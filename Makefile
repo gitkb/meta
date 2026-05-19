@@ -54,9 +54,9 @@ install-hooks:
 	@chmod +x .githooks/pre-commit
 	@chmod +x .githooks/pre-push
 	@mkdir -p "$$(git rev-parse --git-path hooks)"
-	@ln -sf "$$(pwd)/.githooks/commit-msg" "$$(git rev-parse --git-path hooks)/commit-msg"
-	@ln -sf "$$(pwd)/.githooks/pre-commit" "$$(git rev-parse --git-path hooks)/pre-commit"
-	@ln -sf "$$(pwd)/.githooks/pre-push" "$$(git rev-parse --git-path hooks)/pre-push"
+	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/commit-msg" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/commit-msg"
+	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/pre-commit" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/pre-commit"
+	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/pre-push" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/pre-push"
 	@echo "Commit-msg, pre-commit, and pre-push hooks installed."
 
 release: 

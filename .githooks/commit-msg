@@ -17,7 +17,7 @@ if ! output=$(npx --yes \
   --package @commitlint/cli \
   --package @commitlint/config-conventional \
   commitlint --edit "$1" 2>&1); then
-  if printf '%s\n' "$output" | grep -qE '^npm (ERR!|error) (network|code (ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT)|could not determine executable)'; then
+  if printf '%s\n' "$output" | grep -qE '^(npm (ERR!|error) )?(network|code (ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT)|could not determine executable)|^Error: could not determine executable'; then
     echo "Warning: commitlint unavailable; skipping local check." >&2
     echo "CI still requires a semantic PR title before merge." >&2
     exit 0

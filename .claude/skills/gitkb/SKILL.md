@@ -8,7 +8,7 @@ allowed-tools:
 
 # GitKB Knowledge Base Skill
 
-GitKB is a database-first knowledge base with a git-like CLI. Documents are stored in a local database and materialized to `.kb/workspace/` for editing.
+GitKB is a distributed knowledge base with a git-like CLI. Documents are stored in a local database and materialized to `.kb/workspace/` for editing.
 
 ## Common Gotchas
 

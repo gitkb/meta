@@ -98,7 +98,7 @@ When `git kb list --path context/` returns no documents, the knowledge base is f
 
 ### Step 1: Explain GitKB
 
-GitKB is a database-first knowledge base with a git-like CLI. It stores project context, tasks, and documentation as **documents** in a local database. This enables:
+GitKB is a distributed knowledge base with a git-like CLI. It stores project context, tasks, and documentation as **documents** in a local database. This enables:
 - Persistent context across agent sessions
 - Structured task management
 - Relationship tracking between documents
@@ -258,7 +258,7 @@ If workspace is clean and context is still valid, resume work.
 
 ### What is GitKB?
 
-GitKB is a database-first knowledge base with a git-like CLI. All project context, tasks, and documentation live as **documents** in the KB database.
+GitKB is a distributed knowledge base with a git-like CLI. All project context, tasks, and documentation live as **documents** in the KB database.
 
 **Key insight**: The workspace (`.kb/workspace/`) is an ephemeral editing surface. The database is the source of truth.
 

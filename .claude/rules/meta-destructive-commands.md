@@ -19,7 +19,7 @@ Multi-repo workspaces amplify the impact of destructive commands.
    meta --include api-service exec -- git reset --hard
    ```
 
-## Blocked by `meta agent guard`
+## Blocked by `agent guard`
 
 These commands trigger PreToolUse denial:
 - `git push --force` (use `--force-with-lease` instead)

@@ -81,10 +81,10 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-@test "init claude settings references meta agent guard" {
+@test "init claude settings references agent guard" {
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    run grep "meta agent guard" .claude/settings.json
+    run grep "agent guard" .claude/settings.json
     [ "$status" -eq 0 ]
 }
 

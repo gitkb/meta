@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.2.21](https://github.com/gitkb/meta/compare/v0.2.20...v0.2.21) (2026-05-19)
+
+
+### Features
+
+* adding meta worker agent ([#73](https://github.com/gitkb/meta/issues/73)) ([7f7bbdc](https://github.com/gitkb/meta/commit/7f7bbdc3a10077e939547611b2b1948cb861b8aa))
+
+
+### Bug Fixes
+
+* enforce semantic titles after meta agent removal ([#83](https://github.com/gitkb/meta/issues/83)) ([344e814](https://github.com/gitkb/meta/commit/344e814b84773c7cb83e9f3d8c4687dfec177dbc))
+* install/uninstall all plugins in Makefile ([#72](https://github.com/gitkb/meta/issues/72)) ([58423e7](https://github.com/gitkb/meta/commit/58423e7952d6f0219a63c9a7cb450c68060405a1))
+* **loop_cli:** sync ed04ea6 ([#75](https://github.com/gitkb/meta/issues/75)) ([24c6d6a](https://github.com/gitkb/meta/commit/24c6d6aa6da6d0b8fa901ab64dc1c5ec97b26057))
+* **meta_git_cli:** sync ac7ab64 ([#84](https://github.com/gitkb/meta/issues/84)) ([8b6f3a0](https://github.com/gitkb/meta/commit/8b6f3a0605b9fd42661c275b71084ca2bda48426))
+* **meta_mcp:** sync 4d40a4d ([#77](https://github.com/gitkb/meta/issues/77)) ([5243522](https://github.com/gitkb/meta/commit/52435221bbd62b46a03f9d62e4e7a192ab9a3ba1))
+* **meta_project_cli:** sync 9b3e9c8 ([#85](https://github.com/gitkb/meta/issues/85)) ([4b69d5f](https://github.com/gitkb/meta/commit/4b69d5f8b2ee2d328fe9a9c1661c181c88707980))
+* **meta_project_cli:** sync ea1efff ([#76](https://github.com/gitkb/meta/issues/76)) ([e1fce96](https://github.com/gitkb/meta/commit/e1fce96aeb8a02fd4420a4b3c993f25ce894c53f))
+* **meta_rust_cli:** sync 1f62fc2 ([#86](https://github.com/gitkb/meta/issues/86)) ([5c44f54](https://github.com/gitkb/meta/commit/5c44f54e2a526c7fabceed3f8c2c27254b3fd349))
+* stricter regex and better error logging for sync PR commit type ([#70](https://github.com/gitkb/meta/issues/70)) ([74fa296](https://github.com/gitkb/meta/commit/74fa2965ef848e4a5d779f4d8825875c4ae4f0da))
+* updating harmony-labs GitHub org to gitkb ([#74](https://github.com/gitkb/meta/issues/74)) ([b5c1969](https://github.com/gitkb/meta/commit/b5c196912044cfe386608665b4e57d700f41af83))
+* use PAT for release-please PR updates ([#87](https://github.com/gitkb/meta/issues/87)) ([6149471](https://github.com/gitkb/meta/commit/61494718af93fc4a909de75cb3c49628588db415))
+
 ## [0.2.20](https://github.com/gitkb/meta/compare/v0.2.19...v0.2.20) (2026-03-29)
 
 

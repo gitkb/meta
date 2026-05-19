@@ -15,7 +15,7 @@ exclude = ["agent"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.20"
+version = "0.2.21"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/gitkb/meta"

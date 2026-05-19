@@ -86,6 +86,8 @@ teardown() {
     [ "$status" -eq 0 ]
     run grep "agent guard" .claude/settings.json
     [ "$status" -eq 0 ]
+    run grep "meta agent guard" .claude/settings.json
+    [ "$status" -ne 0 ]
 }
 
 @test "init claude PreToolUse has Bash matcher" {

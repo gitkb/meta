@@ -24,18 +24,7 @@ jobs:
 
       - name: Clone child repos
         shell: bash
-        run: |
-          # Clone all workspace member repos (meta-repo architecture)
-          git clone --depth 1 https://github.com/gitkb/loop_lib.git
-          git clone --depth 1 https://github.com/gitkb/loop_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_core.git
-          git clone --depth 1 https://github.com/gitkb/meta_git_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_git_lib.git
-          git clone --depth 1 https://github.com/gitkb/meta_mcp.git
-          git clone --depth 1 https://github.com/gitkb/meta_plugin_protocol.git
-          git clone --depth 1 https://github.com/gitkb/meta_rust_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_project_cli.git
+        run: .github/scripts/clone-child-repos.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -56,17 +45,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Clone child repos
-        run: |
-          git clone --depth 1 https://github.com/gitkb/loop_lib.git
-          git clone --depth 1 https://github.com/gitkb/loop_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_core.git
-          git clone --depth 1 https://github.com/gitkb/meta_git_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_git_lib.git
-          git clone --depth 1 https://github.com/gitkb/meta_mcp.git
-          git clone --depth 1 https://github.com/gitkb/meta_plugin_protocol.git
-          git clone --depth 1 https://github.com/gitkb/meta_rust_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_project_cli.git
+        run: .github/scripts/clone-child-repos.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -93,17 +72,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Clone child repos
-        run: |
-          git clone --depth 1 https://github.com/gitkb/loop_lib.git
-          git clone --depth 1 https://github.com/gitkb/loop_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_core.git
-          git clone --depth 1 https://github.com/gitkb/meta_git_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_git_lib.git
-          git clone --depth 1 https://github.com/gitkb/meta_mcp.git
-          git clone --depth 1 https://github.com/gitkb/meta_plugin_protocol.git
-          git clone --depth 1 https://github.com/gitkb/meta_rust_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_project_cli.git
+        run: .github/scripts/clone-child-repos.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -144,17 +113,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Clone child repos
-        run: |
-          git clone --depth 1 https://github.com/gitkb/loop_lib.git
-          git clone --depth 1 https://github.com/gitkb/loop_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_core.git
-          git clone --depth 1 https://github.com/gitkb/meta_git_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_git_lib.git
-          git clone --depth 1 https://github.com/gitkb/meta_mcp.git
-          git clone --depth 1 https://github.com/gitkb/meta_plugin_protocol.git
-          git clone --depth 1 https://github.com/gitkb/meta_rust_cli.git
-          git clone --depth 1 https://github.com/gitkb/meta_project_cli.git
+        run: .github/scripts/clone-child-repos.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

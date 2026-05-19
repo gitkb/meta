@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.22](https://github.com/gitkb/meta/compare/v0.2.21...v0.2.22) (2026-05-19)
+
+
+### Features
+
+* **meta_project_cli:** sync 5016ebf ([#88](https://github.com/gitkb/meta/issues/88)) ([553dfa5](https://github.com/gitkb/meta/commit/553dfa553d1942aea8d7b24c64064e834a7e5043))
+
 ## [0.2.21](https://github.com/gitkb/meta/compare/v0.2.20...v0.2.21) (2026-05-19)
 
 

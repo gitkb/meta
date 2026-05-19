@@ -28,7 +28,7 @@ jobs:
 
       - name: Release Please
         id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@v5
         with:
           token: ${{ secrets.PARENT_REPO_PAT }}
           # Use manifest mode to track version in VERSION file

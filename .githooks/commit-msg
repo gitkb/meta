@@ -1,0 +1,27 @@
+#!/bin/bash
+# Commit message hook - validates Conventional Commits format.
+# PR title CI remains the merge-blocking guard for GitHub merge subjects.
+
+set -e
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if ! command -v npx >/dev/null 2>&1; then
+  echo "Warning: npx not found; skipping local commitlint check." >&2
+  echo "CI still requires a semantic PR title before merge." >&2
+  exit 0
+fi
+
+if ! output=$(npx --yes \
+  --package @commitlint/cli \
+  --package @commitlint/config-conventional \
+  commitlint --edit "$1" 2>&1); then
+  if printf '%s\n' "$output" | grep -qE '^(npm (ERR!|error) )?(network|code (ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT)|could not determine executable)|^Error: could not determine executable'; then
+    echo "Warning: commitlint unavailable; skipping local check." >&2
+    echo "CI still requires a semantic PR title before merge." >&2
+    exit 0
+  fi
+  printf '%s\n' "$output" >&2
+  exit 1
+fi

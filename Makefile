@@ -46,6 +46,19 @@ clean-plugins:
 
 rebuild-plugins: clean-plugins build-plugins
 
+# Install git hooks (commit-msg validates release-safe subjects; pre-push runs CI checks locally)
+# Uses git rev-parse to handle worktrees and submodules correctly
+install-hooks:
+	@echo "Installing git hooks..."
+	@chmod +x .githooks/commit-msg
+	@chmod +x .githooks/pre-commit
+	@chmod +x .githooks/pre-push
+	@mkdir -p "$$(git rev-parse --git-path hooks)"
+	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/commit-msg" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/commit-msg"
+	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/pre-commit" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/pre-commit"
+	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/pre-push" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/pre-push"
+	@echo "Commit-msg, pre-commit, and pre-push hooks installed."
+
 release: 
 	cargo build --release
 
@@ -103,4 +116,4 @@ uninstall:
 	cargo uninstall meta_rust_cli 2>/dev/null || true
 	rm -f ~/.meta/plugins/meta-git ~/.meta/plugins/meta-project ~/.meta/plugins/meta-rust
 
-.PHONY: install build run test bats release integration-test
+.PHONY: install install-hooks build run test bats release integration-test

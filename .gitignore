@@ -62,6 +62,7 @@ meta_plugin_protocol/
 meta_project_cli/
 meta_rust_cli/
 claude-plugins/
+codex-plugins/
 meta-plugins/
 
 # plugins (built locally, not committed)

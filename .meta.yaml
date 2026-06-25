@@ -54,5 +54,8 @@ projects:
   claude-plugins:
     repo: git@github.com:gitkb/claude-plugins.git
 
+  codex-plugins:
+    repo: git@github.com:gitkb/codex-plugins.git
+
   meta-plugins:
     repo: git@github.com:gitkb/meta-plugins.git

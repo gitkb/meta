@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "description": "Multi-repo workspace management. Skills, hooks, and MCP server for the meta CLI.",
   "author": {
-    "name": "Harmony Labs",
-    "url": "https://github.com/harmony-labs"
+    "name": "GitKB",
+    "url": "https://github.com/gitkb"
   },
   "homepage": "https://github.com/gitkb/meta",
   "repository": "https://github.com/gitkb/meta",

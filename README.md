@@ -52,13 +52,13 @@ Most multi-repo tools solve the *cloning* problem. Meta solves the *working* pro
 
    This clones the meta repo and all child repositories defined in its `.meta` file.
 
-2. **Run commands across all repos:**
+2. **Run workspace commands:**
 
    ```bash
    meta git status
    meta git pull
    meta exec npm install
-   meta exec cargo test
+   meta cargo test
    ```
 
 3. **Filter by tags:**
@@ -274,6 +274,33 @@ This enables impact analysis ("what breaks if I change shared-utils?"), topologi
 | `meta git snapshot list` | List snapshots |
 | `meta git snapshot restore <name>` | Restore workspace to snapshot |
 
+### Rust/Cargo Plugin
+
+`meta cargo` is an explicit pass-through namespace. Meta selects directories that contain a
+`Cargo.toml` and runs the requested command in each one; Cargo remains responsible for validating
+built-in commands, aliases, and installed `cargo-*` extensions. `meta rust` is an alias that
+produces the same canonical `cargo` command.
+
+```bash
+meta cargo clean
+meta cargo check --all-targets
+meta cargo clippy --all-targets -- -D warnings
+meta cargo nextest run
+meta rust test
+```
+
+Put Meta options before the `cargo` or `rust` namespace. Tokens after the namespace belong to
+Cargo by default:
+
+```bash
+meta --include api --dry-run cargo check
+meta --dry-run --sequential cargo clean --recursive
+```
+
+For compatibility, postfix `--recursive` is a Meta scope control for `build`, `test`, and `clean`.
+Commands that own the flag keep it, so `meta cargo update --recursive` forwards `--recursive` to
+Cargo. Meta never inspects or removes arguments after Cargo's `--` separator.
+
 ### Plugin Management
 
 | Command | Description |
@@ -349,7 +376,7 @@ Plugins are standalone executables that extend meta. They're discovered automati
 |--------|-------------|
 | `git` | Clone, status, update, commit, snapshots, SSH multiplexing |
 | `project` | Project health checks and sync |
-| `rust` | Cargo build, test, and command passthrough |
+| `rust` | Cargo namespace pass-through; `meta rust` aliases `meta cargo` |
 
 ### Writing Plugins
 

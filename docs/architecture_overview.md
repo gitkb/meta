@@ -151,9 +151,10 @@ Project management plugin:
 ### meta_rust_cli
 
 Rust/Cargo plugin:
-- Workspace-aware builds
-- Test execution
-- Cargo command passthrough
+- Owns the explicit `cargo` and `rust` namespaces
+- Selects Meta project directories that contain `Cargo.toml`
+- Canonicalizes both namespaces to shell-safe `cargo` execution plans
+- Leaves command validation, aliases, and installed `cargo-*` extensions to Cargo
 
 ## Plugin System
 
@@ -211,7 +212,7 @@ When you run `meta <command>`:
 4. **Otherwise** - Show "unrecognized command" error
 
 **Important:** Bare commands like `meta npm install` are not supported. You must either:
-- Use a plugin command: `meta git status`, `meta rust build`
+- Use a plugin command: `meta git status`, `meta cargo check` (`meta rust check` is an alias)
 - Use explicit exec: `meta exec -- npm install`
 
 Special case commands (like `meta git clone`) are fully handled by the plugin rather than passed through to all repos.

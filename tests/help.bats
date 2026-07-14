@@ -50,6 +50,8 @@ teardown() {
     [ "$output" = "$help_flag" ]
     [[ "$output" == *"git"* ]]
     [[ "$output" == *"project"* ]]
+    [[ "$output" == *"cargo"* ]]
+    [[ "$output" == *"rust"* ]]
 }
 
 @test "built-in command help does not execute commands" {
@@ -101,16 +103,43 @@ teardown() {
     [[ "$output" == *"Current scope:"* ]]
 }
 
-@test "rust and cargo help use the simple plugin help without side effects" {
+@test "rust and cargo namespace help is accurate and side-effect free" {
     cd "$NO_CONFIG_DIR"
 
-    for command in "cargo --help" "cargo build --help" "rust --help" "rust build --help"; do
-        run "$META_BIN" $command
+    # A bare namespace or help request must not parse project configuration.
+    # This malformed file makes accidental dispatch/config discovery observable.
+    printf 'projects: [\n' > "$NO_CONFIG_DIR/.meta.yaml"
+
+    mkdir -p "$NO_CONFIG_DIR/bin"
+    cat > "$NO_CONFIG_DIR/bin/cargo" <<'SH'
+#!/bin/sh
+printf 'cargo executed\n' >> "$CARGO_MARKER"
+SH
+    chmod +x "$NO_CONFIG_DIR/bin/cargo"
+
+    for command in \
+        "cargo" \
+        "cargo --help" \
+        "cargo clean --help" \
+        "rust" \
+        "rust --help" \
+        "rust nextest --help"
+    do
+        run env \
+            PATH="$NO_CONFIG_DIR/bin:$PATH" \
+            CARGO_MARKER="$NO_CONFIG_DIR/cargo-ran" \
+            "$META_BIN" $command
         [ "$status" -eq 0 ]
-        [[ "$output" == *"meta cargo <command>"* ]]
-        [[ "$output" == *"Build all Rust projects"* ]]
+        [[ "$output" == *"Run any Cargo command across selected Rust projects"* ]]
+        [[ "$output" == *"cargo <command>"* ]]
+        [[ "$output" == *"cargo clean"* ]]
+        [[ "$output" == *"cargo check"* ]]
+        [[ "$output" == *"cargo clippy"* ]]
+        [[ "$output" == *"cargo nextest"* ]]
+        [[ "$output" == *"Cargo validates"* ]]
         [[ "$output" != *"Could not find meta config"* ]]
         [[ "$output" != *"No Rust projects found"* ]]
+        [ ! -e "$NO_CONFIG_DIR/cargo-ran" ]
     done
 }
 

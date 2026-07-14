@@ -245,8 +245,8 @@ meta exec --exclude legacy-app -- npm install
 # Tag filter + directory filter
 meta --tag backend git status --include api
 
-# For non-plugin commands, use exec
-meta exec --tag backend --include api -- cargo test
+# Cargo commands use the Rust plugin namespace directly
+meta --tag backend --include api cargo test
 ```
 
 **Filter precedence:**
@@ -338,7 +338,7 @@ By default, commands run sequentially with live output. Use `--parallel` for con
 
 ```bash
 meta git status --parallel
-meta exec --parallel -- cargo test
+meta --parallel cargo test
 ```
 
 ### Parallel Mode Behavior

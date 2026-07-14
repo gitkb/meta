@@ -82,6 +82,7 @@ jobs:
           cargo build --release --target ${{ matrix.target }} -p meta
           cargo build --release --target ${{ matrix.target }} -p meta_git_cli
           cargo build --release --target ${{ matrix.target }} -p meta_project_cli
+          cargo build --release --target ${{ matrix.target }} -p meta_rust_cli
           cargo build --release --target ${{ matrix.target }} -p meta-mcp
           cargo build --release --target ${{ matrix.target }} -p loop_cli
 
@@ -92,6 +93,7 @@ jobs:
           cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dist/
           cp target/${{ matrix.target }}/release/meta-git dist/
           cp target/${{ matrix.target }}/release/meta-project dist/
+          cp target/${{ matrix.target }}/release/meta-rust dist/
           cp target/${{ matrix.target }}/release/meta-mcp dist/
           cp target/${{ matrix.target }}/release/loop dist/
           cd dist
@@ -106,6 +108,7 @@ jobs:
           copy target\${{ matrix.target }}\release\${{ matrix.binary_name }} dist\
           copy target\${{ matrix.target }}\release\meta-git.exe dist\
           copy target\${{ matrix.target }}\release\meta-project.exe dist\
+          copy target\${{ matrix.target }}\release\meta-rust.exe dist\
           copy target\${{ matrix.target }}\release\meta-mcp.exe dist\
           copy target\${{ matrix.target }}\release\loop.exe dist\
           cd dist
@@ -283,6 +286,10 @@ jobs:
         run: cargo publish -p meta --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
         continue-on-error: true
 
+      - name: Publish meta_rust_cli
+        run: cargo publish -p meta_rust_cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
+
       # Tier 3: Depends on meta
       - name: Publish meta_git_lib
         run: cargo publish -p meta_git_lib --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -374,6 +381,7 @@ jobs:
               bin.install "meta"
               bin.install "meta-git"
               bin.install "meta-project"
+              bin.install "meta-rust"
               bin.install "meta-mcp"
               bin.install "loop"
             end

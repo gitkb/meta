@@ -87,9 +87,10 @@ jobs:
 
       - name: Verify binaries
         run: |
-          ls -lh target/debug/meta target/debug/meta-git
+          ls -lh target/debug/meta target/debug/meta-git target/debug/meta-rust
           ./target/debug/meta --version
           ./target/debug/meta-git --meta-plugin-info | jq .name
+          ./target/debug/meta-rust --meta-plugin-info | jq .name
         shell: bash
 
       - name: Install bats

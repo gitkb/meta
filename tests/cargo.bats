@@ -104,7 +104,7 @@ teardown() {
 }
 
 run_with_fake_cargo() {
-    PATH="$TEST_DIR/bin:$PATH" CARGO_LOG="$CARGO_LOG" "$META_BIN" "$@"
+    SHELL=/bin/sh PATH="$TEST_DIR/bin:$PATH" CARGO_LOG="$CARGO_LOG" "$META_BIN" "$@"
 }
 
 @test "cargo clean --recursive runs once in each Rust project" {

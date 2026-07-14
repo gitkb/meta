@@ -33,6 +33,7 @@ class MetaCli < Formula
     bin.install "meta"
     bin.install "meta-git"
     bin.install "meta-project"
+    bin.install "meta-rust"
     bin.install "meta-mcp"
     bin.install "loop"
   end

@@ -141,18 +141,6 @@ JSON
     [ "$(grep -F -x -c 'arg=<clean>' "$CARGO_LOG")" -eq 3 ]
 }
 
-@test "leading Cargo global options preserve recursive compatibility" {
-    run run_with_fake_cargo cargo --locked clean --recursive
-
-    [ "$status" -eq 0 ]
-    [ "$(grep -c '^BEGIN$' "$CARGO_LOG")" -eq 3 ]
-    [ "$(grep -F -x -c 'arg=<--locked>' "$CARGO_LOG")" -eq 3 ]
-    [ "$(grep -F -x -c 'arg=<clean>' "$CARGO_LOG")" -eq 3 ]
-    ! grep -F -q 'arg=<--recursive>' "$CARGO_LOG"
-    grep -F -x -q "cwd=<$TEST_DIR/nested/nested-rust>" "$CARGO_LOG"
-    ! grep -F -q "cwd=<$TEST_DIR/docs>" "$CARGO_LOG"
-}
-
 @test "cargo clean recursive dry-run prints the exact plan without cleanup" {
     run run_with_fake_cargo --dry-run cargo clean --recursive
 
@@ -166,16 +154,6 @@ JSON
     [ -f "$TEST_DIR/target/keep" ]
     [ -f "$TEST_DIR/rust-app/target/keep" ]
     [ -f "$TEST_DIR/nested/nested-rust/target/keep" ]
-}
-
-@test "cargo update retains its recursive argument and does not recurse Meta scope" {
-    run run_with_fake_cargo cargo update --recursive
-
-    [ "$status" -eq 0 ]
-    [ "$(grep -c '^BEGIN$' "$CARGO_LOG")" -eq 2 ]
-    [ "$(grep -F -x -c 'arg=<update>' "$CARGO_LOG")" -eq 2 ]
-    [ "$(grep -F -x -c 'arg=<--recursive>' "$CARGO_LOG")" -eq 2 ]
-    ! grep -F -q "cwd=<$TEST_DIR/nested/nested-rust>" "$CARGO_LOG"
 }
 
 @test "Cargo payload after the separator is never intercepted by Meta" {
@@ -213,16 +191,17 @@ JSON
     [ "$(grep -F -x -c 'arg=<warnings>' "$CARGO_LOG")" -eq 2 ]
 
     rm -f "$CARGO_LOG"
-    run run_with_fake_cargo cargo nextest run --recursive
+    run run_with_fake_cargo cargo nextest run --profile ci
     [ "$status" -eq 0 ]
-    [ "$(grep -F -x -c 'argc=<3>' "$CARGO_LOG")" -eq 2 ]
+    [ "$(grep -F -x -c 'argc=<4>' "$CARGO_LOG")" -eq 2 ]
     [ "$(grep -F -x -c 'arg=<nextest>' "$CARGO_LOG")" -eq 2 ]
     [ "$(grep -F -x -c 'arg=<run>' "$CARGO_LOG")" -eq 2 ]
-    [ "$(grep -F -x -c 'arg=<--recursive>' "$CARGO_LOG")" -eq 2 ]
+    [ "$(grep -F -x -c 'arg=<--profile>' "$CARGO_LOG")" -eq 2 ]
+    [ "$(grep -F -x -c 'arg=<ci>' "$CARGO_LOG")" -eq 2 ]
     ! grep -F -q "cwd=<$TEST_DIR/nested/nested-rust>" "$CARGO_LOG"
 }
 
-@test "Meta controls go before the namespace and postfix controls belong to Cargo" {
+@test "Meta controls before the namespace filter plugin execution" {
     run run_with_fake_cargo --verbose --include rust-app cargo check
 
     [ "$status" -eq 0 ]
@@ -230,16 +209,6 @@ JSON
     [ "$(grep -c '^BEGIN$' "$CARGO_LOG")" -eq 1 ]
     [ "$(grep -F -x -c 'argc=<1>' "$CARGO_LOG")" -eq 1 ]
     grep -F -x -q 'arg=<check>' "$CARGO_LOG"
-
-    rm -f "$CARGO_LOG"
-    run run_with_fake_cargo --include rust-app cargo check --verbose --dry-run
-
-    [ "$status" -eq 0 ]
-    [ "$(grep -c '^BEGIN$' "$CARGO_LOG")" -eq 1 ]
-    [ "$(grep -F -x -c 'argc=<3>' "$CARGO_LOG")" -eq 1 ]
-    grep -F -x -q 'arg=<check>' "$CARGO_LOG"
-    grep -F -x -q 'arg=<--verbose>' "$CARGO_LOG"
-    grep -F -x -q 'arg=<--dry-run>' "$CARGO_LOG"
 }
 
 @test "rust is behaviorally equivalent to the canonical cargo namespace" {

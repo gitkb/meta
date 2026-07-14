@@ -276,7 +276,7 @@ This enables impact analysis ("what breaks if I change shared-utils?"), topologi
 
 ### Rust/Cargo Plugin
 
-`meta cargo` is an explicit pass-through namespace. Meta selects directories that contain a
+`meta cargo` is an explicit plugin namespace. The Rust plugin selects directories that contain a
 `Cargo.toml` and runs the requested command in each one; Cargo remains responsible for validating
 built-in commands, aliases, and installed `cargo-*` extensions. `meta rust` is an alias that
 produces the same canonical `cargo` command.
@@ -289,20 +289,18 @@ meta cargo nextest run
 meta rust test
 ```
 
-Put Meta options before the `cargo` or `rust` namespace. Tokens after the namespace belong to
-Cargo by default:
+Put Meta options before the `cargo` or `rust` namespace:
 
 ```bash
 meta --include api --dry-run cargo check
 meta --dry-run --sequential cargo clean --recursive
 ```
 
-For compatibility, postfix `--recursive` is a Meta scope control for `build`, `test`, and `clean`.
-Commands that own the flag keep it, so `meta cargo update --recursive` forwards `--recursive` to
-Cargo.
+In this first pass, `--recursive` before Cargo's `--` remains a Meta scope control, including
+postfix usage such as `meta cargo clean --recursive`.
 
-Meta also intercepts `-h` and `--help` before Cargo's `--` separator and displays Meta's
-side-effect-free Cargo namespace help. For command-specific Cargo help, run
+The Rust plugin treats `-h` and `--help` before Cargo's `--` separator as side-effect-free
+namespace help. For command-specific Cargo help, run
 `cargo help <command>` directly (for example, `cargo help check`). Meta never inspects or removes
 arguments after Cargo's `--` separator.
 
@@ -381,7 +379,7 @@ Plugins are standalone executables that extend meta. They're discovered automati
 |--------|-------------|
 | `git` | Clone, status, update, commit, snapshots, SSH multiplexing |
 | `project` | Project health checks and sync |
-| `rust` | Cargo namespace pass-through; `meta rust` aliases `meta cargo` |
+| `rust` | Cargo commands across Rust projects; `meta rust` aliases `meta cargo` |
 
 ### Writing Plugins
 

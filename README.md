@@ -299,7 +299,12 @@ meta --dry-run --sequential cargo clean --recursive
 
 For compatibility, postfix `--recursive` is a Meta scope control for `build`, `test`, and `clean`.
 Commands that own the flag keep it, so `meta cargo update --recursive` forwards `--recursive` to
-Cargo. Meta never inspects or removes arguments after Cargo's `--` separator.
+Cargo.
+
+Meta also intercepts `-h` and `--help` before Cargo's `--` separator and displays Meta's
+side-effect-free Cargo namespace help. For command-specific Cargo help, run
+`cargo help <command>` directly (for example, `cargo help check`). Meta never inspects or removes
+arguments after Cargo's `--` separator.
 
 ### Plugin Management
 

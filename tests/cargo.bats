@@ -15,10 +15,13 @@ setup() {
     TEST_DIR="$(mktemp -d)"
     TEST_DIR="$(cd "$TEST_DIR" && pwd -P)"
     CARGO_LOG="$TEST_DIR/cargo.log"
+    HOME="$TEST_DIR/home"
+    export HOME
 
     mkdir -p \
         "$TEST_DIR/.meta/plugins" \
         "$TEST_DIR/bin" \
+        "$HOME" \
         "$TEST_DIR/rust-app/target" \
         "$TEST_DIR/docs" \
         "$TEST_DIR/nested/nested-rust/target" \
@@ -117,6 +120,37 @@ run_with_fake_cargo() {
     ! grep -F -q "cwd=<$TEST_DIR/docs>" "$CARGO_LOG"
     ! grep -F -q "cwd=<$TEST_DIR/nested>" "$CARGO_LOG"
     ! grep -F -q "cwd=<$TEST_DIR/nested/nested-docs>" "$CARGO_LOG"
+}
+
+@test "Cargo and Rust namespace plans ignore Loop aliases" {
+    cat > "$TEST_DIR/.looprc" <<'JSON'
+{"aliases":{"cargo":"true"}}
+JSON
+
+    run run_with_fake_cargo cargo clean --recursive
+
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^BEGIN$' "$CARGO_LOG")" -eq 3 ]
+    [ "$(grep -F -x -c 'arg=<clean>' "$CARGO_LOG")" -eq 3 ]
+
+    rm -f "$CARGO_LOG"
+    run run_with_fake_cargo rust clean --recursive
+
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^BEGIN$' "$CARGO_LOG")" -eq 3 ]
+    [ "$(grep -F -x -c 'arg=<clean>' "$CARGO_LOG")" -eq 3 ]
+}
+
+@test "leading Cargo global options preserve recursive compatibility" {
+    run run_with_fake_cargo cargo --locked clean --recursive
+
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^BEGIN$' "$CARGO_LOG")" -eq 3 ]
+    [ "$(grep -F -x -c 'arg=<--locked>' "$CARGO_LOG")" -eq 3 ]
+    [ "$(grep -F -x -c 'arg=<clean>' "$CARGO_LOG")" -eq 3 ]
+    ! grep -F -q 'arg=<--recursive>' "$CARGO_LOG"
+    grep -F -x -q "cwd=<$TEST_DIR/nested/nested-rust>" "$CARGO_LOG"
+    ! grep -F -q "cwd=<$TEST_DIR/docs>" "$CARGO_LOG"
 }
 
 @test "cargo clean recursive dry-run prints the exact plan without cleanup" {

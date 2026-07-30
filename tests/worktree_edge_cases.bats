@@ -1,9 +1,12 @@
 #!/usr/bin/env bats
 
+load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+
 # Integration tests for meta git worktree edge cases (Phase 2 & 3)
 # Tests: strict mode, prune with orphan detection, cache invalidation, ahead/behind
 
 setup() {
+    clear_git_local_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
 

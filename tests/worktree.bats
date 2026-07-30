@@ -1,9 +1,12 @@
 #!/usr/bin/env bats
 
+load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+
 # Integration tests for `meta git worktree` subcommand
 # Tests: create, add, list, status, diff, exec, remove, configuration, edge cases
 
 setup() {
+    clear_git_local_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
 
@@ -101,6 +104,18 @@ EOF
     [ "$status" -eq 0 ]
     BRANCH=$(git -C ".worktrees/myfix/backend" branch --show-current)
     [ "$BRANCH" = "fix/the-bug" ]
+}
+
+@test "worktree create reports corrupt bare config with scoped repair" {
+    git -C backend config --local core.bare true
+
+    run "$META_BIN" git worktree create corrupt-source --repo backend
+
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"core.bare=true"* ]]
+    [[ "$output" == *"/backend"* ]]
+    [[ "$output" == *"config --local core.bare false"* ]]
+    [ ! -e ".worktrees/corrupt-source/backend" ]
 }
 
 @test "worktree create --all creates worktrees for all repos" {

@@ -1,8 +1,11 @@
 #!/usr/bin/env bats
 
+load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+
 # Integration tests for `meta project list` / `meta project ls`
 
 setup() {
+    clear_git_local_env
     # Build binaries if not already built
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_PROJECT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-project"

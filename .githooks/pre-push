@@ -32,6 +32,22 @@ if [ -z "$WORKSPACE_ROOT" ]; then
     exit 0
 fi
 
+GIT_LOCAL_ENV_VARS=$(git rev-parse --local-env-vars) || {
+    echo "Error: Could not determine repository-local Git environment"
+    exit 1
+}
+for git_env_var in $GIT_LOCAL_ENV_VARS; do
+    case "$git_env_var" in
+        *[!A-Z0-9_]*|'')
+            echo "Error: Refusing invalid Git environment variable name: $git_env_var"
+            exit 1
+            ;;
+        *)
+            unset "$git_env_var"
+            ;;
+    esac
+done
+
 cd "$WORKSPACE_ROOT"
 
 echo "Running pre-push checks from $WORKSPACE_ROOT..."

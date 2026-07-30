@@ -1,8 +1,11 @@
 #!/usr/bin/env bats
 
+load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+
 # Integration tests for `meta init claude`
 
 setup() {
+    clear_git_local_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
 
     if [ ! -f "$META_BIN" ]; then

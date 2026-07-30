@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
+load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+
 setup() {
+    clear_git_local_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
     META_PROJECT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-project"

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.23](https://github.com/gitkb/meta/compare/v0.2.22...v0.2.23) (2026-08-02)
+
+
+### Features
+
+* org rename ([#94](https://github.com/gitkb/meta/issues/94)) ([a44337c](https://github.com/gitkb/meta/commit/a44337ce03373e3a7cf892c4cc451b1f6d88b08b))
+
+
+### Bug Fixes
+
+* **hooks:** isolate Git-local test environment ([#98](https://github.com/gitkb/meta/issues/98)) ([ae5818b](https://github.com/gitkb/meta/commit/ae5818b2dc4f93e61af30dd42c776cf781e23daa))
+* remove agent plugins ([#96](https://github.com/gitkb/meta/issues/96)) ([4d8adcc](https://github.com/gitkb/meta/commit/4d8adcc7e2b3a684e344180f6698a9a56c81bcc4))
+
 ## [0.2.22](https://github.com/gitkb/meta/compare/v0.2.21...v0.2.22) (2026-05-19)
 
 

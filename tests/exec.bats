@@ -1,9 +1,12 @@
 #!/usr/bin/env bats
 
+load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+
 # Integration tests for `meta exec` and loop pass-through options
 # Tests: exec, --include, --exclude, --parallel, --dry-run, --tag
 
 setup() {
+    clear_git_local_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
 

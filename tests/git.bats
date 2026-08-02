@@ -1,9 +1,12 @@
 #!/usr/bin/env bats
 
+load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+
 # Integration tests for `meta git` commands
 # Tests use local git repos (no network IO required)
 
 setup() {
+    clear_git_local_env
     # Build binaries if not already built
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
@@ -376,7 +379,7 @@ assert backend['dirty'] == True, f'backend should be dirty, got {backend}'
 @test "meta git clone from local path works" {
     # Create a "remote" bare repo that IS a meta repo
     REMOTE_DIR="$(mktemp -d)"
-    git -C "$REMOTE_DIR" init --bare --quiet
+    git init --bare --quiet "$REMOTE_DIR"
     git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
 
     # Create a temp working copy to push initial meta content
@@ -415,7 +418,7 @@ EOF
 
     # Create a "remote" bare repo with main as default branch
     REMOTE_DIR="$(mktemp -d)"
-    git -C "$REMOTE_DIR" init --bare --quiet
+    git init --bare --quiet "$REMOTE_DIR"
     git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
 
     # Create a temp working copy to push initial content
@@ -457,7 +460,7 @@ EOF
 
     # Create a "remote" bare repo with main as default branch
     REMOTE_DIR="$(mktemp -d)"
-    git -C "$REMOTE_DIR" init --bare --quiet
+    git init --bare --quiet "$REMOTE_DIR"
     git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
 
     # Push minimal content
@@ -489,7 +492,7 @@ EOF
 @test "meta git clone with --depth option" {
     # Create a "remote" bare repo with main as default branch
     REMOTE_DIR="$(mktemp -d)"
-    git -C "$REMOTE_DIR" init --bare --quiet
+    git init --bare --quiet "$REMOTE_DIR"
     git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
 
     WORK_DIR="$(mktemp -d)"

@@ -49,3 +49,27 @@ EOF
     [ "$(wc -l <"$calls" | tr -d ' ')" -eq 3 ]
     cmp -s "$config_before" "$workspace/.git/config"
 }
+
+@test "Git test environment helper fails closed when enumeration fails" {
+    local fake_bin="$TEST_DIR/bin"
+    local real_git
+    real_git="$(command -v git)"
+    mkdir -p "$fake_bin"
+
+    cat >"$fake_bin/git" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "rev-parse" && "$2" == "--local-env-vars" ]]; then
+    exit 73
+fi
+exec "$META_TEST_REAL_GIT" "$@"
+EOF
+    chmod +x "$fake_bin/git"
+
+    run env \
+        PATH="$fake_bin:$PATH" \
+        META_TEST_REAL_GIT="$real_git" \
+        bash -c 'source "$1"; clear_git_local_env' _ "$BATS_TEST_DIRNAME/helpers/git_environment.bash"
+
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not determine repository-local Git environment"* ]]
+}

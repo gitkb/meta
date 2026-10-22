@@ -432,3 +432,27 @@ meta plugin list
 - [Architecture Overview](architecture_overview.md)
 - [MCP Server Documentation](mcp_server.md)
 - [FAQ / Troubleshooting](faq_troubleshooting.md)
+
+
+## Membership-only worktree discovery
+
+Background consumers that collect their own Git facts should use:
+
+```sh
+meta git worktree members example --recursive --json
+```
+
+The response contains `name` and `repos`, with each member's `alias`, physical
+`path` and `source_path`. It includes realized repositories nested beneath other
+repositories. Branch, dirty-state and ahead/behind fields are deliberately absent;
+this command launches no Git probes. Missing roots, invalid Git metadata and
+traversal failures are errors, rather than successful partial inventories.
+
+Use `status` when Git status is needed and `list` for all worktree sets. Existing
+list/status defaults and recursive options retain their behavior. Implicit
+worktree scoping now uses metadata-only paths instead of launching branch probes
+for each member before a command is dispatched.
+
+Recursive membership still traverses the realized tree with the existing finite
+entry budget. Poll sparingly, retain last-observed data as such, and back off on
+failure. This reduces workload; it is not a fix for a macOS kernel panic.

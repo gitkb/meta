@@ -442,6 +442,16 @@ Background consumers that collect their own Git facts should use:
 meta git worktree members example --recursive --json
 ```
 
+Inside `.worktrees/example/` or any of its subdirectories, omit the name to
+discover the enclosing set:
+
+```sh
+meta git worktree members --recursive --json
+```
+
+An explicit name takes precedence. Outside a realized `.worktrees/<name>/`
+directory, the name is required; omission returns an error.
+
 The response contains `name` and `repos`, with each member's `alias`, physical
 `path` and `source_path`. It includes realized repositories nested beneath other
 repositories. Branch, dirty-state and ahead/behind fields are deliberately absent;

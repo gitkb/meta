@@ -434,35 +434,73 @@ meta plugin list
 - [FAQ / Troubleshooting](faq_troubleshooting.md)
 
 
-## Membership-only worktree discovery
+## Selecting a worktree set and choosing observation detail
 
-Background consumers that collect their own Git facts should use:
-
-```sh
-meta git worktree members example --recursive --json
-```
-
-Inside `.worktrees/example/` or any of its subdirectories, omit the name to
-discover the enclosing set:
+`list` summarizes worktree sets; `status NAME` provides detailed Git state
+(modified files, untracked counts, and ahead/behind information).
 
 ```sh
-meta git worktree members --recursive --json
+# Outside a worktree: list all sets, with branch and dirty/clean summaries.
+meta git worktree list --recursive
+
+# Select one set explicitly.
+meta git worktree list example --recursive
+
+# Inside .worktrees/example/ or any descendant: select the enclosing set.
+meta git worktree list --recursive
 ```
 
-An explicit name takes precedence. Outside a realized `.worktrees/<name>/`
-directory, the name is required; omission returns an error.
+An explicit name overrides the enclosing set. Outside a worktree, an omitted
+name retains all-set listing. A selected set that is missing, empty or invalid
+returns an error rather than an empty successful result. All-set recursive
+listing continues to return readable sets and reports unavailable sets in
+`warnings` (stderr for human output).
 
-The response contains `name` and `repos`, with each member's `alias`, physical
-`path` and `source_path`. It includes realized repositories nested beneath other
-repositories. Branch, dirty-state and ahead/behind fields are deliberately absent;
-this command launches no Git probes. Missing roots, invalid Git metadata and
-traversal failures are errors, rather than successful partial inventories.
+### Metadata-only listing
 
-Use `status` when Git status is needed and `list` for all worktree sets. Existing
-list/status defaults and recursive options retain their behavior. Implicit
-worktree scoping now uses metadata-only paths instead of launching branch probes
-for each member before a command is dispatched.
+Background consumers that collect their own Git facts should request topology
+without branch or dirty-state observation:
 
-Recursive membership still traverses the realized tree with the existing finite
+```sh
+meta git worktree list example --recursive --metadata-only --json
+
+# From inside the worktree, omit the name:
+meta git worktree list --recursive --metadata-only --json
+```
+
+Both forms retain the list envelope, `worktrees`, with one selected set:
+
+```json
+{
+  "worktrees": [{
+    "name": "example",
+    "root": "/work/harmony/.worktrees/example",
+    "has_meta_root": true,
+    "repos": [{
+      "alias": ".",
+      "path": "/work/harmony/.worktrees/example",
+      "source_path": "/work/harmony"
+    }]
+  }]
+}
+```
+
+Paths above are illustrative. Each repository has an alias, physical checkout
+path and canonical source path; branch, dirty-state and ahead/behind fields are
+absent. Set lifecycle metadata is included when available. Without
+`--metadata-only`, existing branch/dirty fields are retained. The flag controls
+observation detail independently of set selection and recursion; outside a
+worktree, no name lists metadata for all sets.
+
+`--recursive` includes realized repositories nested beneath other repositories.
+Metadata-only without recursion retains legacy traversal boundaries. Recursive
+metadata discovery launches no Git probes and uses strict bounded traversal:
+invalid Git metadata, backlink mismatches and traversal failures are errors for
+a selected set. All-set listing reports failed sets as warnings, so consumers
+must check warnings before treating an aggregate inventory as complete.
+
+Implicit worktree scoping uses metadata-only paths rather than branch probes
+before dispatch. Membership still traverses the realized tree with a finite
 entry budget. Poll sparingly, retain last-observed data as such, and back off on
-failure. This reduces workload; it is not a fix for a macOS kernel panic.
+failure. These changes reduce workload; they do not establish a fix for a macOS
+kernel panic.

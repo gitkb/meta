@@ -189,7 +189,8 @@ When your cwd is inside a `.worktrees/<name>/` directory, `meta exec` automatica
 cd .worktrees/auth-fix/backend
 meta exec -- cargo test    # runs in auth-fix's repos
 
-# Override with --primary to use primary checkout paths
+# --primary skips worktree detection; config is still found from the cwd,
+# so run it from the primary checkout to target the primary repos
 meta --primary exec -- cargo test
 ```
 

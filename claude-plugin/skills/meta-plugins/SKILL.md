@@ -48,8 +48,8 @@ meta project dependents <name>  # Projects that depend on one
 Cargo workspace awareness. Check `meta --help` for it; without it, use `meta exec -- cargo build`.
 
 ```bash
-meta rust build        # Build with workspace detection
-meta rust test         # Test with proper ordering
+meta rust build        # cargo build in each repo with a Cargo.toml
+meta rust test         # cargo test in each repo with a Cargo.toml (no dependency ordering)
 ```
 
 ## Plugin Discovery

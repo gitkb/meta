@@ -5,8 +5,8 @@ description: Create, use and remove isolated multi-repo git worktree sets with `
 
 # Meta Worktree Skill
 
-A worktree set is a named group of git worktrees, one per repo, all on one
-branch. It lets a change span several repos without touching the primary
+A worktree set is a named group of git worktrees, one per repo, on one branch
+by default. It lets a change span several repos without touching the primary
 checkout, and lets several tasks run side by side.
 
 ```
@@ -44,7 +44,7 @@ meta git worktree create full-task --all
 meta git worktree create my-task --repo api --branch feature/my-feature
 
 # Per-repo branch
-meta git worktree create review --repo api:main --repo worker:develop
+meta git worktree create review --repo api:release/2.3 --repo worker:develop
 
 # Start from a tag, SHA or branch (positional commit-ish)
 meta git worktree create incident-42 v2.3.1 --repo api

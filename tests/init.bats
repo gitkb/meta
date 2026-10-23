@@ -14,6 +14,12 @@ setup() {
 
     TEST_DIR="$(mktemp -d)"
 
+    # Stub claude: init registers a plugin marketplace through it
+    STUB_DIR="$(mktemp -d)"
+    printf '#!/bin/sh\necho "$*" >> "%s/claude-calls"\n' "$STUB_DIR" > "$STUB_DIR/claude"
+    chmod +x "$STUB_DIR/claude"
+    PATH="$STUB_DIR:$PATH"
+
     # Create .meta config
     cat > "$TEST_DIR/.meta.json" <<'EOF'
 {
@@ -28,7 +34,7 @@ EOF
 
 teardown() {
     cd /
-    rm -rf "$TEST_DIR"
+    rm -rf "$TEST_DIR" "$STUB_DIR"
 }
 
 # ============ Fresh install ============
@@ -59,6 +65,7 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"meta init"* ]]
     [ ! -e ".claude" ]
+    [ ! -e "$STUB_DIR/claude-calls" ]
 }
 
 @test "skill copies in this repo match meta_cli" {
@@ -210,6 +217,17 @@ EOF
 
     run grep "Meta Workspace Skill" .claude/skills/meta-workspace/SKILL.md
     [ "$status" -eq 0 ]
+}
+
+@test "init claude keeps old flat skill files without --update" {
+    mkdir -p .claude/skills
+    echo "custom content" > .claude/skills/meta-git.md
+
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+
+    [ "$(cat .claude/skills/meta-git.md)" = "custom content" ]
+    [ -f ".claude/skills/meta-git/SKILL.md" ]
 }
 
 @test "init claude --update replaces old flat skill files" {

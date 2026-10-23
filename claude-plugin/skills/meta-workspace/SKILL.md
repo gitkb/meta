@@ -98,7 +98,7 @@ The `--depth N` flag limits recursion depth.
 | `meta git clone <url>` | Clone meta repo + all children |
 | `meta exec -- <cmd>` | Run command in every repo |
 | `meta project list` | List all child projects |
-| `meta git worktree create <task>` | Isolated worktree set for a change (see `meta-worktree`) |
+| `meta git worktree create <task> --repo <alias>` | Isolated worktree set for a change (see `meta-worktree`) |
 | `meta init claude` | Install these skills |
 
 ## MCP Tools for Workspace Discovery

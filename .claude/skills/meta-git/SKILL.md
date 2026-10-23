@@ -87,7 +87,7 @@ meta git log --oneline -5
 
 ## Filtering
 
-Target specific repos. The meta root repo stays included even when it doesn't match the filter.
+Target specific repos. With `--tag`, the meta root repo stays included even when it isn't tagged; `--include`/`--exclude` match substrings of directory paths and can drop the root.
 
 ```bash
 # By tag
@@ -139,7 +139,7 @@ When the meta MCP server is available, these tools provide structured JSON outpu
 
 ## Efficiency Tips
 
-- **Targeted commits**: `meta --include repo1,repo2 git commit -m "msg"` commits only in matching repos (plus the root, if it has staged changes)
+- **Targeted commits**: `meta --include repo1,repo2 git commit -m "msg"` commits only in repos whose path matches
 - **Tag-based push**: `meta --tag backend git push` pushes tagged repos (and the root)
 - **Per-repo messages**: Use `meta_git_multi_commit` when changes in different repos need different commit messages
 - **One-call status**: `meta git status` replaces N individual `cd && git status` sequences

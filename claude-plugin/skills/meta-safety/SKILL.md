@@ -15,7 +15,7 @@ Multi-repo workspaces are powerful but require awareness. Meta gives you precisi
 
 ## Precision Operations
 
-Instead of cd-ing into repos one by one, use meta flags to target what you need. Include/exclude match substrings of directory paths, and the meta root stays included:
+Instead of cd-ing into repos one by one, use meta flags to target what you need. Include/exclude match substrings of directory paths; `--tag` keeps the meta root even when it isn't tagged:
 
 ```bash
 # Target specific repos

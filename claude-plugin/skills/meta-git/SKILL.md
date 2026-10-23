@@ -69,7 +69,7 @@ meta git snapshot restore before-refactor --force
 - Branch name
 - Dirty status
 
-**On restore**: If a repo has uncommitted changes to tracked files, meta stashes them before checking out the snapshot state. Untracked files are not stashed and can block the checkout.
+**On restore**: Each repo's branch is reset to the snapshot's SHA (`git checkout -B <branch> <sha>`), so commits made after the snapshot drop off the branch (they stay in the reflog). If a repo has uncommitted changes to tracked files, meta stashes them first. Untracked files are not stashed and can block the checkout.
 
 ## Common Git Operations
 

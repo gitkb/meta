@@ -67,12 +67,16 @@ Add a repo to an existing set with `meta git worktree add auth-fix --repo anothe
 whose `origin` matches; it does not check out a fork's branch or pin the head
 SHA. It never applies to the root repo, and when no repo matches or the fetch
 fails it only warns and creates a new branch (add `--strict` to make that an
-error). To continue a PR on the root repo, start from its branch instead:
+error). To continue a PR on the root repo, check out its branch directly:
 
 ```bash
-git fetch origin my-feature
-meta git worktree create review origin/my-feature --branch my-feature --repo .
+git fetch origin my-feature:my-feature   # create or fast-forward the local branch
+meta git worktree create review --branch my-feature --repo . --strict
 ```
+
+Don't pass `origin/my-feature` as the commit-ish here: with a commit-ish, create
+always makes a new branch, which fails when `my-feature` already exists locally
+(and without `--strict` that failure is only a warning).
 
 ## Short-Lived and Automated Sets
 
@@ -110,12 +114,12 @@ worktree repos.
 meta git worktree exec auth-fix -- cargo test
 meta git worktree exec auth-fix --include backend -- make build
 meta git worktree exec auth-fix --exclude legacy -- npm test
+meta git worktree exec auth-fix --parallel -- cargo build
+```
 
 `--include`/`--exclude` match text anywhere in each repo's absolute path, and
 every path contains `.worktrees/<set>/`: pick filter text that isn't in the set
 name (`--include auth` in set `auth-fix` matches every repo).
-meta git worktree exec auth-fix --parallel -- cargo build
-```
 
 ## Context Detection
 

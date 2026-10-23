@@ -77,7 +77,7 @@ meta --strict git worktree prune
 - Failed PR branch fetches (worktree create)
 - Invalid `--meta` format values (worktree create)
 - Failed directory removal (worktree prune)
-- Store update failures (all worktree commands)
+- Store update failures (worktree create, add, remove, prune)
 
 **When to use --strict:**
 - CI pipelines testing a specific release tag across all repos

@@ -99,7 +99,7 @@ Returns JSON with:
   "success": true,
   "results": [
     {
-      "directory": "./api",
+      "directory": "/path/to/workspace/api",
       "command": "git rev-parse HEAD",
       "success": true,
       "exit_code": 0,
@@ -161,7 +161,8 @@ meta --exclude large-monorepo exec -- cargo update
 
 ### Find Files Across Repos
 ```bash
-meta exec -- find . -name "*.rs" -type f | head -20
+# Quote the whole command: meta joins its arguments with spaces for the shell
+meta exec -- 'find . -name "*.rs" -type f' | head -20
 ```
 
 ### Clean Build Artifacts
@@ -179,7 +180,7 @@ meta exec -- rm -rf node_modules dist
 | One-off scripts | Operations with meta-specific logic |
 | npm/cargo/make | Clone, update, snapshot |
 
-Plugins intercept command patterns and provide enhanced behavior. `meta git clone` doesn't run `git clone` in each repo—it reads `.meta` and clones the entire graph.
+`meta exec -- <cmd>` still offers the command to plugins first: `meta exec -- git ...` goes to the git plugin, and `cargo build`/`cargo test` go to meta-rust when it is installed. Plugins intercept command patterns and provide enhanced behavior. `meta git clone` doesn't run `git clone` in each repo—it reads `.meta` and clones the entire graph.
 
 ## Worktree Context Detection
 

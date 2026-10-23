@@ -500,7 +500,9 @@ a selected set. All-set listing reports failed sets as warnings, so consumers
 must check warnings before treating an aggregate inventory as complete.
 
 Implicit worktree scoping uses metadata-only paths rather than branch probes
-before dispatch. Membership still traverses the realized tree with a finite
+before dispatch. Membership discovery errors stop dispatch instead of silently
+falling back to ordinary project configuration. Plugin list selection uses the
+protocol request directory, even when the plugin process starts elsewhere. Membership still traverses the realized tree with a finite
 entry budget. Poll sparingly, retain last-observed data as such, and back off on
 failure. These changes reduce workload; they do not establish a fix for a macOS
 kernel panic.

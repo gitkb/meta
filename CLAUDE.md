@@ -33,7 +33,7 @@ meta project list -r     # Shows full tree
 meta exec -r cargo test  # Runs across all nested repos
 ```
 
-**What `meta` does:** Clones all child repos, runs commands across them in parallel (`meta exec`), manages git worktrees across the entire workspace (`meta worktree`), and provides project-level coordination.
+**What `meta` does:** Clones all child repos, runs commands across them in parallel (`meta exec`), manages git worktrees across the entire workspace (`meta git worktree`), and provides project-level coordination.
 
 ## Logging & Debugging
 

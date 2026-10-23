@@ -1,16 +1,21 @@
+---
+name: meta-safety
+description: Multi-repo safety discipline — precision operations, dependency checking, and efficiency tips.
+---
+
 # Meta Safety Skill
 
-Multi-repo workspaces are powerful but require awareness. Meta gives you precision tools to operate on exactly what you need, saving turns and avoiding unintended changes.
+Multi-repo workspaces are powerful but require awareness. Meta gives you precision tools to operate on only what you need, saving turns and avoiding unintended changes.
 
 ## Session Start
 
-1. `meta project list --json` — workspace map in one call
-2. `meta git status` — see state of all repos at once
+1. `meta project list --recursive --json` — workspace map, including nested meta repos, in one call
+2. `meta git status` — see state of every repo at once (`meta --recursive git status` for nested ones)
 3. Note which repos provide shared dependencies (check `.meta.yaml` for `provides`/`depends_on`)
 
 ## Precision Operations
 
-Instead of cd-ing into repos one by one, use meta flags to target exactly what you need:
+Instead of cd-ing into repos one by one, use meta flags to target what you need. Include/exclude match substrings of directory paths, and the meta root stays included:
 
 ```bash
 # Target specific repos
@@ -22,11 +27,8 @@ meta --tag backend exec -- cargo test
 # Exclude repos
 meta --exclude legacy exec -- npm update
 
-# Dependency-aware order
-meta --ordered exec -- cargo build
-
-# Combine: tagged repos, in order, excluding one
-meta --tag backend --exclude legacy --ordered exec -- make deploy
+# Combine: tagged repos, excluding one, one at a time
+meta --tag backend --exclude legacy --sequential exec -- make deploy
 ```
 
 ## Before Modifying Shared Code
@@ -35,15 +37,15 @@ When modifying a repo that other repos depend on:
 
 1. **Check dependents**: Use `meta_analyze_impact <repo-name>` (MCP tool) to see transitive dependents
 2. **Plan cascading changes**: If `meta_core` changes, repos that depend on it may need updates
-3. **Build in order**: `meta --ordered exec -- cargo build` respects the dependency graph
+3. **Build in order**: there is no CLI flag for dependency order; get it from the MCP tool `meta_execution_order` and build the repos one at a time in that order
 
 ## Efficient Commits
 
 ```bash
-# Commit in exactly the repos you modified
+# Commit only in the repos you modified
 meta --include repo1,repo2 git commit -m "feat: update shared API"
 
-# Push only tagged repos
+# Push tagged repos (and the root)
 meta --tag backend git push
 
 # Per-repo commit messages (when changes differ)
@@ -63,13 +65,11 @@ The `meta_query_repos` MCP tool filters repos by state:
 
 ## Global Strict Mode
 
-Use `meta --strict` to convert all warnings to errors across any command. This provides all-or-nothing behavior for CI/automation contexts:
+Use `meta --strict` to turn worktree warnings into errors for CI/automation. It applies to the `meta git worktree` checks listed below, not to `meta exec`. It is not a transaction: repos already changed before the error stay changed.
 
 ```bash
-# Global strict mode: fails on ANY warning across all commands
-meta --strict worktree create feature-test v2.0.0 --all
-meta --strict worktree prune
-meta --strict exec -- cargo build
+meta --strict git worktree create feature-test v2.0.0 --all
+meta --strict git worktree prune
 ```
 
 **What becomes an error in strict mode:**
@@ -92,21 +92,21 @@ meta --strict exec -- cargo build
 
 ### Ephemeral Cleanup Behavior
 
-When using `meta worktree exec --ephemeral`, the automatic cleanup after command execution intentionally uses best-effort mode (`strict=false`), even if you specified `--strict`. This ensures:
+`meta git worktree exec --ephemeral` creates and cleans up in best-effort mode (`strict=false`), even if you specified `--strict`. Cleanup only runs if creation succeeded. This ensures:
 
 - The command result (success/failure) reflects the actual executed command, not cleanup issues
 - Cleanup failures are logged as warnings, not errors
 - Partial cleanup succeeds even if some repos have open file handles or permissions issues
 
-If you need to ensure cleanup completed fully, follow up with `meta worktree list` to verify.
+If you need to ensure cleanup completed fully, follow up with `meta git worktree list` to verify.
 
 ### Worktree-specific --strict
 
-The `worktree create` command also has a local `--strict` flag that can be used independently:
+`meta git worktree create` also has a local `--strict` flag:
 
 ```bash
 # Local --strict on worktree create only
-meta worktree create feature-test v2.0.0 --all --strict
+meta git worktree create feature-test v2.0.0 --all --strict
 ```
 
 Both flags work together - if either global `--strict` or local `--strict` is set, strict mode is enabled.
@@ -116,5 +116,4 @@ Both flags work together - if either global `--strict` or local `--strict` is se
 - One `meta git status` replaces N individual `git status` calls
 - One `meta --tag X exec -- cmd` replaces N `cd && cmd` sequences
 - `meta_analyze_impact` before modifying providers prevents cascading fix-up commits
-- `meta --ordered exec -- cargo build` builds in correct dependency order automatically
 - `meta --dry-run exec -- dangerous-cmd` previews before executing

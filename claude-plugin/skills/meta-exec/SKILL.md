@@ -5,7 +5,7 @@ description: Execute commands across all repos — parallel, filtered, dry-run m
 
 # Meta Exec Skill
 
-Execute any command across all repositories in the workspace. Meta extends `loop`, a tool for running commands across directories.
+Execute any command in the root repo and every project at this meta level (add `--recursive` for nested meta repos). Meta extends `loop`, a tool for running commands across directories.
 
 ## The Execution Model
 
@@ -35,14 +35,14 @@ meta exec -- --version
 
 ## Parallel vs Sequential
 
-By default, commands run sequentially with live output. Use `--parallel` for concurrent execution:
+Commands run in parallel by default (a `.meta` config can set `defaults.parallel: false`). Use `--sequential` for live output in order, or `--parallel` to force concurrency:
 
 ```bash
-# Sequential (default) - see output as it happens
+# Parallel (default) - faster, grouped output after completion
 meta exec -- cargo build
 
-# Parallel - faster, grouped output after completion
-meta --parallel git status
+# Sequential - see output as it happens
+meta --sequential exec -- cargo build
 ```
 
 Parallel mode:
@@ -55,10 +55,10 @@ Parallel mode:
 Control which repos run the command. These options come from `loop`:
 
 ```bash
-# Only include specific directories (overrides config)
+# Only directories whose path contains one of these (substring match)
 meta --include api,worker git status
 
-# Exclude specific directories (adds to ignores)
+# Skip directories whose path contains one of these
 meta --exclude legacy-service git push
 
 # Filter by tag (meta-specific, applied before loop filtering)
@@ -72,6 +72,8 @@ meta --tag backend --include api git status
 1. `--tag` filters projects by tag (meta level)
 2. `--include` limits to specific directories (loop level)
 3. `--exclude` removes directories (loop level)
+
+Include/exclude match substrings of directory paths, so `api` also matches `api-tests`. The meta root repo stays included even when it doesn't match a tag.
 
 ## Dry Run
 
@@ -115,7 +117,7 @@ Returns JSON with:
 
 ## Silent Mode
 
-Suppress all output:
+Suppress normal command output (errors and `--json` output still print):
 
 ```bash
 meta --silent exec -- npm install
@@ -125,9 +127,10 @@ meta --silent exec -- npm install
 
 | Option | Description |
 |--------|-------------|
-| `--parallel` | Run commands concurrently |
-| `--include <dirs>` | Only run in these directories |
-| `--exclude <dirs>` | Skip these directories |
+| `--parallel` | Run commands concurrently (the default) |
+| `--sequential` | Run one repo at a time |
+| `--include <dirs>` | Only directories whose path contains these |
+| `--exclude <dirs>` | Skip directories whose path contains these |
 | `--tag <tags>` | Filter by project tag(s) |
 | `--dry-run` | Preview without executing |
 | `--json` | Structured JSON output |
@@ -142,19 +145,18 @@ meta --silent exec -- npm install
 meta exec -- cargo build --release
 ```
 
-### Run Tests (Parallel for Speed)
+### Run Tests
 ```bash
-meta --parallel git status
-meta --parallel exec -- cargo test
+meta exec -- cargo test
 ```
 
 ### Update Dependencies Selectively
 ```bash
-# Only frontend repos
+# Repos tagged frontend (plus the root)
 meta --tag frontend exec -- npm update
 
-# Exclude slow repos
-meta exec -- cargo update --exclude large-monorepo
+# Exclude slow repos (meta options go before `exec`)
+meta --exclude large-monorepo exec -- cargo update
 ```
 
 ### Find Files Across Repos
@@ -188,14 +190,14 @@ cd .worktrees/auth-fix/backend
 meta exec -- cargo test    # runs in auth-fix's repos
 
 # Override with --primary to use primary checkout paths
-meta exec --primary -- cargo test
+meta --primary exec -- cargo test
 ```
 
-This is filesystem-based detection—no store dependency. See `meta-worktree.md` for full worktree management.
+This is filesystem-based detection—no store dependency. See the `meta-worktree` skill for full worktree management.
 
 ## Efficiency Tips
 
-- **Target precisely**: Use `--include`/`--exclude`/`--tag` to run commands in exactly the repos you need — avoids running commands you'll have to undo
-- **Dependency order**: Use `--ordered` for dependency-aware build/test order (respects `depends_on` in `.meta.yaml`)
-- **Avoid unnecessary parallel**: Don't use `--parallel` for operations with cross-repo dependencies — sequential with `--ordered` is safer
+- **Target precisely**: Use `--include`/`--exclude`/`--tag` to run commands in only the repos you need — avoids running commands you'll have to undo
+- **Dependency order**: There is no CLI flag for dependency order. Get it from the MCP tool `meta_execution_order` (from `depends_on` in `.meta.yaml`), then run repos one at a time in that order with `--include`
+- **Cross-repo dependencies**: Use `--sequential` when one repo's step needs another's output; parallel is the default
 - **Dry run first**: `meta --dry-run exec -- dangerous-command` shows what would happen before committing

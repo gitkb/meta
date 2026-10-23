@@ -1,6 +1,11 @@
+---
+name: meta-git
+description: Git operations across multiple repositories — status, commit, push, pull, snapshots, multi-commit.
+---
+
 # Meta Git Skill
 
-Git operations across multiple repositories. One command operates on ALL repos in the workspace.
+Git operations across multiple repositories. One command operates on the root repo and every project in this meta level; add `--recursive` (`meta --recursive git status`) to include nested meta repos.
 
 ## The Core Insight
 
@@ -8,10 +13,10 @@ Git operations across multiple repositories. One command operates on ALL repos i
 
 ```bash
 # Instead of running git status in each repo...
-meta git status    # Shows status for ALL repos at once
+meta git status    # Shows status for every repo at once
 
 # Instead of committing in each repo...
-meta git commit -m "feat: update"    # Commits in ALL dirty repos
+meta git commit -m "feat: update"    # Commits in every repo with staged changes
 ```
 
 ## Cloning a Meta Repo
@@ -35,11 +40,11 @@ meta git clone <url> --depth 1
 ## Updating All Repos
 
 ```bash
-# Pull latest + clone any missing repos
-meta git update
+meta git pull      # Pull every existing repo
+meta git update    # Clone repos listed in .meta that are missing locally
 ```
 
-This is the "sync workspace" command - ensures you have all repos at latest.
+`meta git update` only clones missing repos; it does not pull existing ones. Add `--recursive` to either for nested meta repos.
 
 ## Snapshots (Critical for Batch Operations)
 
@@ -55,7 +60,7 @@ meta git snapshot list
 # Preview what restore would do
 meta --dry-run git snapshot restore before-refactor
 
-# Actually restore (auto-stashes uncommitted work)
+# Actually restore (auto-stashes uncommitted tracked changes)
 meta git snapshot restore before-refactor
 ```
 
@@ -64,7 +69,7 @@ meta git snapshot restore before-refactor
 - Branch name
 - Dirty status
 
-**On restore**: If a repo has uncommitted changes, meta automatically stashes them before checking out the snapshot state.
+**On restore**: If a repo has uncommitted changes to tracked files, meta stashes them before checking out the snapshot state. Untracked files are not stashed and can block the checkout.
 
 ## Common Git Operations
 
@@ -82,13 +87,13 @@ meta git log --oneline -5
 
 ## Filtering
 
-Target specific repos:
+Target specific repos. The meta root repo stays included even when it doesn't match the filter.
 
 ```bash
 # By tag
 meta --tag backend git status
 
-# By name
+# By directory (substring match: `api` also matches `api-tests`)
 meta --include api,web git push
 
 # Exclude repos
@@ -121,16 +126,6 @@ meta git status              # Review
 meta git snapshot restore before-changes
 ```
 
-## SSH Optimization
-
-For faster parallel operations:
-
-```bash
-meta git setup-ssh
-```
-
-Configures SSH connection multiplexing for reuse across parallel git operations.
-
 ## MCP Tools for Git Operations
 
 When the meta MCP server is available, these tools provide structured JSON output:
@@ -144,7 +139,7 @@ When the meta MCP server is available, these tools provide structured JSON outpu
 
 ## Efficiency Tips
 
-- **Targeted commits**: `meta --include repo1,repo2 git commit -m "msg"` commits in exactly the repos you want
-- **Tag-based push**: `meta --tag backend git push` pushes only tagged repos
+- **Targeted commits**: `meta --include repo1,repo2 git commit -m "msg"` commits only in matching repos (plus the root, if it has staged changes)
+- **Tag-based push**: `meta --tag backend git push` pushes tagged repos (and the root)
 - **Per-repo messages**: Use `meta_git_multi_commit` when changes in different repos need different commit messages
 - **One-call status**: `meta git status` replaces N individual `cd && git status` sequences

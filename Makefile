@@ -24,7 +24,8 @@ build-plugins:
 # Copy the Claude skills from meta_cli (their source) into this repo's
 # .claude/skills/ and the Claude plugin. tests/init.bats checks they match.
 skills:
-	rm -rf .claude/skills/meta-*/ claude-plugin/skills/meta-*/
+	set -e; \
+	rm -rf .claude/skills/meta-*/ claude-plugin/skills/meta-*/; \
 	for dir in meta_cli/.claude/skills/meta-*/; do \
 		name=$$(basename "$$dir"); \
 		mkdir -p ".claude/skills/$$name" "claude-plugin/skills/$$name"; \

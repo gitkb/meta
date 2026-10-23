@@ -87,6 +87,34 @@ The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta`
 - When extending meta with custom behavior
 - When troubleshooting command routing
 
+### meta-worktree - Isolated Worktree Sets
+
+**Purpose:** Create, use and remove multi-repo git worktree sets with `meta git worktree`.
+
+**Key concepts covered:**
+- Every change gets its own set; read-only work may stay in the primary checkout
+- `create` with `--repo`, `--recursive`, `--no-deps`, a commit-ish or `--from-pr` (child repos only), plus a root-PR recipe
+- `list`, `status`, `diff`, `exec`, `remove`, `prune`, TTLs and `--strict`
+- Context detection inside `.worktrees/<name>/` and its limits
+
+**When Claude should reference this skill:**
+- Before changing code in a meta workspace
+- When continuing a PR or testing a tag or SHA in isolation
+
+### meta-safety - Multi-Repo Safety
+
+**Purpose:** Precision operations and dependency awareness across repos.
+
+**Key concepts covered:**
+- Session start: `meta project list --recursive --json`, `meta git status`
+- Filtering with `--include`/`--exclude` (substring matches) and `--tag`
+- Dependency order via the MCP tool `meta_execution_order`
+- Global and worktree `--strict` mode
+
+**When Claude should reference this skill:**
+- Before batch changes or commits across repos
+- Before modifying a repo other repos depend on
+
 ## Skill Design Philosophy
 
 These skills were designed with specific principles:

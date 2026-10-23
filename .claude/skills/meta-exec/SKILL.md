@@ -180,7 +180,7 @@ meta exec -- rm -rf node_modules dist
 | One-off scripts | Operations with meta-specific logic |
 | npm/cargo/make | Clone, update, snapshot |
 
-`meta exec -- <cmd>` still offers the command to plugins first: `meta exec -- git ...` goes to the git plugin, and `cargo build`/`cargo test` go to meta-rust when it is installed. Plugins intercept command patterns and provide enhanced behavior. `meta git clone` doesn't run `git clone` in each repo—it reads `.meta` and clones the entire graph.
+`meta exec -- <cmd>` still offers the command to plugins first: `meta exec -- git ...` goes to the git plugin, and every `meta exec -- cargo ...` goes to meta-rust when it is installed. meta-rust only handles `build` and `test`, so with it installed other cargo commands (`cargo update`, `cargo clean`) fail. Plugins intercept command patterns and provide enhanced behavior. `meta git clone` doesn't run `git clone` in each repo—it reads `.meta` and clones the entire graph.
 
 ## Worktree Context Detection
 

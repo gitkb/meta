@@ -44,7 +44,6 @@ The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta`
 - `meta git clone` and its queue-based recursive cloning
 - `meta git update` for syncing workspaces
 - Snapshot create/list/restore workflow
-- SSH optimization with `setup-ssh`
 - Safe workflow patterns (status → snapshot → work → commit)
 
 **When Claude should reference this skill:**

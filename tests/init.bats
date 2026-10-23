@@ -80,6 +80,8 @@ teardown() {
         count=$((count + 1))
     done
     [ "$count" -eq 6 ]
+    # No copies of skills meta_cli no longer has
+    [ "$(ls -d "$root"/.claude/skills/meta-*/ "$root"/claude-plugin/skills/meta-*/ | wc -l)" -eq 12 ]
 }
 
 @test "init claude creates all rule files" {

@@ -74,7 +74,9 @@ git fetch origin my-feature:my-feature   # create or fast-forward the local bran
 meta git worktree create review --branch my-feature --repo . --strict
 ```
 
-Don't pass `origin/my-feature` as the commit-ish here: with a commit-ish, create
+The same applies to child repos: when the branch already exists locally,
+`create` checks it out as it is (the fetch only updates `origin/<branch>`), so
+pull it in the new worktree. Don't pass `origin/my-feature` as the commit-ish here: with a commit-ish, create
 always makes a new branch, which fails when `my-feature` already exists locally
 (and without `--strict` that failure is only a warning).
 
@@ -163,7 +165,7 @@ Configure hooks in the meta config (`.meta`, `.meta.json`, `.meta.yaml` or `.met
 worktree:
   hooks:
     post-create: my-tool worktree on-create
-    post-destroy: my-tool worktree on-destroy   # runs on `remove`
+    post-destroy: my-tool worktree on-destroy   # runs on `remove` and ephemeral cleanup
     post-prune: my-tool worktree on-prune
 ```
 
@@ -181,7 +183,8 @@ store's metadata; `prune` only acts on sets in the store.
 
 `--strict` on `create` (or global `meta --strict`) turns warnings such as a
 missing commit-ish in one repo into errors. Repos already created are not rolled
-back.
+back, and the half-made set is not in the store, so `prune` won't find it: clean
+it up with `remove`.
 
 ## Command Reference
 

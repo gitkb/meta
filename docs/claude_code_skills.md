@@ -16,7 +16,7 @@ meta init claude --update
 
 Each skill is installed as `.claude/skills/<name>/SKILL.md` with `name`/`description` frontmatter, the layout Claude Code loads. Older releases wrote flat `.claude/skills/meta-*.md` files, which Claude Code never loaded; `meta init claude --update` replaces them.
 
-The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta` binary. This repo's `.claude/skills/` and `claude-plugin/skills/` are copies: edit meta_cli, then run `make skills` (`tests/init.bats` fails when they differ).
+The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta` binary. This repo's `.claude/skills/` and `claude-plugin/skills/` are copies: edit meta_cli, then run `make skills` (`tests/init.bats` fails when they differ). CI checks against meta_cli `main` (or the branch of the same name), so after a meta_cli skill change merges, run `make skills` here too, including on the automatic child-update sync PR. Bump `claude-plugin/.claude-plugin/plugin.json`'s version when the plugin's skills change, so plugin users get the update.
 
 ## Available Skills
 

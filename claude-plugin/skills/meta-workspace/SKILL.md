@@ -88,7 +88,7 @@ meta git clone <url> --recursive
 meta --recursive git status
 ```
 
-The `--depth N` flag limits recursion depth.
+The global `--depth N` flag limits recursion depth. For `meta git clone`, `--depth` is the shallow-clone depth; use `--meta-depth N` there.
 
 ## Key Commands Quick Reference
 

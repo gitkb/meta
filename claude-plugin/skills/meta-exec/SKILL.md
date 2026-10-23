@@ -117,7 +117,7 @@ Returns JSON with:
 
 ## Silent Mode
 
-Suppress normal command output (errors and `--json` output still print):
+Suppress command output (only meta's final failure message remains):
 
 ```bash
 meta --silent exec -- npm install
@@ -194,7 +194,7 @@ meta exec -- cargo test    # runs in auth-fix's repos
 meta --primary exec -- cargo test
 ```
 
-This is filesystem-based detection—no store dependency. See the `meta-worktree` skill for full worktree management.
+This is filesystem-based detection—no store dependency. It skips repos nested inside another repo of the set. See the `meta-worktree` skill for full worktree management.
 
 ## Efficiency Tips
 

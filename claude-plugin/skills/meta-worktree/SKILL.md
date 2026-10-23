@@ -26,7 +26,9 @@ Read-only work (reading code, searching, answering questions) may stay in the
 primary checkout.
 
 Create one set per task, with only the repos it touches, and remove it once the
-work is pushed. Before a session ends, remove every set it created.
+work is pushed. Before a session ends, remove every set it created. Run
+`meta git worktree` commands from the primary checkout: inside a set they look
+for sets under that set (only `list` understands the current set).
 
 ## Creating Worktrees
 
@@ -49,7 +51,7 @@ meta git worktree create review --repo api:release/2.3 --repo worker:develop
 # Start from a tag, SHA or branch (positional commit-ish)
 meta git worktree create incident-42 v2.3.1 --repo api
 
-# Continue a GitHub PR: checks out its head branch
+# Continue a GitHub PR on a child repo: checks out its head branch
 meta git worktree create review --from-pr org/api#42 --repo api
 
 # Nested meta repos: resolve across the whole tree, aliases are root-relative paths
@@ -61,8 +63,16 @@ meta git worktree create auth-fix --repo backend --dry-run
 
 Add a repo to an existing set with `meta git worktree add auth-fix --repo another-service`.
 
-`--from-pr` uses the PR's head branch name and fetches it from the matching
-repo's `origin`; it does not check out a fork's branch or pin the head SHA.
+`--from-pr` uses the PR's head branch name and fetches it from the child repo
+whose `origin` matches; it does not check out a fork's branch or pin the head
+SHA. It never applies to the root repo, and when no repo matches or the fetch
+fails it only warns and creates a new branch (add `--strict` to make that an
+error). To continue a PR on the root repo, start from its branch instead:
+
+```bash
+git fetch origin my-feature
+meta git worktree create review origin/my-feature --branch my-feature --repo .
+```
 
 ## Short-Lived and Automated Sets
 
@@ -88,8 +98,7 @@ meta git worktree list auth-fix
 meta --json git worktree list
 meta git worktree list --metadata-only # membership paths only, no Git status
 meta git worktree status auth-fix      # per-repo branch and dirty state
-meta git worktree diff auth-fix --base main
-meta git worktree diff auth-fix --stat
+meta git worktree diff auth-fix --base main   # committed changes only, as a stat summary
 ```
 
 `list` and `status` take `--recursive` to include repos nested beneath other
@@ -101,6 +110,10 @@ worktree repos.
 meta git worktree exec auth-fix -- cargo test
 meta git worktree exec auth-fix --include backend -- make build
 meta git worktree exec auth-fix --exclude legacy -- npm test
+
+`--include`/`--exclude` match text anywhere in each repo's absolute path, and
+every path contains `.worktrees/<set>/`: pick filter text that isn't in the set
+name (`--include auth` in set `auth-fix` matches every repo).
 meta git worktree exec auth-fix --parallel -- cargo build
 ```
 
@@ -116,7 +129,11 @@ meta git status
 meta --tag cli exec -- pwd
 ```
 
-Detection relies on the `.worktrees/<name>` path. The root repo is part of a set
+Detection relies on the `.worktrees/<name>` path. It, and
+`meta git worktree exec`, only find repos down to the first nested repo: repos
+created with `--recursive` inside another repo of the set (e.g.
+`open-source/sdk/core` inside `open-source`) are skipped. `list --recursive`
+shows them; run commands for them from their own directory. The root repo is part of a set
 by default, so the set has its own `.meta` config; otherwise meta walks up to
 the primary checkout's config. `meta --primary <command>` bypasses detection;
 run it from the primary checkout to be sure it uses the primary repos.
@@ -124,7 +141,7 @@ run it from the primary checkout to be sure it uses the primary repos.
 ## Cleanup
 
 ```bash
-meta git worktree remove auth-fix          # refuses repos with uncommitted changes
+meta git worktree remove auth-fix          # refuses top-level repos with uncommitted changes
 meta git worktree remove auth-fix --force  # discards uncommitted changes
 meta git worktree prune --dry-run          # preview
 meta git worktree prune                    # remove expired (TTL) and orphaned sets
@@ -146,36 +163,21 @@ worktree:
     post-prune: my-tool worktree on-prune
 ```
 
-Each hook gets a JSON description of the action on stdin. Hook failures print
-warnings but don't block the operation.
+Each hook gets a JSON description of the action on stdin. Hook failures don't
+block the operation; they are logged as warnings, shown only with `RUST_LOG=warn`.
 
 ## Centralized Store
 
 Worktree metadata lives in `~/.meta/worktree.json` (the directory can be moved
 with `META_DATA_DIR`). It records TTL, ephemeral and custom metadata for every
-set on the machine. `list` falls back to scanning the filesystem without it;
-`prune` only acts on sets in the store.
+set on the machine. `list` scans this project's `.worktrees/` and adds the
+store's metadata; `prune` only acts on sets in the store.
 
 ## Strict Mode
 
 `--strict` on `create` (or global `meta --strict`) turns warnings such as a
 missing commit-ish in one repo into errors. Repos already created are not rolled
 back.
-
-## GitHub Actions Example
-
-```yaml
-steps:
-  - name: Review PR
-    run: |
-      meta --json git worktree exec --ephemeral review-${{ github.run_id }} \
-        --from-pr ${{ github.repository }}#${{ github.event.pull_request.number }} \
-        --all \
-        --meta agent=review-bot \
-        -- make check
-```
-
-This needs a cloned meta workspace, `meta`, and an authenticated `gh`.
 
 ## Command Reference
 
@@ -185,7 +187,7 @@ This needs a cloned meta workspace, `meta`, and an authenticated `gh`.
 | `add <name>` | Add repo(s) to an existing set |
 | `list [<name>]` | List sets (the current one inside a set) |
 | `status <name>` | Per-repo status |
-| `diff <name>` | Diff vs a base branch |
+| `diff <name>` | Committed changes vs a base branch |
 | `exec <name> -- <cmd>` | Run a command in the set's repos |
 | `remove <name>` | Remove a set |
 | `prune` | Remove expired or orphaned sets |
@@ -200,7 +202,7 @@ This needs a cloned meta workspace, `meta`, and an authenticated `gh`.
 | `--no-deps` | Skip automatic root and dependency selection |
 | `-r, --recursive` | Resolve across nested meta repos (root-relative aliases) |
 | `--branch <name>` | Override the branch name |
-| `--from-pr <owner/repo#N>` | Start from a PR's head branch |
+| `--from-pr <owner/repo#N>` | Start a child repo from a PR's head branch |
 | `--dry-run` | Preview without creating anything |
 | `--ephemeral` | Mark as ephemeral |
 | `--ttl <duration>` | Make `prune` remove it after this long |
@@ -211,7 +213,7 @@ This needs a cloned meta workspace, `meta`, and an authenticated `gh`.
 
 | Option | Description |
 |--------|-------------|
-| `--include <repos>` | Only these repos (comma-separated) |
-| `--exclude <repos>` | Skip these repos (comma-separated) |
+| `--include <text>` | Only repos whose path contains it (comma-separated) |
+| `--exclude <text>` | Skip repos whose path contains it (comma-separated) |
 | `--parallel` | Run concurrently |
 | `--ephemeral` | Create, run, then remove (takes `--repo`/`--all`, `--branch`, `--from-pr`, `--meta`, a commit-ish) |

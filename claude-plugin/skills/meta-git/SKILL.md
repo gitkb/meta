@@ -44,7 +44,7 @@ meta git pull      # Pull every existing repo
 meta git update    # Clone repos listed in .meta that are missing locally
 ```
 
-`meta git update` only clones missing repos; it does not pull existing ones. Add `--recursive` to either for nested meta repos.
+`meta git update` only clones missing repos (nested meta repos included); it does not pull existing ones. `meta git pull --recursive` also pulls nested meta repos.
 
 ## Snapshots (Critical for Batch Operations)
 
@@ -60,8 +60,8 @@ meta git snapshot list
 # Preview what restore would do
 meta --dry-run git snapshot restore before-refactor
 
-# Actually restore (auto-stashes uncommitted tracked changes)
-meta git snapshot restore before-refactor
+# Actually restore (auto-stashes uncommitted tracked changes; asks to confirm without --force)
+meta git snapshot restore before-refactor --force
 ```
 
 **What snapshots capture per repo:**
@@ -123,7 +123,7 @@ meta git snapshot create before-changes
 # ... make changes across repos ...
 meta git status              # Review
 # If something went wrong:
-meta git snapshot restore before-changes
+meta git snapshot restore before-changes --force
 ```
 
 ## MCP Tools for Git Operations

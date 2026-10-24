@@ -35,7 +35,7 @@ jobs:
           shared-key: "test-${{ matrix.os }}"
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
   clippy:
     name: Clippy
@@ -58,7 +58,7 @@ jobs:
           shared-key: "clippy"
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   integration:
     name: Integration Tests
@@ -83,7 +83,7 @@ jobs:
           shared-key: "integration-${{ matrix.os }}"
 
       - name: Build workspace
-        run: cargo build --workspace
+        run: cargo build --workspace --locked
 
       - name: Verify binaries
         run: |

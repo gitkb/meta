@@ -37,12 +37,14 @@ skills:
 	cp -R "$$tmp"/meta-* .meta/skills/; \
 	cp -R "$$tmp"/meta-* claude-plugin/skills/
 
-# Install meta binary and all plugins globally via cargo install
-install:
-	cargo install --locked --path meta_cli
-	cargo install --locked --path meta_git_cli
-	cargo install --locked --path meta_project_cli
-	cargo install --locked --path meta_rust_cli
+# Crates whose binaries `make install` and `make uninstall` handle
+BIN_CRATES := meta_cli meta_git_cli meta_project_cli meta_rust_cli meta_mcp loop_cli
+
+# Install meta, its plugins, meta-mcp and loop globally via cargo install
+install: $(BIN_CRATES:%=install-%)
+
+$(BIN_CRATES:%=install-%): install-%:
+	cargo install --locked --path $*
 
 # Install plugins globally to ~/.meta/plugins/
 install-plugins: build-plugins
@@ -125,11 +127,11 @@ integration-test:
 	cargo build -p meta
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) META_CLI_PATH=target/debug/meta CARGO_BIN_EXE_meta=target/debug/meta cargo nextest run --workspace
 
-uninstall:
-	cargo uninstall meta 2>/dev/null || true
-	cargo uninstall meta_git_cli 2>/dev/null || true
-	cargo uninstall meta_project_cli 2>/dev/null || true
-	cargo uninstall meta_rust_cli 2>/dev/null || true
+uninstall: $(BIN_CRATES:%=uninstall-%)
 	rm -f ~/.meta/plugins/meta-git ~/.meta/plugins/meta-project ~/.meta/plugins/meta-rust
 
-.PHONY: install install-hooks build run test bats release integration-test
+# Without a package name, cargo uninstall removes the crate in the current directory
+$(BIN_CRATES:%=uninstall-%): uninstall-%:
+	-cd $* && cargo uninstall
+
+.PHONY: install $(BIN_CRATES:%=install-%) uninstall $(BIN_CRATES:%=uninstall-%) install-hooks build run test bats release integration-test

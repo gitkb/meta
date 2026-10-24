@@ -39,10 +39,10 @@ skills:
 
 # Install meta binary and all plugins globally via cargo install
 install:
-	cargo install --path meta_cli
-	cargo install --path meta_git_cli
-	cargo install --path meta_project_cli
-	cargo install --path meta_rust_cli
+	cargo install --locked --path meta_cli
+	cargo install --locked --path meta_git_cli
+	cargo install --locked --path meta_project_cli
+	cargo install --locked --path meta_rust_cli
 
 # Install plugins globally to ~/.meta/plugins/
 install-plugins: build-plugins

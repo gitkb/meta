@@ -306,19 +306,27 @@ EOF
 
 @test "init claude --update replaces old flat skill files" {
     mkdir -p .claude/skills
+    # Old flat files start with the shipped heading, e.g. "# Meta Git Skill"
     for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
-        echo "old content" > ".claude/skills/$name.md"
+        local word="${name#meta-}"
+        word="$(printf %s "${word:0:1}" | tr a-z A-Z)${word:1}"
+        printf '# Meta %s Skill\nold content\n' "$word" > ".claude/skills/$name.md"
     done
     echo "mine" > .claude/skills/my-skill.md
+    echo "# Another tool" > .claude/skills/meta-git.md
 
     run "$META_BIN" init claude --update
     [ "$status" -eq 0 ]
 
-    for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
+    for name in meta-workspace meta-exec meta-plugins meta-worktree meta-safety; do
         [ ! -e ".claude/skills/$name.md" ]
+    done
+    for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
         [ "$(readlink ".claude/skills/$name")" = "../../.meta/skills/$name" ]
     done
     [ "$(cat .claude/skills/my-skill.md)" = "mine" ]
+    # A same-named file meta never shipped stays
+    [ "$(cat .claude/skills/meta-git.md)" = "# Another tool" ]
 }
 
 @test "init claude --update refreshes rule files" {

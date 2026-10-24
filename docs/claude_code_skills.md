@@ -7,16 +7,28 @@ Meta includes six purpose-built Claude Code skills (`meta-workspace`, `meta-git`
 Install skills via the `meta init` command:
 
 ```bash
-# Install skills, rules and hooks to .claude/
+# Install skills to .meta/skills/, plus rules and hooks to .claude/
 meta init claude
 
 # Refresh skills and rules, keep settings.json
 meta init claude --update
 ```
 
-Each skill is installed as `.claude/skills/<name>/SKILL.md` with `name`/`description` frontmatter, the layout Claude Code loads. Older releases wrote flat `.claude/skills/meta-*.md` files, which Claude Code never loaded; `meta init claude --update` replaces them.
+Each skill is installed as `.meta/skills/<name>/SKILL.md` with `name`/`description` frontmatter, in meta's own `.meta/` folder, and linked into each agent's skills folder, the same way atc (`.atc/skills/`) and git-kb (`.kb/skills/`) install theirs:
 
-The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta` binary. This repo's `.claude/skills/` and `claude-plugin/skills/` are copies: edit meta_cli, then run `make skills` (`tests/init.bats` fails when they differ). CI checks against meta_cli `main` (or the branch of the same name), so after a meta_cli skill change merges, run `make skills` here too, including on the automatic child-update sync PR. Bump `claude-plugin/.claude-plugin/plugin.json`'s version when the plugin's skills change, so plugin users get the update.
+- `.claude/skills/<name> -> ../../.meta/skills/<name>` (Claude Code)
+- `.agents/skills/<name> -> ../../.meta/skills/<name>` (Codex and other agents)
+- `.cursor/skills/`, `.opencode/skills/`, `.pi/skills/`, `.omp/skills/`, `.grok/skills/`: only when that agent's folder (e.g. `.cursor/`) already exists
+
+Commit `.meta/skills/` and the links so everyone working in the repo gets the skills.
+
+**Windows.** Symlinks need Developer Mode or admin rights there. Where a link can't be made, `meta init claude` copies the skill folder instead and puts a `.meta-skill-copy` marker in it; `meta init claude --update` replaces marked copies with links once links work.
+
+**Upgrading.** Older releases wrote flat `.claude/skills/meta-*.md` files (which Claude Code never loaded) and later real `.claude/skills/meta-*/` folders. `meta init claude --update` removes both and links the new layout. It only replaces what meta wrote: a skill folder holding just `SKILL.md` (or a marked copy) and regular flat files. Other files, folders and links, including another tool's link with a meta skill's name, are left alone and reported as skipped; a link is never followed or removed.
+
+**Legacy `.meta` config file.** A repo whose config is the legacy `.meta` file can't also have the `.meta/` folder, so `meta init claude` refuses and asks you to rename the config first: `git mv .meta .meta.json` (same content), or convert it to `.meta.yaml`. Everywhere else, meta reads a `.meta` config only when it is a file, so the `.meta/` folder is never taken for config.
+
+The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta` binary. This repo's `.meta/skills/` (linked from `.claude/skills/` and `.agents/skills/`) and `claude-plugin/skills/` are copies: edit meta_cli, then run `make skills` (`tests/init.bats` fails when they differ). CI checks against meta_cli `main` (or the branch of the same name), so after a meta_cli skill change merges, run `make skills` here too, including on the automatic child-update sync PR. Bump `claude-plugin/.claude-plugin/plugin.json`'s version when the plugin's skills change, so plugin users get the update.
 
 ## Available Skills
 
@@ -129,7 +141,7 @@ These skills were designed with specific principles:
 
 ## Creating Custom Skills
 
-Add a custom skill as `.claude/skills/<name>/SKILL.md`:
+Add a custom skill as `.claude/skills/<name>/SKILL.md` (or `.agents/skills/<name>/SKILL.md` for Codex). Keep custom skills out of `.meta/skills/`, which meta manages:
 
 ```markdown
 ---
@@ -177,4 +189,4 @@ Skills are embedded in the `meta` binary and updated with each release. To get t
 1. Update meta: `brew upgrade meta-cli` or reinstall
 2. Refresh skills: `meta init claude --update`
 
-`--update` overwrites the skill and rule files with the latest versions and keeps `settings.json`; `--force` also overwrites `settings.json`.
+`--update` overwrites the skill and rule files with the latest versions, turns older layouts into links, and keeps `settings.json`; `--force` also overwrites `settings.json`.

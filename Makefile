@@ -21,8 +21,9 @@ build-plugins:
 	cp target/release/meta-project .meta/plugins/meta-project
 	cp target/release/meta-rust .meta/plugins/meta-rust
 
-# Copy the Claude skills from meta_cli (their source) into this repo's
-# .claude/skills/ and the Claude plugin. tests/init.bats checks they match.
+# Copy the agent skills from meta_cli (their source) into this repo's
+# .meta/skills/ (linked from .claude/skills/ and .agents/skills/) and the
+# Claude plugin. tests/init.bats checks they match.
 skills:
 	set -e; \
 	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
@@ -31,8 +32,9 @@ skills:
 		mkdir "$$tmp/$$name"; \
 		cp "$$dir/SKILL.md" "$$tmp/$$name/SKILL.md"; \
 	done; \
-	rm -rf .claude/skills/meta-*/ claude-plugin/skills/meta-*/; \
-	cp -R "$$tmp"/meta-* .claude/skills/; \
+	rm -rf .meta/skills/meta-*/ claude-plugin/skills/meta-*/; \
+	mkdir -p .meta/skills; \
+	cp -R "$$tmp"/meta-* .meta/skills/; \
 	cp -R "$$tmp"/meta-* claude-plugin/skills/
 
 # Install meta binary and all plugins globally via cargo install

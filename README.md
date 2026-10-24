@@ -146,14 +146,15 @@ done
 make install
 ```
 
-This installs `meta`, the `meta-git` and `meta-project` plugins, `meta-mcp`
-and `loop` into `~/.cargo/bin` (the crates in the Makefile's `BIN_CRATES`,
-the binaries a release ships), replacing any copies already there. To
-update, `git pull` in each directory and run `make install` again. Copies
-the install scripts put in `~/.local/bin` or `%USERPROFILE%\.meta\bin`
-(their defaults) stay; remove them or put `~/.cargo/bin` first in `PATH`.
-`agent` and `meta-plugins` in `.meta.yaml` are not needed for the build;
-`meta git` commands report them as missing until you clone them too.
+This installs `meta`, the `meta-git`, `meta-project` and `meta-rust`
+plugins, `meta-mcp` and `loop` into `~/.cargo/bin` (the crates in the
+Makefile's `BIN_CRATES`, the binaries a release ships), replacing any
+copies already there. To update, `git pull` in each directory and run
+`make install` again. Copies the install scripts put in `~/.local/bin` or
+`%USERPROFILE%\.meta\bin` (their defaults) stay; remove them or put
+`~/.cargo/bin` first in `PATH`. `agent` and `meta-plugins` in `.meta.yaml`
+are not needed for the build; `meta git` commands report them as missing
+until you clone them too.
 
 ---
 

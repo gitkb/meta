@@ -79,11 +79,11 @@ jobs:
 
       - name: Build release binaries
         run: |
-          cargo build --locked --release --target ${{ matrix.target }} -p meta
-          cargo build --locked --release --target ${{ matrix.target }} -p meta_git_cli
-          cargo build --locked --release --target ${{ matrix.target }} -p meta_project_cli
-          cargo build --locked --release --target ${{ matrix.target }} -p meta-mcp
-          cargo build --locked --release --target ${{ matrix.target }} -p loop_cli
+          cargo build --release --target ${{ matrix.target }} -p meta
+          cargo build --release --target ${{ matrix.target }} -p meta_git_cli
+          cargo build --release --target ${{ matrix.target }} -p meta_project_cli
+          cargo build --release --target ${{ matrix.target }} -p meta-mcp
+          cargo build --release --target ${{ matrix.target }} -p loop_cli
 
       - name: Package (Unix)
         if: runner.os != 'Windows'

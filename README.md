@@ -146,8 +146,9 @@ done
 make install
 ```
 
-This installs `meta` and the `meta-git`, `meta-project` and `meta-rust`
-plugins into `~/.cargo/bin`. To update, `git pull` in each directory and
+This installs `meta`, the `meta-git`, `meta-project` and `meta-rust`
+plugins, `meta-mcp` and `loop` into `~/.cargo/bin` (the crates in the
+Makefile's `BIN_CRATES`). To update, `git pull` in each directory and
 run `make install` again. `agent` and `meta-plugins` in `.meta.yaml` are not
 needed for the build; `meta git` commands report them as missing until you
 clone them too.

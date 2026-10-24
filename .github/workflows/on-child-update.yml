@@ -21,6 +21,12 @@ jobs:
         with:
           token: ${{ secrets.PARENT_REPO_PAT }}
 
+      - name: Clone child repos
+        run: .github/scripts/clone-child-repos.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Create sync PR
         env:
           REPO_NAME: ${{ github.event.client_payload.repo_name }}
@@ -77,6 +83,9 @@ jobs:
           fi
 
           git checkout -b "$BRANCH"
+          # Carry the child's dependency changes into Cargo.lock (CI builds --locked)
+          cargo update --workspace
+          git add Cargo.lock
           git commit --allow-empty -m "$PR_TITLE"
 
           push_output=$(git push -u origin "$BRANCH" 2>&1) || {

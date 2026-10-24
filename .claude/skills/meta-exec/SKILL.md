@@ -35,7 +35,7 @@ meta exec -- --version
 
 ## Parallel vs Sequential
 
-Commands run in parallel by default (a `.meta` config can set `defaults.parallel: false`). Use `--sequential` for live output in order, or `--parallel` to force concurrency:
+Commands run in parallel by default (a `.meta` config can set `defaults.parallel: false`; it is only read when you run meta from the directory holding that `.meta`). Use `--sequential` for live output in order, or `--parallel` to force concurrency:
 
 ```bash
 # Parallel (default) - faster, grouped output after completion

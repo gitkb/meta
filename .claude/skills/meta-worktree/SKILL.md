@@ -36,7 +36,7 @@ for sets under that set (only `list` understands the current set).
 # Specific repos (the root repo and their dependencies are added automatically)
 meta git worktree create auth-fix --repo backend --repo frontend
 
-# Only the named repos, no automatic root/dependency selection
+# Only the named repos (and, for nested aliases, their parent repos)
 meta git worktree create auth-fix --repo backend --no-deps
 
 # Every repo configured at this meta level
@@ -65,8 +65,9 @@ Add a repo to an existing set with `meta git worktree add auth-fix --repo anothe
 
 `--from-pr` uses the PR's head branch name and fetches it from the child repo
 whose `origin` matches; it does not check out a fork's branch or pin the head
-SHA. It never applies to the root repo, and when no repo matches or the fetch
-fails it only warns and creates a new branch (add `--strict` to make that an
+SHA. It never applies to the root repo. When no repo matches it only warns and
+keeps the set's own branch; when the fetch fails it warns and still uses a branch
+named after the PR, without the PR's commits (add `--strict` to make either an
 error). To continue a PR on the root repo, check out its branch directly:
 
 ```bash
@@ -97,8 +98,9 @@ meta git worktree create ci-check --all --ephemeral --meta agent=review-bot --me
 meta git worktree exec --ephemeral lint-check --all -- make lint
 ```
 
-`prune` removes sets whose TTL has expired and sets it considers orphaned (their
-repos are gone from the project, or the set holds only the root repo);
+`prune` removes sets whose TTL has expired and sets it considers orphaned (for
+example: the set's directory or project is gone, none of its repos are in the
+project any more, or the set holds only the root repo);
 `--ephemeral` alone only records metadata. A TTL is a backstop for a session that
 dies before removing its sets.
 
@@ -145,7 +147,7 @@ Detection relies on the `.worktrees/<name>` path. It, and
 `meta git worktree exec`, only find repos down to the first nested repo: repos
 created with `--recursive` inside another repo of the set (e.g.
 `open-source/sdk/core` inside `open-source`) are skipped. `list --recursive`
-shows them; run commands for them from their own directory. The root repo is part of a set
+shows them; run the tool itself (`cargo`, `git`) in their directory, not `meta exec`, which still scopes to the set's top-level repos there. The root repo is part of a set
 by default, so the set has its own `.meta` config; otherwise meta walks up to
 the primary checkout's config. `meta --primary <command>` bypasses detection;
 run it from the primary checkout to be sure it uses the primary repos.
@@ -213,7 +215,7 @@ it up with `remove`.
 | `[<commit-ish>]` | Start from a tag, SHA or branch (positional) |
 | `--repo <alias>[:<branch>]` | Add specific repo(s) |
 | `--all` | Add all repos at this meta level |
-| `--no-deps` | Skip automatic root and dependency selection |
+| `--no-deps` | Skip automatic root and dependency selection (nested aliases still get their parents) |
 | `-r, --recursive` | Resolve across nested meta repos (root-relative aliases) |
 | `--branch <name>` | Override the branch name |
 | `--from-pr <owner/repo#N>` | Start a child repo from a PR's head branch |

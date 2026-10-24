@@ -49,7 +49,7 @@ The `.meta` file defines child repositories:
 **Simple format**: `"name": "git-url"` - clones to `./name`
 **Extended format**: Object with `repo`, optional `path`, optional `tags`
 
-YAML is also supported (`.meta.yaml` or `.meta.yml`).
+`.meta.json`, `.meta.yaml` and `.meta.yml` are also supported.
 
 ## Discovering What's Here
 

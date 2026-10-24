@@ -51,7 +51,7 @@ meta git update    # Clone repos listed in .meta that are missing locally
 Before making sweeping changes, create a snapshot:
 
 ```bash
-# Save current state of ALL repos
+# Save current state of every repo at this meta level (add --recursive for nested ones)
 meta git snapshot create before-refactor
 
 # See what snapshots exist

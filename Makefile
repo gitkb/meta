@@ -25,13 +25,15 @@ build-plugins:
 # .claude/skills/ and the Claude plugin. tests/init.bats checks they match.
 skills:
 	set -e; \
-	rm -rf .claude/skills/meta-*/ claude-plugin/skills/meta-*/; \
+	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	for dir in meta_cli/.claude/skills/meta-*/; do \
 		name=$$(basename "$$dir"); \
-		mkdir -p ".claude/skills/$$name" "claude-plugin/skills/$$name"; \
-		cp "$$dir/SKILL.md" ".claude/skills/$$name/SKILL.md"; \
-		cp "$$dir/SKILL.md" "claude-plugin/skills/$$name/SKILL.md"; \
-	done
+		mkdir "$$tmp/$$name"; \
+		cp "$$dir/SKILL.md" "$$tmp/$$name/SKILL.md"; \
+	done; \
+	rm -rf .claude/skills/meta-*/ claude-plugin/skills/meta-*/; \
+	cp -R "$$tmp"/meta-* .claude/skills/; \
+	cp -R "$$tmp"/meta-* claude-plugin/skills/
 
 # Install meta binary and all plugins globally via cargo install
 install:

@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.2.23](https://github.com/gitkb/meta/compare/v0.2.22...v0.2.23) (2026-10-24)
+
+
+### Features
+
+* **meta_git_cli:** sync 5492231 ([#103](https://github.com/gitkb/meta/issues/103)) ([d57b145](https://github.com/gitkb/meta/commit/d57b14576dbf575975b6dcf5948971360c8e7a78))
+* **meta_git_cli:** sync 6ff549a ([#99](https://github.com/gitkb/meta/issues/99)) ([51c6bd6](https://github.com/gitkb/meta/commit/51c6bd6f8ebd4b0d2f668a9b272892dce326cbd2))
+* **meta_git_cli:** sync d5e05ca ([#101](https://github.com/gitkb/meta/issues/101)) ([79b4b7c](https://github.com/gitkb/meta/commit/79b4b7c0e105df49931c3a5f7c864c5d9d3f1f8d))
+* **meta_project_cli:** sync 93f40bf ([#104](https://github.com/gitkb/meta/issues/104)) ([5bef81e](https://github.com/gitkb/meta/commit/5bef81ede61503c7e73510727aab21c33035d083))
+* org rename ([#94](https://github.com/gitkb/meta/issues/94)) ([a44337c](https://github.com/gitkb/meta/commit/a44337ce03373e3a7cf892c4cc451b1f6d88b08b))
+* **skills:** keep meta's skills in .meta/skills, linked for Claude a… ([ed594b9](https://github.com/gitkb/meta/commit/ed594b94ce69e0002103957a411ef51585fcf69e))
+* **skills:** keep meta's skills in .meta/skills, linked for Claude and Codex ([#105](https://github.com/gitkb/meta/issues/105)) ([ed594b9](https://github.com/gitkb/meta/commit/ed594b94ce69e0002103957a411ef51585fcf69e))
+
+
+### Bug Fixes
+
+* **hooks:** isolate Git-local test environment ([#98](https://github.com/gitkb/meta/issues/98)) ([ae5818b](https://github.com/gitkb/meta/commit/ae5818b2dc4f93e61af30dd42c776cf781e23daa))
+* **meta_mcp:** sync 16ea505 ([#106](https://github.com/gitkb/meta/issues/106)) ([d023c63](https://github.com/gitkb/meta/commit/d023c639c0e978c7b389064604299e4f0f6ae62f))
+* remove agent plugins ([#96](https://github.com/gitkb/meta/issues/96)) ([4d8adcc](https://github.com/gitkb/meta/commit/4d8adcc7e2b3a684e344180f6698a9a56c81bcc4))
+* **skills:** copy Claude skills from meta_cli and test the new layout ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** copy Claude skills from meta_cli and test the new layout ([#102](https://github.com/gitkb/meta/issues/102)) ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** make skills drops stale copies; sync from meta_cli ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** make skills stages copies before replacing them ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** make skills stops on a failed copy; document all six skills ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** sync skills from meta_cli ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** sync skills from meta_cli ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** sync skills from meta_cli ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** sync skills from meta_cli, bump the plugin version ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+
 ## [0.2.22](https://github.com/gitkb/meta/compare/v0.2.21...v0.2.22) (2026-05-19)
 
 

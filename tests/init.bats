@@ -250,9 +250,10 @@ EOF
 }
 
 @test "init claude --update turns skill folders in .claude/skills into links" {
+    # The previous layout: real folders holding the shipped SKILL.md
     for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
         mkdir -p ".claude/skills/$name"
-        echo "old content" > ".claude/skills/$name/SKILL.md"
+        cp "$BATS_TEST_DIRNAME/../meta_cli/.claude/skills/$name/SKILL.md" ".claude/skills/$name/SKILL.md"
     done
     mkdir .claude/skills/my-skill
     echo "mine" > .claude/skills/my-skill/SKILL.md
@@ -266,6 +267,17 @@ EOF
     run grep "Meta Workspace Skill" .claude/skills/meta-workspace/SKILL.md
     [ "$status" -eq 0 ]
     [ "$(cat .claude/skills/my-skill/SKILL.md)" = "mine" ]
+}
+
+@test "init claude --update keeps a skill folder with text meta never shipped" {
+    mkdir -p .claude/skills/meta-git
+    echo "another tool" > .claude/skills/meta-git/SKILL.md
+
+    run "$META_BIN" init claude --update
+    [ "$status" -eq 0 ]
+
+    [ "$(cat .claude/skills/meta-git/SKILL.md)" = "another tool" ]
+    [[ "$output" == *"not created by meta"* ]]
 }
 
 @test "init claude --update leaves other tools' links alone" {

@@ -156,7 +156,7 @@ meta exec -- cargo test
 meta --tag frontend exec -- npm update
 
 # Exclude slow repos (meta options go before `exec`)
-meta --exclude large-monorepo exec -- cargo update
+meta --exclude large-monorepo exec -- cargo update   # fails if meta-rust is installed (see below)
 ```
 
 ### Find Files Across Repos
@@ -167,7 +167,7 @@ meta exec -- 'find . -name "*.rs" -type f' | head -20
 
 ### Clean Build Artifacts
 ```bash
-meta exec -- cargo clean
+meta exec -- cargo clean   # fails if meta-rust is installed (see below)
 meta exec -- rm -rf node_modules dist
 ```
 

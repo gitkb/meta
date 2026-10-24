@@ -71,14 +71,18 @@ error). To continue a PR on the root repo, check out its branch directly:
 
 ```bash
 git fetch origin my-feature:my-feature   # create or fast-forward the local branch
-meta git worktree create review --branch my-feature --repo . --strict
+meta git worktree create review --repo .:my-feature --repo backend --strict
 ```
 
-The same applies to child repos: when the branch already exists locally,
-`create` checks it out as it is (the fetch only updates `origin/<branch>`), so
-pull it in the new worktree. Don't pass `origin/my-feature` as the commit-ish here: with a commit-ish, create
+Add at least one child repo (here `backend`, on the set's own branch): `prune`
+treats a set that holds only the root repo as orphaned and force-removes it.
+Don't pass `origin/my-feature` as the commit-ish here: with a commit-ish, create
 always makes a new branch, which fails when `my-feature` already exists locally
 (and without `--strict` that failure is only a warning).
+
+With `--from-pr` on a child repo whose PR branch already exists locally, `create`
+checks that branch out as it is (the fetch only updates `origin/<branch>`), so
+pull it in the new worktree.
 
 ## Short-Lived and Automated Sets
 
@@ -93,8 +97,10 @@ meta git worktree create ci-check --all --ephemeral --meta agent=review-bot --me
 meta git worktree exec --ephemeral lint-check --all -- make lint
 ```
 
-`--ttl` is what makes `prune` remove a set; `--ephemeral` alone only records
-metadata. Use a TTL for work that might outlive its session.
+`prune` removes sets whose TTL has expired and sets it considers orphaned (their
+repos are gone from the project, or the set holds only the root repo);
+`--ephemeral` alone only records metadata. A TTL is a backstop for a session that
+dies before removing its sets.
 
 ## Inspecting Worktrees
 
@@ -153,7 +159,8 @@ meta git worktree prune --dry-run          # preview
 meta git worktree prune                    # remove expired (TTL) and orphaned sets
 ```
 
-`prune` works on the machine-wide store, so it can remove expired sets from
+`remove` only checks the set's top-level repos; repos nested inside them (added
+with `--recursive`) are deleted without that check. `prune` works on the machine-wide store, so it can remove expired sets from
 other projects too. `--force`, `exec --ephemeral` and `prune` all discard
 uncommitted work: commit and push first.
 

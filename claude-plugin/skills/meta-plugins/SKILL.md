@@ -43,13 +43,14 @@ meta project check     # Verify all repos exist
 meta project dependents <name>  # Projects that depend on one
 ```
 
-### Rust Plugin (`meta-rust`, if installed)
+### Rust Plugin (`meta-rust`)
 
-Cargo workspace awareness. Check `meta --help` for it; without it, use `meta exec -- cargo build`.
+Runs any cargo command in each selected repo that has a `Cargo.toml`, skipping the rest (listed on stderr). `meta exec -- cargo ...` runs cargo in every repo instead.
 
 ```bash
-meta rust build        # cargo build in each repo with a Cargo.toml
-meta rust test         # cargo test in each repo with a Cargo.toml (no dependency ordering)
+meta cargo build --release   # cargo build --release in each Rust repo
+meta cargo fmt --check       # any cargo subcommand passes through
+meta --include api cargo clippy --all-targets -- -D warnings
 ```
 
 ## Plugin Discovery

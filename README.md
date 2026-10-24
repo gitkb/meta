@@ -362,7 +362,7 @@ Plugins are standalone executables that extend meta. They're discovered automati
 |--------|-------------|
 | `git` | Clone, status, update, commit, snapshots, SSH multiplexing |
 | `project` | Project health checks and sync |
-| `rust` | `cargo build` and `cargo test` across repos (optional: not in releases or `make install`) |
+| `rust` | `meta cargo <cargo args>`: any cargo command in each repo that has a `Cargo.toml` |
 
 ### Writing Plugins
 

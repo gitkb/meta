@@ -150,10 +150,9 @@ Project management plugin:
 
 ### meta_rust_cli
 
-Rust/Cargo plugin:
-- Workspace-aware builds
-- Test execution
-- Cargo command passthrough
+Rust/Cargo plugin (`meta cargo <cargo args>`):
+- Runs any cargo command, as given, in each selected repo that has a `Cargo.toml`
+- Lists the repos it skips (no `Cargo.toml`)
 
 ## Plugin System
 
@@ -205,13 +204,13 @@ echo '{"command":"status","args":[],"projects":[...]}' | meta-git --meta-plugin-
 
 When you run `meta <command>`:
 
-1. **Check for plugin** - Does a plugin handle this command pattern?
-2. **If plugin exists** - Route to plugin with project list and filters
-3. **If `meta exec`** - Run the command via `loop_lib` in all (filtered) repos
+1. **If `meta exec`** - Run the command as typed via `loop_lib` in all (filtered) repos, never through a plugin
+2. **Check for plugin** - Does a plugin claim this command (`meta git ...`, `meta cargo ...`)?
+3. **If plugin exists** - Route to plugin with project list and filters
 4. **Otherwise** - Show "unrecognized command" error
 
 **Important:** Bare commands like `meta npm install` are not supported. You must either:
-- Use a plugin command: `meta git status`, `meta rust build`
+- Use a plugin command: `meta git status`, `meta cargo build`
 - Use explicit exec: `meta exec -- npm install`
 
 Special case commands (like `meta git clone`) are fully handled by the plugin rather than passed through to all repos.

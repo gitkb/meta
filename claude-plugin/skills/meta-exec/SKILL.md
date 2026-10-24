@@ -156,7 +156,7 @@ meta exec -- cargo test
 meta --tag frontend exec -- npm update
 
 # Exclude slow repos (meta options go before `exec`)
-meta --exclude large-monorepo exec -- cargo update   # fails if meta-rust is installed (see below)
+meta --exclude large-monorepo exec -- cargo update
 ```
 
 ### Find Files Across Repos
@@ -167,7 +167,7 @@ meta exec -- 'find . -name "*.rs" -type f' | head -20
 
 ### Clean Build Artifacts
 ```bash
-meta exec -- cargo clean   # fails if meta-rust is installed (see below)
+meta exec -- cargo clean
 meta exec -- rm -rf node_modules dist
 ```
 
@@ -180,7 +180,7 @@ meta exec -- rm -rf node_modules dist
 | One-off scripts | Operations with meta-specific logic |
 | npm/cargo/make | Clone, update, snapshot |
 
-`meta exec -- <cmd>` still offers the command to plugins first: `meta exec -- git ...` goes to the git plugin, and every `meta exec -- cargo ...` goes to meta-rust when it is installed. meta-rust only handles `build` and `test`, so with it installed other cargo commands (`cargo update`, `cargo clean`) fail. Plugins intercept command patterns and provide enhanced behavior. `meta git clone` doesn't run `git clone` in each repo—it reads `.meta` and clones the entire graph.
+`meta exec -- <cmd>` always runs the command as typed, never through a plugin: `meta exec -- git status` runs `git status` in each repo, while `meta git status` uses the git plugin. Plugins intercept only their own subcommands (`meta git ...`, `meta cargo ...`) and provide enhanced behavior. `meta git clone` doesn't run `git clone` in each repo—it reads `.meta` and clones the entire graph.
 
 ## Worktree Context Detection
 

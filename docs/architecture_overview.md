@@ -213,7 +213,7 @@ When you run `meta <command>`:
 - Use a plugin command: `meta git status`, `meta cargo build`
 - Use explicit exec: `meta exec -- npm install`
 
-Special case commands (like `meta git clone`) are fully handled by the plugin rather than passed through to all repos.
+Special case commands (like `meta git clone`) are fully handled by the plugin rather than passed through to all repos. Because exec never reaches a plugin, `meta exec -- git ...` is plain git in each repo (no meta-git handling, e.g. no prompt-free remote commands) and `meta exec -- git clone` doesn't bootstrap a workspace; use `meta git ...` for those.
 
 ## Command Execution Flow
 

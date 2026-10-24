@@ -41,11 +41,7 @@ brew --prefix  # Should show installation prefix
 irm https://raw.githubusercontent.com/gitkb/meta/main/install.ps1 | iex
 ```
 
-Or install via cargo:
-
-```powershell
-cargo install --git https://github.com/gitkb/meta
-```
+Or build it from source (see [From Source](../README.md#from-source)).
 
 ### Q: How do I update meta?
 
@@ -55,8 +51,8 @@ cargo install --git https://github.com/gitkb/meta
 # Homebrew
 brew upgrade meta-cli
 
-# Cargo
-cargo install --git https://github.com/gitkb/meta --force
+# From source: git pull in meta and each child repo, then
+make install
 
 # Script install
 curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | bash

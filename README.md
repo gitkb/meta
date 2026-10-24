@@ -131,17 +131,24 @@ irm https://raw.githubusercontent.com/gitkb/meta/main/install.ps1 | iex
 brew install gitkb/tap/meta-cli
 ```
 
-### Via cargo-binstall
-
-```bash
-cargo binstall meta-cli
-```
-
 ### From Source
 
+meta's crates live in their own repos, which this repo's Cargo workspace
+expects as sibling directories. Clone them all, then install with the
+committed `Cargo.lock`:
+
 ```bash
-cargo install --git https://github.com/gitkb/meta
+git clone https://github.com/gitkb/meta && cd meta
+for p in loop_cli loop_lib meta_cli meta_core meta_git_cli meta_git_lib \
+         meta_mcp meta_plugin_protocol meta_project_cli meta_rust_cli; do
+  git clone "https://github.com/gitkb/$p"
+done
+make install
 ```
+
+This installs `meta` and the `meta-git`, `meta-project` and `meta-rust`
+plugins into `~/.cargo/bin`. To update, `git pull` in each directory and
+run `make install` again.
 
 ---
 

@@ -42,7 +42,7 @@ skills:
 BIN_CRATES := meta_cli meta_git_cli meta_project_cli meta_mcp loop_cli
 
 # Install meta, its plugins, meta-mcp and loop globally via cargo install.
-# --force overwrites binaries cargo doesn't track, e.g. from a release download
+# --force replaces any binary of the same name, e.g. one from a release download
 install: $(BIN_CRATES:%=install-%)
 
 $(BIN_CRATES:%=install-%): install-%:
@@ -129,12 +129,13 @@ integration-test:
 	cargo build -p meta
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) META_CLI_PATH=target/debug/meta CARGO_BIN_EXE_meta=target/debug/meta cargo nextest run --workspace
 
-uninstall: $(BIN_CRATES:%=uninstall-%)
+# Also meta-rust, which earlier `make install`s put in ~/.cargo/bin
+uninstall: $(BIN_CRATES:%=uninstall-%) uninstall-meta_rust_cli
 	rm -f ~/.meta/plugins/meta-git ~/.meta/plugins/meta-project ~/.meta/plugins/meta-rust
 
 # By package name (from the crate's [package] section), so it still matches
 # after a version bump since the install
-$(BIN_CRATES:%=uninstall-%): uninstall-%:
+$(BIN_CRATES:%=uninstall-%) uninstall-meta_rust_cli: uninstall-%:
 	-cargo uninstall $$(sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"/\1/p' $*/Cargo.toml)
 
-.PHONY: install $(BIN_CRATES:%=install-%) uninstall $(BIN_CRATES:%=uninstall-%) install-hooks build run test bats release integration-test
+.PHONY: install $(BIN_CRATES:%=install-%) uninstall $(BIN_CRATES:%=uninstall-%) uninstall-meta_rust_cli install-hooks build run test bats release integration-test

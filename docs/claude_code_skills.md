@@ -20,11 +20,11 @@ Each skill is installed as `.meta/skills/<name>/SKILL.md` with `name`/`descripti
 - `.agents/skills/<name> -> ../../.meta/skills/<name>` (Codex and other agents)
 - `.cursor/skills/`, `.opencode/skills/`, `.pi/skills/`, `.omp/skills/`, `.grok/skills/`: only when that agent's folder (e.g. `.cursor/`) already exists
 
-Commit `.meta/skills/` and the links so everyone working in the repo gets the skills.
+Commit `.meta/skills/` and the links so everyone working in the repo gets the skills (on Windows, see below).
 
-**Windows.** Symlinks need Developer Mode or admin rights there. Where a link can't be made, `meta init claude` copies the skill folder instead and puts a `.meta-skill-copy` marker in it; `meta init claude --update` replaces marked copies with links once links work.
+**Windows.** Symlinks need Developer Mode or admin rights there. Where a link can't be made, `meta init claude` copies the skill folder from `.meta/skills/` instead and puts a `.meta-skill-copy` marker in it; `meta init claude --update` replaces marked copies with links once links work. A clone made with `core.symlinks=false` (Git for Windows' default) checks each committed link out as a small file holding its target path, which agents can't load: run `meta init claude --update` to replace those files with links or marked copies, and don't commit that change.
 
-**Upgrading.** Older releases wrote flat `.claude/skills/meta-*.md` files (which Claude Code never loaded) and later real `.claude/skills/meta-*/` folders. `meta init claude --update` removes both and links the new layout. It only replaces what meta wrote: a skill folder holding just `SKILL.md` (or a marked copy) and regular flat files. Other files, folders and links, including another tool's link with a meta skill's name, are left alone and reported as skipped; a link is never followed or removed.
+**Upgrading.** Older releases wrote flat `.claude/skills/meta-*.md` files (which Claude Code never loaded) and later real `.claude/skills/meta-*/` folders. `meta init claude --update` removes both and links the new layout. It only replaces what meta wrote: in `.claude/skills/`, a skill folder holding just `SKILL.md` and regular flat files; anywhere, a marked copy or a Git link placeholder holding exactly meta's link target. Other files, folders and links, including another tool's link with a meta skill's name, are left alone and reported as skipped. A link is never followed or removed: an agent skills folder that is itself a link is skipped, and a link inside `.meta/skills/` stops the install with an error.
 
 **Legacy `.meta` config file.** A repo whose config is the legacy `.meta` file can't also have the `.meta/` folder, so `meta init claude` refuses and asks you to rename the config first: `git mv .meta .meta.json` (same content), or convert it to `.meta.yaml`. Everywhere else, meta reads a `.meta` config only when it is a file, so the `.meta/` folder is never taken for config.
 

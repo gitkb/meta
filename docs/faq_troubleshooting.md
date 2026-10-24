@@ -41,7 +41,8 @@ brew --prefix  # Should show installation prefix
 irm https://raw.githubusercontent.com/gitkb/meta/main/install.ps1 | iex
 ```
 
-Or build it from source (see [From Source](../README.md#from-source)).
+Or build it from source in Git Bash or WSL (see [From Source](../README.md#from-source)):
+those steps need `bash`, `git`, `make` and Rust.
 
 ### Q: How do I update meta?
 

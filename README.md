@@ -150,10 +150,10 @@ This installs `meta`, the `meta-git` and `meta-project` plugins, `meta-mcp`
 and `loop` into `~/.cargo/bin` (the crates in the Makefile's `BIN_CRATES`,
 the binaries a release ships), replacing any copies already there. To
 update, `git pull` in each directory and run `make install` again. Copies
-the install script put in `~/.local/bin` (its default) stay; remove them
-or put `~/.cargo/bin` first in `PATH`. `agent` and `meta-plugins` in
-`.meta.yaml` are not needed for the build; `meta git` commands report them
-as missing until you clone them too.
+the install scripts put in `~/.local/bin` or `%USERPROFILE%\.meta\bin`
+(their defaults) stay; remove them or put `~/.cargo/bin` first in `PATH`.
+`agent` and `meta-plugins` in `.meta.yaml` are not needed for the build;
+`meta git` commands report them as missing until you clone them too.
 
 ---
 
@@ -361,7 +361,7 @@ Plugins are standalone executables that extend meta. They're discovered automati
 |--------|-------------|
 | `git` | Clone, status, update, commit, snapshots, SSH multiplexing |
 | `project` | Project health checks and sync |
-| `rust` | Cargo build, test, and command passthrough |
+| `rust` | `cargo build` and `cargo test` across repos (optional: not in releases or `make install`) |
 
 ### Writing Plugins
 

@@ -90,7 +90,7 @@ Meta is a **command router on top of a loop engine**, built in three layers:
 
 **1. Loop Engine** — The foundation. Takes a list of directories and a command, runs it in each one (sequential or parallel), aggregates output. Simple, fast, reliable.
 
-**2. Meta CLI** — The brain. Reads your `.meta` config, applies filters (tags, include/exclude), discovers plugins, and routes commands. When no plugin claims a command, it falls through to the loop engine via `meta exec`.
+**2. Meta CLI** — The brain. Reads your `.meta` config, applies filters (tags, include/exclude), discovers plugins, and routes commands. `meta exec -- <cmd>` hands a command to the loop engine as typed, never to a plugin; any other command goes to the plugin that claims it, or fails as unrecognized.
 
 **3. Plugins** — The specialists. They don't *execute* — they *plan*. A plugin receives a request and returns an execution plan (a list of directory/command pairs). The loop engine does the actual work. This means plugins are pure functions, and execution is always consistent.
 

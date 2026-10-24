@@ -1,3 +1,8 @@
+---
+name: meta-plugins
+description: How the meta plugin system intercepts and enhances commands.
+---
+
 # Meta Plugins Skill
 
 Meta uses a plugin system to intercept commands and provide enhanced behavior.
@@ -10,7 +15,7 @@ When you run `meta <command>`, meta checks if a plugin handles that command patt
 2. **No plugin** → Shows help (use `meta exec` for arbitrary commands)
 
 Example:
-- `meta git status` → git plugin runs `git status` in all repos
+- `meta git status` → git plugin runs `git status` in every repo at this meta level (`--recursive` for nested ones)
 - `meta git clone <url>` → git plugin clones parent + all children from `.meta`
 - `meta npm install` → unrecognized, shows help; use `meta exec npm install`
 
@@ -23,10 +28,10 @@ Handles all `meta git *` commands with special cases:
 | Command | Behavior |
 |---------|----------|
 | `meta git clone <url>` | Clone parent, read `.meta`, clone all children |
-| `meta git update` | Clone missing repos, pull existing ones |
+| `meta git update` | Clone missing repos (use `meta git pull` to pull existing ones) |
 | `meta git snapshot *` | Create/restore workspace state |
-| `meta git setup-ssh` | Configure SSH multiplexing |
-| `meta git <other>` | Pass through to all repos |
+| `meta git worktree *` | Isolated multi-repo worktree sets (see the `meta-worktree` skill) |
+| `meta git <other>` | Pass through to every repo at this meta level |
 
 ### Project Plugin (`meta-project`)
 
@@ -35,24 +40,26 @@ Workspace management:
 ```bash
 meta project list      # List projects from .meta
 meta project check     # Verify all repos exist
-meta project sync      # Clone missing repos
+meta project dependents <name>  # Projects that depend on one
 ```
 
-### Rust Plugin (`meta-rust`)
+### Rust Plugin (`meta-rust`, if installed)
 
-Cargo workspace awareness:
+Cargo workspace awareness. Check `meta --help` for it; without it, use `meta exec -- cargo build`.
 
 ```bash
-meta rust build        # Build with workspace detection
-meta rust test         # Test with proper ordering
+meta rust build        # cargo build in each repo with a Cargo.toml
+meta rust test         # cargo test in each repo with a Cargo.toml (no dependency ordering)
 ```
 
 ## Plugin Discovery
 
 Plugins are discovered from:
-1. `.meta-plugins/` in current directory
-2. `~/.meta-plugins/` in home directory
+1. `.meta/plugins/` in the current directory and each parent
+2. `~/.meta/plugins/` (moved by `META_DATA_DIR`)
 3. Executables named `meta-*` in PATH
+
+The first plugin found with a given name wins.
 
 ## Plugin Management
 

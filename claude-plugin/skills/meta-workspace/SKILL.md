@@ -12,7 +12,7 @@ This project is a **meta repository** - a parent repo that manages a graph of ch
 When you begin working in a meta repo, discover its structure:
 
 ```bash
-meta project list --json
+meta project list --recursive --json
 ```
 
 This returns repos, paths, and tags. Use this to:
@@ -20,12 +20,12 @@ This returns repos, paths, and tags. Use this to:
 - Identify available tags for filtering operations
 - Understand the project graph
 
-Run `meta git status` to see the current state across all repos.
+Run `meta git status` to see the current state of every repo at this level (`meta --recursive git status` for nested meta repos).
 
 ## Why This Matters for You (Claude)
 
 In a meta repo, changes often span multiple repositories. Using `meta` commands instead of plain `git` lets you:
-- **Operate on all repos with one command** - fewer tool calls, less context
+- **Operate on every repo with one command** - fewer tool calls, less context
 - **Maintain consistency** - same commit message, same branch across repos
 - **Never miss a repo** - meta tracks them all
 
@@ -49,7 +49,7 @@ The `.meta` file defines child repositories:
 **Simple format**: `"name": "git-url"` - clones to `./name`
 **Extended format**: Object with `repo`, optional `path`, optional `tags`
 
-YAML is also supported (`.meta.yaml` or `.meta.yml`).
+`.meta.json`, `.meta.yaml` and `.meta.yml` are also supported.
 
 ## Discovering What's Here
 
@@ -57,7 +57,7 @@ YAML is also supported (`.meta.yaml` or `.meta.yml`).
 # List all projects in this workspace
 meta project list
 
-# See git status across ALL repos at once
+# See git status across every repo at once
 meta git status
 ```
 
@@ -66,7 +66,7 @@ meta git status
 When projects have tags, filter operations:
 
 ```bash
-# Only frontend repos
+# Frontend repos (the meta root stays included)
 meta --tag frontend git status
 
 # Multiple tags (comma-separated)
@@ -88,16 +88,17 @@ meta git clone <url> --recursive
 meta --recursive git status
 ```
 
-The `--depth N` flag limits recursion depth.
+The global `--depth N` flag limits recursion depth. For `meta git clone`, `--depth` is the shallow-clone depth; use `--meta-depth N` there.
 
 ## Key Commands Quick Reference
 
 | Command | What It Does |
 |---------|--------------|
-| `meta git status` | Git status in ALL repos |
+| `meta git status` | Git status in every repo |
 | `meta git clone <url>` | Clone meta repo + all children |
-| `meta exec -- <cmd>` | Run command in all repos |
+| `meta exec -- <cmd>` | Run command in every repo |
 | `meta project list` | List all child projects |
+| `meta git worktree create <task> --repo <alias>` | Isolated worktree set for a change (see `meta-worktree`) |
 | `meta init claude` | Install these skills |
 
 ## MCP Tools for Workspace Discovery
@@ -114,7 +115,7 @@ When the meta MCP server is available, these tools provide structured JSON for p
 ## Efficiency Tips
 
 - **One command, all repos**: `meta git status` replaces N individual `cd && git status` calls
-- **Targeted operations**: `meta --include repo1,repo2 exec -- cmd` operates on exactly the repos you need
+- **Targeted operations**: `meta --include repo1,repo2 exec -- cmd` operates on only the repos whose path matches
 - **Tag-based filtering**: `meta --tag backend exec -- cargo test` scopes to tagged repos
 - **Dependency awareness**: `meta_analyze_impact <repo>` shows who depends on a repo before you modify it — prevents cascading fix-up commits
-- **Session start**: Always run `meta project list --json` first to get the workspace map
+- **Session start**: Always run `meta project list --recursive --json` first to get the workspace map

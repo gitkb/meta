@@ -14,6 +14,12 @@ setup() {
 
     TEST_DIR="$(mktemp -d)"
 
+    # Stub claude: init registers a plugin marketplace through it
+    STUB_DIR="$(mktemp -d)"
+    printf '#!/bin/sh\necho "$*" >> "%s/claude-calls"\n' "$STUB_DIR" > "$STUB_DIR/claude"
+    chmod +x "$STUB_DIR/claude"
+    PATH="$STUB_DIR:$PATH"
+
     # Create .meta config
     cat > "$TEST_DIR/.meta.json" <<'EOF'
 {
@@ -28,7 +34,7 @@ EOF
 
 teardown() {
     cd /
-    rm -rf "$TEST_DIR"
+    rm -rf "$TEST_DIR" "$STUB_DIR"
 }
 
 # ============ Fresh install ============
@@ -45,15 +51,37 @@ teardown() {
     [ -d ".claude/rules" ]
 }
 
-@test "init claude creates all skill files" {
+@test "init claude creates all skills as SKILL.md folders with frontmatter" {
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    [ -f ".claude/skills/meta-workspace.md" ]
-    [ -f ".claude/skills/meta-git.md" ]
-    [ -f ".claude/skills/meta-exec.md" ]
-    [ -f ".claude/skills/meta-plugins.md" ]
-    [ -f ".claude/skills/meta-worktree.md" ]
-    [ -f ".claude/skills/meta-safety.md" ]
+    for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
+        [ "$(head -2 ".claude/skills/$name/SKILL.md")" = "$(printf -- '---\nname: %s' "$name")" ]
+        [ ! -e ".claude/skills/$name.md" ]
+    done
+}
+
+@test "init claude --help installs nothing" {
+    run "$META_BIN" init claude --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"meta init"* ]]
+    [ ! -e ".claude" ]
+    [ ! -e "$STUB_DIR/claude-calls" ]
+}
+
+@test "skill copies in this repo match meta_cli" {
+    local root="$BATS_TEST_DIRNAME/.."
+    local count=0
+    for src in "$root"/meta_cli/.claude/skills/meta-*/SKILL.md; do
+        local name
+        name="$(basename "$(dirname "$src")")"
+        for copy in "$root/.claude/skills/$name/SKILL.md" "$root/claude-plugin/skills/$name/SKILL.md"; do
+            cmp "$src" "$copy" || { echo "$copy differs from meta_cli: run 'make skills'"; return 1; }
+        done
+        count=$((count + 1))
+    done
+    [ "$count" -eq 6 ]
+    # No copies of skills meta_cli no longer has
+    [ "$(ls -d "$root"/.claude/skills/meta-*/ "$root"/claude-plugin/skills/meta-*/ | wc -l)" -eq 12 ]
 }
 
 @test "init claude creates all rule files" {
@@ -103,13 +131,13 @@ teardown() {
 # ============ Skip existing files ============
 
 @test "init claude skips existing skill files" {
-    mkdir -p .claude/skills
-    echo "custom content" > .claude/skills/meta-workspace.md
+    mkdir -p .claude/skills/meta-workspace
+    echo "custom content" > .claude/skills/meta-workspace/SKILL.md
 
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
 
-    run cat .claude/skills/meta-workspace.md
+    run cat .claude/skills/meta-workspace/SKILL.md
     [ "$output" = "custom content" ]
 }
 
@@ -183,14 +211,42 @@ EOF
 # ============ --update flag ============
 
 @test "init claude --update refreshes skill files" {
-    mkdir -p .claude/skills
-    echo "old content" > .claude/skills/meta-workspace.md
+    mkdir -p .claude/skills/meta-workspace
+    echo "old content" > .claude/skills/meta-workspace/SKILL.md
 
     run "$META_BIN" init claude --update
     [ "$status" -eq 0 ]
 
-    run grep "Meta Workspace Skill" .claude/skills/meta-workspace.md
+    run grep "Meta Workspace Skill" .claude/skills/meta-workspace/SKILL.md
     [ "$status" -eq 0 ]
+}
+
+@test "init claude keeps old flat skill files without --update" {
+    mkdir -p .claude/skills
+    echo "custom content" > .claude/skills/meta-git.md
+
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+
+    [ "$(cat .claude/skills/meta-git.md)" = "custom content" ]
+    [ -f ".claude/skills/meta-git/SKILL.md" ]
+}
+
+@test "init claude --update replaces old flat skill files" {
+    mkdir -p .claude/skills
+    for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
+        echo "old content" > ".claude/skills/$name.md"
+    done
+    echo "mine" > .claude/skills/my-skill.md
+
+    run "$META_BIN" init claude --update
+    [ "$status" -eq 0 ]
+
+    for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
+        [ ! -e ".claude/skills/$name.md" ]
+        [ -f ".claude/skills/$name/SKILL.md" ]
+    done
+    [ "$(cat .claude/skills/my-skill.md)" = "mine" ]
 }
 
 @test "init claude --update refreshes rule files" {
@@ -221,13 +277,13 @@ EOF
 # ============ --force flag ============
 
 @test "init claude --force overwrites skill files" {
-    mkdir -p .claude/skills
-    echo "custom content" > .claude/skills/meta-workspace.md
+    mkdir -p .claude/skills/meta-workspace
+    echo "custom content" > .claude/skills/meta-workspace/SKILL.md
 
     run "$META_BIN" init claude --force
     [ "$status" -eq 0 ]
 
-    run grep "Meta Workspace Skill" .claude/skills/meta-workspace.md
+    run grep "Meta Workspace Skill" .claude/skills/meta-workspace/SKILL.md
     [ "$status" -eq 0 ]
 }
 
@@ -295,7 +351,7 @@ EOF
 @test "init claude shows skills count" {
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    [[ "$output" == *"6 skill files"* ]]
+    [[ "$output" == *"6 skills"* ]]
 }
 
 @test "init claude shows rules count" {

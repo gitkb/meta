@@ -1,20 +1,22 @@
 # Claude Code Skills for Meta
 
-Meta includes four purpose-built Claude Code skills that teach AI agents how to work effectively with multi-repository codebases. These skills are pedagogical—they explain HOW to work in a meta repo, not just WHAT commands exist.
+Meta includes six purpose-built Claude Code skills (`meta-workspace`, `meta-git`, `meta-exec`, `meta-plugins`, `meta-worktree`, `meta-safety`) that teach AI agents how to work effectively with multi-repository codebases. These skills are pedagogical—they explain HOW to work in a meta repo, not just WHAT commands exist.
 
 ## Installation
 
 Install skills via the `meta init` command:
 
 ```bash
-# Install skills to .claude/skills/
+# Install skills, rules and hooks to .claude/
 meta init claude
 
-# Force reinstall/update existing skills
-meta init claude --force
+# Refresh skills and rules, keep settings.json
+meta init claude --update
 ```
 
-Skills are installed to `.claude/skills/` in your meta repository and are automatically discovered by Claude Code.
+Each skill is installed as `.claude/skills/<name>/SKILL.md` with `name`/`description` frontmatter, the layout Claude Code loads. Older releases wrote flat `.claude/skills/meta-*.md` files, which Claude Code never loaded; `meta init claude --update` replaces them.
+
+The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta` binary. This repo's `.claude/skills/` and `claude-plugin/skills/` are copies: edit meta_cli, then run `make skills` (`tests/init.bats` fails when they differ). CI checks against meta_cli `main` (or the branch of the same name), so after a meta_cli skill change merges, run `make skills` here too, including on the automatic child-update sync PR. Bump `claude-plugin/.claude-plugin/plugin.json`'s version when the plugin's skills change, so plugin users get the update.
 
 ## Available Skills
 
@@ -42,7 +44,6 @@ Skills are installed to `.claude/skills/` in your meta repository and are automa
 - `meta git clone` and its queue-based recursive cloning
 - `meta git update` for syncing workspaces
 - Snapshot create/list/restore workflow
-- SSH optimization with `setup-ssh`
 - Safe workflow patterns (status → snapshot → work → commit)
 
 **When Claude should reference this skill:**
@@ -86,6 +87,34 @@ Skills are installed to `.claude/skills/` in your meta repository and are automa
 - When extending meta with custom behavior
 - When troubleshooting command routing
 
+### meta-worktree - Isolated Worktree Sets
+
+**Purpose:** Create, use and remove multi-repo git worktree sets with `meta git worktree`.
+
+**Key concepts covered:**
+- Every change gets its own set; read-only work may stay in the primary checkout
+- `create` with `--repo`, `--recursive`, `--no-deps`, a commit-ish or `--from-pr` (child repos only), plus a root-PR recipe
+- `list`, `status`, `diff`, `exec`, `remove`, `prune`, TTLs and `--strict`
+- Context detection inside `.worktrees/<name>/` and its limits
+
+**When Claude should reference this skill:**
+- Before changing code in a meta workspace
+- When continuing a PR or testing a tag or SHA in isolation
+
+### meta-safety - Multi-Repo Safety
+
+**Purpose:** Precision operations and dependency awareness across repos.
+
+**Key concepts covered:**
+- Session start: `meta project list --recursive --json`, `meta git status`
+- Filtering with `--include`/`--exclude` (substring matches) and `--tag`
+- Dependency order via the MCP tool `meta_execution_order`
+- Global and worktree `--strict` mode
+
+**When Claude should reference this skill:**
+- Before batch changes or commits across repos
+- Before modifying a repo other repos depend on
+
 ## Skill Design Philosophy
 
 These skills were designed with specific principles:
@@ -100,14 +129,12 @@ These skills were designed with specific principles:
 
 ## Creating Custom Skills
 
-Add custom skills by creating markdown files in `.claude/skills/`:
+Add a custom skill as `.claude/skills/<name>/SKILL.md`:
 
 ```markdown
 ---
-description: Brief description of the skill
-triggers:
-  - /trigger-name
-  - /alternate-trigger
+name: my-skill
+description: What the skill does and when Claude should use it
 ---
 
 # Skill Name
@@ -148,6 +175,6 @@ See [mcp_server.md](mcp_server.md) for full MCP documentation.
 Skills are embedded in the `meta` binary and updated with each release. To get the latest skills:
 
 1. Update meta: `brew upgrade meta-cli` or reinstall
-2. Reinstall skills: `meta init claude --force`
+2. Refresh skills: `meta init claude --update`
 
-The `--force` flag overwrites existing skill files with the latest versions.
+`--update` overwrites the skill and rule files with the latest versions and keeps `settings.json`; `--force` also overwrites `settings.json`.

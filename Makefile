@@ -130,8 +130,9 @@ integration-test:
 uninstall: $(BIN_CRATES:%=uninstall-%)
 	rm -f ~/.meta/plugins/meta-git ~/.meta/plugins/meta-project ~/.meta/plugins/meta-rust
 
-# Without a package name, cargo uninstall removes the crate in the current directory
+# By package name (from the crate's [package] section), so it still matches
+# after a version bump since the install
 $(BIN_CRATES:%=uninstall-%): uninstall-%:
-	-cd $* && cargo uninstall
+	-cargo uninstall $$(sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"/\1/p' $*/Cargo.toml)
 
 .PHONY: install $(BIN_CRATES:%=install-%) uninstall $(BIN_CRATES:%=uninstall-%) install-hooks build run test bats release integration-test

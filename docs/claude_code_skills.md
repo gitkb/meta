@@ -56,7 +56,7 @@ The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta`
 - `meta git clone` and its queue-based recursive cloning
 - `meta git update` for syncing workspaces
 - Committing or stashing before batch changes, and recovering with `git reflog`
-- Safe workflow patterns (status → commit/branch → work → commit)
+- Safe workflow patterns (status → commit/stash → work → commit)
 
 **When Claude should reference this skill:**
 - Before any multi-repo git operation

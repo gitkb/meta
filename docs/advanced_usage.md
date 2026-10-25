@@ -119,8 +119,8 @@ meta exec -- npm test
 
 # 4. If tests fail, discard the batch's changes in the affected repos.
 #    Everything from before was committed in step 1, so this only drops
-#    what the batch changed: git restore . (tracked files) and
-#    git clean -n, then -f, for new files
+#    what the batch changed: git restore --staged --worktree . (tracked
+#    files, staged or not) and git clean -nd, then -fd, for new files
 
 # 5. If tests pass, commit
 meta git commit -m "chore: update dependencies"

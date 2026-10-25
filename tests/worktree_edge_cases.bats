@@ -578,3 +578,24 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [ "$status" -ne 0 ]
     [[ "$output" == *"other users can write to it"* ]]
 }
+
+@test "worktree prune refuses a shared data dir and deletes nothing" {
+    run "$META_BIN" git worktree create shared-prune --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    sleep 2
+
+    chmod 775 "$META_DATA"
+    run "$META_BIN" git worktree prune
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"other users can write to it"* ]]
+    [ -d "$TEST_DIR/.worktrees/shared-prune" ]
+}
+
+@test "ephemeral exec fails when its cleanup cannot update the store" {
+    # The command itself makes the store unwritable before cleanup runs
+    run "$META_BIN" git worktree exec --ephemeral eph-store --repo backend -- chmod 500 "$META_DATA"
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not update the worktree store"* ]]
+}

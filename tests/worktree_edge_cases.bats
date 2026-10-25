@@ -640,3 +640,15 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [[ "$output" == *"skipping plugins in"* ]]
     [ ! -e "$TEST_DIR/ran" ]
 }
+
+@test "a failed create removes only what it created" {
+    # A dangling link at the worktree path passes the first existence check,
+    # as a directory made by a concurrent create of the same name would;
+    # create must fail without removing it
+    mkdir -p "$TEST_DIR/.worktrees"
+    ln -s "$TEST_DIR/elsewhere" "$TEST_DIR/.worktrees/taken"
+    run "$META_BIN" git worktree create taken --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already exists"* ]]
+    [ -L "$TEST_DIR/.worktrees/taken" ]
+}

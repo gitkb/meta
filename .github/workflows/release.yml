@@ -274,8 +274,14 @@ jobs:
         continue-on-error: true
 
       # Tier 2: Depends on tier 1
+      # loop_lib's meta_core requirement is "<1" so child-repo CI (which builds
+      # meta_core as 0.0.0 or 0.1.0) resolves; publish it with an ordinary
+      # requirement on the meta_core released alongside it.
       - name: Publish loop_lib
-        run: cargo publish -p loop_lib --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          sed -i 's|meta_core = { path = "../meta_core", version = "<1" }|meta_core = { path = "../meta_core", version = "'"$(cat VERSION)"'" }|' loop_lib/Cargo.toml
+          grep -q "version = \"$(cat VERSION)\"" loop_lib/Cargo.toml
+          cargo publish -p loop_lib --allow-dirty --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
         continue-on-error: true  # May already be published
 
       - name: Publish loop_cli

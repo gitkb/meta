@@ -557,7 +557,9 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     : > "$TEST_DIR/not-a-dir"
     META_DATA_DIR="$TEST_DIR/not-a-dir" run "$META_BIN" git worktree create store-fail --repo backend
     [ "$status" -ne 0 ]
-    [[ "$output" == *"could not record it in the worktree store"* ]]
+    [[ "$output" == *"Could not record worktree 'store-fail' in the worktree store, so it was removed again"* ]]
+    # Nothing is left that no store entry would ever clean up
+    [ ! -e "$TEST_DIR/.worktrees/store-fail" ]
 }
 
 @test "worktree remove fails when the store cannot be updated" {
@@ -577,6 +579,7 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     chmod 700 "$META_DATA"
     [ "$status" -ne 0 ]
     [[ "$output" == *"other users can write to it"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/shared-store" ]
 }
 
 @test "worktree prune refuses a shared data dir and deletes nothing" {
@@ -610,4 +613,24 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [[ "$output" == *'x\u{1b}]0;TITLE\u{7}'* ]]
     [[ "$output" != *$'\e'* ]]
     [[ "$output" != *$'\a'* ]]
+}
+
+@test "ephemeral exec reports a failed cleanup even when its command fails" {
+    # chmod succeeds on the store dir, then fails on the missing file
+    run "$META_BIN" git worktree exec --ephemeral eph-both --repo backend -- chmod 500 "$META_DATA" "$TEST_DIR/missing"
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not update the worktree store"* ]]
+}
+
+@test "plugins in a directory other users can write to are not run" {
+    mkdir -p "$TEST_DIR/sub/.meta/plugins"
+    printf '#!/bin/sh\ntouch "%s/ran"\n' "$TEST_DIR" > "$TEST_DIR/sub/.meta/plugins/meta-planted"
+    chmod 755 "$TEST_DIR/sub/.meta/plugins/meta-planted"
+    chmod 777 "$TEST_DIR/sub/.meta/plugins"
+    cd "$TEST_DIR/sub"
+    run "$META_BIN" git worktree list
+    chmod 755 "$TEST_DIR/sub/.meta/plugins"
+    [[ "$output" == *"skipping plugins in"* ]]
+    [ ! -e "$TEST_DIR/ran" ]
 }

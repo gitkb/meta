@@ -748,3 +748,26 @@ EOF
 EOF
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only | LC_ALL=C sort | tr '\n' ' ')" = "--help -h " ]
 }
+
+@test "meta git clone fails when a cloned repo's nested .meta is refused" {
+    UP="$(mktemp -d)"
+    # bare_with_meta NAME JSON: a bare repo whose only commit holds .meta = JSON
+    bare_with_meta() {
+        git init --bare --quiet -b main "$UP/$1.git"
+        git clone --quiet "$UP/$1.git" "$UP/work-$1" 2>/dev/null
+        printf '%s\n' "$2" > "$UP/work-$1/.meta"
+        git -C "$UP/work-$1" add .meta
+        git -C "$UP/work-$1" -c user.email=t@t -c user.name=t commit --quiet -m meta
+        git -C "$UP/work-$1" push --quiet origin HEAD:main
+    }
+    bare_with_meta child '{"projects": {"x": {"repo": "u", "path": "../../outside"}}}'
+    bare_with_meta root "{\"projects\": {\"child\": {\"repo\": \"$UP/child.git\", \"meta\": true}}}"
+
+    cd "$TEST_DIR"
+    run "$META_BIN" git clone --recursive "$UP/root.git" "$UP/clone"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Could not read nested .meta configs"* ]]
+    [[ "$output" == *"must not contain '..'"* ]]
+    [ ! -e "$UP/outside" ]
+    rm -rf "$UP"
+}

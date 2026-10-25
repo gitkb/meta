@@ -209,7 +209,7 @@ projects:
 
 - A project name is one path component: no `/`, `\` or drive prefix (`C:`), not `.` or `..`.
 - `path` is relative and stays inside the directory of the config file: no `..`, no absolute or drive paths, and no symlink that leads outside it. `\` reads as `/`, and `./`, `//` and a trailing `/` are dropped.
-- No two projects share a path, and no project's path lies inside another's. A repo inside another repo goes in a nested `.meta` (`meta: true`).
+- No two projects share a path, and no project's path lies inside another's. Paths are compared after following existing symlinks, and without regard to case (some filesystems ignore it). A repo inside another repo goes in a nested `.meta` (`meta: true`).
 - No name, path, repo, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline) or a bidirectional-text control.
 - `repo` does not start with `-`.
 - Tags contain no whitespace and no `,`.

@@ -949,6 +949,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "shlex",
  "tempfile",
 ]
 

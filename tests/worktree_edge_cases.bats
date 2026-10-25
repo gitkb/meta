@@ -671,3 +671,13 @@ J
     [ ! -e "$TEST_DIR/.worktrees/t" ]
     rm -rf "$OUTSIDE"
 }
+
+@test "a create that could not be recorded can be retried with --from-ref" {
+    git -C backend branch base-ref
+    : > "$TEST_DIR/not-a-dir"
+    META_DATA_DIR="$TEST_DIR/not-a-dir" run "$META_BIN" git worktree create fr --repo backend --from-ref base-ref
+    [ "$status" -ne 0 ]
+    # The branch it made is gone with the worktree, so -b works again
+    run "$META_BIN" git worktree create fr --repo backend --from-ref base-ref
+    [ "$status" -eq 0 ]
+}

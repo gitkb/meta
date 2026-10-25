@@ -3,7 +3,7 @@
 Use Conventional Commit style for commit subjects and PR titles:
 
 ```text
-feat: add workspace snapshot filtering
+feat: add workspace tag filtering
 fix(meta_git_cli): preserve child repo commit type
 ci: enforce semantic PR titles
 docs: clarify plugin installation

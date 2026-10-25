@@ -10,7 +10,7 @@ This guide addresses common questions and issues encountered when using the `met
 - [Git Operations](#git-operations)
 - [Plugins](#plugins)
 - [MCP Server](#mcp-server)
-- [Snapshots](#snapshots)
+- [Safe Batch Changes](#safe-batch-changes)
 - [Performance](#performance)
 - [Debugging](#debugging)
 - [Getting Help](#getting-help)
@@ -279,40 +279,34 @@ meta project --help
 
 ---
 
-## Snapshots
+## Safe Batch Changes
 
-### Q: How do I create a snapshot before risky changes?
+### Q: How do I protect my work before risky changes?
 
-**A:**
-
-```bash
-meta git snapshot create before-changes
-```
-
-### Q: How do I restore a snapshot?
-
-**A:**
+**A:** Commit it, or create a backup branch in every repo:
 
 ```bash
-# Preview first
-meta git snapshot restore before-changes --dry-run
-
-# Actually restore
-meta git snapshot restore before-changes
+meta git status
+meta exec -- git branch backup/before-changes
 ```
 
-### Q: What happens to uncommitted changes on restore?
+Preview the change with `--dry-run` and limit it with `--include` before running it.
 
-**A:** Meta automatically stashes uncommitted changes before checkout and restores them after. Your work is preserved.
+### Q: How do I get back to an earlier state?
 
-### Q: How do I delete old snapshots?
-
-**A:**
+**A:** Use `git reflog` in the affected repo to find the previous commit, then branch from it:
 
 ```bash
-meta git snapshot list
-meta git snapshot delete old-snapshot
+# Look across repos
+meta --include api-service exec -- git reflog -n 20
+
+# In the affected repo
+git switch -c recovered <sha>
 ```
+
+### Q: Can I recover uncommitted changes?
+
+**A:** No. The reflog only records commits, so commit or branch before batch changes.
 
 ---
 

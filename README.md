@@ -6,7 +6,7 @@
 
 **Meta makes multi-repo architectures feel like monorepos** — without the downsides of monorepos. Keep your repositories independent (their own git history, CI, ownership boundaries), but operate on them as a cohesive unit.
 
-Most multi-repo tools solve the *cloning* problem. Meta solves the *working* problem. A `.meta` file declares your repos. Everything else flows from that: clone them all at once, run any command across them, query their state, snapshot and rollback, understand their dependency graph — and let AI agents do it autonomously.
+Most multi-repo tools solve the *cloning* problem. Meta solves the *working* problem. A `.meta` file declares your repos. Everything else flows from that: clone them all at once, run any command across them, query their state, understand their dependency graph — and let AI agents do it autonomously.
 
 ---
 
@@ -19,7 +19,6 @@ Most multi-repo tools solve the *cloning* problem. Meta solves the *working* pro
 - [Configuration](#configuration)
 - [Commands](#commands)
 - [Filtering](#filtering)
-- [Snapshots](#snapshots)
 - [Plugins](#plugins)
 - [AI Integration](#ai-integration)
 - [Architecture](#architecture)
@@ -74,12 +73,11 @@ Most multi-repo tools solve the *cloning* problem. Meta solves the *working* pro
    meta query "dirty:true AND tag:backend"
    ```
 
-5. **Snapshot before risky changes:**
+5. **Commit or branch before risky changes:**
 
    ```bash
-   meta git snapshot create before-refactor
-   # ... make changes ...
-   meta git snapshot restore before-refactor  # rollback if needed
+   meta exec -- git branch backup/before-refactor
+   meta --dry-run exec -- <command>  # preview before running
    ```
 
 ---
@@ -283,9 +281,6 @@ This enables impact analysis ("what breaks if I change shared-utils?"), topologi
 | `meta git setup-ssh` | Configure SSH multiplexing |
 | `meta git commit --edit` | Per-repo commit messages via editor |
 | `meta git commit -m "msg"` | Same message across all repos |
-| `meta git snapshot create <name>` | Capture workspace state |
-| `meta git snapshot list` | List snapshots |
-| `meta git snapshot restore <name>` | Restore workspace to snapshot |
 
 ### Plugin Management
 
@@ -339,21 +334,6 @@ meta query "ahead:true"
 
 ---
 
-## Snapshots
-
-Capture the complete state of all repositories for safe batch operations:
-
-```bash
-meta git snapshot create before-refactor
-meta git snapshot list
-meta git snapshot restore before-refactor --dry-run
-meta git snapshot restore before-refactor
-```
-
-Snapshots record each repo's commit SHA, branch, and dirty status. Dirty repos are auto-stashed on restore.
-
----
-
 ## Plugins
 
 Plugins are standalone executables that extend meta. They're discovered automatically from:
@@ -366,7 +346,7 @@ Plugins are standalone executables that extend meta. They're discovered automati
 
 | Plugin | Description |
 |--------|-------------|
-| `git` | Clone, status, update, commit, snapshots, SSH multiplexing |
+| `git` | Clone, status, update, commit, SSH multiplexing |
 | `project` | Project health checks and sync |
 | `rust` | `meta cargo <cargo args>`: any cargo command in each repo that has a `Cargo.toml` |
 
@@ -392,7 +372,7 @@ See [docs/plugin_development.md](docs/plugin_development.md) for the full guide.
 
 Meta is designed for AI agents from day one. Three integration points:
 
-### MCP Server (29 tools)
+### MCP Server (26 tools)
 
 ```json
 {
@@ -405,7 +385,7 @@ Meta is designed for AI agents from day one. Three integration points:
 }
 ```
 
-**Tools include:** project listing, git operations (status/pull/push/commit/diff/branch), build/test, code search, file tree discovery, query DSL, impact analysis, workspace snapshots, and batch execution.
+**Tools include:** project listing, git operations (status/pull/push/commit/diff/branch), build/test, code search, file tree discovery, query DSL, impact analysis, and batch execution.
 
 See [docs/mcp_server.md](docs/mcp_server.md) for full documentation.
 
@@ -415,7 +395,7 @@ See [docs/mcp_server.md](docs/mcp_server.md) for full documentation.
 meta init claude
 ```
 
-Installs purpose-built skills that teach Claude Code how to work with multi-repo codebases — using `meta git` instead of `git`, creating snapshots before risky changes, filtering by tags, and understanding plugin interception.
+Installs purpose-built skills that teach Claude Code how to work with multi-repo codebases — using `meta git` instead of `git`, committing or branching before risky changes, filtering by tags, and understanding plugin interception.
 
 ### JSON Output
 
@@ -439,7 +419,7 @@ Meta is a Rust workspace of 10 crates:
 | `loop_cli` | Standalone loop CLI (usable without meta) |
 | `meta_core` | Shared infrastructure — `~/.meta/` directory, lockfile, atomic store |
 | `meta_plugin_protocol` | Shared types for the plugin contract |
-| `meta_git_cli` | Git plugin — clone, update, status, commit, snapshots |
+| `meta_git_cli` | Git plugin — clone, update, status, commit |
 | `meta_git_lib` | Shared git library utilities |
 | `meta_project_cli` | Project management plugin |
 | `meta_rust_cli` | Rust/Cargo plugin |
@@ -509,11 +489,10 @@ Options:
 - [x] Project tags and filtering
 - [x] JSON output mode
 - [x] Nested meta repos (`--recursive`)
-- [x] MCP server for AI agents (29 tools)
+- [x] MCP server for AI agents (26 tools)
 - [x] Multi-commit support (`meta git commit --edit`)
 - [x] Plugin help system
 - [x] Query DSL for advanced filtering
-- [x] Workspace snapshots with rollback
 - [x] Dependency tracking and impact analysis
 - [x] Claude Code skills integration
 - [x] Windows support (PowerShell installer)

@@ -1,6 +1,6 @@
 # Meta MCP Server
 
-The Meta MCP (Model Context Protocol) server provides AI agents with structured access to multi-repository operations. It exposes 29 tools across core operations, git workflows, build/test orchestration, code discovery, and AI-dominance features.
+The Meta MCP (Model Context Protocol) server provides AI agents with structured access to multi-repository operations. It exposes 26 tools across core operations, git workflows, build/test orchestration, code discovery, and AI-dominance features.
 
 ## Installation
 
@@ -309,25 +309,6 @@ Get topologically sorted build/test order based on dependencies.
   "count": 4
 }
 ```
-
-#### meta_snapshot_create
-Create a snapshot of current workspace state for rollback.
-
-**Parameters:**
-- `name` (required): Snapshot name
-- `description` (optional): Description
-
-#### meta_snapshot_list
-List available snapshots.
-
-**Parameters:** None
-
-#### meta_snapshot_restore
-Restore workspace to a previous snapshot.
-
-**Parameters:**
-- `name` (required): Snapshot name
-- `force` (optional): Force restore even with uncommitted changes
 
 #### meta_batch_execute
 Execute command across repos with optional atomic mode (auto-rollback on failure).

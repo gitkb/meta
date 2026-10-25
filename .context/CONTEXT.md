@@ -29,7 +29,7 @@ You are an expert Rust developer specializing in high-performance, cross-platfor
 - Structured help system with usage, commands, examples
 
 ### MCP Server (AI Integration)
-- 29 tools for AI agent integration via Model Context Protocol
+- 26 tools for AI agent integration via Model Context Protocol
 - Core, Git, Build, Discovery, and AI-specific tools
 - Enables autonomous multi-repo operations by AI agents
 

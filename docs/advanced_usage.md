@@ -1,11 +1,11 @@
 # Advanced Usage Guide
 
-This guide covers advanced features of the `meta` CLI, including query DSL, snapshots, dependency tracking, and power-user workflows.
+This guide covers advanced features of the `meta` CLI, including query DSL, safe batch changes, dependency tracking, and power-user workflows.
 
 ## Table of Contents
 
 - [Query DSL](#query-dsl)
-- [Workspace Snapshots](#workspace-snapshots)
+- [Safe Batch Changes](#safe-batch-changes)
 - [Dependency Tracking](#dependency-tracking)
 - [Filtering Commands](#filtering-commands)
 - [Scripting with Meta](#scripting-with-meta)
@@ -77,58 +77,36 @@ meta query "ahead:true" && meta query "behind:true"
 
 ---
 
-## Workspace Snapshots
+## Safe Batch Changes
 
-Snapshots capture the complete state of all repositories, enabling safe batch operations with rollback capability.
+Before changing many repositories at once, commit your work or create a backup branch in every repo, so you can get back to it with plain git.
 
-### Creating Snapshots
-
-```bash
-# Create a named snapshot
-meta git snapshot create before-refactor
-
-# Create with description
-meta git snapshot create release-v2 --description "Pre-release state"
-```
-
-### Listing Snapshots
+### Before Changing Anything
 
 ```bash
-meta git snapshot list
+# See which repos have uncommitted changes
+meta git status
+
+# Commit them, or create a backup branch in every repo
+meta git commit -m "wip: before refactor"
+meta exec -- git branch backup/before-refactor
 ```
 
-Output shows snapshot name, creation time, and repo count.
-
-### Restoring Snapshots
+### Preview and Target
 
 ```bash
-# Preview what restore would do
-meta git snapshot restore before-refactor --dry-run
+# Preview what would run, without running it
+meta --dry-run exec -- npm update
 
-# Actually restore
-meta git snapshot restore before-refactor
-
-# Force restore even with uncommitted changes
-meta git snapshot restore before-refactor --force
+# Limit the change to specific repos
+meta --include api-service,web-app exec -- npm update
 ```
-
-### What Snapshots Capture
-
-Per repository:
-- Current commit SHA
-- Branch name
-- Dirty status
-
-On restore:
-- Checks out the captured commit
-- Auto-stashes uncommitted changes (restored after)
-- Switches to the captured branch
 
 ### Safe Batch Workflow
 
 ```bash
-# 1. Create snapshot before risky operation
-meta git snapshot create before-changes
+# 1. Commit or branch before risky operation
+meta exec -- git branch backup/before-changes
 
 # 2. Make changes across repos
 meta exec -- npm update
@@ -136,18 +114,26 @@ meta exec -- npm update
 # 3. Test changes
 meta exec -- npm test
 
-# 4. If tests fail, restore
-meta git snapshot restore before-changes
+# 4. If tests fail, discard the changes in the affected repos with git
+#    (e.g. git restore . or git switch backup/before-changes)
 
 # 5. If tests pass, commit
 meta git commit -m "chore: update dependencies"
 ```
 
-### Deleting Snapshots
+### Recovering Committed Work
+
+`git reflog` lists every commit a repo's `HEAD` pointed to, so you can find and restore an earlier state:
 
 ```bash
-meta git snapshot delete before-refactor
+# Look across repos
+meta --include api-service exec -- git reflog -n 20
+
+# In the affected repo, branch from the earlier commit
+git switch -c recovered <sha>
 ```
+
+The reflog only recovers commits. Uncommitted changes that were discarded are gone, so commit or branch first.
 
 ---
 

@@ -33,7 +33,7 @@ git push --force in a multi-repo workspace can overwrite history across \
 multiple repos. Safer alternatives:
 - git push --force-with-lease (checks for upstream changes)
 - meta --include <repo> exec -- git push --force (target one repo)
-- meta git snapshot create <name> before force pushing
+- git branch backup/<name> before force pushing (keeps the old tip)
 """
 
 [[patterns]]
@@ -44,8 +44,8 @@ matcher = { type = "regex", pattern = 'git\s+reset.*--hard\b' }
 message = """
 git reset --hard destroys uncommitted work. In a multi-repo workspace, \
 this can silently discard changes across repos. Safer alternatives:
-- meta git snapshot create <name> (save state first)
-- meta git snapshot restore <name> (reversible reset)
+- Commit, or git stash push -u -m <msg>, to keep the work first
+- git reflog to find and go back to an earlier commit (commits only)
 - Target a specific repo: cd <repo> && git reset --hard
 """
 
@@ -60,7 +60,7 @@ git clean -fd removes untracked files and directories permanently. \
 In a multi-repo workspace, this affects all repos. Safer alternatives:
 - git clean -nd (dry run — preview what would be removed)
 - meta --include <repo> exec -- git clean -fd (target specific repos)
-- meta git snapshot create <name> before cleaning
+- git stash push -u -m <msg> to keep untracked files instead
 """
 
 [[patterns]]
@@ -74,7 +74,7 @@ git checkout . reverts all modified files. In a multi-repo workspace, \
 ensure you are in the correct repo directory. Safer alternatives:
 - git checkout -- <specific-file> (target specific files)
 - meta --include <repo> exec -- git checkout . (target one repo)
-- meta git snapshot create <name> before reverting
+- git stash push -m <msg> to keep the changes instead
 """
 
 [[patterns]]
@@ -87,7 +87,7 @@ git branch -D force-deletes branches, potentially losing unmerged work. \
 In a multi-repo workspace, this can affect coordination between repos. Safer alternatives:
 - git branch -d <branch> (safe delete — only works if merged)
 - git branch -v to check merge status first
-- meta git snapshot create <name> before deleting
+- git branch backup/<name> <branch> first to keep its commits
 - meta --include <repo> exec -- git branch -D <branch> (target specific repos)
 """
 
@@ -102,7 +102,6 @@ For AI agents working across repos, this could discard important work. Safer alt
 - git stash list to review what will be dropped
 - git stash show <stash> to inspect contents first
 - git stash apply <stash> instead of pop (preserves the stash)
-- meta git snapshot create <name> captures all stashes
 """
 
 [[patterns]]
@@ -115,7 +114,6 @@ git stash clear removes ALL stash entries permanently. \
 In a multi-repo workspace, this could discard important work across repos. Safer alternatives:
 - git stash list to review what will be cleared
 - git stash drop <stash> to remove specific entries one at a time
-- meta git snapshot create <name> before clearing (captures all stashes)
 - meta --include <repo> exec -- git stash clear (target specific repos)
 """
 
@@ -130,7 +128,7 @@ rm -rf on dangerous paths could destroy repo roots or workspace data. \
 In a multi-repo workspace, this is especially dangerous. Safer alternatives:
 - Remove specific files instead of entire directories
 - meta --dry-run exec -- <cmd> to preview operations
-- meta git snapshot create <name> before destructive operations
+- Commit and push work you want to keep first
 """
 
 # Examples: Project-specific overrides

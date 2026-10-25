@@ -66,20 +66,24 @@ When searching for implementation details:
 When making changes across repositories:
 
 ```
-1. meta_snapshot_create → Save current state
-2. meta_query_repos → Find repos to modify
-3. Make changes
-4. meta_run_tests → Verify changes
-5. If tests fail: meta_snapshot_restore
-6. If tests pass: meta_git_commit → Commit changes
+1. meta_git_status → Check for uncommitted changes
+2. Commit them, or create a backup branch (meta_exec with git branch)
+3. meta_query_repos → Find repos to modify
+4. Make changes
+5. meta_run_tests → Verify changes
+6. If tests fail: revert with git (git restore, git reflog / git switch)
+7. If tests pass: meta_git_commit → Commit changes
 ```
 
 **Example:**
 ```json
-// Create safety snapshot
-{"name": "meta_snapshot_create", "arguments": {
-  "name": "pre-dependency-update",
-  "description": "Before updating axios to v2.0"
+// Check state, then create a backup branch
+{"name": "meta_git_status", "arguments": {
+  "tag": "frontend"
+}}
+{"name": "meta_exec", "arguments": {
+  "command": "git branch backup/pre-dependency-update",
+  "tag": "frontend"
 }}
 
 // Find affected repos
@@ -92,9 +96,10 @@ When making changes across repositories:
   "tag": "frontend"
 }}
 
-// If failed, restore
-{"name": "meta_snapshot_restore", "arguments": {
-  "name": "pre-dependency-update"
+// If failed, discard the changes
+{"name": "meta_exec", "arguments": {
+  "command": "git restore .",
+  "tag": "frontend"
 }}
 ```
 
@@ -201,11 +206,10 @@ Don't operate on all repos when you mean a subset:
 {"name": "meta_run_tests", "arguments": {"tag": "backend"}}
 ```
 
-### 3. Create Snapshots Before Risky Operations
+### 3. Commit or Branch Before Risky Operations
 ```json
-{"name": "meta_snapshot_create", "arguments": {
-  "name": "before-refactor",
-  "description": "Pre-auth-refactor state"
+{"name": "meta_exec", "arguments": {
+  "command": "git branch backup/before-refactor"
 }}
 ```
 
@@ -231,14 +235,14 @@ Always check the `is_error` field in responses and handle appropriately.
 When operations fail:
 
 1. **Single repo failure**: Check error, fix issue, retry
-2. **Multiple repo failure**: Consider `meta_snapshot_restore`
+2. **Multiple repo failure**: Revert with git in each affected repo (`git reflog` to find the previous commit, then `git switch -c recovered <sha>`; the reflog only recovers commits)
 3. **Build order failure**: Use `meta_execution_order` to find dependencies
 4. **Git conflicts**: Manual intervention may be required
 
 ## Example: Full Feature Development Workflow
 
 ```
-1. Create snapshot: meta_snapshot_create
+1. Check status and commit pending work: meta_git_status, meta_git_commit
 2. Create feature branch: meta_git_checkout with create=true
 3. Find relevant code: meta_search_code
 4. Make changes across repos
@@ -246,7 +250,7 @@ When operations fail:
 6. Get build order: meta_execution_order
 7. Build in order: meta_batch_execute
 8. Run tests: meta_run_tests
-9. If failed: meta_snapshot_restore, fix issues
+9. If failed: revert with git (git reflog / git switch), fix issues
 10. If passed: meta_git_add, meta_git_commit, meta_git_push
 ```
 

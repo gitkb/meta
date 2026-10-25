@@ -27,7 +27,7 @@
 | Project plugin | ✅ Done | check, sync, update |
 | Rust plugin | ✅ Done | cargo build, cargo test |
 | Multi-commit support | ✅ Done | Per-repo commit messages |
-| MCP server | ✅ Done | 29 tools for AI agents |
+| MCP server | ✅ Done | 26 tools for AI agents |
 | GitHub Actions release | ✅ Done | All platforms |
 | Homebrew formula | ✅ Done | `meta-cli` to avoid conflicts |
 | Install script | ✅ Done | Cross-platform |
@@ -121,7 +121,7 @@ echo '{"command":"status","args":[],"projects":["a","b"],"cwd":"/path","options"
 
 ## MCP Server (AI Integration)
 
-The MCP server exposes 29 tools for AI agent integration:
+The MCP server exposes 26 tools for AI agent integration:
 
 ### Core Tools
 - `meta_list_projects` - List all projects in workspace
@@ -149,7 +149,6 @@ The MCP server exposes 29 tools for AI agent integration:
 - `meta_workspace_state` - Current workspace state summary
 - `meta_analyze_impact` - Impact analysis for changes
 - `meta_execution_order` - Topological sort for builds
-- `meta_snapshot_create/list/restore` - Workspace snapshots
 - `meta_batch_execute` - Batch command execution
 
 ---

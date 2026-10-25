@@ -117,19 +117,6 @@ teardown() {
     done
 }
 
-@test "git snapshot help reaches snapshot command implementation" {
-    run "$META_BIN" git snapshot --help
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Workspace State Management"* ]]
-    [[ "$output" != *"Adapted Commands"* ]]
-
-    run "$META_BIN" git snapshot create --help
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"meta git snapshot create"* ]]
-    [[ "$output" == *"Save workspace git state"* ]]
-    [[ "$output" != *"Adapted Commands"* ]]
-}
-
 @test "git pass-through help is meta-aware" {
     for subcommand in pull fetch checkout; do
         run "$META_BIN" git "$subcommand" --help

@@ -647,3 +647,14 @@ EOF
     [ "$(grep -cx "$legacy" <<<"$output" || true)" -eq "$default_runs" ]
     [ "$default_runs" -eq 1 ]
 }
+
+@test "--exclude skips every spelling of the same repo" {
+    mkdir -p "$TEST_DIR/api" "$TEST_DIR/libs"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{ "projects": { "api": "git@github.com:org/api.git", "other": { "repo": "git@github.com:org/api.git", "path": "libs/../api" } } }
+EOF
+    run "$META_BIN" --exclude api exec -- touch ran
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_DIR/api/ran" ]
+    [ -e "$TEST_DIR/ran" ]
+}

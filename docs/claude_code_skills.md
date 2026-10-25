@@ -55,7 +55,7 @@ The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta`
 **Key concepts covered:**
 - `meta git clone` and its queue-based recursive cloning
 - `meta git update` for syncing workspaces
-- Committing or branching before batch changes, and recovering with `git reflog`
+- Committing or stashing before batch changes, and recovering with `git reflog`
 - Safe workflow patterns (status → commit/branch → work → commit)
 
 **When Claude should reference this skill:**
@@ -158,7 +158,7 @@ Instructions for Claude...
 
 1. **Focus on workflow, not reference** - Explain when and why, not just what
 2. **Include concrete examples** - Show actual command sequences
-3. **Highlight safety patterns** - Commit or branch first, dry-run, filtered operations
+3. **Highlight safety patterns** - Commit or stash first, dry-run, filtered operations
 4. **Keep it scannable** - Use tables, code blocks, and clear headers
 
 ## Best Practices for AI Agents
@@ -167,7 +167,7 @@ Instructions for Claude...
 2. **Check status first** - Run `meta git status` before bulk operations
 3. **Use atomic mode** - For risky operations, use atomic mode for auto-rollback
 4. **Leverage queries** - Use query DSL to find specific repos by state
-5. **Commit or branch first** - Before major changes, commit or create a backup branch so git can recover the work
+5. **Commit or stash first** - Before major changes, commit or stash uncommitted work so git can recover it
 
 ## Integration with MCP Server
 

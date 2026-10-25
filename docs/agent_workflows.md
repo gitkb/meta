@@ -67,22 +67,22 @@ When making changes across repositories:
 
 ```
 1. meta_git_status → Check for uncommitted changes
-2. Commit them, or create a backup branch (meta_exec with git branch)
+2. Commit them (meta_git_add, then meta_git_commit, which commits only staged changes)
 3. meta_query_repos → Find repos to modify
 4. Make changes
 5. meta_run_tests → Verify changes
-6. If tests fail: revert with git (git restore, git reflog / git switch)
+6. If tests fail: discard the batch's changes with git (everything from before is committed), or go back with git reflog / git switch
 7. If tests pass: meta_git_commit → Commit changes
 ```
 
 **Example:**
 ```json
-// Check state, then create a backup branch
+// Check state, then commit pending work
 {"name": "meta_git_status", "arguments": {
   "tag": "frontend"
 }}
 {"name": "meta_exec", "arguments": {
-  "command": "git branch backup/pre-dependency-update",
+  "command": "git add -A && (git diff --cached --quiet || git commit -m 'wip: before dependency update')",
   "tag": "frontend"
 }}
 
@@ -96,7 +96,7 @@ When making changes across repositories:
   "tag": "frontend"
 }}
 
-// If failed, discard the changes
+// If failed, discard the changes (pending work was committed above)
 {"name": "meta_exec", "arguments": {
   "command": "git restore .",
   "tag": "frontend"
@@ -206,10 +206,10 @@ Don't operate on all repos when you mean a subset:
 {"name": "meta_run_tests", "arguments": {"tag": "backend"}}
 ```
 
-### 3. Commit or Branch Before Risky Operations
+### 3. Commit or Stash Before Risky Operations
 ```json
 {"name": "meta_exec", "arguments": {
-  "command": "git branch backup/before-refactor"
+  "command": "git stash push -u -m before-refactor"
 }}
 ```
 
@@ -242,7 +242,7 @@ When operations fail:
 ## Example: Full Feature Development Workflow
 
 ```
-1. Check status and commit pending work: meta_git_status, meta_git_commit
+1. Check status and commit pending work: meta_git_status, meta_git_add, meta_git_commit
 2. Create feature branch: meta_git_checkout with create=true
 3. Find relevant code: meta_search_code
 4. Make changes across repos

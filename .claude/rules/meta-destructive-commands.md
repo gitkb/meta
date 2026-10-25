@@ -4,12 +4,13 @@ Multi-repo workspaces amplify the impact of destructive commands.
 
 ## Before Destructive Operations
 
-1. **Commit or branch first**
+1. **Commit or stash first**
    ```
    meta git status
-   meta exec -- git branch backup/before-refactor
+   meta git add -A && meta git commit -m "wip: before refactor"
    ```
-   Commit uncommitted work, or create a backup branch in every repo.
+   Or stash it in every repo: `meta exec -- git stash push -u -m before-refactor`.
+   A backup branch (`git branch backup/<name>`) keeps only commits, not uncommitted changes.
 
 2. **Preview with --dry-run**
    ```
@@ -25,7 +26,7 @@ Multi-repo workspaces amplify the impact of destructive commands.
 
 These commands trigger PreToolUse denial:
 - `git push --force` (use `--force-with-lease` instead)
-- `git reset --hard` (commit or branch first; recover commits with `git reflog`)
+- `git reset --hard` (commit or stash first; recover commits with `git reflog`)
 - `git clean -fd` (dangerous file removal)
 - `rm -rf` on repo roots or `.meta*` paths
 

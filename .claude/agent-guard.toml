@@ -33,7 +33,7 @@ git push --force in a multi-repo workspace can overwrite history across \
 multiple repos. Safer alternatives:
 - git push --force-with-lease (checks for upstream changes)
 - meta --include <repo> exec -- git push --force (target one repo)
-- git branch backup/<name> before force pushing (keeps the old tip)
+- git fetch, then git branch backup/<name> origin/<branch> to keep the remote tip
 """
 
 [[patterns]]

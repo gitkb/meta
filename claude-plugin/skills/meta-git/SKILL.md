@@ -50,21 +50,24 @@ meta git update    # Clone repos listed in .meta that are missing locally
 
 ## Before Batch Operations (Critical)
 
-Before making sweeping changes, commit your work or create a backup branch in every repo:
+Before making sweeping changes, commit or stash uncommitted work in every repo:
 
 ```bash
 # See which repos have uncommitted changes
 meta git status
 
-# Commit them, or create a backup branch in every repo at this meta level (add --recursive for nested ones)
+# Commit them at this meta level (add --recursive for nested ones); `meta git commit` commits only staged changes
+meta git add -A
 meta git commit -m "wip: before refactor"
-meta exec -- git branch backup/before-refactor
+
+# Or stash them instead (untracked files included)
+meta exec -- git stash push -u -m before-refactor
 
 # Preview a batch command before running it
 meta --dry-run exec -- <command>
 ```
 
-**Recovering**: `git reflog` in the affected repo lists the commits its `HEAD` pointed to; `git switch -c recovered <sha>` brings one back. Use `meta --include <repo> exec -- git reflog -n 20` to look across repos. The reflog only recovers commits, not uncommitted changes, so commit or branch first.
+**Recovering**: `git reflog` in the affected repo lists the commits its `HEAD` pointed to; `git switch -c recovered <sha>` brings one back. Use `meta --include <repo> exec -- git reflog -n 20` to look across repos. The reflog only recovers commits, not uncommitted changes, so commit or stash first. A backup branch keeps only commits.
 
 ## Common Git Operations
 
@@ -100,7 +103,8 @@ meta --exclude legacy git pull
 ### Starting Work
 ```bash
 meta git status              # What's the current state?
-meta git commit -m "wip"     # Commit pending work before changes
+meta git add -A              # Stage pending work
+meta git commit -m "wip"     # Commit it before changes
 meta git pull                # Get latest
 ```
 
@@ -114,7 +118,7 @@ meta git push                # Push all repos
 
 ### Safe Batch Refactoring
 ```bash
-meta exec -- git branch backup/before-changes
+meta git add -A && meta git commit -m "wip: before changes"  # Save pending work first
 # ... make changes across repos ...
 meta git status              # Review
 # If something went wrong, in the affected repo:

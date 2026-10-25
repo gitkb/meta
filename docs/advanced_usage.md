@@ -79,7 +79,7 @@ meta query "ahead:true" && meta query "behind:true"
 
 ## Safe Batch Changes
 
-Before changing many repositories at once, commit your work or create a backup branch in every repo, so you can get back to it with plain git.
+Before changing many repositories at once, commit or stash uncommitted work in every repo, so you can get back to it with plain git. A backup branch alone keeps only commits, not uncommitted changes.
 
 ### Before Changing Anything
 
@@ -87,9 +87,12 @@ Before changing many repositories at once, commit your work or create a backup b
 # See which repos have uncommitted changes
 meta git status
 
-# Commit them, or create a backup branch in every repo
+# Commit them (`meta git commit` commits only staged changes)
+meta git add -A
 meta git commit -m "wip: before refactor"
-meta exec -- git branch backup/before-refactor
+
+# Or stash them in every repo (untracked files included)
+meta exec -- git stash push -u -m before-refactor
 ```
 
 ### Preview and Target
@@ -105,8 +108,8 @@ meta --include api-service,web-app exec -- npm update
 ### Safe Batch Workflow
 
 ```bash
-# 1. Commit or branch before risky operation
-meta exec -- git branch backup/before-changes
+# 1. Commit pending work before the risky operation
+meta git add -A && meta git commit -m "wip: before changes"
 
 # 2. Make changes across repos
 meta exec -- npm update
@@ -114,8 +117,10 @@ meta exec -- npm update
 # 3. Test changes
 meta exec -- npm test
 
-# 4. If tests fail, discard the changes in the affected repos with git
-#    (e.g. git restore . or git switch backup/before-changes)
+# 4. If tests fail, discard the batch's changes in the affected repos.
+#    Everything from before was committed in step 1, so this only drops
+#    what the batch changed: git restore . (tracked files) and
+#    git clean -n, then -f, for new files
 
 # 5. If tests pass, commit
 meta git commit -m "chore: update dependencies"
@@ -133,7 +138,7 @@ meta --include api-service exec -- git reflog -n 20
 git switch -c recovered <sha>
 ```
 
-The reflog only recovers commits. Uncommitted changes that were discarded are gone, so commit or branch first.
+The reflog only recovers commits. Uncommitted changes that were discarded are gone, so commit or stash first.
 
 ---
 

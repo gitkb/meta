@@ -283,11 +283,12 @@ meta project --help
 
 ### Q: How do I protect my work before risky changes?
 
-**A:** Commit it, or create a backup branch in every repo:
+**A:** Commit it, or stash it, in every repo (a backup branch alone keeps only commits):
 
 ```bash
 meta git status
-meta exec -- git branch backup/before-changes
+meta git add -A && meta git commit -m "wip: before changes"
+# or: meta exec -- git stash push -u -m before-changes
 ```
 
 Preview the change with `--dry-run` and limit it with `--include` before running it.
@@ -306,7 +307,7 @@ git switch -c recovered <sha>
 
 ### Q: Can I recover uncommitted changes?
 
-**A:** No. The reflog only records commits, so commit or branch before batch changes.
+**A:** No. The reflog only records commits, so commit or stash before batch changes.
 
 ---
 

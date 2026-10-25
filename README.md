@@ -73,10 +73,10 @@ Most multi-repo tools solve the *cloning* problem. Meta solves the *working* pro
    meta query "dirty:true AND tag:backend"
    ```
 
-5. **Commit or branch before risky changes:**
+5. **Commit before risky changes:**
 
    ```bash
-   meta exec -- git branch backup/before-refactor
+   meta git add -A && meta git commit -m "wip: before refactor"
    meta --dry-run exec -- <command>  # preview before running
    ```
 
@@ -395,7 +395,7 @@ See [docs/mcp_server.md](docs/mcp_server.md) for full documentation.
 meta init claude
 ```
 
-Installs purpose-built skills that teach Claude Code how to work with multi-repo codebases — using `meta git` instead of `git`, committing or branching before risky changes, filtering by tags, and understanding plugin interception.
+Installs purpose-built skills that teach Claude Code how to work with multi-repo codebases — using `meta git` instead of `git`, committing or stashing before risky changes, filtering by tags, and understanding plugin interception.
 
 ### JSON Output
 

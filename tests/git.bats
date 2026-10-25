@@ -1028,3 +1028,16 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not take --include/--exclude"* ]]
 }
+
+@test "meta git update refuses --include instead of cloning every missing repo" {
+    run "$META_BIN" --include frontend git update
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --include/--exclude"* ]]
+}
+
+@test "arguments after -- that look like meta flags reach git" {
+    echo x > "$TEST_DIR/frontend/--json"
+    run "$META_BIN" --include frontend git add -- --json
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" = "--json" ]
+}

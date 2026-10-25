@@ -207,13 +207,14 @@ projects:
 
 **Rules for names and values.** meta checks every entry when it reads the config and stops with an error that names the file and the project:
 
-- A project name is one path component: no `/` or `\`, not `.` or `..`.
-- No name or path component means something else on Windows: no drive prefix (`C:`), none of `<>:"|?*`, no trailing dot or space, no `~` followed by a digit (as in short names like `PROGRA~1`), and no device name (`CON`, `NUL`, `COM1`, ...).
-- `path` is relative and stays inside the directory of the config file: no `..`, no absolute or drive paths, and no symlink that leads outside it. `\` reads as `/`, and `./`, `//` and a trailing `/` are dropped.
+- `path` (the name when it is omitted) is relative and stays inside the directory of the config file: no `..`, no absolute paths, and no symlink that leads outside it or into `.git` or `.worktrees`. `\` reads as `/`, and `./`, `//` and a trailing `/` are dropped.
+- A project name is usually one word; a nested alias such as `vendor/lib` is fine. It follows the same rules as `path` and must already be in plain form, because worktrees put the project at `<worktree>/<name>`.
+- Names and path components use only ASCII letters, digits, space and `._-+@`, so one `.meta` names the same directories on every platform (no Unicode that macOS or Windows would treat as another name, no `C:`, `<>:"|?*` or short names like `PROGRA~1`). They have no trailing dot or space, are not Windows device names (`CON`, `NUL`, `COM1`, ...) or `.git`, and do not start with `.worktrees`.
 - No two projects share a path, and no project's path lies inside another's. Paths are compared after following existing symlinks, and without regard to case (some filesystems ignore it). A repo inside another repo goes in a nested `.meta` (`meta: true`).
 - No name, path, repo, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline), a bidirectional-text control, or an invisible format character (such as a zero-width space).
 - `repo` does not start with `-`.
 - Tags contain no whitespace and no `,`.
+- `worktrees_dir`, if set, lies inside the workspace (relative, or absolute but inside). For a directory elsewhere, set `META_WORKTREES`.
 
 **File priority:** `.meta.yaml` > `.meta.yml` > `.meta`
 

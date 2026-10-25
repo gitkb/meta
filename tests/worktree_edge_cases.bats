@@ -681,3 +681,32 @@ J
     run "$META_BIN" git worktree create fr --repo backend --from-ref base-ref
     [ "$status" -eq 0 ]
 }
+
+@test "worktrees are not kept where a .worktrees symlink or worktrees_dir points outside" {
+    OUTSIDE="$(mktemp -d)"
+    ln -s "$OUTSIDE" "$TEST_DIR/.worktrees"
+    run "$META_BIN" git worktree create out --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to keep worktrees in"* ]]
+    [ -z "$(ls -A "$OUTSIDE")" ]
+    rm "$TEST_DIR/.worktrees"
+
+    cat > "$TEST_DIR/.meta.json" <<J
+{"projects": {"backend": "git@github.com:org/backend.git"}, "worktrees_dir": "$OUTSIDE"}
+J
+    run "$META_BIN" git worktree create out --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Invalid worktrees_dir"* ]]
+    [ -z "$(ls -A "$OUTSIDE")" ]
+    rm -rf "$OUTSIDE"
+}
+
+@test "worktree add fails when the store cannot be updated" {
+    run "$META_BIN" git worktree create add-ro --repo backend
+    [ "$status" -eq 0 ]
+    chmod 500 "$META_DATA"
+    run "$META_BIN" git worktree add add-ro --repo frontend
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not update the worktree store"* ]]
+}

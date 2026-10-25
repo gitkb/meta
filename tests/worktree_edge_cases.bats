@@ -587,7 +587,7 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [ "$status" -eq 0 ]
     sleep 2
 
-    chmod 775 "$META_DATA"
+    chmod 777 "$META_DATA"
     run "$META_BIN" git worktree prune
     chmod 700 "$META_DATA"
     [ "$status" -ne 0 ]
@@ -605,7 +605,7 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
 
 @test "a refused data dir is reported with control characters escaped" {
     BAD="$META_DATA/x"$'\e]0;TITLE\a'
-    mkdir -p "$BAD"
+    mkdir -p "$BAD/plugins"
     chmod 777 "$BAD"
     META_DATA_DIR="$BAD" run "$META_BIN" git worktree list
     chmod 700 "$BAD"

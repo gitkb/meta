@@ -361,7 +361,7 @@ assert d['totals']['files_changed'] >= 1
     "$META_BIN" git worktree create exec-whole --repo backend --repo frontend
     run "$META_BIN" git worktree exec exec-whole --include end -- touch ran
     [ "$status" -ne 0 ]
-    [[ "$output" == *"--include 'end' names no repo"* ]]
+    [[ "$output" == *"--include 'end' names none of the repos"* ]]
     [ -z "$(find .worktrees/exec-whole -name ran)" ]
     run "$META_BIN" git worktree exec exec-whole --exclude ./backend/ -- pwd
     [ "$status" -eq 0 ]
@@ -754,4 +754,12 @@ EOF
     run "$META_BIN" git worktree list
     [ "$status" -eq 0 ]
     [[ "$output" == *"list-nested"* ]]
+}
+
+@test "--include before git worktree is refused, not ignored" {
+    "$META_BIN" git worktree create global-filter --repo backend --repo frontend
+    run "$META_BIN" --exclude frontend git worktree exec global-filter -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --include/--exclude before it"* ]]
+    [ -z "$(find .worktrees/global-filter -name ran)" ]
 }

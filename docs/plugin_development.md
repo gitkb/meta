@@ -144,32 +144,19 @@ echo '<request>' | meta-docker --meta-plugin-exec
 }
 ```
 
-**Response Format:**
+**Response Format:** a plugin prints text (meta shows it as is), or an execution plan that meta runs in each directory:
 ```json
 {
-  "success": true,
-  "results": [
-    {
-      "project": "api",
-      "success": true,
-      "output": "Successfully built image api:latest",
-      "exit_code": 0
-    },
-    {
-      "project": "web",
-      "success": false,
-      "output": "",
-      "error": "Dockerfile not found",
-      "exit_code": 1
-    }
-  ],
-  "summary": {
-    "total": 2,
-    "succeeded": 1,
-    "failed": 1
+  "plan": {
+    "commands": [
+      {"dir": "/ws/api", "argv": ["docker", "build", "-t", "api:latest", "."]},
+      {"dir": "/ws/web", "argv": ["docker", "build", "-t", "web:latest", "."]}
+    ],
+    "parallel": true
   }
 }
 ```
+Each `argv` is a program and its arguments. Meta runs it as given, with no shell, so the plugin needs no quoting; a plugin that needs a shell plans `["sh", "-c", "..."]`. `projects` in the request lists the repos `--include`/`--exclude` selected; a plugin that finds repos itself must refuse those filters rather than ignore them.
 
 ### Error Response
 

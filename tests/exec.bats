@@ -108,7 +108,7 @@ teardown() {
 @test "meta exec --include with nonexistent dir is an error and runs nothing" {
     run "$META_BIN" --include nonexistent exec -- echo hello
     [ "$status" -ne 0 ]
-    [[ "$output" == *"--include 'nonexistent' names no repo"* ]]
+    [[ "$output" == *"--include 'nonexistent' names none of the repos"* ]]
     [[ "$output" != *"hello"* ]]
 }
 
@@ -533,13 +533,13 @@ EOF
     [ "$(grep -c "^$TEST_DIR/api\$" <<<"$output")" -eq 0 ]
 }
 
-@test "--include a part of a path names no repo" {
+@test "--include a part of a path names none of the repos" {
     add_api_legacy
     # every absolute path here contains "t" and "a"
     for value in a t ap libs core/x; do
         run "$META_BIN" --include "$value" exec -- pwd
         [ "$status" -ne 0 ] || { echo "--include $value: $output"; false; }
-        [[ "$output" == *"names no repo"* ]]
+        [[ "$output" == *"names none of the repos"* ]]
     done
 }
 
@@ -561,7 +561,7 @@ EOF
     add_api_legacy
     run "$META_BIN" --exclude apii exec -- touch ran
     [ "$status" -ne 0 ]
-    [[ "$output" == *"--exclude 'apii' names no repo"* ]]
+    [[ "$output" == *"--exclude 'apii' names none of the repos"* ]]
     [ -z "$(find "$TEST_DIR" -name ran)" ]
 }
 
@@ -585,7 +585,7 @@ EOF
     [[ "$output" != *"api"* ]]
     run "$META_BIN" --config alt.json --include core exec -- pwd
     [ "$status" -ne 0 ]
-    [[ "$output" == *"names no repo"* ]]
+    [[ "$output" == *"names none of the repos"* ]]
 }
 
 @test "--recursive with --config walks the chosen config" {
@@ -601,4 +601,30 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"$TEST_DIR/staging/api"* ]]
     [[ "$output" != *"api-legacy"* ]]
+}
+
+@test "a value that is one repo's path and another's name is an error" {
+    mkdir -p "$TEST_DIR/web" "$TEST_DIR/frontend"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{ "projects": { "web": { "repo": "git@github.com:org/web.git", "path": "frontend" }, "web-app": { "repo": "git@github.com:org/web-app.git", "path": "web" } } }
+EOF
+    run "$META_BIN" --include web exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"is the path of web and the .meta name of frontend"* ]]
+    [ -z "$(find "$TEST_DIR" -name ran)" ]
+}
+
+@test "meta git clone refuses --include" {
+    run "$META_BIN" --include api git clone https://example.invalid/meta.git
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --include/--exclude"* ]]
+}
+
+@test "meta-mcp meta_exec runs its argv with no shell" {
+    run env PATH="$(dirname "$META_BIN"):$PATH" "$BATS_TEST_DIRNAME/../target/debug/meta-mcp" <<'EOF'
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"meta_exec","arguments":{"command":["printf","[%s]","one arg","$(touch PWNED5)"]}}}
+EOF
+    [[ "$output" == *'[one arg][$(touch PWNED5)]'* ]]
+    [ -z "$(find "$TEST_DIR" -name PWNED5)" ]
 }

@@ -314,7 +314,7 @@ meta --include api-service,web-app git status
 meta --exclude legacy-app exec -- npm install
 ```
 
-A value names a whole repo: its `.meta` name or its path from the workspace root (`.` for the root repo), never part of a path, so `api` does not select `api-legacy`. A value that names no repo is an error, so a typo never runs a command in a repo you meant to skip.
+A value names a whole repo: its `.meta` name or its path from the workspace root (`.` for the root repo), never part of a path, so `api` does not select `api-legacy`. A value that names no repo is an error, so a typo never runs a command in a repo you meant to skip. Inside a worktree set, a repo is named by its alias (its path in the set).
 
 ### Arguments
 

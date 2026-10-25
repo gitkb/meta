@@ -652,3 +652,22 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [[ "$output" == *"already exists"* ]]
     [ -L "$TEST_DIR/.worktrees/taken" ]
 }
+
+@test "worktree create refuses a destination the root checkout made a symlink" {
+    # The root repo tracks a symlink named like a project; checking out the
+    # root worktree recreates it where that project's worktree would go
+    OUTSIDE="$(mktemp -d)"
+    ln -s "$OUTSIDE" "$TEST_DIR/evil"
+    cat > "$TEST_DIR/.meta.json" <<'J'
+{"projects": {"evil": {"repo": "git@github.com:org/backend.git", "path": "backend"}}}
+J
+    git -C "$TEST_DIR" add evil .meta.json
+    git -C "$TEST_DIR" commit --quiet -m "track a symlink"
+
+    run "$META_BIN" git worktree create t --repo . --repo evil
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to add the worktree for 'evil'"* ]]
+    [ -z "$(ls -A "$OUTSIDE")" ]
+    [ ! -e "$TEST_DIR/.worktrees/t" ]
+    rm -rf "$OUTSIDE"
+}

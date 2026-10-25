@@ -587,3 +587,18 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"names no repo"* ]]
 }
+
+@test "--recursive with --config walks the chosen config" {
+    add_api_legacy
+    mkdir -p "$TEST_DIR/staging/api"
+    cat > "$TEST_DIR/alt.json" <<'EOF'
+{ "projects": { "staging-api": { "repo": "git@github.com:org/api.git", "path": "staging/api" } } }
+EOF
+    run "$META_BIN" --config alt.json --recursive --include staging-api exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/staging/api"* ]]
+    run "$META_BIN" --config alt.json --recursive exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/staging/api"* ]]
+    [[ "$output" != *"api-legacy"* ]]
+}

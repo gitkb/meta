@@ -1015,10 +1015,12 @@ create_meta_bare_repo() {
     run env PATH="$(dirname "$META_BIN"):$PATH" "$META_MCP_BIN" <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"meta_git_add","arguments":{"files":"my file.txt; touch PWNED4"}}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"meta_git_add","arguments":{"files":["my file.txt; touch PWNED4"]}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"meta_git_add","arguments":{"files":[]}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"meta_git_add","arguments":{"files":["my file.txt; touch PWNED4"]}}}
 EOF
     [ -z "$(find "$TEST_DIR" -name PWNED4)" ]
     [[ "$output" == *"'files' must be a list of strings"* ]]
+    [[ "$output" == *"'files' is empty"* ]]
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" = "my file.txt; touch PWNED4" ]
 }
 

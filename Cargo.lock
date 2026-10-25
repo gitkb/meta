@@ -1091,12 +1091,10 @@ dependencies = [
 name = "meta_rust_cli"
 version = "0.2.22"
 dependencies = [
- "anyhow",
  "colored",
  "indexmap",
- "meta_core",
  "meta_plugin_protocol",
- "serde_json",
+ "shlex",
  "tempfile",
 ]
 

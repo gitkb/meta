@@ -14,7 +14,8 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
+    # The physical path, as pwd prints it (macOS temp dirs sit behind a symlink)
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
     chmod +x "$TEST_DIR/.meta/plugins/meta-git"
@@ -105,11 +106,11 @@ teardown() {
     [[ "$output" != *"worker"* ]]
 }
 
-@test "meta exec --include with nonexistent dir runs nothing" {
+@test "meta exec --include with nonexistent dir is an error and runs nothing" {
     run "$META_BIN" --include nonexistent exec -- echo hello
-    [ "$status" -eq 0 ]
-    # Should not produce "hello" output since no dirs match
-    [[ "$output" != *"hello"* ]] || [[ "$output" == *"No directories"* ]] || [[ "$output" == *"0"* ]]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--include 'nonexistent' names none of the repos"* ]]
+    [[ "$output" != *"hello"* ]]
 }
 
 # ============ --exclude ============
@@ -463,4 +464,198 @@ SCRIPT
     run "$META_BIN" exec -- echo hello
     [ "$status" -eq 0 ]
     [[ "$output" == *"hello"* ]]
+}
+
+# ============ Arguments reach the command as typed, with no shell ============
+
+@test "meta exec passes each argument as given, never through a shell" {
+    run "$META_BIN" --include api exec -- printf '[%s]\n' 'one arg' '$(touch PWNED)' 'a;touch PWNED' '*' "it's"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[one arg]"* ]]
+    [[ "$output" == *'[$(touch PWNED)]'* ]]
+    [[ "$output" == *"[a;touch PWNED]"* ]]
+    [[ "$output" == *"[*]"* ]]
+    [[ "$output" == *"[it's]"* ]]
+    [ -z "$(find "$TEST_DIR" -name PWNED)" ]
+}
+
+@test "meta exec runs a shell only when asked for one" {
+    run "$META_BIN" --include api exec -- sh -c 'echo first && echo second'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"first"* ]]
+    [[ "$output" == *"second"* ]]
+}
+
+@test "meta exec --dry-run shows the command quoted as typed" {
+    run "$META_BIN" --dry-run --include api exec -- touch 'one arg'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"touch 'one arg'"* ]]
+    [ ! -e "$TEST_DIR/api/one arg" ]
+}
+
+@test "meta exec of a missing program fails cleanly" {
+    run "$META_BIN" --include api exec -- meta-no-such-program
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"meta-no-such-program"* ]]
+    [[ "$output" != *"panicked"* ]]
+}
+
+# ============ --include / --exclude name whole repos ============
+
+add_api_legacy() {
+    mkdir -p "$TEST_DIR/api-legacy" "$TEST_DIR/libs/core"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{
+    "projects": {
+        "api": "git@github.com:org/api.git",
+        "api-legacy": "git@github.com:org/api-legacy.git",
+        "worker": "git@github.com:org/worker.git",
+        "core": { "repo": "git@github.com:org/core.git", "path": "libs/core" }
+    }
+}
+EOF
+}
+
+@test "--include api does not select api-legacy" {
+    add_api_legacy
+    run "$META_BIN" --include api exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/api"* ]]
+    [[ "$output" != *"api-legacy"* ]]
+    [[ "$output" != *"worker"* ]]
+}
+
+@test "--exclude api keeps api-legacy" {
+    add_api_legacy
+    run "$META_BIN" --exclude api exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/api-legacy"* ]]
+    [[ "$output" == *"$TEST_DIR/worker"* ]]
+    [ "$(grep -c "^$TEST_DIR/api\$" <<<"$output")" -eq 0 ]
+}
+
+@test "--include a part of a path names none of the repos" {
+    add_api_legacy
+    # every absolute path here contains "t" and "a"
+    for value in a t ap libs core/x; do
+        run "$META_BIN" --include "$value" exec -- pwd
+        [ "$status" -ne 0 ] || { echo "--include $value: $output"; false; }
+        [[ "$output" == *"names none of the repos"* ]]
+    done
+}
+
+@test "--include takes a repo's .meta name or its path from the root" {
+    add_api_legacy
+    for value in core libs/core ./libs/core/; do
+        run "$META_BIN" --include "$value" exec -- pwd
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"$TEST_DIR/libs/core"* ]]
+        [[ "$output" != *"api"* ]]
+    done
+    run "$META_BIN" --include . exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "^$TEST_DIR\$" <<<"$output")" -eq 1 ]
+    [[ "$output" != *"$TEST_DIR/"* ]]
+}
+
+@test "--exclude with a typo is an error, not a no-op" {
+    add_api_legacy
+    run "$META_BIN" --exclude apii exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--exclude 'apii' names none of the repos"* ]]
+    [ -z "$(find "$TEST_DIR" -name ran)" ]
+}
+
+@test "--include selects plugin commands the same way" {
+    add_api_legacy
+    run "$META_BIN" --dry-run --include api git reset --hard
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "Would execute" <<<"$output")" -eq 1 ]
+    [[ "$output" == *"$TEST_DIR/api"* ]]
+    [[ "$output" != *"api-legacy"* ]]
+}
+
+@test "--include takes names from the config chosen with --config" {
+    add_api_legacy
+    cat > "$TEST_DIR/alt.json" <<'EOF'
+{ "projects": { "core-lib": { "repo": "git@github.com:org/core.git", "path": "./libs/core/" } } }
+EOF
+    run "$META_BIN" --config alt.json --include core-lib exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/libs/core"* ]]
+    [[ "$output" != *"api"* ]]
+    run "$META_BIN" --config alt.json --include core exec -- pwd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"names none of the repos"* ]]
+}
+
+@test "--recursive with --config walks the chosen config" {
+    add_api_legacy
+    mkdir -p "$TEST_DIR/staging/api"
+    cat > "$TEST_DIR/alt.json" <<'EOF'
+{ "projects": { "staging-api": { "repo": "git@github.com:org/api.git", "path": "staging/api" } } }
+EOF
+    run "$META_BIN" --config alt.json --recursive --include staging-api exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/staging/api"* ]]
+    run "$META_BIN" --config alt.json --recursive exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/staging/api"* ]]
+    [[ "$output" != *"api-legacy"* ]]
+}
+
+@test "a value that is one repo's path and another's name is an error" {
+    mkdir -p "$TEST_DIR/web" "$TEST_DIR/frontend"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{ "projects": { "web": { "repo": "git@github.com:org/web.git", "path": "frontend" }, "web-app": { "repo": "git@github.com:org/web-app.git", "path": "web" } } }
+EOF
+    run "$META_BIN" --include web exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"names the repo at web by path and the repo at frontend by .meta name"* ]]
+    [ -z "$(find "$TEST_DIR" -name ran)" ]
+}
+
+@test "meta git clone refuses --include" {
+    run "$META_BIN" --include api git clone https://example.invalid/meta.git
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --include/--exclude"* ]]
+}
+
+@test "meta-mcp meta_exec runs its argv with no shell" {
+    run env PATH="$(dirname "$META_BIN"):$PATH" "$BATS_TEST_DIRNAME/../target/debug/meta-mcp" <<'EOF'
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"meta_exec","arguments":{"command":["printf","[%s]","one arg","$(touch PWNED5)"]}}}
+EOF
+    [[ "$output" == *'[one arg][$(touch PWNED5)]'* ]]
+    [ -z "$(find "$TEST_DIR" -name PWNED5)" ]
+}
+
+@test "--recursive with --config expands each nested meta repo once" {
+    mkdir -p "$TEST_DIR/child" "$TEST_DIR/legacy"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{ "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
+EOF
+    cat > "$TEST_DIR/child/.meta.json" <<'EOF'
+{ "projects": { "up": { "repo": "git@github.com:org/up.git", "path": ".." } } }
+EOF
+    # pwd prints the physical path (macOS temp dirs sit behind a symlink)
+    legacy="$(cd "$TEST_DIR/legacy" && pwd -P)"
+    run "$META_BIN" --recursive exec -- pwd
+    [ "$status" -eq 0 ]
+    default_runs="$(grep -cx "$legacy" <<<"$output" || true)"
+    run "$META_BIN" --config .meta.json --recursive exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(grep -cx "$legacy" <<<"$output" || true)" -eq "$default_runs" ]
+    [ "$default_runs" -eq 1 ]
+}
+
+@test "--exclude skips every spelling of the same repo" {
+    mkdir -p "$TEST_DIR/api" "$TEST_DIR/libs"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{ "projects": { "api": "git@github.com:org/api.git", "other": { "repo": "git@github.com:org/api.git", "path": "libs/../api" } } }
+EOF
+    run "$META_BIN" --exclude api exec -- touch ran
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_DIR/api/ran" ]
+    [ -e "$TEST_DIR/ran" ]
 }

@@ -119,7 +119,7 @@ The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta`
 
 **Key concepts covered:**
 - Session start: `meta project list --recursive --json`, `meta git status`
-- Filtering with `--include`/`--exclude` (substring matches) and `--tag`
+- Filtering with `--include`/`--exclude` (whole repos: `.meta` name or path from the root) and `--tag`
 - Dependency order via the MCP tool `meta_execution_order`
 - Global and worktree `--strict` mode
 

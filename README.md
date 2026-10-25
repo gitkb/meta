@@ -101,7 +101,7 @@ User runs: meta git status --tag backend
 Meta CLI: parse args → load .meta → filter by tags → find plugin
     │
     ▼
-Plugin (meta-git): "here's the plan" → [{dir: "./api", cmd: "git status"}, ...]
+Plugin (meta-git): "here's the plan" → [{dir: "./api", argv: ["git", "status"]}, ...]
     │
     ▼
 Loop Engine: execute plan → aggregate output → report results
@@ -268,7 +268,7 @@ This enables impact analysis ("what breaks if I change shared-utils?"), topologi
 
 | Command | Description |
 |---------|-------------|
-| `meta exec <command>` | Run any command across all repositories |
+| `meta exec -- <command>` | Run any command across all repositories (no shell; `sh -c '...'` for one) |
 | `meta git status` | Git status for all repos |
 | `meta git pull` | Pull latest changes |
 | `meta git push` | Push commits |
@@ -310,9 +310,15 @@ meta exec npm test --tag frontend,shared
 ### By Directory
 
 ```bash
-meta git status --include api-service,web-app
-meta exec npm install --exclude legacy-app
+meta --include api-service,web-app git status
+meta --exclude legacy-app exec -- npm install
 ```
+
+A value names a whole repo: its `.meta` name or its path from the workspace root (`.` for the root repo), never part of a path, so `api` does not select `api-legacy`. A value that names no repo is an error, so a typo never runs a command in a repo you meant to skip. Inside a worktree set, a repo is named by its alias (its path in the set). A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too).
+
+### Arguments
+
+Meta runs every command as a program with its arguments, never through a shell. Each argument meta receives reaches the program unchanged, so quotes, spaces, `$()`, `;`, globs and `%` stay literal (`meta git log --format='%h %s'` works, and text pasted into a commit message can't run commands). Your own shell still parses the line before meta runs, so `"$(...)"` in double quotes runs there: pass untrusted text in single quotes. When you want a shell, ask for one: `meta exec -- sh -c 'npm ci && npm test'`. `meta git status`, `commit`, `clone`, `update`, `snapshot` and `worktree` are meta's own commands with their own options; for git's native behavior, `meta exec -- git ...`. Meta still reads its own `--json`, `--verbose`, `--silent`, `--recursive`, `--strict` and `--primary` after a plugin command (`meta git status --json`); put arguments that look like those after `--` (`meta git add -- --json`).
 
 ### Recursive Processing
 
@@ -375,7 +381,7 @@ meta-myplugin --meta-plugin-info
 
 # Meta asks: "Execute this command"
 echo '{"command":"myplugin run","args":[],"projects":[...]}' | meta-myplugin --meta-plugin-exec
-# → {"plan": {"commands": [{"dir": "./repo1", "cmd": "..."}]}}
+# → {"plan": {"commands": [{"dir": "./repo1", "argv": ["make", "lint"]}]}}
 ```
 
 See [docs/plugin_development.md](docs/plugin_development.md) for the full guide.
@@ -470,8 +476,8 @@ Arguments:
 Options:
   -c, --config <FILE>       Path to .meta config file
   -t, --tag <TAGS>          Filter by tag(s), comma-separated
-  -i, --include <DIRS>      Include only these directories
-  -e, --exclude <DIRS>      Exclude these directories
+  -i, --include <REPOS>     Only these repos (.meta name or path from the root)
+  -e, --exclude <REPOS>     Skip these repos (.meta name or path from the root)
   -r, --recursive           Process nested meta repos
       --depth <N>           Max recursion depth
       --json                Output in JSON format

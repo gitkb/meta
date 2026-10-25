@@ -26,7 +26,7 @@
 
 ## Key Features
 
-- Run any shell command in multiple directories in parallel
+- Run any command in multiple directories in parallel (as a program with arguments, never through a shell; use `sh -c '...'` when you want one)
 - Defaults to all child repositories, with flexible inclusion/exclusion via CLI or config
 - Supports `.looprc` for persistent configuration
 - Verbose and silent output modes

@@ -357,6 +357,18 @@ assert d['totals']['files_changed'] >= 1
     [[ "$output" != *"exec-excl/frontend"* ]]
 }
 
+@test "worktree exec --include names whole repos, never parts of paths" {
+    "$META_BIN" git worktree create exec-whole --repo backend --repo frontend
+    run "$META_BIN" git worktree exec exec-whole --include end -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--include 'end' names none of the repos"* ]]
+    [ -z "$(find .worktrees/exec-whole -name ran)" ]
+    run "$META_BIN" git worktree exec exec-whole --exclude ./backend/ -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"exec-whole/frontend"* ]]
+    [[ "$output" != *"exec-whole/backend"* ]]
+}
+
 @test "worktree exec --parallel runs concurrently" {
     "$META_BIN" git worktree create exec-par --repo backend --repo frontend
     run "$META_BIN" git worktree exec exec-par --parallel -- echo parallel-ok
@@ -742,4 +754,28 @@ EOF
     run "$META_BIN" git worktree list
     [ "$status" -eq 0 ]
     [[ "$output" == *"list-nested"* ]]
+}
+
+@test "--include before git worktree is refused, not ignored" {
+    "$META_BIN" git worktree create global-filter --repo backend --repo frontend
+    run "$META_BIN" --exclude frontend git worktree exec global-filter -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --include/--exclude before it"* ]]
+    [ -z "$(find .worktrees/global-filter -name ran)" ]
+}
+
+@test "inside a worktree set, a filter typo is an error even when --tag selects nothing" {
+    "$META_BIN" git worktree create tagged --repo backend --repo frontend
+    cd .worktrees/tagged
+    run "$META_BIN" --tag nonexistent --exclude typo exec -- pwd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--exclude 'typo' names none of the repos"* ]]
+}
+
+@test "worktree exec --include works with a relative META_WORKTREES" {
+    "$META_BIN" git worktree create rel-root --repo backend --repo frontend
+    run env META_WORKTREES=.worktrees "$META_BIN" git worktree exec rel-root --include backend -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rel-root/backend"* ]]
+    [[ "$output" != *"rel-root/frontend"* ]]
 }

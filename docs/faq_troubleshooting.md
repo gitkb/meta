@@ -123,11 +123,11 @@ projects:
 # By tag (plugin commands)
 meta --tag backend git status
 
-# By directory name (plugin commands)
-meta git status --include api,web
+# By repo: its .meta name or its path from the workspace root
+meta --include api,web git status
 
-# Exclude specific repos (use exec for non-plugin commands)
-meta exec --exclude legacy-service -- npm install
+# Exclude specific repos
+meta --exclude legacy-service exec -- npm install
 ```
 
 ### Q: Commands are running slowly. How can I speed them up?

@@ -19,6 +19,8 @@ meta git status    # Shows status for every repo at once
 meta git commit -m "feat: update"    # Commits in every repo with staged changes
 ```
 
+Any other git subcommand passes through to git in each repo. Meta passes the arguments it receives to git unchanged, with no shell in between: `meta git log --format='%h %s'` and a commit message containing `$(...)` or `;` are passed as-is. Your own shell still expands `$(...)` inside double quotes before meta runs, so put untrusted text in single quotes.
+
 ## Cloning a Meta Repo
 
 ```bash
@@ -87,13 +89,13 @@ meta git log --oneline -5
 
 ## Filtering
 
-Target specific repos. With `--tag`, the meta root repo stays included even when it isn't tagged; `--include`/`--exclude` match substrings of directory paths and can drop the root.
+Target specific repos. With `--tag`, the meta root repo stays included even when it isn't tagged; `--include`/`--exclude` take whole repos (a `.meta` name or the path from the workspace root, `.` for the root), never part of a path, and can drop the root. A value that names no repo is an error.
 
 ```bash
 # By tag
 meta --tag backend git status
 
-# By directory (substring match: `api` also matches `api-tests`)
+# By repo: .meta name or path from the root (`api` does not match `api-tests`)
 meta --include api,web git push
 
 # Exclude repos
@@ -139,7 +141,7 @@ When the meta MCP server is available, these tools provide structured JSON outpu
 
 ## Efficiency Tips
 
-- **Targeted commits**: `meta --include repo1,repo2 git commit -m "msg"` commits only in repos whose path matches
+- **Targeted commits**: `meta --include repo1,repo2 git commit -m "msg"` commits only in the named repos
 - **Tag-based push**: `meta --tag backend git push` pushes tagged repos (and the root)
 - **Per-repo messages**: Use `meta_git_multi_commit` when changes in different repos need different commit messages
 - **One-call status**: `meta git status` replaces N individual `cd && git status` sequences

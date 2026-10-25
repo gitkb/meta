@@ -637,11 +637,13 @@ EOF
     cat > "$TEST_DIR/child/.meta.json" <<'EOF'
 { "projects": { "up": { "repo": "git@github.com:org/up.git", "path": ".." } } }
 EOF
+    # pwd prints the physical path (macOS temp dirs sit behind a symlink)
+    legacy="$(cd "$TEST_DIR/legacy" && pwd -P)"
     run "$META_BIN" --recursive exec -- pwd
     [ "$status" -eq 0 ]
-    default_runs="$(grep -c "^$TEST_DIR/legacy\$" <<<"$output")"
+    default_runs="$(grep -cx "$legacy" <<<"$output" || true)"
     run "$META_BIN" --config .meta.json --recursive exec -- pwd
     [ "$status" -eq 0 ]
-    [ "$(grep -c "^$TEST_DIR/legacy\$" <<<"$output")" -eq "$default_runs" ]
+    [ "$(grep -cx "$legacy" <<<"$output" || true)" -eq "$default_runs" ]
     [ "$default_runs" -eq 1 ]
 }

@@ -723,3 +723,14 @@ J
     [ "$(git -C backend worktree list | wc -l)" -eq 1 ]
     ! git -C backend rev-parse --verify --quiet refs/heads/hooked
 }
+
+@test "a skipped repo whose add failed in its checkout hook leaves nothing behind" {
+    mkdir -p backend/.git/hooks
+    printf '#!/bin/sh\nexit 1\n' > backend/.git/hooks/post-checkout
+    chmod +x backend/.git/hooks/post-checkout
+    # with a starting ref, a failed add is skipped rather than fatal
+    run "$META_BIN" git worktree create hooked-ref HEAD --repo backend --no-deps
+    rm backend/.git/hooks/post-checkout
+    [ "$(git -C backend worktree list | wc -l)" -eq 1 ]
+    ! git -C backend rev-parse --verify --quiet refs/heads/hooked-ref
+}

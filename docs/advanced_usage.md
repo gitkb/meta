@@ -122,8 +122,8 @@ meta exec -- npm test
 #    what the batch changed: git restore --staged --worktree . (tracked
 #    files, staged or not) and git clean -nd, then -fd, for new files
 
-# 5. If tests pass, commit
-meta git commit -m "chore: update dependencies"
+# 5. If tests pass, stage and commit
+meta git add -A && meta git commit -m "chore: update dependencies"
 ```
 
 ### Recovering Committed Work
@@ -131,8 +131,8 @@ meta git commit -m "chore: update dependencies"
 `git reflog` lists every commit a repo's `HEAD` pointed to, so you can find and restore an earlier state:
 
 ```bash
-# Look across repos
-meta --include api-service exec -- git reflog -n 20
+# Look across all repos
+meta exec -- git reflog -n 20
 
 # In the affected repo, branch from the earlier commit
 git switch -c recovered <sha>

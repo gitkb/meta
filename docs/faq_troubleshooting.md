@@ -298,8 +298,8 @@ Preview the change with `--dry-run` and limit it with `--include` before running
 **A:** Use `git reflog` in the affected repo to find the previous commit, then branch from it:
 
 ```bash
-# Look across repos
-meta --include api-service exec -- git reflog -n 20
+# Look across all repos
+meta exec -- git reflog -n 20
 
 # In the affected repo
 git switch -c recovered <sha>

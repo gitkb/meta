@@ -67,7 +67,7 @@ meta exec -- git stash push -u -m before-refactor
 meta --dry-run exec -- <command>
 ```
 
-**Recovering**: `git reflog` in the affected repo lists the commits its `HEAD` pointed to; `git switch -c recovered <sha>` brings one back. Use `meta --include <repo> exec -- git reflog -n 20` to look across repos. The reflog only recovers commits, not uncommitted changes, so commit or stash first. A backup branch keeps only commits.
+**Recovering**: `git reflog` in the affected repo lists the commits its `HEAD` pointed to; `git switch -c recovered <sha>` brings one back. Use `meta exec -- git reflog -n 20` to look across all repos (`--include <repo>` for one). The reflog only recovers commits, not uncommitted changes, so commit or stash first. A backup branch keeps only commits.
 
 ## Common Git Operations
 

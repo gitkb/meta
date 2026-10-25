@@ -71,8 +71,8 @@ When making changes across repositories:
 3. meta_query_repos → Find repos to modify
 4. Make changes
 5. meta_run_tests → Verify changes
-6. If tests fail: discard the batch's changes with git (`git restore --staged --worktree .`; everything from before is committed). `git reflog` / `git switch` only go back to earlier commits; they don't discard uncommitted edits
-7. If tests pass: meta_git_commit → Commit changes
+6. If tests fail: discard the batch's changes with git (`git restore --staged --worktree .` and `git clean -nd`, then `-fd`, for new files; everything from before is committed). `git reflog` / `git switch` only go back to earlier commits; they don't discard uncommitted edits
+7. If tests pass: meta_git_add, then meta_git_commit → Commit changes
 ```
 
 **Example:**
@@ -96,7 +96,8 @@ When making changes across repositories:
   "tag": "frontend"
 }}
 
-// If failed, discard the changes (pending work was committed above)
+// If failed, discard the changes (pending work was committed above);
+// then preview and remove new files with git clean -nd / -fd
 {"name": "meta_exec", "arguments": {
   "command": ["git", "restore", "--staged", "--worktree", "."],
   "tag": "frontend"
@@ -235,7 +236,7 @@ Always check the `is_error` field in responses and handle appropriately.
 When operations fail:
 
 1. **Single repo failure**: Check error, fix issue, retry
-2. **Multiple repo failure**: In each affected repo, discard uncommitted batch edits with `git restore --staged --worktree .` (after committing or stashing earlier work), and go back to an earlier commit with `git reflog` and `git switch -c recovered <sha>` (the reflog only recovers commits; switching carries uncommitted edits along)
+2. **Multiple repo failure**: In each affected repo, discard uncommitted batch edits with `git restore --staged --worktree .` and `git clean -nd`, then `-fd` (this assumes earlier work was already committed or stashed before the batch), and go back to an earlier commit with `git reflog` and `git switch -c recovered <sha>` (the reflog only recovers commits; switching carries uncommitted edits along)
 3. **Build order failure**: Use `meta_execution_order` to find dependencies
 4. **Git conflicts**: Manual intervention may be required
 
@@ -250,7 +251,7 @@ When operations fail:
 6. Get build order: meta_execution_order
 7. Build in order: meta_batch_execute
 8. Run tests: meta_run_tests
-9. If failed: discard the batch's edits (`git restore --staged --worktree .`) or go back to an earlier commit (git reflog / git switch), fix issues
+9. If failed: discard the batch's edits (`git restore --staged --worktree .`, `git clean -nd`, then `-fd`) or go back to an earlier commit (git reflog / git switch), fix issues
 10. If passed: meta_git_add, meta_git_commit, meta_git_push
 ```
 

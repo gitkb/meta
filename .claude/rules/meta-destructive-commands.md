@@ -36,8 +36,8 @@ If something goes wrong, run `git reflog` in the affected repo to find the previ
 ```
 git switch -c recovered <sha>
 ```
-To look across repos:
+To look across all repos:
 ```
-meta --include <repo> exec -- git reflog -n 20
+meta exec -- git reflog -n 20
 ```
 The reflog only recovers commits, not uncommitted changes.

@@ -790,3 +790,32 @@ J
     [ -f "$OUTSIDE/wt/mine" ]
     rm -rf "$OUTSIDE"
 }
+
+@test "prune removes a worktree made under META_WORKTREES when run without it" {
+    CUSTOM="$(mktemp -d)"
+    META_WORKTREES="$CUSTOM" run "$META_BIN" git worktree create elsewhere --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    [ -d "$CUSTOM/elsewhere/backend" ]
+    sleep 2
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [ ! -e "$CUSTOM/elsewhere" ]
+    rm -rf "$CUSTOM"
+}
+
+@test "prune does not follow an expired set swapped for a link to a live one" {
+    run "$META_BIN" git worktree create old --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree create live --repo frontend
+    [ "$status" -eq 0 ]
+    echo mine > "$TEST_DIR/.worktrees/live/frontend/mine"
+    sleep 2
+    mv "$TEST_DIR/.worktrees/old" "$TEST_DIR/old-moved"
+    ln -s "$TEST_DIR/.worktrees/live" "$TEST_DIR/.worktrees/old"
+    run "$META_BIN" git worktree prune
+    [ -f "$TEST_DIR/.worktrees/live/frontend/mine" ]
+    run "$META_BIN" git worktree remove --force old
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"is a symlink"* ]]
+    [ -f "$TEST_DIR/.worktrees/live/frontend/mine" ]
+}

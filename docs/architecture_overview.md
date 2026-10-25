@@ -70,7 +70,6 @@ The main CLI entry point responsible for:
 - Configuration loading (`.meta`, `.meta.yaml`, `.meta.yml`)
 - Plugin discovery and dispatch
 - Filter application (tags, include, exclude)
-- Snapshot management
 - Query DSL processing
 - Dependency graph analysis
 
@@ -78,7 +77,6 @@ Key modules:
 - `main.rs` - Entry point, argument parsing
 - `config.rs` - Configuration loading and parsing
 - `subprocess_plugins.rs` - Plugin discovery and execution
-- `snapshots.rs` - Workspace snapshot functionality
 - `query.rs` - Query DSL implementation
 - `dependency_graph.rs` - Dependency tracking and analysis
 - `registry.rs` - Plugin registry client
@@ -121,7 +119,6 @@ Standalone CLI for the loop engine:
 
 Git plugin providing:
 - Queue-based recursive cloning
-- Workspace snapshots
 - SSH multiplexing setup
 - Standard git operation passthrough
 
@@ -134,12 +131,12 @@ Shared git utilities:
 
 ### meta_mcp
 
-MCP (Model Context Protocol) server exposing 29 tools:
+MCP (Model Context Protocol) server exposing 26 tools:
 - Core operations (list, exec, config)
 - Git operations (status, pull, push, commit, etc.)
 - Build/test operations
 - Discovery tools (search, file tree)
-- AI-dominance features (query, impact analysis, snapshots)
+- AI-dominance features (query, impact analysis, batch execution)
 
 ### meta_project_cli
 
@@ -181,7 +178,7 @@ meta-git --meta-plugin-info
   "name": "git",
   "version": "0.1.0",
   "description": "Git operations for meta repositories",
-  "commands": ["clone", "status", "update", "commit", "snapshot"]
+  "commands": ["clone", "status", "update", "commit"]
 }
 ```
 
@@ -315,23 +312,6 @@ pub enum ProjectEntry {
 }
 ```
 
-### Workspace Snapshot
-
-```rust
-pub struct WorkspaceSnapshot {
-    pub name: String,
-    pub created_at: DateTime<Utc>,
-    pub description: Option<String>,
-    pub projects: HashMap<String, ProjectSnapshot>,
-}
-
-pub struct ProjectSnapshot {
-    pub sha: String,
-    pub branch: String,
-    pub dirty: bool,
-}
-```
-
 ### Query Condition
 
 ```rust
@@ -370,7 +350,6 @@ pub struct ProjectDependencies {
 | `meta_cli/src/main.rs` | CLI entry, arg parsing |
 | `meta_cli/src/config.rs` | Config loading |
 | `meta_cli/src/subprocess_plugins.rs` | Plugin discovery/execution |
-| `meta_cli/src/snapshots.rs` | Workspace snapshots |
 | `meta_cli/src/query.rs` | Query DSL |
 | `meta_cli/src/dependency_graph.rs` | Dependency analysis |
 | `meta_cli/src/registry.rs` | Plugin registry |
@@ -390,10 +369,6 @@ The main CLI uses loop_lib for directory iteration and command execution when `m
 ### meta_cli ↔ subprocess_plugins
 
 Plugin manager discovers, validates, and executes plugins via subprocess communication.
-
-### meta_cli ↔ snapshots
-
-Snapshot module captures and restores workspace state for safe batch operations.
 
 ### meta_cli ↔ query
 
@@ -417,7 +392,7 @@ All plugins (git, project, rust) use `meta_plugin_protocol` for standardized hos
 
 ### meta_cli ↔ meta_core
 
-The main CLI uses `meta_core` for managing the `~/.meta/` data directory, file locking, and atomic JSON storage (e.g., for snapshots).
+The main CLI uses `meta_core` for managing the `~/.meta/` data directory, file locking, and atomic JSON storage.
 
 ## See Also
 

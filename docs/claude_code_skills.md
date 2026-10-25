@@ -50,13 +50,13 @@ The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta`
 
 ### meta-git - Git Operations
 
-**Purpose:** Multi-repo git operations with special attention to snapshots and safe batch changes.
+**Purpose:** Multi-repo git operations with special attention to safe batch changes.
 
 **Key concepts covered:**
 - `meta git clone` and its queue-based recursive cloning
 - `meta git update` for syncing workspaces
-- Snapshot create/list/restore workflow
-- Safe workflow patterns (status → snapshot → work → commit)
+- Committing or stashing before batch changes, and recovering with `git reflog`
+- Safe workflow patterns (status → commit/stash → work → commit)
 
 **When Claude should reference this skill:**
 - Before any multi-repo git operation
@@ -135,7 +135,7 @@ These skills were designed with specific principles:
 
 2. **Context-aware** - Skills explain WHEN to use techniques, not just HOW
 
-3. **Safety-first** - Snapshots and dry-run are emphasized for batch operations
+3. **Safety-first** - Committing first and dry-run are emphasized for batch operations
 
 4. **AI-optimized** - Written for how AI agents process instructions, with clear patterns and examples
 
@@ -158,7 +158,7 @@ Instructions for Claude...
 
 1. **Focus on workflow, not reference** - Explain when and why, not just what
 2. **Include concrete examples** - Show actual command sequences
-3. **Highlight safety patterns** - Snapshots, dry-run, filtered operations
+3. **Highlight safety patterns** - Commit or stash first, dry-run, filtered operations
 4. **Keep it scannable** - Use tables, code blocks, and clear headers
 
 ## Best Practices for AI Agents
@@ -167,16 +167,16 @@ Instructions for Claude...
 2. **Check status first** - Run `meta git status` before bulk operations
 3. **Use atomic mode** - For risky operations, use atomic mode for auto-rollback
 4. **Leverage queries** - Use query DSL to find specific repos by state
-5. **Create snapshots** - Before major changes, create a snapshot for easy rollback
+5. **Commit or stash first** - Before major changes, commit or stash uncommitted work so git can recover it
 
 ## Integration with MCP Server
 
-While skills provide guidance for CLI usage, Claude can also use the Meta MCP server for programmatic access. The MCP server exposes 29 tools:
+While skills provide guidance for CLI usage, Claude can also use the Meta MCP server for programmatic access. The MCP server exposes 26 tools:
 
 | Skill Domain | Related MCP Tools |
 |--------------|-------------------|
 | meta-workspace | `meta_list_projects`, `meta_get_config`, `meta_workspace_state` |
-| meta-git | `meta_git_*`, `meta_snapshot_*` |
+| meta-git | `meta_git_*` |
 | meta-exec | `meta_exec`, `meta_batch_execute`, `meta_query_repos` |
 | meta-plugins | `meta_list_plugins` |
 

@@ -89,213 +89,6 @@ teardown() {
     [[ "$output" == *"nothing to commit"* ]] || [[ "$output" == *"clean"* ]]
 }
 
-# ============ meta git snapshot create ============
-
-@test "meta git snapshot create captures workspace state" {
-    run "$META_BIN" git snapshot create test-snap
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Captured state"* ]] || [[ "$output" == *"test-snap"* ]]
-    # Snapshot file should exist
-    [ -f "$TEST_DIR/.meta-snapshots/test-snap.json" ]
-}
-
-@test "meta git snapshot create requires a name" {
-    run "$META_BIN" git snapshot create
-    [ "$status" -ne 0 ] || [[ "$output" == *"Usage"* ]] || [[ "$output" == *"name"* ]]
-}
-
-@test "meta git snapshot create records correct repo count" {
-    run "$META_BIN" git snapshot create count-test
-    [ "$status" -eq 0 ]
-    # Should capture frontend, backend, shared, and root (.)
-    # Verify the snapshot file has repo entries
-    python3 -c "
-import json, sys
-with open('$TEST_DIR/.meta-snapshots/count-test.json') as f:
-    snap = json.load(f)
-repos = snap['repos']
-assert len(repos) >= 3, f'Expected at least 3 repos, got {len(repos)}: {list(repos.keys())}'
-"
-}
-
-@test "meta git snapshot create records branch info" {
-    run "$META_BIN" git snapshot create branch-test
-    [ "$status" -eq 0 ]
-    python3 -c "
-import json
-with open('$TEST_DIR/.meta-snapshots/branch-test.json') as f:
-    snap = json.load(f)
-for name, state in snap['repos'].items():
-    assert 'sha' in state, f'{name} missing sha'
-    assert 'branch' in state or state.get('branch') is None, f'{name} missing branch'
-    assert 'dirty' in state, f'{name} missing dirty flag'
-"
-}
-
-@test "meta git snapshot create detects dirty repos" {
-    echo "uncommitted change" >> "$TEST_DIR/backend/README.md"
-    run "$META_BIN" git snapshot create dirty-test
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"dirty"* ]]
-    python3 -c "
-import json
-with open('$TEST_DIR/.meta-snapshots/dirty-test.json') as f:
-    snap = json.load(f)
-# Keys may be absolute paths; find the one containing 'backend'
-backend = None
-for key, state in snap['repos'].items():
-    if 'backend' in key:
-        backend = state
-        break
-assert backend is not None, f'backend not in snapshot: {list(snap[\"repos\"].keys())}'
-assert backend['dirty'] == True, f'backend should be dirty, got {backend}'
-"
-}
-
-# ============ meta git snapshot list ============
-
-@test "meta git snapshot list shows no snapshots initially" {
-    run "$META_BIN" git snapshot list
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"No snapshots"* ]]
-}
-
-@test "meta git snapshot list shows created snapshots" {
-    "$META_BIN" git snapshot create alpha
-    "$META_BIN" git snapshot create beta
-    run "$META_BIN" git snapshot list
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"alpha"* ]]
-    [[ "$output" == *"beta"* ]]
-}
-
-@test "meta git snapshot list shows repo count" {
-    "$META_BIN" git snapshot create count-snap
-    run "$META_BIN" git snapshot list
-    [ "$status" -eq 0 ]
-    # Should mention the number of repos
-    [[ "$output" == *"repos"* ]] || [[ "$output" == *"3"* ]] || [[ "$output" == *"4"* ]]
-}
-
-# ============ meta git snapshot show ============
-
-@test "meta git snapshot show displays snapshot details" {
-    "$META_BIN" git snapshot create show-test
-    run "$META_BIN" git snapshot show show-test
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"show-test"* ]]
-    [[ "$output" == *"frontend"* ]]
-    [[ "$output" == *"backend"* ]]
-    [[ "$output" == *"shared"* ]]
-}
-
-@test "meta git snapshot show displays branch info" {
-    "$META_BIN" git snapshot create branch-show
-    run "$META_BIN" git snapshot show branch-show
-    [ "$status" -eq 0 ]
-    # Should show branch names (main or master)
-    [[ "$output" == *"main"* ]] || [[ "$output" == *"master"* ]]
-}
-
-@test "meta git snapshot show fails for nonexistent snapshot" {
-    run "$META_BIN" git snapshot show nonexistent
-    [ "$status" -ne 0 ] || [[ "$output" == *"not found"* ]] || [[ "$output" == *"error"* ]] || [[ "$output" == *"Error"* ]]
-}
-
-@test "meta git snapshot show requires a name" {
-    run "$META_BIN" git snapshot show
-    [ "$status" -ne 0 ] || [[ "$output" == *"Usage"* ]] || [[ "$output" == *"name"* ]]
-}
-
-# ============ meta git snapshot delete ============
-
-@test "meta git snapshot delete removes snapshot" {
-    "$META_BIN" git snapshot create del-test
-    [ -f "$TEST_DIR/.meta-snapshots/del-test.json" ]
-    run "$META_BIN" git snapshot delete del-test
-    [ "$status" -eq 0 ]
-    [ ! -f "$TEST_DIR/.meta-snapshots/del-test.json" ]
-}
-
-@test "meta git snapshot delete fails for nonexistent" {
-    run "$META_BIN" git snapshot delete ghost
-    [ "$status" -ne 0 ] || [[ "$output" == *"not found"* ]] || [[ "$output" == *"error"* ]] || [[ "$output" == *"Error"* ]]
-}
-
-# ============ meta git snapshot restore (dry-run only) ============
-
-@test "meta git snapshot restore --dry-run previews changes" {
-    "$META_BIN" git snapshot create restore-test
-    # Make a change after snapshot
-    echo "new content" >> "$TEST_DIR/frontend/README.md"
-    git -C "$TEST_DIR/frontend" add README.md
-    git -C "$TEST_DIR/frontend" commit --quiet -m "Post-snapshot change"
-
-    run "$META_BIN" --dry-run git snapshot restore restore-test
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"DRY RUN"* ]] || [[ "$output" == *"dry run"* ]] || [[ "$output" == *"Dry run"* ]]
-}
-
-@test "meta git snapshot restore --dry-run makes no changes" {
-    "$META_BIN" git snapshot create no-change-test
-    ORIGINAL_SHA=$(git -C "$TEST_DIR/frontend" rev-parse HEAD)
-    echo "new" >> "$TEST_DIR/frontend/README.md"
-    git -C "$TEST_DIR/frontend" add README.md
-    git -C "$TEST_DIR/frontend" commit --quiet -m "Change"
-
-    "$META_BIN" --dry-run git snapshot restore no-change-test
-    CURRENT_SHA=$(git -C "$TEST_DIR/frontend" rev-parse HEAD)
-    # SHA should NOT have reverted (dry-run doesn't change anything)
-    [ "$CURRENT_SHA" != "$ORIGINAL_SHA" ]
-}
-
-@test "meta git snapshot restore --force restores to snapshot state" {
-    "$META_BIN" git snapshot create force-test
-    SNAPSHOT_SHA=$(git -C "$TEST_DIR/frontend" rev-parse HEAD)
-
-    # Make changes after snapshot
-    echo "post-snapshot" >> "$TEST_DIR/frontend/README.md"
-    git -C "$TEST_DIR/frontend" add README.md
-    git -C "$TEST_DIR/frontend" commit --quiet -m "Post-snapshot commit"
-    POST_SHA=$(git -C "$TEST_DIR/frontend" rev-parse HEAD)
-    [ "$POST_SHA" != "$SNAPSHOT_SHA" ]
-
-    run "$META_BIN" git snapshot restore force-test --force
-    [ "$status" -eq 0 ]
-
-    RESTORED_SHA=$(git -C "$TEST_DIR/frontend" rev-parse HEAD)
-    [ "$RESTORED_SHA" = "$SNAPSHOT_SHA" ]
-}
-
-# ============ meta git snapshot full lifecycle ============
-
-@test "meta git snapshot full lifecycle: create, list, show, delete" {
-    # Create
-    run "$META_BIN" git snapshot create lifecycle
-    [ "$status" -eq 0 ]
-    [ -f "$TEST_DIR/.meta-snapshots/lifecycle.json" ]
-
-    # List
-    run "$META_BIN" git snapshot list
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"lifecycle"* ]]
-
-    # Show
-    run "$META_BIN" git snapshot show lifecycle
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"lifecycle"* ]]
-    [[ "$output" == *"frontend"* ]]
-
-    # Delete
-    run "$META_BIN" git snapshot delete lifecycle
-    [ "$status" -eq 0 ]
-    [ ! -f "$TEST_DIR/.meta-snapshots/lifecycle.json" ]
-
-    # Verify gone from list
-    run "$META_BIN" git snapshot list
-    [[ "$output" != *"lifecycle"* ]]
-}
-
 # ============ meta git commit ============
 
 @test "meta git commit with no staged changes reports nothing" {
@@ -538,43 +331,6 @@ EOF
     [[ "$output" == *"git@github.com:example/repo.git"* ]]
 }
 
-# ============ meta git snapshot with --recursive ============
-
-@test "meta git snapshot create with nested meta repos" {
-    # Create a nested .meta inside frontend
-    mkdir -p "$TEST_DIR/frontend/sub-component"
-    git -C "$TEST_DIR/frontend/sub-component" init --quiet
-    git -C "$TEST_DIR/frontend/sub-component" config user.email "test@test.com"
-    git -C "$TEST_DIR/frontend/sub-component" config user.name "Test"
-    echo "# sub" > "$TEST_DIR/frontend/sub-component/README.md"
-    git -C "$TEST_DIR/frontend/sub-component" add README.md
-    git -C "$TEST_DIR/frontend/sub-component" commit --quiet -m "Init sub-component"
-
-    cat > "$TEST_DIR/frontend/.meta" <<'EOF'
-{
-    "projects": {
-        "sub-component": "git@github.com:org/sub.git"
-    }
-}
-EOF
-
-    run "$META_BIN" --recursive git snapshot create nested-snap
-    [ "$status" -eq 0 ]
-    [ -f "$TEST_DIR/.meta-snapshots/nested-snap.json" ]
-}
-
-# ============ meta git snapshot help ============
-
-@test "meta git snapshot with no subcommand shows help" {
-    run "$META_BIN" git snapshot
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"create"* ]]
-    [[ "$output" == *"list"* ]]
-    [[ "$output" == *"show"* ]]
-    [[ "$output" == *"restore"* ]]
-    [[ "$output" == *"delete"* ]]
-}
-
 # ============ meta git --dry-run ============
 
 @test "meta git status --dry-run shows plan without executing" {
@@ -611,34 +367,6 @@ EOF
 
     LAST_MSG=$(git -C "$TEST_DIR/frontend" log -1 --pretty=%s)
     [[ "$LAST_MSG" == *"quotes"* ]]
-}
-
-@test "meta git snapshot create overwrites existing snapshot" {
-    "$META_BIN" git snapshot create overwrite-test
-    # Modify a repo
-    echo "change" >> "$TEST_DIR/backend/README.md"
-    git -C "$TEST_DIR/backend" add README.md
-    git -C "$TEST_DIR/backend" commit --quiet -m "Change for overwrite"
-    NEW_SHA=$(git -C "$TEST_DIR/backend" rev-parse HEAD)
-
-    # Create again with same name
-    run "$META_BIN" git snapshot create overwrite-test
-    [ "$status" -eq 0 ]
-
-    # Should have the new SHA
-    python3 -c "
-import json
-with open('$TEST_DIR/.meta-snapshots/overwrite-test.json') as f:
-    snap = json.load(f)
-# Keys may be absolute paths; find the one containing 'backend'
-backend_sha = None
-for key, state in snap['repos'].items():
-    if 'backend' in key:
-        backend_sha = state['sha']
-        break
-assert backend_sha is not None, f'backend not in snapshot: {list(snap[\"repos\"].keys())}'
-assert backend_sha == '$NEW_SHA', f'Snapshot not updated: got {backend_sha}'
-"
 }
 
 # ============ --recursive ============
@@ -739,37 +467,6 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"frontend"* ]]
     [[ "$output" != *"deep"* ]]
-}
-
-@test "meta git snapshot create --recursive captures nested repos" {
-    mkdir -p "$TEST_DIR/backend/sub-service"
-    git -C "$TEST_DIR/backend/sub-service" init --quiet
-    git -C "$TEST_DIR/backend/sub-service" config user.email "test@test.com"
-    git -C "$TEST_DIR/backend/sub-service" config user.name "Test"
-    echo "# sub-service" > "$TEST_DIR/backend/sub-service/README.md"
-    git -C "$TEST_DIR/backend/sub-service" add README.md
-    git -C "$TEST_DIR/backend/sub-service" commit --quiet -m "Init sub-service"
-
-    cat > "$TEST_DIR/backend/.meta" <<'EOF'
-{
-    "projects": {
-        "sub-service": "git@github.com:org/sub-service.git"
-    }
-}
-EOF
-
-    run "$META_BIN" --recursive git snapshot create recursive-snap
-    [ "$status" -eq 0 ]
-    [ -f "$TEST_DIR/.meta-snapshots/recursive-snap.json" ]
-
-    # Verify the nested repo is in the snapshot
-    python3 -c "
-import json
-with open('$TEST_DIR/.meta-snapshots/recursive-snap.json') as f:
-    snap = json.load(f)
-has_sub = any('sub-service' in key for key in snap['repos'])
-assert has_sub, f'sub-service not in snapshot: {list(snap[\"repos\"].keys())}'
-"
 }
 
 @test "meta git commit -m --recursive commits in nested repos" {
@@ -1022,13 +719,6 @@ EOF
     [[ "$output" == *"'files' must be a list of strings"* ]]
     [[ "$output" == *"'files' is empty"* ]]
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" = "my file.txt; touch PWNED4" ]
-}
-
-@test "meta git snapshot restore refuses --include instead of restoring every repo" {
-    "$META_BIN" git snapshot create filtered
-    run "$META_BIN" --include frontend git snapshot restore filtered --force
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"does not take --include/--exclude"* ]]
 }
 
 @test "meta git update refuses --include instead of cloning every missing repo" {

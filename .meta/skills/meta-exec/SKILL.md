@@ -185,7 +185,7 @@ meta exec -- rm -rf node_modules dist
 | Generic commands | Git operations |
 | Build/test commands | Commands needing special handling |
 | One-off scripts | Operations with meta-specific logic |
-| npm/cargo/make | Clone, update, snapshot |
+| npm/cargo/make | Clone, update, worktree |
 
 `meta exec -- <cmd>` always runs the command as typed, never through a plugin: `meta exec -- git status` runs plain `git status` in each repo, while `meta git status` uses the git plugin. Prefer `meta git <cmd>` for git: any git subcommand passes through it, and it runs remote commands (`fetch`, `pull`, `push`) without credential prompts that would hang parallel runs. Plugins intercept only their own subcommands (`meta git ...`, `meta cargo ...`) and provide enhanced behavior. `meta git clone` doesn't run `git clone` in each repo—it reads `.meta` and clones the entire graph.
 

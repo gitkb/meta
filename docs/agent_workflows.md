@@ -66,20 +66,24 @@ When searching for implementation details:
 When making changes across repositories:
 
 ```
-1. meta_snapshot_create → Save current state
-2. meta_query_repos → Find repos to modify
-3. Make changes
-4. meta_run_tests → Verify changes
-5. If tests fail: meta_snapshot_restore
-6. If tests pass: meta_git_commit → Commit changes
+1. meta_git_status → Check for uncommitted changes
+2. Commit them (meta_git_add, then meta_git_commit, which commits only staged changes)
+3. meta_query_repos → Find repos to modify
+4. Make changes
+5. meta_run_tests → Verify changes
+6. If tests fail: discard the batch's changes with git (`git restore --staged --worktree .`, then `git clean -nd` to list new files and remove those by name, since agent guard blocks `git clean -fd`; everything from before is committed). `git reflog` / `git switch` only go back to earlier commits; they don't discard uncommitted edits
+7. If tests pass: meta_git_add, then meta_git_commit → Commit changes
 ```
 
 **Example:**
 ```json
-// Create safety snapshot
-{"name": "meta_snapshot_create", "arguments": {
-  "name": "pre-dependency-update",
-  "description": "Before updating axios to v2.0"
+// Check state, then commit pending work
+{"name": "meta_git_status", "arguments": {
+  "tag": "frontend"
+}}
+{"name": "meta_exec", "arguments": {
+  "command": ["sh", "-c", "git add -A && { git diff --cached --quiet || git commit -m 'wip: before dependency update'; }"],
+  "tag": "frontend"
 }}
 
 // Find affected repos
@@ -92,9 +96,12 @@ When making changes across repositories:
   "tag": "frontend"
 }}
 
-// If failed, restore
-{"name": "meta_snapshot_restore", "arguments": {
-  "name": "pre-dependency-update"
+// If failed, discard the changes (pending work was committed above);
+// then list new files with git clean -nd and remove them by name
+// (agent guard blocks git clean -fd)
+{"name": "meta_exec", "arguments": {
+  "command": ["git", "restore", "--staged", "--worktree", "."],
+  "tag": "frontend"
 }}
 ```
 
@@ -201,11 +208,10 @@ Don't operate on all repos when you mean a subset:
 {"name": "meta_run_tests", "arguments": {"tag": "backend"}}
 ```
 
-### 3. Create Snapshots Before Risky Operations
+### 3. Commit or Stash Before Risky Operations
 ```json
-{"name": "meta_snapshot_create", "arguments": {
-  "name": "before-refactor",
-  "description": "Pre-auth-refactor state"
+{"name": "meta_exec", "arguments": {
+  "command": ["git", "stash", "push", "-u", "-m", "before-refactor"]
 }}
 ```
 
@@ -231,14 +237,14 @@ Always check the `is_error` field in responses and handle appropriately.
 When operations fail:
 
 1. **Single repo failure**: Check error, fix issue, retry
-2. **Multiple repo failure**: Consider `meta_snapshot_restore`
+2. **Multiple repo failure**: In each affected repo, discard uncommitted batch edits with `git restore --staged --worktree .`, list new files with `git clean -nd` and remove those by name (this assumes earlier work was already committed or stashed before the batch), and go back to an earlier commit with `git reflog` and `git switch -c recovered <sha>` (the reflog only recovers commits; switching carries uncommitted edits along)
 3. **Build order failure**: Use `meta_execution_order` to find dependencies
 4. **Git conflicts**: Manual intervention may be required
 
 ## Example: Full Feature Development Workflow
 
 ```
-1. Create snapshot: meta_snapshot_create
+1. Check status and commit pending work: meta_git_status, meta_git_add, meta_git_commit
 2. Create feature branch: meta_git_checkout with create=true
 3. Find relevant code: meta_search_code
 4. Make changes across repos
@@ -246,7 +252,7 @@ When operations fail:
 6. Get build order: meta_execution_order
 7. Build in order: meta_batch_execute
 8. Run tests: meta_run_tests
-9. If failed: meta_snapshot_restore, fix issues
+9. If failed: discard the batch's edits (`git restore --staged --worktree .`; `git clean -nd` lists new files to remove by name) or go back to an earlier commit (git reflog / git switch), fix issues
 10. If passed: meta_git_add, meta_git_commit, meta_git_push
 ```
 

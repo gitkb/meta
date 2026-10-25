@@ -29,7 +29,6 @@ Handles all `meta git *` commands with special cases:
 |---------|----------|
 | `meta git clone <url>` | Clone parent, read `.meta`, clone all children |
 | `meta git update` | Clone missing repos (use `meta git pull` to pull existing ones) |
-| `meta git snapshot *` | Create/restore workspace state |
 | `meta git worktree *` | Isolated multi-repo worktree sets (see the `meta-worktree` skill) |
 | `meta git <other>` | Pass through to every repo at this meta level |
 

@@ -1,6 +1,6 @@
 ---
 name: meta-git
-description: Git operations across multiple repositories — status, commit, push, pull, snapshots, multi-commit.
+description: Git operations across multiple repositories — status, commit, push, pull, multi-commit.
 ---
 
 # Meta Git Skill
@@ -48,30 +48,26 @@ meta git update    # Clone repos listed in .meta that are missing locally
 
 `meta git update` only clones missing repos (nested meta repos included); it does not pull existing ones. `meta git pull --recursive` also pulls nested meta repos.
 
-## Snapshots (Critical for Batch Operations)
+## Before Batch Operations (Critical)
 
-Before making sweeping changes, create a snapshot:
+Before making sweeping changes, commit or stash uncommitted work in every repo:
 
 ```bash
-# Save current state of every repo at this meta level (add --recursive for nested ones)
-meta git snapshot create before-refactor
+# See which repos have uncommitted changes
+meta git status
 
-# See what snapshots exist
-meta git snapshot list
+# Commit them at this meta level (add --recursive for nested ones); `meta git commit` commits only staged changes
+meta git add -A
+meta git commit -m "wip: before refactor"
 
-# Preview what restore would do
-meta --dry-run git snapshot restore before-refactor
+# Or stash them instead (untracked files included)
+meta exec -- git stash push -u -m before-refactor
 
-# Actually restore (auto-stashes uncommitted tracked changes; asks to confirm without --force)
-meta git snapshot restore before-refactor --force
+# Preview a batch command before running it
+meta --dry-run exec -- <command>
 ```
 
-**What snapshots capture per repo:**
-- Current SHA
-- Branch name
-- Dirty status
-
-**On restore**: Each repo's branch is reset to the snapshot's SHA (`git checkout -B <branch> <sha>`), so commits made after the snapshot drop off the branch (they stay in the reflog). If a repo has uncommitted changes to tracked files, meta stashes them first. Untracked files are not stashed and can block the checkout.
+**Recovering**: `git reflog` in the affected repo lists the commits its `HEAD` pointed to; `git switch -c recovered <sha>` brings one back. Use `meta exec -- git reflog -n 20` to look across all repos (`--include <repo>` for one). The reflog only recovers commits, not uncommitted changes, so commit or stash first. A backup branch keeps only commits.
 
 ## Common Git Operations
 
@@ -107,7 +103,8 @@ meta --exclude legacy git pull
 ### Starting Work
 ```bash
 meta git status              # What's the current state?
-meta git snapshot create wip # Save state before changes
+meta git add -A              # Stage pending work
+meta git commit -m "wip"     # Commit it before changes
 meta git pull                # Get latest
 ```
 
@@ -121,11 +118,11 @@ meta git push                # Push all repos
 
 ### Safe Batch Refactoring
 ```bash
-meta git snapshot create before-changes
+meta git add -A && meta git commit -m "wip: before changes"  # Save pending work first
 # ... make changes across repos ...
 meta git status              # Review
-# If something went wrong:
-meta git snapshot restore before-changes --force
+# If something went wrong, in the affected repo:
+git reflog                   # Find an earlier commit, then: git switch -c recovered <sha>
 ```
 
 ## MCP Tools for Git Operations

@@ -176,7 +176,7 @@ teardown() {
     [[ "$output" == *"orphan-missing"* ]]
 }
 
-@test "worktree prune removes orphaned worktree (source project missing)" {
+@test "worktree prune keeps a worktree whose source project is missing" {
     # Create a temporary project directory
     mkdir -p "$TEST_DIR/temp-project/temp-repo"
     git -C "$TEST_DIR/temp-project/temp-repo" init --quiet
@@ -195,27 +195,32 @@ teardown() {
 }
 EOF
 
-    # Create worktree in temp project
+    # Create the worktree outside the project, so it outlives the project
     cd "$TEST_DIR/temp-project"
-    "$META_BIN" git worktree create temp-wt --repo temp-repo
-    [ -d ".worktrees/temp-wt" ]
+    META_WORKTREES="$TEST_DIR/elsewhere" "$META_BIN" git worktree create temp-wt --repo temp-repo
+    [ -d "$TEST_DIR/elsewhere/temp-wt/temp-repo" ]
 
     # Remove the entire source project directory (not just the repo)
     # This simulates a deleted project
     cd "$TEST_DIR"
     rm -rf "$TEST_DIR/temp-project"
 
-    # Prune should detect orphaned worktree (project missing)
-    # Note: prune reads from global store, so it can detect worktrees from other projects
+    # Prune detects the orphan (it reads the global store, so it sees worktrees
+    # from other projects) but keeps it: without its repo, git can't tell
+    # whether the checkout holds uncommitted work.
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
-    [[ "$output" == *"orphan"* ]] || [[ "$output" == *"project missing"* ]]
+    [[ "$output" == *"Kept 1 worktree"* ]]
     [[ "$output" == *"temp-wt"* ]]
+    [[ "$output" == *"project missing"* ]]
+    [[ "$output" == *"moved or deleted"* ]]
+    [ -d "$TEST_DIR/elsewhere/temp-wt/temp-repo" ]
 }
 
 @test "worktree prune removes orphaned worktree (all repos removed from project)" {
-    # Create worktree with backend
-    "$META_BIN" git worktree create removed-repos --repo backend --repo frontend
+    # Create worktree with backend and frontend only (the root repo always exists,
+    # so a set holding it is never orphaned)
+    "$META_BIN" git worktree create removed-repos --repo backend --repo frontend --no-deps
     [ -d ".worktrees/removed-repos" ]
 
     # Update .meta to remove backend and frontend (simulating repo removal)

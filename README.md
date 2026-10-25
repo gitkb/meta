@@ -216,6 +216,8 @@ projects:
 - Tags contain no whitespace and no `,`.
 - `worktrees_dir`, if set, lies inside the workspace (relative, or absolute but inside). For a directory elsewhere, set `META_WORKTREES`.
 
+The same rules apply to every `.meta` that a recursive command reads, including one inside a cloned project: a refused nested config stops the command rather than silently leaving out that part of the tree.
+
 **File priority:** `.meta.yaml` > `.meta.yml` > `.meta`
 
 You can mix simple and extended formats in the same file.

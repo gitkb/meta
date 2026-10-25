@@ -859,8 +859,8 @@ J
     cat > "$TEST_DIR/fakebin/git" <<SH
 #!/bin/sh
 case "\$PWD \$* " in
-*"/backend update-ref "*"refs/heads/review "* | *"/backend worktree add "*)
-    "$REAL_GIT" -C "$TEST_DIR/backend" update-ref refs/heads/review $VALUABLE 2>/dev/null ;;
+*"/backend branch "*" review "* | *"/backend worktree add "*)
+    "$REAL_GIT" -C "$TEST_DIR/backend" branch review $VALUABLE 2>/dev/null ;;
 esac
 exec "$REAL_GIT" "\$@"
 SH
@@ -868,4 +868,59 @@ SH
     PATH="$TEST_DIR/fakebin:$PATH" run "$META_BIN" git worktree create review --repo backend
     [ "$status" -ne 0 ]
     [ "$(git -C backend rev-parse refs/heads/review)" = "$VALUABLE" ]
+}
+
+# A bare origin for backend holding main and a branch only it has
+add_backend_origin() {
+    git init --quiet --bare "$TEST_DIR/backend-origin.git"
+    git -C backend remote add origin "$TEST_DIR/backend-origin.git"
+    git -C backend push --quiet origin main
+    git -C backend push --quiet origin main:remote-only
+    git -C backend fetch --quiet origin
+}
+
+@test "a branch started at a remote branch tracks it" {
+    add_backend_origin
+    run "$META_BIN" git worktree create review --repo backend --from-ref origin/main --no-deps
+    [ "$status" -eq 0 ]
+    [ "$(git -C backend config branch.review.merge)" = "refs/heads/main" ]
+    [ "$(git -C backend config branch.review.remote)" = "origin" ]
+}
+
+@test "a branch only the remote has is created tracking it, and removed with a failed create" {
+    add_backend_origin
+    run "$META_BIN" git worktree create remote-only --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"backend -> remote-only (new)"* ]]
+    [ "$(git -C backend config branch.remote-only.merge)" = "refs/heads/remote-only" ]
+    run "$META_BIN" git worktree remove --force remote-only
+    git -C backend branch --quiet -D remote-only
+    # a failing checkout hook makes the create fail after the branch is made
+    mkdir -p backend/.git/hooks
+    printf '#!/bin/sh\nexit 1\n' > backend/.git/hooks/post-checkout
+    chmod +x backend/.git/hooks/post-checkout
+    run "$META_BIN" git worktree create remote-only --repo backend --no-deps
+    rm backend/.git/hooks/post-checkout
+    [ "$status" -ne 0 ]
+    ! git -C backend rev-parse --verify --quiet refs/heads/remote-only
+}
+
+@test "a failed create keeps a branch it made that another worktree checked out" {
+    # A git that, just before meta adds the worktree for the branch it
+    # made, has another command check that branch out elsewhere
+    REAL_GIT="$(git --exec-path)/git"
+    mkdir -p "$TEST_DIR/fakebin"
+    cat > "$TEST_DIR/fakebin/git" <<SH
+#!/bin/sh
+case "\$PWD \$* " in
+*"/backend worktree add "*"/.worktrees/shared/"*)
+    "$REAL_GIT" -C "$TEST_DIR/backend" worktree add --quiet "$TEST_DIR/other" shared 2>/dev/null ;;
+esac
+exec "$REAL_GIT" "\$@"
+SH
+    chmod +x "$TEST_DIR/fakebin/git"
+    PATH="$TEST_DIR/fakebin:$PATH" run "$META_BIN" git worktree create shared --repo backend --no-deps
+    [ "$status" -ne 0 ]
+    [ "$(git -C "$TEST_DIR/other" symbolic-ref HEAD)" = "refs/heads/shared" ]
+    git -C backend rev-parse --verify --quiet refs/heads/shared
 }

@@ -819,3 +819,11 @@ J
     [[ "$output" == *"is a symlink"* ]]
     [ -f "$TEST_DIR/.worktrees/live/frontend/mine" ]
 }
+
+@test "a .worktrees link into .git is refused" {
+    ln -s .git "$TEST_DIR/.worktrees"
+    run "$META_BIN" git worktree remove --force objects
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"leads into .git"* ]]
+    [ -d "$TEST_DIR/.git/objects" ]
+}

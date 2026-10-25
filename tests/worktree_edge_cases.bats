@@ -599,3 +599,15 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [ "$status" -ne 0 ]
     [[ "$output" == *"could not update the worktree store"* ]]
 }
+
+@test "a refused data dir is reported with control characters escaped" {
+    BAD="$META_DATA/x"$'\e]0;TITLE\a'
+    mkdir -p "$BAD"
+    chmod 777 "$BAD"
+    META_DATA_DIR="$BAD" run "$META_BIN" git worktree list
+    chmod 700 "$BAD"
+    [[ "$output" == *"skipping global plugins"* ]]
+    [[ "$output" == *'x\u{1b}]0;TITLE\u{7}'* ]]
+    [[ "$output" != *$'\e'* ]]
+    [[ "$output" != *$'\a'* ]]
+}

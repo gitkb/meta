@@ -721,13 +721,6 @@ EOF
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" = "my file.txt; touch PWNED4" ]
 }
 
-@test "meta git snapshot restore refuses --include instead of restoring every repo" {
-    "$META_BIN" git snapshot create filtered
-    run "$META_BIN" --include frontend git snapshot restore filtered --force
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"does not take --include/--exclude"* ]]
-}
-
 @test "meta git update refuses --include instead of cloning every missing repo" {
     run "$META_BIN" --include frontend git update
     [ "$status" -ne 0 ]

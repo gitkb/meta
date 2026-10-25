@@ -82,7 +82,7 @@ When making changes across repositories:
   "tag": "frontend"
 }}
 {"name": "meta_exec", "arguments": {
-  "command": "git add -A && (git diff --cached --quiet || git commit -m 'wip: before dependency update')",
+  "command": ["sh", "-c", "git add -A && { git diff --cached --quiet || git commit -m 'wip: before dependency update'; }"],
   "tag": "frontend"
 }}
 
@@ -98,7 +98,7 @@ When making changes across repositories:
 
 // If failed, discard the changes (pending work was committed above)
 {"name": "meta_exec", "arguments": {
-  "command": "git restore .",
+  "command": ["git", "restore", "--staged", "--worktree", "."],
   "tag": "frontend"
 }}
 ```
@@ -209,7 +209,7 @@ Don't operate on all repos when you mean a subset:
 ### 3. Commit or Stash Before Risky Operations
 ```json
 {"name": "meta_exec", "arguments": {
-  "command": "git stash push -u -m before-refactor"
+  "command": ["git", "stash", "push", "-u", "-m", "before-refactor"]
 }}
 ```
 

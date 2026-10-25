@@ -120,7 +120,7 @@ When building projects with dependencies:
 
 // Build with dependencies
 {"name": "meta_batch_execute", "arguments": {
-  "command": "npm run build",
+  "command": ["npm", "run", "build"],
   "atomic": true
 }}
 ```
@@ -157,7 +157,7 @@ For operations that must succeed together:
 
 ```json
 {"name": "meta_batch_execute", "arguments": {
-  "command": "npm test && npm run build",
+  "command": ["sh", "-c", "npm test && npm run build"],
   "tag": "frontend",
   "atomic": true
 }}
@@ -212,7 +212,7 @@ Don't operate on all repos when you mean a subset:
 ### 4. Use Atomic Mode for Critical Operations
 ```json
 {"name": "meta_batch_execute", "arguments": {
-  "command": "npm publish",
+  "command": ["npm", "publish"],
   "atomic": true
 }}
 ```

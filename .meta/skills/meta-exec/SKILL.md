@@ -68,7 +68,7 @@ meta --include libs/core,. git status   # `.` is the root repo
 # Skip these repos
 meta --exclude legacy-service git push
 
-# Filter by tag (meta-specific, applied before loop filtering)
+# Filter by tag (applied before --include/--exclude)
 meta --tag backend exec -- make deploy
 
 # Combine: tag filter + directory filter

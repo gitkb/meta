@@ -771,3 +771,11 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"--exclude 'typo' names none of the repos"* ]]
 }
+
+@test "worktree exec --include works with a relative META_WORKTREES" {
+    "$META_BIN" git worktree create rel-root --repo backend --repo frontend
+    run env META_WORKTREES=.worktrees "$META_BIN" git worktree exec rel-root --include backend -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rel-root/backend"* ]]
+    [[ "$output" != *"rel-root/frontend"* ]]
+}

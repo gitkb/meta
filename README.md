@@ -205,6 +205,14 @@ projects:
 | `provides` | No | Array of capabilities this project provides |
 | `depends_on` | No | Array of project names or provided capabilities this depends on |
 
+**Rules for names and values.** meta checks every entry when it reads the config and stops with an error that names the file and the project:
+
+- A project name is one path component: no `/` or `\`, not `.` or `..`.
+- `path` is relative and stays inside the directory of the config file: no `..`, no absolute or drive paths, and no symlink that leads outside it. `\` reads as `/`, and `./`, `//` and a trailing `/` are dropped.
+- No name, path, repo, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline) or a bidirectional-text control.
+- `repo` does not start with `-`.
+- Tags contain no whitespace and no `,`.
+
 **File priority:** `.meta.yaml` > `.meta.yml` > `.meta`
 
 You can mix simple and extended formats in the same file.

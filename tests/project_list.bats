@@ -328,3 +328,34 @@ nested_lib = next((p for p in nested if p['name'] == 'nested-lib'), None)
 assert nested_lib is not None, f'nested-lib not found in vendor projects: {nested}'
 "
 }
+
+@test "meta project list rejects a project path outside the workspace" {
+    for path in "../../outside" "/abs/outside"; do
+        printf '{"projects": {"evil": {"repo": "u", "path": "%s"}}}' "$path" > .meta.json
+        run "$META_BIN" project list
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"Invalid project 'evil' in"* ]]
+    done
+}
+
+@test "meta project list rejects a project reached through a symlink out of the workspace" {
+    OUTSIDE="$(mktemp -d)"
+    ln -s "$OUTSIDE" linked
+    echo '{"projects": {"linked": "git@github.com:org/linked.git"}}' > .meta.json
+    run "$META_BIN" project list
+    rm -rf "$OUTSIDE"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"through the symlink"* ]]
+}
+
+@test "meta project list never prints terminal escapes from .meta" {
+    # Name, path and tag carry OSC/CSI sequences and a newline
+    cat > .meta.json <<'J'
+{"projects": {"x\u001b]0;TITLE\u0007": {"repo": "u", "path": "t\u001b[2J", "tags": ["n\nfake"]}}}
+J
+    run "$META_BIN" project list
+    [ "$status" -ne 0 ]
+    [[ "$output" != *$'\e'* ]]
+    [[ "$output" != *$'\a'* ]]
+    [[ "$output" == *'x\u{1b}]0;TITLE\u{7}'* ]]
+}

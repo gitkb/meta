@@ -537,3 +537,44 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "import sys, json; json.load(sys.stdin)"
 }
+
+# ============ Store Lock and Store Failures ============
+
+@test "worktree create records the store despite a leftover lock file" {
+    # An empty lock (crash between create and write) or one naming a PID
+    # that now belongs to an unrelated process must not block store writes.
+    for content in "" "$$"; do
+        printf '%s' "$content" > "$META_DATA/worktree.lock"
+        name="lock-test-${#content}"
+        run "$META_BIN" git worktree create "$name" --repo backend
+        [ "$status" -eq 0 ]
+        grep -q ".worktrees/$name\"" "$META_DATA/worktree.json"
+    done
+}
+
+@test "worktree create fails when the store cannot be written" {
+    # The data dir is a plain file, so no store can be written under it
+    : > "$TEST_DIR/not-a-dir"
+    META_DATA_DIR="$TEST_DIR/not-a-dir" run "$META_BIN" git worktree create store-fail --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not record it in the worktree store"* ]]
+}
+
+@test "worktree remove fails when the store cannot be updated" {
+    run "$META_BIN" git worktree create store-ro --repo backend
+    [ "$status" -eq 0 ]
+
+    chmod 500 "$META_DATA"
+    run "$META_BIN" git worktree remove --force store-ro
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not update the worktree store"* ]]
+}
+
+@test "meta refuses a data dir other users can write to" {
+    chmod 777 "$META_DATA"
+    run "$META_BIN" git worktree create shared-store --repo backend
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"other users can write to it"* ]]
+}

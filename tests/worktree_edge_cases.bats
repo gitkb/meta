@@ -903,6 +903,44 @@ add_backend_origin() {
     rm backend/.git/hooks/post-checkout
     [ "$status" -ne 0 ]
     ! git -C backend rev-parse --verify --quiet refs/heads/remote-only
+    ! git -C backend config branch.remote-only.merge
+}
+
+@test "a branch rolled back after tracking a remote ref leaves no upstream to a later one" {
+    add_backend_origin
+    mkdir -p backend/.git/hooks
+    printf '#!/bin/sh\nexit 1\n' > backend/.git/hooks/post-checkout
+    chmod +x backend/.git/hooks/post-checkout
+    run "$META_BIN" git worktree create review --repo backend --from-ref origin/main --no-deps --strict
+    rm backend/.git/hooks/post-checkout
+    [ "$status" -ne 0 ]
+    run "$META_BIN" git worktree create review --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    ! git -C backend config branch.review.merge
+}
+
+@test "a worktree of a repo with no commits yet is created on an unborn branch" {
+    git init --quiet --initial-branch=main "$TEST_DIR/fresh"
+    cat > "$TEST_DIR/.meta.json" <<'J'
+{"projects": {"fresh": "git@github.com:org/fresh.git"}}
+J
+    run "$META_BIN" git worktree create task --repo fresh --no-deps
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_DIR/.worktrees/task/fresh" symbolic-ref HEAD)" = "refs/heads/task" ]
+}
+
+@test "the git plugin run directly holds worktrees_dir to the config rules" {
+    cat > "$TEST_DIR/.meta.json" <<'J'
+{"projects": {"backend": "git@github.com:org/backend.git"}, "worktrees_dir": "backend"}
+J
+    mkdir -p backend/src
+    echo keep > backend/src/file
+    run "$META_GIT_BIN" --meta-plugin-exec <<J
+{"command": "worktree", "args": ["remove", "src"], "projects": [], "cwd": "$TEST_DIR"}
+J
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Invalid project 'backend'"* ]]
+    [ -f backend/src/file ]
 }
 
 @test "a failed create keeps a branch it made that another worktree checked out" {

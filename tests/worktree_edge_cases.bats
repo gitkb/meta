@@ -558,8 +558,14 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     META_DATA_DIR="$TEST_DIR/not-a-dir" run "$META_BIN" git worktree create store-fail --repo backend
     [ "$status" -ne 0 ]
     [[ "$output" == *"Could not record worktree 'store-fail' in the worktree store, so it was removed again"* ]]
-    # Nothing is left that no store entry would ever clean up
+    # Nothing is left that no store entry would ever clean up: no directory,
+    # and no worktree registered in git
     [ ! -e "$TEST_DIR/.worktrees/store-fail" ]
+    [ "$(git -C "$TEST_DIR/backend" worktree list | wc -l)" -eq 1 ]
+
+    # So a retry with a working store succeeds
+    run "$META_BIN" git worktree create store-fail --repo backend
+    [ "$status" -eq 0 ]
 }
 
 @test "worktree remove fails when the store cannot be updated" {

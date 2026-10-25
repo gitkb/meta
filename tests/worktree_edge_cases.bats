@@ -710,3 +710,16 @@ J
     [ "$status" -ne 0 ]
     [[ "$output" == *"could not update the worktree store"* ]]
 }
+
+@test "a create whose checkout hook fails is rolled back with its registration and branch" {
+    # git registers the worktree and then fails on the hook
+    mkdir -p backend/.git/hooks
+    printf '#!/bin/sh\nexit 1\n' > backend/.git/hooks/post-checkout
+    chmod +x backend/.git/hooks/post-checkout
+    run "$META_BIN" git worktree create hooked --repo backend
+    rm backend/.git/hooks/post-checkout
+    [ "$status" -ne 0 ]
+    [ ! -e "$TEST_DIR/.worktrees/hooked" ]
+    [ "$(git -C backend worktree list | wc -l)" -eq 1 ]
+    ! git -C backend rev-parse --verify --quiet refs/heads/hooked
+}

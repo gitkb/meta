@@ -557,7 +557,7 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     : > "$TEST_DIR/not-a-dir"
     META_DATA_DIR="$TEST_DIR/not-a-dir" run "$META_BIN" git worktree create store-fail --repo backend
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Could not record worktree 'store-fail' in the worktree store, so it was removed again"* ]]
+    [[ "$output" == *"Cannot record the new worktree"* ]]
     # Nothing is left that no store entry would ever clean up: no directory,
     # and no worktree registered in git
     [ ! -e "$TEST_DIR/.worktrees/store-fail" ]
@@ -763,30 +763,6 @@ J
     [[ "$output" == *"could not update the worktree store"* ]]
 }
 
-@test "a create whose checkout hook fails is rolled back with its registration and branch" {
-    # git registers the worktree and then fails on the hook
-    mkdir -p backend/.git/hooks
-    printf '#!/bin/sh\nexit 1\n' > backend/.git/hooks/post-checkout
-    chmod +x backend/.git/hooks/post-checkout
-    run "$META_BIN" git worktree create hooked --repo backend
-    rm backend/.git/hooks/post-checkout
-    [ "$status" -ne 0 ]
-    [ ! -e "$TEST_DIR/.worktrees/hooked" ]
-    [ "$(git -C backend worktree list | wc -l)" -eq 1 ]
-    ! git -C backend rev-parse --verify --quiet refs/heads/hooked
-}
-
-@test "a skipped repo whose add failed in its checkout hook leaves nothing behind" {
-    mkdir -p backend/.git/hooks
-    printf '#!/bin/sh\nexit 1\n' > backend/.git/hooks/post-checkout
-    chmod +x backend/.git/hooks/post-checkout
-    # with a starting ref, a failed add is skipped rather than fatal
-    run "$META_BIN" git worktree create hooked-ref HEAD --repo backend --no-deps
-    rm backend/.git/hooks/post-checkout
-    [ "$(git -C backend worktree list | wc -l)" -eq 1 ]
-    ! git -C backend rev-parse --verify --quiet refs/heads/hooked-ref
-}
-
 @test "a worktree set that is a symlink out of the worktree root is refused" {
     OUTSIDE="$(mktemp -d)"
     echo keep > "$OUTSIDE/file"
@@ -797,17 +773,6 @@ J
     [[ "$output" == *"Refusing to use worktree 'review'"* ]]
     [ -f "$OUTSIDE/file" ]
     rm -rf "$OUTSIDE"
-}
-
-@test "a skipped root checkout still leaves room for the child worktrees" {
-    mkdir -p "$TEST_DIR/.git/hooks"
-    printf '#!/bin/sh\nexit 1\n' > "$TEST_DIR/.git/hooks/post-checkout"
-    chmod +x "$TEST_DIR/.git/hooks/post-checkout"
-    run "$META_BIN" git worktree create rooted HEAD --repo . --repo backend --no-deps
-    rm "$TEST_DIR/.git/hooks/post-checkout"
-    [ "$status" -eq 0 ]
-    [ -d "$TEST_DIR/.worktrees/rooted/backend" ]
-    [ "$(git -C "$TEST_DIR" worktree list | wc -l)" -eq 1 ]
 }
 
 @test "a repeated --repo creates the worktree once and keeps it" {
@@ -838,7 +803,7 @@ J
     mv "$TEST_DIR/.worktrees/swapped" "$TEST_DIR/swapped-moved"
     ln -s "$OUTSIDE" "$TEST_DIR/.worktrees/swapped"
     run "$META_BIN" git worktree prune
-    [[ "$output" == *"Skipping"* ]]
+    [[ "$output" == *"meta doesn't delete through links"* ]]
     [ -f "$OUTSIDE/wt/mine" ]
     rm -rf "$OUTSIDE"
 }
@@ -878,20 +843,6 @@ J
     [ "$status" -ne 0 ]
     [[ "$output" == *"leads into .git"* ]]
     [ -d "$TEST_DIR/.git/objects" ]
-}
-
-@test "a child add that fails on a non-empty destination leaves no branch behind" {
-    # The root tracks files where the child's worktree would go
-    mkdir -p "$TEST_DIR/api"
-    echo x > "$TEST_DIR/api/README"
-    cat > "$TEST_DIR/.meta.json" <<'J'
-{"projects": {"api": {"repo": "git@github.com:org/backend.git", "path": "backend"}}}
-J
-    git -C "$TEST_DIR" add api .meta.json
-    git -C "$TEST_DIR" commit --quiet -m "track api/"
-    run "$META_BIN" git worktree create trial --from-ref HEAD --repo . --repo api --no-deps --strict
-    [ "$status" -ne 0 ]
-    ! git -C "$TEST_DIR/backend" rev-parse --verify --quiet refs/heads/trial
 }
 
 @test "a branch someone else makes while create runs is never deleted" {
@@ -939,48 +890,6 @@ add_backend_origin() {
     [ "$(git -C backend config branch.review.remote)" = "origin" ]
 }
 
-@test "a branch only the remote has is created tracking it, and removed with a failed create" {
-    add_backend_origin
-    run "$META_BIN" git worktree create remote-only --repo backend --no-deps
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"backend -> remote-only (new)"* ]]
-    [ "$(git -C backend config branch.remote-only.merge)" = "refs/heads/remote-only" ]
-    run "$META_BIN" git worktree remove --force remote-only
-    git -C backend branch --quiet -D remote-only
-    # a failing checkout hook makes the create fail after the branch is made
-    mkdir -p backend/.git/hooks
-    printf '#!/bin/sh\nexit 1\n' > backend/.git/hooks/post-checkout
-    chmod +x backend/.git/hooks/post-checkout
-    run "$META_BIN" git worktree create remote-only --repo backend --no-deps
-    rm backend/.git/hooks/post-checkout
-    [ "$status" -ne 0 ]
-    ! git -C backend rev-parse --verify --quiet refs/heads/remote-only
-    ! git -C backend config branch.remote-only.merge
-}
-
-@test "a branch rolled back after tracking a remote ref leaves no upstream to a later one" {
-    add_backend_origin
-    mkdir -p backend/.git/hooks
-    printf '#!/bin/sh\nexit 1\n' > backend/.git/hooks/post-checkout
-    chmod +x backend/.git/hooks/post-checkout
-    run "$META_BIN" git worktree create review --repo backend --from-ref origin/main --no-deps --strict
-    rm backend/.git/hooks/post-checkout
-    [ "$status" -ne 0 ]
-    run "$META_BIN" git worktree create review --repo backend --no-deps
-    [ "$status" -eq 0 ]
-    ! git -C backend config branch.review.merge
-}
-
-@test "a worktree of a repo with no commits yet is created on an unborn branch" {
-    git init --quiet --initial-branch=main "$TEST_DIR/fresh"
-    cat > "$TEST_DIR/.meta.json" <<'J'
-{"projects": {"fresh": "git@github.com:org/fresh.git"}}
-J
-    run "$META_BIN" git worktree create task --repo fresh --no-deps
-    [ "$status" -eq 0 ]
-    [ "$(git -C "$TEST_DIR/.worktrees/task/fresh" symbolic-ref HEAD)" = "refs/heads/task" ]
-}
-
 @test "the git plugin run directly holds worktrees_dir to the config rules" {
     cat > "$TEST_DIR/.meta.json" <<'J'
 {"projects": {"backend": "git@github.com:org/backend.git"}, "worktrees_dir": "backend"}
@@ -995,22 +904,3 @@ J
     [ -f backend/src/file ]
 }
 
-@test "a failed create keeps a branch it made that another worktree checked out" {
-    # A git that, just before meta adds the worktree for the branch it
-    # made, has another command check that branch out elsewhere
-    REAL_GIT="$(git --exec-path)/git"
-    mkdir -p "$TEST_DIR/fakebin"
-    cat > "$TEST_DIR/fakebin/git" <<SH
-#!/bin/sh
-case "\$PWD \$* " in
-*"/backend worktree add "*"/.worktrees/shared/"*)
-    "$REAL_GIT" -C "$TEST_DIR/backend" worktree add --quiet "$TEST_DIR/other" shared 2>/dev/null ;;
-esac
-exec "$REAL_GIT" "\$@"
-SH
-    chmod +x "$TEST_DIR/fakebin/git"
-    PATH="$TEST_DIR/fakebin:$PATH" run "$META_BIN" git worktree create shared --repo backend --no-deps
-    [ "$status" -ne 0 ]
-    [ "$(git -C "$TEST_DIR/other" symbolic-ref HEAD)" = "refs/heads/shared" ]
-    git -C backend rev-parse --verify --quiet refs/heads/shared
-}

@@ -37,14 +37,16 @@ skills:
 	cp -R "$$tmp"/meta-* .meta/skills/; \
 	cp -R "$$tmp"/meta-* claude-plugin/skills/
 
-# Crates whose binaries `make install` and `make uninstall` handle
+# Crates whose binaries `make install` and `make uninstall` handle: the
+# binaries release.yml ships
 BIN_CRATES := meta_cli meta_git_cli meta_project_cli meta_rust_cli meta_mcp loop_cli
 
-# Install meta, its plugins, meta-mcp and loop globally via cargo install
+# Install meta, its plugins, meta-mcp and loop globally via cargo install.
+# --force replaces any binary of the same name, e.g. one from a release download
 install: $(BIN_CRATES:%=install-%)
 
 $(BIN_CRATES:%=install-%): install-%:
-	cargo install --locked --path $*
+	cargo install --locked --force --path $*
 
 # Install plugins globally to ~/.meta/plugins/
 install-plugins: build-plugins

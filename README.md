@@ -90,7 +90,7 @@ Meta is a **command router on top of a loop engine**, built in three layers:
 
 **1. Loop Engine** — The foundation. Takes a list of directories and a command, runs it in each one (sequential or parallel), aggregates output. Simple, fast, reliable.
 
-**2. Meta CLI** — The brain. Reads your `.meta` config, applies filters (tags, include/exclude), discovers plugins, and routes commands. When no plugin claims a command, it falls through to the loop engine via `meta exec`.
+**2. Meta CLI** — The brain. Reads your `.meta` config, applies filters (tags, include/exclude), discovers plugins, and routes commands. `meta exec -- <cmd>` hands a command to the loop engine as typed, never to a plugin; any other command goes to the plugin that claims it, or fails as unrecognized.
 
 **3. Plugins** — The specialists. They don't *execute* — they *plan*. A plugin receives a request and returns an execution plan (a list of directory/command pairs). The loop engine does the actual work. This means plugins are pure functions, and execution is always consistent.
 
@@ -148,10 +148,13 @@ make install
 
 This installs `meta`, the `meta-git`, `meta-project` and `meta-rust`
 plugins, `meta-mcp` and `loop` into `~/.cargo/bin` (the crates in the
-Makefile's `BIN_CRATES`). To update, `git pull` in each directory and
-run `make install` again. `agent` and `meta-plugins` in `.meta.yaml` are not
-needed for the build; `meta git` commands report them as missing until you
-clone them too.
+Makefile's `BIN_CRATES`, the binaries a release ships), replacing any
+copies already there. To update, `git pull` in each directory and run
+`make install` again. Copies the install scripts put in `~/.local/bin` or
+`%USERPROFILE%\.meta\bin` (their defaults) stay; remove them or put
+`~/.cargo/bin` first in `PATH`. `agent` and `meta-plugins` in `.meta.yaml`
+are not needed for the build; `meta git` commands report them as missing
+until you clone them too.
 
 ---
 
@@ -359,7 +362,7 @@ Plugins are standalone executables that extend meta. They're discovered automati
 |--------|-------------|
 | `git` | Clone, status, update, commit, snapshots, SSH multiplexing |
 | `project` | Project health checks and sync |
-| `rust` | Cargo build, test, and command passthrough |
+| `rust` | `meta cargo <cargo args>`: any cargo command in each repo that has a `Cargo.toml` |
 
 ### Writing Plugins
 

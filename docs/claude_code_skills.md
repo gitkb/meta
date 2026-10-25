@@ -88,7 +88,7 @@ The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta`
 
 **Key concepts covered:**
 - Plugin discovery locations
-- Command routing: plugin → exec → error (no automatic fallback for bare commands)
+- Command routing: `meta exec --` runs commands as typed; other commands go to a plugin or error (no automatic fallback for bare commands)
 - Built-in plugins (git, project, rust)
 - Plugin management commands
 - Why some commands behave "magically" (e.g., `meta git clone`)

@@ -104,14 +104,14 @@ teardown() {
     [[ "$output" == *"Current scope:"* ]]
 }
 
-@test "rust and cargo help use the simple plugin help without side effects" {
+@test "cargo help uses the simple plugin help without side effects" {
     cd "$NO_CONFIG_DIR"
 
-    for command in "cargo --help" "cargo build --help" "rust --help" "rust build --help"; do
+    for command in "cargo --help" "cargo build --help"; do
         run "$META_BIN" $command
         [ "$status" -eq 0 ]
-        [[ "$output" == *"meta cargo <command>"* ]]
-        [[ "$output" == *"Build all Rust projects"* ]]
+        [[ "$output" == *"meta cargo <cargo args>"* ]]
+        [[ "$output" == *"Run cargo with your args in each selected repo"* ]]
         [[ "$output" != *"Could not find meta config"* ]]
         [[ "$output" != *"No Rust projects found"* ]]
     done

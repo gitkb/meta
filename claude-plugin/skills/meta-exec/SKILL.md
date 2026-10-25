@@ -26,7 +26,7 @@ Each argument reaches the program exactly as you typed it: meta runs the program
 meta exec -- sh -c 'npm ci && npm test'
 ```
 
-A `.looprc` alias for the program is expanded into words (POSIX quoting rules, nothing expanded or run). On Windows there is no `cmd /c` either: run batch shims as `meta exec -- cmd /c npm install` (or `npm.cmd install`).
+A `.looprc` alias for the program is expanded into words (POSIX quoting rules, nothing expanded or run). On Windows meta does not wrap commands in `cmd /c` either. Batch files such as `npm.cmd` need their extension (`meta exec -- npm.cmd install`); Windows runs those through `cmd.exe`, and Rust escapes their arguments for it and refuses any it cannot pass safely.
 
 The `--` separates meta options from the command to execute. The `--` is optional unless your command starts with `-`.
 

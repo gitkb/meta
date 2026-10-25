@@ -573,3 +573,17 @@ EOF
     [[ "$output" == *"$TEST_DIR/api"* ]]
     [[ "$output" != *"api-legacy"* ]]
 }
+
+@test "--include takes names from the config chosen with --config" {
+    add_api_legacy
+    cat > "$TEST_DIR/alt.json" <<'EOF'
+{ "projects": { "core-lib": { "repo": "git@github.com:org/core.git", "path": "./libs/core/" } } }
+EOF
+    run "$META_BIN" --config alt.json --include core-lib exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/libs/core"* ]]
+    [[ "$output" != *"api"* ]]
+    run "$META_BIN" --config alt.json --include core exec -- pwd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"names no repo"* ]]
+}

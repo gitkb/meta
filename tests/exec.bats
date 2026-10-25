@@ -635,8 +635,9 @@ EOF
     cat > "$TEST_DIR/.meta.json" <<'EOF'
 { "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
 EOF
+    # A '..' back-edge to the root is refused when the config is read
     cat > "$TEST_DIR/child/.meta.json" <<'EOF'
-{ "projects": { "up": { "repo": "git@github.com:org/up.git", "path": ".." } } }
+{ "projects": {} }
 EOF
     # pwd prints the physical path (macOS temp dirs sit behind a symlink)
     legacy="$(cd "$TEST_DIR/legacy" && pwd -P)"
@@ -649,13 +650,13 @@ EOF
     [ "$default_runs" -eq 1 ]
 }
 
-@test "--exclude skips every spelling of the same repo" {
-    mkdir -p "$TEST_DIR/api" "$TEST_DIR/libs"
+@test "--exclude cannot be dodged by a second spelling of the same repo" {
+    mkdir -p "$TEST_DIR/api"
     cat > "$TEST_DIR/.meta.json" <<'EOF'
-{ "projects": { "api": "git@github.com:org/api.git", "other": { "repo": "git@github.com:org/api.git", "path": "libs/../api" } } }
+{ "projects": { "api": "git@github.com:org/api.git", "other": { "repo": "git@github.com:org/api.git", "path": "./api/" } } }
 EOF
     run "$META_BIN" --exclude api exec -- touch ran
-    [ "$status" -eq 0 ]
-    [ ! -e "$TEST_DIR/api/ran" ]
-    [ -e "$TEST_DIR/ran" ]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"project 'other' (path 'api') is at or inside project 'api'"* ]]
+    [ -z "$(find "$TEST_DIR" -name ran)" ]
 }

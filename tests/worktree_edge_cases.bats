@@ -773,3 +773,20 @@ J
     [ "$status" -ne 0 ]
     [[ "$output" == *"must not contain '..'"* ]]
 }
+
+@test "prune does not follow a worktree path that became a symlink" {
+    run "$META_BIN" git worktree create swapped --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    sleep 2
+    # Elsewhere: another repo's linked worktree with uncommitted work
+    OUTSIDE="$(mktemp -d)"
+    git -C frontend worktree add --quiet "$OUTSIDE/wt" -b outside-wt
+    echo mine > "$OUTSIDE/wt/mine"
+    # The expired worktree's directory is swapped for a link to it, in place
+    mv "$TEST_DIR/.worktrees/swapped" "$TEST_DIR/swapped-moved"
+    ln -s "$OUTSIDE" "$TEST_DIR/.worktrees/swapped"
+    run "$META_BIN" git worktree prune
+    [[ "$output" == *"Skipping"* ]]
+    [ -f "$OUTSIDE/wt/mine" ]
+    rm -rf "$OUTSIDE"
+}

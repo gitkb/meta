@@ -268,7 +268,7 @@ This enables impact analysis ("what breaks if I change shared-utils?"), topologi
 
 | Command | Description |
 |---------|-------------|
-| `meta exec <command>` | Run any command across all repositories |
+| `meta exec -- <command>` | Run any command across all repositories (no shell; `sh -c '...'` for one) |
 | `meta git status` | Git status for all repos |
 | `meta git pull` | Pull latest changes |
 | `meta git push` | Push commits |

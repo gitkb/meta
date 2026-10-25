@@ -179,7 +179,7 @@ Captured state of 25 repos
 Snapshot saved: .meta-snapshots/before-upgrade.json
 
 # Do batch operations
-$ meta exec "git pull && npm install"
+$ meta exec -- sh -c 'git pull && npm install'
 # ... something breaks ...
 
 # Restore

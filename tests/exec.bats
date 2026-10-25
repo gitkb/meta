@@ -635,7 +635,6 @@ EOF
     cat > "$TEST_DIR/.meta.json" <<'EOF'
 { "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
 EOF
-    # A '..' back-edge to the root is refused when the config is read
     cat > "$TEST_DIR/child/.meta.json" <<'EOF'
 { "projects": {} }
 EOF
@@ -648,6 +647,23 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(grep -cx "$legacy" <<<"$output" || true)" -eq "$default_runs" ]
     [ "$default_runs" -eq 1 ]
+}
+
+@test "--recursive stops at a refused nested config, with or without --config" {
+    mkdir -p "$TEST_DIR/child" "$TEST_DIR/legacy"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{ "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
+EOF
+    cat > "$TEST_DIR/child/.meta.json" <<'EOF'
+{ "projects": { "up": { "repo": "git@github.com:org/up.git", "path": ".." } } }
+EOF
+    run "$META_BIN" --recursive exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"must not contain '..'"* ]]
+    run "$META_BIN" --config .meta.json --recursive exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"must not contain '..'"* ]]
+    [ -z "$(find "$TEST_DIR" -name ran)" ]
 }
 
 @test "--exclude cannot be dodged by a second spelling of the same repo" {

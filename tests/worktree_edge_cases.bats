@@ -579,6 +579,50 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [[ "$output" == *"could not update the worktree store"* ]]
 }
 
+@test "worktree remove fails when the store dir cannot be searched" {
+    run "$META_BIN" git worktree create store-x --repo backend
+    [ "$status" -eq 0 ]
+
+    chmod 000 "$META_DATA"
+    run "$META_BIN" git worktree remove --force store-x
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    grep -q ".worktrees/store-x\"" "$META_DATA/worktree.json"
+}
+
+@test "worktree prune fails when the store cannot be updated" {
+    run "$META_BIN" git worktree create prune-ro --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    sleep 2
+
+    chmod 500 "$META_DATA"
+    run "$META_BIN" git worktree prune
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not update the worktree store"* ]]
+}
+
+@test "worktree remove escapes a dirty repo's alias found on disk" {
+    run "$META_BIN" git worktree create alias-nl --repo backend
+    [ "$status" -eq 0 ]
+    evil="$TEST_DIR/.worktrees/alias-nl/x"$'\n'"FORGED"
+    git -C "$TEST_DIR/backend" worktree add -q -b alias-nl-evil "$evil"
+    echo dirty > "$evil/dirty.txt"
+
+    run "$META_BIN" git worktree remove alias-nl
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'x\nFORGED'* ]]
+    [[ "$output" != *$'\n'"FORGED"* ]]
+    git -C "$TEST_DIR/backend" worktree remove --force "$evil"
+}
+
+@test "worktree create refuses one repo on two branches" {
+    run "$META_BIN" git worktree create two-branches --repo backend:one --repo backend:two
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Repo 'backend' is given twice, on branches 'one' and 'two'"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/two-branches" ]
+}
+
 @test "meta refuses a data dir other users can write to" {
     chmod 777 "$META_DATA"
     run "$META_BIN" git worktree create shared-store --repo backend
@@ -639,6 +683,14 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     chmod 755 "$TEST_DIR/sub/.meta/plugins"
     [[ "$output" == *"skipping plugins in"* ]]
     [ ! -e "$TEST_DIR/ran" ]
+}
+
+@test "a meta-* entry that is not a program is skipped without a warning" {
+    mkdir -p "$TEST_DIR/sub/.meta/plugins/meta-foo.dSYM"
+    ln -s "$TEST_DIR/nowhere" "$TEST_DIR/sub/.meta/plugins/meta-dangling"
+    cd "$TEST_DIR/sub"
+    run "$META_BIN" git worktree list
+    [[ "$output" != *"skipping plugin"* ]]
 }
 
 @test "a failed create leaves a foreign entry at the worktree path in place" {

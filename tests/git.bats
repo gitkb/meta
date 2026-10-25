@@ -1043,3 +1043,18 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" = "--json" ]
 }
+
+@test "--help and -h after -- reach git as file names" {
+    META_MCP_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-mcp"
+    echo x > "$TEST_DIR/frontend/--help"
+    echo x > "$TEST_DIR/frontend/-h"
+    run "$META_BIN" --include frontend git add -- --help
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" = "--help" ]
+    # meta_git_add runs in every repo; only frontend has the file
+    run env PATH="$(dirname "$META_BIN"):$PATH" "$META_MCP_BIN" <<'EOF'
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"meta_git_add","arguments":{"files":["-h"]}}}
+EOF
+    [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only | LC_ALL=C sort | tr '\n' ' ')" = "--help -h " ]
+}

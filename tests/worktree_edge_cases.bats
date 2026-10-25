@@ -841,3 +841,31 @@ J
     [ "$status" -ne 0 ]
     ! git -C "$TEST_DIR/backend" rev-parse --verify --quiet refs/heads/trial
 }
+
+@test "a branch someone else makes while create runs is never deleted" {
+    # A commit only the other process's branch holds
+    git -C backend checkout --quiet -b side
+    echo v > backend/valuable
+    git -C backend add valuable
+    git -C backend commit --quiet -m valuable
+    VALUABLE="$(git -C backend rev-parse HEAD)"
+    git -C backend checkout --quiet main
+    git -C backend branch --quiet -D side
+    # A git that makes branch "review" at that commit just before meta
+    # creates it (or adds the worktree that would), as a concurrent
+    # `git branch review <commit>` would
+    REAL_GIT="$(git --exec-path)/git"
+    mkdir -p "$TEST_DIR/fakebin"
+    cat > "$TEST_DIR/fakebin/git" <<SH
+#!/bin/sh
+case "\$PWD \$* " in
+*"/backend update-ref "*"refs/heads/review "* | *"/backend worktree add "*)
+    "$REAL_GIT" -C "$TEST_DIR/backend" update-ref refs/heads/review $VALUABLE 2>/dev/null ;;
+esac
+exec "$REAL_GIT" "\$@"
+SH
+    chmod +x "$TEST_DIR/fakebin/git"
+    PATH="$TEST_DIR/fakebin:$PATH" run "$META_BIN" git worktree create review --repo backend
+    [ "$status" -ne 0 ]
+    [ "$(git -C backend rev-parse refs/heads/review)" = "$VALUABLE" ]
+}

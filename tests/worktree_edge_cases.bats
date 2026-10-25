@@ -641,7 +641,7 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [ ! -e "$TEST_DIR/ran" ]
 }
 
-@test "a failed create removes only what it created" {
+@test "a failed create leaves a foreign entry at the worktree path in place" {
     # A dangling link at the worktree path passes the first existence check,
     # as a directory made by a concurrent create of the same name would;
     # create must fail without removing it
@@ -756,4 +756,20 @@ J
     [ "$status" -eq 0 ]
     [ -d "$TEST_DIR/.worktrees/rooted/backend" ]
     [ "$(git -C "$TEST_DIR" worktree list | wc -l)" -eq 1 ]
+}
+
+@test "a repeated --repo creates the worktree once and keeps it" {
+    run "$META_BIN" git worktree create dup HEAD --no-deps --repo backend --repo backend
+    [ "$status" -eq 0 ]
+    [ -d "$TEST_DIR/.worktrees/dup/backend" ]
+}
+
+@test "meta git status and project check fail on a refused .meta" {
+    echo '{"projects": {"evil": {"repo": "u", "path": "../../outside"}}}' > "$TEST_DIR/.meta.json"
+    run "$META_BIN" git status
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"must not contain '..'"* ]]
+    run "$META_BIN" project check --recursive
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"must not contain '..'"* ]]
 }

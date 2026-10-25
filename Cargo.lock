@@ -933,6 +933,7 @@ dependencies = [
  "diff",
  "indicatif",
  "is-terminal",
+ "meta_core",
  "rayon",
  "serde",
  "serde_json",

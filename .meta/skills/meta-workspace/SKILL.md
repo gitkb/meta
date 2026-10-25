@@ -115,7 +115,7 @@ When the meta MCP server is available, these tools provide structured JSON for p
 ## Efficiency Tips
 
 - **One command, all repos**: `meta git status` replaces N individual `cd && git status` calls
-- **Targeted operations**: `meta --include repo1,repo2 exec -- cmd` operates on only the repos whose path matches
+- **Targeted operations**: `meta --include repo1,repo2 exec -- cmd` operates on only the named repos (`.meta` name or path from the workspace root)
 - **Tag-based filtering**: `meta --tag backend exec -- cargo test` scopes to tagged repos
 - **Dependency awareness**: `meta_analyze_impact <repo>` shows who depends on a repo before you modify it — prevents cascading fix-up commits
 - **Session start**: Always run `meta project list --recursive --json` first to get the workspace map

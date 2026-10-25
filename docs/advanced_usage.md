@@ -210,7 +210,7 @@ Execute commands with automatic rollback on failure:
 
 ```bash
 # Via MCP tool
-meta_batch_execute --command "npm test" --atomic true
+meta_batch_execute {"command": ["npm", "test"], "atomic": true}
 ```
 
 If any repo fails, all repos are rolled back to pre-execution state.
@@ -232,27 +232,27 @@ meta exec --tag frontend,shared -- npm test
 ### By Directory
 
 ```bash
-# Include only specific directories (plugin commands)
-meta git status --include api-service,web-app
+# Only these repos
+meta --include api-service,web-app git status
 
-# Exclude directories - use exec for non-plugin commands
-meta exec --exclude legacy-app -- npm install
+# Skip a repo
+meta --exclude legacy-app exec -- npm install
 ```
+
+A value names a whole repo: its `.meta` name or its path from the workspace root (`.` for the root repo), never part of a path, so `api` does not select `api-legacy`. A value that names no repo is an error, so a typo never runs a command in a repo you meant to skip.
 
 ### Combined Filtering
 
 ```bash
-# Tag filter + directory filter
-meta --tag backend git status --include api
-
-# For non-plugin commands, use exec
-meta exec --tag backend --include api -- cargo test
+# Tag filter + repo filter
+meta --tag backend --include api git status
+meta --tag backend --include api exec -- cargo test
 ```
 
 **Filter precedence:**
 1. `--tag` filters by project tags (meta level)
-2. `--include` limits to specific directories (loop level)
-3. `--exclude` removes directories (loop level)
+2. `--include` limits to the named repos
+3. `--exclude` removes the named repos
 
 ---
 

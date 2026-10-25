@@ -105,11 +105,11 @@ teardown() {
     [[ "$output" != *"worker"* ]]
 }
 
-@test "meta exec --include with nonexistent dir runs nothing" {
+@test "meta exec --include with nonexistent dir is an error and runs nothing" {
     run "$META_BIN" --include nonexistent exec -- echo hello
-    [ "$status" -eq 0 ]
-    # Should not produce "hello" output since no dirs match
-    [[ "$output" != *"hello"* ]] || [[ "$output" == *"No directories"* ]] || [[ "$output" == *"0"* ]]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--include 'nonexistent' names no repo"* ]]
+    [[ "$output" != *"hello"* ]]
 }
 
 # ============ --exclude ============
@@ -463,4 +463,113 @@ SCRIPT
     run "$META_BIN" exec -- echo hello
     [ "$status" -eq 0 ]
     [[ "$output" == *"hello"* ]]
+}
+
+# ============ Arguments reach the command as typed, with no shell ============
+
+@test "meta exec passes each argument as given, never through a shell" {
+    run "$META_BIN" --include api exec -- printf '[%s]\n' 'one arg' '$(touch PWNED)' 'a;touch PWNED' '*' "it's"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[one arg]"* ]]
+    [[ "$output" == *'[$(touch PWNED)]'* ]]
+    [[ "$output" == *"[a;touch PWNED]"* ]]
+    [[ "$output" == *"[*]"* ]]
+    [[ "$output" == *"[it's]"* ]]
+    [ -z "$(find "$TEST_DIR" -name PWNED)" ]
+}
+
+@test "meta exec runs a shell only when asked for one" {
+    run "$META_BIN" --include api exec -- sh -c 'echo first && echo second'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"first"* ]]
+    [[ "$output" == *"second"* ]]
+}
+
+@test "meta exec --dry-run shows the command quoted as typed" {
+    run "$META_BIN" --dry-run --include api exec -- touch 'one arg'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"touch 'one arg'"* ]]
+    [ ! -e "$TEST_DIR/api/one arg" ]
+}
+
+@test "meta exec of a missing program fails cleanly" {
+    run "$META_BIN" --include api exec -- meta-no-such-program
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"meta-no-such-program"* ]]
+    [[ "$output" != *"panicked"* ]]
+}
+
+# ============ --include / --exclude name whole repos ============
+
+add_api_legacy() {
+    mkdir -p "$TEST_DIR/api-legacy" "$TEST_DIR/libs/core"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{
+    "projects": {
+        "api": "git@github.com:org/api.git",
+        "api-legacy": "git@github.com:org/api-legacy.git",
+        "worker": "git@github.com:org/worker.git",
+        "core": { "repo": "git@github.com:org/core.git", "path": "libs/core" }
+    }
+}
+EOF
+}
+
+@test "--include api does not select api-legacy" {
+    add_api_legacy
+    run "$META_BIN" --include api exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/api"* ]]
+    [[ "$output" != *"api-legacy"* ]]
+    [[ "$output" != *"worker"* ]]
+}
+
+@test "--exclude api keeps api-legacy" {
+    add_api_legacy
+    run "$META_BIN" --exclude api exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/api-legacy"* ]]
+    [[ "$output" == *"$TEST_DIR/worker"* ]]
+    [ "$(grep -c "^$TEST_DIR/api\$" <<<"$output")" -eq 0 ]
+}
+
+@test "--include a part of a path names no repo" {
+    add_api_legacy
+    # every absolute path here contains "t" and "a"
+    for value in a t ap libs core/x; do
+        run "$META_BIN" --include "$value" exec -- pwd
+        [ "$status" -ne 0 ] || { echo "--include $value: $output"; false; }
+        [[ "$output" == *"names no repo"* ]]
+    done
+}
+
+@test "--include takes a repo's .meta name or its path from the root" {
+    add_api_legacy
+    for value in core libs/core ./libs/core/; do
+        run "$META_BIN" --include "$value" exec -- pwd
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"$TEST_DIR/libs/core"* ]]
+        [[ "$output" != *"api"* ]]
+    done
+    run "$META_BIN" --include . exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "^$TEST_DIR\$" <<<"$output")" -eq 1 ]
+    [[ "$output" != *"$TEST_DIR/"* ]]
+}
+
+@test "--exclude with a typo is an error, not a no-op" {
+    add_api_legacy
+    run "$META_BIN" --exclude apii exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--exclude 'apii' names no repo"* ]]
+    [ -z "$(find "$TEST_DIR" -name ran)" ]
+}
+
+@test "--include selects plugin commands the same way" {
+    add_api_legacy
+    run "$META_BIN" --dry-run --include api git reset --hard
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "Would execute" <<<"$output")" -eq 1 ]
+    [[ "$output" == *"$TEST_DIR/api"* ]]
+    [[ "$output" != *"api-legacy"* ]]
 }

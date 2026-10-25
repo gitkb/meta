@@ -15,12 +15,18 @@ Execute any command in the root repo and every project at this meta level (add `
 # Run 'make build' in every repo
 meta exec -- make build
 
-# Run any shell command
+# Any program with its arguments
 meta exec -- ls -la
-
-# Commands with arguments
 meta exec -- npm install --save-dev typescript
 ```
+
+Each argument reaches the program exactly as you typed it: meta runs the program directly, with no shell in between. Quotes, spaces, `$()`, `;`, `|`, `&&`, globs and `%` in an argument stay literal, so text from an issue, a commit message or a file name can't run commands. When you want a shell (pipes, `&&`, redirects, globs), ask for one:
+
+```bash
+meta exec -- sh -c 'npm ci && npm test'
+```
+
+A `.looprc` alias for the program is expanded into words (POSIX quoting rules, nothing expanded or run). On Windows there is no `cmd /c` either: run batch shims as `meta exec -- cmd /c npm install` (or `npm.cmd install`).
 
 The `--` separates meta options from the command to execute. The `--` is optional unless your command starts with `-`.
 
@@ -52,13 +58,14 @@ Parallel mode:
 
 ## Filtering Options
 
-Control which repos run the command. These options come from `loop`:
+Control which repos run the command:
 
 ```bash
-# Only directories whose path contains one of these (substring match)
+# Only these repos: each value is a repo's .meta name or its path from the workspace root
 meta --include api,worker git status
+meta --include libs/core,. git status   # `.` is the root repo
 
-# Skip directories whose path contains one of these
+# Skip these repos
 meta --exclude legacy-service git push
 
 # Filter by tag (meta-specific, applied before loop filtering)
@@ -70,10 +77,10 @@ meta --tag backend --include api git status
 
 **Filter precedence:**
 1. `--tag` filters projects by tag (meta level)
-2. `--include` limits to specific directories (loop level)
-3. `--exclude` removes directories (loop level)
+2. `--include` limits to the named repos
+3. `--exclude` removes the named repos
 
-Include/exclude match substrings of directory paths, so `api` also matches `api-tests`. The meta root repo stays included even when it doesn't match a tag.
+A value names a whole repo, never part of a path: `api` does not match `api-tests`. A value that names no repo is an error, so a typo never runs a command in the repo you meant to skip. The meta root repo stays included even when it doesn't match a tag.
 
 ## Dry Run
 
@@ -129,8 +136,8 @@ meta --silent exec -- npm install
 |--------|-------------|
 | `--parallel` | Run commands concurrently (the default) |
 | `--sequential` | Run one repo at a time |
-| `--include <dirs>` | Only directories whose path contains these |
-| `--exclude <dirs>` | Skip directories whose path contains these |
+| `--include <repos>` | Only these repos (`.meta` name or path from the root) |
+| `--exclude <repos>` | Skip these repos (`.meta` name or path from the root) |
 | `--tag <tags>` | Filter by project tag(s) |
 | `--dry-run` | Preview without executing |
 | `--json` | Structured JSON output |
@@ -161,8 +168,8 @@ meta --exclude large-monorepo exec -- cargo update
 
 ### Find Files Across Repos
 ```bash
-# Quote the whole command: meta joins its arguments with spaces for the shell
-meta exec -- 'find . -name "*.rs" -type f' | head -20
+# Arguments go to find as typed: "*.rs" is find's pattern, not a shell glob
+meta exec -- find . -name '*.rs' -type f | head -20
 ```
 
 ### Clean Build Artifacts
@@ -175,7 +182,7 @@ meta exec -- rm -rf node_modules dist
 
 | Use `meta exec` | Use Plugin (e.g., `meta git`) |
 |-----------------|-------------------------------|
-| Generic shell commands | Git operations |
+| Generic commands | Git operations |
 | Build/test commands | Commands needing special handling |
 | One-off scripts | Operations with meta-specific logic |
 | npm/cargo/make | Clone, update, snapshot |

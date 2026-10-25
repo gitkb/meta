@@ -53,13 +53,15 @@ Lists all projects in the meta repository.
 #### meta_exec
 Execute a command across all projects.
 
+Runs `meta exec` with the given program and arguments.
+
 **Parameters:**
-- `command` (required): Command to execute
+- `command` (required): The program and its arguments, one per item. They reach the program as given, with no shell; for a shell, ask for one: `["sh", "-c", "..."]`
 - `tag` (optional): Filter by tag
 
 **Example:**
 ```json
-{"name": "meta_exec", "arguments": {"command": "npm install", "tag": "frontend"}}
+{"name": "meta_exec", "arguments": {"command": ["git", "log", "--format=%h %s", "-1"], "tag": "frontend"}}
 ```
 
 #### meta_get_config
@@ -121,7 +123,7 @@ Get branch information (current, tracking, ahead/behind).
 Stage files across repositories.
 
 **Parameters:**
-- `files` (optional): Files to stage (default: ".")
+- `files` (optional): Paths to stage, one per item, passed to git as given (default: `["."]`)
 - `tag` (optional): Filter by tag
 
 #### meta_git_commit
@@ -331,7 +333,7 @@ Restore workspace to a previous snapshot.
 Execute command across repos with optional atomic mode (auto-rollback on failure).
 
 **Parameters:**
-- `command` (required): Command to execute
+- `command` (required): The program and its arguments to run in each project, one per item, with no shell
 - `tag` (optional): Filter by tag
 - `atomic` (optional): Enable atomic mode with rollback on failure
 
@@ -340,7 +342,7 @@ Execute command across repos with optional atomic mode (auto-rollback on failure
 {
   "name": "meta_batch_execute",
   "arguments": {
-    "command": "npm test",
+    "command": ["npm", "test"],
     "tag": "frontend",
     "atomic": true
   }

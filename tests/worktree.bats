@@ -357,6 +357,18 @@ assert d['totals']['files_changed'] >= 1
     [[ "$output" != *"exec-excl/frontend"* ]]
 }
 
+@test "worktree exec --include names whole repos, never parts of paths" {
+    "$META_BIN" git worktree create exec-whole --repo backend --repo frontend
+    run "$META_BIN" git worktree exec exec-whole --include end -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--include 'end' names no repo"* ]]
+    [ -z "$(find .worktrees/exec-whole -name ran)" ]
+    run "$META_BIN" git worktree exec exec-whole --exclude ./backend/ -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"exec-whole/frontend"* ]]
+    [[ "$output" != *"exec-whole/backend"* ]]
+}
+
 @test "worktree exec --parallel runs concurrently" {
     "$META_BIN" git worktree create exec-par --repo backend --repo frontend
     run "$META_BIN" git worktree exec exec-par --parallel -- echo parallel-ok

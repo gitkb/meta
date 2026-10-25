@@ -976,3 +976,48 @@ create_meta_bare_repo() {
 
     rm -rf "$GRANDCHILD_BARE" "$CHILD_BARE" "$ROOT_BARE" "$CLONE_TARGET"
 }
+
+# ============ Arguments reach git as typed, with no shell ============
+
+@test "meta git passes \$(...) to git, never runs it" {
+    run "$META_BIN" git log --grep='$(touch PWNED1)' -1
+    [ "$status" -eq 0 ]
+    [ -z "$(find "$TEST_DIR" -name PWNED1)" ]
+}
+
+@test "meta git keeps a ; inside one argument" {
+    run "$META_BIN" --include frontend git tag -m 'release; touch PWNED2' v1
+    [ "$status" -eq 0 ]
+    [ -z "$(find "$TEST_DIR" -name PWNED2)" ]
+    [ "$(git -C "$TEST_DIR/frontend" tag -l --format='%(contents:subject)' v1)" = "release; touch PWNED2" ]
+}
+
+@test "meta git keeps an argument with spaces whole" {
+    run "$META_BIN" git log --format='%h %s' -1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *" Initial commit for frontend"* ]]
+    [[ "$output" != *"ambiguous argument"* ]]
+}
+
+@test "meta git commit -m keeps the message as typed" {
+    echo change >> "$TEST_DIR/frontend/README.md"
+    git -C "$TEST_DIR/frontend" add README.md
+    run "$META_BIN" git commit -m "it's \$(touch PWNED3); done"
+    [ "$status" -eq 0 ]
+    [ -z "$(find "$TEST_DIR" -name PWNED3)" ]
+    [ "$(git -C "$TEST_DIR/frontend" log -1 --format=%s)" = "it's \$(touch PWNED3); done" ]
+}
+
+@test "meta-mcp meta_git_add stages a hostile file name as one path" {
+    META_MCP_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-mcp"
+    echo x > "$TEST_DIR/frontend/my file.txt; touch PWNED4"
+    echo x > "$TEST_DIR/frontend/unrelated.txt"
+    run env PATH="$(dirname "$META_BIN"):$PATH" "$META_MCP_BIN" <<'EOF'
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"meta_git_add","arguments":{"files":"my file.txt; touch PWNED4"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"meta_git_add","arguments":{"files":["my file.txt; touch PWNED4"]}}}
+EOF
+    [ -z "$(find "$TEST_DIR" -name PWNED4)" ]
+    [[ "$output" == *"'files' must be a list of strings"* ]]
+    [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" = "my file.txt; touch PWNED4" ]
+}

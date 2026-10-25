@@ -149,8 +149,7 @@ echo '<request>' | meta-docker --meta-plugin-exec
 {
   "plan": {
     "commands": [
-      {"dir": "/ws/api", "argv": ["docker", "build", "-t", "api:latest", "."]},
-      {"dir": "/ws/web", "argv": ["docker", "build", "-t", "web:latest", "."]}
+      {"dir": "/ws/api", "argv": ["docker", "build", "-t", "api:latest", "."]}
     ],
     "parallel": true
   }

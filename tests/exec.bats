@@ -14,7 +14,8 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
+    # The physical path, as pwd prints it (macOS temp dirs sit behind a symlink)
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
     chmod +x "$TEST_DIR/.meta/plugins/meta-git"
@@ -610,7 +611,7 @@ EOF
 EOF
     run "$META_BIN" --include web exec -- touch ran
     [ "$status" -ne 0 ]
-    [[ "$output" == *"is the path of web and the .meta name of frontend"* ]]
+    [[ "$output" == *"names the repo at web by path and the repo at frontend by .meta name"* ]]
     [ -z "$(find "$TEST_DIR" -name ran)" ]
 }
 

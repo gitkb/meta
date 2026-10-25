@@ -763,3 +763,11 @@ EOF
     [[ "$output" == *"does not take --include/--exclude before it"* ]]
     [ -z "$(find .worktrees/global-filter -name ran)" ]
 }
+
+@test "inside a worktree set, a filter typo is an error even when --tag selects nothing" {
+    "$META_BIN" git worktree create tagged --repo backend --repo frontend
+    cd .worktrees/tagged
+    run "$META_BIN" --tag nonexistent --exclude typo exec -- pwd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--exclude 'typo' names none of the repos"* ]]
+}

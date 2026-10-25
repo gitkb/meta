@@ -628,3 +628,20 @@ EOF
     [[ "$output" == *'[one arg][$(touch PWNED5)]'* ]]
     [ -z "$(find "$TEST_DIR" -name PWNED5)" ]
 }
+
+@test "--recursive with --config expands each nested meta repo once" {
+    mkdir -p "$TEST_DIR/child" "$TEST_DIR/legacy"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{ "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
+EOF
+    cat > "$TEST_DIR/child/.meta.json" <<'EOF'
+{ "projects": { "up": { "repo": "git@github.com:org/up.git", "path": ".." } } }
+EOF
+    run "$META_BIN" --recursive exec -- pwd
+    [ "$status" -eq 0 ]
+    default_runs="$(grep -c "^$TEST_DIR/legacy\$" <<<"$output")"
+    run "$META_BIN" --config .meta.json --recursive exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "^$TEST_DIR/legacy\$" <<<"$output")" -eq "$default_runs" ]
+    [ "$default_runs" -eq 1 ]
+}

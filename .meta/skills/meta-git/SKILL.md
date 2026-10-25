@@ -19,7 +19,7 @@ meta git status    # Shows status for every repo at once
 meta git commit -m "feat: update"    # Commits in every repo with staged changes
 ```
 
-Any other git subcommand passes through to git in each repo. Arguments reach git exactly as typed, with no shell in between: `meta git log --format='%h %s'` and a commit message containing `$(...)` or `;` are passed as-is.
+Any other git subcommand passes through to git in each repo. Meta passes the arguments it receives to git unchanged, with no shell in between: `meta git log --format='%h %s'` and a commit message containing `$(...)` or `;` are passed as-is. Your own shell still expands `$(...)` inside double quotes before meta runs, so put untrusted text in single quotes.
 
 ## Cloning a Meta Repo
 
@@ -95,7 +95,7 @@ Target specific repos. With `--tag`, the meta root repo stays included even when
 # By tag
 meta --tag backend git status
 
-# By directory (substring match: `api` also matches `api-tests`)
+# By repo: .meta name or path from the root (`api` does not match `api-tests`)
 meta --include api,web git push
 
 # Exclude repos

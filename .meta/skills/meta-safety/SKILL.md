@@ -42,7 +42,7 @@ When modifying a repo that other repos depend on:
 ## Efficient Commits
 
 ```bash
-# Commit only in repos whose path contains repo1 or repo2 (substring match)
+# Commit only in repos repo1 and repo2 (.meta name or path from the root)
 meta --include repo1,repo2 git commit -m "feat: update shared API"
 
 # Push tagged repos (and the root)

@@ -20,7 +20,7 @@ meta exec -- ls -la
 meta exec -- npm install --save-dev typescript
 ```
 
-Each argument reaches the program exactly as you typed it: meta runs the program directly, with no shell in between. Quotes, spaces, `$()`, `;`, `|`, `&&`, globs and `%` in an argument stay literal, so text from an issue, a commit message or a file name can't run commands. When you want a shell (pipes, `&&`, redirects, globs), ask for one:
+Each argument meta receives reaches the program unchanged: meta runs the program directly, with no shell in between. Quotes, spaces, `$()`, `;`, `|`, `&&`, globs and `%` in an argument stay literal, so text from an issue, a commit message or a file name can't run commands once meta has it. Your own shell still parses the command line before meta runs (`"$(...)"` in double quotes runs there), so pass untrusted text in single quotes or as a separate argv element (as the MCP tools take it). When you want a shell (pipes, `&&`, redirects, globs), ask for one:
 
 ```bash
 meta exec -- sh -c 'npm ci && npm test'

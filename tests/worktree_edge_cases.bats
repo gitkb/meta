@@ -649,7 +649,7 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     ln -s "$TEST_DIR/elsewhere" "$TEST_DIR/.worktrees/taken"
     run "$META_BIN" git worktree create taken --repo backend
     [ "$status" -ne 0 ]
-    [[ "$output" == *"already exists"* ]]
+    [[ "$output" == *"already exists"* || "$output" == *"Refusing to use worktree 'taken'"* ]]
     [ -L "$TEST_DIR/.worktrees/taken" ]
 }
 
@@ -733,4 +733,27 @@ J
     rm backend/.git/hooks/post-checkout
     [ "$(git -C backend worktree list | wc -l)" -eq 1 ]
     ! git -C backend rev-parse --verify --quiet refs/heads/hooked-ref
+}
+
+@test "a worktree set that is a symlink out of the worktree root is refused" {
+    OUTSIDE="$(mktemp -d)"
+    echo keep > "$OUTSIDE/file"
+    mkdir -p "$TEST_DIR/.worktrees"
+    ln -s "$OUTSIDE" "$TEST_DIR/.worktrees/review"
+    run "$META_BIN" git worktree remove --force review
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to use worktree 'review'"* ]]
+    [ -f "$OUTSIDE/file" ]
+    rm -rf "$OUTSIDE"
+}
+
+@test "a skipped root checkout still leaves room for the child worktrees" {
+    mkdir -p "$TEST_DIR/.git/hooks"
+    printf '#!/bin/sh\nexit 1\n' > "$TEST_DIR/.git/hooks/post-checkout"
+    chmod +x "$TEST_DIR/.git/hooks/post-checkout"
+    run "$META_BIN" git worktree create rooted HEAD --repo . --repo backend --no-deps
+    rm "$TEST_DIR/.git/hooks/post-checkout"
+    [ "$status" -eq 0 ]
+    [ -d "$TEST_DIR/.worktrees/rooted/backend" ]
+    [ "$(git -C "$TEST_DIR" worktree list | wc -l)" -eq 1 ]
 }

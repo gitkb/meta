@@ -827,3 +827,17 @@ J
     [[ "$output" == *"leads into .git"* ]]
     [ -d "$TEST_DIR/.git/objects" ]
 }
+
+@test "a child add that fails on a non-empty destination leaves no branch behind" {
+    # The root tracks files where the child's worktree would go
+    mkdir -p "$TEST_DIR/api"
+    echo x > "$TEST_DIR/api/README"
+    cat > "$TEST_DIR/.meta.json" <<'J'
+{"projects": {"api": {"repo": "git@github.com:org/backend.git", "path": "backend"}}}
+J
+    git -C "$TEST_DIR" add api .meta.json
+    git -C "$TEST_DIR" commit --quiet -m "track api/"
+    run "$META_BIN" git worktree create trial --from-ref HEAD --repo . --repo api --no-deps --strict
+    [ "$status" -ne 0 ]
+    ! git -C "$TEST_DIR/backend" rev-parse --verify --quiet refs/heads/trial
+}

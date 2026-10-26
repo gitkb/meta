@@ -756,8 +756,8 @@ EOF
 }
 
 @test "a symlinked data dir, store and lock are followed" {
-    REAL="$(mktemp -d)"
-    mkdir "$REAL/data" "$REAL/files"
+    REAL="$TEST_DIR/real"
+    mkdir -p "$REAL/data" "$REAL/files"
     : > "$REAL/files/worktree.json"
     : > "$REAL/files/worktree.lock"
     ln -s "$REAL/files/worktree.json" "$REAL/data/worktree.json"
@@ -766,9 +766,10 @@ EOF
     META_DATA_DIR="$META_DATA/linked" run "$META_BIN" git worktree create linked-store --repo backend
     [ "$status" -eq 0 ]
     [ -L "$REAL/data/worktree.json" ]
+    [ -L "$REAL/data/worktree.lock" ]
     grep -q 'linked-store' "$REAL/files/worktree.json"
-    rm -rf "$REAL"
 }
+
 @test "a meta-* program in a group-writable PATH dir still loads" {
     # Homebrew prefixes and umask 002 installs leave PATH dirs 0775; PATH
     # is the user's own choice, like the git meta runs from it

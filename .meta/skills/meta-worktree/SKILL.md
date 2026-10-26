@@ -163,8 +163,9 @@ meta git worktree prune                    # remove expired (TTL) and orphaned s
 `remove` and `prune` delete only sets meta created, and check every repo in the
 set first, nested ones included: uncommitted or untracked changes, commits on
 no branch, and files outside every repo count as work. `remove` refuses such a
-set unless `--force`; `prune` keeps it. `prune` sees the sets of the current
-workspace only. `--force` and `exec --ephemeral` discard that work: commit and
+set unless `--force`; `prune` keeps it. `prune` sees the sets recorded in the
+current workspace's repositories (including sets made from other checkouts of
+them), not every set on the machine. `--force` and `exec --ephemeral` discard that work: commit and
 push first.
 
 ## Lifecycle Hooks

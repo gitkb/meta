@@ -1006,3 +1006,26 @@ J
     [ -f backend/src/file ]
 }
 
+
+@test "prune does not take a set as orphaned while a repo nested in it is in the project" {
+    mkdir -p "$TEST_DIR/group"
+    git -C "$TEST_DIR/group" init --quiet --initial-branch=main
+    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta"
+    printf 'core/\n' > "$TEST_DIR/group/.gitignore"
+    git -C "$TEST_DIR/group" add .meta .gitignore
+    git -C "$TEST_DIR/group" -c user.email=t@t -c user.name=t commit --quiet -m init
+    git init --quiet --initial-branch=main "$TEST_DIR/group/core"
+    git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    cat > "$TEST_DIR/.meta.json" <<'EOF2'
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
+EOF2
+    run "$META_BIN" git worktree create nest --repo group --repo group/core --no-deps
+    [ "$status" -eq 0 ]
+    # group's own entry goes; its nested repo is now listed directly
+    printf '{"projects": {"group/core": "git@github.com:org/core.git"}}' > "$TEST_DIR/.meta.json"
+    run "$META_BIN" git worktree prune --json
+    [ "$status" -eq 0 ]
+    [[ "$output" != *'"nest"'* ]]
+    [ -d "$TEST_DIR/.worktrees/nest/group/core" ]
+}

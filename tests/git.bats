@@ -749,6 +749,32 @@ EOF
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only | LC_ALL=C sort | tr '\n' ' ')" = "--help -h " ]
 }
 
+@test "meta git commit --edit uses a private temp file it removes" {
+    export META_DATA_DIR="$TEST_DIR/data"
+    mkdir -p "$META_DATA_DIR"
+    chmod 700 "$META_DATA_DIR"
+    LOG="$TEST_DIR/editor.log"
+    printf '#!/bin/sh\necho "$1 $(ls -l "$1" | cut -c1-10)" >> "%s"\nexit "${EDITOR_EXIT:-0}"\n' "$LOG" > "$TEST_DIR/editor"
+    chmod 755 "$TEST_DIR/editor"
+    echo change >> "$TEST_DIR/frontend/README.md"
+    git -C "$TEST_DIR/frontend" add README.md
+
+    # The editor leaves every message empty, so nothing is committed
+    EDITOR="$TEST_DIR/editor" run "$META_BIN" git commit --edit
+    EDITOR="$TEST_DIR/editor" EDITOR_EXIT=1 run "$META_BIN" git commit --edit
+    [ "$status" -ne 0 ]
+
+    [ "$(wc -l < "$LOG")" -eq 2 ]
+    first="$(sed -n 1p "$LOG" | cut -d' ' -f1)"
+    second="$(sed -n 2p "$LOG" | cut -d' ' -f1)"
+    [ "$first" != "$second" ]
+    for path in "$first" "$second"; do
+        [[ "$path" == "$META_DATA_DIR/tmp/META_COMMIT_EDITMSG-"* ]]
+        [ ! -e "$path" ]
+    done
+    [ "$(grep -c -- ' -rw-------$' "$LOG")" -eq 2 ]
+}
+
 @test "meta git commit escapes repo paths in its summary" {
     WS="$TEST_DIR/ws"$'\e[2J'
     mkdir -p "$WS"

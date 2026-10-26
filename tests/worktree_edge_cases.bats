@@ -784,16 +784,28 @@ EOF
     [ ! -e "$TEST_DIR/ran" ]
 }
 
-@test "a PATH entry linking into a dir other users can write is not run" {
-    mkdir -p "$TEST_DIR/shared" "$TEST_DIR/bin"
-    printf '#!/bin/sh\ntouch "%s/ran"\n' "$TEST_DIR" > "$TEST_DIR/shared/meta-planted"
-    chmod 755 "$TEST_DIR/shared/meta-planted"
-    chmod 777 "$TEST_DIR/shared"
-    ln -s "$TEST_DIR/shared/meta-planted" "$TEST_DIR/bin/meta-planted"
+@test "a PATH entry linking into a refused plugin dir is not run" {
+    mkdir -p "$META_DATA/plugins" "$TEST_DIR/bin"
+    printf '#!/bin/sh\ntouch "%s/ran"\n' "$TEST_DIR" > "$META_DATA/plugins/meta-planted"
+    chmod 755 "$META_DATA/plugins/meta-planted"
+    chmod 777 "$META_DATA/plugins"
+    ln -s "$META_DATA/plugins/meta-planted" "$TEST_DIR/bin/meta-planted"
     PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" git worktree list
-    chmod 755 "$TEST_DIR/shared"
-    [[ "$output" == *"skipping plugin"*"meta-planted"* ]]
+    chmod 700 "$META_DATA/plugins"
+    [[ "$output" == *"skipping global plugins"* ]]
+    [[ "$output" == *"meta-planted: it links into a refused plugin directory"* ]]
     [ ! -e "$TEST_DIR/ran" ]
+}
+
+@test "a meta-* program in a group-writable PATH dir still loads" {
+    # Homebrew prefixes and umask 002 installs leave PATH dirs 0775; PATH
+    # is the user's own choice, like the git meta runs from it
+    mkdir -p "$TEST_DIR/gbin"
+    printf '#!/bin/sh\ntouch "%s/ran"\n' "$TEST_DIR" > "$TEST_DIR/gbin/meta-shared"
+    chmod 775 "$TEST_DIR/gbin" "$TEST_DIR/gbin/meta-shared"
+    PATH="$TEST_DIR/gbin:$PATH" run "$META_BIN" git worktree list
+    [[ "$output" != *"skipping plugin"* ]]
+    [ -e "$TEST_DIR/ran" ]
 }
 
 @test "a meta-* entry that is not a program is skipped without a warning" {
@@ -863,6 +875,26 @@ J
     [[ "$output" == *"Invalid worktrees_dir"* ]]
     [ -z "$(ls -A "$OUTSIDE")" ]
     rm -rf "$OUTSIDE"
+}
+
+@test "create does not take a symlinked intermediate parent as a repo" {
+    # vendor links to an unrelated repo that holds the lib repo; vendor is
+    # no project, so create falls back to the directory, which must refuse
+    mkdir -p "$TEST_DIR/unrelated/lib"
+    for repo in unrelated unrelated/lib; do
+        git -C "$TEST_DIR/$repo" init --quiet --initial-branch=main
+        git -C "$TEST_DIR/$repo" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    done
+    ln -s unrelated "$TEST_DIR/vendor"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "vendor/lib": "git@github.com:org/lib.git"}}
+EOF
+    RUST_LOG=warn run "$META_BIN" git worktree create via-link --no-deps --repo vendor/lib
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Intermediate parent 'vendor' is not a plain directory inside the workspace, skipping"* ]]
+    [ "$(git -C "$TEST_DIR/unrelated" worktree list | wc -l)" -eq 1 ]
+    ! git -C "$TEST_DIR/unrelated" rev-parse --verify --quiet refs/heads/via-link
 }
 
 @test "worktree add refuses a repo given twice before adding anything" {

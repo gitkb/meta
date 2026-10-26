@@ -96,9 +96,10 @@ meta git worktree create ci-check --all --ephemeral --meta agent=review-bot --me
 meta git worktree exec --ephemeral lint-check --all -- make lint
 ```
 
-`prune` removes sets whose TTL has expired and sets it considers orphaned (none
-of its repos are in the project any more); for a set whose directory is gone it
-only forgets meta's record. `--ephemeral` alone only records metadata. A TTL is a backstop for a session that
+`prune` removes sets whose TTL has expired and sets whose project directory is
+gone; for a set whose directory is gone it only forgets meta's record. Once its
+repos are taken out of the meta config, a set is no longer the workspace's:
+remove it with `git worktree remove`. `--ephemeral` alone only records metadata. A TTL is a backstop for a session that
 dies before removing its sets.
 
 ## Inspecting Worktrees
@@ -157,7 +158,7 @@ run it from the primary checkout to be sure it uses the primary repos.
 meta git worktree remove auth-fix          # refuses a set with work it would lose
 meta git worktree remove auth-fix --force  # discards that work
 meta git worktree prune --dry-run          # preview
-meta git worktree prune                    # remove expired (TTL) and orphaned sets
+meta git worktree prune                    # remove expired (TTL) and orphaned sets of this workspace
 ```
 
 `remove` and `prune` delete only sets meta created, and check every repo in the

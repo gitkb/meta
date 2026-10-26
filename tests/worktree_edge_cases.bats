@@ -687,19 +687,14 @@ EOF
     [ ! -e "$META_DATA/worktree.json" ]
 }
 
-@test "a symlinked data dir, store and lock are followed" {
+@test "a symlinked data dir is followed, and worktrees write nothing to it" {
     REAL="$TEST_DIR/real"
-    mkdir -p "$REAL/data" "$REAL/files"
-    : > "$REAL/files/worktree.json"
-    : > "$REAL/files/worktree.lock"
-    ln -s "$REAL/files/worktree.json" "$REAL/data/worktree.json"
-    ln -s "$REAL/files/worktree.lock" "$REAL/data/worktree.lock"
+    mkdir -p "$REAL/data"
     ln -s "$REAL/data" "$META_DATA/linked"
     META_DATA_DIR="$META_DATA/linked" run "$META_BIN" git worktree create linked-store --repo backend
     [ "$status" -eq 0 ]
-    [ -L "$REAL/data/worktree.json" ]
-    [ -L "$REAL/data/worktree.lock" ]
-    grep -q 'linked-store' "$REAL/files/worktree.json"
+    [ -f "$(record_file .worktrees/linked-store/backend)" ]
+    [ -z "$(ls -A "$REAL/data")" ]
 }
 
 @test "a meta-* program in a group-writable PATH dir still loads" {

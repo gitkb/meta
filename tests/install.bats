@@ -2,6 +2,10 @@
 
 # install.sh and install.ps1 against a fake release served from a local HTTP server.
 
+sha256() {
+    if command -v sha256sum > /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi
+}
+
 setup() {
     TEST_DIR="$(mktemp -d)"
     RELEASES="$TEST_DIR/releases"
@@ -22,7 +26,7 @@ setup() {
     done
     tar -czf "$RELEASES/latest/download/$ASSET" -C "$TEST_DIR/archive" \
         meta meta-git meta-project meta-rust meta-mcp loop
-    (cd "$RELEASES/latest/download" && shasum -a 256 "$ASSET" > "$ASSET.sha256")
+    (cd "$RELEASES/latest/download" && sha256 "$ASSET" > "$ASSET.sha256")
 
     # Windows checksums are certutil output, CRLF line endings included
     for zip in meta-windows-x64.zip meta-windows-arm64.zip; do
@@ -31,7 +35,7 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
     for f in sys.argv[2:]:
         z.write(f, f.rsplit("/", 1)[-1])' "$RELEASES/latest/download/$zip" "$TEST_DIR"/archive/*.exe
         local hash
-        hash=$(shasum -a 256 "$RELEASES/latest/download/$zip" | awk '{print $1}')
+        hash=$(sha256 "$RELEASES/latest/download/$zip" | awk '{print $1}')
         printf 'SHA256 hash of %s:\r\n%s\r\nCertUtil: -hashfile command completed successfully.\r\n' \
             "$zip" "$hash" > "$RELEASES/latest/download/$zip.sha256"
     done

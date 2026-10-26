@@ -802,10 +802,18 @@ EOF
     chmod 755 "$TEST_DIR/out/meta-dir"
     ln -s "$TEST_DIR/out" "$META_DATA/plugins/forward"
     ln -s "$META_DATA/plugins/forward/meta-dir" "$TEST_DIR/bin/meta-dir"
+    # and through a relative PATH entry with .. (run from frontend)
+    printf '#!/bin/sh\ntouch "%s/ran-rel"\n' "$TEST_DIR" > "$META_DATA/plugins/meta-rel"
+    chmod 755 "$META_DATA/plugins/meta-rel"
+    ln -s "$META_DATA/plugins/meta-rel" "$TEST_DIR/bin/meta-rel"
     ln -s "$META_DATA/plugins/v1/meta-sub" "$TEST_DIR/bin/meta-sub"
     ln -s "$META_DATA/plugins/meta-hop" "$TEST_DIR/bin/meta-hop"
     PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" git worktree list
+    cd "$TEST_DIR/frontend"
+    PATH="../bin:$PATH" "$META_BIN" git worktree list >/dev/null 2>&1 || true
+    cd "$TEST_DIR"
     chmod 700 "$META_DATA/plugins"
+    [ ! -e "$TEST_DIR/ran-rel" ]
     [[ "$output" == *"skipping global plugins"* ]]
     [[ "$output" == *"meta-planted: it links into a refused plugin directory"* ]]
     [ ! -e "$TEST_DIR/ran" ]
@@ -1010,9 +1018,14 @@ EOF
 }
 
 @test "a plain project check does not read a child's own .meta" {
+    # The built project plugin, not one that happens to be on PATH
+    cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/"
     ln -s missing.json "$TEST_DIR/frontend/.meta"
     run "$META_BIN" project check
     [ "$status" -eq 0 ]
+    # From a subdirectory with no config of its own, the workspace's counts
+    mkdir -p "$TEST_DIR/docs"
+    (cd "$TEST_DIR/docs" && "$META_BIN" project check)
     run "$META_BIN" project check --recursive
     [ "$status" -ne 0 ]
     [[ "$output" == *"Cannot read"* ]]

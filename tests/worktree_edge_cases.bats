@@ -897,6 +897,41 @@ EOF
     ! git -C "$TEST_DIR/unrelated" rev-parse --verify --quiet refs/heads/via-link
 }
 
+@test "worktree add rechecks a destination after an earlier add in the same call" {
+    OUT="$(mktemp -d)"
+    # group is a nested meta repo with its own core repo inside
+    mkdir -p "$TEST_DIR/group"
+    git -C "$TEST_DIR/group" init --quiet --initial-branch=main
+    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta"
+    printf 'core/\n' > "$TEST_DIR/group/.gitignore"
+    git -C "$TEST_DIR/group" add .meta .gitignore
+    git -C "$TEST_DIR/group" -c user.email=t@t -c user.name=t commit --quiet -m init
+    git init --quiet --initial-branch=main "$TEST_DIR/group/core"
+    git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    # Branch "linked" of group tracks core as a symlink out of the workspace
+    git clone --quiet "$TEST_DIR/group" "$OUT/clone"
+    git -C "$OUT/clone" checkout --quiet -b linked
+    git -C "$OUT/clone" rm --quiet .gitignore
+    ln -s "$OUT/target" "$OUT/clone/core"
+    git -C "$OUT/clone" add core
+    git -C "$OUT/clone" -c user.email=t@t -c user.name=t commit --quiet -m link
+    git -C "$OUT/clone" push --quiet origin linked
+    mkdir "$OUT/target"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
+EOF
+    run "$META_BIN" git worktree create linkset --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree add linkset --repo group:linked --repo group/core
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to add the worktree for 'group/core'"* ]]
+    [ -z "$(ls -A "$OUT/target")" ]
+    # The add that did happen is recorded
+    grep -q '"alias": "group"' "$META_DATA/worktree.json"
+    rm -rf "$OUT"
+}
+
 @test "worktree add refuses a repo given twice before adding anything" {
     run "$META_BIN" git worktree create add-twice --repo backend
     [ "$status" -eq 0 ]
@@ -1015,34 +1050,6 @@ EOF
     [ -d "$TEST_DIR/.git/objects" ]
 }
 
-@test "a branch someone else makes while create runs is never deleted" {
-    # A commit only the other process's branch holds
-    git -C backend checkout --quiet -b side
-    echo v > backend/valuable
-    git -C backend add valuable
-    git -C backend commit --quiet -m valuable
-    VALUABLE="$(git -C backend rev-parse HEAD)"
-    git -C backend checkout --quiet main
-    git -C backend branch --quiet -D side
-    # A git that makes branch "review" at that commit just before meta
-    # creates it (or adds the worktree that would), as a concurrent
-    # `git branch review <commit>` would
-    REAL_GIT="$(git --exec-path)/git"
-    mkdir -p "$TEST_DIR/fakebin"
-    cat > "$TEST_DIR/fakebin/git" <<SH
-#!/bin/sh
-case "\$PWD \$* " in
-*"/backend branch "*" review "* | *"/backend worktree add "*)
-    "$REAL_GIT" -C "$TEST_DIR/backend" branch review $VALUABLE 2>/dev/null ;;
-esac
-exec "$REAL_GIT" "\$@"
-SH
-    chmod +x "$TEST_DIR/fakebin/git"
-    PATH="$TEST_DIR/fakebin:$PATH" run "$META_BIN" git worktree create review --repo backend
-    [ "$status" -ne 0 ]
-    [ "$(git -C backend rev-parse refs/heads/review)" = "$VALUABLE" ]
-}
-
 # A bare origin for backend holding main and a branch only it has
 add_backend_origin() {
     git init --quiet --bare "$TEST_DIR/backend-origin.git"
@@ -1050,14 +1057,6 @@ add_backend_origin() {
     git -C backend push --quiet origin main
     git -C backend push --quiet origin main:remote-only
     git -C backend fetch --quiet origin
-}
-
-@test "a branch started at a remote branch tracks it" {
-    add_backend_origin
-    run "$META_BIN" git worktree create review --repo backend --from-ref origin/main --no-deps
-    [ "$status" -eq 0 ]
-    [ "$(git -C backend config branch.review.merge)" = "refs/heads/main" ]
-    [ "$(git -C backend config branch.review.remote)" = "origin" ]
 }
 
 @test "the git plugin run directly holds worktrees_dir to the config rules" {

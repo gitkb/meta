@@ -689,12 +689,16 @@ EOF
 
 @test "a symlinked data dir is followed, and worktrees write nothing to it" {
     REAL="$TEST_DIR/real"
-    mkdir -p "$REAL/data"
+    mkdir -p "$REAL/data/plugins"
+    printf '#!/bin/sh\ntouch "%s/ran-linked"\n' "$TEST_DIR" > "$REAL/data/plugins/meta-linked"
+    chmod +x "$REAL/data/plugins/meta-linked"
     ln -s "$REAL/data" "$META_DATA/linked"
     META_DATA_DIR="$META_DATA/linked" run "$META_BIN" git worktree create linked-store --repo backend
     [ "$status" -eq 0 ]
+    # The global plugin under the link loaded, so the link was followed
+    [ -e "$TEST_DIR/ran-linked" ]
     [ -f "$(record_file .worktrees/linked-store/backend)" ]
-    [ -z "$(ls -A "$REAL/data")" ]
+    [ "$(ls -A "$REAL/data")" = "plugins" ]
 }
 
 @test "a meta-* program in a group-writable PATH dir still loads" {

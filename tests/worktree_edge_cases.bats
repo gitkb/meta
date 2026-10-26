@@ -582,7 +582,7 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
 @test "a malformed store timestamp is escaped in the plugin's warning" {
     run "$META_BIN" git worktree create bad-time --repo backend --ttl 1h
     [ "$status" -eq 0 ]
-    sed -i 's/"created_at": *"[^"]*"/"created_at": "x\\u001b]0;PWNED\\u0007"/' "$META_DATA/worktree.json"
+    perl -pi -e 's/"created_at": *"[^"]*"/"created_at": "x\\u001b]0;PWNED\\u0007"/' "$META_DATA/worktree.json"
     RUST_LOG=warn run "$META_BIN" git worktree list
     [[ "$output" == *'Malformed created_at'* ]]
     [[ "$output" == *'x\u{1b}]0;PWNED\u{7}'* ]]
@@ -597,7 +597,26 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     run "$META_BIN" git worktree remove --force store-x
     chmod 700 "$META_DATA"
     [ "$status" -ne 0 ]
+    [[ "$output" == *"Permission denied"* ]]
+    # The record is read before anything is deleted, so nothing was
+    [ -d "$TEST_DIR/.worktrees/store-x/backend" ]
     grep -q ".worktrees/store-x\"" "$META_DATA/worktree.json"
+}
+
+@test "worktree create --no-deps refuses one repo on two branches" {
+    run "$META_BIN" git worktree create two-nodeps --no-deps --repo backend:one --repo backend:two
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Repo 'backend' is given twice, on branches 'one' and 'two'"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/two-nodeps" ]
+}
+
+@test "a registry config other users can write is refused, not replaced by the default registry" {
+    printf 'registries:\n  - https://registry.invalid/private\n' > "$META_DATA/config.yaml"
+    chmod 666 "$META_DATA/config.yaml"
+    run "$META_BIN" plugin search anything
+    chmod 600 "$META_DATA/config.yaml"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"config.yaml"* ]]
 }
 
 @test "worktree prune fails when the store cannot be updated" {
@@ -700,6 +719,7 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     ln -s "$TEST_DIR/nowhere" "$TEST_DIR/sub/.meta/plugins/meta-dangling"
     cd "$TEST_DIR/sub"
     run "$META_BIN" git worktree list
+    [ "$status" -eq 0 ]
     [[ "$output" != *"skipping plugin"* ]]
 }
 

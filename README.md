@@ -209,12 +209,12 @@ projects:
 
 - `path` (the name when it is omitted) is relative and stays inside the directory of the config file: no `..`, no absolute paths, and no symlink that leads outside it or into `.git` or `.worktrees`. `\` reads as `/`, and `./`, `//` and a trailing `/` are dropped.
 - A project name is usually one word; a nested alias such as `vendor/lib` is fine. It follows the same rules as `path` and must already be in plain form, because worktrees put the project at `<worktree>/<name>`.
-- Names and path components use only ASCII letters, digits, space and `._-+@`, so one `.meta` names the same directories on every platform (no Unicode that macOS or Windows would treat as another name, no `C:`, `<>:"|?*` or short names like `PROGRA~1`). They have no trailing dot or space, are not Windows device names (`CON`, `NUL`, `COM1`, ...) or `.git`, and do not start with `.worktrees`.
-- No two projects share a path, and no project's path lies inside another's. Paths are compared after following existing symlinks, and without regard to case (some filesystems ignore it). A repo inside another repo goes in a nested `.meta` (`meta: true`).
+- Names and path components use only ASCII letters, digits, space and `._-+@`, so one `.meta` names the same directories on every platform (no Unicode that macOS or Windows would treat as another name, no `C:`, `<>:"|?*` or short names like `PROGRA~1`). They have no trailing dot or space, are not Windows device names (`CON`, `NUL`, `COM1`, ...) or `.git`, and no component is `.worktrees` or lies under the configured `worktrees_dir`.
+- No two projects share a path, and no project's path lies inside another's. Paths are compared after following existing symlinks, and without regard to case (some filesystems ignore it). Project names may not be equal or nested either, also without regard to case, since worktrees use them as directories. A repo inside another repo goes in a nested `.meta` (`meta: true`).
 - No name, path, repo, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline), a bidirectional-text control, or an invisible format character (such as a zero-width space).
 - `repo` does not start with `-`.
 - Tags contain no whitespace and no `,`.
-- `worktrees_dir`, if set, lies inside the workspace (relative, or absolute but inside). For a directory elsewhere, set `META_WORKTREES`.
+- `worktrees_dir`, if set, lies inside the workspace (relative, or absolute but inside), not inside a project and not in `.git`. For a directory elsewhere, set `META_WORKTREES`.
 
 The same rules apply to every `.meta` that a recursive command reads, including one inside a cloned project: a refused nested config stops the command rather than silently leaving out that part of the tree.
 

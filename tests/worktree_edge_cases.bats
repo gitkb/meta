@@ -808,6 +808,23 @@ J
     rm -rf "$OUTSIDE"
 }
 
+@test "prune does not follow a directory above a worktree that became a symlink" {
+    OUT="$(mktemp -d)"
+    META_WORKTREES="$OUT/sets" run "$META_BIN" git worktree create old --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    sleep 2
+    # Another live, clean checkout named like the expired set
+    git -C frontend worktree add --quiet "$OUT/live/old" -b live-old
+    # The directory above the expired set is swapped for a link to it
+    mv "$OUT/sets" "$OUT/sets-moved"
+    ln -s "$OUT/live" "$OUT/sets"
+    run "$META_BIN" git worktree prune
+    [[ "$output" == *"a directory above it now leads elsewhere through a symlink"* ]]
+    [ -d "$OUT/live/old" ]
+    [ -e "$OUT/live/old/.git" ]
+    rm -rf "$OUT"
+}
+
 @test "prune removes a worktree made under META_WORKTREES when run without it" {
     CUSTOM="$(mktemp -d)"
     META_WORKTREES="$CUSTOM" run "$META_BIN" git worktree create elsewhere --repo backend --ttl 1s

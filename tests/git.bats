@@ -749,6 +749,17 @@ EOF
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only | LC_ALL=C sort | tr '\n' ' ')" = "--help -h " ]
 }
 
+@test "meta git update fails on a nested .meta it cannot read" {
+    mkdir -p "$TEST_DIR/private"
+    printf '{"projects": {}}' > "$TEST_DIR/private/config.json"
+    ln -s ../private/config.json "$TEST_DIR/frontend/.meta"
+    chmod 000 "$TEST_DIR/private"
+    run "$META_BIN" git update
+    chmod 700 "$TEST_DIR/private"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cannot read"*"frontend/.meta"* ]]
+}
+
 @test "meta git clone fails when a cloned repo's nested .meta is refused" {
     UP="$(mktemp -d)"
     # bare_with_meta NAME JSON: a bare repo whose only commit holds .meta = JSON

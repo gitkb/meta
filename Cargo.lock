@@ -999,6 +999,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

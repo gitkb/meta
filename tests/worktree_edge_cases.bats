@@ -61,9 +61,21 @@ record_file() {
     echo "$(git -C "$1" rev-parse --absolute-git-dir)/meta-worktree.json"
 }
 
+# Another workspace at $1, with its own clone of backend
+make_workspace() {
+    mkdir -p "$1/.meta/plugins"
+    cp "$META_GIT_BIN" "$1/.meta/plugins/meta-git"
+    git -C "$1" init --quiet --initial-branch=main
+    printf '{"projects": {"backend": "git@github.com:org/backend.git"}}' > "$1/.meta.json"
+    git -C "$1" add .meta.json
+    git -C "$1" -c user.email=t@t -c user.name=t commit --quiet -m init
+    git clone --quiet "$TEST_DIR/backend" "$1/backend"
+}
+
 teardown() {
     cd /
     rm -rf "$TEST_DIR"
+    rm -rf "${OTHER:-}"
     rm -rf "$META_DATA"
     unset META_DATA_DIR
 }
@@ -219,37 +231,22 @@ EOF
     [ -d "$TEST_DIR/elsewhere/temp-wt/temp-repo" ]
 }
 
-@test "worktree prune removes orphaned worktree (all repos removed from project)" {
-    # Create worktree with backend and frontend only (the root repo always exists,
-    # so a set holding it is never orphaned)
-    "$META_BIN" git worktree create removed-repos --repo backend --repo frontend --no-deps
+@test "prune and remove leave a set whose repos were removed from the project" {
+    # Expired, and made only of backend and frontend
+    "$META_BIN" git worktree create removed-repos --repo backend --repo frontend --no-deps --ttl 0
     [ -d ".worktrees/removed-repos" ]
 
-    # Update .meta to remove backend and frontend (simulating repo removal)
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
-{
-    "projects": {
-        "common": "git@github.com:org/common.git"
-    }
-}
-EOF
-
-    # Prune should detect that all source repos are gone
+    # Repos that leave the project are no longer this workspace's, nor are
+    # the sets made from them
+    printf '{"projects": {"common": "git@github.com:org/common.git"}}' > "$TEST_DIR/.meta.json"
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
-    [[ "$output" == *"orphan"* ]] || [[ "$output" == *"removed from project"* ]]
-    [[ "$output" == *"removed-repos"* ]]
-
-    # Restore original .meta for other tests
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
-{
-    "projects": {
-        "backend": "git@github.com:org/backend.git",
-        "frontend": "git@github.com:org/frontend.git",
-        "common": "git@github.com:org/common.git"
-    }
-}
-EOF
+    [[ "$output" != *"Pruned"* ]]
+    [ -d ".worktrees/removed-repos/backend" ]
+    run "$META_BIN" git worktree remove removed-repos --force
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not a set of this workspace"* ]]
+    [ -d ".worktrees/removed-repos/backend" ]
 }
 
 @test "worktree prune --dry-run shows orphans without removing" {
@@ -1029,7 +1026,7 @@ EOF2
     [ -d "$TEST_DIR/.worktrees/nest/group/core" ]
 }
 
-@test "prune still prunes an expired set that turned out not to be orphaned" {
+@test "prune keeps an expired set whose parent repo left the project" {
     mkdir -p "$TEST_DIR/group"
     git -C "$TEST_DIR/group" init --quiet --initial-branch=main
     printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta"
@@ -1045,10 +1042,12 @@ EOF2
     run "$META_BIN" git worktree create nest --repo group --repo group/core --no-deps --ttl 0
     [ "$status" -eq 0 ]
     printf '{"projects": {"group/core": "git@github.com:org/core.git"}}' > "$TEST_DIR/.meta.json"
+    # Found through group/core's record, but group is no longer this
+    # workspace's repo
     run "$META_BIN" git worktree prune --json
     [ "$status" -eq 0 ]
-    [[ "$output" == *'"ttl_expired"'* ]]
-    [ ! -e "$TEST_DIR/.worktrees/nest" ]
+    [[ "$output" == *"ttl_expired, but group: its repository"*"is not one of this workspace's"* ]]
+    [ -d "$TEST_DIR/.worktrees/nest/group/core" ]
 }
 
 @test "create and add fail, and say so, when a worktree's record cannot be written" {
@@ -1056,24 +1055,141 @@ EOF2
     hook="$TEST_DIR/frontend/.git/hooks/post-checkout"
     printf '#!/bin/sh\nmkdir "$(git rev-parse --git-dir)/meta-worktree.json"\n' > "$hook"
     chmod +x "$hook"
-    run "$META_BIN" git worktree create rec-fail --repo frontend --no-deps
+    # backend is added and recorded first, then frontend's record fails
+    run "$META_BIN" git worktree create rec-fail --repo backend --repo frontend --no-deps
     [ "$status" -ne 0 ]
     [[ "$output" == *"Cannot record the worktree"* ]]
     [[ "$output" != *"Created worktree"* ]]
     # Rolled back: no directory, no worktree in git, no branch
     [ ! -e "$TEST_DIR/.worktrees/rec-fail" ]
-    [ "$(git -C "$TEST_DIR/frontend" worktree list | wc -l)" -eq 1 ]
-    run git -C "$TEST_DIR/frontend" rev-parse --verify --quiet refs/heads/rec-fail
-    [ "$status" -ne 0 ]
+    for repo in backend frontend; do
+        [ "$(git -C "$TEST_DIR/$repo" worktree list | wc -l)" -eq 1 ]
+        run git -C "$TEST_DIR/$repo" rev-parse --verify --quiet refs/heads/rec-fail
+        [ "$status" -ne 0 ]
+    done
 
     run "$META_BIN" git worktree create rec-add --repo backend --no-deps
     [ "$status" -eq 0 ]
     run "$META_BIN" git worktree add rec-add --repo frontend
     [ "$status" -ne 0 ]
     [[ "$output" == *"Added 'frontend', but cannot record it in worktree 'rec-add'"* ]]
+    # Reported as failed, not as added
+    [[ "$output" != *"✓ Added 'frontend'"* ]]
 
     # Without the hook, the name can be used again
     rm "$hook"
     run "$META_BIN" git worktree create rec-fail --repo frontend --no-deps
     [ "$status" -eq 0 ]
+}
+
+# ============ Workspace scope ============
+
+@test "prune and remove in one workspace leave another's sets in a shared worktree dir" {
+    OTHER="$(mktemp -d)"
+    make_workspace "$OTHER"
+    OTHER_ROOT="$(cd "$OTHER" && pwd -P)"
+    export META_WORKTREES="$OTHER/shared"
+    (cd "$OTHER" && "$META_BIN" git worktree create bexp --repo backend --ttl 0)
+    (cd "$OTHER" && "$META_BIN" git worktree create bother --repo backend)
+
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"bexp"* ]]
+    [ -d "$META_WORKTREES/bexp/backend" ]
+
+    # --force doesn't change whose set it is
+    run "$META_BIN" git worktree remove bother --force
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to remove worktree 'bother': it is not a set of this workspace"* ]]
+    [[ "$output" == *"its record names the workspace at $OTHER_ROOT"* ]]
+    [ -d "$META_WORKTREES/bother/backend" ]
+
+    # Its own workspace prunes it
+    cd "$OTHER"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Pruned 1 worktree(s)"*"bexp"* ]]
+    [ ! -e "$META_WORKTREES/bexp" ]
+}
+
+@test "a set with worktrees from two workspaces is neither removed nor pruned" {
+    OTHER="$(mktemp -d)"
+    make_workspace "$OTHER"
+    export META_WORKTREES="$OTHER/shared"
+    (cd "$OTHER" && "$META_BIN" git worktree create mix --repo backend --ttl 0)
+    # This workspace's frontend joins the other workspace's set
+    run "$META_BIN" git worktree add mix --repo frontend
+    [ "$status" -eq 0 ]
+
+    for ws in "$TEST_DIR" "$OTHER"; do
+        cd "$ws"
+        run "$META_BIN" git worktree remove mix --force
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"not a set of this workspace"* ]]
+        run "$META_BIN" git worktree prune
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"Kept 1 worktree(s)"*"mix (ttl_expired, but "*"is not one of this workspace's"* ]]
+    done
+    for member in . backend frontend; do
+        [ -e "$META_WORKTREES/mix/$member/.git" ]
+    done
+}
+
+@test "a workspace nested in another, but not listed by it, can't prune or remove its sets" {
+    "$META_BIN" git worktree create outer --repo backend --no-deps --ttl 0
+    make_workspace "$TEST_DIR/inner"
+    cd "$TEST_DIR/inner"
+    export META_WORKTREES="$TEST_DIR/.worktrees"
+
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"outer"* ]]
+    run "$META_BIN" git worktree remove outer --force
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not a set of this workspace"* ]]
+    [ -d "$TEST_DIR/.worktrees/outer/backend" ]
+}
+
+@test "a worktree without a record in a set meta made blocks remove and prune" {
+    "$META_BIN" git worktree create handmade --repo backend --no-deps --ttl 0
+    git -C frontend worktree add --quiet -b handmade "$TEST_DIR/.worktrees/handmade/frontend"
+
+    run "$META_BIN" git worktree remove handmade --force
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"frontend: meta has no record of creating it"* ]]
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Kept 1 worktree(s)"*"handmade (ttl_expired, but frontend: meta has no record"* ]]
+    [ -d .worktrees/handmade/frontend ]
+    [ -d .worktrees/handmade/backend ]
+}
+
+@test "prune lists a set it keeps once, however many of its records are unusable" {
+    "$META_BIN" git worktree create broken --repo backend --repo frontend --no-deps
+    for repo in backend frontend; do
+        echo "not json" > "$(record_file .worktrees/broken/$repo)"
+    done
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Kept 1 worktree(s)"* ]]
+    [[ "$output" == *"Kept worktrees: broken"* ]]
+    [[ "$output" != *"broken, broken"* ]]
+}
+
+@test "worktree create --all --recursive includes every nested level" {
+    mkdir -p "$TEST_DIR/inner"
+    git -C "$TEST_DIR/inner" init --quiet --initial-branch=main
+    printf '{"projects": {"deep": "git@github.com:org/deep.git"}}' > "$TEST_DIR/inner/.meta"
+    printf 'deep/\n' > "$TEST_DIR/inner/.gitignore"
+    git -C "$TEST_DIR/inner" add .meta .gitignore
+    git -C "$TEST_DIR/inner" -c user.email=t@t -c user.name=t commit --quiet -m init
+    git init --quiet --initial-branch=main "$TEST_DIR/inner/deep"
+    git -C "$TEST_DIR/inner/deep" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    printf '{"projects": {"inner": {"repo": "git@github.com:org/inner.git", "meta": true}}}' > "$TEST_DIR/.meta.json"
+
+    run "$META_BIN" git worktree create everything --all --recursive
+    [ "$status" -eq 0 ]
+    for member in . inner inner/deep; do
+        [ -f ".worktrees/everything/$member/.git" ]
+    done
 }

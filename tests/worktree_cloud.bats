@@ -166,9 +166,14 @@ assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
     echo "$output" | python3 -c "import json,sys; assert json.load(sys.stdin)['ttl_seconds'] == 172800"
 }
 
-@test "worktree create --ttl invalid format fails" {
+@test "worktree create --ttl invalid format fails with one clear error" {
     run "$META_BIN" git worktree create ttl-bad --repo backend --ttl "notavalue"
     [ "$status" -ne 0 ]
+    [[ "$output" == *"invalid value 'notavalue' for '--ttl <DURATION>'"* ]]
+    # Not "error: error:", and not the whole git help after it
+    [[ "$output" != *"error: error:"* ]]
+    [[ "$output" != *"Pass-through Commands"* ]]
+    [ ! -e .worktrees/ttl-bad ]
 }
 
 # ============ --from-ref ============

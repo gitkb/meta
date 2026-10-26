@@ -126,10 +126,23 @@ irm https://raw.githubusercontent.com/gitkb/meta/main/install.ps1 | iex
 The scripts download the release archive for your platform together with
 its published `.sha256` and check it before installing anything; a
 download error, a missing checksum file or a mismatch stops the install.
-`install.sh` needs `curl`, `tar` and `sha256sum` or `shasum`. Set
-`VERSION=0.2.22` for a specific release, `INSTALL_DIR` for the target
+`install.sh` needs `curl`, `tar` and `sha256sum` or `shasum`.
+
+Set `VERSION` for a specific release, `INSTALL_DIR` for the target
 directory, or `META_DOWNLOAD_URL` to install from a mirror of
-`https://github.com/gitkb/meta/releases`.
+`https://github.com/gitkb/meta/releases`. The variables go on `bash`, not
+on `curl`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | VERSION=0.2.22 bash
+```
+```powershell
+$env:VERSION = "0.2.22"; irm https://raw.githubusercontent.com/gitkb/meta/main/install.ps1 | iex
+```
+
+The checksum comes from the same place as the archive, so it catches a
+corrupted or truncated download, not a compromised source: use a mirror you
+trust, over https.
 
 ### Via Homebrew (macOS/Linux)
 

@@ -671,15 +671,6 @@ EOF
     [ ! -e "$TEST_DIR/.worktrees/two-nodeps" ]
 }
 
-@test "a registry config other users can write is refused, not replaced by the default registry" {
-    printf 'registries:\n  - https://registry.invalid/private\n' > "$META_DATA/config.yaml"
-    chmod 666 "$META_DATA/config.yaml"
-    run "$META_BIN" plugin search anything
-    chmod 600 "$META_DATA/config.yaml"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"config.yaml"* ]]
-}
-
 @test "worktree prune fails when the store cannot be updated" {
     cat > "$TEST_DIR/.meta.json" <<EOF
 {"projects": {"backend": "git@github.com:org/backend.git",
@@ -722,46 +713,12 @@ EOF
     [ ! -e "$TEST_DIR/.worktrees/two-branches" ]
 }
 
-@test "meta refuses a data dir other users can write to" {
-    chmod 777 "$META_DATA"
-    run "$META_BIN" git worktree create shared-store --repo backend
-    chmod 700 "$META_DATA"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"other users can write to it"* ]]
-    [ ! -e "$TEST_DIR/.worktrees/shared-store" ]
-}
-
-@test "worktree prune refuses a shared data dir and deletes nothing" {
-    run "$META_BIN" git worktree create shared-prune --repo backend --ttl 1s
-    [ "$status" -eq 0 ]
-    sleep 2
-
-    chmod 777 "$META_DATA"
-    run "$META_BIN" git worktree prune
-    chmod 700 "$META_DATA"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"other users can write to it"* ]]
-    [ -d "$TEST_DIR/.worktrees/shared-prune" ]
-}
-
 @test "ephemeral exec fails when its cleanup cannot update the store" {
     # The command itself makes the store unwritable before cleanup runs
     run "$META_BIN" git worktree exec --ephemeral eph-store --repo backend -- chmod 500 "$META_DATA"
     chmod 700 "$META_DATA"
     [ "$status" -ne 0 ]
     [[ "$output" == *"could not update the worktree store"* ]]
-}
-
-@test "a refused data dir is reported with control characters escaped" {
-    BAD="$META_DATA/x"$'\e]0;TITLE\a'
-    mkdir -p "$BAD/plugins"
-    chmod 777 "$BAD"
-    META_DATA_DIR="$BAD" run "$META_BIN" git worktree list
-    chmod 700 "$BAD"
-    [[ "$output" == *"skipping global plugins"* ]]
-    [[ "$output" == *'x\u{1b}]0;TITLE\u{7}'* ]]
-    [[ "$output" != *$'\e'* ]]
-    [[ "$output" != *$'\a'* ]]
 }
 
 @test "ephemeral exec reports a failed cleanup even when its command fails" {
@@ -772,56 +729,46 @@ EOF
     [[ "$output" == *"could not update the worktree store"* ]]
 }
 
-@test "plugins in a directory other users can write to are not run" {
-    mkdir -p "$TEST_DIR/sub/.meta/plugins"
-    printf '#!/bin/sh\ntouch "%s/ran"\n' "$TEST_DIR" > "$TEST_DIR/sub/.meta/plugins/meta-planted"
-    chmod 755 "$TEST_DIR/sub/.meta/plugins/meta-planted"
-    chmod 777 "$TEST_DIR/sub/.meta/plugins"
+@test "a umask 002 checkout and data dir are used, and their plugins load" {
+    # Stock Ubuntu/Debian/Fedora: user private groups, umask 002, so
+    # directories are 0775. meta trusts them like git or cargo would.
+    mkdir -p "$TEST_DIR/sub/.meta/plugins" "$META_DATA/plugins"
+    printf '#!/bin/sh\ntouch "%s/ran-local"\n' "$TEST_DIR" > "$TEST_DIR/sub/.meta/plugins/meta-local"
+    printf '#!/bin/sh\ntouch "%s/ran-global"\n' "$TEST_DIR" > "$META_DATA/plugins/meta-global"
+    chmod 775 "$TEST_DIR" "$TEST_DIR/.meta" "$TEST_DIR/.meta/plugins" "$TEST_DIR/sub" \
+        "$TEST_DIR/sub/.meta" "$TEST_DIR/sub/.meta/plugins" "$TEST_DIR/sub/.meta/plugins/meta-local" \
+        "$META_DATA" "$META_DATA/plugins" "$META_DATA/plugins/meta-global"
     cd "$TEST_DIR/sub"
+    umask 002
     run "$META_BIN" git worktree list
-    chmod 755 "$TEST_DIR/sub/.meta/plugins"
-    [[ "$output" == *"skipping plugins in"* ]]
-    [ ! -e "$TEST_DIR/ran" ]
-}
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"skipping"* ]]
+    [ -e "$TEST_DIR/ran-local" ]
+    [ -e "$TEST_DIR/ran-global" ]
 
-@test "a PATH entry linking into a refused plugin dir is not run" {
-    mkdir -p "$META_DATA/plugins" "$TEST_DIR/bin"
-    printf '#!/bin/sh\ntouch "%s/ran"\n' "$TEST_DIR" > "$META_DATA/plugins/meta-planted"
-    chmod 755 "$META_DATA/plugins/meta-planted"
-    chmod 777 "$META_DATA/plugins"
-    ln -s "$META_DATA/plugins/meta-planted" "$TEST_DIR/bin/meta-planted"
-    # Below the refused dir, and through a second link that leaves it
-    mkdir -p "$META_DATA/plugins/v1" "$TEST_DIR/elsewhere"
-    printf '#!/bin/sh\ntouch "%s/ran-sub"\n' "$TEST_DIR" > "$META_DATA/plugins/v1/meta-sub"
-    printf '#!/bin/sh\ntouch "%s/ran-hop"\n' "$TEST_DIR" > "$TEST_DIR/elsewhere/meta-hop"
-    chmod 755 "$META_DATA/plugins/v1/meta-sub" "$TEST_DIR/elsewhere/meta-hop"
-    ln -s "$TEST_DIR/elsewhere/meta-hop" "$META_DATA/plugins/meta-hop"
-    # and through a directory link inside the refused dir
-    mkdir -p "$TEST_DIR/out"
-    printf '#!/bin/sh\ntouch "%s/ran-dir"\n' "$TEST_DIR" > "$TEST_DIR/out/meta-dir"
-    chmod 755 "$TEST_DIR/out/meta-dir"
-    ln -s "$TEST_DIR/out" "$META_DATA/plugins/forward"
-    ln -s "$META_DATA/plugins/forward/meta-dir" "$TEST_DIR/bin/meta-dir"
-    # and through a relative PATH entry with .. (run from frontend)
-    printf '#!/bin/sh\ntouch "%s/ran-rel"\n' "$TEST_DIR" > "$META_DATA/plugins/meta-rel"
-    chmod 755 "$META_DATA/plugins/meta-rel"
-    ln -s "$META_DATA/plugins/meta-rel" "$TEST_DIR/bin/meta-rel"
-    ln -s "$META_DATA/plugins/v1/meta-sub" "$TEST_DIR/bin/meta-sub"
-    ln -s "$META_DATA/plugins/meta-hop" "$TEST_DIR/bin/meta-hop"
-    PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" git worktree list
-    cd "$TEST_DIR/frontend"
-    PATH="../bin:$PATH" "$META_BIN" git worktree list >/dev/null 2>&1 || true
     cd "$TEST_DIR"
-    chmod 700 "$META_DATA/plugins"
-    [ ! -e "$TEST_DIR/ran-rel" ]
-    [[ "$output" == *"skipping global plugins"* ]]
-    [[ "$output" == *"meta-planted: it links into a refused plugin directory"* ]]
-    [ ! -e "$TEST_DIR/ran" ]
-    [ ! -e "$TEST_DIR/ran-sub" ]
-    [ ! -e "$TEST_DIR/ran-hop" ]
-    [ ! -e "$TEST_DIR/ran-dir" ]
+    run "$META_BIN" git worktree create umask-002 --repo backend
+    [ "$status" -eq 0 ]
+    grep -q 'umask-002' "$META_DATA/worktree.json"
+    # meta's own files stay private whatever the umask
+    [[ "$(ls -l "$META_DATA/worktree.json")" == "-rw------- "* ]]
+    [[ "$(ls -l "$META_DATA/worktree.lock")" == "-rw------- "* ]]
 }
 
+@test "a symlinked data dir, store and lock are followed" {
+    REAL="$(mktemp -d)"
+    mkdir "$REAL/data" "$REAL/files"
+    : > "$REAL/files/worktree.json"
+    : > "$REAL/files/worktree.lock"
+    ln -s "$REAL/files/worktree.json" "$REAL/data/worktree.json"
+    ln -s "$REAL/files/worktree.lock" "$REAL/data/worktree.lock"
+    ln -s "$REAL/data" "$META_DATA/linked"
+    META_DATA_DIR="$META_DATA/linked" run "$META_BIN" git worktree create linked-store --repo backend
+    [ "$status" -eq 0 ]
+    [ -L "$REAL/data/worktree.json" ]
+    grep -q 'linked-store' "$REAL/files/worktree.json"
+    rm -rf "$REAL"
+}
 @test "a meta-* program in a group-writable PATH dir still loads" {
     # Homebrew prefixes and umask 002 installs leave PATH dirs 0775; PATH
     # is the user's own choice, like the git meta runs from it

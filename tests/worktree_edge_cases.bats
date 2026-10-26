@@ -784,6 +784,18 @@ EOF
     [ ! -e "$TEST_DIR/ran" ]
 }
 
+@test "a PATH entry linking into a dir other users can write is not run" {
+    mkdir -p "$TEST_DIR/shared" "$TEST_DIR/bin"
+    printf '#!/bin/sh\ntouch "%s/ran"\n' "$TEST_DIR" > "$TEST_DIR/shared/meta-planted"
+    chmod 755 "$TEST_DIR/shared/meta-planted"
+    chmod 777 "$TEST_DIR/shared"
+    ln -s "$TEST_DIR/shared/meta-planted" "$TEST_DIR/bin/meta-planted"
+    PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" git worktree list
+    chmod 755 "$TEST_DIR/shared"
+    [[ "$output" == *"skipping plugin"*"meta-planted"* ]]
+    [ ! -e "$TEST_DIR/ran" ]
+}
+
 @test "a meta-* entry that is not a program is skipped without a warning" {
     mkdir -p "$TEST_DIR/sub/.meta/plugins/meta-foo.dSYM"
     ln -s "$TEST_DIR/nowhere" "$TEST_DIR/sub/.meta/plugins/meta-dangling"

@@ -749,6 +749,21 @@ EOF
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only | LC_ALL=C sort | tr '\n' ' ')" = "--help -h " ]
 }
 
+@test "meta git commit escapes repo paths in its summary" {
+    WS="$TEST_DIR/ws"$'\e[2J'
+    mkdir -p "$WS"
+    git -C "$WS" init --quiet -b main
+    git init --quiet -b main "$WS/api"
+    git -C "$WS/api" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    printf '{"projects": {"api": "git@github.com:org/api.git"}}' > "$WS/.meta"
+    echo x > "$WS/api/file"
+    git -C "$WS/api" add file
+    cd "$WS"
+    run "$META_BIN" git commit
+    [[ "$output" == *'ws\u{1b}[2J'* ]]
+    [[ "$output" != *$'\e'* ]]
+}
+
 @test "meta git update fails on a nested .meta it cannot read" {
     mkdir -p "$TEST_DIR/private"
     printf '{"projects": {}}' > "$TEST_DIR/private/config.json"

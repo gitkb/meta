@@ -1060,10 +1060,20 @@ EOF2
     [ "$status" -ne 0 ]
     [[ "$output" == *"Cannot record the worktree"* ]]
     [[ "$output" != *"Created worktree"* ]]
+    # Rolled back: no directory, no worktree in git, no branch
+    [ ! -e "$TEST_DIR/.worktrees/rec-fail" ]
+    [ "$(git -C "$TEST_DIR/frontend" worktree list | wc -l)" -eq 1 ]
+    run git -C "$TEST_DIR/frontend" rev-parse --verify --quiet refs/heads/rec-fail
+    [ "$status" -ne 0 ]
 
     run "$META_BIN" git worktree create rec-add --repo backend --no-deps
     [ "$status" -eq 0 ]
     run "$META_BIN" git worktree add rec-add --repo frontend
     [ "$status" -ne 0 ]
     [[ "$output" == *"Added 'frontend', but cannot record it in worktree 'rec-add'"* ]]
+
+    # Without the hook, the name can be used again
+    rm "$hook"
+    run "$META_BIN" git worktree create rec-fail --repo frontend --no-deps
+    [ "$status" -eq 0 ]
 }

@@ -1051,3 +1051,20 @@ EOF2
     [[ "$output" == *'"ttl_expired"'* ]]
     [ ! -e "$TEST_DIR/.worktrees/nest" ]
 }
+
+@test "create and add fail, and say so, when a worktree's record cannot be written" {
+    # A hook leaves a directory where the new worktree's record goes
+    hook="$TEST_DIR/frontend/.git/hooks/post-checkout"
+    printf '#!/bin/sh\nmkdir "$(git rev-parse --git-dir)/meta-worktree.json"\n' > "$hook"
+    chmod +x "$hook"
+    run "$META_BIN" git worktree create rec-fail --repo frontend --no-deps
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cannot record the worktree"* ]]
+    [[ "$output" != *"Created worktree"* ]]
+
+    run "$META_BIN" git worktree create rec-add --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree add rec-add --repo frontend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Added 'frontend', but cannot record it in worktree 'rec-add'"* ]]
+}

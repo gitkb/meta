@@ -38,10 +38,11 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
 
     python3 "$BATS_TEST_DIRNAME/helpers/release_server.py" "$RELEASES" "$TEST_DIR/port" 3>&- &
     SERVER_PID=$!
-    for _ in $(seq 50); do
+    for _ in $(seq 100); do
         [ -s "$TEST_DIR/port" ] && break
         sleep 0.1
     done
+    [ -s "$TEST_DIR/port" ] || { echo "release server did not start" >&2; return 1; }
     export META_DOWNLOAD_URL="http://127.0.0.1:$(cat "$TEST_DIR/port")"
     export INSTALL_DIR
 }

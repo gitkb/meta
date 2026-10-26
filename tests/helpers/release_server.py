@@ -10,6 +10,7 @@ A request for <path> answers with HTTP status N, and no file, when
 import functools
 import http.server
 import pathlib
+import socketserver
 import sys
 
 
@@ -23,8 +24,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 
 root, port_file = sys.argv[1], sys.argv[2]
-server = http.server.HTTPServer(
+# TCPServer, not HTTPServer: HTTPServer looks up the host's FQDN, which takes
+# seconds on macOS runners
+server = socketserver.TCPServer(
     ("127.0.0.1", 0), functools.partial(Handler, directory=root)
 )
-pathlib.Path(port_file).write_text(str(server.server_port))
+pathlib.Path(port_file).write_text(str(server.server_address[1]))
 server.serve_forever()

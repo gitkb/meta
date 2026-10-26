@@ -51,10 +51,10 @@ detect_platform() {
 # Download a URL to a file; on failure, name the URL and the reason
 download() {
     local url="$1" out="$2" status reason
-    if status=$(curl -fsSL -o "$out" -w '%{http_code}' "$url"); then
-        return 0
-    fi
+    status=$(curl -fsSL -o "$out" -w '%{http_code}' "$url") && return 0
+    local rc=$?
     case "$status" in
+        2??) reason="transfer failed, curl exit ${rc}" ;;
         404) reason="HTTP 404: no such release asset; check VERSION and that your platform has a release" ;;
         403|429) reason="HTTP ${status}: rate limited or forbidden; wait and retry" ;;
         5??) reason="HTTP ${status}: server error; retry later" ;;
@@ -74,7 +74,8 @@ sha256() {
 
 # Download, verify and install
 install_meta() {
-    local platform=$(detect_platform)
+    local platform
+    platform=$(detect_platform)
     local asset="meta-${platform}.tar.gz"
     local base_url
 

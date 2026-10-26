@@ -790,11 +790,21 @@ EOF
     chmod 755 "$META_DATA/plugins/meta-planted"
     chmod 777 "$META_DATA/plugins"
     ln -s "$META_DATA/plugins/meta-planted" "$TEST_DIR/bin/meta-planted"
+    # Below the refused dir, and through a second link that leaves it
+    mkdir -p "$META_DATA/plugins/v1" "$TEST_DIR/elsewhere"
+    printf '#!/bin/sh\ntouch "%s/ran-sub"\n' "$TEST_DIR" > "$META_DATA/plugins/v1/meta-sub"
+    printf '#!/bin/sh\ntouch "%s/ran-hop"\n' "$TEST_DIR" > "$TEST_DIR/elsewhere/meta-hop"
+    chmod 755 "$META_DATA/plugins/v1/meta-sub" "$TEST_DIR/elsewhere/meta-hop"
+    ln -s "$TEST_DIR/elsewhere/meta-hop" "$META_DATA/plugins/meta-hop"
+    ln -s "$META_DATA/plugins/v1/meta-sub" "$TEST_DIR/bin/meta-sub"
+    ln -s "$META_DATA/plugins/meta-hop" "$TEST_DIR/bin/meta-hop"
     PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" git worktree list
     chmod 700 "$META_DATA/plugins"
     [[ "$output" == *"skipping global plugins"* ]]
     [[ "$output" == *"meta-planted: it links into a refused plugin directory"* ]]
     [ ! -e "$TEST_DIR/ran" ]
+    [ ! -e "$TEST_DIR/ran-sub" ]
+    [ ! -e "$TEST_DIR/ran-hop" ]
 }
 
 @test "a meta-* program in a group-writable PATH dir still loads" {
@@ -930,6 +940,29 @@ EOF
     # The add that did happen is recorded
     grep -q '"alias": "group"' "$META_DATA/worktree.json"
     rm -rf "$OUT"
+}
+
+@test "worktree add records what it added when a later parent dir cannot be made" {
+    mkdir -p "$TEST_DIR/group/deep/lib"
+    git -C "$TEST_DIR/group" init --quiet --initial-branch=main
+    printf '{"projects": {"deep/lib": "git@github.com:org/lib.git"}}' > "$TEST_DIR/group/.meta"
+    git -C "$TEST_DIR/group/deep/lib" init --quiet --initial-branch=main
+    git -C "$TEST_DIR/group/deep/lib" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "frontend": "git@github.com:org/frontend.git",
+              "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
+EOF
+    run "$META_BIN" git worktree create partial --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    mkdir "$TEST_DIR/.worktrees/partial/group"
+    chmod 555 "$TEST_DIR/.worktrees/partial/group"
+    run "$META_BIN" git worktree add partial --repo frontend --repo group/deep/lib
+    chmod 755 "$TEST_DIR/.worktrees/partial/group"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cannot create"* ]]
+    [ -d "$TEST_DIR/.worktrees/partial/frontend" ]
+    grep -q '"alias": "frontend"' "$META_DATA/worktree.json"
 }
 
 @test "worktree add refuses a repo given twice before adding anything" {

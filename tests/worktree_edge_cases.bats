@@ -603,6 +603,37 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     grep -q ".worktrees/store-x\"" "$META_DATA/worktree.json"
 }
 
+@test "prune keeps a set whose nested config became unreadable" {
+    mkdir -p "$TEST_DIR/group/core"
+    git -C "$TEST_DIR/group/core" init --quiet --initial-branch=main
+    git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "frontend": "git@github.com:org/frontend.git",
+              "common": "git@github.com:org/common.git",
+              "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
+EOF
+    run "$META_BIN" git worktree create nested-live --no-deps --repo group/core
+    [ "$status" -eq 0 ]
+    # The nested config now has an entry the path rules refuse
+    printf '{"projects": {"core": "git@github.com:org/core.git", "x": {"repo": "u", "path": "../outside"}}}' > "$TEST_DIR/group/.meta"
+    run "$META_BIN" git worktree prune
+    [[ "$output" != *"orphaned"* ]]
+    [ -d "$TEST_DIR/.worktrees/nested-live/group/core" ]
+}
+
+@test "a registry config that cannot be examined is refused, not replaced by the default registry" {
+    printf 'registries:\n  - https://registry.invalid/private\n' > "$META_DATA/config.yaml"
+    chmod 600 "$META_DATA/config.yaml"
+    chmod 600 "$META_DATA"
+    run "$META_BIN" plugin search anything
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"config.yaml"* ]]
+    [[ "$output" == *"Permission denied"* ]]
+}
+
 @test "worktree create --no-deps refuses one repo on two branches" {
     run "$META_BIN" git worktree create two-nodeps --no-deps --repo backend:one --repo backend:two
     [ "$status" -ne 0 ]

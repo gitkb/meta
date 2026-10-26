@@ -631,15 +631,16 @@ EOF
 }
 
 @test "--recursive with --config expands each nested meta repo once" {
-    mkdir -p "$TEST_DIR/child" "$TEST_DIR/legacy"
+    mkdir -p "$TEST_DIR/child/inner" "$TEST_DIR/legacy"
     cat > "$TEST_DIR/.meta.json" <<'EOF'
 { "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
 EOF
     cat > "$TEST_DIR/child/.meta.json" <<'EOF'
-{ "projects": { "up": { "repo": "git@github.com:org/up.git", "path": ".." } } }
+{ "projects": { "inner": "git@github.com:org/inner.git" } }
 EOF
-    # pwd prints the physical path (macOS temp dirs sit behind a symlink)
-    legacy="$(cd "$TEST_DIR/legacy" && pwd -P)"
+    # pwd prints the physical path (macOS temp dirs sit behind a symlink);
+    # the nested project is where expanding twice would show
+    legacy="$(cd "$TEST_DIR/child/inner" && pwd -P)"
     run "$META_BIN" --recursive exec -- pwd
     [ "$status" -eq 0 ]
     default_runs="$(grep -cx "$legacy" <<<"$output" || true)"
@@ -649,13 +650,30 @@ EOF
     [ "$default_runs" -eq 1 ]
 }
 
-@test "--exclude skips every spelling of the same repo" {
-    mkdir -p "$TEST_DIR/api" "$TEST_DIR/libs"
+@test "--recursive stops at a refused nested config, with or without --config" {
+    mkdir -p "$TEST_DIR/child" "$TEST_DIR/legacy"
     cat > "$TEST_DIR/.meta.json" <<'EOF'
-{ "projects": { "api": "git@github.com:org/api.git", "other": { "repo": "git@github.com:org/api.git", "path": "libs/../api" } } }
+{ "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
+EOF
+    cat > "$TEST_DIR/child/.meta.json" <<'EOF'
+{ "projects": { "up": { "repo": "git@github.com:org/up.git", "path": ".." } } }
+EOF
+    run "$META_BIN" --recursive exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"must not contain '..'"* ]]
+    run "$META_BIN" --config .meta.json --recursive exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"must not contain '..'"* ]]
+    [ -z "$(find "$TEST_DIR" -name ran)" ]
+}
+
+@test "--exclude cannot be dodged by a second spelling of the same repo" {
+    mkdir -p "$TEST_DIR/api"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{ "projects": { "api": "git@github.com:org/api.git", "other": { "repo": "git@github.com:org/api.git", "path": "./api/" } } }
 EOF
     run "$META_BIN" --exclude api exec -- touch ran
-    [ "$status" -eq 0 ]
-    [ ! -e "$TEST_DIR/api/ran" ]
-    [ -e "$TEST_DIR/ran" ]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"project 'other' (path 'api') is at or inside project 'api'"* ]]
+    [ -z "$(find "$TEST_DIR" -name ran)" ]
 }

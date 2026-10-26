@@ -149,7 +149,7 @@ teardown() {
     [[ "$output" == *"strict"* ]]
 }
 
-@test "global --strict affects worktree prune store errors" {
+@test "global --strict still lets a clean destroy succeed" {
     # Create a worktree then corrupt the store to test error handling (use --no-deps to avoid root)
     "$META_BIN" git worktree create prune-strict-test --repo backend --no-deps
     [ -d ".worktrees/prune-strict-test" ]
@@ -537,3 +537,601 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "import sys, json; json.load(sys.stdin)"
 }
+
+# ============ Store Lock and Store Failures ============
+
+@test "worktree create records the store despite a leftover lock file" {
+    # An empty lock (crash between create and write) or one naming a PID
+    # that now belongs to an unrelated process must not block store writes.
+    for content in "" "$$"; do
+        printf '%s' "$content" > "$META_DATA/worktree.lock"
+        name="lock-test-${#content}"
+        run "$META_BIN" git worktree create "$name" --repo backend
+        [ "$status" -eq 0 ]
+        grep -q ".worktrees/$name\"" "$META_DATA/worktree.json"
+    done
+}
+
+@test "worktree create fails when the store cannot be written" {
+    # The data dir is a plain file, so no store can be written under it
+    : > "$TEST_DIR/not-a-dir"
+    META_DATA_DIR="$TEST_DIR/not-a-dir" run "$META_BIN" git worktree create store-fail --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cannot record the new worktree"* ]]
+    # Nothing is left that no store entry would ever clean up: no directory,
+    # and no worktree registered in git
+    [ ! -e "$TEST_DIR/.worktrees/store-fail" ]
+    [ "$(git -C "$TEST_DIR/backend" worktree list | wc -l)" -eq 1 ]
+
+    # So a retry with a working store succeeds
+    run "$META_BIN" git worktree create store-fail --repo backend
+    [ "$status" -eq 0 ]
+}
+
+@test "worktree remove fails when the store cannot be updated" {
+    cat > "$TEST_DIR/.meta.json" <<EOF
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "frontend": "git@github.com:org/frontend.git",
+              "common": "git@github.com:org/common.git"},
+ "worktree": {"hooks": {"post-destroy": "touch $TEST_DIR/hook-ran"}}}
+EOF
+    run "$META_BIN" git worktree create store-ro --repo backend
+    [ "$status" -eq 0 ]
+
+    chmod 500 "$META_DATA"
+    run "$META_BIN" git worktree remove --force store-ro
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not update the worktree store"* ]]
+    # The worktree is gone, so its hook ran and the removal is reported
+    [[ "$output" == *"✓ Removed worktree 'store-ro'"* ]]
+    [ -e "$TEST_DIR/hook-ran" ]
+}
+
+@test "a malformed store timestamp is escaped in the plugin's warning" {
+    run "$META_BIN" git worktree create bad-time --repo backend --ttl 1h
+    [ "$status" -eq 0 ]
+    perl -pi -e 's/"created_at": *"[^"]*"/"created_at": "x\\u001b]0;PWNED\\u0007"/' "$META_DATA/worktree.json"
+    RUST_LOG=warn run "$META_BIN" git worktree list
+    [[ "$output" == *'Malformed created_at'* ]]
+    [[ "$output" == *'x\u{1b}]0;PWNED\u{7}'* ]]
+    [[ "$output" != *$'\e'* ]]
+}
+
+@test "worktree remove fails when the store dir cannot be searched" {
+    run "$META_BIN" git worktree create store-x --repo backend
+    [ "$status" -eq 0 ]
+
+    chmod 000 "$META_DATA"
+    run "$META_BIN" git worktree remove --force store-x
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Permission denied"* ]]
+    # The record is read before anything is deleted, so nothing was
+    [ -d "$TEST_DIR/.worktrees/store-x/backend" ]
+    grep -q ".worktrees/store-x\"" "$META_DATA/worktree.json"
+}
+
+@test "prune keeps a set whose nested config became unreadable" {
+    mkdir -p "$TEST_DIR/group/core"
+    git -C "$TEST_DIR/group/core" init --quiet --initial-branch=main
+    git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "frontend": "git@github.com:org/frontend.git",
+              "common": "git@github.com:org/common.git",
+              "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
+EOF
+    run "$META_BIN" git worktree create nested-live --no-deps --repo group/core
+    [ "$status" -eq 0 ]
+    # The nested config now has an entry the path rules refuse
+    printf '{"projects": {"core": "git@github.com:org/core.git", "x": {"repo": "u", "path": "../outside"}}}' > "$TEST_DIR/group/.meta"
+    run "$META_BIN" git worktree prune
+    [[ "$output" != *"orphaned"* ]]
+    [ -d "$TEST_DIR/.worktrees/nested-live/group/core" ]
+}
+
+@test "a registry config that cannot be examined is refused, not replaced by the default registry" {
+    printf 'registries:\n  - https://registry.invalid/private\n' > "$META_DATA/config.yaml"
+    chmod 600 "$META_DATA/config.yaml"
+    chmod 600 "$META_DATA"
+    run "$META_BIN" plugin search anything
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"config.yaml"* ]]
+    [[ "$output" == *"Permission denied"* ]]
+}
+
+@test "prune keeps a set whose nested config link cannot be followed" {
+    mkdir -p "$TEST_DIR/group/core" "$TEST_DIR/private"
+    git -C "$TEST_DIR/group/core" init --quiet --initial-branch=main
+    git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/private/config.json"
+    ln -s ../private/config.json "$TEST_DIR/group/.meta"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "frontend": "git@github.com:org/frontend.git",
+              "common": "git@github.com:org/common.git",
+              "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
+EOF
+    run "$META_BIN" git worktree create linked-live --no-deps --repo group/core
+    [ "$status" -eq 0 ]
+    chmod 000 "$TEST_DIR/private"
+    run "$META_BIN" git worktree prune
+    chmod 700 "$TEST_DIR/private"
+    [[ "$output" != *"orphaned"* ]]
+    [ -d "$TEST_DIR/.worktrees/linked-live/group/core" ]
+}
+
+@test "worktree create --no-deps refuses one repo on two branches" {
+    run "$META_BIN" git worktree create two-nodeps --no-deps --repo backend:one --repo backend:two
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Repo 'backend' is given twice, on branches 'one' and 'two'"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/two-nodeps" ]
+}
+
+@test "a registry config other users can write is refused, not replaced by the default registry" {
+    printf 'registries:\n  - https://registry.invalid/private\n' > "$META_DATA/config.yaml"
+    chmod 666 "$META_DATA/config.yaml"
+    run "$META_BIN" plugin search anything
+    chmod 600 "$META_DATA/config.yaml"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"config.yaml"* ]]
+}
+
+@test "worktree prune fails when the store cannot be updated" {
+    cat > "$TEST_DIR/.meta.json" <<EOF
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "frontend": "git@github.com:org/frontend.git",
+              "common": "git@github.com:org/common.git"},
+ "worktree": {"hooks": {"post-prune": "touch $TEST_DIR/hook-ran"}}}
+EOF
+    run "$META_BIN" git worktree create prune-ro --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    sleep 2
+
+    chmod 500 "$META_DATA"
+    run "$META_BIN" git worktree prune
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not update the worktree store"* ]]
+    # The set is gone, so the hook ran and the removal is reported
+    [[ "$output" == *"Pruned 1 worktree(s)"* ]]
+    [ -e "$TEST_DIR/hook-ran" ]
+}
+
+@test "worktree remove escapes a dirty repo's alias found on disk" {
+    run "$META_BIN" git worktree create alias-nl --repo backend
+    [ "$status" -eq 0 ]
+    evil="$TEST_DIR/.worktrees/alias-nl/x"$'\n'"FORGED"
+    git -C "$TEST_DIR/backend" worktree add -q -b alias-nl-evil "$evil"
+    echo dirty > "$evil/dirty.txt"
+
+    run "$META_BIN" git worktree remove alias-nl
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'x\nFORGED'* ]]
+    [[ "$output" != *$'\n'"FORGED"* ]]
+    git -C "$TEST_DIR/backend" worktree remove --force "$evil"
+}
+
+@test "worktree create refuses one repo on two branches" {
+    run "$META_BIN" git worktree create two-branches --repo backend:one --repo backend:two
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Repo 'backend' is given twice, on branches 'one' and 'two'"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/two-branches" ]
+}
+
+@test "meta refuses a data dir other users can write to" {
+    chmod 777 "$META_DATA"
+    run "$META_BIN" git worktree create shared-store --repo backend
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"other users can write to it"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/shared-store" ]
+}
+
+@test "worktree prune refuses a shared data dir and deletes nothing" {
+    run "$META_BIN" git worktree create shared-prune --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    sleep 2
+
+    chmod 777 "$META_DATA"
+    run "$META_BIN" git worktree prune
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"other users can write to it"* ]]
+    [ -d "$TEST_DIR/.worktrees/shared-prune" ]
+}
+
+@test "ephemeral exec fails when its cleanup cannot update the store" {
+    # The command itself makes the store unwritable before cleanup runs
+    run "$META_BIN" git worktree exec --ephemeral eph-store --repo backend -- chmod 500 "$META_DATA"
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not update the worktree store"* ]]
+}
+
+@test "a refused data dir is reported with control characters escaped" {
+    BAD="$META_DATA/x"$'\e]0;TITLE\a'
+    mkdir -p "$BAD/plugins"
+    chmod 777 "$BAD"
+    META_DATA_DIR="$BAD" run "$META_BIN" git worktree list
+    chmod 700 "$BAD"
+    [[ "$output" == *"skipping global plugins"* ]]
+    [[ "$output" == *'x\u{1b}]0;TITLE\u{7}'* ]]
+    [[ "$output" != *$'\e'* ]]
+    [[ "$output" != *$'\a'* ]]
+}
+
+@test "ephemeral exec reports a failed cleanup even when its command fails" {
+    # chmod succeeds on the store dir, then fails on the missing file
+    run "$META_BIN" git worktree exec --ephemeral eph-both --repo backend -- chmod 500 "$META_DATA" "$TEST_DIR/missing"
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not update the worktree store"* ]]
+}
+
+@test "plugins in a directory other users can write to are not run" {
+    mkdir -p "$TEST_DIR/sub/.meta/plugins"
+    printf '#!/bin/sh\ntouch "%s/ran"\n' "$TEST_DIR" > "$TEST_DIR/sub/.meta/plugins/meta-planted"
+    chmod 755 "$TEST_DIR/sub/.meta/plugins/meta-planted"
+    chmod 777 "$TEST_DIR/sub/.meta/plugins"
+    cd "$TEST_DIR/sub"
+    run "$META_BIN" git worktree list
+    chmod 755 "$TEST_DIR/sub/.meta/plugins"
+    [[ "$output" == *"skipping plugins in"* ]]
+    [ ! -e "$TEST_DIR/ran" ]
+}
+
+@test "a PATH entry linking into a refused plugin dir is not run" {
+    mkdir -p "$META_DATA/plugins" "$TEST_DIR/bin"
+    printf '#!/bin/sh\ntouch "%s/ran"\n' "$TEST_DIR" > "$META_DATA/plugins/meta-planted"
+    chmod 755 "$META_DATA/plugins/meta-planted"
+    chmod 777 "$META_DATA/plugins"
+    ln -s "$META_DATA/plugins/meta-planted" "$TEST_DIR/bin/meta-planted"
+    # Below the refused dir, and through a second link that leaves it
+    mkdir -p "$META_DATA/plugins/v1" "$TEST_DIR/elsewhere"
+    printf '#!/bin/sh\ntouch "%s/ran-sub"\n' "$TEST_DIR" > "$META_DATA/plugins/v1/meta-sub"
+    printf '#!/bin/sh\ntouch "%s/ran-hop"\n' "$TEST_DIR" > "$TEST_DIR/elsewhere/meta-hop"
+    chmod 755 "$META_DATA/plugins/v1/meta-sub" "$TEST_DIR/elsewhere/meta-hop"
+    ln -s "$TEST_DIR/elsewhere/meta-hop" "$META_DATA/plugins/meta-hop"
+    # and through a directory link inside the refused dir
+    mkdir -p "$TEST_DIR/out"
+    printf '#!/bin/sh\ntouch "%s/ran-dir"\n' "$TEST_DIR" > "$TEST_DIR/out/meta-dir"
+    chmod 755 "$TEST_DIR/out/meta-dir"
+    ln -s "$TEST_DIR/out" "$META_DATA/plugins/forward"
+    ln -s "$META_DATA/plugins/forward/meta-dir" "$TEST_DIR/bin/meta-dir"
+    # and through a relative PATH entry with .. (run from frontend)
+    printf '#!/bin/sh\ntouch "%s/ran-rel"\n' "$TEST_DIR" > "$META_DATA/plugins/meta-rel"
+    chmod 755 "$META_DATA/plugins/meta-rel"
+    ln -s "$META_DATA/plugins/meta-rel" "$TEST_DIR/bin/meta-rel"
+    ln -s "$META_DATA/plugins/v1/meta-sub" "$TEST_DIR/bin/meta-sub"
+    ln -s "$META_DATA/plugins/meta-hop" "$TEST_DIR/bin/meta-hop"
+    PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" git worktree list
+    cd "$TEST_DIR/frontend"
+    PATH="../bin:$PATH" "$META_BIN" git worktree list >/dev/null 2>&1 || true
+    cd "$TEST_DIR"
+    chmod 700 "$META_DATA/plugins"
+    [ ! -e "$TEST_DIR/ran-rel" ]
+    [[ "$output" == *"skipping global plugins"* ]]
+    [[ "$output" == *"meta-planted: it links into a refused plugin directory"* ]]
+    [ ! -e "$TEST_DIR/ran" ]
+    [ ! -e "$TEST_DIR/ran-sub" ]
+    [ ! -e "$TEST_DIR/ran-hop" ]
+    [ ! -e "$TEST_DIR/ran-dir" ]
+}
+
+@test "a meta-* program in a group-writable PATH dir still loads" {
+    # Homebrew prefixes and umask 002 installs leave PATH dirs 0775; PATH
+    # is the user's own choice, like the git meta runs from it
+    mkdir -p "$TEST_DIR/gbin"
+    printf '#!/bin/sh\ntouch "%s/ran"\n' "$TEST_DIR" > "$TEST_DIR/gbin/meta-shared"
+    chmod 775 "$TEST_DIR/gbin" "$TEST_DIR/gbin/meta-shared"
+    PATH="$TEST_DIR/gbin:$PATH" run "$META_BIN" git worktree list
+    [[ "$output" != *"skipping plugin"* ]]
+    [ -e "$TEST_DIR/ran" ]
+}
+
+@test "a meta-* entry that is not a program is skipped without a warning" {
+    mkdir -p "$TEST_DIR/sub/.meta/plugins/meta-foo.dSYM"
+    ln -s "$TEST_DIR/nowhere" "$TEST_DIR/sub/.meta/plugins/meta-dangling"
+    cd "$TEST_DIR/sub"
+    run "$META_BIN" git worktree list
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"skipping plugin"* ]]
+}
+
+@test "a failed create leaves a foreign entry at the worktree path in place" {
+    # A dangling link at the worktree path passes the first existence check,
+    # as a directory made by a concurrent create of the same name would;
+    # create must fail without removing it
+    mkdir -p "$TEST_DIR/.worktrees"
+    ln -s "$TEST_DIR/elsewhere" "$TEST_DIR/.worktrees/taken"
+    run "$META_BIN" git worktree create taken --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already exists"* || "$output" == *"Refusing to use worktree 'taken'"* ]]
+    [ -L "$TEST_DIR/.worktrees/taken" ]
+}
+
+@test "worktree create refuses a destination the root checkout made a symlink" {
+    # The root repo tracks a symlink named like a project; checking out the
+    # root worktree recreates it where that project's worktree would go
+    OUTSIDE="$(mktemp -d)"
+    ln -s "$OUTSIDE" "$TEST_DIR/evil"
+    cat > "$TEST_DIR/.meta.json" <<'J'
+{"projects": {"evil": {"repo": "git@github.com:org/backend.git", "path": "backend"}}}
+J
+    git -C "$TEST_DIR" add evil .meta.json
+    git -C "$TEST_DIR" commit --quiet -m "track a symlink"
+
+    run "$META_BIN" git worktree create t --repo . --repo evil
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to add the worktree for 'evil'"* ]]
+    [ -z "$(ls -A "$OUTSIDE")" ]
+    [ ! -e "$TEST_DIR/.worktrees/t" ]
+    rm -rf "$OUTSIDE"
+}
+
+@test "a create that could not be recorded can be retried with --from-ref" {
+    git -C backend branch base-ref
+    : > "$TEST_DIR/not-a-dir"
+    META_DATA_DIR="$TEST_DIR/not-a-dir" run "$META_BIN" git worktree create fr --repo backend --from-ref base-ref
+    [ "$status" -ne 0 ]
+    # The branch it made is gone with the worktree, so -b works again
+    run "$META_BIN" git worktree create fr --repo backend --from-ref base-ref
+    [ "$status" -eq 0 ]
+}
+
+@test "worktrees are not kept where a .worktrees symlink or worktrees_dir points outside" {
+    OUTSIDE="$(mktemp -d)"
+    ln -s "$OUTSIDE" "$TEST_DIR/.worktrees"
+    run "$META_BIN" git worktree create out --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to keep worktrees in"* ]]
+    [ -z "$(ls -A "$OUTSIDE")" ]
+    rm "$TEST_DIR/.worktrees"
+
+    cat > "$TEST_DIR/.meta.json" <<J
+{"projects": {"backend": "git@github.com:org/backend.git"}, "worktrees_dir": "$OUTSIDE"}
+J
+    run "$META_BIN" git worktree create out --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Invalid worktrees_dir"* ]]
+    [ -z "$(ls -A "$OUTSIDE")" ]
+    rm -rf "$OUTSIDE"
+}
+
+@test "create does not take a symlinked intermediate parent as a repo" {
+    # vendor links to an unrelated repo that holds the lib repo; vendor is
+    # no project, so create falls back to the directory, which must refuse
+    mkdir -p "$TEST_DIR/unrelated/lib"
+    for repo in unrelated unrelated/lib; do
+        git -C "$TEST_DIR/$repo" init --quiet --initial-branch=main
+        git -C "$TEST_DIR/$repo" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    done
+    ln -s unrelated "$TEST_DIR/vendor"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "vendor/lib": "git@github.com:org/lib.git"}}
+EOF
+    RUST_LOG=warn run "$META_BIN" git worktree create via-link --no-deps --repo vendor/lib
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Intermediate parent 'vendor' is not a plain directory inside the workspace, skipping"* ]]
+    [ "$(git -C "$TEST_DIR/unrelated" worktree list | wc -l)" -eq 1 ]
+    ! git -C "$TEST_DIR/unrelated" rev-parse --verify --quiet refs/heads/via-link
+}
+
+@test "worktree add rechecks a destination after an earlier add in the same call" {
+    OUT="$(mktemp -d)"
+    # group is a nested meta repo with its own core repo inside
+    mkdir -p "$TEST_DIR/group"
+    git -C "$TEST_DIR/group" init --quiet --initial-branch=main
+    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta"
+    printf 'core/\n' > "$TEST_DIR/group/.gitignore"
+    git -C "$TEST_DIR/group" add .meta .gitignore
+    git -C "$TEST_DIR/group" -c user.email=t@t -c user.name=t commit --quiet -m init
+    git init --quiet --initial-branch=main "$TEST_DIR/group/core"
+    git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    # Branch "linked" of group tracks core as a symlink out of the workspace
+    git clone --quiet "$TEST_DIR/group" "$OUT/clone"
+    git -C "$OUT/clone" checkout --quiet -b linked
+    git -C "$OUT/clone" rm --quiet .gitignore
+    ln -s "$OUT/target" "$OUT/clone/core"
+    git -C "$OUT/clone" add core
+    git -C "$OUT/clone" -c user.email=t@t -c user.name=t commit --quiet -m link
+    git -C "$OUT/clone" push --quiet origin linked
+    mkdir "$OUT/target"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
+EOF
+    run "$META_BIN" git worktree create linkset --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree add linkset --repo group:linked --repo group/core
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to add the worktree for 'group/core'"* ]]
+    [ -z "$(ls -A "$OUT/target")" ]
+    # The add that did happen is recorded
+    grep -q '"alias": "group"' "$META_DATA/worktree.json"
+    rm -rf "$OUT"
+}
+
+@test "worktree add records what it added when a later parent dir cannot be made" {
+    mkdir -p "$TEST_DIR/group/deep/lib"
+    git -C "$TEST_DIR/group" init --quiet --initial-branch=main
+    printf '{"projects": {"deep/lib": "git@github.com:org/lib.git"}}' > "$TEST_DIR/group/.meta"
+    git -C "$TEST_DIR/group/deep/lib" init --quiet --initial-branch=main
+    git -C "$TEST_DIR/group/deep/lib" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "frontend": "git@github.com:org/frontend.git",
+              "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
+EOF
+    run "$META_BIN" git worktree create partial --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    mkdir "$TEST_DIR/.worktrees/partial/group"
+    chmod 555 "$TEST_DIR/.worktrees/partial/group"
+    run "$META_BIN" git worktree add partial --repo frontend --repo group/deep/lib
+    chmod 755 "$TEST_DIR/.worktrees/partial/group"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cannot create"* ]]
+    [ -d "$TEST_DIR/.worktrees/partial/frontend" ]
+    grep -q '"alias": "frontend"' "$META_DATA/worktree.json"
+}
+
+@test "worktree add refuses a repo given twice before adding anything" {
+    run "$META_BIN" git worktree create add-twice --repo backend
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree add add-twice --repo frontend:x --repo frontend:y
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Repo 'frontend' is given twice"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/add-twice/frontend" ]
+}
+
+@test "worktree add fails when the store cannot be updated" {
+    run "$META_BIN" git worktree create add-ro --repo backend
+    [ "$status" -eq 0 ]
+    chmod 500 "$META_DATA"
+    run "$META_BIN" git worktree add add-ro --repo frontend
+    chmod 700 "$META_DATA"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"could not update the worktree store"* ]]
+}
+
+@test "a worktree set that is a symlink out of the worktree root is refused" {
+    OUTSIDE="$(mktemp -d)"
+    echo keep > "$OUTSIDE/file"
+    mkdir -p "$TEST_DIR/.worktrees"
+    ln -s "$OUTSIDE" "$TEST_DIR/.worktrees/review"
+    run "$META_BIN" git worktree remove --force review
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Refusing to use worktree 'review'"* ]]
+    [ -f "$OUTSIDE/file" ]
+    rm -rf "$OUTSIDE"
+}
+
+@test "a repeated --repo creates the worktree once and keeps it" {
+    run "$META_BIN" git worktree create dup HEAD --no-deps --repo backend --repo backend
+    [ "$status" -eq 0 ]
+    [ -d "$TEST_DIR/.worktrees/dup/backend" ]
+}
+
+@test "a plain project check does not read a child's own .meta" {
+    # The built project plugin, not one that happens to be on PATH
+    cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/"
+    ln -s missing.json "$TEST_DIR/frontend/.meta"
+    run "$META_BIN" project check
+    [ "$status" -eq 0 ]
+    # From a subdirectory with no config of its own, the workspace's counts
+    mkdir -p "$TEST_DIR/docs"
+    (cd "$TEST_DIR/docs" && "$META_BIN" project check)
+    run "$META_BIN" project check --recursive
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cannot read"* ]]
+}
+
+@test "meta git status and project check fail on a refused .meta" {
+    echo '{"projects": {"evil": {"repo": "u", "path": "../../outside"}}}' > "$TEST_DIR/.meta.json"
+    run "$META_BIN" git status
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"must not contain '..'"* ]]
+    run "$META_BIN" project check --recursive
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"must not contain '..'"* ]]
+}
+
+@test "prune does not follow a worktree path that became a symlink" {
+    run "$META_BIN" git worktree create swapped --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    sleep 2
+    # Elsewhere: another repo's linked worktree with uncommitted work
+    OUTSIDE="$(mktemp -d)"
+    git -C frontend worktree add --quiet "$OUTSIDE/wt" -b outside-wt
+    echo mine > "$OUTSIDE/wt/mine"
+    # The expired worktree's directory is swapped for a link to it, in place
+    mv "$TEST_DIR/.worktrees/swapped" "$TEST_DIR/swapped-moved"
+    ln -s "$OUTSIDE" "$TEST_DIR/.worktrees/swapped"
+    run "$META_BIN" git worktree prune
+    [[ "$output" == *"meta doesn't delete through links"* ]]
+    [ -f "$OUTSIDE/wt/mine" ]
+    rm -rf "$OUTSIDE"
+}
+
+@test "prune does not follow a directory above a worktree that became a symlink" {
+    OUT="$(mktemp -d)"
+    META_WORKTREES="$OUT/sets" run "$META_BIN" git worktree create old --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    sleep 2
+    # Another live, clean checkout named like the expired set
+    git -C frontend worktree add --quiet "$OUT/live/old" -b live-old
+    # The directory above the expired set is swapped for a link to it
+    mv "$OUT/sets" "$OUT/sets-moved"
+    ln -s "$OUT/live" "$OUT/sets"
+    run "$META_BIN" git worktree prune
+    [[ "$output" == *"a directory above it now leads elsewhere through a symlink"* ]]
+    [ -d "$OUT/live/old" ]
+    [ -e "$OUT/live/old/.git" ]
+    rm -rf "$OUT"
+}
+
+@test "prune removes a worktree made under META_WORKTREES when run without it" {
+    CUSTOM="$(mktemp -d)"
+    META_WORKTREES="$CUSTOM" run "$META_BIN" git worktree create elsewhere --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    [ -d "$CUSTOM/elsewhere/backend" ]
+    sleep 2
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [ ! -e "$CUSTOM/elsewhere" ]
+    rm -rf "$CUSTOM"
+}
+
+@test "prune does not follow an expired set swapped for a link to a live one" {
+    run "$META_BIN" git worktree create old --repo backend --ttl 1s
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree create live --repo frontend
+    [ "$status" -eq 0 ]
+    echo mine > "$TEST_DIR/.worktrees/live/frontend/mine"
+    sleep 2
+    mv "$TEST_DIR/.worktrees/old" "$TEST_DIR/old-moved"
+    ln -s "$TEST_DIR/.worktrees/live" "$TEST_DIR/.worktrees/old"
+    run "$META_BIN" git worktree prune
+    [ -f "$TEST_DIR/.worktrees/live/frontend/mine" ]
+    run "$META_BIN" git worktree remove --force old
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"is a symlink"* ]]
+    [ -f "$TEST_DIR/.worktrees/live/frontend/mine" ]
+}
+
+@test "a .worktrees link into .git is refused" {
+    ln -s .git "$TEST_DIR/.worktrees"
+    run "$META_BIN" git worktree remove --force objects
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"leads into .git"* ]]
+    [ -d "$TEST_DIR/.git/objects" ]
+}
+
+# A bare origin for backend holding main and a branch only it has
+add_backend_origin() {
+    git init --quiet --bare "$TEST_DIR/backend-origin.git"
+    git -C backend remote add origin "$TEST_DIR/backend-origin.git"
+    git -C backend push --quiet origin main
+    git -C backend push --quiet origin main:remote-only
+    git -C backend fetch --quiet origin
+}
+
+@test "the git plugin run directly holds worktrees_dir to the config rules" {
+    cat > "$TEST_DIR/.meta.json" <<'J'
+{"projects": {"backend": "git@github.com:org/backend.git"}, "worktrees_dir": "backend"}
+J
+    mkdir -p backend/src
+    echo keep > backend/src/file
+    run "$META_GIT_BIN" --meta-plugin-exec <<J
+{"command": "worktree", "args": ["remove", "src"], "projects": [], "cwd": "$TEST_DIR"}
+J
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Invalid project 'backend'"* ]]
+    [ -f backend/src/file ]
+}
+

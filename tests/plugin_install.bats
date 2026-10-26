@@ -216,3 +216,65 @@ EOF
     [ "$status" -ne 0 ]
     # The implementation should show it's trying to install locally
 }
+
+@test "plugin search escapes text from the registry index" {
+    mkdir -p "$HOME_DIR/reg/plugins"
+    cat > "$HOME_DIR/reg/plugins/index.json" <<'EOF'
+{"plugins": {"evil": {"name": "evil\u001b]0;T\u0007", "description": "d\u001b[2J",
+  "version": "1\u001b[31m", "author": "a\u001b]52;c;eA==\u0007"}}}
+EOF
+    python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$HOME_DIR/reg" > "$HOME_DIR/srv.log" 2>&1 &
+    SRV=$!
+    for _ in $(seq 50); do grep -q 'port [0-9]' "$HOME_DIR/srv.log" && break; sleep 0.1; done
+    PORT="$(grep -o 'port [0-9]*' "$HOME_DIR/srv.log" | head -1 | cut -d' ' -f2)"
+    mkdir -p "$META_DATA_DIR"
+    chmod 700 "$META_DATA_DIR"
+    printf 'registries:\n  - http://127.0.0.1:%s\n' "$PORT" > "$META_DATA_DIR/config.yaml"
+    chmod 600 "$META_DATA_DIR/config.yaml"
+    run "$META_BIN" plugin search evil
+    kill "$SRV"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'evil\u{1b}]0;T\u{7}'* ]]
+    [[ "$output" == *'d\u{1b}[2J'* ]]
+    [[ "$output" == *'a\u{1b}]52;c;eA==\u{7}'* ]]
+    [[ "$output" != *$'\e'* ]]
+}
+
+@test "plugin update refuses a local plugins dir other users can write" {
+    mkdir -p "$TEST_DIR/.meta/plugins"
+    printf '{"plugins": {}}' > "$TEST_DIR/.meta/plugins/.manifest.json"
+    chmod 600 "$TEST_DIR/.meta/plugins/.manifest.json"
+    chmod 777 "$TEST_DIR/.meta/plugins"
+    run "$META_BIN" plugin update --local --check
+    chmod 700 "$TEST_DIR/.meta/plugins"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"other users can write to it"* ]]
+}
+
+@test "plugin update refuses a manifest other users can change" {
+    mkdir -p "$META_DATA_DIR/plugins"
+    chmod 700 "$META_DATA_DIR" "$META_DATA_DIR/plugins"
+    printf '{"plugins": {"x": {"source": "evil/x", "version": "0.0.1", "installed": "2026-01-01T00:00:00Z", "platform": "linux-x86_64"}}}' > "$META_DATA_DIR/plugins/.manifest.json"
+    chmod 666 "$META_DATA_DIR/plugins/.manifest.json"
+    run "$META_BIN" plugin update --check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *".manifest.json"* ]]
+}
+
+@test "log records escape control characters from registry config" {
+    mkdir -p "$META_DATA_DIR"
+    chmod 700 "$META_DATA_DIR"
+    # Port 9 refuses at once; the URL is only logged, never reached
+    printf 'registries:\n  - "http://127.0.0.1:9/r\\e[31m"\n' > "$META_DATA_DIR/config.yaml"
+    chmod 600 "$META_DATA_DIR/config.yaml"
+    RUST_LOG=debug run "$META_BIN" plugin search anything
+    [[ "$output" == *'Fetching registry index from: http://127.0.0.1:9/r\u{1b}[31m'* ]]
+    [[ "$output" != *$'\e'* ]]
+}
+
+@test "plugin list --local works in a workspace whose .meta is the config file" {
+    printf '{"projects": {}}' > "$TEST_DIR/.meta"
+    run "$META_BIN" plugin list --local
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No project-local plugins installed"* ]]
+}

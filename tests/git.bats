@@ -748,3 +748,80 @@ EOF
 EOF
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only | LC_ALL=C sort | tr '\n' ' ')" = "--help -h " ]
 }
+
+@test "meta git commit --edit uses a private temp file it removes" {
+    export META_DATA_DIR="$TEST_DIR/data"
+    mkdir -p "$META_DATA_DIR"
+    chmod 700 "$META_DATA_DIR"
+    LOG="$TEST_DIR/editor.log"
+    printf '#!/bin/sh\necho "$1 $(ls -l "$1" | cut -c1-10)" >> "%s"\nexit "${EDITOR_EXIT:-0}"\n' "$LOG" > "$TEST_DIR/editor"
+    chmod 755 "$TEST_DIR/editor"
+    echo change >> "$TEST_DIR/frontend/README.md"
+    git -C "$TEST_DIR/frontend" add README.md
+
+    # The editor leaves every message empty, so nothing is committed
+    EDITOR="$TEST_DIR/editor" run "$META_BIN" git commit --edit
+    EDITOR="$TEST_DIR/editor" EDITOR_EXIT=1 run "$META_BIN" git commit --edit
+    [ "$status" -ne 0 ]
+
+    [ "$(wc -l < "$LOG")" -eq 2 ]
+    first="$(sed -n 1p "$LOG" | cut -d' ' -f1)"
+    second="$(sed -n 2p "$LOG" | cut -d' ' -f1)"
+    [ "$first" != "$second" ]
+    for path in "$first" "$second"; do
+        [[ "$path" == "$META_DATA_DIR/tmp/META_COMMIT_EDITMSG-"* ]]
+        [ ! -e "$path" ]
+    done
+    [ "$(grep -c -- ' -rw-------$' "$LOG")" -eq 2 ]
+}
+
+@test "meta git commit escapes repo paths in its summary" {
+    WS="$TEST_DIR/ws"$'\e[2J'
+    mkdir -p "$WS"
+    git -C "$WS" init --quiet -b main
+    git init --quiet -b main "$WS/api"
+    git -C "$WS/api" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    printf '{"projects": {"api": "git@github.com:org/api.git"}}' > "$WS/.meta"
+    echo x > "$WS/api/file"
+    git -C "$WS/api" add file
+    cd "$WS"
+    run "$META_BIN" git commit
+    [[ "$output" == *'ws\u{1b}[2J'* ]]
+    [[ "$output" != *$'\e'* ]]
+}
+
+@test "meta git update fails on a nested .meta it cannot read" {
+    mkdir -p "$TEST_DIR/private"
+    printf '{"projects": {}}' > "$TEST_DIR/private/config.json"
+    ln -s ../private/config.json "$TEST_DIR/frontend/.meta"
+    chmod 000 "$TEST_DIR/private"
+    run "$META_BIN" git update
+    chmod 700 "$TEST_DIR/private"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cannot read"*"frontend/.meta"* ]]
+}
+
+@test "meta git clone fails when a cloned repo's nested .meta is refused" {
+    UP="$(mktemp -d)"
+    # bare_with_meta NAME JSON: a bare repo whose only commit holds .meta = JSON
+    bare_with_meta() {
+        git init --bare --quiet -b main "$UP/$1.git"
+        git clone --quiet "$UP/$1.git" "$UP/work-$1" 2>/dev/null
+        printf '%s\n' "$2" > "$UP/work-$1/.meta"
+        git -C "$UP/work-$1" add .meta
+        git -C "$UP/work-$1" -c user.email=t@t -c user.name=t commit --quiet -m meta
+        git -C "$UP/work-$1" push --quiet origin HEAD:main
+    }
+    bare_with_meta child '{"projects": {"x": {"repo": "u", "path": "../../outside"}}}'
+    bare_with_meta root "{\"projects\": {\"child\": {\"repo\": \"$UP/child.git\", \"meta\": true}, \"gone\": \"$UP/gone.git\"}}"
+
+    cd "$TEST_DIR"
+    run "$META_BIN" git clone --recursive "$UP/root.git" "$UP/clone"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Could not read nested .meta configs"* ]]
+    [[ "$output" == *"must not contain '..'"* ]]
+    # A failed clone is still reported alongside it
+    [[ "$output" == *"Failed to clone"*"gone"* ]]
+    [ ! -e "$UP/outside" ]
+    rm -rf "$UP"
+}

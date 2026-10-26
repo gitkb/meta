@@ -172,3 +172,19 @@ teardown() {
     [[ "$output" == *"bash:"* ]]
     [ ! -d "$TEST_DIR/.worktrees/preview" ]
 }
+
+@test "help lists cargo but not the rust plugin name as a command" {
+    run "$META_BIN" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ [[:space:]]cargo[[:space:]] ]]
+    ! printf '%s\n' "$output" | grep -Eq '^  rust[[:space:]]'
+}
+
+@test "unknown command errors and suggestions escape controls and newlines" {
+    run "$META_BIN" $'bad\033[31m\nFORGED'
+    [ "$status" -ne 0 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    [[ "${lines[0]}" == *'bad\u{1b}[31m\nFORGED'* ]]
+    [[ "$output" == *'meta exec --'*'\nFORGED'* ]]
+}

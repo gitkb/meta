@@ -359,3 +359,13 @@ J
     [[ "$output" != *$'\a'* ]]
     [[ "$output" == *'x\u{1b}]0;TITLE\u{7}'* ]]
 }
+
+@test "project list refuses include and exclude instead of ignoring them" {
+    for flag in --include --exclude; do
+        for command in list ls; do
+            run "$META_BIN" "$flag" frontend project "$command" --recursive --json
+            [ "$status" -ne 0 ]
+            [[ "$output" == *"meta project list does not take --include/--exclude"* ]]
+        done
+    done
+}

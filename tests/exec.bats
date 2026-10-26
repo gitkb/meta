@@ -677,3 +677,41 @@ EOF
     [[ "$output" == *"project 'other' (path 'api') is at or inside project 'api'"* ]]
     [ -z "$(find "$TEST_DIR" -name ran)" ]
 }
+
+@test "exec stdout broken pipe exits quietly without a panic" {
+    for mode in --parallel --sequential; do
+        run bash -c 'set -o pipefail; "$1" "$2" exec -- seq 1 20000 2>"$3" | head -1' _ "$META_BIN" "$mode" "$TEST_DIR/stderr"
+        [[ "$status" -eq 0 || "$status" -eq 141 ]]
+        [ ! -s "$TEST_DIR/stderr" ]
+    done
+}
+
+@test "include and exclude errors escape controls and stay on one line" {
+    for flag in --include --exclude; do
+        run "$META_BIN" "$flag" $'bad\033[31m\nFORGED' exec -- echo hello
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\n'* ]]
+        [[ "$output" == *'bad\u{1b}[31m\nFORGED'* ]]
+    done
+}
+
+@test "plugin closing stdin still reports an error instead of SIGPIPE death" {
+    cat > .meta/plugins/meta-close <<'SH'
+#!/bin/sh
+if [ "$1" = --meta-plugin-info ]; then
+    printf '%s\n' '{"name":"close","version":"1","commands":["close"]}'
+else
+    exec 0<&-
+    exit 0
+fi
+SH
+    chmod +x .meta/plugins/meta-close
+    # Exceed the pipe buffer so the write cannot finish before the reader closes.
+    local large
+    large="$(python3 -c 'print("x" * 100000)')"
+    run "$META_BIN" close "$large"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error:"* ]]
+    [[ "$output" != *"panicked"* ]]
+}

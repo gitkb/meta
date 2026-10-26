@@ -796,6 +796,12 @@ EOF
     printf '#!/bin/sh\ntouch "%s/ran-hop"\n' "$TEST_DIR" > "$TEST_DIR/elsewhere/meta-hop"
     chmod 755 "$META_DATA/plugins/v1/meta-sub" "$TEST_DIR/elsewhere/meta-hop"
     ln -s "$TEST_DIR/elsewhere/meta-hop" "$META_DATA/plugins/meta-hop"
+    # and through a directory link inside the refused dir
+    mkdir -p "$TEST_DIR/out"
+    printf '#!/bin/sh\ntouch "%s/ran-dir"\n' "$TEST_DIR" > "$TEST_DIR/out/meta-dir"
+    chmod 755 "$TEST_DIR/out/meta-dir"
+    ln -s "$TEST_DIR/out" "$META_DATA/plugins/forward"
+    ln -s "$META_DATA/plugins/forward/meta-dir" "$TEST_DIR/bin/meta-dir"
     ln -s "$META_DATA/plugins/v1/meta-sub" "$TEST_DIR/bin/meta-sub"
     ln -s "$META_DATA/plugins/meta-hop" "$TEST_DIR/bin/meta-hop"
     PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" git worktree list
@@ -805,6 +811,7 @@ EOF
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/ran-sub" ]
     [ ! -e "$TEST_DIR/ran-hop" ]
+    [ ! -e "$TEST_DIR/ran-dir" ]
 }
 
 @test "a meta-* program in a group-writable PATH dir still loads" {
@@ -1000,6 +1007,15 @@ EOF
     run "$META_BIN" git worktree create dup HEAD --no-deps --repo backend --repo backend
     [ "$status" -eq 0 ]
     [ -d "$TEST_DIR/.worktrees/dup/backend" ]
+}
+
+@test "a plain project check does not read a child's own .meta" {
+    ln -s missing.json "$TEST_DIR/frontend/.meta"
+    run "$META_BIN" project check
+    [ "$status" -eq 0 ]
+    run "$META_BIN" project check --recursive
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cannot read"* ]]
 }
 
 @test "meta git status and project check fail on a refused .meta" {

@@ -271,3 +271,10 @@ EOF
     [[ "$output" == *'Fetching registry index from: http://127.0.0.1:9/r\u{1b}[31m'* ]]
     [[ "$output" != *$'\e'* ]]
 }
+
+@test "plugin list --local works in a workspace whose .meta is the config file" {
+    printf '{"projects": {}}' > "$TEST_DIR/.meta"
+    run "$META_BIN" plugin list --local
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No project-local plugins installed"* ]]
+}

@@ -631,15 +631,16 @@ EOF
 }
 
 @test "--recursive with --config expands each nested meta repo once" {
-    mkdir -p "$TEST_DIR/child" "$TEST_DIR/legacy"
+    mkdir -p "$TEST_DIR/child/inner" "$TEST_DIR/legacy"
     cat > "$TEST_DIR/.meta.json" <<'EOF'
 { "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
 EOF
     cat > "$TEST_DIR/child/.meta.json" <<'EOF'
-{ "projects": {} }
+{ "projects": { "inner": "git@github.com:org/inner.git" } }
 EOF
-    # pwd prints the physical path (macOS temp dirs sit behind a symlink)
-    legacy="$(cd "$TEST_DIR/legacy" && pwd -P)"
+    # pwd prints the physical path (macOS temp dirs sit behind a symlink);
+    # the nested project is where expanding twice would show
+    legacy="$(cd "$TEST_DIR/child/inner" && pwd -P)"
     run "$META_BIN" --recursive exec -- pwd
     [ "$status" -eq 0 ]
     default_runs="$(grep -cx "$legacy" <<<"$output" || true)"

@@ -22,6 +22,9 @@ setup() {
     export ORIGINAL_HOME="$HOME"
     export ORIGINAL_PATH="$PATH"
     export HOME="$HOME_DIR"
+    export XDG_CONFIG_HOME="$HOME_DIR/xdg"
+    export XDG_DATA_HOME="$HOME_DIR/xdg/data"
+    export GIT_CONFIG_GLOBAL="$HOME_DIR/gitconfig"
     export META_DATA_DIR="$HOME_DIR/.meta"
     # Build a minimal PATH that excludes the global meta plugins directory
     NEW_PATH=""
@@ -155,18 +158,21 @@ teardown() {
 }
 
 @test "plugin list --local in workspace with no plugins" {
-    # Create a workspace
-    mkdir -p "$TEST_DIR/.meta"
+    # A config file establishes a workspace.
+    printf 'projects: {}\n' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" plugin list --local
     [ "$status" -eq 0 ]
     [[ "$output" =~ "No project-local plugins installed" ]]
 }
 
 @test "plugin list --local shows only local plugins" {
-    # Create workspace with local plugin directory
+    # Create workspace with local plugin directory.
+    printf 'projects: {}\n' > "$TEST_DIR/.meta.yaml"
     mkdir -p "$TEST_DIR/.meta/plugins"
-    echo '#!/bin/bash' > "$TEST_DIR/.meta/plugins/meta-local-test"
-    echo 'echo "local plugin"' >> "$TEST_DIR/.meta/plugins/meta-local-test"
+    cat > "$TEST_DIR/.meta/plugins/meta-local-test" <<'PLUGIN'
+#!/bin/sh
+echo '{"name":"local-test","version":"2.0.0","commands":["local-test"]}'
+PLUGIN
     chmod +x "$TEST_DIR/.meta/plugins/meta-local-test"
 
     # Create manifest
@@ -183,13 +189,19 @@ teardown() {
 }
 EOF
 
+    mkdir -p "$TEST_DIR/sub/dir"
+    cd "$TEST_DIR/sub/dir"
     run "$META_BIN" plugin list --local
     [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/.meta/plugins/meta-local-test"* ]]
+    [[ "$output" == *"2.0.0"* ]]
+    [[ "$output" != *"v1.0.0"* ]]
     [[ "$output" =~ "local-test" ]]  # meta- prefix is stripped in output
     [[ "$output" =~ "Project-local plugins" ]]
 }
 
 @test "plugin uninstall --local fails when plugin not installed" {
+    printf 'projects: {}\n' > "$TEST_DIR/.meta.yaml"
     mkdir -p "$TEST_DIR/.meta/plugins"
     run "$META_BIN" plugin uninstall --local nonexistent-plugin
     [ "$status" -ne 0 ]
@@ -197,8 +209,8 @@ EOF
 }
 
 @test "plugin install --local to .meta/plugins succeeds with workspace" {
-    # Create a valid workspace
-    mkdir -p "$TEST_DIR/.meta"
+    # Create a valid workspace.
+    printf 'projects: {}\n' > "$TEST_DIR/.meta.yaml"
 
     # This will fail because there's no actual release, but should recognize it as a workspace
     run "$META_BIN" plugin install --local test-user/meta-test-plugin
@@ -209,6 +221,7 @@ EOF
 }
 
 @test "plugin commands show location in output" {
+    printf 'projects: {}\n' > "$TEST_DIR/.meta.yaml"
     mkdir -p "$TEST_DIR/.meta/plugins"
 
     # Test that error messages mention the location

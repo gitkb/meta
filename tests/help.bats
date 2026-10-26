@@ -93,6 +93,7 @@ teardown() {
 
 @test "nested plugin help does not require a meta config" {
     cd "$NO_CONFIG_DIR"
+    export PATH="$NO_CONFIG_DIR/.meta/plugins:$PATH"
 
     run "$META_BIN" git worktree --help
     [ "$status" -eq 0 ]
@@ -106,6 +107,7 @@ teardown() {
 
 @test "cargo help uses the simple plugin help without side effects" {
     cd "$NO_CONFIG_DIR"
+    export PATH="$NO_CONFIG_DIR/.meta/plugins:$PATH"
 
     for command in "cargo --help" "cargo build --help"; do
         run "$META_BIN" $command

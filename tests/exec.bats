@@ -676,14 +676,3 @@ EOF
     [[ "$output" == *"project 'other' (path 'api') is at or inside project 'api'"* ]]
     [ -z "$(find "$TEST_DIR" -name ran)" ]
 }
-
-@test "debug logs escape control characters in paths" {
-    WS="$TEST_DIR/ws"$'\e[31m'
-    mkdir -p "$WS/api"
-    printf '{"projects": {"api": "git@github.com:org/api.git"}}' > "$WS/.meta"
-    cd "$WS"
-    RUST_LOG=debug run "$META_BIN" exec -- true
-    [ "$status" -eq 0 ]
-    [[ "$output" == *'ws\u{1b}[31m'* ]]
-    [[ "$output" != *$'\e'* ]]
-}

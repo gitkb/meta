@@ -853,6 +853,15 @@ J
     rm -rf "$OUTSIDE"
 }
 
+@test "worktree add refuses a repo given twice before adding anything" {
+    run "$META_BIN" git worktree create add-twice --repo backend
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree add add-twice --repo frontend:x --repo frontend:y
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Repo 'frontend' is given twice"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/add-twice/frontend" ]
+}
+
 @test "worktree add fails when the store cannot be updated" {
     run "$META_BIN" git worktree create add-ro --repo backend
     [ "$status" -eq 0 ]

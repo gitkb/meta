@@ -254,9 +254,20 @@ EOF
 @test "plugin update refuses a manifest other users can change" {
     mkdir -p "$META_DATA_DIR/plugins"
     chmod 700 "$META_DATA_DIR" "$META_DATA_DIR/plugins"
-    printf '{"plugins": {"x": {"source": "evil/x", "version": "0.0.1", "installed_at": "2026-01-01T00:00:00Z"}}}' > "$META_DATA_DIR/plugins/.manifest.json"
+    printf '{"plugins": {"x": {"source": "evil/x", "version": "0.0.1", "installed": "2026-01-01T00:00:00Z", "platform": "linux-x86_64"}}}' > "$META_DATA_DIR/plugins/.manifest.json"
     chmod 666 "$META_DATA_DIR/plugins/.manifest.json"
     run "$META_BIN" plugin update --check
     [ "$status" -ne 0 ]
     [[ "$output" == *".manifest.json"* ]]
+}
+
+@test "log records escape control characters from registry config" {
+    mkdir -p "$META_DATA_DIR"
+    chmod 700 "$META_DATA_DIR"
+    # Port 9 refuses at once; the URL is only logged, never reached
+    printf 'registries:\n  - "http://127.0.0.1:9/r\\e[31m"\n' > "$META_DATA_DIR/config.yaml"
+    chmod 600 "$META_DATA_DIR/config.yaml"
+    RUST_LOG=debug run "$META_BIN" plugin search anything
+    [[ "$output" == *'Fetching registry index from: http://127.0.0.1:9/r\u{1b}[31m'* ]]
+    [[ "$output" != *$'\e'* ]]
 }

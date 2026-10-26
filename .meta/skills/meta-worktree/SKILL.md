@@ -163,14 +163,15 @@ meta git worktree prune                    # remove expired (TTL) and orphaned s
 `remove` and `prune` delete only sets meta created, and check every repo in the
 set first, nested ones included: uncommitted or untracked changes, commits on
 no branch, and files outside every repo count as work. `remove` refuses such a
-set unless `--force`; `prune` keeps it. `prune` sees the sets recorded in the
-current workspace's repositories (including sets made from other checkouts of
-them), not every set on the machine. `--force` and `exec --ephemeral` discard that work: commit and
-push first.
+set unless `--force`; `prune` keeps it. Both act only on sets of the current
+workspace: sets whose every worktree is recorded in one of the workspace's
+repositories. Another workspace's set is never touched, even when both share a
+`META_WORKTREES` directory; `remove` refuses it and names its workspace.
+`--force` and `exec --ephemeral` discard that work: commit and push first.
 
 ## Lifecycle Hooks
 
-Configure hooks in the meta config (`.meta`, `.meta.json`, `.meta.yaml` or `.meta.yml`):
+Configure hooks in the meta config (`.meta.yaml`, `.meta.yml`, `.meta.json` or the legacy `.meta`):
 
 ```yaml
 worktree:
@@ -190,14 +191,17 @@ into git's own directory for that worktree, `<repo>/.git/worktrees/<id>/meta-wor
 with the set's path, its project, when it was created, and its TTL, ephemeral
 flag and custom metadata. Git deletes the record with the worktree. The record
 is how `remove` and `prune` know meta made a set: a set made by hand, or by a
-meta from before records, is refused; remove it with `git worktree remove`.
+meta from before records, is refused, and so is a set holding a worktree meta
+has no record of (one added by hand with `git worktree add`); remove those with
+`git worktree remove`.
 `list` scans this project's `.worktrees/` and shows each set's record.
 
 ## Strict Mode
 
 `--strict` on `create` (or global `meta --strict`) turns warnings such as a
 missing commit-ish in one repo into errors. A create that fails is rolled back:
-the worktrees and branches it made are deleted again.
+the worktrees and branches it made are deleted again. If the rollback itself
+can't delete something, the error says what was left behind.
 
 ## Command Reference
 

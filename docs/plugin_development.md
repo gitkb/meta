@@ -70,18 +70,18 @@ import sys
 
 Meta discovers plugins from these locations (in order):
 
-1. `.meta-plugins/` in current directory
-2. `.meta-plugins/` in parent directories (up to root)
-3. `~/.meta-plugins/` in home directory
-4. System PATH (executables named `meta-*`)
+1. `.meta/plugins/` at the workspace root: the nearest directory at or above the current one that holds a meta config. `meta plugin install <name> --local` installs there.
+2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
+3. Executables named `meta-*` on PATH.
+
+The first plugin found with a given name wins. A plugins folder meta can't read, and a plugin that doesn't answer `--meta-plugin-info` within 5 seconds, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
 
 ### Naming Convention
 
 Plugins must follow the naming pattern:
 - `meta-<name>` (e.g., `meta-docker`, `meta-npm`)
-- Or `meta_<name>_cli` for Rust crates (e.g., `meta_git_cli`)
 
-Meta strips the prefix to determine the command. `meta-docker` handles `meta docker <subcommand>`.
+The commands a plugin handles are the ones its `--meta-plugin-info` lists, not its name: `meta-docker` listing `docker` handles `meta docker <subcommand>`, and `meta --help` shows the listed commands.
 
 ## Plugin Protocol
 
@@ -459,7 +459,7 @@ echo '{"command":"build","args":[],"projects":[{"name":"test","path":"./test"}],
 
 ```bash
 # Place plugin in discovery path
-cp meta-docker ~/.meta-plugins/
+cp meta-docker ~/.meta/plugins/
 
 # Test via meta
 meta docker build --dry-run
@@ -496,7 +496,7 @@ meta plugin install meta-docker
 
 1. Build for target platforms
 2. Distribute binaries or packages
-3. Users place in `~/.meta-plugins/` or PATH
+3. Users place in `~/.meta/plugins/` or PATH
 
 ## Troubleshooting
 
@@ -504,7 +504,8 @@ meta plugin install meta-docker
 
 - Ensure executable permissions: `chmod +x meta-plugin`
 - Check naming: must start with `meta-`
-- Verify location: `.meta-plugins/`, `~/.meta-plugins/`, or PATH
+- Verify location: `.meta/plugins/` at the workspace root, `~/.meta/plugins/`, or PATH
+- Make sure it answers `--meta-plugin-info` within 5 seconds
 - Use `META_DEBUG=1` for debug output
 
 ### Protocol Errors

@@ -369,9 +369,11 @@ meta exec --parallel -- cargo test
 ### Plugin Locations
 
 Plugins are discovered from:
-1. `.meta-plugins/` in current directory
-2. `~/.meta-plugins/` in home directory
-3. Executables named `meta-*` in PATH
+1. `.meta/plugins/` at the workspace root: the nearest directory at or above the current one that holds a meta config. `meta plugin install <name> --local` installs there.
+2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
+3. Executables named `meta-*` on PATH.
+
+The first plugin found with a given name wins. A plugins folder meta can't read, and a plugin that doesn't answer `--meta-plugin-info` within 5 seconds, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
 
 ### Plugin Protocol
 
@@ -413,6 +415,10 @@ meta plugin install meta-docker
 
 # List installed
 meta plugin list
+
+# This workspace only (.meta/plugins/ at its root)
+meta plugin install meta-docker --local
+meta plugin list --local
 ```
 
 ---

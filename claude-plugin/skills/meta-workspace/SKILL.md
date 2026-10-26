@@ -29,27 +29,27 @@ In a meta repo, changes often span multiple repositories. Using `meta` commands 
 - **Maintain consistency** - same commit message, same branch across repos
 - **Never miss a repo** - meta tracks them all
 
-## The .meta File
+## The Meta Config
 
-The `.meta` file defines child repositories:
+One config file in the workspace root defines the child repositories:
+`.meta.yaml` (or `.meta.yml`), or `.meta.json`.
 
-```json
-{
-  "projects": {
-    "api": "git@github.com:org/api.git",
-    "web": {
-      "repo": "git@github.com:org/web.git",
-      "path": "./frontend/web",
-      "tags": ["frontend", "typescript"]
-    }
-  }
-}
+```yaml
+projects:
+  api: git@github.com:org/api.git
+  web:
+    repo: git@github.com:org/web.git
+    path: frontend/web
+    tags: [frontend, typescript]
 ```
 
-**Simple format**: `"name": "git-url"` - clones to `./name`
+**Simple format**: `name: git-url` - clones to `./name`
 **Extended format**: Object with `repo`, optional `path`, optional `tags`
 
-`.meta.json`, `.meta.yaml` and `.meta.yml` are also supported.
+An older repo may use the legacy `.meta` file (JSON, no extension). It still
+works, but it takes the name of meta's `.meta/` folder (skills and
+project-local plugins): rename it with `git mv .meta .meta.json` (same content).
+Two config files in one directory are an error that names both; keep one.
 
 ## Discovering What's Here
 

@@ -12,7 +12,14 @@ meta init claude
 
 # Refresh skills and rules, keep settings.json
 meta init claude --update
+
+# Rewrite skills and rules meta installed, and merge settings.json
+meta init claude --force
 ```
+
+**settings.json.** `meta init claude` adds meta's hooks (`SessionStart` and `PreCompact` run `meta context`, `PreToolUse` runs `agent guard` for Bash) to `.claude/settings.json`, keeping everything else in it. It never replaces the file, `--force` included. It merges only into the layout Claude Code documents: a JSON object whose `hooks` is an object of arrays. Anything else (invalid JSON, an array, `hooks` or a hook event that isn't that shape) stops the command with an error naming the file and the key, before anything is written, so you can fix the file and rerun. The output says what it did: created the file, added which hooks, or found meta's hooks already there. `--update` leaves settings.json alone.
+
+**Plugin marketplace.** `meta init claude` writes only inside the repo. To get the same skills in every project through Claude Code's plugin system, run the two commands it prints: `claude plugin marketplace add gitkb/claude-plugins`, then `claude plugin install meta@gitkb`.
 
 Each skill is installed as `.meta/skills/<name>/SKILL.md` with `name`/`description` frontmatter, in meta's own `.meta/` folder, and linked into each agent's skills folder, the same way atc (`.atc/skills/`) and git-kb (`.kb/skills/`) install theirs:
 

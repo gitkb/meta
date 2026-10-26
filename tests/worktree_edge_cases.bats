@@ -149,7 +149,7 @@ teardown() {
     [[ "$output" == *"strict"* ]]
 }
 
-@test "global --strict affects worktree prune store errors" {
+@test "global --strict still lets a clean destroy succeed" {
     # Create a worktree then corrupt the store to test error handling (use --no-deps to avoid root)
     "$META_BIN" git worktree create prune-strict-test --repo backend --no-deps
     [ -d ".worktrees/prune-strict-test" ]
@@ -569,6 +569,12 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
 }
 
 @test "worktree remove fails when the store cannot be updated" {
+    cat > "$TEST_DIR/.meta.json" <<EOF
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "frontend": "git@github.com:org/frontend.git",
+              "common": "git@github.com:org/common.git"},
+ "worktree": {"hooks": {"post-destroy": "touch $TEST_DIR/hook-ran"}}}
+EOF
     run "$META_BIN" git worktree create store-ro --repo backend
     [ "$status" -eq 0 ]
 
@@ -577,6 +583,9 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     chmod 700 "$META_DATA"
     [ "$status" -ne 0 ]
     [[ "$output" == *"could not update the worktree store"* ]]
+    # The worktree is gone, so its hook ran and the removal is reported
+    [[ "$output" == *"✓ Removed worktree 'store-ro'"* ]]
+    [ -e "$TEST_DIR/hook-ran" ]
 }
 
 @test "a malformed store timestamp is escaped in the plugin's warning" {
@@ -634,6 +643,27 @@ EOF
     [[ "$output" == *"Permission denied"* ]]
 }
 
+@test "prune keeps a set whose nested config link cannot be followed" {
+    mkdir -p "$TEST_DIR/group/core" "$TEST_DIR/private"
+    git -C "$TEST_DIR/group/core" init --quiet --initial-branch=main
+    git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/private/config.json"
+    ln -s ../private/config.json "$TEST_DIR/group/.meta"
+    cat > "$TEST_DIR/.meta.json" <<'EOF'
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "frontend": "git@github.com:org/frontend.git",
+              "common": "git@github.com:org/common.git",
+              "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
+EOF
+    run "$META_BIN" git worktree create linked-live --no-deps --repo group/core
+    [ "$status" -eq 0 ]
+    chmod 000 "$TEST_DIR/private"
+    run "$META_BIN" git worktree prune
+    chmod 700 "$TEST_DIR/private"
+    [[ "$output" != *"orphaned"* ]]
+    [ -d "$TEST_DIR/.worktrees/linked-live/group/core" ]
+}
+
 @test "worktree create --no-deps refuses one repo on two branches" {
     run "$META_BIN" git worktree create two-nodeps --no-deps --repo backend:one --repo backend:two
     [ "$status" -ne 0 ]
@@ -651,6 +681,12 @@ EOF
 }
 
 @test "worktree prune fails when the store cannot be updated" {
+    cat > "$TEST_DIR/.meta.json" <<EOF
+{"projects": {"backend": "git@github.com:org/backend.git",
+              "frontend": "git@github.com:org/frontend.git",
+              "common": "git@github.com:org/common.git"},
+ "worktree": {"hooks": {"post-prune": "touch $TEST_DIR/hook-ran"}}}
+EOF
     run "$META_BIN" git worktree create prune-ro --repo backend --ttl 1s
     [ "$status" -eq 0 ]
     sleep 2
@@ -660,6 +696,9 @@ EOF
     chmod 700 "$META_DATA"
     [ "$status" -ne 0 ]
     [[ "$output" == *"could not update the worktree store"* ]]
+    # The set is gone, so the hook ran and the removal is reported
+    [[ "$output" == *"Pruned 1 worktree(s)"* ]]
+    [ -e "$TEST_DIR/hook-ran" ]
 }
 
 @test "worktree remove escapes a dirty repo's alias found on disk" {

@@ -216,3 +216,26 @@ EOF
     [ "$status" -ne 0 ]
     # The implementation should show it's trying to install locally
 }
+
+@test "plugin search escapes text from the registry index" {
+    mkdir -p "$HOME_DIR/reg/plugins"
+    cat > "$HOME_DIR/reg/plugins/index.json" <<'EOF'
+{"plugins": {"evil": {"name": "evil\u001b]0;T\u0007", "description": "d\u001b[2J",
+  "version": "1\u001b[31m", "author": "a\u001b]52;c;eA==\u0007"}}}
+EOF
+    python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$HOME_DIR/reg" > "$HOME_DIR/srv.log" 2>&1 &
+    SRV=$!
+    for _ in $(seq 50); do grep -q 'port [0-9]' "$HOME_DIR/srv.log" && break; sleep 0.1; done
+    PORT="$(grep -o 'port [0-9]*' "$HOME_DIR/srv.log" | head -1 | cut -d' ' -f2)"
+    mkdir -p "$META_DATA_DIR"
+    chmod 700 "$META_DATA_DIR"
+    printf 'registries:\n  - http://127.0.0.1:%s\n' "$PORT" > "$META_DATA_DIR/config.yaml"
+    chmod 600 "$META_DATA_DIR/config.yaml"
+    run "$META_BIN" plugin search evil
+    kill "$SRV"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'evil\u{1b}]0;T\u{7}'* ]]
+    [[ "$output" == *'d\u{1b}[2J'* ]]
+    [[ "$output" == *'a\u{1b}]52;c;eA==\u{7}'* ]]
+    [[ "$output" != *$'\e'* ]]
+}

@@ -761,13 +761,15 @@ EOF
         git -C "$UP/work-$1" push --quiet origin HEAD:main
     }
     bare_with_meta child '{"projects": {"x": {"repo": "u", "path": "../../outside"}}}'
-    bare_with_meta root "{\"projects\": {\"child\": {\"repo\": \"$UP/child.git\", \"meta\": true}}}"
+    bare_with_meta root "{\"projects\": {\"child\": {\"repo\": \"$UP/child.git\", \"meta\": true}, \"gone\": \"$UP/gone.git\"}}"
 
     cd "$TEST_DIR"
     run "$META_BIN" git clone --recursive "$UP/root.git" "$UP/clone"
     [ "$status" -ne 0 ]
     [[ "$output" == *"Could not read nested .meta configs"* ]]
     [[ "$output" == *"must not contain '..'"* ]]
+    # A failed clone is still reported alongside it
+    [[ "$output" == *"Failed to clone"*"gone"* ]]
     [ ! -e "$UP/outside" ]
     rm -rf "$UP"
 }

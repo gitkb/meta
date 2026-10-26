@@ -203,8 +203,11 @@ teardown() {
     git -C "$TEST_DIR/temp-project/temp-repo" add README.md
     git -C "$TEST_DIR/temp-project/temp-repo" commit --quiet -m "init"
 
-    # Create .meta config for temp project
-    cat > "$TEST_DIR/temp-project/.meta" <<'EOF'
+    # Create a config for temp project, a workspace of its own (the test
+    # workspace doesn't list it), so it needs its own git plugin
+    mkdir -p "$TEST_DIR/temp-project/.meta/plugins"
+    cp "$META_GIT_BIN" "$TEST_DIR/temp-project/.meta/plugins/meta-git"
+    cat > "$TEST_DIR/temp-project/.meta.json" <<'EOF'
 {
     "projects": {
         "temp-repo": "git@github.com:org/temp.git"
@@ -663,11 +666,11 @@ EOF
 @test "a umask 002 checkout and data dir are used, and their plugins load" {
     # Stock Ubuntu/Debian/Fedora: user private groups, umask 002, so
     # directories are 0775. meta trusts them like git or cargo would.
-    mkdir -p "$TEST_DIR/sub/.meta/plugins" "$META_DATA/plugins"
-    printf '#!/bin/sh\ntouch "%s/ran-local"\n' "$TEST_DIR" > "$TEST_DIR/sub/.meta/plugins/meta-local"
+    mkdir -p "$TEST_DIR/sub" "$META_DATA/plugins"
+    printf '#!/bin/sh\ntouch "%s/ran-local"\n' "$TEST_DIR" > "$TEST_DIR/.meta/plugins/meta-local"
     printf '#!/bin/sh\ntouch "%s/ran-global"\n' "$TEST_DIR" > "$META_DATA/plugins/meta-global"
     chmod 775 "$TEST_DIR" "$TEST_DIR/.meta" "$TEST_DIR/.meta/plugins" "$TEST_DIR/sub" \
-        "$TEST_DIR/sub/.meta" "$TEST_DIR/sub/.meta/plugins" "$TEST_DIR/sub/.meta/plugins/meta-local" \
+        "$TEST_DIR/.meta/plugins/meta-local" \
         "$META_DATA" "$META_DATA/plugins" "$META_DATA/plugins/meta-global"
     cd "$TEST_DIR/sub"
     umask 002

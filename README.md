@@ -330,7 +330,7 @@ This enables impact analysis ("what breaks if I change shared-utils?"), topologi
 | `meta plugin install <name>` | Install a plugin |
 | `meta plugin uninstall <name>` | Remove a plugin |
 
-Add `--local` to install, list, uninstall or update the plugins of the current workspace only (`.meta/plugins/` at its root).
+Add `--local` to install, list, uninstall or update the plugins of this meta repo only (`.meta/plugins/` next to the nearest meta config).
 
 ---
 
@@ -379,7 +379,7 @@ meta query "ahead:true"
 
 Plugins are standalone executables that extend meta. They're discovered automatically from:
 
-1. `.meta/plugins/` at the workspace root: the nearest directory at or above the current one that holds a meta config. `meta plugin install <name> --local` installs there.
+1. `.meta/plugins/` next to the nearest meta config at or above the current directory, then next to each parent meta config that lists that directory as a project (the same workspace), nearest first. A parent that doesn't list it is another workspace and is not read. `meta plugin install <name> --local` installs into the nearest one.
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
 3. Executables named `meta-*` on PATH.
 

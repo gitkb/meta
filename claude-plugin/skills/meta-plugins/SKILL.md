@@ -55,9 +55,10 @@ meta --include api cargo clippy --all-targets -- -D warnings
 ## Plugin Discovery
 
 Plugins are discovered from:
-1. `.meta/plugins/` at the workspace root (the nearest directory at or above
-   the current one that holds a meta config); `meta plugin install <name> --local`
-   installs there
+1. `.meta/plugins/` next to the nearest meta config, then next to each parent
+   meta config that lists it as a project (one workspace), nearest first; a
+   parent that doesn't list it is not read. `meta plugin install <name> --local`
+   installs into the nearest one
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install` installs
 3. Executables named `meta-*` in PATH
 
@@ -83,7 +84,7 @@ meta plugin install <name>
 # Uninstall
 meta plugin uninstall <name>
 
-# The same for this workspace only (.meta/plugins/ at the workspace root)
+# The same for this meta repo only (.meta/plugins/ next to the nearest meta config)
 meta plugin install <name> --local
 meta plugin list --local
 ```

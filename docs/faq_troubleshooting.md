@@ -206,7 +206,7 @@ This opens an editor for each dirty repo.
 
 **A:** Install it with `meta plugin install <name>` (add `--local` for this workspace only), or place an executable named `meta-<name>` in one of these locations:
 
-1. `.meta/plugins/` at the workspace root: the nearest directory at or above the current one that holds a meta config. `meta plugin install <name> --local` installs there.
+1. `.meta/plugins/` next to the nearest meta config at or above the current directory, then next to each parent meta config that lists that directory as a project (the same workspace), nearest first. A parent that doesn't list it is another workspace and is not read. `meta plugin install <name> --local` installs into the nearest one.
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
 3. Executables named `meta-*` on PATH.
 

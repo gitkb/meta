@@ -4,7 +4,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 # Integration tests for `meta git worktree` cloud/agent extensions (meta-6)
 # Tests: --meta, --ephemeral, --ttl, --from-ref, prune, lifecycle hooks,
-#         context detection, ephemeral exec, centralized store
+#         context detection, ephemeral exec, per-worktree records
 
 setup() {
     clear_git_local_env
@@ -53,6 +53,11 @@ EOF
     cd "$TEST_DIR"
 }
 
+# The file where meta records the set a linked worktree checkout belongs to
+record_file() {
+    echo "$(git -C "$1" rev-parse --absolute-git-dir)/meta-worktree.json"
+}
+
 teardown() {
     cd /
     rm -rf "$TEST_DIR"
@@ -66,16 +71,11 @@ teardown() {
     run "$META_BIN" git worktree create meta-test --repo backend --meta agent=review-bot --meta run_id=abc123
     [ "$status" -eq 0 ]
 
-    # Verify store file was created with custom fields
-    STORE="$META_DATA/worktree.json"
-    [ -f "$STORE" ]
+    # The record beside the worktree holds the custom fields
+    REC="$(record_file .worktrees/meta-test/backend)"
     python3 -c "
-import json, sys
-with open('$STORE') as f:
-    data = json.load(f)
-entries = data['worktrees']
-# Find our entry (key is absolute path)
-entry = next(v for v in entries.values() if v['name'] == 'meta-test')
+import json
+entry = json.load(open('$REC'))
 assert entry['custom']['agent'] == 'review-bot', f'got: {entry[\"custom\"]}'
 assert entry['custom']['run_id'] == 'abc123'
 "
@@ -99,16 +99,14 @@ assert d['custom']['env'] == 'ci', f'got custom: {d.get(\"custom\")}'
 
 # ============ --ephemeral ============
 
-@test "worktree create --ephemeral sets ephemeral flag in store" {
+@test "worktree create --ephemeral records the ephemeral flag" {
     run "$META_BIN" git worktree create eph-test --repo backend --ephemeral
     [ "$status" -eq 0 ]
 
-    STORE="$META_DATA/worktree.json"
+    REC="$(record_file .worktrees/eph-test/backend)"
     python3 -c "
 import json
-with open('$STORE') as f:
-    data = json.load(f)
-entry = next(v for v in data['worktrees'].values() if v['name'] == 'eph-test')
+entry = json.load(open('$REC'))
 assert entry['ephemeral'] == True
 "
 }
@@ -125,16 +123,14 @@ assert d['ephemeral'] == True
 
 # ============ --ttl ============
 
-@test "worktree create --ttl stores ttl_seconds in store" {
+@test "worktree create --ttl records ttl_seconds" {
     run "$META_BIN" git worktree create ttl-test --repo backend --ttl 2h
     [ "$status" -eq 0 ]
 
-    STORE="$META_DATA/worktree.json"
+    REC="$(record_file .worktrees/ttl-test/backend)"
     python3 -c "
 import json
-with open('$STORE') as f:
-    data = json.load(f)
-entry = next(v for v in data['worktrees'].values() if v['name'] == 'ttl-test')
+entry = json.load(open('$REC'))
 assert entry['ttl_seconds'] == 7200, f'got: {entry[\"ttl_seconds\"]}'
 "
 }
@@ -274,50 +270,35 @@ assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
     [[ "$output" == *"cannot be used with"* ]] || [[ "$output" == *"Cannot specify both"* ]] || [[ "$output" == *"mutually exclusive"* ]]
 }
 
-# ============ Centralized Store ============
+# ============ Records ============
 
-@test "worktree create writes to centralized store" {
+@test "worktree create records the set beside git, in no global store" {
     run "$META_BIN" git worktree create store-test --repo backend --no-deps
     [ "$status" -eq 0 ]
 
-    STORE="$META_DATA/worktree.json"
-    [ -f "$STORE" ]
+    [ ! -e "$META_DATA/worktree.json" ]
+    REC="$(record_file .worktrees/store-test/backend)"
+    [[ "$REC" == */backend/.git/worktrees/backend/meta-worktree.json ]]
+    [ -f "$REC" ]
     python3 -c "
-import json
-with open('$STORE') as f:
-    data = json.load(f)
-assert len(data['worktrees']) == 1
-entry = next(v for v in data['worktrees'].values() if v['name'] == 'store-test')
+import json, os
+entry = json.load(open('$REC'))
+assert entry['set'] == os.path.realpath('.worktrees/store-test'), entry
 assert entry['project'] != ''
 assert 'created_at' in entry
-assert len(entry['repos']) == 1
-assert entry['repos'][0]['alias'] == 'backend'
 "
 }
 
-@test "worktree remove removes from centralized store" {
+@test "worktree remove deletes the records with the worktrees" {
     "$META_BIN" git worktree create store-rm --repo backend --no-deps
-    STORE="$META_DATA/worktree.json"
+    [ -f "$(record_file .worktrees/store-rm/backend)" ]
 
-    # Verify entry exists
-    python3 -c "
-import json
-with open('$STORE') as f:
-    data = json.load(f)
-assert any(v['name'] == 'store-rm' for v in data['worktrees'].values())
-"
-
-    # Remove
     run "$META_BIN" git worktree remove store-rm
     [ "$status" -eq 0 ]
 
-    # Verify entry removed
-    python3 -c "
-import json
-with open('$STORE') as f:
-    data = json.load(f)
-assert not any(v['name'] == 'store-rm' for v in data['worktrees'].values())
-"
+    # git deleted the worktree's admin directory, record and all
+    [ ! -e "$TEST_DIR/backend/.git/worktrees/backend" ]
+    [ ! -e "$META_DATA/worktree.json" ]
 }
 
 @test "worktree remove --json outputs structured result" {
@@ -334,21 +315,25 @@ assert d['repos_removed'] == 2, f'expected 2 repos, got: {d.get(\"repos_removed\
 "
 }
 
-@test "worktree add updates store entry with new repo" {
-    "$META_BIN" git worktree create store-add --repo backend
+@test "worktree add gives the new repo the set's record" {
+    "$META_BIN" git worktree create store-add --repo backend --ttl 1h
     run "$META_BIN" git worktree add store-add --repo frontend
     [ "$status" -eq 0 ]
 
-    STORE="$META_DATA/worktree.json"
-    python3 -c "
-import json
-with open('$STORE') as f:
-    data = json.load(f)
-entry = next(v for v in data['worktrees'].values() if v['name'] == 'store-add')
-aliases = [r['alias'] for r in entry['repos']]
-assert 'backend' in aliases
-assert 'frontend' in aliases
-"
+    cmp "$(record_file .worktrees/store-add/backend)" "$(record_file .worktrees/store-add/frontend)"
+}
+
+@test "worktree add to a set meta did not create records nothing" {
+    mkdir -p .worktrees
+    git -C backend worktree add --quiet -b byhand ../.worktrees/byhand/backend
+    run "$META_BIN" git worktree add byhand --repo frontend
+    [ "$status" -eq 0 ]
+    [ ! -e "$(record_file .worktrees/byhand/frontend)" ]
+
+    run "$META_BIN" git worktree remove byhand
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no record"* ]]
+    [ -d .worktrees/byhand/backend ]
 }
 
 @test "worktree list shows store metadata" {
@@ -521,17 +506,9 @@ EOF
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
 
-    # Worktree should be gone
+    # Worktree should be gone, and git's entry for it with its record
     [ ! -d ".worktrees/prune-exp" ]
-
-    # Store entry should be gone
-    STORE="$META_DATA/worktree.json"
-    python3 -c "
-import json
-with open('$STORE') as f:
-    data = json.load(f)
-assert not any(v['name'] == 'prune-exp' for v in data['worktrees'].values())
-"
+    [ ! -e "$TEST_DIR/backend/.git/worktrees/backend" ]
 }
 
 @test "worktree prune detects orphaned entries" {
@@ -546,20 +523,20 @@ assert not any(v['name'] == 'prune-exp' for v in data['worktrees'].values())
     [[ "$output" == *"orphaned"* ]] || [[ "$output" == *"Would prune"* ]]
 }
 
-@test "worktree prune removes orphaned entries from store" {
+@test "worktree prune deletes the records of an orphaned set" {
     "$META_BIN" git worktree create prune-orphan2 --repo backend
     rm -rf ".worktrees/prune-orphan2"
 
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
+    [[ "$output" == *"prune-orphan2"* ]]
 
-    STORE="$META_DATA/worktree.json"
-    python3 -c "
-import json
-with open('$STORE') as f:
-    data = json.load(f)
-assert not any(v['name'] == 'prune-orphan2' for v in data['worktrees'].values())
-"
+    # Only meta's record goes; git's entry stays for 'git worktree prune'
+    [ -d "$TEST_DIR/backend/.git/worktrees/backend" ]
+    [ ! -e "$TEST_DIR/backend/.git/worktrees/backend/meta-worktree.json" ]
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"prune-orphan2"* ]]
 }
 
 @test "worktree prune --json outputs structured result" {
@@ -668,19 +645,12 @@ assert 'removed' in payload
     [ ! -d ".worktrees/eph-meta" ]
 }
 
-@test "worktree exec --ephemeral removes from store" {
+@test "worktree exec --ephemeral leaves no worktree or record behind" {
     run "$META_BIN" git worktree exec --ephemeral eph-store --repo backend -- echo done
     [ "$status" -eq 0 ]
 
-    STORE="$META_DATA/worktree.json"
-    if [ -f "$STORE" ]; then
-        python3 -c "
-import json
-with open('$STORE') as f:
-    data = json.load(f)
-assert not any(v['name'] == 'eph-store' for v in data['worktrees'].values())
-"
-    fi
+    [ ! -e ".worktrees/eph-store" ]
+    [ ! -e "$TEST_DIR/backend/.git/worktrees/backend" ]
 }
 
 # ============ Context Detection ============
@@ -747,22 +717,14 @@ assert wt['ephemeral'] == True
     [ "$status" -eq 0 ]
     [ ! -d ".worktrees/lifecycle-meta" ]
 
-    # Store should be clean
-    STORE="$META_DATA/worktree.json"
-    python3 -c "
-import json
-with open('$STORE') as f:
-    data = json.load(f)
-assert not any(v['name'] == 'lifecycle-meta' for v in data['worktrees'].values())
-"
+    # git's entries, and the records in them, are gone
+    [ -z "$(ls -A "$TEST_DIR/backend/.git/worktrees" 2>/dev/null)" ]
+    [ -z "$(ls -A "$TEST_DIR/frontend/.git/worktrees" 2>/dev/null)" ]
 }
 
-# ============ Store Resilience ============
+# ============ No Global State ============
 
-@test "worktree commands work without store file" {
-    # Remove store if it exists
-    rm -f "$META_DATA/worktree.json"
-
+@test "worktree commands write nothing to the meta data dir" {
     run "$META_BIN" git worktree create no-store --repo backend
     [ "$status" -eq 0 ]
     [ -d ".worktrees/no-store/backend" ]
@@ -770,9 +732,15 @@ assert not any(v['name'] == 'lifecycle-meta' for v in data['worktrees'].values()
     run "$META_BIN" git worktree list
     [ "$status" -eq 0 ]
     [[ "$output" == *"no-store"* ]]
+
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree remove no-store
+    [ "$status" -eq 0 ]
+    [ ! -e "$META_DATA/worktree.json" ] && [ ! -e "$META_DATA/worktree.lock" ]
 }
 
-@test "worktree prune with empty store" {
+@test "worktree prune with no sets" {
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"Nothing to prune"* ]] || [[ "$output" == *"No worktrees"* ]]

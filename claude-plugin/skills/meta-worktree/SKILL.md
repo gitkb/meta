@@ -75,8 +75,6 @@ git fetch origin my-feature:my-feature   # create or fast-forward the local bran
 meta git worktree create review --repo .:my-feature --repo backend --strict
 ```
 
-Add at least one child repo (here `backend`, on the set's own branch): `prune`
-treats a set that holds only the root repo as orphaned and force-removes it.
 Don't pass `origin/my-feature` as the commit-ish here: with a commit-ish, create
 always makes a new branch, which fails when `my-feature` already exists locally
 (and without `--strict` that failure is only a warning).
@@ -98,10 +96,9 @@ meta git worktree create ci-check --all --ephemeral --meta agent=review-bot --me
 meta git worktree exec --ephemeral lint-check --all -- make lint
 ```
 
-`prune` removes sets whose TTL has expired and sets it considers orphaned (for
-example: the set's directory or project is gone, none of its repos are in the
-project any more, or the set holds only the root repo);
-`--ephemeral` alone only records metadata. A TTL is a backstop for a session that
+`prune` removes sets whose TTL has expired and sets it considers orphaned (none
+of its repos are in the project any more); for a set whose directory is gone it
+only forgets meta's record. `--ephemeral` alone only records metadata. A TTL is a backstop for a session that
 dies before removing its sets.
 
 ## Inspecting Worktrees
@@ -157,16 +154,19 @@ run it from the primary checkout to be sure it uses the primary repos.
 ## Cleanup
 
 ```bash
-meta git worktree remove auth-fix          # refuses top-level repos with uncommitted changes
-meta git worktree remove auth-fix --force  # discards uncommitted changes
+meta git worktree remove auth-fix          # refuses a set with work it would lose
+meta git worktree remove auth-fix --force  # discards that work
 meta git worktree prune --dry-run          # preview
 meta git worktree prune                    # remove expired (TTL) and orphaned sets
 ```
 
-`remove` only checks the set's top-level repos; repos nested inside them (added
-with `--recursive`) are deleted without that check. `prune` works on the machine-wide store, so it can remove expired sets from
-other projects too. `--force`, `exec --ephemeral` and `prune` all discard
-uncommitted work: commit and push first.
+`remove` and `prune` delete only sets meta created, and check every repo in the
+set first, nested ones included: uncommitted or untracked changes, commits on
+no branch, and files outside every repo count as work. `remove` refuses such a
+set unless `--force`; `prune` keeps it. `prune` sees the sets recorded in the
+current workspace's repositories (including sets made from other checkouts of
+them), not every set on the machine. `--force` and `exec --ephemeral` discard that work: commit and
+push first.
 
 ## Lifecycle Hooks
 
@@ -183,19 +183,21 @@ worktree:
 Each hook gets a JSON description of the action on stdin. Hook failures don't
 block the operation; they are logged as warnings, shown only with `RUST_LOG=warn`.
 
-## Centralized Store
+## Where Meta Keeps Its Records
 
-Worktree metadata lives in `~/.meta/worktree.json` (the directory can be moved
-with `META_DATA_DIR`). It records TTL, ephemeral and custom metadata for every
-set on the machine. `list` scans this project's `.worktrees/` and adds the
-store's metadata; `prune` only acts on sets in the store.
+There is no global state file. When meta creates a worktree it writes a record
+into git's own directory for that worktree, `<repo>/.git/worktrees/<id>/meta-worktree.json`,
+with the set's path, its project, when it was created, and its TTL, ephemeral
+flag and custom metadata. Git deletes the record with the worktree. The record
+is how `remove` and `prune` know meta made a set: a set made by hand, or by a
+meta from before records, is refused; remove it with `git worktree remove`.
+`list` scans this project's `.worktrees/` and shows each set's record.
 
 ## Strict Mode
 
 `--strict` on `create` (or global `meta --strict`) turns warnings such as a
-missing commit-ish in one repo into errors. Repos already created are not rolled
-back, and the half-made set is not in the store, so `prune` won't find it: clean
-it up with `remove`.
+missing commit-ish in one repo into errors. A create that fails is rolled back:
+the worktrees and branches it made are deleted again.
 
 ## Command Reference
 
@@ -224,7 +226,7 @@ it up with `remove`.
 | `--dry-run` | Preview without creating anything |
 | `--ephemeral` | Mark as ephemeral |
 | `--ttl <duration>` | Make `prune` remove it after this long |
-| `--meta <key=value>` | Store custom metadata |
+| `--meta <key=value>` | Record custom metadata |
 | `--strict` | Fail instead of warning on missing refs |
 
 ### Exec Options

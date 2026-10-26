@@ -86,8 +86,7 @@ Key modules:
 
 Shared infrastructure for `~/.meta/` directory management:
 - `data_dir` - Locate and create the `~/.meta/` data directory and namespaced files
-- `lock` - File-based locking with PID staleness detection and retry
-- `store` - Atomic JSON read/write with lock-protected updates
+- `store` - Atomic JSON read/write
 
 ### meta_plugin_protocol
 
@@ -392,7 +391,7 @@ All plugins (git, project, rust) use `meta_plugin_protocol` for standardized hos
 
 ### meta_cli ↔ meta_core
 
-The main CLI uses `meta_core` for managing the `~/.meta/` data directory, file locking, and atomic JSON storage.
+The main CLI uses `meta_core` for managing the `~/.meta/` data directory and atomic JSON storage.
 
 ## See Also
 

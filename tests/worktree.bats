@@ -679,6 +679,15 @@ EOF
     [ "$BRANCH" = "nested-test" ]
 }
 
+@test "worktree create refuses a repo named twice by short and full alias on two branches" {
+    setup_nested_meta
+
+    run "$META_BIN" git worktree create two-names --recursive --repo nested-lib:one --repo vendor/nested-lib:two
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"is given twice"* ]]
+    [ ! -e ".worktrees/two-names" ]
+}
+
 @test "worktree add with nested repo alias succeeds" {
     setup_nested_meta
 

@@ -579,6 +579,16 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [[ "$output" == *"could not update the worktree store"* ]]
 }
 
+@test "a malformed store timestamp is escaped in the plugin's warning" {
+    run "$META_BIN" git worktree create bad-time --repo backend --ttl 1h
+    [ "$status" -eq 0 ]
+    sed -i 's/"created_at": *"[^"]*"/"created_at": "x\\u001b]0;PWNED\\u0007"/' "$META_DATA/worktree.json"
+    RUST_LOG=warn run "$META_BIN" git worktree list
+    [[ "$output" == *'Malformed created_at'* ]]
+    [[ "$output" == *'x\u{1b}]0;PWNED\u{7}'* ]]
+    [[ "$output" != *$'\e'* ]]
+}
+
 @test "worktree remove fails when the store dir cannot be searched" {
     run "$META_BIN" git worktree create store-x --repo backend
     [ "$status" -eq 0 ]

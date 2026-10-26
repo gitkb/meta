@@ -5,9 +5,10 @@
 
 $ErrorActionPreference = "Stop"
 
-$Repo = "gitkb/meta"
 $InstallDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { "$env:USERPROFILE\.meta\bin" }
 $Version = if ($env:VERSION) { $env:VERSION } else { "latest" }
+# Base URL of the release downloads; point it at a mirror of the GitHub releases.
+$DownloadBase = if ($env:META_DOWNLOAD_URL) { $env:META_DOWNLOAD_URL } else { "https://github.com/gitkb/meta/releases" }
 
 function Write-Info($msg) {
     Write-Host "[INFO] $msg" -ForegroundColor Green
@@ -31,38 +32,54 @@ function Get-Architecture {
     }
 }
 
-function Get-LatestVersion {
+# Download a URL to a file; on failure, name the URL and the reason
+function Get-Download($url, $outFile) {
     try {
-        $response = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-        return $response.tag_name -replace '^v', ''
+        Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing
     } catch {
-        Write-Err "Failed to fetch latest version: $_"
+        $err = $_
+        $status = [int]$err.Exception.Response.StatusCode
+        $reason = switch ($status) {
+            0 { "could not connect: $($err.Exception.Message)" }
+            404 { "HTTP 404: no such release asset; check VERSION and that your platform has a release" }
+            { $_ -in 403, 429 } { "HTTP ${status}: rate limited or forbidden; wait and retry" }
+            { $_ -ge 500 } { "HTTP ${status}: server error; retry later" }
+            default { "HTTP $status" }
+        }
+        Write-Err "Download failed ($reason): $url"
     }
 }
 
 function Install-Meta {
     $arch = Get-Architecture
     $platform = "windows-$arch"
+    $asset = "meta-$platform.zip"
 
     if ($Version -eq "latest") {
-        Write-Info "Fetching latest version..."
-        $Version = Get-LatestVersion
-        if (-not $Version) {
-            Write-Err "Could not determine latest version"
-        }
+        Write-Info "Installing the latest meta release for $platform..."
+        $baseUrl = "$DownloadBase/latest/download"
+    } else {
+        Write-Info "Installing meta v$Version for $platform..."
+        $baseUrl = "$DownloadBase/download/v$Version"
     }
 
-    Write-Info "Installing meta v$Version for $platform..."
-
-    $downloadUrl = "https://github.com/$Repo/releases/download/v$Version/meta-$platform.zip"
     $tempDir = New-Item -ItemType Directory -Path "$env:TEMP\meta-install-$(Get-Random)" -Force
-    $zipPath = "$tempDir\meta.zip"
+    $zipPath = Join-Path $tempDir $asset
+    $checksumPath = "$zipPath.sha256"
 
-    Write-Info "Downloading from $downloadUrl..."
-    try {
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath -UseBasicParsing
-    } catch {
-        Write-Err "Failed to download meta: $_"
+    Write-Info "Downloading from $baseUrl/$asset..."
+    Get-Download "$baseUrl/$asset" $zipPath
+    Get-Download "$baseUrl/$asset.sha256" $checksumPath
+
+    # The release publishes certutil output: a header line, the hash, a footer line
+    Write-Info "Verifying checksum..."
+    $expected = [regex]::Match("$(Get-Content -Raw $checksumPath)", '\b[0-9a-fA-F]{64}\b').Value
+    if (-not $expected) {
+        Write-Err "No SHA-256 hash in $baseUrl/$asset.sha256; nothing was installed"
+    }
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $zipPath).Hash
+    if ($actual -ne $expected) {
+        Write-Err "Checksum mismatch for $asset; nothing was installed`n  Expected: $expected`n  Actual:   $actual"
     }
 
     Write-Info "Extracting..."

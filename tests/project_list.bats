@@ -361,6 +361,13 @@ J
     [[ "$output" == *'x\u{1b}]0;TITLE\u{7}'* ]]
 }
 
+@test "an unknown project subcommand is escaped on one line" {
+    run "$META_BIN" project $'bad\033[2J\nFORGED'
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    [[ "$output" == *"unrecognized command"* ]]
+}
+
 @test "project list refuses include and exclude instead of ignoring them" {
     for flag in --include --exclude; do
         for command in list ls; do

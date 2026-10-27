@@ -534,13 +534,13 @@ PY
     echo 'foreign skill' > .claude/skills/meta-safety.md
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    [[ "$output" == *"meta-safety.md (left alone)"* ]]
+    [[ "$output" == *"meta-safety.md (not created by meta, left alone)"* ]]
     [ "$(cat .claude/skills/meta-safety.md)" = 'foreign skill' ]
     rm .claude/skills/meta-safety.md
     ln -s missing-target .claude/skills/meta-safety.md
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    [[ "$output" == *"meta-safety.md (left alone)"* ]]
+    [[ "$output" == *"meta-safety.md (not created by meta, left alone)"* ]]
     [ "$(readlink .claude/skills/meta-safety.md)" = missing-target ]
 }
 

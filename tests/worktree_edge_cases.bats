@@ -1158,10 +1158,45 @@ PY2
     "$META_BIN" git worktree create ctx --repo backend
     "$META_BIN" git worktree create gone --repo frontend --no-deps --ttl 0
     cd "$TEST_DIR/wt/ctx"
+    run "$META_BIN" git worktree list --recursive --metadata-only --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"worktrees"'*'"gone"'* ]]
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
     [ ! -e "$TEST_DIR/wt/gone" ]
     [ -d "$TEST_DIR/wt/ctx" ]
+}
+
+@test "a nested meta repo in a set stands for its own checkout" {
+    # nested: a meta repo of its own, with an absolute worktrees_dir and a plugin
+    mkdir -p "$TEST_DIR/nested"
+    git -C "$TEST_DIR/nested" init --quiet --initial-branch=main
+    printf '{"projects": {}, "worktrees_dir": "%s/nested/wt"}\n' "$TEST_DIR" > "$TEST_DIR/nested/.meta.json"
+    git -C "$TEST_DIR/nested" add .meta.json
+    git -C "$TEST_DIR/nested" -c user.email=t@t -c user.name=t commit --quiet -m init
+    mkdir -p "$TEST_DIR/nested/.meta/plugins"
+    cat > "$TEST_DIR/nested/.meta/plugins/meta-nestedtool" <<'EOF'
+#!/bin/sh
+echo '{"name":"nestedtool","version":"1","commands":["nestedtool"]}'
+EOF
+    chmod +x "$TEST_DIR/nested/.meta/plugins/meta-nestedtool"
+    python3 - "$TEST_DIR" <<'PY2'
+import json, sys
+path = sys.argv[1] + "/.meta.json"
+config = json.load(open(path))
+config["projects"]["nested"] = {"repo": "git@github.com:org/nested.git", "meta": True}
+json.dump(config, open(path, "w"))
+PY2
+    git -C "$TEST_DIR" commit --quiet -am "nested"
+
+    "$META_BIN" git worktree create s --repo nested --recursive
+    cd "$TEST_DIR/.worktrees/s/nested"
+    # Its config's absolute worktrees_dir reads as nested's own
+    run "$META_BIN" exec -- true
+    [ "$status" -eq 0 ]
+    # and nested's plugins load, as in nested itself
+    run "$META_BIN" plugin list --json
+    [[ "$output" == *"nestedtool"* ]]
 }
 
 @test "remove names the parts of the workspace it couldn't read" {
@@ -1231,6 +1266,18 @@ EOF
     grep -q agone "$TEST_DIR"/.git/worktrees/*/meta-worktree.json
     (cd "$TEST_DIR" && "$META_BIN" git worktree prune)
     ! grep -q agone "$TEST_DIR"/.git/worktrees/*/meta-worktree.json
+
+    # Once B is moved, its sets' records name a project that is gone: A
+    # still doesn't take them for its own
+    "$META_BIN" git worktree create bmoved --repo . --no-deps --ttl 0
+    echo work > "$B/.worktrees/bmoved/untracked"
+    git -C "$TEST_DIR" worktree move "$B" "$B-moved"
+    (cd "$TEST_DIR" && "$META_BIN" git worktree prune)
+    [ -f "$B-moved/.worktrees/bmoved/untracked" ]
+    run bash -c 'cd "$1" && META_WORKTREES="$2" "$3" git worktree remove bmoved --force' _ "$TEST_DIR" "$B-moved/.worktrees" "$META_BIN"
+    [ "$status" -ne 0 ]
+    [ -f "$B-moved/.worktrees/bmoved/untracked" ]
+    git -C "$TEST_DIR" worktree move "$B-moved" "$B"
 
     # From inside one of B's sets, remove finds B's sets, not A's same-named one
     (cd "$TEST_DIR" && "$META_BIN" git worktree create twin --repo backend --no-deps)

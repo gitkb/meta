@@ -587,6 +587,16 @@ assert d['totals']['files_changed'] >= 1
         [[ "$output" != *$'\nFORGED'* ]]
         [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
     done
+    # The dry-run preview echoes them too
+    for args in "probe" "--from-pr" "--meta"; do
+        case "$args" in
+            probe) run "$META_BIN" git worktree create preview $'bad\033[2J\nFORGED' --repo . --no-deps --dry-run ;;
+            --from-pr) run "$META_BIN" git worktree create preview --from-pr $'o/r#1\033[2J\nFORGED' --repo . --no-deps --dry-run ;;
+            --meta) run "$META_BIN" git worktree create preview --meta $'k=v\033[2J\nFORGED' --repo . --no-deps --dry-run ;;
+        esac
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+    done
     for flag in --meta --from-pr; do
         run "$META_BIN" --strict git worktree create probe --repo . --no-deps "$flag" $'bad\033[2J\nFORGED'
         [ "$status" -ne 0 ]
@@ -594,6 +604,20 @@ assert d['totals']['files_changed'] >= 1
         [[ "$output" != *$'\nFORGED'* ]]
         [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
     done
+}
+
+@test "names given to exec, status, diff and --branch are escaped on one line" {
+    cd "$TEST_DIR"
+    E=$'bad\033[2J\nFORGED'
+    check() {
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+    }
+    run "$META_BIN" git worktree exec "$E" -- true; check
+    run "$META_BIN" git worktree status "$E"; check
+    run "$META_BIN" git worktree diff "$E"; check
+    run "$META_BIN" git worktree create okb --all --branch "$E"; check
 }
 
 @test "unrecognized worktree command shows help" {

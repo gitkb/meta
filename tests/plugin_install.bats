@@ -264,3 +264,13 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"No project-local plugins installed"* ]]
 }
+
+@test "a plugin name in uninstall's error is escaped on one line" {
+    cd "$TEST_DIR"
+    echo 'projects: {}' > .meta.yaml
+    run "$META_BIN" plugin uninstall $'bad\033[2J\nFORGED' --local
+    [ "$status" -ne 0 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    [[ "$output" == *"is not installed"* ]]
+}

@@ -26,10 +26,9 @@ Read-only work (reading code, searching, answering questions) may stay in the
 primary checkout.
 
 Create one set per task, with only the repos it touches, and remove it once the
-work is pushed. Before a session ends, remove every set it created. Run
-`meta git worktree` commands from the primary checkout: inside a set they look
-for sets under that set (only `list`, `remove` and `prune` understand the
-current set).
+work is pushed. Before a session ends, remove every set it created. Inside a
+set, `meta git worktree` commands find sets where the checkout the set was
+made from keeps them, so running them there acts on the workspace's sets.
 
 ## Creating Worktrees
 
@@ -97,10 +96,10 @@ meta git worktree create ci-check --all --ephemeral --meta agent=review-bot --me
 meta git worktree exec --ephemeral lint-check --all -- make lint
 ```
 
-`prune` removes sets whose TTL has expired and sets whose project directory is
-gone; for a set whose directory is gone it only forgets meta's record. Once its
-repos are taken out of the meta config, a set is no longer the workspace's:
-remove it with `git worktree remove`. `--ephemeral` alone only records metadata. A TTL is a backstop for a session that
+`prune` removes sets whose TTL has expired; for a set whose directory is gone
+it only forgets meta's record. Once its repos are taken out of the meta config,
+or the checkout it was made from is moved or deleted, a set is no longer the
+workspace's: remove it with `git worktree remove`. `--ephemeral` alone only records metadata. A TTL is a backstop for a session that
 dies before removing its sets.
 
 ## Inspecting Worktrees

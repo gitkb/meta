@@ -58,8 +58,8 @@ Plugins are discovered from:
 1. `.meta/plugins/` next to the nearest meta config, then next to each parent
    meta config that lists it as a project (one workspace), nearest first; a
    parent that doesn't list it is not read. Inside a worktree set, a checkout's
-   own plugins come first, then those of the main checkout it was made from
-   and its workspace. `meta plugin install <name> --local`
+   own plugins come first, then those of the checkout it stands for (the one
+   it was made from) and its workspace. `meta plugin install <name> --local`
    installs into the nearest one
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install` installs
 3. Executables named `meta-*` in PATH

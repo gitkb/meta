@@ -867,6 +867,34 @@ EOF
     [[ "$output" == *"--exclude 'typo' names none of the repos"* ]]
 }
 
+@test "in a set made elsewhere without its root, --tag uses the workspace's config" {
+    cat > .meta.json <<'EOF'
+{
+    "projects": {
+        "backend": { "repo": "git@github.com:org/backend.git", "tags": ["back"] },
+        "frontend": { "repo": "git@github.com:org/frontend.git", "tags": ["front"] }
+    }
+}
+EOF
+    OUT="$(cd "$(mktemp -d)" && pwd -P)"
+    META_WORKTREES="$OUT/.worktrees" "$META_BIN" git worktree create tagged --repo backend --repo frontend --no-deps
+    cd "$OUT/.worktrees/tagged"
+    run "$META_BIN" --tag front exec -- touch ran
+    [ "$status" -eq 0 ]
+    [ -f frontend/ran ]
+    [ ! -e backend/ran ]
+
+    # Without a config to read the tags from, --tag is an error, not "every repo"
+    mv "$TEST_DIR/.meta.json" "$TEST_DIR/meta.json.bak"
+    rm frontend/ran
+    run "$META_BIN" --tag front exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot select its repos"* ]]
+    [ -z "$(find . -name ran)" ]
+    cd /
+    rm -rf "$OUT"
+}
+
 @test "worktree exec --include works with a relative META_WORKTREES" {
     "$META_BIN" git worktree create rel-root --repo backend --repo frontend
     run env META_WORKTREES=.worktrees "$META_BIN" git worktree exec rel-root --include backend -- pwd

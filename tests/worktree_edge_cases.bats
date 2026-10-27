@@ -789,7 +789,7 @@ J
 
 @test "create does not take a symlinked intermediate parent as a repo" {
     # vendor links to an unrelated repo that holds the lib repo; vendor is
-    # no project, so create falls back to the directory, which must refuse
+    # no project, so it is not added as a parent
     mkdir -p "$TEST_DIR/unrelated/lib"
     for repo in unrelated unrelated/lib; do
         git -C "$TEST_DIR/$repo" init --quiet --initial-branch=main
@@ -802,7 +802,7 @@ J
 EOF
     RUST_LOG=warn run "$META_BIN" git worktree create via-link --no-deps --repo vendor/lib
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Intermediate parent 'vendor' is not a plain directory inside the workspace, skipping"* ]]
+    [[ "$output" == *"Intermediate parent 'vendor' for nested repo 'vendor/lib' is not a project of the workspace, skipping"* ]]
     [ "$(git -C "$TEST_DIR/unrelated" worktree list | wc -l)" -eq 1 ]
     ! git -C "$TEST_DIR/unrelated" rev-parse --verify --quiet refs/heads/via-link
 }
@@ -1539,6 +1539,29 @@ set_projects() {
     [[ "$output" == *"/s/link"* ]]
 }
 
+@test "a project at a link the root repo tracks is checked out where the link leads" {
+    commit_repo "$TEST_DIR/real"
+    ln -s real "$TEST_DIR/link"
+    echo real/ >> "$TEST_DIR/.gitignore"
+    git -C "$TEST_DIR" add link .gitignore
+    set_projects '{"app": {"repo": "git@x:o/app.git", "path": "link", "tags": ["backend"]}}'
+    run "$META_BIN" git worktree create s --all
+    [ "$status" -eq 0 ]
+    [ -L "$TEST_DIR/.worktrees/s/link" ]
+    [ -e "$TEST_DIR/.worktrees/s/real/.git" ]
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" --include app exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/s/real"* ]]
+    # its tags are its own, not "unknown, so it runs"
+    run "$META_BIN" --tag other exec -- pwd
+    [[ "$output" != *"/s/real"* ]]
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree remove s --force
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_DIR/.worktrees/s" ]
+}
+
 @test "worktree exec takes project names in a set without its root" {
     commit_repo "$TEST_DIR/actual"
     set_projects '{"api": {"repo": "git@x:o/api.git", "path": "actual"}}'
@@ -1585,6 +1608,52 @@ set_projects() {
     [ ! -e "$TEST_DIR/.worktrees/s" ]
 }
 
+@test "worktree add takes one repo named by name and by path once" {
+    commit_repo "$TEST_DIR/libs/core"
+    commit_repo "$TEST_DIR/api"
+    set_projects '{"app": {"repo": "git@x:o/app.git", "path": "libs/core"}, "api": "git@x:o/api.git"}'
+    "$META_BIN" git worktree create s --repo api --no-deps
+    run "$META_BIN" git worktree add s --repo app --repo libs/core
+    [ "$status" -eq 0 ]
+    [ -e "$TEST_DIR/.worktrees/s/libs/core/.git" ]
+
+    "$META_BIN" git worktree create t --repo api --no-deps
+    run "$META_BIN" git worktree add t --repo app:first --repo libs/core:second
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"is given twice, on branches 'first' and 'second'"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/t/libs" ]
+    ! git -C "$TEST_DIR/libs/core" rev-parse --verify -q second
+}
+
+@test "a repo the workspace doesn't list is not added as a parent" {
+    commit_repo "$TEST_DIR/container"
+    commit_repo "$TEST_DIR/container/app"
+    set_projects '{"app": {"repo": "git@x:o/app.git", "path": "container/app"}}'
+    run "$META_BIN" git worktree create s --repo app --no-deps
+    [ "$status" -eq 0 ]
+    [ -e "$TEST_DIR/.worktrees/s/container/app/.git" ]
+    [ ! -e "$TEST_DIR/.worktrees/s/container/.git" ]
+    run "$META_BIN" git worktree remove s --force
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_DIR/.worktrees/s" ]
+}
+
+@test "a set made in another workspace's .worktrees uses the config it was made from" {
+    commit_repo "$TEST_DIR/api"
+    commit_repo "$TEST_DIR/web"
+    set_projects '{"api": {"repo": "git@x:o/api.git", "tags": ["be"]}, "web": {"repo": "git@x:o/web.git", "tags": ["fe"]}}'
+    B="$(cd "$(mktemp -d)" && pwd -P)"
+    printf '{"projects": {"web": {"repo": "x", "tags": ["be"]}, "api": {"repo": "y", "tags": ["fe"]}}}\n' > "$B/.meta.json"
+    META_WORKTREES="$B/.worktrees" "$META_BIN" git worktree create subset --repo api --repo web --no-deps
+    cd "$B/.worktrees/subset"
+    run "$META_BIN" --tag be exec -- touch ran
+    [ "$status" -eq 0 ]
+    [ -f api/ran ]
+    [ ! -e web/ran ]
+    cd /
+    rm -rf "$B"
+}
+
 @test "inside a set, --tag reads the config chosen with --config" {
     commit_repo "$TEST_DIR/api"
     commit_repo "$TEST_DIR/web"
@@ -1610,10 +1679,14 @@ set_projects() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"/s/.claude/skills/shared"* ]]
     [[ "$output" != *"agent"* ]]
-    # and a tag nothing has is named escaped in the warning
+    # and a tag nothing has is named escaped in the warning (a set without
+    # its root, which would otherwise pass the filter)
+    "$META_BIN" git worktree create s2 --repo shared --no-deps
+    cd "$TEST_DIR/.worktrees/s2"
     run "$META_BIN" --tag $'bad\033[2J\nFORGED' exec -- pwd
     [[ "$output" != *$'\033[2J'* ]]
     [[ "$output" != *$'\nFORGED'* ]]
+    [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
 }
 
 @test "a project named like a path gets no parents from its name" {
@@ -1637,4 +1710,9 @@ set_projects() {
     [[ "$output" == *"web/.meta.json"* ]]
     # pwd printed no repo's path: nothing ran
     ! printf '%s\n' "$output" | grep -qE '/s(/api|/web)?$'
+
+    # Without a filter the nested config is not read, as in the workspace
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/s/api"* ]]
 }

@@ -274,3 +274,14 @@ EOF
     [[ "$output" != *$'\nFORGED'* ]]
     [[ "$output" == *"is not installed"* ]]
 }
+
+@test "a plugin name in update's errors is escaped on one line" {
+    cd "$TEST_DIR"
+    for check in --check ""; do
+        run "$META_BIN" plugin update $'bad\033[2J\nFORGED' $check
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+        [[ "$output" == *"bad\u{1b}[2J\nFORGED"* ]]
+    done
+}

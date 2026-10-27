@@ -191,3 +191,17 @@ teardown() {
     [[ "${lines[0]}" == *'bad\u{1b}[31m\nFORGED'* ]]
     [[ "$output" == *'meta exec --'*'\nFORGED'* ]]
 }
+
+@test "argument errors from meta and loop are escaped on one line" {
+    LOOP_BIN="$BATS_TEST_DIRNAME/../target/debug/loop"
+    for cmd in "$META_BIN" "$LOOP_BIN"; do
+        run "$cmd" $'--bo\033]0;TITLE\007\nFORGED'
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+    done
+    run "$META_BIN" --depth $'1\033[2J\nFORGED' exec -- true
+    [ "$status" -ne 0 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+}

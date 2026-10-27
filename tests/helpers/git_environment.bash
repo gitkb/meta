@@ -27,4 +27,6 @@ isolate_user_env() {
     export XDG_DATA_HOME="$user_env/data"
     export META_DATA_DIR="$user_env/meta"
     export GIT_CONFIG_GLOBAL="$user_env/gitconfig"
+    # Tests that want these set them themselves
+    unset META_WORKTREES RUST_LOG
 }

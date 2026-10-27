@@ -369,7 +369,7 @@ meta exec --parallel -- cargo test
 ### Plugin Locations
 
 Plugins are discovered from:
-1. `.meta/plugins/` next to the nearest meta config at or above the current directory, then next to each parent meta config that lists that directory as a project (the same workspace), nearest first. A parent that doesn't list it is another workspace and is not read. Inside a worktree set, a checkout counts as the main checkout it was made from. `meta plugin install <name> --local` installs into the nearest one.
+1. `.meta/plugins/` next to the nearest meta config at or above the current directory, then next to each parent meta config that lists that directory as a project (the same workspace), nearest first. A parent that doesn't list it is another workspace and is not read. Inside a worktree set meta made, a checkout's own `.meta/plugins/` comes first, then those of the main checkout it was made from and its workspace. `meta plugin install <name> --local` installs into the nearest one.
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
 3. Executables named `meta-*` on PATH.
 

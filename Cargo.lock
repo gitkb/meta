@@ -919,6 +919,7 @@ dependencies = [
  "clap",
  "colored",
  "loop_lib",
+ "meta_core",
  "rayon",
  "serde_json",
  "walkdir",

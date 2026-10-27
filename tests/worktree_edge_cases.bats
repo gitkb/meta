@@ -1139,6 +1139,54 @@ EOF2
     done
 }
 
+@test "remove names the parts of the workspace it couldn't read" {
+    "$META_BIN" git worktree create unread --repo backend --no-deps
+    # A nested project list that doesn't parse: the workspace's tree can't be
+    # read, so backend isn't known to be the workspace's
+    cat > .meta.json <<'EOF'
+{"projects": {"backend": "git@github.com:org/backend.git", "nested": {"repo": "git@github.com:org/nested.git", "meta": true}}}
+EOF
+    mkdir nested
+    cat > nested/.meta.json <<'EOF'
+{"projects": {"lib": "git@github.com:org/lib.git", "lib": "git@github.com:org/lib2.git"}}
+EOF
+    run "$META_BIN" git worktree remove unread
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"couldn't be read"* ]]
+    [[ "$output" == *"duplicate project key"* ]]
+    [ -d "$TEST_DIR/.worktrees/unread/backend" ]
+}
+
+@test "a second workspace made with git worktree add is its own workspace" {
+    "$META_BIN" git worktree create aexp --repo backend --no-deps --ttl 0
+    cat > .meta/plugins/meta-hello <<'EOF'
+#!/bin/sh
+echo '{"name":"hello","version":"1","commands":["hello"]}'
+EOF
+    chmod +x .meta/plugins/meta-hello
+
+    # B: the root checked out again by hand, with its own clone of backend
+    B="$BATS_TEST_TMPDIR/B"
+    git -C "$TEST_DIR" worktree add --quiet -b bws "$B"
+    git clone --quiet "$TEST_DIR/backend" "$B/backend"
+    mkdir -p "$B/.meta/plugins"
+    cp "$META_GIT_BIN" "$B/.meta/plugins/meta-git"
+    cd "$B"
+    "$META_BIN" git worktree create bkeep --repo backend --no-deps
+
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"aexp"* ]]
+    [ -d "$TEST_DIR/.worktrees/aexp" ]
+
+    run "$META_BIN" git worktree remove bkeep
+    [ "$status" -eq 0 ]
+    [ ! -e "$B/.worktrees/bkeep" ]
+
+    run "$META_BIN" plugin list
+    [[ "$output" != *"hello"* ]]
+}
+
 @test "prune and remove from inside a worktree set act on the workspace's sets" {
     "$META_BIN" git worktree create inside --repo backend
     "$META_BIN" git worktree create other --repo frontend --ttl 0
@@ -1153,7 +1201,7 @@ EOF2
     [ ! -e "$TEST_DIR/.worktrees/other" ]
 
     cd "$TEST_DIR/.worktrees/inside/backend"
-    META_WORKTREES="$TEST_DIR/.worktrees" run "$META_BIN" git worktree remove named
+    run "$META_BIN" git worktree remove named
     [ "$status" -eq 0 ]
     [ ! -e "$TEST_DIR/.worktrees/named" ]
 }

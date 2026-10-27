@@ -1552,3 +1552,89 @@ set_projects() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"/subset/actual"* ]]
 }
+
+@test "worktree exec takes project names in a set elsewhere without its root" {
+    commit_repo "$TEST_DIR/actual"
+    set_projects '{"api": {"repo": "git@x:o/api.git", "path": "actual"}}'
+    export META_WORKTREES="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/elsewhere"
+    "$META_BIN" git worktree create subset --repo api --no-deps
+    run "$META_BIN" git worktree exec subset --include api -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/subset/actual"* ]]
+}
+
+@test "a set elsewhere without its root still has its hidden-path repos" {
+    commit_repo "$TEST_DIR/.deps/hidden"
+    set_projects '{"hidden": {"repo": "git@x:o/h.git", "path": ".deps/hidden"}}'
+    export META_WORKTREES="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/external"
+    "$META_BIN" git worktree create subset --repo hidden --no-deps
+    run "$META_BIN" git worktree list --recursive --metadata-only --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".deps/hidden"* ]]
+    run "$META_BIN" git worktree exec subset -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/subset/.deps/hidden"* ]]
+}
+
+@test "one repo named twice on different branches is refused" {
+    commit_repo "$TEST_DIR/libs/core"
+    set_projects '{"app": {"repo": "git@x:o/app.git", "path": "libs/core"}}'
+    run "$META_BIN" git worktree create s --repo app:first --repo libs/core:second --no-deps
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"is given twice, on branches 'first' and 'second'"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/s" ]
+}
+
+@test "inside a set, --tag reads the config chosen with --config" {
+    commit_repo "$TEST_DIR/api"
+    commit_repo "$TEST_DIR/web"
+    set_projects '{"api": {"repo": "git@x:o/api.git", "tags": ["be"]}, "web": {"repo": "git@x:o/web.git", "tags": ["fe"]}}'
+    printf '{"projects": {"api": {"repo": "git@x:o/api.git", "tags": ["custom"]}, "web": "git@x:o/web.git"}}\n' > "$TEST_DIR/selected.json"
+    git -C "$TEST_DIR" add selected.json
+    git -C "$TEST_DIR" commit --quiet -m selected
+    "$META_BIN" git worktree create s --all
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" --config selected.json --tag custom exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/s/api"* ]]
+    [[ "$output" != *"/s/web"* ]]
+}
+
+@test "a project under .claude does not make an agent's worktree beside it a member" {
+    commit_repo "$TEST_DIR/.claude/skills/shared"
+    set_projects '{"shared": {"repo": "git@x:o/s.git", "path": ".claude/skills/shared"}}'
+    "$META_BIN" git worktree create s --all
+    git -C "$TEST_DIR/.worktrees/s" worktree add --quiet .claude/worktrees/agent -b agent
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/s/.claude/skills/shared"* ]]
+    [[ "$output" != *"agent"* ]]
+    # and a tag nothing has is named escaped in the warning
+    run "$META_BIN" --tag $'bad\033[2J\nFORGED' exec -- pwd
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+}
+
+@test "a project named like a path gets no parents from its name" {
+    commit_repo "$TEST_DIR/actual"
+    commit_repo "$TEST_DIR/tools"
+    set_projects '{"tools/app": {"repo": "git@x:o/app.git", "path": "actual"}}'
+    "$META_BIN" git worktree create s --all
+    [ -e "$TEST_DIR/.worktrees/s/actual/.git" ]
+    [ ! -e "$TEST_DIR/.worktrees/s/tools" ]
+}
+
+@test "inside a set, a broken nested config stops a tagged command" {
+    commit_repo "$TEST_DIR/api"
+    commit_repo "$TEST_DIR/web"
+    set_projects '{"api": {"repo": "git@x:o/api.git", "tags": ["red"]}, "web": {"repo": "git@x:o/web.git", "tags": ["blue"], "meta": true}}'
+    "$META_BIN" git worktree create s --all
+    echo '{broken' > "$TEST_DIR/.worktrees/s/web/.meta.json"
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" --tag red exec -- pwd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"web/.meta.json"* ]]
+    # pwd printed no repo's path: nothing ran
+    ! printf '%s\n' "$output" | grep -qE '/s(/api|/web)?$'
+}

@@ -1146,6 +1146,24 @@ EOF2
     done
 }
 
+@test "prune from inside a set uses the workspace's absolute worktrees_dir" {
+    python3 - "$TEST_DIR" <<'PY2'
+import json, sys
+path = sys.argv[1] + "/.meta.json"
+config = json.load(open(path))
+config["worktrees_dir"] = sys.argv[1] + "/wt"
+json.dump(config, open(path, "w"))
+PY2
+    git -C "$TEST_DIR" commit --quiet -am "worktrees_dir"
+    "$META_BIN" git worktree create ctx --repo backend
+    "$META_BIN" git worktree create gone --repo frontend --no-deps --ttl 0
+    cd "$TEST_DIR/wt/ctx"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_DIR/wt/gone" ]
+    [ -d "$TEST_DIR/wt/ctx" ]
+}
+
 @test "remove names the parts of the workspace it couldn't read" {
     "$META_BIN" git worktree create unread --repo backend --no-deps
     # A nested project list that doesn't parse: the workspace's tree can't be

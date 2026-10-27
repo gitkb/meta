@@ -687,6 +687,20 @@ EOF
     done
 }
 
+@test "meta's own output to a closed stdout exits quietly without a panic" {
+    for args in "plugin list --json" "init --help" "--help"; do
+        run bash -c 'set -o pipefail; "$1" $2 2>"$3" | head -c0' _ "$META_BIN" "$args" "$TEST_DIR/stderr"
+        [[ "$status" -eq 0 || "$status" -eq 141 ]]
+        [ ! -s "$TEST_DIR/stderr" ]
+    done
+}
+
+@test "a failure cut off by a closed stdout isn't reported as success" {
+    run bash -c 'set -o pipefail; "$1" exec -- sh -c "seq 1 200000; exit 3" 2>"$2" | head -1' _ "$META_BIN" "$TEST_DIR/stderr"
+    [ "$status" -eq 141 ]
+    [ ! -s "$TEST_DIR/stderr" ]
+}
+
 @test "plugin output to a closed stdout exits quietly without a panic" {
     mkdir -p .meta/plugins
     cat > .meta/plugins/meta-chatty <<'EOF'

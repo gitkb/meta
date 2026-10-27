@@ -578,6 +578,24 @@ assert d['totals']['files_changed'] >= 1
     [[ "$output" != *$'\nFORGED'* ]]
 }
 
+@test "rejected refs and --meta values are escaped on one line" {
+    cd "$TEST_DIR"
+    for strict in "" --strict; do
+        run "$META_BIN" $strict git worktree create probe $'bad\033[2J\nFORGED' --repo . --no-deps
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+        [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
+    done
+    for flag in --meta --from-pr; do
+        run "$META_BIN" --strict git worktree create probe --repo . --no-deps "$flag" $'bad\033[2J\nFORGED'
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+        [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
+    done
+}
+
 @test "unrecognized worktree command shows help" {
     cd "$TEST_DIR"
     run "$META_BIN" git worktree blablabla

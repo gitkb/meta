@@ -23,9 +23,6 @@ setup() {
     export ORIGINAL_HOME="$HOME"
     export ORIGINAL_PATH="$PATH"
     export HOME="$HOME_DIR"
-    export XDG_CONFIG_HOME="$HOME_DIR/xdg"
-    export XDG_DATA_HOME="$HOME_DIR/xdg/data"
-    export GIT_CONFIG_GLOBAL="$HOME_DIR/gitconfig"
     export META_DATA_DIR="$HOME_DIR/.meta"
     # Build a minimal PATH that excludes the global meta plugins directory
     NEW_PATH=""

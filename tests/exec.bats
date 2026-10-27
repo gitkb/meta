@@ -725,7 +725,16 @@ EOF
         run "$META_BIN" "$mode" exec -- "$E"
         [[ "$output" != *$'\033[2J'* ]]
         [[ "$output" != *$'\nFORGED'* ]]
+        [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
     done
+    # and in the line for a listed project that isn't cloned
+    mkdir "$TEST_DIR/ghostws"
+    cd "$TEST_DIR/ghostws"
+    echo '{"projects": {"ghost": "git@x:o/ghost.git"}}' > .meta.json
+    run "$META_BIN" --sequential exec -- "$E"
+    [[ "$output" == *"No directory found"* ]]
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
 }
 
 @test "include and exclude errors escape controls and stay on one line" {

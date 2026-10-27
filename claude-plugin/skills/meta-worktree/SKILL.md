@@ -126,8 +126,8 @@ meta git worktree exec auth-fix --exclude legacy -- npm test
 meta git worktree exec auth-fix --parallel -- cargo build
 ```
 
-`--include`/`--exclude` name whole repos by alias, their path in the set
-(`.` for the root repo), never part of a path. A value that names no repo in
+`--include`/`--exclude` name whole repos as in the workspace: a project's name
+or its path in the set (`.` for the root repo), never part of a path. A value that names no repo in
 the set is an error. They go after the set name: `meta --include x git
 worktree ...` is refused. The command's arguments reach it as
 typed, with no shell; use `-- sh -c '...'` when you want one.
@@ -240,7 +240,7 @@ can't delete something, the error says what was left behind.
 
 | Option | Description |
 |--------|-------------|
-| `--include <repos>` | Only these repos, by alias (comma-separated) |
-| `--exclude <repos>` | Skip these repos, by alias (comma-separated) |
+| `--include <repos>` | Only these repos, by name or path (comma-separated) |
+| `--exclude <repos>` | Skip these repos, by name or path (comma-separated) |
 | `--parallel` | Run concurrently |
 | `--ephemeral` | Create, run, then remove (takes `--repo`/`--all`, `--branch`, `--from-pr`, `--meta`, a commit-ish) |

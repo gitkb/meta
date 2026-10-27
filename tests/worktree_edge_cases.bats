@@ -1212,6 +1212,18 @@ EOF
     [[ "$output" == *"settool"* ]]
     [[ "$output" == *"nestedtool"* ]]
 
+    # add and the dry-run preview place it at its path too
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree create preview --repo nested --no-deps --dry-run
+    [[ "$output" == *"dest:   $TEST_DIR/.worktrees/preview/actual"* ]]
+    "$META_BIN" git worktree create addto --repo backend --no-deps
+    "$META_BIN" git worktree add addto --repo nested
+    [ -d "$TEST_DIR/.worktrees/addto/actual" ]
+    [ ! -e "$TEST_DIR/.worktrees/addto/nested" ]
+    run "$META_BIN" git worktree add addto --repo nested
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already exists"* ]]
+
     # A set made from inside this one finds its repos where they are
     cd "$TEST_DIR/.worktrees/one"
     run "$META_BIN" git worktree create two --all
@@ -1268,7 +1280,7 @@ EOF
     chmod +x .meta/plugins/meta-hello
 
     # B: the root checked out again by hand, with its own clone of backend
-    B="$BATS_TEST_TMPDIR/B"
+    B="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/B"
     git -C "$TEST_DIR" worktree add --quiet -b bws "$B"
     git clone --quiet "$TEST_DIR/backend" "$B/backend"
     mkdir -p "$B/.meta/plugins"
@@ -1312,7 +1324,7 @@ EOF
     # Once B is moved, its sets' records name a project that is gone: A
     # still doesn't take them for its own. The sets live outside B, so
     # moving B leaves them intact
-    BWT="$BATS_TEST_TMPDIR/bwt"
+    BWT="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/bwt"
     META_WORKTREES="$BWT" "$META_BIN" git worktree create bclean --repo . --no-deps --ttl 0
     META_WORKTREES="$BWT" "$META_BIN" git worktree create bdirty --repo . --no-deps
     echo work > "$BWT/bdirty/untracked"
@@ -1414,4 +1426,69 @@ EOF
     for member in . inner inner/deep; do
         [ -f ".worktrees/everything/$member/.git" ]
     done
+}
+
+# A git repo with one commit at $1
+commit_repo() {
+    mkdir -p "$1"
+    git -C "$1" init --quiet --initial-branch=main
+    git -C "$1" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+}
+
+# Replace the test workspace's projects with the JSON object $1, committed
+set_projects() {
+    printf '{"projects": %s}\n' "$1" > "$TEST_DIR/.meta.json"
+    git -C "$TEST_DIR" add .meta.json
+    git -C "$TEST_DIR" commit --quiet -m projects
+}
+
+@test "inside a set, --tag selects repos by their projects' paths" {
+    commit_repo "$TEST_DIR/beta"
+    commit_repo "$TEST_DIR/gamma"
+    set_projects '{"alpha": {"repo": "git@x:o/a.git", "path": "beta", "tags": ["backend"]},
+                   "beta": {"repo": "git@x:o/b.git", "path": "gamma", "tags": ["frontend"]}}'
+    "$META_BIN" git worktree create s --all
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" --tag backend exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/s/beta"* ]]
+    [[ "$output" != *"/s/gamma"* ]]
+    # and --include takes a project's name too
+    run "$META_BIN" --include alpha exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/s/beta"* ]]
+    [[ "$output" != *"/s/gamma"* ]]
+    # so does worktree exec, and a value that is one's name and another's
+    # path is refused there as in the workspace
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree exec s --include alpha -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/s/beta"* ]]
+    [[ "$output" != *"/s/gamma"* ]]
+    run "$META_BIN" git worktree exec s --include beta -- pwd
+    [ "$status" -ne 0 ]
+}
+
+@test "a repo at a hidden path is a member of its set" {
+    commit_repo "$TEST_DIR/.deps/hidden"
+    set_projects '{"hidden": {"repo": "git@x:o/h.git", "path": ".deps/hidden"}}'
+    "$META_BIN" git worktree create s --all
+    [ -e "$TEST_DIR/.worktrees/s/.deps/hidden/.git" ]
+    run "$META_BIN" git worktree list --recursive --metadata-only --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".deps/hidden"* ]]
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" exec -- pwd
+    [[ "$output" == *"/s/.deps/hidden"* ]]
+}
+
+@test "a repo named once by its name and once by its path is one worktree" {
+    commit_repo "$TEST_DIR/actual"
+    commit_repo "$TEST_DIR/actual/leaf"
+    printf '{"projects": {"leaf": "git@x:o/l.git"}}\n' > "$TEST_DIR/actual/.meta.json"
+    set_projects '{"z": {"repo": "git@x:o/z.git", "path": "actual", "meta": true}}'
+    run "$META_BIN" git worktree create review --repo z:parent-branch --repo actual/leaf --no-deps
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_DIR/.worktrees/review/actual" branch --show-current)" = "parent-branch" ]
+    [ -e "$TEST_DIR/.worktrees/review/actual/leaf/.git" ]
 }

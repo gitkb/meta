@@ -13,7 +13,7 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
 
     # Create .meta config with two projects
     cat > "$TEST_DIR/.meta.json" <<'EOF'

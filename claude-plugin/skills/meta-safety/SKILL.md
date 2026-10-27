@@ -74,7 +74,6 @@ meta --strict git worktree prune
 
 **What becomes an error in strict mode:**
 - Missing refs when using a commit-ish (worktree create)
-- Failed PR branch fetches, or no repo matching `--from-pr` (worktree create)
 - The root repo skipped because a commit-ish is missing there (worktree create)
 - Invalid `--meta` format values (worktree create)
 - Failed directory removal (worktree prune)

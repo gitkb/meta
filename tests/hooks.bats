@@ -5,7 +5,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 setup() {
     clear_git_local_env
     isolate_user_env
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
 }
 
 teardown() {

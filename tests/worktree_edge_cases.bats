@@ -15,13 +15,13 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
     chmod +x "$TEST_DIR/.meta/plugins/meta-git"
 
     # Isolate meta's data dir per test
-    META_DATA="$(mktemp -d)"
+    META_DATA="$(cd "$(mktemp -d)" && pwd -P)"
     export META_DATA_DIR="$META_DATA"
 
     # Create .meta config with three projects
@@ -737,7 +737,7 @@ EOF
 @test "worktree create refuses a destination the root checkout made a symlink" {
     # The root repo tracks a symlink named like a project; checking out the
     # root worktree recreates it where that project's worktree would go
-    OUTSIDE="$(mktemp -d)"
+    OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
     ln -s "$OUTSIDE" "$TEST_DIR/evil"
     cat > "$TEST_DIR/.meta.json" <<'J'
 {"projects": {"evil": {"repo": "git@github.com:org/backend.git", "path": "backend"}}}
@@ -765,7 +765,7 @@ J
 }
 
 @test "worktrees are not kept where a .worktrees symlink or worktrees_dir points outside" {
-    OUTSIDE="$(mktemp -d)"
+    OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
     ln -s "$OUTSIDE" "$TEST_DIR/.worktrees"
     run "$META_BIN" git worktree create out --repo backend
     [ "$status" -ne 0 ]
@@ -804,7 +804,7 @@ EOF
 }
 
 @test "worktree add rechecks a destination after an earlier add in the same call" {
-    OUT="$(mktemp -d)"
+    OUT="$(cd "$(mktemp -d)" && pwd -P)"
     # group is a nested meta repo with its own core repo inside
     mkdir -p "$TEST_DIR/group"
     git -C "$TEST_DIR/group" init --quiet --initial-branch=main
@@ -871,7 +871,7 @@ EOF
 }
 
 @test "a worktree set that is a symlink out of the worktree root is refused" {
-    OUTSIDE="$(mktemp -d)"
+    OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
     echo keep > "$OUTSIDE/file"
     mkdir -p "$TEST_DIR/.worktrees"
     ln -s "$OUTSIDE" "$TEST_DIR/.worktrees/review"
@@ -917,7 +917,7 @@ EOF
     [ "$status" -eq 0 ]
     sleep 2
     # Elsewhere: another repo's linked worktree with uncommitted work
-    OUTSIDE="$(mktemp -d)"
+    OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
     git -C frontend worktree add --quiet "$OUTSIDE/wt" -b outside-wt
     echo mine > "$OUTSIDE/wt/mine"
     # The expired worktree's directory is swapped for a link to it, in place
@@ -930,7 +930,7 @@ EOF
 }
 
 @test "prune does not follow a directory above a worktree that became a symlink" {
-    OUT="$(mktemp -d)"
+    OUT="$(cd "$(mktemp -d)" && pwd -P)"
     META_WORKTREES="$OUT/sets" run "$META_BIN" git worktree create old --repo backend --ttl 1s
     [ "$status" -eq 0 ]
     sleep 2
@@ -947,7 +947,7 @@ EOF
 }
 
 @test "prune removes a worktree made under META_WORKTREES when run without it" {
-    CUSTOM="$(mktemp -d)"
+    CUSTOM="$(cd "$(mktemp -d)" && pwd -P)"
     META_WORKTREES="$CUSTOM" run "$META_BIN" git worktree create elsewhere --repo backend --ttl 1s
     [ "$status" -eq 0 ]
     [ -d "$CUSTOM/elsewhere/backend" ]
@@ -1089,7 +1089,7 @@ EOF2
 # ============ Workspace scope ============
 
 @test "prune and remove in one workspace leave another's sets in a shared worktree dir" {
-    OTHER="$(mktemp -d)"
+    OTHER="$(cd "$(mktemp -d)" && pwd -P)"
     make_workspace "$OTHER"
     OTHER_ROOT="$(cd "$OTHER" && pwd -P)"
     export META_WORKTREES="$OTHER/shared"
@@ -1117,7 +1117,7 @@ EOF2
 }
 
 @test "a set with worktrees from two workspaces is neither removed nor pruned" {
-    OTHER="$(mktemp -d)"
+    OTHER="$(cd "$(mktemp -d)" && pwd -P)"
     make_workspace "$OTHER"
     export META_WORKTREES="$OTHER/shared"
     (cd "$OTHER" && "$META_BIN" git worktree create mix --repo backend --ttl 0)
@@ -1168,35 +1168,58 @@ PY2
 }
 
 @test "a nested meta repo in a set stands for its own checkout" {
-    # nested: a meta repo of its own, with an absolute worktrees_dir and a plugin
-    mkdir -p "$TEST_DIR/nested"
-    git -C "$TEST_DIR/nested" init --quiet --initial-branch=main
-    printf '{"projects": {}, "worktrees_dir": "%s/nested/wt"}\n' "$TEST_DIR" > "$TEST_DIR/nested/.meta.json"
-    git -C "$TEST_DIR/nested" add .meta.json
-    git -C "$TEST_DIR/nested" -c user.email=t@t -c user.name=t commit --quiet -m init
-    mkdir -p "$TEST_DIR/nested/.meta/plugins"
-    cat > "$TEST_DIR/nested/.meta/plugins/meta-nestedtool" <<'EOF'
+    # nested (alias) lives at actual (path): a meta repo of its own, with an
+    # absolute worktrees_dir and a plugin
+    mkdir -p "$TEST_DIR/actual"
+    git -C "$TEST_DIR/actual" init --quiet --initial-branch=main
+    printf '{"projects": {}, "worktrees_dir": "%s/actual/wt"}\n' "$TEST_DIR" > "$TEST_DIR/actual/.meta.json"
+    git -C "$TEST_DIR/actual" add .meta.json
+    git -C "$TEST_DIR/actual" -c user.email=t@t -c user.name=t commit --quiet -m init
+    mkdir -p "$TEST_DIR/actual/.meta/plugins"
+    cat > "$TEST_DIR/actual/.meta/plugins/meta-nestedtool" <<'EOF'
 #!/bin/sh
 echo '{"name":"nestedtool","version":"1","commands":["nestedtool"]}'
 EOF
-    chmod +x "$TEST_DIR/nested/.meta/plugins/meta-nestedtool"
+    chmod +x "$TEST_DIR/actual/.meta/plugins/meta-nestedtool"
     python3 - "$TEST_DIR" <<'PY2'
 import json, sys
 path = sys.argv[1] + "/.meta.json"
 config = json.load(open(path))
-config["projects"]["nested"] = {"repo": "git@github.com:org/nested.git", "meta": True}
+config["projects"]["nested"] = {"repo": "git@github.com:org/nested.git", "path": "actual", "meta": True}
 json.dump(config, open(path, "w"))
 PY2
     git -C "$TEST_DIR" commit --quiet -am "nested"
 
-    "$META_BIN" git worktree create s --repo nested --recursive
-    cd "$TEST_DIR/.worktrees/s/nested"
-    # Its config's absolute worktrees_dir reads as nested's own
+    "$META_BIN" git worktree create one --repo nested --no-deps
+    cd "$TEST_DIR/.worktrees/one/nested"
+    # Its config's absolute worktrees_dir reads as actual's own
     run "$META_BIN" exec -- true
     [ "$status" -eq 0 ]
-    # and nested's plugins load, as in nested itself
+    # and actual's plugins load, as in actual itself
     run "$META_BIN" plugin list --json
     [[ "$output" == *"nestedtool"* ]]
+}
+
+@test "sets made from inside sets are the workspace's sets" {
+    "$META_BIN" git worktree create first --repo . --no-deps
+    cd "$TEST_DIR/.worktrees/first"
+    "$META_BIN" git worktree create second --repo . --no-deps
+    [ -d "$TEST_DIR/.worktrees/second" ]
+    cd "$TEST_DIR/.worktrees/second"
+    "$META_BIN" git worktree create third --repo . --no-deps
+    [ -d "$TEST_DIR/.worktrees/third" ]
+    "$META_BIN" git worktree create expiring --repo . --no-deps --ttl 0
+    run "$META_BIN" git worktree remove first
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_DIR/.worktrees/first" ]
+
+    # With the set they were made from gone, they are still the workspace's
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_DIR/.worktrees/expiring" ]
+    run "$META_BIN" git worktree remove third
+    [ "$status" -eq 0 ]
 }
 
 @test "remove names the parts of the workspace it couldn't read" {

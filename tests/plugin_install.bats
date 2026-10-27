@@ -13,8 +13,8 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
-    HOME_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
+    HOME_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     PLUGINS_DIR="$HOME_DIR/.meta/plugins"
 
     # Isolate plugin discovery so tests don't find real plugins:

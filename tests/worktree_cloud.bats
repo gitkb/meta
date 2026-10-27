@@ -16,11 +16,11 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
     chmod +x "$TEST_DIR/.meta/plugins/meta-git"
-    META_DATA="$(mktemp -d)"
+    META_DATA="$(cd "$(mktemp -d)" && pwd -P)"
     export META_DATA_DIR="$META_DATA"
 
     # Create .meta config with two projects

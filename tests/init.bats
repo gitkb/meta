@@ -13,10 +13,10 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
 
     # Stub claude to detect unintended global marketplace changes
-    STUB_DIR="$(mktemp -d)"
+    STUB_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     printf '#!/bin/sh\necho "$*" >> "%s/claude-calls"\n' "$STUB_DIR" > "$STUB_DIR/claude"
     chmod +x "$STUB_DIR/claude"
     PATH="$STUB_DIR:$PATH"

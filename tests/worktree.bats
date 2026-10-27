@@ -15,7 +15,7 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
     chmod +x "$TEST_DIR/.meta/plugins/meta-git"
@@ -459,7 +459,7 @@ assert d['totals']['files_changed'] >= 1
 # ============ Configuration ============
 
 @test "META_WORKTREES env overrides default location" {
-    CUSTOM_DIR="$(mktemp -d)"
+    CUSTOM_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     META_WORKTREES="$CUSTOM_DIR" run "$META_BIN" git worktree create env-test --repo backend
     [ "$status" -eq 0 ]
     [ -d "$CUSTOM_DIR/env-test/backend" ]
@@ -618,6 +618,23 @@ assert d['totals']['files_changed'] >= 1
     run "$META_BIN" git worktree status "$E"; check
     run "$META_BIN" git worktree diff "$E"; check
     run "$META_BIN" git worktree create okb --all --branch "$E"; check
+    # A real set, compared against a bad base
+    "$META_BIN" git worktree create based --repo backend
+    run "$META_BIN" git worktree diff based --base "$E"
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+}
+
+@test "gh's error for --from-pr is escaped on one line" {
+    cd "$TEST_DIR"
+    mkdir -p "$TEST_DIR/fakebin"
+    printf '#!/bin/sh\nprintf "no such PR\\033[2J\\nFORGED\\n" >&2\nexit 1\n' > "$TEST_DIR/fakebin/gh"
+    chmod +x "$TEST_DIR/fakebin/gh"
+    PATH="$TEST_DIR/fakebin:$PATH" run "$META_BIN" git worktree create probe --from-pr o/r#1 --repo . --no-deps
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Failed to resolve PR #1"* ]]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
 }
 
 @test "unrecognized worktree command shows help" {

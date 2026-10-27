@@ -7,7 +7,7 @@ sha256() {
 }
 
 setup() {
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     RELEASES="$TEST_DIR/releases"
     INSTALL_DIR="$TEST_DIR/bin"
     mkdir -p "$RELEASES/latest/download" "$TEST_DIR/archive"

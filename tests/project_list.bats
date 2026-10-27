@@ -16,7 +16,7 @@ setup() {
     fi
 
     # Create a temp directory for each test
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins"
     cp "$META_PROJECT_BIN" "$TEST_DIR/.meta/plugins/meta-project"
     chmod +x "$TEST_DIR/.meta/plugins/meta-project"
@@ -340,7 +340,7 @@ assert nested_lib is not None, f'nested-lib not found in vendor projects: {neste
 }
 
 @test "meta project list rejects a project reached through a symlink out of the workspace" {
-    OUTSIDE="$(mktemp -d)"
+    OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
     ln -s "$OUTSIDE" linked
     echo '{"projects": {"linked": "git@github.com:org/linked.git"}}' > .meta.json
     run "$META_BIN" project list

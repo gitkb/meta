@@ -65,10 +65,9 @@ Add a repo to an existing set with `meta git worktree add auth-fix --repo anothe
 
 `--from-pr` uses the PR's head branch name and fetches it from the child repo
 whose `origin` matches; it does not check out a fork's branch or pin the head
-SHA. It never applies to the root repo. When no repo matches it only warns and
-keeps the set's own branch; when the fetch fails it warns and still uses a branch
-named after the PR, without the PR's commits (add `--strict` to make either an
-error). To continue a PR on the root repo, check out its branch directly:
+SHA. It never applies to the root repo. When no selected repo matches, or the
+fetch fails, create fails and makes nothing. To continue a PR on the root repo,
+check out its branch directly:
 
 ```bash
 git fetch origin my-feature:my-feature   # create or fast-forward the local branch
@@ -76,8 +75,7 @@ meta git worktree create review --repo .:my-feature --repo backend --strict
 ```
 
 Don't pass `origin/my-feature` as the commit-ish here: with a commit-ish, create
-always makes a new branch, which fails when `my-feature` already exists locally
-(and without `--strict` that failure is only a warning).
+always makes a new branch, which fails when `my-feature` already exists locally.
 
 With `--from-pr` on a child repo whose PR branch already exists locally, `create`
 checks that branch out as it is (the fetch only updates `origin/<branch>`), so

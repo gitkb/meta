@@ -14,8 +14,8 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
-    NO_CONFIG_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
+    NO_CONFIG_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins" "$TEST_DIR/api" "$TEST_DIR/web"
     mkdir -p "$NO_CONFIG_DIR/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
@@ -200,6 +200,11 @@ teardown() {
         [[ "$output" != *$'\033'* ]]
         [[ "$output" != *$'\nFORGED'* ]]
     done
+    # loop's verbose echo of its config path
+    # (loop colours its own result lines, so look for the injected sequence)
+    run "$LOOP_BIN" --verbose --config $'bad\033[2J\nFORGED' true
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
     run "$META_BIN" --depth $'1\033[2J\nFORGED' exec -- true
     [ "$status" -ne 0 ]
     [[ "$output" != *$'\033'* ]]

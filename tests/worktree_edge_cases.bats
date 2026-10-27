@@ -7,6 +7,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
 
@@ -1136,6 +1137,25 @@ EOF2
     for member in . backend frontend; do
         [ -e "$META_WORKTREES/mix/$member/.git" ]
     done
+}
+
+@test "prune and remove from inside a worktree set act on the workspace's sets" {
+    "$META_BIN" git worktree create inside --repo backend
+    "$META_BIN" git worktree create other --repo frontend --ttl 0
+    "$META_BIN" git worktree create named --repo frontend
+    [ -f "$TEST_DIR/.worktrees/inside/.meta.json" ]
+
+    # The set's root checkout is the workspace's, not a workspace of its own
+    cd "$TEST_DIR/.worktrees/inside"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"other"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/other" ]
+
+    cd "$TEST_DIR/.worktrees/inside/backend"
+    META_WORKTREES="$TEST_DIR/.worktrees" run "$META_BIN" git worktree remove named
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_DIR/.worktrees/named" ]
 }
 
 @test "a workspace nested in another, but not listed by it, can't prune or remove its sets" {

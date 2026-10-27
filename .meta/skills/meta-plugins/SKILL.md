@@ -57,7 +57,8 @@ meta --include api cargo clippy --all-targets -- -D warnings
 Plugins are discovered from:
 1. `.meta/plugins/` next to the nearest meta config, then next to each parent
    meta config that lists it as a project (one workspace), nearest first; a
-   parent that doesn't list it is not read. `meta plugin install <name> --local`
+   parent that doesn't list it is not read. Inside a worktree set, a checkout
+   counts as the main checkout it was made from. `meta plugin install <name> --local`
    installs into the nearest one
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install` installs
 3. Executables named `meta-*` in PATH

@@ -17,7 +17,7 @@ meta init claude --update
 meta init claude --force
 ```
 
-**settings.json.** `meta init claude` adds meta's hooks (`SessionStart` and `PreCompact` run `meta context`, `PreToolUse` runs `agent guard` for Bash) to `.claude/settings.json`, keeping everything else in it. It never replaces the file, `--force` included. It merges only into the layout Claude Code documents: a JSON object whose `hooks` is an object of arrays. Anything else (invalid JSON, an array, `hooks` or a hook event that isn't that shape) stops the command with an error naming the file and the key, before anything is written, so you can fix the file and rerun. The output says what it did: created the file, added which hooks, or found meta's hooks already there. `--update` leaves settings.json alone.
+**settings.json.** `meta init claude` adds meta's hooks (`SessionStart` and `PreCompact` run `meta context`, `PreToolUse` runs `agent guard` for Bash) to `.claude/settings.json`, keeping everything else in it. It never replaces the file, `--force` included. It merges only into the layout Claude Code documents: a JSON object whose `hooks` is an object, with `SessionStart`, `PreToolUse` and `PreCompact` (the events meta adds to) each an array. Anything else (invalid JSON, an array, `hooks` or one of those three events in another shape) stops the command with an error naming the file and the key, before anything is written, so you can fix the file and rerun. The output says what it did: created the file, added which hooks, or found meta's hooks already there. `--update` leaves settings.json alone.
 
 **Plugin marketplace.** `meta init claude` writes only inside the repo. To get the same skills in every project through Claude Code's plugin system, run the two commands it prints: `claude plugin marketplace add gitkb/claude-plugins`, then `claude plugin install meta@gitkb`.
 
@@ -196,4 +196,4 @@ Skills are embedded in the `meta` binary and updated with each release. To get t
 1. Update meta: `brew upgrade meta-cli` or reinstall
 2. Refresh skills: `meta init claude --update`
 
-`--update` overwrites the skill and rule files with the latest versions, turns older layouts into links, and keeps `settings.json`; `--force` also overwrites `settings.json`.
+`--update` overwrites the skill and rule files with the latest versions, turns older layouts into links, and leaves `settings.json` alone; `--force` does the same and also merges meta's hooks into `settings.json`, never replacing it.

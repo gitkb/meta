@@ -7,6 +7,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
 
@@ -681,6 +682,24 @@ EOF
 @test "exec stdout broken pipe exits quietly without a panic" {
     for mode in --parallel --sequential; do
         run bash -c 'set -o pipefail; "$1" "$2" exec -- seq 1 20000 2>"$3" | head -1' _ "$META_BIN" "$mode" "$TEST_DIR/stderr"
+        [[ "$status" -eq 0 || "$status" -eq 141 ]]
+        [ ! -s "$TEST_DIR/stderr" ]
+    done
+}
+
+@test "plugin output to a closed stdout exits quietly without a panic" {
+    mkdir -p .meta/plugins
+    cat > .meta/plugins/meta-chatty <<'EOF'
+#!/bin/sh
+if [ "$1" = --meta-plugin-info ]; then
+    echo '{"name":"chatty","version":"1","commands":["chatty"]}'
+else
+    seq 1 200000
+fi
+EOF
+    chmod +x .meta/plugins/meta-chatty
+    for args in chatty "chatty go"; do
+        run bash -c 'set -o pipefail; "$1" $2 2>"$3" | head -1' _ "$META_BIN" "$args" "$TEST_DIR/stderr"
         [[ "$status" -eq 0 || "$status" -eq 141 ]]
         [ ! -s "$TEST_DIR/stderr" ]
     done

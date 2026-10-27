@@ -6,6 +6,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
 
     if [ ! -f "$META_BIN" ]; then
@@ -153,7 +154,7 @@ teardown() {
 
 @test "plugin list --local outside workspace shows error" {
     run "$META_BIN" plugin list --local
-    [ "$status" -eq 0 ]  # Command succeeds but shows message
+    [ "$status" -ne 0 ]
     [[ "$output" =~ "Not in a meta workspace" ]]
 }
 

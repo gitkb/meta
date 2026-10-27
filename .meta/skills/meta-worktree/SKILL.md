@@ -167,7 +167,8 @@ no branch, and files outside every repo count as work. `remove` refuses such a
 set unless `--force`; `prune` keeps it. Both act only on sets of the current
 workspace: sets whose every worktree is recorded in one of the workspace's
 repositories. Another workspace's set is never touched, even when both share a
-`META_WORKTREES` directory; `remove` refuses it and names its workspace.
+`META_WORKTREES` directory; `remove` refuses it and names its workspace. Run
+from inside a set, they act on the workspace the set was made from.
 `--force` and `exec --ephemeral` discard that work: commit and push first.
 
 ## Lifecycle Hooks

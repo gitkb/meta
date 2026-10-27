@@ -7,6 +7,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     # Build binaries if not already built
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"

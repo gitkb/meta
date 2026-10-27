@@ -7,6 +7,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
 
@@ -550,6 +551,24 @@ assert d['totals']['files_changed'] >= 1
 }
 
 # ============ Unrecognized command handling (meta-7) ============
+
+@test "unrecognized worktree command is escaped on one line" {
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree $'bad\033]0;TITLE\007\nFORGED'
+    [ "$status" -eq 1 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    [[ "$output" == *"unrecognized worktree subcommand 'bad"* ]]
+}
+
+@test "an invalid option value is escaped on one line" {
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree create ttl-bad --repo backend --ttl $'bad\033[2J\nFORGEDs'
+    [ "$status" -ne 0 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    [[ "$output" == *"--ttl"* ]]
+}
 
 @test "unrecognized worktree command shows help" {
     cd "$TEST_DIR"

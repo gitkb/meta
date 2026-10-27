@@ -1130,10 +1130,17 @@ EOF2
         run "$META_BIN" git worktree remove mix --force
         [ "$status" -ne 0 ]
         [[ "$output" == *"not a set of this workspace"* ]]
-        run "$META_BIN" git worktree prune
-        [ "$status" -eq 0 ]
-        [[ "$output" == *"Kept 1 worktree(s)"*"mix (ttl_expired, but "*"is not one of this workspace's"* ]]
     done
+    # Its records name the other workspace, so this one's prune leaves it be
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"mix"* ]]
+    # and the other keeps it, since one of its worktrees isn't the other's
+    cd "$OTHER"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Kept 1 worktree(s)"*"mix (ttl_expired, but "*"is not one of this workspace's"* ]]
     for member in . backend frontend; do
         [ -e "$META_WORKTREES/mix/$member/.git" ]
     done
@@ -1189,13 +1196,23 @@ EOF
     # A and B share the root repository: a set of only the root made in A
     # is still A's
     (cd "$TEST_DIR" && "$META_BIN" git worktree create aroot --repo . --no-deps --ttl 0)
-    run "$META_BIN" git worktree prune
+    run "$META_BIN" --strict git worktree prune
     [ "$status" -eq 0 ]
+    [[ "$output" != *"aroot"* ]]
     [ -d "$TEST_DIR/.worktrees/aroot" ]
     META_WORKTREES="$TEST_DIR/.worktrees" run "$META_BIN" git worktree remove aroot --force
     [ "$status" -ne 0 ]
     [[ "$output" == *"the workspace at $TEST_DIR made it"* ]]
     [ -d "$TEST_DIR/.worktrees/aroot" ]
+
+    # Nor are A's records of a set whose directory is gone B's to forget
+    (cd "$TEST_DIR" && "$META_BIN" git worktree create agone --repo . --no-deps)
+    rm -rf "$TEST_DIR/.worktrees/agone"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    grep -q agone "$TEST_DIR"/.git/worktrees/*/meta-worktree.json
+    (cd "$TEST_DIR" && "$META_BIN" git worktree prune)
+    ! grep -q agone "$TEST_DIR"/.git/worktrees/*/meta-worktree.json
 
     # From inside one of B's sets, remove finds B's sets, not A's same-named one
     (cd "$TEST_DIR" && "$META_BIN" git worktree create twin --repo backend --no-deps)

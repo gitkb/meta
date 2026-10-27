@@ -63,6 +63,9 @@ meta git worktree create auth-fix --repo backend --dry-run
 
 Add a repo to an existing set with `meta git worktree add auth-fix --repo another-service`.
 
+A set lays its repos out as the workspace does: each repo sits at its `path`
+from the meta config, so relative references between repos keep working.
+
 `--from-pr` uses the PR's head branch name and fetches it from the child repo
 whose `origin` matches; it does not check out a fork's branch or pin the head
 SHA. It never applies to the root repo. When no selected repo matches, or the

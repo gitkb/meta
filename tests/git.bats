@@ -826,3 +826,11 @@ EOF
     [ ! -e "$UP/outside" ]
     rm -rf "$UP"
 }
+
+@test "meta git clone escapes the URL it echoes" {
+    cd "$TEST_DIR"
+    run "$META_BIN" --dry-run git clone $'q\033[2J\nFORGED'
+    [[ "$output" == *"Would clone"* ]]
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+}

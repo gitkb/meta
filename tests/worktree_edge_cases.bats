@@ -735,14 +735,18 @@ EOF
 }
 
 @test "worktree create refuses a destination the root checkout made a symlink" {
-    # The root repo tracks a symlink named like a project; checking out the
-    # root worktree recreates it where that project's worktree would go
+    # The root repo tracks a symlink on the way to a project's path;
+    # checking out the root worktree recreates it where that project's
+    # worktree would go (the workspace itself keeps a real directory there)
     OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
-    ln -s "$OUTSIDE" "$TEST_DIR/evil"
+    mkdir -p "$TEST_DIR/sub"
+    git clone --quiet "$TEST_DIR/backend" "$TEST_DIR/sub/backend"
     cat > "$TEST_DIR/.meta.json" <<'J'
-{"projects": {"evil": {"repo": "git@github.com:org/backend.git", "path": "backend"}}}
+{"projects": {"evil": {"repo": "git@github.com:org/backend.git", "path": "sub/backend"}}}
 J
-    git -C "$TEST_DIR" add evil .meta.json
+    blob="$(printf '%s' "$OUTSIDE" | git -C "$TEST_DIR" hash-object -w --stdin)"
+    git -C "$TEST_DIR" update-index --add --cacheinfo "120000,$blob,sub"
+    git -C "$TEST_DIR" add .meta.json
     git -C "$TEST_DIR" commit --quiet -m "track a symlink"
 
     run "$META_BIN" git worktree create t --repo . --repo evil
@@ -1190,14 +1194,29 @@ json.dump(config, open(path, "w"))
 PY2
     git -C "$TEST_DIR" commit --quiet -am "nested"
 
-    "$META_BIN" git worktree create one --repo nested --no-deps
-    cd "$TEST_DIR/.worktrees/one/nested"
+    # The set lays its repos out as the workspace: nested at actual
+    "$META_BIN" git worktree create one --all
+    [ -d "$TEST_DIR/.worktrees/one/actual" ]
+    mkdir -p "$TEST_DIR/.worktrees/one/.meta/plugins"
+    cat > "$TEST_DIR/.worktrees/one/.meta/plugins/meta-settool" <<'EOF'
+#!/bin/sh
+echo '{"name":"settool","version":"1","commands":["settool"]}'
+EOF
+    chmod +x "$TEST_DIR/.worktrees/one/.meta/plugins/meta-settool"
+    cd "$TEST_DIR/.worktrees/one/actual"
     # Its config's absolute worktrees_dir reads as actual's own
     run "$META_BIN" exec -- true
     [ "$status" -eq 0 ]
-    # and actual's plugins load, as in actual itself
+    # and it reads the set root's plugins, then actual's, as in actual itself
     run "$META_BIN" plugin list --json
+    [[ "$output" == *"settool"* ]]
     [[ "$output" == *"nestedtool"* ]]
+
+    # A set made from inside this one finds its repos where they are
+    cd "$TEST_DIR/.worktrees/one"
+    run "$META_BIN" git worktree create two --all
+    [ "$status" -eq 0 ]
+    [ -d "$TEST_DIR/.worktrees/two/actual" ]
 }
 
 @test "sets made from inside sets are the workspace's sets" {
@@ -1291,15 +1310,21 @@ EOF
     ! grep -q agone "$TEST_DIR"/.git/worktrees/*/meta-worktree.json
 
     # Once B is moved, its sets' records name a project that is gone: A
-    # still doesn't take them for its own
-    "$META_BIN" git worktree create bmoved --repo . --no-deps --ttl 0
-    echo work > "$B/.worktrees/bmoved/untracked"
+    # still doesn't take them for its own. The sets live outside B, so
+    # moving B leaves them intact
+    BWT="$BATS_TEST_TMPDIR/bwt"
+    META_WORKTREES="$BWT" "$META_BIN" git worktree create bclean --repo . --no-deps --ttl 0
+    META_WORKTREES="$BWT" "$META_BIN" git worktree create bdirty --repo . --no-deps
+    echo work > "$BWT/bdirty/untracked"
     git -C "$TEST_DIR" worktree move "$B" "$B-moved"
-    (cd "$TEST_DIR" && "$META_BIN" git worktree prune)
-    [ -f "$B-moved/.worktrees/bmoved/untracked" ]
-    run bash -c 'cd "$1" && META_WORKTREES="$2" "$3" git worktree remove bmoved --force' _ "$TEST_DIR" "$B-moved/.worktrees" "$META_BIN"
+    run bash -c 'cd "$1" && META_WORKTREES="$2" "$3" git worktree prune' _ "$TEST_DIR" "$BWT" "$META_BIN"
+    [ "$status" -eq 0 ]
+    [ -d "$BWT/bclean" ]
+    grep -q bclean "$TEST_DIR"/.git/worktrees/*/meta-worktree.json
+    run bash -c 'cd "$1" && META_WORKTREES="$2" "$3" git worktree remove bdirty --force' _ "$TEST_DIR" "$BWT" "$META_BIN"
     [ "$status" -ne 0 ]
-    [ -f "$B-moved/.worktrees/bmoved/untracked" ]
+    [[ "$output" == *"not a set of this workspace"*"the workspace at $B made it, and it is gone or was moved"*"git worktree remove"* ]]
+    [ -f "$BWT/bdirty/untracked" ]
     git -C "$TEST_DIR" worktree move "$B-moved" "$B"
 
     # From inside one of B's sets, remove finds B's sets, not A's same-named one

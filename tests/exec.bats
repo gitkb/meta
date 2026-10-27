@@ -719,6 +719,15 @@ EOF
     done
 }
 
+@test "a hostile command name is escaped in meta's own lines" {
+    E=$'bad\033[2J\nFORGED'
+    for mode in --parallel --sequential --dry-run; do
+        run "$META_BIN" "$mode" exec -- "$E"
+        [[ "$output" != *$'\033[2J'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+    done
+}
+
 @test "include and exclude errors escape controls and stay on one line" {
     for flag in --include --exclude; do
         run "$META_BIN" "$flag" $'bad\033[31m\nFORGED' exec -- echo hello

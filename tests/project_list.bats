@@ -374,6 +374,12 @@ J
             run "$META_BIN" "$flag" frontend project "$command" --recursive --json
             [ "$status" -ne 0 ]
             [[ "$output" == *"meta project list does not take --include/--exclude"* ]]
+            # after the subcommand too, and in --flag=value form
+            for trailing in "$flag frontend" "$flag=frontend"; do
+                run "$META_BIN" project "$command" $trailing --json
+                [ "$status" -ne 0 ]
+                [[ "$output" == *"meta project list does not take --include/--exclude"* ]]
+            done
         done
     done
 }

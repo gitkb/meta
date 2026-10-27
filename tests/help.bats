@@ -205,6 +205,9 @@ teardown() {
     run "$LOOP_BIN" --verbose --config $'bad\033[2J\nFORGED' true
     [[ "$output" != *$'\033[2J'* ]]
     [[ "$output" != *$'\nFORGED'* ]]
+    run "$LOOP_BIN" --verbose true $'bad\033[2J\nFORGED'
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
     run "$META_BIN" --depth $'1\033[2J\nFORGED' exec -- true
     [ "$status" -ne 0 ]
     [[ "$output" != *$'\033'* ]]

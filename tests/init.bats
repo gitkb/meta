@@ -470,7 +470,7 @@ assert_settings_refused_without_changes() {
         run "$META_BIN" init claude $flag
         [ "$status" -ne 0 ]
         [[ "$output" == *".claude/settings.json"* ]]
-        [[ "$output" == *"key '$key'"* ]]
+        [[ "$output" == *"$key"* ]]
         [[ "$output" != *"Installed"* ]]
         [[ "$output" != *"Hooks:"* ]]
         [ "$(cat .claude/settings.json)" = "$content" ]
@@ -479,23 +479,21 @@ assert_settings_refused_without_changes() {
 }
 
 @test "init refuses settings array before writing any files" {
-    assert_settings_refused_without_changes '[{"user":"data"}]' '$'
-    [[ "$output" == *"must be an object"* ]]
+    assert_settings_refused_without_changes '[{"user":"data"}]' "must hold a JSON object"
 }
 
 @test "init refuses hooks array before writing any files" {
-    assert_settings_refused_without_changes '{"hooks":[{"mine":1}],"theme":"dark"}' hooks
+    assert_settings_refused_without_changes '{"hooks":[{"mine":1}],"theme":"dark"}' "key 'hooks'"
     [[ "$output" == *"must be an object"* ]]
 }
 
 @test "init refuses PreToolUse object before writing any files" {
-    assert_settings_refused_without_changes '{"hooks":{"PreToolUse":{"matcher":"Bash"}}}' hooks.PreToolUse
+    assert_settings_refused_without_changes '{"hooks":{"PreToolUse":{"matcher":"Bash"}}}' "key 'hooks.PreToolUse'"
     [[ "$output" == *"must be an array"* ]]
 }
 
 @test "init refuses invalid JSON before writing any files" {
-    assert_settings_refused_without_changes '{invalid json' '$'
-    [[ "$output" == *"Invalid JSON"* ]]
+    assert_settings_refused_without_changes '{invalid json' "Invalid JSON"
 }
 
 @test "init compares whole hook groups including matcher and reports only added hooks" {

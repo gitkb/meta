@@ -78,7 +78,7 @@ meta --strict git worktree prune
 - The root repo skipped because a commit-ish is missing there (worktree create)
 - Invalid `--meta` format values (worktree create)
 - Failed directory removal (worktree prune)
-- Worktree sets prune can't check or whose records it can't read (worktree prune)
+- Any set prune keeps: one holding work, a worktree meta has no record of, a worktree from another workspace, or a record it can't read (worktree prune)
 
 **When to use --strict:**
 - CI pipelines testing a specific release tag across all repos

@@ -570,6 +570,14 @@ assert d['totals']['files_changed'] >= 1
     [[ "$output" == *"--ttl"* ]]
 }
 
+@test "an unknown recursive repo alias is escaped on one line" {
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree create badrepo --recursive --repo $'a\033[2J\nFORGED'
+    [ "$status" -ne 0 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+}
+
 @test "unrecognized worktree command shows help" {
     cd "$TEST_DIR"
     run "$META_BIN" git worktree blablabla

@@ -28,7 +28,8 @@ primary checkout.
 Create one set per task, with only the repos it touches, and remove it once the
 work is pushed. Before a session ends, remove every set it created. Run
 `meta git worktree` commands from the primary checkout: inside a set they look
-for sets under that set (only `list` understands the current set).
+for sets under that set (only `list`, `remove` and `prune` understand the
+current set).
 
 ## Creating Worktrees
 

@@ -149,7 +149,7 @@ teardown() {
     run "$META_BIN" plugin install --local nonexistent/repo
     [ "$status" -ne 0 ]
     [[ "$output" =~ "Not in a meta workspace" ]]
-    [[ "$output" =~ "meta init" ]]
+    [[ "$output" =~ "Create one here" ]]
 }
 
 @test "plugin list --local outside workspace shows error" {

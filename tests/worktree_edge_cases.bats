@@ -1185,6 +1185,27 @@ EOF
 
     run "$META_BIN" plugin list
     [[ "$output" != *"hello"* ]]
+
+    # A and B share the root repository: a set of only the root made in A
+    # is still A's
+    (cd "$TEST_DIR" && "$META_BIN" git worktree create aroot --repo . --no-deps --ttl 0)
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [ -d "$TEST_DIR/.worktrees/aroot" ]
+    META_WORKTREES="$TEST_DIR/.worktrees" run "$META_BIN" git worktree remove aroot --force
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"the workspace at $TEST_DIR made it"* ]]
+    [ -d "$TEST_DIR/.worktrees/aroot" ]
+
+    # From inside one of B's sets, remove finds B's sets, not A's same-named one
+    (cd "$TEST_DIR" && "$META_BIN" git worktree create twin --repo backend --no-deps)
+    "$META_BIN" git worktree create bctx --repo . --no-deps
+    "$META_BIN" git worktree create twin --repo backend --no-deps
+    cd "$B/.worktrees/bctx"
+    run "$META_BIN" git worktree remove twin
+    [ "$status" -eq 0 ]
+    [ ! -e "$B/.worktrees/twin" ]
+    [ -d "$TEST_DIR/.worktrees/twin" ]
 }
 
 @test "prune and remove from inside a worktree set act on the workspace's sets" {

@@ -48,7 +48,7 @@ name = "meta-docker"
 
 ### External Executables
 
-Any executable in your PATH or `.meta-plugins` directory:
+Any executable named `meta-<name>` in your PATH or a plugins directory (see [Plugin Discovery](#plugin-discovery)):
 
 ```bash
 #!/bin/bash

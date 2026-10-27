@@ -833,4 +833,12 @@ EOF
     [[ "$output" == *"Would clone"* ]]
     [[ "$output" != *$'\033[2J'* ]]
     [[ "$output" != *$'\nFORGED'* ]]
+    # and when it really clones (git stubbed out: it fails quietly)
+    mkdir -p "$TEST_DIR/fakebin"
+    printf '#!/bin/sh\nexit 1\n' > "$TEST_DIR/fakebin/git"
+    chmod +x "$TEST_DIR/fakebin/git"
+    PATH="$TEST_DIR/fakebin:$PATH" run "$META_BIN" git clone $'q\033[2J\nFORGED'
+    [[ "$output" == *"Cloning meta repository: "'q\u{1b}[2J\nFORGED'* ]]
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
 }

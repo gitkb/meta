@@ -727,6 +727,11 @@ EOF
         [[ "$output" != *$'\nFORGED'* ]]
         [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
     done
+    # and in meta's own --verbose echo of the command
+    run "$META_BIN" --verbose exec -- "$E"
+    [[ "$output" == *"Executing command:"*'bad\u{1b}[2J\nFORGED'* ]]
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
     # and in the line for a listed project that isn't cloned
     mkdir "$TEST_DIR/ghostws"
     cd "$TEST_DIR/ghostws"

@@ -1492,3 +1492,63 @@ set_projects() {
     [ "$(git -C "$TEST_DIR/.worktrees/review/actual" branch --show-current)" = "parent-branch" ]
     [ -e "$TEST_DIR/.worktrees/review/actual/leaf/.git" ]
 }
+
+@test "an agent's own worktree inside a set is not a member of it" {
+    commit_repo "$TEST_DIR/api"
+    set_projects '{"api": {"repo": "git@x:o/api.git", "tags": ["be"]}}'
+    "$META_BIN" git worktree create s --all
+    git -C "$TEST_DIR/.worktrees/s" worktree add --quiet .claude/worktrees/agent-1 -b agent-1
+    cd "$TEST_DIR/.worktrees/s/api"
+    for args in "exec -- pwd" "--tag be exec -- pwd"; do
+        run "$META_BIN" $args
+        [ "$status" -eq 0 ]
+        [[ "$output" != *"agent-1"* ]]
+    done
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree list --recursive --metadata-only --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"s"'* ]]
+    [[ "$output" != *"agent-1"* ]]
+}
+
+@test "a nested repo's parent is the repo at its path, not one by that name" {
+    commit_repo "$TEST_DIR/beta"
+    commit_repo "$TEST_DIR/beta/leaf"
+    printf '{"projects": {"leaf": "git@x:o/l.git"}}\n' > "$TEST_DIR/beta/.meta.json"
+    commit_repo "$TEST_DIR/gamma"
+    set_projects '{"alpha": {"repo": "git@x:o/a.git", "path": "beta", "meta": true},
+                   "beta": {"repo": "git@x:o/b.git", "path": "gamma"}}'
+    run "$META_BIN" git worktree create s --repo beta --repo beta/leaf --no-deps
+    [ "$status" -eq 0 ]
+    # beta (at gamma), and leaf with its parent alpha (at beta)
+    [ -e "$TEST_DIR/.worktrees/s/gamma/.git" ]
+    [ -e "$TEST_DIR/.worktrees/s/beta/.git" ]
+    [ -e "$TEST_DIR/.worktrees/s/beta/leaf/.git" ]
+}
+
+@test "a project at a linked path inside the workspace keeps that path in a set" {
+    commit_repo "$TEST_DIR/real"
+    ln -s real "$TEST_DIR/link"
+    set_projects '{"app": {"repo": "git@x:o/app.git", "path": "link", "tags": ["backend"]}}'
+    "$META_BIN" git worktree create s --all
+    [ -e "$TEST_DIR/.worktrees/s/link/.git" ]
+    [ ! -e "$TEST_DIR/.worktrees/s/real" ]
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" --include app exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/s/link"* ]]
+}
+
+@test "worktree exec takes project names in a set without its root" {
+    commit_repo "$TEST_DIR/actual"
+    set_projects '{"api": {"repo": "git@x:o/api.git", "path": "actual"}}'
+    "$META_BIN" git worktree create subset --repo api --no-deps
+    [ ! -e "$TEST_DIR/.worktrees/subset/.git" ]
+    for flag in --include --exclude; do
+        run "$META_BIN" git worktree exec subset "$flag" api -- pwd
+        [[ "$output" != *"names none"* ]]
+    done
+    run "$META_BIN" git worktree exec subset --include api -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/subset/actual"* ]]
+}

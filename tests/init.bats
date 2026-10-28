@@ -74,6 +74,15 @@ teardown() {
     [ "$(readlink .cursor/skills/meta-git)" = "../../.meta/skills/meta-git" ]
 }
 
+@test "init claude stops on a .meta file where its folder goes, writing nothing" {
+    printf '{}' > .meta
+    run "$META_BIN" init claude
+    [ "$status" -ne 0 ]
+    [ -f .meta ]
+    [ ! -e .claude ]
+    [ ! -e .agents ]
+}
+
 @test "init claude --help installs nothing" {
     run "$META_BIN" init claude --help
     [ "$status" -eq 0 ]

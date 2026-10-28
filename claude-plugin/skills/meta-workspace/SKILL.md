@@ -1,6 +1,6 @@
 ---
 name: meta-workspace
-description: Understanding and operating in meta repository workspaces with .meta/.meta.yaml configuration.
+description: Understanding and operating in meta repository workspaces with .meta.yaml configuration.
 ---
 
 # Meta Workspace Skill

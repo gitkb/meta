@@ -224,7 +224,7 @@ User: meta git status --tag backend
               ▼
     ┌─────────────────────┐
     │  Load Configuration │
-    │  (.meta/.meta.yaml) │
+    │    (.meta.yaml)     │
     └─────────────────────┘
               │
               ▼

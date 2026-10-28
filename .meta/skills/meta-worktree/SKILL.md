@@ -102,7 +102,8 @@ it only forgets meta's record. Once its repos are taken out of the meta config,
 or the checkout it was made from is moved or deleted, a set is no longer the
 workspace's: remove each member with `git worktree remove`, run in the repo it
 was made from. A member whose repo was deleted with that checkout has no git
-record left, so git can't remove it: delete its folder by hand. `--ephemeral` alone only records metadata. A TTL is a backstop for a session that
+record left, so git can't remove it: copy out any files you want to keep,
+then delete its folder by hand. `--ephemeral` alone only records metadata. A TTL is a backstop for a session that
 dies before removing its sets.
 
 ## Inspecting Worktrees

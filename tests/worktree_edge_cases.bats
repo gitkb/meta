@@ -1556,10 +1556,45 @@ set_projects() {
     # its tags are its own, not "unknown, so it runs"
     run "$META_BIN" --tag other exec -- pwd
     [[ "$output" != *"/s/real"* ]]
+    # added again (on another branch), it is found where the link leads
     cd "$TEST_DIR"
+    run "$META_BIN" git worktree add s --repo app:feature
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Repo 'app' already exists in worktree 's'"* ]]
+    ! git -C "$TEST_DIR/real" rev-parse --verify -q feature
     run "$META_BIN" git worktree remove s --force
     [ "$status" -eq 0 ]
     [ ! -e "$TEST_DIR/.worktrees/s" ]
+}
+
+@test "a broken config in an unrelated nested meta repo doesn't stop create" {
+    commit_repo "$TEST_DIR/vendor/lib"
+    commit_repo "$TEST_DIR/child"
+    echo '{"projects": {}}' > "$TEST_DIR/child/.meta.json"
+    echo 'projects: {}' > "$TEST_DIR/child/.meta.yaml"
+    set_projects '{"lib": {"repo": "git@x:o/lib.git", "path": "vendor/lib"}, "child": {"repo": "git@x:o/c.git", "meta": true}}'
+    run "$META_BIN" git worktree create s --repo lib
+    [ "$status" -eq 0 ]
+    [ -e "$TEST_DIR/.worktrees/s/vendor/lib/.git" ]
+}
+
+@test "a tracked link through another link and .. leads where the workspace's does" {
+    mkdir -p "$TEST_DIR/real/base"
+    touch "$TEST_DIR/real/base/.keep"
+    commit_repo "$TEST_DIR/real/app"
+    ln -s real/base "$TEST_DIR/hop"
+    ln -s hop/../app "$TEST_DIR/link"
+    echo real/app/ >> "$TEST_DIR/.gitignore"
+    git -C "$TEST_DIR" add hop link real/base/.keep .gitignore
+    set_projects '{"app": {"repo": "git@x:o/app.git", "path": "link", "tags": ["backend"]}}'
+    run "$META_BIN" git worktree create s --all
+    [ "$status" -eq 0 ]
+    [ -e "$TEST_DIR/.worktrees/s/real/app/.git" ]
+    [ -e "$TEST_DIR/.worktrees/s/link/.git" ]
+    [ ! -e "$TEST_DIR/.worktrees/s/app" ]
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" --tag other exec -- pwd
+    [[ "$output" != *"/s/real/app"* ]]
 }
 
 @test "worktree exec takes project names in a set without its root" {

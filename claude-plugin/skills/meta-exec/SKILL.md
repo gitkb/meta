@@ -80,7 +80,7 @@ meta --tag backend --include api git status
 2. `--include` limits to the named repos
 3. `--exclude` removes the named repos
 
-A value names a whole repo, never part of a path: `api` does not match `api-tests`. A value that names no repo is an error, so a typo never runs a command in the repo you meant to skip. Inside a worktree set, a repo is named by its alias (its path in the set). A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too). The meta root repo stays included even when it doesn't match a tag.
+A value names a whole repo, never part of a path: `api` does not match `api-tests`. A value that names no repo is an error, so a typo never runs a command in the repo you meant to skip. Inside a worktree set the same holds: a repo sits at its project's path, so it is named by its `.meta` name or that path, from the set's root. A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too). The meta root repo stays included even when it doesn't match a tag.
 
 ## Dry Run
 

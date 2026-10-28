@@ -752,14 +752,14 @@ EOF
     done
 }
 
-@test "plugin closing stdin still reports an error instead of SIGPIPE death" {
+@test "a plugin closing stdin decides the result itself, not SIGPIPE" {
     cat > .meta/plugins/meta-close <<'SH'
 #!/bin/sh
 if [ "$1" = --meta-plugin-info ]; then
     printf '%s\n' '{"name":"close","version":"1","commands":["close"]}'
 else
     exec 0<&-
-    exit 0
+    exit 3
 fi
 SH
     chmod +x .meta/plugins/meta-close
@@ -767,7 +767,7 @@ SH
     local large
     large="$(python3 -c 'print("x" * 100000)')"
     run "$META_BIN" close "$large"
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"Error:"* ]]
+    # the plugin's status, not death by SIGPIPE (141) or a panic
+    [ "$status" -eq 3 ]
     [[ "$output" != *"panicked"* ]]
 }

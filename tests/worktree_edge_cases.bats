@@ -1884,6 +1884,20 @@ set_projects() {
     [ ! -e ran ]
 }
 
+@test "a set in a worktrees_dir under .worktrees runs nothing in the workspace" {
+    commit_repo "$TEST_DIR/.deps/x"
+    printf '{"projects": {"x": {"repo": "git@x:o/x.git", "path": ".deps/x"}}, "worktrees_dir": ".worktrees/w"}\n' > "$TEST_DIR/.meta.json"
+    git -C "$TEST_DIR" add .meta.json
+    git -C "$TEST_DIR" commit --quiet -m wdir
+    "$META_BIN" git worktree create s1 --repo x --no-deps
+    cd "$TEST_DIR/.worktrees/w/s1/.deps/x"
+    run "$META_BIN" exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--primary"* ]]
+    [ ! -e "$TEST_DIR/ran" ]
+    [ ! -e "$TEST_DIR/.deps/x/ran" ]
+}
+
 @test "a set with a part that can't be read runs nothing in the workspace" {
     [ "$(id -u)" -ne 0 ] || skip "root reads any directory"
     commit_repo "$TEST_DIR/.deps/child"

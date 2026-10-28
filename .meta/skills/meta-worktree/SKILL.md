@@ -36,7 +36,7 @@ made from keeps them, so running them there acts on the workspace's sets.
 # Specific repos (the root repo and their dependencies are added automatically)
 meta git worktree create auth-fix --repo backend --repo frontend
 
-# Only the named repos (and, for a repo nested inside another repo's path, that parent repo)
+# Only the named repos (and, for a repo nested inside another project's path, that parent project)
 meta git worktree create auth-fix --repo backend --no-deps
 
 # Every repo configured at this meta level
@@ -226,7 +226,7 @@ can't delete something, the error says what was left behind.
 | `[<commit-ish>]` | Start from a tag, SHA or branch (positional) |
 | `--repo <alias>[:<branch>]` | Add specific repo(s) |
 | `--all` | Add all repos at this meta level |
-| `--no-deps` | Skip automatic root and dependency selection (a repo nested inside another repo's path still gets that parent) |
+| `--no-deps` | Skip automatic root and dependency selection (a repo nested inside another project's path still gets that parent project) |
 | `-r, --recursive` | Resolve across nested meta repos (root-relative aliases) |
 | `--branch <name>` | Override the branch name |
 | `--from-pr <owner/repo#N>` | Start a child repo from a PR's head branch |

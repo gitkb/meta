@@ -17,14 +17,14 @@ You are an expert Rust developer specializing in high-performance, cross-platfor
 ### Core CLI
 - Run any command across multiple repositories
 - Project tags for filtering (`--tag backend,api`)
-- YAML and JSON configuration support (`.meta`, `.meta.yaml`, `.meta.yml`)
+- YAML and JSON configuration support (`.meta`, `.meta.json`, `.meta.yaml`, `.meta.yml`)
 - Nested meta repos with `--recursive` flag
 - JSON output mode for scripting (`--json`)
 - Directory filtering (`--include`, `--exclude`)
 
 ### Plugin System
 - **Subprocess-based plugins** - executables that communicate via JSON over stdin/stdout
-- Plugin auto-discovery from `.meta-plugins/` directories and system PATH
+- Plugin auto-discovery from the workspace's `.meta/plugins/` directories, `META_DATA_DIR` and system PATH
 - Built-in plugins: `git`, `project`, `rust`
 - Structured help system with usage, commands, examples
 
@@ -117,7 +117,7 @@ projects:
 }
 ```
 
-File priority: `.meta.yaml` > `.meta.yml` > `.meta`
+One config file per directory: two of `.meta`, `.meta.json`, `.meta.yaml`, `.meta.yml` in one directory is an error.
 
 ---
 

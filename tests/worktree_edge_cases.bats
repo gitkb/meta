@@ -804,7 +804,7 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"Intermediate parent 'vendor' for nested repo 'vendor/lib' is not a project of the workspace, skipping"* ]]
     [ "$(git -C "$TEST_DIR/unrelated" worktree list | wc -l)" -eq 1 ]
-    ! git -C "$TEST_DIR/unrelated" rev-parse --verify --quiet refs/heads/via-link
+    if git -C "$TEST_DIR/unrelated" rev-parse --verify --quiet refs/heads/via-link; then false; fi
 }
 
 @test "worktree add rechecks a destination after an earlier add in the same call" {
@@ -1319,7 +1319,7 @@ EOF
     [ "$status" -eq 0 ]
     grep -q agone "$TEST_DIR"/.git/worktrees/*/meta-worktree.json
     (cd "$TEST_DIR" && "$META_BIN" git worktree prune)
-    ! grep -q agone "$TEST_DIR"/.git/worktrees/*/meta-worktree.json
+    if grep -q agone "$TEST_DIR"/.git/worktrees/*/meta-worktree.json; then false; fi
 
     # Once B is moved, its sets' records name a project that is gone: A
     # still doesn't take them for its own. The sets live outside B, so
@@ -1556,12 +1556,24 @@ set_projects() {
     # its tags are its own, not "unknown, so it runs"
     run "$META_BIN" --tag other exec -- pwd
     [[ "$output" != *"/s/real"* ]]
+    # and its configured path names it too
+    for value in link ./link; do
+        run "$META_BIN" --include "$value" exec -- pwd
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"/s/real"* ]]
+    done
+    run "$META_BIN" --exclude link exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"/s/real"* ]]
+    run "$META_BIN" git worktree exec s --include link -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/s/real"* ]]
     # added again (on another branch), it is found where the link leads
     cd "$TEST_DIR"
     run "$META_BIN" git worktree add s --repo app:feature
     [ "$status" -ne 0 ]
     [[ "$output" == *"Repo 'app' already exists in worktree 's'"* ]]
-    ! git -C "$TEST_DIR/real" rev-parse --verify -q feature
+    if git -C "$TEST_DIR/real" rev-parse --verify -q feature; then false; fi
     run "$META_BIN" git worktree remove s --force
     [ "$status" -eq 0 ]
     [ ! -e "$TEST_DIR/.worktrees/s" ]
@@ -1576,6 +1588,20 @@ set_projects() {
     run "$META_BIN" git worktree create s --repo lib
     [ "$status" -eq 0 ]
     [ -e "$TEST_DIR/.worktrees/s/vendor/lib/.git" ]
+}
+
+@test "inside a set, a value that is one repo's linked path and another's name is ambiguous" {
+    commit_repo "$TEST_DIR/real"
+    commit_repo "$TEST_DIR/other"
+    ln -s real "$TEST_DIR/link"
+    printf 'real/\nother/\n' >> "$TEST_DIR/.gitignore"
+    git -C "$TEST_DIR" add link .gitignore
+    set_projects '{"app": {"repo": "git@x:o/app.git", "path": "link"}, "link": {"repo": "git@x:o/o.git", "path": "other"}}'
+    "$META_BIN" git worktree create s --all
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" --include link exec -- pwd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"by path and the repo at"* ]]
 }
 
 @test "a tracked link through another link and .. leads where the workspace's does" {
@@ -1657,7 +1683,7 @@ set_projects() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"is given twice, on branches 'first' and 'second'"* ]]
     [ ! -e "$TEST_DIR/.worktrees/t/libs" ]
-    ! git -C "$TEST_DIR/libs/core" rev-parse --verify -q second
+    if git -C "$TEST_DIR/libs/core" rev-parse --verify -q second; then false; fi
 }
 
 @test "a repo the workspace doesn't list is not added as a parent" {
@@ -1724,6 +1750,21 @@ set_projects() {
     [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
 }
 
+@test "a moved set whose records no longer match runs nothing in the workspace" {
+    commit_repo "$TEST_DIR/.deps/child"
+    set_projects '{"child": {"repo": "git@x:o/c.git", "path": ".deps/child"}}'
+    "$META_BIN" git worktree create s --repo child --no-deps
+    mv "$TEST_DIR/.worktrees/s" "$TEST_DIR/.worktrees/s2"
+    git -C "$TEST_DIR/.worktrees/s2/.deps/child" worktree repair
+    cd "$TEST_DIR/.worktrees/s2/.deps/child"
+    run "$META_BIN" exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"No checkouts of worktree set 's2'"* ]]
+    [ ! -e "$TEST_DIR/ran" ]
+    [ ! -e "$TEST_DIR/.deps/child/ran" ]
+    [ ! -e ran ]
+}
+
 @test "a project named like a path gets no parents from its name" {
     commit_repo "$TEST_DIR/actual"
     commit_repo "$TEST_DIR/tools"
@@ -1744,7 +1785,7 @@ set_projects() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"web/.meta.json"* ]]
     # pwd printed no repo's path: nothing ran
-    ! printf '%s\n' "$output" | grep -qE '/s(/api|/web)?$'
+    if printf '%s\n' "$output" | grep -qE '/s(/api|/web)?$'; then false; fi
 
     # Without a filter the nested config is not read, as in the workspace
     run "$META_BIN" exec -- pwd

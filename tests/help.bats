@@ -180,7 +180,7 @@ teardown() {
     run "$META_BIN" --help
     [ "$status" -eq 0 ]
     [[ "$output" =~ [[:space:]]cargo[[:space:]] ]]
-    ! printf '%s\n' "$output" | grep -Eq '^  rust[[:space:]]'
+    if printf '%s\n' "$output" | grep -Eq '^  rust[[:space:]]'; then false; fi
 }
 
 @test "unknown command errors and suggestions escape controls and newlines" {

@@ -1582,8 +1582,7 @@ set_projects() {
 @test "a broken config in an unrelated nested meta repo doesn't stop create" {
     commit_repo "$TEST_DIR/vendor/lib"
     commit_repo "$TEST_DIR/child"
-    echo '{"projects": {}}' > "$TEST_DIR/child/.meta.yaml"
-    echo 'projects: {}' > "$TEST_DIR/child/.meta.yaml"
+    echo '{broken' > "$TEST_DIR/child/.meta.yaml"
     set_projects '{"lib": {"repo": "git@x:o/lib.git", "path": "vendor/lib"}, "child": {"repo": "git@x:o/c.git", "meta": true}}'
     run "$META_BIN" git worktree create s --repo lib
     [ "$status" -eq 0 ]

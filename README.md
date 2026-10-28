@@ -492,7 +492,7 @@ Arguments:
   [COMMAND]...  Command to run across repositories
 
 Options:
-  -c, --config <FILE>       Path to .meta.yaml config file
+  -c, --config <FILE>       Read this config file instead of finding .meta.yaml
   -t, --tag <TAGS>          Filter by tag(s), comma-separated
   -i, --include <REPOS>     Only these repos (.meta.yaml name or path from the root)
   -e, --exclude <REPOS>     Skip these repos (.meta.yaml name or path from the root)

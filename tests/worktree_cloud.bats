@@ -451,7 +451,6 @@ EOF
     HOOK_LOG="$TEST_DIR/hook-yaml.json"
 
     # Create YAML config with hook
-    rm -f "$TEST_DIR/.meta.yaml"
     cat > "$TEST_DIR/.meta.yaml" <<EOF
 projects:
   backend: "git@github.com:org/backend.git"
@@ -474,17 +473,6 @@ assert payload['action'] == 'create'
 assert payload['name'] == 'yaml-hook-test'
 assert payload['custom']['env'] == 'yaml'
 "
-
-    # Restore JSON config for other tests
-    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
-{
-    "projects": {
-        "backend": "git@github.com:org/backend.git",
-        "frontend": "git@github.com:org/frontend.git"
-    }
-}
-EOF
-    rm -f "$TEST_DIR/.meta.yaml"
 }
 
 # ============ Prune ============

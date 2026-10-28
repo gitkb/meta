@@ -169,7 +169,6 @@ assert 'api' in backend['tags']
 }
 
 @test "meta project list with YAML config" {
-    rm "$TEST_DIR/.meta.yaml"
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 projects:
   frontend:

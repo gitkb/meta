@@ -299,7 +299,7 @@ EOF
     echo '{"projects": {}}' > .meta.yaml
     git add .meta.yaml
     git commit --quiet -m "Commit 1"
-    # Create additional commits by adding new files (keep .meta.yaml valid JSON)
+    # Create additional commits by adding new files (keep .meta.yaml valid)
     echo "readme 1" > README.md
     git add README.md
     git commit --quiet -m "Commit 2"

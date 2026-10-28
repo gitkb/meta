@@ -1669,6 +1669,21 @@ set_projects() {
     [ ! -e "$TEST_DIR/.worktrees/s" ]
 }
 
+@test "worktree add finds a nested repo already in the set" {
+    commit_repo "$TEST_DIR/parent"
+    printf '{"projects": {"leaf": "git@x:o/leaf.git"}}\n' > "$TEST_DIR/parent/.meta.json"
+    echo leaf/ > "$TEST_DIR/parent/.gitignore"
+    git -C "$TEST_DIR/parent" add .meta.json .gitignore
+    git -C "$TEST_DIR/parent" -c user.email=t@t -c user.name=t commit --quiet -m config
+    commit_repo "$TEST_DIR/parent/leaf"
+    set_projects '{"parent": {"repo": "git@x:o/parent.git", "meta": true}}'
+    "$META_BIN" git worktree create s --repo parent/leaf
+    run "$META_BIN" git worktree add s --repo parent/leaf:newb
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already exists in worktree 's'"* ]]
+    if git -C "$TEST_DIR/parent/leaf" rev-parse --verify -q newb; then false; fi
+}
+
 @test "worktree add takes one repo named by name and by path once" {
     commit_repo "$TEST_DIR/libs/core"
     commit_repo "$TEST_DIR/api"
@@ -1805,6 +1820,21 @@ set_projects() {
     run "$META_BIN" exec -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"/ws/app"* ]]
+}
+
+@test "a moved set whose relative git links no longer resolve runs nothing in the workspace" {
+    commit_repo "$TEST_DIR/.deps/child"
+    set_projects '{"child": {"repo": "git@x:o/c.git", "path": ".deps/child"}}'
+    git -C "$TEST_DIR/.deps/child" config worktree.useRelativePaths true
+    "$META_BIN" git worktree create s --repo child --no-deps
+    mkdir -p "$TEST_DIR/.worktrees/holder"
+    mv "$TEST_DIR/.worktrees/s" "$TEST_DIR/.worktrees/holder/moved"
+    cd "$TEST_DIR/.worktrees/holder/moved/.deps/child"
+    run "$META_BIN" exec -- touch ran
+    [ "$status" -ne 0 ]
+    [ ! -e "$TEST_DIR/ran" ]
+    [ ! -e "$TEST_DIR/.deps/child/ran" ]
+    [ ! -e ran ]
 }
 
 @test "a moved set whose records no longer match runs nothing in the workspace" {

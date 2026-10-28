@@ -213,3 +213,9 @@ teardown() {
     [[ "$output" != *$'\033'* ]]
     [[ "$output" != *$'\nFORGED'* ]]
 }
+
+@test "an argument that isn't UTF-8 gets clap's own error" {
+    run "$META_BIN" exec -- ls $'\xff'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"invalid UTF-8"* ]]
+}

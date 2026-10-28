@@ -444,7 +444,7 @@ meta git status --json
 meta query "dirty:true" --json
 ```
 
-With `--json`, a command run outside any meta workspace (no config file found) also prints a JSON error on stdout and exits 1: `{"error":{"code":"config_not_found","message":"..."}}`. Tools can match on `code`; the message is for people.
+With `--json`, a command that finds no meta config (outside any meta workspace, or a `--config` file that doesn't exist) also prints a JSON error on stdout and exits 1: `{"error":{"code":"config_not_found","message":"..."}}`. Tools can match on `code`; the message is for people.
 
 ---
 

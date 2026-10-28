@@ -8,6 +8,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
 
@@ -15,11 +16,11 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
     chmod +x "$TEST_DIR/.meta/plugins/meta-git"
-    META_DATA="$(mktemp -d)"
+    META_DATA="$(cd "$(mktemp -d)" && pwd -P)"
     export META_DATA_DIR="$META_DATA"
 
     # Create .meta config with two projects
@@ -166,9 +167,14 @@ assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
     echo "$output" | python3 -c "import json,sys; assert json.load(sys.stdin)['ttl_seconds'] == 172800"
 }
 
-@test "worktree create --ttl invalid format fails" {
+@test "worktree create --ttl invalid format fails with one clear error" {
     run "$META_BIN" git worktree create ttl-bad --repo backend --ttl "notavalue"
     [ "$status" -ne 0 ]
+    [[ "$output" == *"invalid value 'notavalue' for '--ttl <DURATION>'"* ]]
+    # Not "error: error:", and not the whole git help after it
+    [[ "$output" != *"error: error:"* ]]
+    [[ "$output" != *"Pass-through Commands"* ]]
+    [ ! -e .worktrees/ttl-bad ]
 }
 
 # ============ --from-ref ============

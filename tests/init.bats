@@ -6,16 +6,17 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
 
     if [ ! -f "$META_BIN" ]; then
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
 
-    # Stub claude: init registers a plugin marketplace through it
-    STUB_DIR="$(mktemp -d)"
+    # Stub claude to detect unintended global marketplace changes
+    STUB_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     printf '#!/bin/sh\necho "$*" >> "%s/claude-calls"\n' "$STUB_DIR" > "$STUB_DIR/claude"
     chmod +x "$STUB_DIR/claude"
     PATH="$STUB_DIR:$PATH"
@@ -378,16 +379,16 @@ EOF
     [ "$status" -eq 0 ]
 }
 
-@test "init claude --force overwrites settings.json" {
+@test "init claude --force merges settings.json" {
     mkdir -p .claude
     echo '{"custom": true}' > .claude/settings.json
 
     run "$META_BIN" init claude --force
     [ "$status" -eq 0 ]
 
-    # Custom key should be gone
+    # Custom key is preserved even with --force
     run grep "custom" .claude/settings.json
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 0 ]
 
     # Meta hooks should be present
     run grep "SessionStart" .claude/settings.json
@@ -457,4 +458,105 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"Warning"* ]]
     [[ "$output" == *"No .meta config"* ]]
+}
+
+assert_settings_refused_without_changes() {
+    local content="$1" key="$2"
+    mkdir -p .claude
+    printf '%s' "$content" > .claude/settings.json
+    local before
+    before="$(find . -print | sort)"
+    for flag in '' '--force'; do
+        run "$META_BIN" init claude $flag
+        [ "$status" -ne 0 ]
+        [[ "$output" == *".claude/settings.json"* ]]
+        [[ "$output" == *"$key"* ]]
+        [[ "$output" != *"Installed"* ]]
+        [[ "$output" != *"Hooks:"* ]]
+        [ "$(cat .claude/settings.json)" = "$content" ]
+        [ "$(find . -print | sort)" = "$before" ]
+    done
+}
+
+@test "init refuses settings array before writing any files" {
+    assert_settings_refused_without_changes '[{"user":"data"}]' "must hold a JSON object"
+}
+
+@test "init refuses hooks array before writing any files" {
+    assert_settings_refused_without_changes '{"hooks":[{"mine":1}],"theme":"dark"}' "key 'hooks'"
+    [[ "$output" == *"must be an object"* ]]
+}
+
+@test "init refuses PreToolUse object before writing any files" {
+    assert_settings_refused_without_changes '{"hooks":{"PreToolUse":{"matcher":"Bash"}}}' "key 'hooks.PreToolUse'"
+    [[ "$output" == *"must be an array"* ]]
+}
+
+@test "init refuses invalid JSON before writing any files" {
+    assert_settings_refused_without_changes '{invalid json' "Invalid JSON"
+}
+
+@test "init compares whole hook groups including matcher and reports only added hooks" {
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Created "*".claude/settings.json"* ]]
+    python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path('.claude/settings.json')
+s = json.loads(p.read_text())
+s['hooks']['PreToolUse'][0]['matcher'] = 'Read'
+p.write_text(json.dumps(s))
+PY
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Added PreToolUse hooks to "* ]]
+    [[ "$output" == *"Hooks:   .claude/settings.json (PreCompact, PreToolUse, SessionStart)"* ]]
+    python3 - <<'PY'
+import json
+s = json.load(open('.claude/settings.json'))
+assert [g['matcher'] for g in s['hooks']['PreToolUse']] == ['Read', 'Bash']
+PY
+    touch -t 200001010000 .claude/settings.json
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Already has meta's hooks (no write): "* ]]
+    python3 - <<'PY'
+import os
+assert os.stat('.claude/settings.json').st_mtime < 1000000000
+PY
+}
+
+@test "init reports preserved flat skill file and symlink without verbose" {
+    mkdir -p .claude/skills
+    echo 'foreign skill' > .claude/skills/meta-safety.md
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"meta-safety.md (not created by meta, left alone)"* ]]
+    [ "$(cat .claude/skills/meta-safety.md)" = 'foreign skill' ]
+    rm .claude/skills/meta-safety.md
+    ln -s missing-target .claude/skills/meta-safety.md
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"meta-safety.md (not created by meta, left alone)"* ]]
+    [ "$(readlink .claude/skills/meta-safety.md)" = missing-target ]
+}
+
+@test "init prints marketplace hint without calling claude" {
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+    [ ! -e "$STUB_DIR/claude-calls" ]
+    [[ "$output" == *"For global Claude plugin access, run:"* ]]
+    [[ "$output" == *"  claude plugin marketplace add gitkb/claude-plugins"* ]]
+    [[ "$output" == *"  claude plugin install meta@gitkb"* ]]
+}
+
+@test "init update leaves unsupported settings alone and does not claim hooks" {
+    mkdir .claude
+    echo '[]' > .claude/settings.json
+    run "$META_BIN" init claude --update
+    [ "$status" -eq 0 ]
+    [ "$(cat .claude/settings.json)" = '[]' ]
+    [[ "$output" != *"Hooks:"* ]]
+    [[ "$output" == *"--update preserves settings"* ]]
 }

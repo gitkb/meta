@@ -6,7 +6,7 @@
 
 **Meta makes multi-repo architectures feel like monorepos** — without the downsides of monorepos. Keep your repositories independent (their own git history, CI, ownership boundaries), but operate on them as a cohesive unit.
 
-Most multi-repo tools solve the *cloning* problem. Meta solves the *working* problem. A `.meta` file declares your repos. Everything else flows from that: clone them all at once, run any command across them, query their state, understand their dependency graph — and let AI agents do it autonomously.
+Most multi-repo tools solve the *cloning* problem. Meta solves the *working* problem. A meta config file (`.meta.yaml`) declares your repos. Everything else flows from that: clone them all at once, run any command across them, query their state, understand their dependency graph — and let AI agents do it autonomously.
 
 ---
 
@@ -49,7 +49,7 @@ Most multi-repo tools solve the *cloning* problem. Meta solves the *working* pro
    meta git clone https://github.com/org/meta-repo.git
    ```
 
-   This clones the meta repo and all child repositories defined in its `.meta` file.
+   This clones the meta repo and all child repositories defined in its meta config.
 
 2. **Run commands across all repos:**
 
@@ -88,7 +88,7 @@ Meta is a **command router on top of a loop engine**, built in three layers:
 
 **1. Loop Engine** — The foundation. Takes a list of directories and a command, runs it in each one (sequential or parallel), aggregates output. Simple, fast, reliable.
 
-**2. Meta CLI** — The brain. Reads your `.meta` config, applies filters (tags, include/exclude), discovers plugins, and routes commands. `meta exec -- <cmd>` hands a command to the loop engine as typed, never to a plugin; any other command goes to the plugin that claims it, or fails as unrecognized.
+**2. Meta CLI** — The brain. Reads your meta config, applies filters (tags, include/exclude), discovers plugins, and routes commands. `meta exec -- <cmd>` hands a command to the loop engine as typed, never to a plugin; any other command goes to the plugin that claims it, or fails as unrecognized.
 
 **3. Plugins** — The specialists. They don't *execute* — they *plan*. A plugin receives a request and returns an execution plan (a list of directory/command pairs). The loop engine does the actual work. This means plugins are pure functions, and execution is always consistent.
 
@@ -184,11 +184,13 @@ until you clone them too.
 
 ## Configuration
 
-Meta projects are configured via a `.meta` file (JSON) or `.meta.yaml`/`.meta.yml` (YAML) in the repository root.
+Meta projects are configured by one config file in the repository root: `.meta.yaml` (or `.meta.yml`) for YAML, or `.meta.json` for JSON. Two config files in one directory are an error that names both; keep one.
+
+The legacy `.meta` file (JSON, no extension) still works, but it takes the name of meta's `.meta/` folder, which holds skills and project-local plugins, so `meta init claude` refuses it. Rename it with `git mv .meta .meta.json` (same content).
 
 ### Simple Format
 
-Map project names to repository URLs:
+Map project names to repository URLs (`.meta.json`):
 
 ```json
 {
@@ -234,17 +236,15 @@ projects:
 **Rules for names and values.** meta checks every entry when it reads the config and stops with an error that names the file and the project:
 
 - `path` (the name when it is omitted) is relative and stays inside the directory of the config file: no `..`, no absolute paths, and no symlink that leads outside it or into `.git` or `.worktrees`. `\` reads as `/`, and `./`, `//` and a trailing `/` are dropped.
-- A project name is usually one word; a nested alias such as `vendor/lib` is fine. It follows the same rules as `path` and must already be in plain form, because worktrees put the project at `<worktree>/<name>`.
-- Names and path components use only ASCII letters, digits, space and `._-+@`, so one `.meta` names the same directories on every platform (no Unicode that macOS or Windows would treat as another name, no `C:`, `<>:"|?*` or short names like `PROGRA~1`). They have no trailing dot or space, are not Windows device names (`CON`, `NUL`, `COM1`, ...) or `.git`, and do not start with `.worktrees` or lie under the configured `worktrees_dir`.
-- No two projects share a path, and no project's path lies inside another's. Paths are compared after following existing symlinks, and without regard to case (some filesystems ignore it). Project names may not be equal or nested either, also without regard to case, since worktrees use them as directories. A repo inside another repo goes in a nested `.meta` (`meta: true`).
+- A project name is usually one word; a nested alias such as `vendor/lib` is fine. It follows the same rules as `path` and must already be in plain form.
+- Names and path components use only ASCII letters, digits, space and `._-+@`, so one config names the same directories on every platform (no Unicode that macOS or Windows would treat as another name, no `C:`, `<>:"|?*` or short names like `PROGRA~1`). They have no trailing dot or space, are not Windows device names (`CON`, `NUL`, `COM1`, ...) or `.git`, and do not start with `.worktrees` or lie under the configured `worktrees_dir`.
+- No two projects share a path, and no project's path lies inside another's. Paths are compared after following existing symlinks, and without regard to case (some filesystems ignore it). Project names may not be equal or nested either, also without regard to case. A repo inside another repo goes in a nested meta config (`meta: true`).
 - No name, path, repo, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline), a bidirectional-text control, or an invisible format character (such as a zero-width space).
 - `repo` does not start with `-`.
 - Tags contain no whitespace and no `,`.
 - `worktrees_dir`, if set, lies inside the workspace (relative, or absolute but inside), not inside a project and not in `.git`. For a directory elsewhere, set `META_WORKTREES`.
 
-The same rules apply to every `.meta` that a recursive command reads, including one inside a cloned project: a refused nested config stops the command rather than silently leaving out that part of the tree.
-
-**File priority:** `.meta.yaml` > `.meta.yml` > `.meta`
+The same rules apply to every meta config that a recursive command reads, including one inside a cloned project: a refused nested config stops the command rather than silently leaving out that part of the tree.
 
 You can mix simple and extended formats in the same file.
 
@@ -330,6 +330,8 @@ This enables impact analysis ("what breaks if I change shared-utils?"), topologi
 | `meta plugin install <name>` | Install a plugin |
 | `meta plugin uninstall <name>` | Remove a plugin |
 
+Add `--local` to install, list, uninstall or update the plugins of this meta repo only (`.meta/plugins/` next to the nearest meta config).
+
 ---
 
 ## Filtering
@@ -348,7 +350,7 @@ meta --include api-service,web-app git status
 meta --exclude legacy-app exec -- npm install
 ```
 
-A value names a whole repo: its `.meta` name or its path from the workspace root (`.` for the root repo), never part of a path, so `api` does not select `api-legacy`. A value that names no repo is an error, so a typo never runs a command in a repo you meant to skip. Inside a worktree set, a repo is named by its alias (its path in the set). A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too).
+A value names a whole repo: its `.meta` name or its path from the workspace root (`.` for the root repo), never part of a path, so `api` does not select `api-legacy`. A value that names no repo is an error, so a typo never runs a command in a repo you meant to skip. Inside a worktree set the same holds: a repo sits at its project's path, so it is named by its `.meta` name or that path, from the set's root. A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too).
 
 ### Arguments
 
@@ -377,9 +379,11 @@ meta query "ahead:true"
 
 Plugins are standalone executables that extend meta. They're discovered automatically from:
 
-- `.meta-plugins/` in the current or parent directories
-- `~/.meta-plugins/`
-- System PATH (binaries named `meta-*`)
+1. `.meta/plugins/` next to the nearest meta config at or above the current directory, then next to each parent meta config that lists that directory as a project (the same workspace), nearest first. A parent that doesn't list it is another workspace and is not read. Inside a worktree set meta made, a checkout's own `.meta/plugins/` comes first, then those of the checkout it stands for (the one it was made from) and its workspace. `meta plugin install <name> --local` installs into the nearest one.
+2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
+3. Executables named `meta-*` on PATH.
+
+The first plugin found with a given name wins. A plugins folder meta can't read, and a plugin that doesn't answer `--meta-plugin-info` within 5 seconds, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
 
 ### Built-in Plugins
 
@@ -434,7 +438,7 @@ See [docs/mcp_server.md](docs/mcp_server.md) for full documentation.
 meta init claude
 ```
 
-Installs purpose-built skills that teach Claude Code how to work with multi-repo codebases — using `meta git` instead of `git`, committing or stashing before risky changes, filtering by tags, and understanding plugin interception.
+Installs purpose-built skills that teach Claude Code how to work with multi-repo codebases — using `meta git` instead of `git`, committing or stashing before risky changes, filtering by tags, and understanding plugin interception. It writes only inside the repo, and prints the `claude plugin` commands that install the same skills for all your projects. See [docs/claude_code_skills.md](docs/claude_code_skills.md).
 
 ### JSON Output
 

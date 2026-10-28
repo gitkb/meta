@@ -18,10 +18,10 @@
 | Loop engine | ✅ Done | Directory iteration, filtering |
 | JSON output (`--json`) | ✅ Done | Scripting support |
 | Project tags (`--tag`) | ✅ Done | Filter by tags |
-| YAML configuration | ✅ Done | `.meta.yaml` / `.meta.yml` |
+| YAML configuration | ✅ Done | `.meta.yaml` / `.meta.yml` (one config per directory) |
 | Nested meta repos (`--recursive`) | ✅ Done | Process nested repos |
 | Subprocess plugin system | ✅ Done | JSON over stdin/stdout |
-| Plugin discovery | ✅ Done | `.meta-plugins/`, PATH |
+| Plugin discovery | ✅ Done | `.meta/plugins/` of the workspace's meta dirs, `META_DATA_DIR`, PATH |
 | Plugin help system | ✅ Done | Structured help info |
 | Git plugin | ✅ Done | clone, status, update, commit, setup-ssh |
 | Project plugin | ✅ Done | check, sync, update |

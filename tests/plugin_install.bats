@@ -6,14 +6,15 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
 
     if [ ! -f "$META_BIN" ]; then
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
-    HOME_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
+    HOME_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     PLUGINS_DIR="$HOME_DIR/.meta/plugins"
 
     # Isolate plugin discovery so tests don't find real plugins:
@@ -145,28 +146,31 @@ teardown() {
     run "$META_BIN" plugin install --local nonexistent/repo
     [ "$status" -ne 0 ]
     [[ "$output" =~ "Not in a meta workspace" ]]
-    [[ "$output" =~ "meta init" ]]
+    [[ "$output" =~ "Create one here" ]]
 }
 
 @test "plugin list --local outside workspace shows error" {
     run "$META_BIN" plugin list --local
-    [ "$status" -eq 0 ]  # Command succeeds but shows message
+    [ "$status" -ne 0 ]
     [[ "$output" =~ "Not in a meta workspace" ]]
 }
 
 @test "plugin list --local in workspace with no plugins" {
-    # Create a workspace
-    mkdir -p "$TEST_DIR/.meta"
+    # A config file establishes a workspace.
+    printf 'projects: {}\n' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" plugin list --local
     [ "$status" -eq 0 ]
     [[ "$output" =~ "No project-local plugins installed" ]]
 }
 
 @test "plugin list --local shows only local plugins" {
-    # Create workspace with local plugin directory
+    # Create workspace with local plugin directory.
+    printf 'projects: {}\n' > "$TEST_DIR/.meta.yaml"
     mkdir -p "$TEST_DIR/.meta/plugins"
-    echo '#!/bin/bash' > "$TEST_DIR/.meta/plugins/meta-local-test"
-    echo 'echo "local plugin"' >> "$TEST_DIR/.meta/plugins/meta-local-test"
+    cat > "$TEST_DIR/.meta/plugins/meta-local-test" <<'PLUGIN'
+#!/bin/sh
+echo '{"name":"local-test","version":"2.0.0","commands":["local-test"]}'
+PLUGIN
     chmod +x "$TEST_DIR/.meta/plugins/meta-local-test"
 
     # Create manifest
@@ -183,13 +187,19 @@ teardown() {
 }
 EOF
 
+    mkdir -p "$TEST_DIR/sub/dir"
+    cd "$TEST_DIR/sub/dir"
     run "$META_BIN" plugin list --local
     [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/.meta/plugins/meta-local-test"* ]]
+    [[ "$output" == *"2.0.0"* ]]
+    [[ "$output" != *"v1.0.0"* ]]
     [[ "$output" =~ "local-test" ]]  # meta- prefix is stripped in output
     [[ "$output" =~ "Project-local plugins" ]]
 }
 
 @test "plugin uninstall --local fails when plugin not installed" {
+    printf 'projects: {}\n' > "$TEST_DIR/.meta.yaml"
     mkdir -p "$TEST_DIR/.meta/plugins"
     run "$META_BIN" plugin uninstall --local nonexistent-plugin
     [ "$status" -ne 0 ]
@@ -197,8 +207,8 @@ EOF
 }
 
 @test "plugin install --local to .meta/plugins succeeds with workspace" {
-    # Create a valid workspace
-    mkdir -p "$TEST_DIR/.meta"
+    # Create a valid workspace.
+    printf 'projects: {}\n' > "$TEST_DIR/.meta.yaml"
 
     # This will fail because there's no actual release, but should recognize it as a workspace
     run "$META_BIN" plugin install --local test-user/meta-test-plugin
@@ -209,6 +219,7 @@ EOF
 }
 
 @test "plugin commands show location in output" {
+    printf 'projects: {}\n' > "$TEST_DIR/.meta.yaml"
     mkdir -p "$TEST_DIR/.meta/plugins"
 
     # Test that error messages mention the location
@@ -252,4 +263,25 @@ EOF
     run "$META_BIN" plugin list --local
     [ "$status" -eq 0 ]
     [[ "$output" == *"No project-local plugins installed"* ]]
+}
+
+@test "a plugin name in uninstall's error is escaped on one line" {
+    cd "$TEST_DIR"
+    echo 'projects: {}' > .meta.yaml
+    run "$META_BIN" plugin uninstall $'bad\033[2J\nFORGED' --local
+    [ "$status" -ne 0 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    [[ "$output" == *"is not installed"* ]]
+}
+
+@test "a plugin name in update's errors is escaped on one line" {
+    cd "$TEST_DIR"
+    for check in --check ""; do
+        run "$META_BIN" plugin update $'bad\033[2J\nFORGED' $check
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+        [[ "$output" == *"bad\u{1b}[2J\nFORGED"* ]]
+    done
 }

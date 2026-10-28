@@ -6,6 +6,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     # Build binaries if not already built
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_PROJECT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-project"
@@ -15,7 +16,7 @@ setup() {
     fi
 
     # Create a temp directory for each test
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins"
     cp "$META_PROJECT_BIN" "$TEST_DIR/.meta/plugins/meta-project"
     chmod +x "$TEST_DIR/.meta/plugins/meta-project"
@@ -339,7 +340,7 @@ assert nested_lib is not None, f'nested-lib not found in vendor projects: {neste
 }
 
 @test "meta project list rejects a project reached through a symlink out of the workspace" {
-    OUTSIDE="$(mktemp -d)"
+    OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
     ln -s "$OUTSIDE" linked
     echo '{"projects": {"linked": "git@github.com:org/linked.git"}}' > .meta.json
     run "$META_BIN" project list
@@ -358,4 +359,28 @@ J
     [[ "$output" != *$'\e'* ]]
     [[ "$output" != *$'\a'* ]]
     [[ "$output" == *'x\u{1b}]0;TITLE\u{7}'* ]]
+}
+
+@test "an unknown project subcommand is escaped on one line" {
+    run "$META_BIN" project $'bad\033[2J\nFORGED'
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    [[ "$output" == *"unrecognized command"* ]]
+}
+
+@test "project list refuses include and exclude instead of ignoring them" {
+    for flag in --include --exclude; do
+        for command in list ls; do
+            run "$META_BIN" "$flag" frontend project "$command" --recursive --json
+            [ "$status" -ne 0 ]
+            [[ "$output" == *"meta project list does not take --include/--exclude"* ]]
+            # after the subcommand too, and in --flag=value form
+            short="${flag:1:2}"
+            for trailing in "$flag frontend" "$flag=frontend" "${short}frontend"; do
+                run "$META_BIN" project "$command" $trailing --json
+                [ "$status" -ne 0 ]
+                [[ "$output" == *"meta project list does not take --include/--exclude"* ]]
+            done
+        done
+    done
 }

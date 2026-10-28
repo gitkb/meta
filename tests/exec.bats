@@ -7,6 +7,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
 
@@ -676,4 +677,97 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"project 'other' (path 'api') is at or inside project 'api'"* ]]
     [ -z "$(find "$TEST_DIR" -name ran)" ]
+}
+
+@test "exec stdout broken pipe exits quietly without a panic" {
+    for mode in --parallel --sequential; do
+        run bash -c 'set -o pipefail; "$1" "$2" exec -- seq 1 20000 2>"$3" | head -1' _ "$META_BIN" "$mode" "$TEST_DIR/stderr"
+        [[ "$status" -eq 0 || "$status" -eq 141 ]]
+        [ ! -s "$TEST_DIR/stderr" ]
+    done
+}
+
+@test "meta's own output to a closed stdout exits quietly without a panic" {
+    for args in "plugin list --json" "init --help" "--help"; do
+        run bash -c 'set -o pipefail; "$1" $2 2>"$3" | head -c0' _ "$META_BIN" "$args" "$TEST_DIR/stderr"
+        [[ "$status" -eq 0 || "$status" -eq 141 ]]
+        [ ! -s "$TEST_DIR/stderr" ]
+    done
+}
+
+@test "a failure cut off by a closed stdout isn't reported as success" {
+    run bash -c 'set -o pipefail; "$1" exec -- sh -c "seq 1 200000; exit 3" 2>"$2" | head -1' _ "$META_BIN" "$TEST_DIR/stderr"
+    [ "$status" -eq 141 ]
+    [ ! -s "$TEST_DIR/stderr" ]
+}
+
+@test "plugin output to a closed stdout exits quietly without a panic" {
+    mkdir -p .meta/plugins
+    cat > .meta/plugins/meta-chatty <<'EOF'
+#!/bin/sh
+if [ "$1" = --meta-plugin-info ]; then
+    echo '{"name":"chatty","version":"1","commands":["chatty"]}'
+else
+    seq 1 200000
+fi
+EOF
+    chmod +x .meta/plugins/meta-chatty
+    for args in chatty "chatty go"; do
+        run bash -c 'set -o pipefail; "$1" $2 2>"$3" | head -1' _ "$META_BIN" "$args" "$TEST_DIR/stderr"
+        [[ "$status" -eq 0 || "$status" -eq 141 ]]
+        [ ! -s "$TEST_DIR/stderr" ]
+    done
+}
+
+@test "a hostile command name is escaped in meta's own lines" {
+    E=$'bad\033[2J\nFORGED'
+    for mode in --parallel --sequential --dry-run; do
+        run "$META_BIN" "$mode" exec -- "$E"
+        [[ "$output" != *$'\033[2J'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+        [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
+    done
+    # and in meta's own --verbose echo of the command
+    run "$META_BIN" --verbose exec -- "$E"
+    [[ "$output" == *"Executing command:"*'bad\u{1b}[2J\nFORGED'* ]]
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    # and in the line for a listed project that isn't cloned
+    mkdir "$TEST_DIR/ghostws"
+    cd "$TEST_DIR/ghostws"
+    echo '{"projects": {"ghost": "git@x:o/ghost.git"}}' > .meta.json
+    run "$META_BIN" --sequential exec -- "$E"
+    [[ "$output" == *"No directory found"* ]]
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+}
+
+@test "include and exclude errors escape controls and stay on one line" {
+    for flag in --include --exclude; do
+        run "$META_BIN" "$flag" $'bad\033[31m\nFORGED' exec -- echo hello
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\n'* ]]
+        [[ "$output" == *'bad\u{1b}[31m\nFORGED'* ]]
+    done
+}
+
+@test "a plugin closing stdin decides the result itself, not SIGPIPE" {
+    cat > .meta/plugins/meta-close <<'SH'
+#!/bin/sh
+if [ "$1" = --meta-plugin-info ]; then
+    printf '%s\n' '{"name":"close","version":"1","commands":["close"]}'
+else
+    exec 0<&-
+    exit 3
+fi
+SH
+    chmod +x .meta/plugins/meta-close
+    # Exceed the pipe buffer so the write cannot finish before the reader closes.
+    local large
+    large="$(python3 -c 'print("x" * 100000)')"
+    run "$META_BIN" close "$large"
+    # the plugin's status, not death by SIGPIPE (141) or a panic
+    [ "$status" -eq 3 ]
+    [[ "$output" != *"panicked"* ]]
 }

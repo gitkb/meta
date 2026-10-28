@@ -7,6 +7,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
 
@@ -14,7 +15,7 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
     chmod +x "$TEST_DIR/.meta/plugins/meta-git"
@@ -458,7 +459,7 @@ assert d['totals']['files_changed'] >= 1
 # ============ Configuration ============
 
 @test "META_WORKTREES env overrides default location" {
-    CUSTOM_DIR="$(mktemp -d)"
+    CUSTOM_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     META_WORKTREES="$CUSTOM_DIR" run "$META_BIN" git worktree create env-test --repo backend
     [ "$status" -eq 0 ]
     [ -d "$CUSTOM_DIR/env-test/backend" ]
@@ -550,6 +551,91 @@ assert d['totals']['files_changed'] >= 1
 }
 
 # ============ Unrecognized command handling (meta-7) ============
+
+@test "unrecognized worktree command is escaped on one line" {
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree $'bad\033]0;TITLE\007\nFORGED'
+    [ "$status" -eq 1 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    [[ "$output" == *"unrecognized worktree subcommand 'bad"* ]]
+}
+
+@test "an invalid option value is escaped on one line" {
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree create ttl-bad --repo backend --ttl $'bad\033[2J\nFORGEDs'
+    [ "$status" -ne 0 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    [[ "$output" == *"--ttl"* ]]
+}
+
+@test "an unknown recursive repo alias is escaped on one line" {
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree create badrepo --recursive --repo $'a\033[2J\nFORGED'
+    [ "$status" -ne 0 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+}
+
+@test "rejected refs and --meta values are escaped on one line" {
+    cd "$TEST_DIR"
+    for strict in "" --strict; do
+        run "$META_BIN" $strict git worktree create probe $'bad\033[2J\nFORGED' --repo . --no-deps
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+        [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
+    done
+    # The dry-run preview echoes them too
+    for args in "probe" "--from-pr" "--meta"; do
+        case "$args" in
+            probe) run "$META_BIN" git worktree create preview $'bad\033[2J\nFORGED' --repo . --no-deps --dry-run ;;
+            --from-pr) run "$META_BIN" git worktree create preview --from-pr $'o/r#1\033[2J\nFORGED' --repo . --no-deps --dry-run ;;
+            --meta) run "$META_BIN" git worktree create preview --meta $'k=v\033[2J\nFORGED' --repo . --no-deps --dry-run ;;
+        esac
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+    done
+    for flag in --meta --from-pr; do
+        run "$META_BIN" --strict git worktree create probe --repo . --no-deps "$flag" $'bad\033[2J\nFORGED'
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+        [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
+    done
+}
+
+@test "names given to exec, status, diff and --branch are escaped on one line" {
+    cd "$TEST_DIR"
+    E=$'bad\033[2J\nFORGED'
+    check() {
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+    }
+    run "$META_BIN" git worktree exec "$E" -- true; check
+    run "$META_BIN" git worktree status "$E"; check
+    run "$META_BIN" git worktree diff "$E"; check
+    run "$META_BIN" git worktree create okb --all --branch "$E"; check
+    # A real set, compared against a bad base
+    "$META_BIN" git worktree create based --repo backend
+    run "$META_BIN" git worktree diff based --base "$E"
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+}
+
+@test "gh's error for --from-pr is escaped on one line" {
+    cd "$TEST_DIR"
+    mkdir -p "$TEST_DIR/fakebin"
+    printf '#!/bin/sh\nprintf "no such PR\\033[2J\\nFORGED\\n" >&2\nexit 1\n' > "$TEST_DIR/fakebin/gh"
+    chmod +x "$TEST_DIR/fakebin/gh"
+    PATH="$TEST_DIR/fakebin:$PATH" run "$META_BIN" git worktree create probe --from-pr o/r#1 --repo . --no-deps
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Failed to resolve PR #1"* ]]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+}
 
 @test "unrecognized worktree command shows help" {
     cd "$TEST_DIR"
@@ -779,6 +865,34 @@ EOF
     run "$META_BIN" --tag nonexistent --exclude typo exec -- pwd
     [ "$status" -ne 0 ]
     [[ "$output" == *"--exclude 'typo' names none of the repos"* ]]
+}
+
+@test "in a set made elsewhere without its root, --tag uses the workspace's config" {
+    cat > .meta.json <<'EOF'
+{
+    "projects": {
+        "backend": { "repo": "git@github.com:org/backend.git", "tags": ["back"] },
+        "frontend": { "repo": "git@github.com:org/frontend.git", "tags": ["front"] }
+    }
+}
+EOF
+    OUT="$(cd "$(mktemp -d)" && pwd -P)"
+    META_WORKTREES="$OUT/.worktrees" "$META_BIN" git worktree create tagged --repo backend --repo frontend --no-deps
+    cd "$OUT/.worktrees/tagged"
+    run "$META_BIN" --tag front exec -- touch ran
+    [ "$status" -eq 0 ]
+    [ -f frontend/ran ]
+    [ ! -e backend/ran ]
+
+    # Without a config to read the tags from, --tag is an error, not "every repo"
+    mv "$TEST_DIR/.meta.json" "$TEST_DIR/meta.json.bak"
+    rm frontend/ran
+    run "$META_BIN" --tag front exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot select its repos"* ]]
+    [ -z "$(find . -name ran)" ]
+    cd /
+    rm -rf "$OUT"
 }
 
 @test "worktree exec --include works with a relative META_WORKTREES" {

@@ -6,13 +6,14 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
 
     if [ ! -f "$META_BIN" ]; then
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
 
     # Create .meta config with two projects
     cat > "$TEST_DIR/.meta.json" <<'EOF'

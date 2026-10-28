@@ -55,11 +55,21 @@ meta --include api cargo clippy --all-targets -- -D warnings
 ## Plugin Discovery
 
 Plugins are discovered from:
-1. `.meta/plugins/` in the current directory and each parent
-2. `~/.meta/plugins/` (moved by `META_DATA_DIR`)
+1. `.meta/plugins/` next to the nearest meta config, then next to each parent
+   meta config that lists it as a project (one workspace), nearest first; a
+   parent that doesn't list it is not read. Inside a worktree set, a checkout's
+   own plugins come first, then those of the checkout it stands for (the one
+   it was made from) and its workspace. `meta plugin install <name> --local`
+   installs into the nearest one
+2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install` installs
 3. Executables named `meta-*` in PATH
 
-The first plugin found with a given name wins.
+The first plugin found with a given name wins. A plugins folder meta can't read,
+and a plugin that doesn't answer `--meta-plugin-info` within 5 seconds, are
+skipped with a warning naming them.
+
+Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore`
+(`*`) so they stay out of git as untracked files.
 
 ## Plugin Management
 
@@ -75,7 +85,13 @@ meta plugin install <name>
 
 # Uninstall
 meta plugin uninstall <name>
+
+# The same for this meta repo only (.meta/plugins/ next to the nearest meta config)
+meta plugin install <name> --local
+meta plugin list --local
 ```
+
+`--local` outside a meta workspace fails with "not in a meta workspace".
 
 ## Understanding Command Flow
 

@@ -7,6 +7,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     # Build binaries if not already built
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
@@ -16,7 +17,7 @@ setup() {
     fi
 
     # Create a temp directory for each test
-    TEST_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
     chmod +x "$TEST_DIR/.meta/plugins/meta-git"
@@ -171,12 +172,12 @@ teardown() {
 
 @test "meta git clone from local path works" {
     # Create a "remote" bare repo that IS a meta repo
-    REMOTE_DIR="$(mktemp -d)"
+    REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git init --bare --quiet "$REMOTE_DIR"
     git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
 
     # Create a temp working copy to push initial meta content
-    WORK_DIR="$(mktemp -d)"
+    WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
     cd "$WORK_DIR/meta-repo"
     git config user.email "test@test.com"
@@ -194,7 +195,7 @@ EOF
     git push --quiet -u origin main
 
     # Now test cloning
-    CLONE_TARGET="$(mktemp -d)"
+    CLONE_TARGET="$(cd "$(mktemp -d)" && pwd -P)"
     rm -rf "$CLONE_TARGET"
 
     cd "$TEST_DIR"
@@ -210,12 +211,12 @@ EOF
     # Child repos clone to paths according to .meta config files
 
     # Create a "remote" bare repo with main as default branch
-    REMOTE_DIR="$(mktemp -d)"
+    REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git init --bare --quiet "$REMOTE_DIR"
     git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
 
     # Create a temp working copy to push initial content
-    WORK_DIR="$(mktemp -d)"
+    WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
     cd "$WORK_DIR/meta-repo"
     git config user.email "test@test.com"
@@ -231,7 +232,7 @@ EOF
     git push --quiet -u origin main
 
     # Clone with custom directory name
-    CLONE_DIR="$(mktemp -d)"
+    CLONE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     rm -rf "$CLONE_DIR"
     CUSTOM_NAME="my-custom-clone-name"
 
@@ -252,12 +253,12 @@ EOF
     # where the URL was being lost due to double-stripping of args
 
     # Create a "remote" bare repo with main as default branch
-    REMOTE_DIR="$(mktemp -d)"
+    REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git init --bare --quiet "$REMOTE_DIR"
     git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
 
     # Push minimal content
-    WORK_DIR="$(mktemp -d)"
+    WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
     cd "$WORK_DIR/meta-repo"
     git config user.email "test@test.com"
@@ -284,11 +285,11 @@ EOF
 
 @test "meta git clone with --depth option" {
     # Create a "remote" bare repo with main as default branch
-    REMOTE_DIR="$(mktemp -d)"
+    REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git init --bare --quiet "$REMOTE_DIR"
     git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
 
-    WORK_DIR="$(mktemp -d)"
+    WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
     cd "$WORK_DIR/meta-repo"
     git config user.email "test@test.com"
@@ -802,7 +803,7 @@ EOF
 }
 
 @test "meta git clone fails when a cloned repo's nested .meta is refused" {
-    UP="$(mktemp -d)"
+    UP="$(cd "$(mktemp -d)" && pwd -P)"
     # bare_with_meta NAME JSON: a bare repo whose only commit holds .meta = JSON
     bare_with_meta() {
         git init --bare --quiet -b main "$UP/$1.git"
@@ -824,4 +825,20 @@ EOF
     [[ "$output" == *"Failed to clone"*"gone"* ]]
     [ ! -e "$UP/outside" ]
     rm -rf "$UP"
+}
+
+@test "meta git clone escapes the URL it echoes" {
+    cd "$TEST_DIR"
+    run "$META_BIN" --dry-run git clone $'q\033[2J\nFORGED'
+    [[ "$output" == *"Would clone"* ]]
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    # and when it really clones (git stubbed out: it fails quietly)
+    mkdir -p "$TEST_DIR/fakebin"
+    printf '#!/bin/sh\nexit 1\n' > "$TEST_DIR/fakebin/git"
+    chmod +x "$TEST_DIR/fakebin/git"
+    PATH="$TEST_DIR/fakebin:$PATH" run "$META_BIN" git clone $'q\033[2J\nFORGED'
+    [[ "$output" == *"Cloning meta repository: "'q\u{1b}[2J\nFORGED'* ]]
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
 }

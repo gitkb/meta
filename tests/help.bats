@@ -4,6 +4,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
     clear_git_local_env
+    isolate_user_env
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
     META_PROJECT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-project"
@@ -13,8 +14,8 @@ setup() {
         cargo build --workspace --quiet
     fi
 
-    TEST_DIR="$(mktemp -d)"
-    NO_CONFIG_DIR="$(mktemp -d)"
+    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
+    NO_CONFIG_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/.meta/plugins" "$TEST_DIR/api" "$TEST_DIR/web"
     mkdir -p "$NO_CONFIG_DIR/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
@@ -93,6 +94,7 @@ teardown() {
 
 @test "nested plugin help does not require a meta config" {
     cd "$NO_CONFIG_DIR"
+    export PATH="$NO_CONFIG_DIR/.meta/plugins:$PATH"
 
     run "$META_BIN" git worktree --help
     [ "$status" -eq 0 ]
@@ -106,6 +108,7 @@ teardown() {
 
 @test "cargo help uses the simple plugin help without side effects" {
     cd "$NO_CONFIG_DIR"
+    export PATH="$NO_CONFIG_DIR/.meta/plugins:$PATH"
 
     for command in "cargo --help" "cargo build --help"; do
         run "$META_BIN" $command
@@ -171,4 +174,51 @@ teardown() {
     [[ "$output" == *"api:"* ]]
     [[ "$output" == *"bash:"* ]]
     [ ! -d "$TEST_DIR/.worktrees/preview" ]
+}
+
+@test "help lists cargo but not the rust plugin name as a command" {
+    run "$META_BIN" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ [[:space:]]cargo[[:space:]] ]]
+    if printf '%s\n' "$output" | grep -Eq '^  rust[[:space:]]'; then false; fi
+}
+
+@test "unknown command errors and suggestions escape controls and newlines" {
+    run "$META_BIN" $'bad\033[31m\nFORGED'
+    [ "$status" -ne 0 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    [[ "${lines[0]}" == *'bad\u{1b}[31m\nFORGED'* ]]
+    [[ "$output" == *'meta exec --'*'\nFORGED'* ]]
+}
+
+@test "argument errors from meta and loop are escaped on one line" {
+    LOOP_BIN="$BATS_TEST_DIRNAME/../target/debug/loop"
+    for cmd in "$META_BIN" "$LOOP_BIN"; do
+        run "$cmd" $'--bo\033]0;TITLE\007\nFORGED'
+        [ "$status" -ne 0 ]
+        [[ "$output" != *$'\033'* ]]
+        [[ "$output" != *$'\nFORGED'* ]]
+    done
+    # loop's verbose echo of its config path
+    # (loop colours its own result lines, so look for the injected sequence)
+    run "$LOOP_BIN" --verbose --config $'bad\033[2J\nFORGED' true
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    run "$LOOP_BIN" --verbose true $'bad\033[2J\nFORGED'
+    [[ "$output" != *$'\033[2J'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+    run "$META_BIN" --depth $'1\033[2J\nFORGED' exec -- true
+    [ "$status" -ne 0 ]
+    [[ "$output" != *$'\033'* ]]
+    [[ "$output" != *$'\nFORGED'* ]]
+}
+
+@test "an argument that isn't UTF-8 gets clap's own error" {
+    run "$META_BIN" exec -- ls $'\xff'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"invalid UTF-8"* ]]
+    run "$BATS_TEST_DIRNAME/../target/debug/loop" true $'\xff'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"invalid UTF-8"* ]]
 }

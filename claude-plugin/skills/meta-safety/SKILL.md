@@ -74,11 +74,10 @@ meta --strict git worktree prune
 
 **What becomes an error in strict mode:**
 - Missing refs when using a commit-ish (worktree create)
-- Failed PR branch fetches, or no repo matching `--from-pr` (worktree create)
 - The root repo skipped because a commit-ish is missing there (worktree create)
 - Invalid `--meta` format values (worktree create)
 - Failed directory removal (worktree prune)
-- Store update failures (worktree create, add, remove, prune)
+- Any set prune keeps: one holding work, a worktree meta has no record of, a worktree from another workspace, or a record it can't read (worktree prune)
 
 **When to use --strict:**
 - CI pipelines testing a specific release tag across all repos
@@ -93,13 +92,9 @@ meta --strict git worktree prune
 
 ### Ephemeral Cleanup Behavior
 
-`meta git worktree exec --ephemeral` creates and cleans up in best-effort mode (`strict=false`), even if you specified `--strict`. Cleanup only runs if creation succeeded. This ensures:
+`meta git worktree exec --ephemeral` creates the set in best-effort mode (`strict=false`, so a repo missing a ref is skipped), even if you specified `--strict`, runs the command, then removes the set. Cleanup only runs if creation succeeded.
 
-- The command result (success/failure) reflects the actual executed command, not cleanup issues
-- Cleanup failures are logged as warnings, not errors
-- Partial cleanup succeeds even if some repos have open file handles or permissions issues
-
-If you need to ensure cleanup completed fully, follow up with `meta git worktree list` to verify.
+If cleanup fails, meta prints the error and exits non-zero even when the command itself succeeded, and the set may be left in place. Check with `meta git worktree list` and remove it with `meta git worktree remove <name>`.
 
 ### Worktree-specific --strict
 

@@ -65,7 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | bash
 
 ### Q: Why does meta not find my repos?
 
-**A:** Check your `.meta` or `.meta.yaml` file:
+**A:** Check your meta config (`.meta.yaml`, `.meta.yml`, `.meta.json`, or the legacy `.meta`):
 
 1. Ensure it's in the repository root
 2. Verify JSON/YAML syntax
@@ -73,7 +73,7 @@ curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | bash
 
 ```bash
 # Validate JSON
-cat .meta | jq .
+jq . .meta.json
 
 # Validate YAML
 cat .meta.yaml | python3 -c "import yaml,sys; yaml.safe_load(sys.stdin)"
@@ -81,7 +81,7 @@ cat .meta.yaml | python3 -c "import yaml,sys; yaml.safe_load(sys.stdin)"
 
 ### Q: Which config file takes priority?
 
-**A:** File priority: `.meta.yaml` > `.meta.yml` > `.meta`
+**A:** None: a directory holds one config, `.meta.yaml`, `.meta.yml`, `.meta.json` or the legacy `.meta` file. Two of them in one directory are an error that names both; delete or merge one. A legacy `.meta` file is best renamed: `git mv .meta .meta.json`.
 
 ### Q: How do I add a new project?
 
@@ -162,13 +162,13 @@ meta --json git status | jq '.results[] | select(.success == false)'
 
 ### Q: `meta git clone` only clones the parent repo?
 
-**A:** Check that your `.meta` file is properly formatted and committed. The clone process:
+**A:** Check that your meta config is properly formatted and committed. The clone process:
 
 1. Clones the parent repo
-2. Reads `.meta` or `.meta.yaml`
+2. Reads its meta config
 3. Queues and clones all child repos
 
-If child repos aren't cloning, the `.meta` file may be missing or malformed.
+If child repos aren't cloning, the meta config may be missing or malformed.
 
 ### Q: Git operations are slow over SSH?
 
@@ -204,16 +204,18 @@ This opens an editor for each dirty repo.
 
 ### Q: How do I add a new plugin?
 
-**A:** Place the plugin in one of these locations:
+**A:** Install it with `meta plugin install <name>` (add `--local` for this workspace only), or place an executable named `meta-<name>` in one of these locations:
 
-1. `.meta-plugins/` in your project
-2. `~/.meta-plugins/` in your home directory
-3. System PATH (binary named `meta-<name>`)
+1. `.meta/plugins/` next to the nearest meta config at or above the current directory, then next to each parent meta config that lists that directory as a project (the same workspace), nearest first. A parent that doesn't list it is another workspace and is not read. Inside a worktree set meta made, a checkout's own `.meta/plugins/` comes first, then those of the checkout it stands for (the one it was made from) and its workspace. `meta plugin install <name> --local` installs into the nearest one.
+2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
+3. Executables named `meta-*` on PATH.
+
+The first plugin found with a given name wins. A plugins folder meta can't read, and a plugin that doesn't answer `--meta-plugin-info` within 5 seconds, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
 
 ```bash
-# Example: install to home directory
-cp meta-docker ~/.meta-plugins/
-chmod +x ~/.meta-plugins/meta-docker
+# Example: install by hand for every workspace
+cp meta-docker ~/.meta/plugins/
+chmod +x ~/.meta/plugins/meta-docker
 ```
 
 ### Q: My plugin is not detected. What should I check?

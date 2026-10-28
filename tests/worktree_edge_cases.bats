@@ -1905,6 +1905,19 @@ set_projects() {
     [ ! -e ran ]
 }
 
+@test "a set in a custom worktrees_dir gets no orphan advice" {
+    commit_repo "$TEST_DIR/api"
+    printf '{"projects": {"api": "git@x:o/api.git"}, "worktrees_dir": "wt"}\n' > "$TEST_DIR/.meta.json"
+    printf 'wt/\napi/\n' >> "$TEST_DIR/.gitignore"
+    git -C "$TEST_DIR" add .meta.json .gitignore
+    git -C "$TEST_DIR" commit --quiet -m wt
+    "$META_BIN" git worktree create s --all
+    cd "$TEST_DIR/wt/s"
+    run "$META_BIN" exec -- true
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"not tracked by its parent"* ]]
+}
+
 @test "a set in a worktrees_dir under .worktrees runs nothing in the workspace" {
     commit_repo "$TEST_DIR/.deps/x"
     printf '{"projects": {"x": {"repo": "git@x:o/x.git", "path": ".deps/x"}}, "worktrees_dir": ".worktrees/w"}\n' > "$TEST_DIR/.meta.json"
@@ -1917,6 +1930,20 @@ set_projects() {
     [[ "$output" == *"--primary"* ]]
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/.deps/x/ran" ]
+}
+
+@test "a set checkout whose git admin dir can't be searched runs nothing in the workspace" {
+    [ "$(id -u)" -ne 0 ] || skip "root reads any directory"
+    commit_repo "$TEST_DIR/.deps/child"
+    set_projects '{"child": {"repo": "git@x:o/c.git", "path": ".deps/child"}}'
+    "$META_BIN" git worktree create s --repo child --no-deps
+    admin="$(git -C "$TEST_DIR/.worktrees/s/.deps/child" rev-parse --absolute-git-dir)"
+    cd "$TEST_DIR/.worktrees/s/.deps/child"
+    chmod 600 "$admin"
+    run "$META_BIN" exec -- touch "$TEST_DIR/ran-\$(basename "\$PWD")"
+    chmod 700 "$admin"
+    [ "$status" -ne 0 ]
+    [ -z "$(find "$TEST_DIR" -maxdepth 1 -name 'ran-*')" ]
 }
 
 @test "a set with a part that can't be read runs nothing in the workspace" {

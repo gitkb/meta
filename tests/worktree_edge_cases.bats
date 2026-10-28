@@ -1669,6 +1669,23 @@ set_projects() {
     [ ! -e "$TEST_DIR/.worktrees/s" ]
 }
 
+@test "worktree add works in a set holding a submodule and an unreadable directory" {
+    commit_repo "$TEST_DIR/subsrc"
+    commit_repo "$TEST_DIR/a"
+    commit_repo "$TEST_DIR/b"
+    git -C "$TEST_DIR/a" -c protocol.file.allow=always submodule --quiet add "$TEST_DIR/subsrc" vendor/sub
+    git -C "$TEST_DIR/a" -c user.email=t@t -c user.name=t commit --quiet -m sub
+    set_projects '{"a": "git@x:o/a.git", "b": "git@x:o/b.git"}'
+    "$META_BIN" git worktree create s --repo a --no-deps
+    git -C "$TEST_DIR/.worktrees/s/a" -c protocol.file.allow=always submodule --quiet update --init
+    mkdir "$TEST_DIR/.worktrees/s/a/secret"
+    chmod 000 "$TEST_DIR/.worktrees/s/a/secret"
+    run "$META_BIN" git worktree add s --repo b
+    chmod 755 "$TEST_DIR/.worktrees/s/a/secret"
+    [ "$status" -eq 0 ]
+    [ -e "$TEST_DIR/.worktrees/s/b/.git" ]
+}
+
 @test "worktree add finds a nested repo already in the set" {
     commit_repo "$TEST_DIR/parent"
     printf '{"projects": {"leaf": "git@x:o/leaf.git"}}\n' > "$TEST_DIR/parent/.meta.json"

@@ -1763,6 +1763,46 @@ set_projects() {
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/.deps/child/ran" ]
     [ ! -e ran ]
+    # --primary runs in the workspace, as the error says
+    run "$META_BIN" --primary exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR"* ]]
+}
+
+@test "a set without a nested meta repo's checkout reads its projects where the set was made from" {
+    commit_repo "$TEST_DIR/parent"
+    printf '{"projects": {"leaf": {"repo": "git@x:o/leaf.git", "tags": ["red"]}}}\n' > "$TEST_DIR/parent/.meta.json"
+    echo leaf/ > "$TEST_DIR/parent/.gitignore"
+    git -C "$TEST_DIR/parent" add .meta.json .gitignore
+    git -C "$TEST_DIR/parent" -c user.email=t@t -c user.name=t commit --quiet -m config
+    commit_repo "$TEST_DIR/parent/leaf"
+    git -C "$TEST_DIR/parent/leaf" tag onlyleaf
+    set_projects '{"parent": {"repo": "git@x:o/parent.git", "meta": true}}'
+    # parent has no onlyleaf, so the set holds leaf without it
+    run "$META_BIN" git worktree create subset onlyleaf --repo parent/leaf --no-deps
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_DIR/.worktrees/subset/parent/.git" ]
+    cd "$TEST_DIR/.worktrees/subset"
+    run "$META_BIN" --tag red exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/subset/parent/leaf"* ]]
+    run "$META_BIN" --tag blue exec -- pwd
+    [[ "$output" != *"/subset/parent/leaf"* ]]
+    run "$META_BIN" --include leaf exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/subset/parent/leaf"* ]]
+}
+
+@test "inside a set, a checkout no project owns doesn't pass --tag" {
+    commit_repo "$TEST_DIR/api"
+    set_projects '{"api": {"repo": "git@x:o/api.git", "tags": ["backend"]}}'
+    "$META_BIN" git worktree create s --all
+    git -C "$TEST_DIR/api" worktree add --quiet "$TEST_DIR/.worktrees/s/experiment" -b experiment
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" --tag backend exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/s/api"* ]]
+    [[ "$output" != *"/s/experiment"* ]]
 }
 
 @test "a project named like a path gets no parents from its name" {

@@ -459,7 +459,7 @@ echo '{"command":"build","args":[],"projects":[{"name":"test","path":"./test"}],
 
 ```bash
 # Place plugin in discovery path
-cp meta-docker ~/.meta/plugins/
+cp meta-docker "${META_DATA_DIR:-$HOME/.meta}/plugins/"
 
 # Test via meta
 meta docker build --dry-run
@@ -496,7 +496,7 @@ meta plugin install meta-docker
 
 1. Build for target platforms
 2. Distribute binaries or packages
-3. Users place in `~/.meta/plugins/` or PATH
+3. Users place in `$META_DATA_DIR/plugins/` (default `~/.meta/plugins/`) or PATH
 
 ## Troubleshooting
 
@@ -504,7 +504,7 @@ meta plugin install meta-docker
 
 - Ensure executable permissions: `chmod +x meta-plugin`
 - Check naming: must start with `meta-`
-- Verify location: `.meta/plugins/` next to a meta config of this workspace, `~/.meta/plugins/`, or PATH
+- Verify location: `.meta/plugins/` next to a meta config of this workspace, `$META_DATA_DIR/plugins/` (default `~/.meta/plugins/`), or PATH
 - Make sure it answers `--meta-plugin-info` within 5 seconds
 - Use `META_DEBUG=1` for debug output
 

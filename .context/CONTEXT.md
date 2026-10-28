@@ -17,7 +17,7 @@ You are an expert Rust developer specializing in high-performance, cross-platfor
 ### Core CLI
 - Run any command across multiple repositories
 - Project tags for filtering (`--tag backend,api`)
-- YAML and JSON configuration support (`.meta`, `.meta.json`, `.meta.yaml`, `.meta.yml`)
+- YAML configuration (`.meta.yaml`)
 - Nested meta repos with `--recursive` flag
 - JSON output mode for scripting (`--json`)
 - Directory filtering (`--include`, `--exclude`)
@@ -107,17 +107,12 @@ projects:
     tags: [frontend, typescript]
 ```
 
-### Simple Format (Legacy)
-```json
-{
-  "projects": {
-    "api-service": "git@github.com:org/api-service.git",
-    "web-app": "git@github.com:org/web-app.git"
-  }
-}
+### Simple Format
+```yaml
+projects:
+  api-service: git@github.com:org/api-service.git
+  web-app: git@github.com:org/web-app.git
 ```
-
-One config file per directory: two of `.meta`, `.meta.json`, `.meta.yaml`, `.meta.yml` in one directory is an error.
 
 ---
 

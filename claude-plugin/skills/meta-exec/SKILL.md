@@ -41,7 +41,7 @@ meta exec -- --version
 
 ## Parallel vs Sequential
 
-Commands run in parallel by default (a `.meta` config can set `defaults.parallel: false`; it is only read when you run meta from the directory holding that `.meta`). Use `--sequential` for live output in order, or `--parallel` to force concurrency:
+Commands run in parallel by default (a `.meta.yaml` can set `defaults.parallel: false`; it is only read when you run meta from the directory holding that `.meta.yaml`). Use `--sequential` for live output in order, or `--parallel` to force concurrency:
 
 ```bash
 # Parallel (default) - faster, grouped output after completion
@@ -61,7 +61,7 @@ Parallel mode:
 Control which repos run the command:
 
 ```bash
-# Only these repos: each value is a repo's .meta name or its path from the workspace root
+# Only these repos: each value is a repo's .meta.yaml name or its path from the workspace root
 meta --include api,worker git status
 meta --include libs/core,. git status   # `.` is the root repo
 
@@ -80,7 +80,7 @@ meta --tag backend --include api git status
 2. `--include` limits to the named repos
 3. `--exclude` removes the named repos
 
-A value names a whole repo, never part of a path: `api` does not match `api-tests`. A value that names no repo is an error, so a typo never runs a command in the repo you meant to skip. Inside a worktree set the same holds: a repo sits at its project's path, so it is named by its `.meta` name or that path, from the set's root. A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too). The meta root repo stays included even when it doesn't match a tag.
+A value names a whole repo, never part of a path: `api` does not match `api-tests`. A value that names no repo is an error, so a typo never runs a command in the repo you meant to skip. Inside a worktree set the same holds: a repo sits at its project's path, so it is named by its `.meta.yaml` name or that path, from the set's root. A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too). The meta root repo stays included even when it doesn't match a tag.
 
 ## Dry Run
 
@@ -136,8 +136,8 @@ meta --silent exec -- npm install
 |--------|-------------|
 | `--parallel` | Run commands concurrently (the default) |
 | `--sequential` | Run one repo at a time |
-| `--include <repos>` | Only these repos (`.meta` name or path from the root) |
-| `--exclude <repos>` | Skip these repos (`.meta` name or path from the root) |
+| `--include <repos>` | Only these repos (`.meta.yaml` name or path from the root) |
+| `--exclude <repos>` | Skip these repos (`.meta.yaml` name or path from the root) |
 | `--tag <tags>` | Filter by project tag(s) |
 | `--dry-run` | Preview without executing |
 | `--json` | Structured JSON output |
@@ -187,7 +187,7 @@ meta exec -- rm -rf node_modules dist
 | One-off scripts | Operations with meta-specific logic |
 | npm/cargo/make | Clone, update, worktree |
 
-`meta exec -- <cmd>` always runs the command as typed, never through a plugin: `meta exec -- git status` runs plain `git status` in each repo, while `meta git status` uses the git plugin. Prefer `meta git <cmd>` for git: any git subcommand passes through it, and it runs remote commands (`fetch`, `pull`, `push`) without credential prompts that would hang parallel runs. Plugins intercept only their own subcommands (`meta git ...`, `meta cargo ...`) and provide enhanced behavior. `meta git clone` doesn't run `git clone` in each repo—it reads `.meta` and clones the entire graph.
+`meta exec -- <cmd>` always runs the command as typed, never through a plugin: `meta exec -- git status` runs plain `git status` in each repo, while `meta git status` uses the git plugin. Prefer `meta git <cmd>` for git: any git subcommand passes through it, and it runs remote commands (`fetch`, `pull`, `push`) without credential prompts that would hang parallel runs. Plugins intercept only their own subcommands (`meta git ...`, `meta cargo ...`) and provide enhanced behavior. `meta git clone` doesn't run `git clone` in each repo—it reads `.meta.yaml` and clones the entire graph.
 
 ## Worktree Context Detection
 

@@ -28,7 +28,7 @@ USAGE:
     meta git <command> [args...]
 
 COMMANDS:
-    clone       Clone all repositories defined in .meta
+    clone       Clone all repositories defined in .meta.yaml
     status      Show git status for all repos
     pull        Pull changes in all repos
     push        Push commits in all repos
@@ -54,7 +54,7 @@ Extend the subprocess plugin protocol to require help text:
   "help": {
     "usage": "meta git <command> [args...]",
     "commands": {
-      "clone": "Clone all repositories defined in .meta",
+      "clone": "Clone all repositories defined in .meta.yaml",
       "status": "Show git status for all repos",
       "pull": "Pull changes in all repos",
       "push": "Push commits in all repos",

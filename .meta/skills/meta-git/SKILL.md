@@ -24,7 +24,7 @@ Any other git subcommand passes through to git in each repo. Meta passes the arg
 ## Cloning a Meta Repo
 
 ```bash
-# Clone meta repo and all child repos defined in .meta
+# Clone meta repo and all child repos defined in .meta.yaml
 meta git clone <url>
 
 # Clone recursively (if child repos are also meta repos)
@@ -37,13 +37,13 @@ meta git clone <url> --parallel 8
 meta git clone <url> --depth 1
 ```
 
-**How it works**: Meta clones the parent, reads `.meta`, then queues and clones all children in parallel. With `--recursive`, it repeats for any child that has its own `.meta`.
+**How it works**: Meta clones the parent, reads `.meta.yaml`, then queues and clones all children in parallel. With `--recursive`, it repeats for any child that has its own `.meta.yaml`.
 
 ## Updating All Repos
 
 ```bash
 meta git pull      # Pull every existing repo
-meta git update    # Clone repos listed in .meta that are missing locally
+meta git update    # Clone repos listed in .meta.yaml that are missing locally
 ```
 
 `meta git update` only clones missing repos (nested meta repos included); it does not pull existing ones. `meta git pull --recursive` also pulls nested meta repos.
@@ -85,13 +85,13 @@ meta git log --oneline -5
 
 ## Filtering
 
-Target specific repos. With `--tag`, the meta root repo stays included even when it isn't tagged; `--include`/`--exclude` take whole repos (a `.meta` name or the path from the workspace root, `.` for the root), never part of a path, and can drop the root. A value that names no repo is an error.
+Target specific repos. With `--tag`, the meta root repo stays included even when it isn't tagged; `--include`/`--exclude` take whole repos (a `.meta.yaml` name or the path from the workspace root, `.` for the root), never part of a path, and can drop the root. A value that names no repo is an error.
 
 ```bash
 # By tag
 meta --tag backend git status
 
-# By repo: .meta name or path from the root (`api` does not match `api-tests`)
+# By repo: .meta.yaml name or path from the root (`api` does not match `api-tests`)
 meta --include api,web git push
 
 # Exclude repos

@@ -1,6 +1,6 @@
 ---
 name: meta-workspace
-description: Understanding and operating in meta repository workspaces with .meta/.meta.yaml configuration.
+description: Understanding and operating in meta repository workspaces with .meta.yaml configuration.
 ---
 
 # Meta Workspace Skill
@@ -31,8 +31,8 @@ In a meta repo, changes often span multiple repositories. Using `meta` commands 
 
 ## The Meta Config
 
-One config file in the workspace root defines the child repositories:
-`.meta.yaml` (or `.meta.yml`), or `.meta.json`.
+One config file in the workspace root, `.meta.yaml`, defines the child
+repositories.
 
 ```yaml
 projects:
@@ -45,11 +45,6 @@ projects:
 
 **Simple format**: `name: git-url` - clones to `./name`
 **Extended format**: Object with `repo`, optional `path`, optional `tags`
-
-An older repo may use the legacy `.meta` file (JSON, no extension). It still
-works, but it takes the name of meta's `.meta/` folder (skills and
-project-local plugins): rename it with `git mv .meta .meta.json` (same content).
-Two config files in one directory are an error that names both; keep one.
 
 ## Discovering What's Here
 
@@ -115,7 +110,7 @@ When the meta MCP server is available, these tools provide structured JSON for p
 ## Efficiency Tips
 
 - **One command, all repos**: `meta git status` replaces N individual `cd && git status` calls
-- **Targeted operations**: `meta --include repo1,repo2 exec -- cmd` operates on only the named repos (`.meta` name or path from the workspace root)
+- **Targeted operations**: `meta --include repo1,repo2 exec -- cmd` operates on only the named repos (`.meta.yaml` name or path from the workspace root)
 - **Tag-based filtering**: `meta --tag backend exec -- cargo test` scopes to tagged repos
 - **Dependency awareness**: `meta_analyze_impact <repo>` shows who depends on a repo before you modify it — prevents cascading fix-up commits
 - **Session start**: Always run `meta project list --recursive --json` first to get the workspace map

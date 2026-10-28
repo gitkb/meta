@@ -27,8 +27,8 @@ setup() {
         echo "# $repo" > "$TEST_DIR/$repo/README.md"
     done
 
-    # Default .meta config with tags
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    # Default .meta.yaml with tags
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "api": {
@@ -505,7 +505,7 @@ SCRIPT
 
 add_api_legacy() {
     mkdir -p "$TEST_DIR/api-legacy" "$TEST_DIR/libs/core"
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "api": "git@github.com:org/api.git",
@@ -545,7 +545,7 @@ EOF
     done
 }
 
-@test "--include takes a repo's .meta name or its path from the root" {
+@test "--include takes a repo's .meta.yaml name or its path from the root" {
     add_api_legacy
     for value in core libs/core ./libs/core/; do
         run "$META_BIN" --include "$value" exec -- pwd
@@ -607,12 +607,12 @@ EOF
 
 @test "a value that is one repo's path and another's name is an error" {
     mkdir -p "$TEST_DIR/web" "$TEST_DIR/frontend"
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 { "projects": { "web": { "repo": "git@github.com:org/web.git", "path": "frontend" }, "web-app": { "repo": "git@github.com:org/web-app.git", "path": "web" } } }
 EOF
     run "$META_BIN" --include web exec -- touch ran
     [ "$status" -ne 0 ]
-    [[ "$output" == *"names the repo at web by path and the repo at frontend by .meta name"* ]]
+    [[ "$output" == *"names the repo at web by path and the repo at frontend by .meta.yaml name"* ]]
     [ -z "$(find "$TEST_DIR" -name ran)" ]
 }
 
@@ -633,10 +633,10 @@ EOF
 
 @test "--recursive with --config expands each nested meta repo once" {
     mkdir -p "$TEST_DIR/child/inner" "$TEST_DIR/legacy"
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 { "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
 EOF
-    cat > "$TEST_DIR/child/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/child/.meta.yaml" <<'EOF'
 { "projects": { "inner": "git@github.com:org/inner.git" } }
 EOF
     # pwd prints the physical path (macOS temp dirs sit behind a symlink);
@@ -645,7 +645,7 @@ EOF
     run "$META_BIN" --recursive exec -- pwd
     [ "$status" -eq 0 ]
     default_runs="$(grep -cx "$legacy" <<<"$output" || true)"
-    run "$META_BIN" --config .meta.json --recursive exec -- pwd
+    run "$META_BIN" --config .meta.yaml --recursive exec -- pwd
     [ "$status" -eq 0 ]
     [ "$(grep -cx "$legacy" <<<"$output" || true)" -eq "$default_runs" ]
     [ "$default_runs" -eq 1 ]
@@ -653,16 +653,16 @@ EOF
 
 @test "--recursive stops at a refused nested config, with or without --config" {
     mkdir -p "$TEST_DIR/child" "$TEST_DIR/legacy"
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 { "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
 EOF
-    cat > "$TEST_DIR/child/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/child/.meta.yaml" <<'EOF'
 { "projects": { "up": { "repo": "git@github.com:org/up.git", "path": ".." } } }
 EOF
     run "$META_BIN" --recursive exec -- touch ran
     [ "$status" -ne 0 ]
     [[ "$output" == *"must not contain '..'"* ]]
-    run "$META_BIN" --config .meta.json --recursive exec -- touch ran
+    run "$META_BIN" --config .meta.yaml --recursive exec -- touch ran
     [ "$status" -ne 0 ]
     [[ "$output" == *"must not contain '..'"* ]]
     [ -z "$(find "$TEST_DIR" -name ran)" ]
@@ -670,7 +670,7 @@ EOF
 
 @test "--exclude cannot be dodged by a second spelling of the same repo" {
     mkdir -p "$TEST_DIR/api"
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 { "projects": { "api": "git@github.com:org/api.git", "other": { "repo": "git@github.com:org/api.git", "path": "./api/" } } }
 EOF
     run "$META_BIN" --exclude api exec -- touch ran
@@ -735,7 +735,7 @@ EOF
     # and in the line for a listed project that isn't cloned
     mkdir "$TEST_DIR/ghostws"
     cd "$TEST_DIR/ghostws"
-    echo '{"projects": {"ghost": "git@x:o/ghost.git"}}' > .meta.json
+    echo '{"projects": {"ghost": "git@x:o/ghost.git"}}' > .meta.yaml
     run "$META_BIN" --sequential exec -- "$E"
     [[ "$output" == *"No directory found"* ]]
     [[ "$output" != *$'\033[2J'* ]]

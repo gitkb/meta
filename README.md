@@ -96,7 +96,7 @@ Meta is a **command router on top of a loop engine**, built in three layers:
 User runs: meta git status --tag backend
     │
     ▼
-Meta CLI: parse args → load .meta → filter by tags → find plugin
+Meta CLI: parse args → load .meta.yaml → filter by tags → find plugin
     │
     ▼
 Plugin (meta-git): "here's the plan" → [{dir: "./api", argv: ["git", "status"]}, ...]
@@ -184,22 +184,17 @@ until you clone them too.
 
 ## Configuration
 
-Meta projects are configured by one config file in the repository root: `.meta.yaml` (or `.meta.yml`) for YAML, or `.meta.json` for JSON. Two config files in one directory are an error that names both; keep one.
-
-The legacy `.meta` file (JSON, no extension) still works, but it takes the name of meta's `.meta/` folder, which holds skills and project-local plugins, so `meta init claude` refuses it. Rename it with `git mv .meta .meta.json` (same content).
+Meta projects are configured by one YAML file in the repository root: `.meta.yaml`. It is the only name meta looks for; `--config <FILE>` reads another file instead.
 
 ### Simple Format
 
-Map project names to repository URLs (`.meta.json`):
+Map project names to repository URLs:
 
-```json
-{
-  "projects": {
-    "api-service": "git@github.com:org/api-service.git",
-    "web-app": "git@github.com:org/web-app.git",
-    "shared-utils": "git@github.com:org/shared-utils.git"
-  }
-}
+```yaml
+projects:
+  api-service: git@github.com:org/api-service.git
+  web-app: git@github.com:org/web-app.git
+  shared-utils: git@github.com:org/shared-utils.git
 ```
 
 ### Extended Format
@@ -350,7 +345,7 @@ meta --include api-service,web-app git status
 meta --exclude legacy-app exec -- npm install
 ```
 
-A value names a whole repo: its `.meta` name or its path from the workspace root (`.` for the root repo), never part of a path, so `api` does not select `api-legacy`. A value that names no repo is an error, so a typo never runs a command in a repo you meant to skip. Inside a worktree set the same holds: a repo sits at its project's path, so it is named by its `.meta` name or that path, from the set's root. A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too).
+A value names a whole repo: its `.meta.yaml` name or its path from the workspace root (`.` for the root repo), never part of a path, so `api` does not select `api-legacy`. A value that names no repo is an error, so a typo never runs a command in a repo you meant to skip. Inside a worktree set the same holds: a repo sits at its project's path, so it is named by its `.meta.yaml` name or that path, from the set's root. A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too).
 
 ### Arguments
 
@@ -468,7 +463,7 @@ Meta is a Rust workspace of 10 crates:
 | `meta_rust_cli` | Rust/Cargo plugin |
 | `meta_mcp` | MCP server for AI agent integration |
 
-Each plugin is both a workspace member and a child repo in the `.meta` manifest — meta manages itself with itself.
+Each plugin is both a workspace member and a child repo in the `.meta.yaml` manifest — meta manages itself with itself.
 
 See [docs/architecture_overview.md](docs/architecture_overview.md) for the full design.
 
@@ -497,10 +492,10 @@ Arguments:
   [COMMAND]...  Command to run across repositories
 
 Options:
-  -c, --config <FILE>       Path to .meta config file
+  -c, --config <FILE>       Read this config file instead of finding .meta.yaml
   -t, --tag <TAGS>          Filter by tag(s), comma-separated
-  -i, --include <REPOS>     Only these repos (.meta name or path from the root)
-  -e, --exclude <REPOS>     Skip these repos (.meta name or path from the root)
+  -i, --include <REPOS>     Only these repos (.meta.yaml name or path from the root)
+  -e, --exclude <REPOS>     Skip these repos (.meta.yaml name or path from the root)
   -r, --recursive           Process nested meta repos
       --depth <N>           Max recursion depth
       --json                Output in JSON format

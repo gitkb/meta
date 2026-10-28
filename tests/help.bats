@@ -27,7 +27,7 @@ setup() {
     chmod +x "$NO_CONFIG_DIR/.meta/plugins/meta-git"
     chmod +x "$NO_CONFIG_DIR/.meta/plugins/meta-rust"
 
-    cat > "$TEST_DIR/.meta.json" <<'JSON'
+    cat > "$TEST_DIR/.meta.yaml" <<'JSON'
 {
     "projects": {
         "api": "git@github.com:org/api.git",

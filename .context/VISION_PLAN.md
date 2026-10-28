@@ -18,7 +18,7 @@
 | Loop engine | ✅ Done | Directory iteration, filtering |
 | JSON output (`--json`) | ✅ Done | Scripting support |
 | Project tags (`--tag`) | ✅ Done | Filter by tags |
-| YAML configuration | ✅ Done | `.meta.yaml` / `.meta.yml` (one config per directory) |
+| YAML configuration | ✅ Done | `.meta.yaml` |
 | Nested meta repos (`--recursive`) | ✅ Done | Process nested repos |
 | Subprocess plugin system | ✅ Done | JSON over stdin/stdout |
 | Plugin discovery | ✅ Done | `.meta/plugins/` of the workspace's meta dirs, `META_DATA_DIR`, PATH |
@@ -43,7 +43,7 @@
 │                        meta CLI                              │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────────────┐ │
 │  │ Parsing │→ │ Config  │→ │ Filter  │→ │ Plugin Manager  │ │
-│  │ (clap)  │  │ (.meta) │  │ (tags)  │  │ (subprocess)    │ │
+│  │ (clap)  │  │ (yaml)  │  │ (tags)  │  │ (subprocess)    │ │
 │  └─────────┘  └─────────┘  └─────────┘  └─────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
                               ↓
@@ -162,7 +162,7 @@ The MCP server exposes 26 tools for AI agent integration:
    - `meta query "modified_after:24h AND branch:main"`
 
 2. **Dependency Tracking** - Understand project relationships
-   - Extended `.meta` schema with `provides`/`depends_on`
+   - Extended `.meta.yaml` schema with `provides`/`depends_on`
    - Impact analysis before changes
    - Topological sort for build ordering
 
@@ -206,7 +206,7 @@ The MCP server exposes 26 tools for AI agent integration:
 | JS/TS ecosystem only | Language-agnostic by design |
 | Complex dependency graphs | Simple repos + tags model |
 | Build-centric philosophy | Git-first, builds are plugins |
-| Heavy configuration | Minimal .meta config |
+| Heavy configuration | Minimal .meta.yaml config |
 
 ### meta's Unique Position
 1. **Conceptual simplicity** - Easy mental model for users and AI agents

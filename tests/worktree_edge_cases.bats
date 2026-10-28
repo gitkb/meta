@@ -1791,6 +1791,13 @@ set_projects() {
     run "$META_BIN" --include leaf exec -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"/subset/parent/leaf"* ]]
+    # and worktree exec names it the same way
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree exec subset --include leaf -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/subset/parent/leaf"* ]]
+    run "$META_BIN" git worktree exec subset --exclude leaf -- pwd
+    [[ "$output" == *"leave no repo"* ]]
 }
 
 @test "inside a set, a checkout no project owns doesn't pass --tag" {

@@ -1827,9 +1827,25 @@ set_projects() {
     set_projects '{"child": {"repo": "git@x:o/c.git", "path": ".deps/child"}}'
     git -C "$TEST_DIR/.deps/child" config worktree.useRelativePaths true
     "$META_BIN" git worktree create s --repo child --no-deps
+    # an older git writes absolute links, which still resolve after the move
+    grep -q '^gitdir: \.\.' "$TEST_DIR/.worktrees/s/.deps/child/.git" \
+        || skip "this git doesn't write relative worktree links"
     mkdir -p "$TEST_DIR/.worktrees/holder"
     mv "$TEST_DIR/.worktrees/s" "$TEST_DIR/.worktrees/holder/moved"
     cd "$TEST_DIR/.worktrees/holder/moved/.deps/child"
+    run "$META_BIN" exec -- touch ran
+    [ "$status" -ne 0 ]
+    [ ! -e "$TEST_DIR/ran" ]
+    [ ! -e "$TEST_DIR/.deps/child/ran" ]
+    [ ! -e ran ]
+}
+
+@test "a set checkout whose .git names nothing runs nothing in the workspace" {
+    commit_repo "$TEST_DIR/.deps/child"
+    set_projects '{"child": {"repo": "git@x:o/c.git", "path": ".deps/child"}}'
+    "$META_BIN" git worktree create s --repo child --no-deps
+    printf 'gitdir:\n' > "$TEST_DIR/.worktrees/s/.deps/child/.git"
+    cd "$TEST_DIR/.worktrees/s/.deps/child"
     run "$META_BIN" exec -- touch ran
     [ "$status" -ne 0 ]
     [ ! -e "$TEST_DIR/ran" ]

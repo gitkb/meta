@@ -218,4 +218,7 @@ teardown() {
     run "$META_BIN" exec -- ls $'\xff'
     [ "$status" -ne 0 ]
     [[ "$output" == *"invalid UTF-8"* ]]
+    run "$BATS_TEST_DIRNAME/../target/debug/loop" true $'\xff'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"invalid UTF-8"* ]]
 }

@@ -1767,6 +1767,20 @@ set_projects() {
     [[ "$output" == *"/ws/app"* ]]
 }
 
+@test "a rootless workspace under .worktrees with sets of its own is no set" {
+    W="$TEST_DIR/clones/.worktrees/ws"
+    commit_repo "$W/child"
+    printf '{"projects": {"child": "git@x:o/child.git"}}\n' > "$W/.meta.json"
+    mkdir -p "$W/.meta/plugins"
+    cp "$META_GIT_BIN" "$W/.meta/plugins/meta-git"
+    cd "$W"
+    run "$META_BIN" git worktree create first --repo child --no-deps
+    [ "$status" -eq 0 ]
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/ws/child"* ]]
+}
+
 @test "a separate-git-dir workspace under .worktrees is no set" {
     W="$TEST_DIR/.worktrees/container/.deps/workspace"
     mkdir -p "$(dirname "$W")"
@@ -1912,8 +1926,9 @@ set_projects() {
 
 @test "removing or pruning a set from inside it runs the workspace's hooks" {
     commit_repo "$TEST_DIR/api"
-    printf '{"projects": {"api": "git@x:o/api.git"}, "worktree": {"hooks": {"post-destroy": "cat > %s/destroyed", "post-prune": "cat > %s/pruned"}}}\n' \
-        "$TEST_DIR" "$TEST_DIR" > "$TEST_DIR/.meta.json"
+    # relative paths: a hook runs in the workspace, not in the removed set
+    printf '{"projects": {"api": "git@x:o/api.git"}, "worktree": {"hooks": {"post-destroy": "cat > destroyed", "post-prune": "cat > pruned"}}}\n' \
+        > "$TEST_DIR/.meta.json"
     git -C "$TEST_DIR" add .meta.json
     git -C "$TEST_DIR" commit --quiet -m hooks
     "$META_BIN" git worktree create a --all

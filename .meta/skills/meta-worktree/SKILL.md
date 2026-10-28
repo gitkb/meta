@@ -184,7 +184,9 @@ worktree:
     post-prune: my-tool worktree on-prune
 ```
 
-Each hook gets a JSON description of the action on stdin. Hook failures don't
+Each hook runs in the directory of the config that names it (the workspace's,
+also when run from inside a set) and gets a JSON description of the action on
+stdin. Hook failures don't
 block the operation; they are logged as warnings, shown only with `RUST_LOG=warn`.
 
 ## Where Meta Keeps Its Records

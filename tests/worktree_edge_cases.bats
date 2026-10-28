@@ -1760,6 +1760,37 @@ set_projects() {
     run "$META_BIN" exec -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"/ws/app"* ]]
+    # nor does another tool's worktree in it make it one
+    git -C "$W/app" worktree add --quiet "$W/.claude/worktrees/agent" -b agent
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/ws/app"* ]]
+}
+
+@test "a separate-git-dir workspace under .worktrees is no set" {
+    W="$TEST_DIR/.worktrees/container/.deps/workspace"
+    mkdir -p "$(dirname "$W")"
+    git init --quiet --initial-branch=main --separate-git-dir "$TEST_DIR/workspace.git" "$W"
+    commit_repo "$W/app"
+    printf '{"projects": {"app": "git@x:o/app.git"}}\n' > "$W/.meta.json"
+    cd "$W"
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/workspace/app"* ]]
+}
+
+@test "a plain workspace under .worktrees whose .git is a link is no set" {
+    W="$TEST_DIR/clones/.worktrees/ws"
+    mkdir -p "$W"
+    git init --quiet --initial-branch=main "$TEST_DIR/ws-git-holder"
+    mv "$TEST_DIR/ws-git-holder/.git" "$TEST_DIR/ws.git"
+    ln -s "$TEST_DIR/ws.git" "$W/.git"
+    commit_repo "$W/app"
+    printf '{"projects": {"app": "git@x:o/app.git"}}\n' > "$W/.meta.json"
+    cd "$W"
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/ws/app"* ]]
 }
 
 @test "a moved set whose records no longer match runs nothing in the workspace" {

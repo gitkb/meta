@@ -31,8 +31,8 @@ In a meta repo, changes often span multiple repositories. Using `meta` commands 
 
 ## The Meta Config
 
-One config file in the workspace root defines the child repositories:
-`.meta.yaml` (or `.meta.yml`).
+One config file in the workspace root, `.meta.yaml`, defines the child
+repositories.
 
 ```yaml
 projects:
@@ -45,8 +45,6 @@ projects:
 
 **Simple format**: `name: git-url` - clones to `./name`
 **Extended format**: Object with `repo`, optional `path`, optional `tags`
-
-Two config files in one directory are an error that names both; keep one.
 
 ## Discovering What's Here
 

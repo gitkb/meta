@@ -176,7 +176,7 @@ from inside a set, they act on the workspace the set was made from.
 
 ## Lifecycle Hooks
 
-Configure hooks in the meta config (`.meta.yaml` or `.meta.yml`):
+Configure hooks in the meta config (`.meta.yaml`):
 
 ```yaml
 worktree:

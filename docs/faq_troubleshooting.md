@@ -65,7 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | bash
 
 ### Q: Why does meta not find my repos?
 
-**A:** Check your meta config (`.meta.yaml` or `.meta.yml`):
+**A:** Check your meta config, `.meta.yaml`:
 
 1. Ensure it's in the repository root
 2. Verify YAML syntax
@@ -75,10 +75,6 @@ curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | bash
 # Validate YAML
 cat .meta.yaml | python3 -c "import yaml,sys; yaml.safe_load(sys.stdin)"
 ```
-
-### Q: Which config file takes priority?
-
-**A:** None: a directory holds one config, `.meta.yaml` or `.meta.yml`. Both in one directory are an error that names both; delete or merge one.
 
 ### Q: How do I add a new project?
 

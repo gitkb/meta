@@ -184,7 +184,7 @@ until you clone them too.
 
 ## Configuration
 
-Meta projects are configured by one YAML file in the repository root: `.meta.yaml` (or `.meta.yml`). Two config files in one directory are an error that names both; keep one.
+Meta projects are configured by one YAML file in the repository root: `.meta.yaml`. It is the only name meta looks for; `--config <FILE>` reads another file instead.
 
 ### Simple Format
 

@@ -17,7 +17,7 @@ You are an expert Rust developer specializing in high-performance, cross-platfor
 ### Core CLI
 - Run any command across multiple repositories
 - Project tags for filtering (`--tag backend,api`)
-- YAML configuration (`.meta.yaml` or `.meta.yml`)
+- YAML configuration (`.meta.yaml`)
 - Nested meta repos with `--recursive` flag
 - JSON output mode for scripting (`--json`)
 - Directory filtering (`--include`, `--exclude`)
@@ -113,8 +113,6 @@ projects:
   api-service: git@github.com:org/api-service.git
   web-app: git@github.com:org/web-app.git
 ```
-
-One config file per directory: `.meta.yaml` and `.meta.yml` in one directory is an error.
 
 ---
 

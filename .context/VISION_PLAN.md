@@ -18,7 +18,7 @@
 | Loop engine | ✅ Done | Directory iteration, filtering |
 | JSON output (`--json`) | ✅ Done | Scripting support |
 | Project tags (`--tag`) | ✅ Done | Filter by tags |
-| YAML configuration | ✅ Done | `.meta.yaml` / `.meta.yml` (one config per directory) |
+| YAML configuration | ✅ Done | `.meta.yaml` |
 | Nested meta repos (`--recursive`) | ✅ Done | Process nested repos |
 | Subprocess plugin system | ✅ Done | JSON over stdin/stdout |
 | Plugin discovery | ✅ Done | `.meta/plugins/` of the workspace's meta dirs, `META_DATA_DIR`, PATH |

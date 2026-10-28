@@ -1750,6 +1750,18 @@ set_projects() {
     [[ "$output" == *'bad\u{1b}[2J\nFORGED'* ]]
 }
 
+@test "a plain workspace under a directory named .worktrees is no set" {
+    W="$TEST_DIR/clones/.worktrees/ws"
+    mkdir -p "$W"
+    git -C "$W" init --quiet --initial-branch=main
+    commit_repo "$W/app"
+    printf '{"projects": {"app": "git@x:o/app.git"}}\n' > "$W/.meta.json"
+    cd "$W"
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/ws/app"* ]]
+}
+
 @test "a moved set whose records no longer match runs nothing in the workspace" {
     commit_repo "$TEST_DIR/.deps/child"
     set_projects '{"child": {"repo": "git@x:o/c.git", "path": ".deps/child"}}'

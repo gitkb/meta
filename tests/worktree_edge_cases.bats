@@ -1806,6 +1806,12 @@ set_projects() {
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/.deps/child/ran" ]
     [ ! -e ran ]
+    # nor with a record meta can no longer read
+    echo '{broken' > "$(git rev-parse --git-dir)/meta-worktree.json"
+    run "$META_BIN" exec -- touch ran
+    [ "$status" -ne 0 ]
+    [ ! -e "$TEST_DIR/ran" ]
+    [ ! -e "$TEST_DIR/.deps/child/ran" ]
     # --primary runs in the workspace, as the error says
     run "$META_BIN" --primary exec -- pwd
     [ "$status" -eq 0 ]
@@ -1889,6 +1895,40 @@ set_projects() {
     [ ! -e "$W/.worktrees/second" ]
     cd /
     rm -rf "$(dirname "$W")" "$(dirname "$G")"
+}
+
+@test "a directory recursive listing can't read is named on one line" {
+    [ "$(id -u)" -ne 0 ] || skip "root reads any directory"
+    "$META_BIN" git worktree create s --repo backend --no-deps
+    bad="$TEST_DIR/.worktrees/s/.hidden"$'\n'"FORGED"
+    mkdir "$bad"
+    chmod 0111 "$bad"
+    run "$META_BIN" git worktree list s --recursive --metadata-only
+    chmod 0755 "$bad"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'.hidden\nFORGED'* ]]
+    if printf '%s\n' "$output" | grep -q '^FORGED'; then false; fi
+}
+
+@test "removing or pruning a set from inside it runs the workspace's hooks" {
+    commit_repo "$TEST_DIR/api"
+    printf '{"projects": {"api": "git@x:o/api.git"}, "worktree": {"hooks": {"post-destroy": "cat > %s/destroyed", "post-prune": "cat > %s/pruned"}}}\n' \
+        "$TEST_DIR" "$TEST_DIR" > "$TEST_DIR/.meta.json"
+    git -C "$TEST_DIR" add .meta.json
+    git -C "$TEST_DIR" commit --quiet -m hooks
+    "$META_BIN" git worktree create a --all
+    cd "$TEST_DIR/.worktrees/a/api"
+    run "$META_BIN" git worktree remove a
+    [ "$status" -eq 0 ]
+    [ -s "$TEST_DIR/destroyed" ]
+
+    cd "$TEST_DIR"
+    "$META_BIN" git worktree create b --all --ttl 1s
+    sleep 2
+    cd "$TEST_DIR/.worktrees/b/api"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [ -s "$TEST_DIR/pruned" ]
 }
 
 @test "a project named like a path gets no parents from its name" {

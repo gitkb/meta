@@ -1701,6 +1701,18 @@ set_projects() {
     if git -C "$TEST_DIR/parent/leaf" rev-parse --verify -q newb; then false; fi
 }
 
+@test "worktree add names files in the way that are no checkout" {
+    commit_repo "$TEST_DIR/api"
+    set_projects '{"api": "git@x:o/api.git", "backend": "git@x:o/backend.git"}'
+    "$META_BIN" git worktree create s --repo api --no-deps
+    mkdir -p "$TEST_DIR/.worktrees/s/backend"
+    echo note > "$TEST_DIR/.worktrees/s/backend/notes.txt"
+    run "$META_BIN" git worktree add s --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already holds files that aren't a checkout of 'backend'"* ]]
+    [ -e "$TEST_DIR/.worktrees/s/backend/notes.txt" ]
+}
+
 @test "worktree add takes one repo named by name and by path once" {
     commit_repo "$TEST_DIR/libs/core"
     commit_repo "$TEST_DIR/api"
@@ -1813,6 +1825,21 @@ set_projects() {
     [[ "$output" == *"/ws/child"* ]]
 }
 
+@test "a workspace under .worktrees with sets in its own worktrees_dir is no set" {
+    W="$TEST_DIR/clones/.worktrees/ws"
+    commit_repo "$W/child"
+    printf '{"projects": {"child": "git@x:o/child.git"}, "worktrees_dir": ".sets"}\n' > "$W/.meta.json"
+    mkdir -p "$W/.meta/plugins"
+    cp "$META_GIT_BIN" "$W/.meta/plugins/meta-git"
+    cd "$W"
+    run "$META_BIN" git worktree create first --repo child --no-deps
+    [ "$status" -eq 0 ]
+    [ -e "$W/.sets/first/child/.git" ]
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/ws/child"* ]]
+}
+
 @test "a separate-git-dir workspace under .worktrees is no set" {
     W="$TEST_DIR/.worktrees/container/.deps/workspace"
     mkdir -p "$(dirname "$W")"
@@ -1855,6 +1882,20 @@ set_projects() {
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/.deps/child/ran" ]
     [ ! -e ran ]
+}
+
+@test "a set with a part that can't be read runs nothing in the workspace" {
+    [ "$(id -u)" -ne 0 ] || skip "root reads any directory"
+    commit_repo "$TEST_DIR/.deps/child"
+    set_projects '{"child": {"repo": "git@x:o/c.git", "path": ".deps/child"}}'
+    "$META_BIN" git worktree create s --repo child --no-deps
+    chmod 000 "$TEST_DIR/.worktrees/s/.deps"
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" exec -- touch ran
+    chmod 755 "$TEST_DIR/.worktrees/s/.deps"
+    [ "$status" -ne 0 ]
+    [ ! -e "$TEST_DIR/ran" ]
+    [ ! -e "$TEST_DIR/.deps/child/ran" ]
 }
 
 @test "a set checkout whose .git names nothing runs nothing in the workspace" {
@@ -1924,6 +1965,21 @@ set_projects() {
     [[ "$output" == *"/subset/parent/leaf"* ]]
     run "$META_BIN" git worktree exec subset --exclude leaf -- pwd
     [[ "$output" == *"leave no repo"* ]]
+
+    # a broken config of another nested repo in the workspace loses only its own
+    commit_repo "$TEST_DIR/other"
+    echo '{broken' > "$TEST_DIR/other/.meta.json"
+    set_projects '{"parent": {"repo": "git@x:o/parent.git", "meta": true}, "other": {"repo": "git@x:o/other.git", "meta": true}}'
+    cd "$TEST_DIR/.worktrees/subset"
+    run "$META_BIN" --tag red exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/subset/parent/leaf"* ]]
+    run "$META_BIN" --include leaf exec -- pwd
+    [ "$status" -eq 0 ]
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree exec subset --include leaf -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/subset/parent/leaf"* ]]
 }
 
 @test "inside a set, a checkout no project owns doesn't pass --tag" {

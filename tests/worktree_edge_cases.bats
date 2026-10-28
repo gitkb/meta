@@ -1818,7 +1818,34 @@ set_projects() {
     cd "$TEST_DIR/.worktrees/broken"
     run "$META_BIN" exec -- true
     [ "$status" -ne 0 ]
+    [[ "$output" == *'gitdir: /bad\nFORGED'* ]]
     if printf '%s\n' "$output" | grep -q '^FORGED'; then false; fi
+}
+
+@test "a workspace with a separate git dir keeps a set made inside its set" {
+    W="$(cd "$(mktemp -d)" && pwd -P)/ws"
+    G="$(cd "$(mktemp -d)" && pwd -P)/git"
+    git init --quiet --initial-branch=main --separate-git-dir "$G" "$W"
+    commit_repo "$W/api"
+    printf '{"projects": {"api": "git@x:o/api.git"}}\n' > "$W/.meta.json"
+    printf 'api/\n.worktrees/\n.meta/\n' > "$W/.gitignore"
+    git -C "$W" add .meta.json .gitignore
+    git -C "$W" -c user.email=t@t -c user.name=t commit --quiet -m init
+    mkdir -p "$W/.meta/plugins"
+    cp "$META_GIT_BIN" "$W/.meta/plugins/meta-git"
+    cd "$W"
+    "$META_BIN" git worktree create first --all
+    cd "$W/.worktrees/first"
+    run "$META_BIN" git worktree create second --all
+    [ "$status" -eq 0 ]
+    [ -e "$W/.worktrees/second/api/.git" ]
+    [ ! -e "$W/.worktrees/first/.worktrees/second" ]
+    cd "$W"
+    run "$META_BIN" git worktree remove second
+    [ "$status" -eq 0 ]
+    [ ! -e "$W/.worktrees/second" ]
+    cd /
+    rm -rf "$(dirname "$W")" "$(dirname "$G")"
 }
 
 @test "a project named like a path gets no parents from its name" {

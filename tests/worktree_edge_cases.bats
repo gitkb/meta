@@ -1812,6 +1812,15 @@ set_projects() {
     [[ "$output" != *"/s/experiment"* ]]
 }
 
+@test "a checkout in a set whose .git names a hostile path keeps the error on one line" {
+    mkdir -p "$TEST_DIR/.worktrees/broken"
+    printf 'gitdir: /bad\nFORGED\n' > "$TEST_DIR/.worktrees/broken/.git"
+    cd "$TEST_DIR/.worktrees/broken"
+    run "$META_BIN" exec -- true
+    [ "$status" -ne 0 ]
+    if printf '%s\n' "$output" | grep -q '^FORGED'; then false; fi
+}
+
 @test "a project named like a path gets no parents from its name" {
     commit_repo "$TEST_DIR/actual"
     commit_repo "$TEST_DIR/tools"

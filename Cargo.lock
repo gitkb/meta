@@ -959,6 +959,7 @@ dependencies = [
  "env_logger",
  "flate2",
  "indexmap",
+ "libc",
  "log",
  "loop_lib",
  "meta_core",

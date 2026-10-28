@@ -65,23 +65,20 @@ curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | bash
 
 ### Q: Why does meta not find my repos?
 
-**A:** Check your meta config (`.meta.yaml`, `.meta.yml`, `.meta.json`, or the legacy `.meta`):
+**A:** Check your meta config (`.meta.yaml` or `.meta.yml`):
 
 1. Ensure it's in the repository root
-2. Verify JSON/YAML syntax
+2. Verify YAML syntax
 3. Check project paths are relative to the meta file location
 
 ```bash
-# Validate JSON
-jq . .meta.json
-
 # Validate YAML
 cat .meta.yaml | python3 -c "import yaml,sys; yaml.safe_load(sys.stdin)"
 ```
 
 ### Q: Which config file takes priority?
 
-**A:** None: a directory holds one config, `.meta.yaml`, `.meta.yml`, `.meta.json` or the legacy `.meta` file. Two of them in one directory are an error that names both; delete or merge one. A legacy `.meta` file is best renamed: `git mv .meta .meta.json`.
+**A:** None: a directory holds one config, `.meta.yaml` or `.meta.yml`. Both in one directory are an error that names both; delete or merge one.
 
 ### Q: How do I add a new project?
 
@@ -123,7 +120,7 @@ projects:
 # By tag (plugin commands)
 meta --tag backend git status
 
-# By repo: its .meta name or its path from the workspace root
+# By repo: its .meta.yaml name or its path from the workspace root
 meta --include api,web git status
 
 # Exclude specific repos

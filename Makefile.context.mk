@@ -1,6 +1,6 @@
 # Define the file patterns we're interested in
 FILE_PATTERNS := -name "Makefile" -o -name ".gitignore" -o -name "*.md" -o \
-                 -name ".looprc" -o -name "*.meta" -o -name "*.rs" -o \
+                 -name ".looprc" -o -name ".meta.yaml" -o -name "*.rs" -o \
                  -name ".tool-versions" -o -name "*.toml"
 
 # List all contextable files

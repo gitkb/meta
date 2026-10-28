@@ -38,8 +38,8 @@ setup() {
     git -C "$TEST_DIR" config user.email "test@test.com"
     git -C "$TEST_DIR" config user.name "Test"
 
-    # Default .meta config
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    # Default .meta.yaml
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "frontend": "git@github.com:org/frontend.git",
@@ -49,7 +49,7 @@ setup() {
 }
 EOF
 
-    git -C "$TEST_DIR" add .meta.json
+    git -C "$TEST_DIR" add .meta.yaml
     git -C "$TEST_DIR" commit --quiet -m "Initial meta commit"
 
     cd "$TEST_DIR"
@@ -183,15 +183,15 @@ teardown() {
     git config user.email "test@test.com"
     git config user.name "Test"
     git checkout -b main --quiet 2>/dev/null || true
-    cat > .meta <<'EOF'
+    cat > .meta.yaml <<'EOF'
 {
     "projects": {
         "child": "file:///dev/null"
     }
 }
 EOF
-    git add .meta
-    git commit --quiet -m "Add .meta"
+    git add .meta.yaml
+    git commit --quiet -m "Add .meta.yaml"
     git push --quiet -u origin main
 
     # Now test cloning
@@ -208,7 +208,7 @@ EOF
 
 @test "meta git clone with custom directory name for meta repo" {
     # Custom directory only applies to the meta repo itself
-    # Child repos clone to paths according to .meta config files
+    # Child repos clone to paths according to .meta.yaml files
 
     # Create a "remote" bare repo with main as default branch
     REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
@@ -222,13 +222,13 @@ EOF
     git config user.email "test@test.com"
     git config user.name "Test"
     git checkout -b main --quiet 2>/dev/null || true
-    cat > .meta <<'EOF'
+    cat > .meta.yaml <<'EOF'
 {
     "projects": {}
 }
 EOF
-    git add .meta
-    git commit --quiet -m "Add .meta"
+    git add .meta.yaml
+    git commit --quiet -m "Add .meta.yaml"
     git push --quiet -u origin main
 
     # Clone with custom directory name
@@ -242,7 +242,7 @@ EOF
 
     # Verify the custom directory was used for the meta repo
     [ -d "$CLONE_DIR/$CUSTOM_NAME" ]
-    [ -f "$CLONE_DIR/$CUSTOM_NAME/.meta" ]
+    [ -f "$CLONE_DIR/$CUSTOM_NAME/.meta.yaml" ]
 
     # Clean up
     rm -rf "$REMOTE_DIR" "$WORK_DIR" "$CLONE_DIR"
@@ -264,8 +264,8 @@ EOF
     git config user.email "test@test.com"
     git config user.name "Test"
     git checkout -b main --quiet 2>/dev/null || true
-    echo '{"projects": {}}' > .meta
-    git add .meta
+    echo '{"projects": {}}' > .meta.yaml
+    git add .meta.yaml
     git commit --quiet -m "Init"
     git push --quiet -u origin main
 
@@ -296,10 +296,10 @@ EOF
     git config user.name "Test"
     # Set default branch name explicitly
     git checkout -b main --quiet 2>/dev/null || true
-    echo '{"projects": {}}' > .meta
-    git add .meta
+    echo '{"projects": {}}' > .meta.yaml
+    git add .meta.yaml
     git commit --quiet -m "Commit 1"
-    # Create additional commits by adding new files (keep .meta valid JSON)
+    # Create additional commits by adding new files (keep .meta.yaml valid JSON)
     echo "readme 1" > README.md
     git add README.md
     git commit --quiet -m "Commit 2"
@@ -346,7 +346,7 @@ EOF
 @test "meta git status with non-git project directory" {
     # Add a non-git directory to projects
     mkdir -p "$TEST_DIR/not-a-repo"
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "frontend": "git@github.com:org/frontend.git",
@@ -373,7 +373,7 @@ EOF
 # ============ --recursive ============
 
 @test "meta git status --recursive discovers nested repos" {
-    # Create a nested .meta inside frontend with a sub-component
+    # Create a nested .meta.yaml inside frontend with a sub-component
     mkdir -p "$TEST_DIR/frontend/sub-lib"
     git -C "$TEST_DIR/frontend/sub-lib" init --quiet
     git -C "$TEST_DIR/frontend/sub-lib" config user.email "test@test.com"
@@ -382,7 +382,7 @@ EOF
     git -C "$TEST_DIR/frontend/sub-lib" add README.md
     git -C "$TEST_DIR/frontend/sub-lib" commit --quiet -m "Init sub-lib"
 
-    cat > "$TEST_DIR/frontend/.meta" <<'EOF'
+    cat > "$TEST_DIR/frontend/.meta.yaml" <<'EOF'
 {
     "projects": {
         "sub-lib": "git@github.com:org/sub-lib.git"
@@ -414,14 +414,14 @@ EOF
     git -C "$TEST_DIR/frontend/sub-lib/deep" add README.md
     git -C "$TEST_DIR/frontend/sub-lib/deep" commit --quiet -m "Init deep"
 
-    cat > "$TEST_DIR/frontend/.meta" <<'EOF'
+    cat > "$TEST_DIR/frontend/.meta.yaml" <<'EOF'
 {
     "projects": {
         "sub-lib": "git@github.com:org/sub-lib.git"
     }
 }
 EOF
-    cat > "$TEST_DIR/frontend/sub-lib/.meta" <<'EOF'
+    cat > "$TEST_DIR/frontend/sub-lib/.meta.yaml" <<'EOF'
 {
     "projects": {
         "deep": "git@github.com:org/deep.git"
@@ -448,14 +448,14 @@ EOF
         git -C "$repo" commit --quiet -m "Init $(basename $repo)"
     done
 
-    cat > "$TEST_DIR/frontend/.meta" <<'EOF'
+    cat > "$TEST_DIR/frontend/.meta.yaml" <<'EOF'
 {
     "projects": {
         "sub-lib": "git@github.com:org/sub-lib.git"
     }
 }
 EOF
-    cat > "$TEST_DIR/frontend/sub-lib/.meta" <<'EOF'
+    cat > "$TEST_DIR/frontend/sub-lib/.meta.yaml" <<'EOF'
 {
     "projects": {
         "deep": "git@github.com:org/deep.git"
@@ -480,7 +480,7 @@ EOF
     git -C "$TEST_DIR/frontend/sub-lib" add file.txt
     git -C "$TEST_DIR/frontend/sub-lib" commit --quiet -m "Init"
 
-    cat > "$TEST_DIR/frontend/.meta" <<'EOF'
+    cat > "$TEST_DIR/frontend/.meta.yaml" <<'EOF'
 {
     "projects": {
         "sub-lib": "git@github.com:org/sub-lib.git"
@@ -502,7 +502,7 @@ EOF
 
 @test "meta exec --recursive runs in nested project dirs" {
     mkdir -p "$TEST_DIR/backend/sub-service"
-    cat > "$TEST_DIR/backend/.meta" <<'EOF'
+    cat > "$TEST_DIR/backend/.meta.yaml" <<'EOF'
 {
     "projects": {
         "sub-service": "git@github.com:org/sub-service.git"
@@ -517,7 +517,7 @@ EOF
 
 @test "meta exec --recursive --depth 0 does not recurse" {
     mkdir -p "$TEST_DIR/backend/sub-service"
-    cat > "$TEST_DIR/backend/.meta" <<'EOF'
+    cat > "$TEST_DIR/backend/.meta.yaml" <<'EOF'
 {
     "projects": {
         "sub-service": "git@github.com:org/sub-service.git"
@@ -533,13 +533,12 @@ EOF
 
 # ============ meta git clone --recursive ============
 
-# Helper: create a bare repo containing a .meta config with given projects.
+# Helper: create a bare repo containing a .meta.yaml with given projects.
 # Usage: create_meta_bare_repo <bare_dir> <projects_json>
 # Returns the file:// URL suitable for cloning.
 create_meta_bare_repo() {
     local bare_dir="$1"
     local meta_content="$2"
-    local meta_format="${3:-.meta}"  # default to JSON .meta
 
     local work_dir="$(mktemp -d)"
     git init --bare --quiet "$bare_dir"
@@ -551,8 +550,8 @@ create_meta_bare_repo() {
         git config user.email "test@test.com"
         git config user.name "Test"
         git checkout -b main --quiet 2>/dev/null || true
-        echo "$meta_content" > "$meta_format"
-        git add "$meta_format"
+        echo "$meta_content" > .meta.yaml
+        git add .meta.yaml
         git commit --quiet -m "Add meta config"
         git push --quiet -u origin main
     )
@@ -582,7 +581,7 @@ create_meta_bare_repo() {
     [ -d "$CLONE_TARGET/.git" ]
     # Child was cloned
     [ -d "$CLONE_TARGET/child/.git" ]
-    # Grandchild was cloned (recursive discovered child's .meta)
+    # Grandchild was cloned (recursive discovered child's .meta.yaml)
     [ -d "$CLONE_TARGET/child/grandchild/.git" ]
 
     rm -rf "$GRANDCHILD_BARE" "$CHILD_BARE" "$ROOT_BARE" "$CLONE_TARGET"
@@ -782,7 +781,7 @@ EOF
     git -C "$WS" init --quiet -b main
     git init --quiet -b main "$WS/api"
     git -C "$WS/api" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
-    printf '{"projects": {"api": "git@github.com:org/api.git"}}' > "$WS/.meta"
+    printf '{"projects": {"api": "git@github.com:org/api.git"}}' > "$WS/.meta.yaml"
     echo x > "$WS/api/file"
     git -C "$WS/api" add file
     cd "$WS"
@@ -791,25 +790,25 @@ EOF
     [[ "$output" != *$'\e'* ]]
 }
 
-@test "meta git update fails on a nested .meta it cannot read" {
+@test "meta git update fails on a nested .meta.yaml it cannot read" {
     mkdir -p "$TEST_DIR/private"
     printf '{"projects": {}}' > "$TEST_DIR/private/config.json"
-    ln -s ../private/config.json "$TEST_DIR/frontend/.meta"
+    ln -s ../private/config.json "$TEST_DIR/frontend/.meta.yaml"
     chmod 000 "$TEST_DIR/private"
     run "$META_BIN" git update
     chmod 700 "$TEST_DIR/private"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Cannot read"*"frontend/.meta"* ]]
+    [[ "$output" == *"Cannot read"*"frontend/.meta.yaml"* ]]
 }
 
-@test "meta git clone fails when a cloned repo's nested .meta is refused" {
+@test "meta git clone fails when a cloned repo's nested .meta.yaml is refused" {
     UP="$(cd "$(mktemp -d)" && pwd -P)"
-    # bare_with_meta NAME JSON: a bare repo whose only commit holds .meta = JSON
+    # bare_with_meta NAME JSON: a bare repo whose only commit holds .meta.yaml = JSON
     bare_with_meta() {
         git init --bare --quiet -b main "$UP/$1.git"
         git clone --quiet "$UP/$1.git" "$UP/work-$1" 2>/dev/null
-        printf '%s\n' "$2" > "$UP/work-$1/.meta"
-        git -C "$UP/work-$1" add .meta
+        printf '%s\n' "$2" > "$UP/work-$1/.meta.yaml"
+        git -C "$UP/work-$1" add .meta.yaml
         git -C "$UP/work-$1" -c user.email=t@t -c user.name=t commit --quiet -m meta
         git -C "$UP/work-$1" push --quiet origin HEAD:main
     }
@@ -819,7 +818,7 @@ EOF
     cd "$TEST_DIR"
     run "$META_BIN" git clone --recursive "$UP/root.git" "$UP/clone"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Could not read nested .meta configs"* ]]
+    [[ "$output" == *"Could not read nested .meta.yaml files"* ]]
     [[ "$output" == *"must not contain '..'"* ]]
     # A failed clone is still reported alongside it
     [[ "$output" == *"Failed to clone"*"gone"* ]]

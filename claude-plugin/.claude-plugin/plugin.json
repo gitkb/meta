@@ -1,6 +1,6 @@
 {
   "name": "meta",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Multi-repo workspace management. Skills, hooks, and MCP server for the meta CLI.",
   "author": {
     "name": "GitKB",

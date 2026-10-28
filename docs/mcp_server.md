@@ -332,7 +332,7 @@ Execute command across repos with optional atomic mode (auto-rollback on failure
 
 ---
 
-## Extended .meta Configuration
+## Extended .meta.yaml Configuration
 
 For dependency tracking features, extend your `.meta.yaml` with `provides` and `depends_on`:
 

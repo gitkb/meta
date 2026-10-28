@@ -67,7 +67,7 @@ repository = "https://github.com/gitkb/meta"
 
 The main CLI entry point responsible for:
 - Argument parsing (via clap)
-- Configuration loading (`.meta.yaml`, `.meta.yml`, `.meta.json`, or the legacy `.meta`; one per directory)
+- Configuration loading (`.meta.yaml` or `.meta.yml`; one per directory)
 - Plugin discovery and dispatch
 - Filter application (tags, include, exclude)
 - Query DSL processing

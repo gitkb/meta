@@ -21,8 +21,8 @@ setup() {
     cp "$META_PROJECT_BIN" "$TEST_DIR/.meta/plugins/meta-project"
     chmod +x "$TEST_DIR/.meta/plugins/meta-project"
 
-    # Default .meta config
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    # Default .meta.yaml
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "frontend": "git@github.com:org/frontend.git",
@@ -93,8 +93,8 @@ assert repos['backend'] == 'git@github.com:org/backend.git'
 }
 
 @test "meta project list --recursive discovers nested projects" {
-    # Create a nested .meta inside frontend
-    cat > "$TEST_DIR/frontend/.meta" <<'EOF'
+    # Create a nested .meta.yaml inside frontend
+    cat > "$TEST_DIR/frontend/.meta.yaml" <<'EOF'
 {
     "projects": {
         "frontend-lib": "git@github.com:org/frontend-lib.git"
@@ -110,7 +110,7 @@ EOF
 }
 
 @test "meta project list --recursive --json includes nested projects" {
-    cat > "$TEST_DIR/frontend/.meta" <<'EOF'
+    cat > "$TEST_DIR/frontend/.meta.yaml" <<'EOF'
 {
     "projects": {
         "frontend-lib": "git@github.com:org/frontend-lib.git"
@@ -134,7 +134,7 @@ assert child['name'] == 'frontend-lib'
 }
 
 @test "meta project list with extended format shows tags" {
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "frontend": {
@@ -162,14 +162,14 @@ assert 'api' in backend['tags']
 "
 }
 
-@test "meta project list with no .meta file shows error" {
-    rm "$TEST_DIR/.meta.json"
+@test "meta project list with no .meta.yaml file shows error" {
+    rm "$TEST_DIR/.meta.yaml"
     run "$META_BIN" project list
-    [ "$status" -ne 0 ] || [[ "$output" == *"No .meta"* ]] || [[ "$output" == *"error"* ]]
+    [ "$status" -ne 0 ] || [[ "$output" == *"No .meta.yaml"* ]] || [[ "$output" == *"error"* ]]
 }
 
 @test "meta project list with YAML config" {
-    rm "$TEST_DIR/.meta.json"
+    rm "$TEST_DIR/.meta.yaml"
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 projects:
   frontend:
@@ -192,7 +192,7 @@ assert 'backend' in names
 
 @test "meta project list handles nested meta repos" {
     # Verify nested meta repo entries (repo + meta: true) are handled correctly
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "backend": "git@github.com:org/backend.git",
@@ -209,7 +209,7 @@ EOF
 }
 
 @test "meta project list --json includes nested meta repos" {
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "backend": "git@github.com:org/backend.git",
@@ -227,7 +227,7 @@ data = json.load(sys.stdin)
 names = [p['name'] for p in data['projects']]
 assert 'vendor' in names, f'vendor not in {names}'
 assert 'backend' in names, f'backend not in {names}'
-# vendor should have a repo (nested meta repos are regular repos that happen to contain .meta)
+# vendor should have a repo (nested meta repos are regular repos that happen to contain .meta.yaml)
 vendor = next(p for p in data['projects'] if p['name'] == 'vendor')
 assert vendor.get('repo') == 'git@github.com:org/vendor.git', f'vendor should have repo: {vendor}'
 "
@@ -235,7 +235,7 @@ assert vendor.get('repo') == 'git@github.com:org/vendor.git', f'vendor should ha
 
 @test "meta project list --recursive shows nested meta repo children" {
     # Setup: vendor is a nested meta repo with nested-lib inside
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "backend": "git@github.com:org/backend.git",
@@ -244,7 +244,7 @@ assert vendor.get('repo') == 'git@github.com:org/vendor.git', f'vendor should ha
 }
 EOF
     mkdir -p "$TEST_DIR/vendor/nested-lib"
-    cat > "$TEST_DIR/vendor/.meta" <<'EOF'
+    cat > "$TEST_DIR/vendor/.meta.yaml" <<'EOF'
 {"projects": {"nested-lib": "git@github.com:org/nested-lib.git"}}
 EOF
 
@@ -257,8 +257,8 @@ EOF
 }
 
 @test "meta project list --recursive from nested meta-repo shows root tree" {
-    # Create a nested .meta inside frontend
-    cat > "$TEST_DIR/frontend/.meta" <<'EOF'
+    # Create a nested .meta.yaml inside frontend
+    cat > "$TEST_DIR/frontend/.meta.yaml" <<'EOF'
 {
     "projects": {
         "frontend-lib": "git@github.com:org/frontend-lib.git"
@@ -299,7 +299,7 @@ assert cwd.startswith('/'), f'cwd should be absolute path: {cwd}'
 
 @test "meta project list --recursive --json shows nested paths" {
     # Setup: vendor is a nested meta repo with nested-lib inside
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "backend": "git@github.com:org/backend.git",
@@ -308,7 +308,7 @@ assert cwd.startswith('/'), f'cwd should be absolute path: {cwd}'
 }
 EOF
     mkdir -p "$TEST_DIR/vendor/nested-lib"
-    cat > "$TEST_DIR/vendor/.meta" <<'EOF'
+    cat > "$TEST_DIR/vendor/.meta.yaml" <<'EOF'
 {"projects": {"nested-lib": "git@github.com:org/nested-lib.git"}}
 EOF
 
@@ -332,7 +332,7 @@ assert nested_lib is not None, f'nested-lib not found in vendor projects: {neste
 
 @test "meta project list rejects a project path outside the workspace" {
     for path in "../../outside" "/abs/outside"; do
-        printf '{"projects": {"evil": {"repo": "u", "path": "%s"}}}' "$path" > .meta.json
+        printf '{"projects": {"evil": {"repo": "u", "path": "%s"}}}' "$path" > .meta.yaml
         run "$META_BIN" project list
         [ "$status" -ne 0 ]
         [[ "$output" == *"Invalid project 'evil' in"* ]]
@@ -342,16 +342,16 @@ assert nested_lib is not None, f'nested-lib not found in vendor projects: {neste
 @test "meta project list rejects a project reached through a symlink out of the workspace" {
     OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
     ln -s "$OUTSIDE" linked
-    echo '{"projects": {"linked": "git@github.com:org/linked.git"}}' > .meta.json
+    echo '{"projects": {"linked": "git@github.com:org/linked.git"}}' > .meta.yaml
     run "$META_BIN" project list
     rm -rf "$OUTSIDE"
     [ "$status" -ne 0 ]
     [[ "$output" == *"through the symlink"* ]]
 }
 
-@test "meta project list never prints terminal escapes from .meta" {
+@test "meta project list never prints terminal escapes from .meta.yaml" {
     # Name, path and tag carry OSC/CSI sequences and a newline
-    cat > .meta.json <<'J'
+    cat > .meta.yaml <<'J'
 {"projects": {"x\u001b]0;TITLE\u0007": {"repo": "u", "path": "t\u001b[2J", "tags": ["n\nfake"]}}}
 J
     run "$META_BIN" project list

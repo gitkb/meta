@@ -16,7 +16,7 @@ When you run `meta <command>`, meta checks if a plugin handles that command patt
 
 Example:
 - `meta git status` → git plugin runs `git status` in every repo at this meta level (`--recursive` for nested ones)
-- `meta git clone <url>` → git plugin clones parent + all children from `.meta`
+- `meta git clone <url>` → git plugin clones parent + all children from `.meta.yaml`
 - `meta npm install` → unrecognized, shows help; use `meta exec npm install`
 
 ## Built-in Plugins
@@ -27,7 +27,7 @@ Handles all `meta git *` commands with special cases:
 
 | Command | Behavior |
 |---------|----------|
-| `meta git clone <url>` | Clone parent, read `.meta`, clone all children |
+| `meta git clone <url>` | Clone parent, read `.meta.yaml`, clone all children |
 | `meta git update` | Clone missing repos (use `meta git pull` to pull existing ones) |
 | `meta git worktree *` | Isolated multi-repo worktree sets (see the `meta-worktree` skill) |
 | `meta git <other>` | Pass through to every repo at this meta level |
@@ -37,7 +37,7 @@ Handles all `meta git *` commands with special cases:
 Workspace management:
 
 ```bash
-meta project list      # List projects from .meta
+meta project list      # List projects from .meta.yaml
 meta project check     # Verify all repos exist
 meta project dependents <name>  # Projects that depend on one
 ```

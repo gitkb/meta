@@ -67,7 +67,7 @@ meta git clone <meta-repo-url> [options]
 
 ### Behavior:
 - Clone the **meta repository** itself
-- Parse its **manifest/config** (e.g., `.meta` file)
+- Parse its **manifest/config** (e.g., `.meta.yaml` file)
 - **Iterate child repositories:**
   - Clone each child repo into its specified path
   - Support options:

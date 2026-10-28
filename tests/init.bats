@@ -21,8 +21,8 @@ setup() {
     chmod +x "$STUB_DIR/claude"
     PATH="$STUB_DIR:$PATH"
 
-    # Create .meta config
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    # Create .meta.yaml
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "backend": "git@github.com:org/backend.git"
@@ -72,16 +72,6 @@ teardown() {
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
     [ "$(readlink .cursor/skills/meta-git)" = "../../.meta/skills/meta-git" ]
-}
-
-@test "init claude refuses a legacy .meta config file" {
-    mv .meta.json .meta
-    run "$META_BIN" init claude --update
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"git mv .meta .meta.json"* ]]
-    [ -f .meta ]
-    [ ! -e .claude ]
-    [ ! -e .agents ]
 }
 
 @test "init claude --help installs nothing" {
@@ -449,15 +439,15 @@ EOF
     [[ "$output" == *"PreCompact"* ]]
 }
 
-# ============ Warning without .meta config ============
+# ============ Warning without .meta.yaml ============
 
 @test "init claude warns when not in meta repo" {
-    rm .meta.json
+    rm .meta.yaml
 
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
     [[ "$output" == *"Warning"* ]]
-    [[ "$output" == *"No .meta config"* ]]
+    [[ "$output" == *"No .meta.yaml"* ]]
 }
 
 assert_settings_refused_without_changes() {

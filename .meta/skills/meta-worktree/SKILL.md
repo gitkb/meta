@@ -100,7 +100,9 @@ meta git worktree exec --ephemeral lint-check --all -- make lint
 `prune` removes sets whose TTL has expired; for a set whose directory is gone
 it only forgets meta's record. Once its repos are taken out of the meta config,
 or the checkout it was made from is moved or deleted, a set is no longer the
-workspace's: remove it with `git worktree remove`. `--ephemeral` alone only records metadata. A TTL is a backstop for a session that
+workspace's: remove each member with `git worktree remove`, run in the repo it
+was made from. A member whose repo was deleted with that checkout has no git
+record left, so git can't remove it: delete its folder by hand. `--ephemeral` alone only records metadata. A TTL is a backstop for a session that
 dies before removing its sets.
 
 ## Inspecting Worktrees
@@ -149,7 +151,7 @@ Detection relies on the `.worktrees/<name>` path. It, and
 created with `--recursive` inside another repo of the set (e.g.
 `open-source/sdk/core` inside `open-source`) are skipped. `list --recursive`
 shows them; run the tool itself (`cargo`, `git`) in their directory, not `meta exec`, which still scopes to the set's top-level repos there. The root repo is part of a set
-by default, so the set has its own `.meta` config; otherwise meta walks up to
+by default, so the set has its own `.meta.yaml` config; otherwise meta walks up to
 the primary checkout's config. `meta --primary <command>` bypasses detection;
 run it from the primary checkout to be sure it uses the primary repos.
 
@@ -174,7 +176,7 @@ from inside a set, they act on the workspace the set was made from.
 
 ## Lifecycle Hooks
 
-Configure hooks in the meta config (`.meta.yaml`, `.meta.yml`, `.meta.json` or the legacy `.meta`):
+Configure hooks in the meta config (`.meta.yaml` or `.meta.yml`):
 
 ```yaml
 worktree:

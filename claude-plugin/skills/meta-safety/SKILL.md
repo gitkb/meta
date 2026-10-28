@@ -15,7 +15,7 @@ Multi-repo workspaces are powerful but require awareness. Meta gives you precisi
 
 ## Precision Operations
 
-Instead of cd-ing into repos one by one, use meta flags to target what you need. Include/exclude take whole repos (a `.meta` name or the path from the workspace root), never part of a path, and a value that names no repo is an error; `--tag` keeps the meta root even when it isn't tagged:
+Instead of cd-ing into repos one by one, use meta flags to target what you need. Include/exclude take whole repos (a `.meta.yaml` name or the path from the workspace root), never part of a path, and a value that names no repo is an error; `--tag` keeps the meta root even when it isn't tagged:
 
 ```bash
 # Target specific repos
@@ -42,7 +42,7 @@ When modifying a repo that other repos depend on:
 ## Efficient Commits
 
 ```bash
-# Commit only in repos repo1 and repo2 (.meta name or path from the root)
+# Commit only in repos repo1 and repo2 (.meta.yaml name or path from the root)
 meta --include repo1,repo2 git commit -m "feat: update shared API"
 
 # Push tagged repos (and the root)

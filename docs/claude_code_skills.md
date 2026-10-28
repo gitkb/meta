@@ -33,8 +33,6 @@ Commit `.meta/skills/` and the links so everyone working in the repo gets the sk
 
 **Upgrading.** Older releases wrote flat `.claude/skills/meta-*.md` files (which Claude Code never loaded) and later real `.claude/skills/meta-*/` folders. `meta init claude --update` removes both and links the new layout. It only replaces what meta wrote: in `.claude/skills/`, a skill folder holding just the `SKILL.md` meta shipped (unchanged) and regular flat `meta-*.md` files starting with the heading meta shipped (e.g. `# Meta Git Skill`); anywhere, a marked copy or a Git link placeholder holding exactly meta's link target. Other files, folders and links, including another tool's link with a meta skill's name, are left alone and reported as skipped. A link is never followed or removed: an agent skills folder, rule file or `settings.json` reached through a link is skipped, and a link inside `.meta/skills/` stops the install with an error.
 
-**Legacy `.meta` config file.** A repo whose config is the legacy `.meta` file can't also have the `.meta/` folder, so `meta init claude` refuses and asks you to rename the config first: `git mv .meta .meta.json` (same content), or convert it to `.meta.yaml`. Everywhere else, meta reads a `.meta` config only when it is a file, so the `.meta/` folder is never taken for config.
-
 The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta` binary. This repo's `.meta/skills/` (linked from `.claude/skills/` and `.agents/skills/`) and `claude-plugin/skills/` are copies: edit meta_cli, then run `make skills` (`tests/init.bats` fails when they differ). CI checks against meta_cli `main` (or the branch of the same name), so after a meta_cli skill change merges, run `make skills` here too, including on the automatic child-update sync PR. Bump `claude-plugin/.claude-plugin/plugin.json`'s version when the plugin's skills change, so plugin users get the update.
 
 ## Available Skills
@@ -44,7 +42,7 @@ The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta`
 **Purpose:** Teaches Claude about meta repository structure and why multi-repo commands matter.
 
 **Key concepts covered:**
-- The `.meta` file structure (JSON and YAML formats)
+- The `.meta.yaml` file structure
 - Simple vs extended project formats
 - Tag-based filtering
 - Nested meta repos and recursive operations
@@ -126,7 +124,7 @@ The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta`
 
 **Key concepts covered:**
 - Session start: `meta project list --recursive --json`, `meta git status`
-- Filtering with `--include`/`--exclude` (whole repos: `.meta` name or path from the root) and `--tag`
+- Filtering with `--include`/`--exclude` (whole repos: `.meta.yaml` name or path from the root) and `--tag`
 - Dependency order via the MCP tool `meta_execution_order`
 - Global and worktree `--strict` mode
 

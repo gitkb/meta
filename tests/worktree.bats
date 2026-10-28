@@ -20,8 +20,8 @@ setup() {
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
     chmod +x "$TEST_DIR/.meta/plugins/meta-git"
 
-    # Create .meta config with two projects
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    # Create .meta.yaml with two projects
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "backend": "git@github.com:org/backend.git",
@@ -46,7 +46,7 @@ EOF
     git -C "$TEST_DIR" init --quiet --initial-branch=main
     git -C "$TEST_DIR" config user.email "test@test.com"
     git -C "$TEST_DIR" config user.name "Test"
-    git -C "$TEST_DIR" add .meta.json
+    git -C "$TEST_DIR" add .meta.yaml
     git -C "$TEST_DIR" commit --quiet -m "init meta"
 
     cd "$TEST_DIR"
@@ -58,7 +58,7 @@ teardown() {
 }
 
 # Helper: Set up a nested meta repo structure
-# Creates vendor/ with its own .meta file containing nested-lib
+# Creates vendor/ with its own .meta.yaml containing nested-lib
 # Args: $1 = nested lib name (default: nested-lib)
 setup_nested_meta() {
     local nested_name="${1:-nested-lib}"
@@ -66,7 +66,7 @@ setup_nested_meta() {
     mkdir -p "$TEST_DIR/vendor/$nested_name"
 
     # Update root config to include vendor as nested meta repo
-    cat > "$TEST_DIR/.meta.json" <<EOF
+    cat > "$TEST_DIR/.meta.yaml" <<EOF
 {
     "projects": {
         "backend": "git@github.com:org/backend.git",
@@ -76,8 +76,8 @@ setup_nested_meta() {
 }
 EOF
 
-    # Create nested .meta inside vendor
-    cat > "$TEST_DIR/vendor/.meta" <<EOF
+    # Create nested .meta.yaml inside vendor
+    cat > "$TEST_DIR/vendor/.meta.yaml" <<EOF
 {"projects": {"$nested_name": "git@github.com:org/$nested_name.git"}}
 EOF
 
@@ -731,7 +731,7 @@ assert repos['frontend']['dirty'] == False, f'frontend should be clean: {repos[\
 @test "worktrees_dir config option overrides default location" {
     CUSTOM_DIR="$TEST_DIR/custom-wt-dir"
 
-    cat > "$TEST_DIR/.meta.json" <<EOF
+    cat > "$TEST_DIR/.meta.yaml" <<EOF
 {
     "projects": {
         "backend": "git@github.com:org/backend.git",
@@ -868,7 +868,7 @@ EOF
 }
 
 @test "in a set made elsewhere without its root, --tag uses the workspace's config" {
-    cat > .meta.json <<'EOF'
+    cat > .meta.yaml <<'EOF'
 {
     "projects": {
         "backend": { "repo": "git@github.com:org/backend.git", "tags": ["back"] },
@@ -885,7 +885,7 @@ EOF
     [ ! -e backend/ran ]
 
     # Without a config to read the tags from, --tag is an error, not "every repo"
-    mv "$TEST_DIR/.meta.json" "$TEST_DIR/meta.json.bak"
+    mv "$TEST_DIR/.meta.yaml" "$TEST_DIR/meta.json.bak"
     rm frontend/ran
     run "$META_BIN" --tag front exec -- touch ran
     [ "$status" -ne 0 ]

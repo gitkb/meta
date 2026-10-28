@@ -258,13 +258,6 @@ EOF
     [[ "$output" != *$'\e'* ]]
 }
 
-@test "plugin list --local works in a workspace whose .meta is the config file" {
-    printf '{"projects": {}}' > "$TEST_DIR/.meta"
-    run "$META_BIN" plugin list --local
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"No project-local plugins installed"* ]]
-}
-
 @test "a plugin name in uninstall's error is escaped on one line" {
     cd "$TEST_DIR"
     echo 'projects: {}' > .meta.yaml

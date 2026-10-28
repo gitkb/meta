@@ -24,8 +24,8 @@ setup() {
     META_DATA="$(cd "$(mktemp -d)" && pwd -P)"
     export META_DATA_DIR="$META_DATA"
 
-    # Create .meta config with three projects
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    # Create .meta.yaml with three projects
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "backend": "git@github.com:org/backend.git",
@@ -51,7 +51,7 @@ EOF
     git -C "$TEST_DIR" init --quiet --initial-branch=main
     git -C "$TEST_DIR" config user.email "test@test.com"
     git -C "$TEST_DIR" config user.name "Test"
-    git -C "$TEST_DIR" add .meta.json
+    git -C "$TEST_DIR" add .meta.yaml
     git -C "$TEST_DIR" commit --quiet -m "init meta"
 
     cd "$TEST_DIR"
@@ -67,8 +67,8 @@ make_workspace() {
     mkdir -p "$1/.meta/plugins"
     cp "$META_GIT_BIN" "$1/.meta/plugins/meta-git"
     git -C "$1" init --quiet --initial-branch=main
-    printf '{"projects": {"backend": "git@github.com:org/backend.git"}}' > "$1/.meta.json"
-    git -C "$1" add .meta.json
+    printf '{"projects": {"backend": "git@github.com:org/backend.git"}}' > "$1/.meta.yaml"
+    git -C "$1" add .meta.yaml
     git -C "$1" -c user.email=t@t -c user.name=t commit --quiet -m init
     git clone --quiet "$TEST_DIR/backend" "$1/backend"
 }
@@ -208,7 +208,7 @@ teardown() {
     # workspace doesn't list it), so it needs its own git plugin
     mkdir -p "$TEST_DIR/temp-project/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/temp-project/.meta/plugins/meta-git"
-    cat > "$TEST_DIR/temp-project/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/temp-project/.meta.yaml" <<'EOF'
 {
     "projects": {
         "temp-repo": "git@github.com:org/temp.git"
@@ -242,7 +242,7 @@ EOF
 
     # Repos that leave the project are no longer this workspace's, nor are
     # the sets made from them
-    printf '{"projects": {"common": "git@github.com:org/common.git"}}' > "$TEST_DIR/.meta.json"
+    printf '{"projects": {"common": "git@github.com:org/common.git"}}' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
     [[ "$output" != *"Pruned"* ]]
@@ -287,8 +287,8 @@ EOF
     "$META_BIN" git worktree create partial-orphan --repo backend --repo frontend
     [ -d ".worktrees/partial-orphan" ]
 
-    # Remove backend from .meta (but keep frontend)
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    # Remove backend from .meta.yaml (but keep frontend)
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "frontend": "git@github.com:org/frontend.git",
@@ -303,8 +303,8 @@ EOF
     [[ "$output" != *"partial-orphan"* ]] || [[ "$output" == *"Nothing to prune"* ]]
     [ -d ".worktrees/partial-orphan" ]
 
-    # Restore original .meta
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    # Restore original .meta.yaml
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
         "backend": "git@github.com:org/backend.git",
@@ -571,8 +571,8 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     mkdir -p "$TEST_DIR/group/core"
     git -C "$TEST_DIR/group/core" init --quiet --initial-branch=main
     git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
-    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta"
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta.yaml"
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {"projects": {"backend": "git@github.com:org/backend.git",
               "frontend": "git@github.com:org/frontend.git",
               "common": "git@github.com:org/common.git",
@@ -581,7 +581,7 @@ EOF
     run "$META_BIN" git worktree create nested-live --no-deps --repo group/core
     [ "$status" -eq 0 ]
     # The nested config now has an entry the path rules refuse
-    printf '{"projects": {"core": "git@github.com:org/core.git", "x": {"repo": "u", "path": "../outside"}}}' > "$TEST_DIR/group/.meta"
+    printf '{"projects": {"core": "git@github.com:org/core.git", "x": {"repo": "u", "path": "../outside"}}}' > "$TEST_DIR/group/.meta.yaml"
     run "$META_BIN" git worktree prune
     [[ "$output" != *"orphaned"* ]]
     [ -d "$TEST_DIR/.worktrees/nested-live/group/core" ]
@@ -603,8 +603,8 @@ EOF
     git -C "$TEST_DIR/group/core" init --quiet --initial-branch=main
     git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
     printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/private/config.json"
-    ln -s ../private/config.json "$TEST_DIR/group/.meta"
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    ln -s ../private/config.json "$TEST_DIR/group/.meta.yaml"
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {"projects": {"backend": "git@github.com:org/backend.git",
               "frontend": "git@github.com:org/frontend.git",
               "common": "git@github.com:org/common.git",
@@ -741,12 +741,12 @@ EOF
     OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$TEST_DIR/sub"
     git clone --quiet "$TEST_DIR/backend" "$TEST_DIR/sub/backend"
-    cat > "$TEST_DIR/.meta.json" <<'J'
+    cat > "$TEST_DIR/.meta.yaml" <<'J'
 {"projects": {"evil": {"repo": "git@github.com:org/backend.git", "path": "sub/backend"}}}
 J
     blob="$(printf '%s' "$OUTSIDE" | git -C "$TEST_DIR" hash-object -w --stdin)"
     git -C "$TEST_DIR" update-index --add --cacheinfo "120000,$blob,sub"
-    git -C "$TEST_DIR" add .meta.json
+    git -C "$TEST_DIR" add .meta.yaml
     git -C "$TEST_DIR" commit --quiet -m "track a symlink"
 
     run "$META_BIN" git worktree create t --repo . --repo evil
@@ -777,7 +777,7 @@ J
     [ -z "$(ls -A "$OUTSIDE")" ]
     rm "$TEST_DIR/.worktrees"
 
-    cat > "$TEST_DIR/.meta.json" <<J
+    cat > "$TEST_DIR/.meta.yaml" <<J
 {"projects": {"backend": "git@github.com:org/backend.git"}, "worktrees_dir": "$OUTSIDE"}
 J
     run "$META_BIN" git worktree create out --repo backend
@@ -796,7 +796,7 @@ J
         git -C "$TEST_DIR/$repo" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
     done
     ln -s unrelated "$TEST_DIR/vendor"
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {"projects": {"backend": "git@github.com:org/backend.git",
               "vendor/lib": "git@github.com:org/lib.git"}}
 EOF
@@ -812,9 +812,9 @@ EOF
     # group is a nested meta repo with its own core repo inside
     mkdir -p "$TEST_DIR/group"
     git -C "$TEST_DIR/group" init --quiet --initial-branch=main
-    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta"
+    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta.yaml"
     printf 'core/\n' > "$TEST_DIR/group/.gitignore"
-    git -C "$TEST_DIR/group" add .meta .gitignore
+    git -C "$TEST_DIR/group" add .meta.yaml .gitignore
     git -C "$TEST_DIR/group" -c user.email=t@t -c user.name=t commit --quiet -m init
     git init --quiet --initial-branch=main "$TEST_DIR/group/core"
     git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
@@ -827,7 +827,7 @@ EOF
     git -C "$OUT/clone" -c user.email=t@t -c user.name=t commit --quiet -m link
     git -C "$OUT/clone" push --quiet origin linked
     mkdir "$OUT/target"
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {"projects": {"backend": "git@github.com:org/backend.git",
               "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
 EOF
@@ -845,10 +845,10 @@ EOF
 @test "worktree add records what it added when a later parent dir cannot be made" {
     mkdir -p "$TEST_DIR/group/deep/lib"
     git -C "$TEST_DIR/group" init --quiet --initial-branch=main
-    printf '{"projects": {"deep/lib": "git@github.com:org/lib.git"}}' > "$TEST_DIR/group/.meta"
+    printf '{"projects": {"deep/lib": "git@github.com:org/lib.git"}}' > "$TEST_DIR/group/.meta.yaml"
     git -C "$TEST_DIR/group/deep/lib" init --quiet --initial-branch=main
     git -C "$TEST_DIR/group/deep/lib" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
-    cat > "$TEST_DIR/.meta.json" <<'EOF'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {"projects": {"backend": "git@github.com:org/backend.git",
               "frontend": "git@github.com:org/frontend.git",
               "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
@@ -892,10 +892,10 @@ EOF
     [ -d "$TEST_DIR/.worktrees/dup/backend" ]
 }
 
-@test "a plain project check does not read a child's own .meta" {
+@test "a plain project check does not read a child's own .meta.yaml" {
     # The built project plugin, not one that happens to be on PATH
     cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/"
-    ln -s missing.json "$TEST_DIR/frontend/.meta"
+    ln -s missing.json "$TEST_DIR/frontend/.meta.yaml"
     run "$META_BIN" project check
     [ "$status" -eq 0 ]
     # From a subdirectory with no config of its own, the workspace's counts
@@ -906,8 +906,8 @@ EOF
     [[ "$output" == *"Cannot read"* ]]
 }
 
-@test "meta git status and project check fail on a refused .meta" {
-    echo '{"projects": {"evil": {"repo": "u", "path": "../../outside"}}}' > "$TEST_DIR/.meta.json"
+@test "meta git status and project check fail on a refused .meta.yaml" {
+    echo '{"projects": {"evil": {"repo": "u", "path": "../../outside"}}}' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git status
     [ "$status" -ne 0 ]
     [[ "$output" == *"must not contain '..'"* ]]
@@ -997,7 +997,7 @@ add_backend_origin() {
 }
 
 @test "the git plugin run directly holds worktrees_dir to the config rules" {
-    cat > "$TEST_DIR/.meta.json" <<'J'
+    cat > "$TEST_DIR/.meta.yaml" <<'J'
 {"projects": {"backend": "git@github.com:org/backend.git"}, "worktrees_dir": "backend"}
 J
     mkdir -p backend/src
@@ -1014,20 +1014,20 @@ J
 @test "prune does not take a set as orphaned while a repo nested in it is in the project" {
     mkdir -p "$TEST_DIR/group"
     git -C "$TEST_DIR/group" init --quiet --initial-branch=main
-    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta"
+    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta.yaml"
     printf 'core/\n' > "$TEST_DIR/group/.gitignore"
-    git -C "$TEST_DIR/group" add .meta .gitignore
+    git -C "$TEST_DIR/group" add .meta.yaml .gitignore
     git -C "$TEST_DIR/group" -c user.email=t@t -c user.name=t commit --quiet -m init
     git init --quiet --initial-branch=main "$TEST_DIR/group/core"
     git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
-    cat > "$TEST_DIR/.meta.json" <<'EOF2'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF2'
 {"projects": {"backend": "git@github.com:org/backend.git",
               "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
 EOF2
     run "$META_BIN" git worktree create nest --repo group --repo group/core --no-deps
     [ "$status" -eq 0 ]
     # group's own entry goes; its nested repo is now listed directly
-    printf '{"projects": {"group/core": "git@github.com:org/core.git"}}' > "$TEST_DIR/.meta.json"
+    printf '{"projects": {"group/core": "git@github.com:org/core.git"}}' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git worktree prune --json
     [ "$status" -eq 0 ]
     [[ "$output" != *'"nest"'* ]]
@@ -1037,19 +1037,19 @@ EOF2
 @test "prune keeps an expired set whose parent repo left the project" {
     mkdir -p "$TEST_DIR/group"
     git -C "$TEST_DIR/group" init --quiet --initial-branch=main
-    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta"
+    printf '{"projects": {"core": "git@github.com:org/core.git"}}' > "$TEST_DIR/group/.meta.yaml"
     printf 'core/\n' > "$TEST_DIR/group/.gitignore"
-    git -C "$TEST_DIR/group" add .meta .gitignore
+    git -C "$TEST_DIR/group" add .meta.yaml .gitignore
     git -C "$TEST_DIR/group" -c user.email=t@t -c user.name=t commit --quiet -m init
     git init --quiet --initial-branch=main "$TEST_DIR/group/core"
     git -C "$TEST_DIR/group/core" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
-    cat > "$TEST_DIR/.meta.json" <<'EOF2'
+    cat > "$TEST_DIR/.meta.yaml" <<'EOF2'
 {"projects": {"backend": "git@github.com:org/backend.git",
               "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
 EOF2
     run "$META_BIN" git worktree create nest --repo group --repo group/core --no-deps --ttl 0
     [ "$status" -eq 0 ]
-    printf '{"projects": {"group/core": "git@github.com:org/core.git"}}' > "$TEST_DIR/.meta.json"
+    printf '{"projects": {"group/core": "git@github.com:org/core.git"}}' > "$TEST_DIR/.meta.yaml"
     # Found through group/core's record, but group is no longer this
     # workspace's repo
     run "$META_BIN" git worktree prune --json
@@ -1153,7 +1153,7 @@ EOF2
 @test "prune from inside a set uses the workspace's absolute worktrees_dir" {
     python3 - "$TEST_DIR" <<'PY2'
 import json, sys
-path = sys.argv[1] + "/.meta.json"
+path = sys.argv[1] + "/.meta.yaml"
 config = json.load(open(path))
 config["worktrees_dir"] = sys.argv[1] + "/wt"
 json.dump(config, open(path, "w"))
@@ -1176,8 +1176,8 @@ PY2
     # absolute worktrees_dir and a plugin
     mkdir -p "$TEST_DIR/actual"
     git -C "$TEST_DIR/actual" init --quiet --initial-branch=main
-    printf '{"projects": {}, "worktrees_dir": "%s/actual/wt"}\n' "$TEST_DIR" > "$TEST_DIR/actual/.meta.json"
-    git -C "$TEST_DIR/actual" add .meta.json
+    printf '{"projects": {}, "worktrees_dir": "%s/actual/wt"}\n' "$TEST_DIR" > "$TEST_DIR/actual/.meta.yaml"
+    git -C "$TEST_DIR/actual" add .meta.yaml
     git -C "$TEST_DIR/actual" -c user.email=t@t -c user.name=t commit --quiet -m init
     mkdir -p "$TEST_DIR/actual/.meta/plugins"
     cat > "$TEST_DIR/actual/.meta/plugins/meta-nestedtool" <<'EOF'
@@ -1187,7 +1187,7 @@ EOF
     chmod +x "$TEST_DIR/actual/.meta/plugins/meta-nestedtool"
     python3 - "$TEST_DIR" <<'PY2'
 import json, sys
-path = sys.argv[1] + "/.meta.json"
+path = sys.argv[1] + "/.meta.yaml"
 config = json.load(open(path))
 config["projects"]["nested"] = {"repo": "git@github.com:org/nested.git", "path": "actual", "meta": True}
 json.dump(config, open(path, "w"))
@@ -1257,11 +1257,11 @@ EOF
     "$META_BIN" git worktree create unread --repo backend --no-deps
     # A nested project list that doesn't parse: the workspace's tree can't be
     # read, so backend isn't known to be the workspace's
-    cat > .meta.json <<'EOF'
+    cat > .meta.yaml <<'EOF'
 {"projects": {"backend": "git@github.com:org/backend.git", "nested": {"repo": "git@github.com:org/nested.git", "meta": true}}}
 EOF
     mkdir nested
-    cat > nested/.meta.json <<'EOF'
+    cat > nested/.meta.yaml <<'EOF'
 {"projects": {"lib": "git@github.com:org/lib.git", "lib": "git@github.com:org/lib2.git"}}
 EOF
     run "$META_BIN" git worktree remove unread
@@ -1354,7 +1354,7 @@ EOF
     "$META_BIN" git worktree create inside --repo backend
     "$META_BIN" git worktree create other --repo frontend --ttl 0
     "$META_BIN" git worktree create named --repo frontend
-    [ -f "$TEST_DIR/.worktrees/inside/.meta.json" ]
+    [ -f "$TEST_DIR/.worktrees/inside/.meta.yaml" ]
 
     # The set's root checkout is the workspace's, not a workspace of its own
     cd "$TEST_DIR/.worktrees/inside"
@@ -1413,13 +1413,13 @@ EOF
 @test "worktree create --all --recursive includes every nested level" {
     mkdir -p "$TEST_DIR/inner"
     git -C "$TEST_DIR/inner" init --quiet --initial-branch=main
-    printf '{"projects": {"deep": "git@github.com:org/deep.git"}}' > "$TEST_DIR/inner/.meta"
+    printf '{"projects": {"deep": "git@github.com:org/deep.git"}}' > "$TEST_DIR/inner/.meta.yaml"
     printf 'deep/\n' > "$TEST_DIR/inner/.gitignore"
-    git -C "$TEST_DIR/inner" add .meta .gitignore
+    git -C "$TEST_DIR/inner" add .meta.yaml .gitignore
     git -C "$TEST_DIR/inner" -c user.email=t@t -c user.name=t commit --quiet -m init
     git init --quiet --initial-branch=main "$TEST_DIR/inner/deep"
     git -C "$TEST_DIR/inner/deep" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
-    printf '{"projects": {"inner": {"repo": "git@github.com:org/inner.git", "meta": true}}}' > "$TEST_DIR/.meta.json"
+    printf '{"projects": {"inner": {"repo": "git@github.com:org/inner.git", "meta": true}}}' > "$TEST_DIR/.meta.yaml"
 
     run "$META_BIN" git worktree create everything --all --recursive
     [ "$status" -eq 0 ]
@@ -1437,8 +1437,8 @@ commit_repo() {
 
 # Replace the test workspace's projects with the JSON object $1, committed
 set_projects() {
-    printf '{"projects": %s}\n' "$1" > "$TEST_DIR/.meta.json"
-    git -C "$TEST_DIR" add .meta.json
+    printf '{"projects": %s}\n' "$1" > "$TEST_DIR/.meta.yaml"
+    git -C "$TEST_DIR" add .meta.yaml
     git -C "$TEST_DIR" commit --quiet -m projects
 }
 
@@ -1485,7 +1485,7 @@ set_projects() {
 @test "a repo named once by its name and once by its path is one worktree" {
     commit_repo "$TEST_DIR/actual"
     commit_repo "$TEST_DIR/actual/leaf"
-    printf '{"projects": {"leaf": "git@x:o/l.git"}}\n' > "$TEST_DIR/actual/.meta.json"
+    printf '{"projects": {"leaf": "git@x:o/l.git"}}\n' > "$TEST_DIR/actual/.meta.yaml"
     set_projects '{"z": {"repo": "git@x:o/z.git", "path": "actual", "meta": true}}'
     run "$META_BIN" git worktree create review --repo z:parent-branch --repo actual/leaf --no-deps
     [ "$status" -eq 0 ]
@@ -1514,7 +1514,7 @@ set_projects() {
 @test "a nested repo's parent is the repo at its path, not one by that name" {
     commit_repo "$TEST_DIR/beta"
     commit_repo "$TEST_DIR/beta/leaf"
-    printf '{"projects": {"leaf": "git@x:o/l.git"}}\n' > "$TEST_DIR/beta/.meta.json"
+    printf '{"projects": {"leaf": "git@x:o/l.git"}}\n' > "$TEST_DIR/beta/.meta.yaml"
     commit_repo "$TEST_DIR/gamma"
     set_projects '{"alpha": {"repo": "git@x:o/a.git", "path": "beta", "meta": true},
                    "beta": {"repo": "git@x:o/b.git", "path": "gamma"}}'
@@ -1582,7 +1582,7 @@ set_projects() {
 @test "a broken config in an unrelated nested meta repo doesn't stop create" {
     commit_repo "$TEST_DIR/vendor/lib"
     commit_repo "$TEST_DIR/child"
-    echo '{"projects": {}}' > "$TEST_DIR/child/.meta.json"
+    echo '{"projects": {}}' > "$TEST_DIR/child/.meta.yaml"
     echo 'projects: {}' > "$TEST_DIR/child/.meta.yaml"
     set_projects '{"lib": {"repo": "git@x:o/lib.git", "path": "vendor/lib"}, "child": {"repo": "git@x:o/c.git", "meta": true}}'
     run "$META_BIN" git worktree create s --repo lib
@@ -1688,9 +1688,9 @@ set_projects() {
 
 @test "worktree add finds a nested repo already in the set" {
     commit_repo "$TEST_DIR/parent"
-    printf '{"projects": {"leaf": "git@x:o/leaf.git"}}\n' > "$TEST_DIR/parent/.meta.json"
+    printf '{"projects": {"leaf": "git@x:o/leaf.git"}}\n' > "$TEST_DIR/parent/.meta.yaml"
     echo leaf/ > "$TEST_DIR/parent/.gitignore"
-    git -C "$TEST_DIR/parent" add .meta.json .gitignore
+    git -C "$TEST_DIR/parent" add .meta.yaml .gitignore
     git -C "$TEST_DIR/parent" -c user.email=t@t -c user.name=t commit --quiet -m config
     commit_repo "$TEST_DIR/parent/leaf"
     set_projects '{"parent": {"repo": "git@x:o/parent.git", "meta": true}}'
@@ -1750,7 +1750,7 @@ set_projects() {
     B="$(cd "$(mktemp -d)" && pwd -P)"
     commit_repo "$B/api"
     commit_repo "$B/aaa"
-    printf '{"projects": {"api": {"repo": "x", "tags": ["blue"]}, "aaa": {"repo": "y", "tags": ["blue"]}}}\n' > "$B/.meta.json"
+    printf '{"projects": {"api": {"repo": "x", "tags": ["blue"]}, "aaa": {"repo": "y", "tags": ["blue"]}}}\n' > "$B/.meta.yaml"
     mkdir -p "$B/.meta/plugins"
     cp "$META_GIT_BIN" "$B/.meta/plugins/meta-git"
     (cd "$B" && "$META_BIN" git worktree create t --repo aaa --no-deps)
@@ -1769,7 +1769,7 @@ set_projects() {
     commit_repo "$TEST_DIR/web"
     set_projects '{"api": {"repo": "git@x:o/api.git", "tags": ["be"]}, "web": {"repo": "git@x:o/web.git", "tags": ["fe"]}}'
     B="$(cd "$(mktemp -d)" && pwd -P)"
-    printf '{"projects": {"web": {"repo": "x", "tags": ["be"]}, "api": {"repo": "y", "tags": ["fe"]}}}\n' > "$B/.meta.json"
+    printf '{"projects": {"web": {"repo": "x", "tags": ["be"]}, "api": {"repo": "y", "tags": ["fe"]}}}\n' > "$B/.meta.yaml"
     META_WORKTREES="$B/.worktrees" "$META_BIN" git worktree create subset --repo api --repo web --no-deps
     cd "$B/.worktrees/subset"
     run "$META_BIN" --tag be exec -- touch ran
@@ -1820,7 +1820,7 @@ set_projects() {
     mkdir -p "$W"
     git -C "$W" init --quiet --initial-branch=main
     commit_repo "$W/app"
-    printf '{"projects": {"app": "git@x:o/app.git"}}\n' > "$W/.meta.json"
+    printf '{"projects": {"app": "git@x:o/app.git"}}\n' > "$W/.meta.yaml"
     cd "$W"
     run "$META_BIN" exec -- pwd
     [ "$status" -eq 0 ]
@@ -1835,7 +1835,7 @@ set_projects() {
 @test "a rootless workspace under .worktrees with sets of its own is no set" {
     W="$TEST_DIR/clones/.worktrees/ws"
     commit_repo "$W/child"
-    printf '{"projects": {"child": "git@x:o/child.git"}}\n' > "$W/.meta.json"
+    printf '{"projects": {"child": "git@x:o/child.git"}}\n' > "$W/.meta.yaml"
     mkdir -p "$W/.meta/plugins"
     cp "$META_GIT_BIN" "$W/.meta/plugins/meta-git"
     cd "$W"
@@ -1849,7 +1849,7 @@ set_projects() {
 @test "a workspace under .worktrees with sets in its own worktrees_dir is no set" {
     W="$TEST_DIR/clones/.worktrees/ws"
     commit_repo "$W/child"
-    printf '{"projects": {"child": "git@x:o/child.git"}, "worktrees_dir": ".sets"}\n' > "$W/.meta.json"
+    printf '{"projects": {"child": "git@x:o/child.git"}, "worktrees_dir": ".sets"}\n' > "$W/.meta.yaml"
     mkdir -p "$W/.meta/plugins"
     cp "$META_GIT_BIN" "$W/.meta/plugins/meta-git"
     cd "$W"
@@ -1866,7 +1866,7 @@ set_projects() {
     mkdir -p "$(dirname "$W")"
     git init --quiet --initial-branch=main --separate-git-dir "$TEST_DIR/workspace.git" "$W"
     commit_repo "$W/app"
-    printf '{"projects": {"app": "git@x:o/app.git"}}\n' > "$W/.meta.json"
+    printf '{"projects": {"app": "git@x:o/app.git"}}\n' > "$W/.meta.yaml"
     cd "$W"
     run "$META_BIN" exec -- pwd
     [ "$status" -eq 0 ]
@@ -1880,7 +1880,7 @@ set_projects() {
     mv "$TEST_DIR/ws-git-holder/.git" "$TEST_DIR/ws.git"
     ln -s "$TEST_DIR/ws.git" "$W/.git"
     commit_repo "$W/app"
-    printf '{"projects": {"app": "git@x:o/app.git"}}\n' > "$W/.meta.json"
+    printf '{"projects": {"app": "git@x:o/app.git"}}\n' > "$W/.meta.yaml"
     cd "$W"
     run "$META_BIN" exec -- pwd
     [ "$status" -eq 0 ]
@@ -1907,9 +1907,9 @@ set_projects() {
 
 @test "a set in a custom worktrees_dir gets no orphan advice" {
     commit_repo "$TEST_DIR/api"
-    printf '{"projects": {"api": "git@x:o/api.git"}, "worktrees_dir": "wt"}\n' > "$TEST_DIR/.meta.json"
+    printf '{"projects": {"api": "git@x:o/api.git"}, "worktrees_dir": "wt"}\n' > "$TEST_DIR/.meta.yaml"
     printf 'wt/\napi/\n' >> "$TEST_DIR/.gitignore"
-    git -C "$TEST_DIR" add .meta.json .gitignore
+    git -C "$TEST_DIR" add .meta.yaml .gitignore
     git -C "$TEST_DIR" commit --quiet -m wt
     "$META_BIN" git worktree create s --all
     cd "$TEST_DIR/wt/s"
@@ -1920,8 +1920,8 @@ set_projects() {
 
 @test "a set in a worktrees_dir under .worktrees runs nothing in the workspace" {
     commit_repo "$TEST_DIR/.deps/x"
-    printf '{"projects": {"x": {"repo": "git@x:o/x.git", "path": ".deps/x"}}, "worktrees_dir": ".worktrees/w"}\n' > "$TEST_DIR/.meta.json"
-    git -C "$TEST_DIR" add .meta.json
+    printf '{"projects": {"x": {"repo": "git@x:o/x.git", "path": ".deps/x"}}, "worktrees_dir": ".worktrees/w"}\n' > "$TEST_DIR/.meta.yaml"
+    git -C "$TEST_DIR" add .meta.yaml
     git -C "$TEST_DIR" commit --quiet -m wdir
     "$META_BIN" git worktree create s1 --repo x --no-deps
     cd "$TEST_DIR/.worktrees/w/s1/.deps/x"
@@ -2000,9 +2000,9 @@ set_projects() {
 
 @test "a set without a nested meta repo's checkout reads its projects where the set was made from" {
     commit_repo "$TEST_DIR/parent"
-    printf '{"projects": {"leaf": {"repo": "git@x:o/leaf.git", "tags": ["red"]}}}\n' > "$TEST_DIR/parent/.meta.json"
+    printf '{"projects": {"leaf": {"repo": "git@x:o/leaf.git", "tags": ["red"]}}}\n' > "$TEST_DIR/parent/.meta.yaml"
     echo leaf/ > "$TEST_DIR/parent/.gitignore"
-    git -C "$TEST_DIR/parent" add .meta.json .gitignore
+    git -C "$TEST_DIR/parent" add .meta.yaml .gitignore
     git -C "$TEST_DIR/parent" -c user.email=t@t -c user.name=t commit --quiet -m config
     commit_repo "$TEST_DIR/parent/leaf"
     git -C "$TEST_DIR/parent/leaf" tag onlyleaf
@@ -2030,7 +2030,7 @@ set_projects() {
 
     # a broken config of another nested repo in the workspace loses only its own
     commit_repo "$TEST_DIR/other"
-    echo '{broken' > "$TEST_DIR/other/.meta.json"
+    echo '{broken' > "$TEST_DIR/other/.meta.yaml"
     set_projects '{"parent": {"repo": "git@x:o/parent.git", "meta": true}, "other": {"repo": "git@x:o/other.git", "meta": true}}'
     cd "$TEST_DIR/.worktrees/subset"
     run "$META_BIN" --tag red exec -- pwd
@@ -2071,9 +2071,9 @@ set_projects() {
     G="$(cd "$(mktemp -d)" && pwd -P)/git"
     git init --quiet --initial-branch=main --separate-git-dir "$G" "$W"
     commit_repo "$W/api"
-    printf '{"projects": {"api": "git@x:o/api.git"}}\n' > "$W/.meta.json"
+    printf '{"projects": {"api": "git@x:o/api.git"}}\n' > "$W/.meta.yaml"
     printf 'api/\n.worktrees/\n.meta/\n' > "$W/.gitignore"
-    git -C "$W" add .meta.json .gitignore
+    git -C "$W" add .meta.yaml .gitignore
     git -C "$W" -c user.email=t@t -c user.name=t commit --quiet -m init
     mkdir -p "$W/.meta/plugins"
     cp "$META_GIT_BIN" "$W/.meta/plugins/meta-git"
@@ -2109,8 +2109,8 @@ set_projects() {
     commit_repo "$TEST_DIR/api"
     # relative paths: a hook runs in the workspace, not in the removed set
     printf '{"projects": {"api": "git@x:o/api.git"}, "worktree": {"hooks": {"post-destroy": "cat > destroyed", "post-prune": "cat > pruned"}}}\n' \
-        > "$TEST_DIR/.meta.json"
-    git -C "$TEST_DIR" add .meta.json
+        > "$TEST_DIR/.meta.yaml"
+    git -C "$TEST_DIR" add .meta.yaml
     git -C "$TEST_DIR" commit --quiet -m hooks
     "$META_BIN" git worktree create a --all
     cd "$TEST_DIR/.worktrees/a/api"
@@ -2141,11 +2141,11 @@ set_projects() {
     commit_repo "$TEST_DIR/web"
     set_projects '{"api": {"repo": "git@x:o/api.git", "tags": ["red"]}, "web": {"repo": "git@x:o/web.git", "tags": ["blue"], "meta": true}}'
     "$META_BIN" git worktree create s --all
-    echo '{broken' > "$TEST_DIR/.worktrees/s/web/.meta.json"
+    echo '{broken' > "$TEST_DIR/.worktrees/s/web/.meta.yaml"
     cd "$TEST_DIR/.worktrees/s"
     run "$META_BIN" --tag red exec -- pwd
     [ "$status" -ne 0 ]
-    [[ "$output" == *"web/.meta.json"* ]]
+    [[ "$output" == *"web/.meta.yaml"* ]]
     # pwd printed no repo's path: nothing ran
     if printf '%s\n' "$output" | grep -qE '/s(/api|/web)?$'; then false; fi
 

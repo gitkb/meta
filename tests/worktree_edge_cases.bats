@@ -1743,6 +1743,27 @@ set_projects() {
     [ ! -e "$TEST_DIR/.worktrees/s" ]
 }
 
+@test "a checkout of another workspace's set moved in lends the set no config" {
+    commit_repo "$TEST_DIR/api"
+    set_projects '{"api": {"repo": "git@x:o/api.git", "tags": ["red"]}}'
+    "$META_BIN" git worktree create s --repo api --no-deps
+    B="$(cd "$(mktemp -d)" && pwd -P)"
+    commit_repo "$B/api"
+    commit_repo "$B/aaa"
+    printf '{"projects": {"api": {"repo": "x", "tags": ["blue"]}, "aaa": {"repo": "y", "tags": ["blue"]}}}\n' > "$B/.meta.json"
+    mkdir -p "$B/.meta/plugins"
+    cp "$META_GIT_BIN" "$B/.meta/plugins/meta-git"
+    (cd "$B" && "$META_BIN" git worktree create t --repo aaa --no-deps)
+    git -C "$B/aaa" worktree move "$B/.worktrees/t/aaa" "$TEST_DIR/.worktrees/s/aaa"
+    cd "$TEST_DIR/.worktrees/s"
+    run "$META_BIN" --tag blue exec -- pwd
+    [[ "$output" != *"/s/api"* ]]
+    run "$META_BIN" --tag red exec -- pwd
+    [[ "$output" == *"/s/api"* ]]
+    cd /
+    rm -rf "$B"
+}
+
 @test "a set made in another workspace's .worktrees uses the config it was made from" {
     commit_repo "$TEST_DIR/api"
     commit_repo "$TEST_DIR/web"

@@ -13,7 +13,7 @@ Meta-repos can be deeply nested. The workspace you're operating in may be a chil
 
 Your task prompt will include:
 - **Worktree name**: A short kebab-case identifier (e.g., `fix-ssh-forwarding`)
-- **Repos**: Which repos to include (e.g., `meta_git_cli`). Transitive dependencies from `.meta.yaml` are auto-resolved — you only need to specify the primary repo(s).
+- **Repos**: Which repos to include (e.g., `api`). Transitive dependencies from `.meta.yaml` are auto-resolved — you only need to specify the primary repo(s).
 - **Task description**: What to implement, fix, or change.
 
 If the worktree name or repos are not specified, infer them from the task description.
@@ -49,7 +49,7 @@ Parse the JSON output to capture:
 
 Store the root path — you'll need it for every file operation.
 
-**Dependency resolution**: When you specify `--repo meta_git_cli`, meta automatically includes transitive dependencies defined in `.meta.yaml` (`provides`/`depends_on`). Use `--no-deps` only if you need precise control.
+**Dependency resolution**: When you specify `--repo <repo>`, meta automatically includes transitive dependencies defined in `.meta.yaml` (`provides`/`depends_on`). Use `--no-deps` only if you need precise control.
 
 ### Phase 2: Enter Worktree
 
@@ -81,7 +81,7 @@ meta exec --parallel -- cargo test
 
 Or target specific repos:
 ```bash
-meta --include meta_git_cli exec -- cargo test
+meta --include <repo> exec -- cargo test
 ```
 
 Adapt the test command to the project's language/framework. Not all repos use `cargo test` — check for `Makefile`, `package.json`, etc.

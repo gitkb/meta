@@ -169,6 +169,10 @@ This installs `meta`, the `meta-git`, `meta-project` and `meta-rust`
 plugins, `meta-mcp` and `loop` into `~/.cargo/bin` (the crates in the
 Makefile's `BIN_CRATES`, the binaries a release ships), replacing any
 copies already there. To update, `git pull` and run `make install` again.
+A checkout from before the crates moved into this repo, with `meta_cli/` and
+the rest as separate clones, must run the snippet in
+[#135](https://github.com/gitkb/meta/pull/135) first: a plain pull writes over
+those clones.
 Copies the install scripts put in `~/.local/bin` or `%USERPROFILE%\.meta\bin`
 (their defaults) stay; remove them or put `~/.cargo/bin` first in `PATH`.
 `agent` and `meta-plugins` in `.meta.yaml` are not needed for the build;

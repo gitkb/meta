@@ -53,6 +53,8 @@ those steps need `bash`, `git`, `make` and Rust.
 brew upgrade meta-cli
 
 # From source: git pull in your meta checkout, then
+# make install. A checkout with meta_cli/ and the rest as separate clones
+# must first run the snippet in https://github.com/gitkb/meta/pull/135.
 make install
 
 # Script install

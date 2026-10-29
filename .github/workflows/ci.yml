@@ -72,7 +72,10 @@ jobs:
       # crate that only compiles with its siblings' features
       - name: Check each crate on its own
         run: |
-          for p in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name'); do
+          set -o pipefail
+          pkgs=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+          [ -n "$pkgs" ]
+          for p in $pkgs; do
             echo "::group::$p"
             cargo check -p "$p" --all-targets --locked
             echo "::endgroup::"

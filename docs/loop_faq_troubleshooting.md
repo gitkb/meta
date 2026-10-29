@@ -51,5 +51,5 @@ A: By default, loop will continue unless `fail_fast` is enabled.
 
 ## See Also
 
-- [loop_cli/README.md](../../loop_cli/README.md)
-- [loop_lib/README.md](../../loop_lib/README.md)
+- [loop_cli/README.md](../loop_cli/README.md)
+- [loop_lib/src/lib.rs](../loop_lib/src/lib.rs)

@@ -62,6 +62,6 @@ Integrate loop into CI pipelines for parallelized builds, tests, or deployments.
 
 ## See Also
 
-- [loop_cli/README.md](../../loop_cli/README.md)
+- [loop_cli/README.md](../loop_cli/README.md)
 - [FAQ / Troubleshooting](loop_faq_troubleshooting.md)
 - [Architecture Overview](loop_architecture_overview.md)

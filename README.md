@@ -157,24 +157,19 @@ pinned in `rust-toolchain.toml`), a C compiler and linker (Xcode Command
 Line Tools on macOS, `build-essential` or your distro's equivalent on
 Linux, Visual Studio Build Tools on Windows), `git` and `make`.
 
-meta's crates live in their own repos, which this repo's Cargo workspace
-expects as sibling directories. Clone them all, then install with the
+Clone this repo, which holds all of meta's crates, then install with the
 committed `Cargo.lock`:
 
 ```bash
 git clone https://github.com/gitkb/meta && cd meta
-for p in loop_cli loop_lib meta_cli meta_core meta_git_cli meta_git_lib \
-         meta_mcp meta_plugin_protocol meta_project_cli meta_rust_cli; do
-  git clone "https://github.com/gitkb/$p"
-done
 make install
 ```
 
 This installs `meta`, the `meta-git`, `meta-project` and `meta-rust`
 plugins, `meta-mcp` and `loop` into `~/.cargo/bin` (the crates in the
 Makefile's `BIN_CRATES`, the binaries a release ships), replacing any
-copies already there. To update, `git pull` in each directory and run
-`make install` again. Copies the install scripts put in `~/.local/bin` or
+copies already there. To update, `git pull` and run `make install` again.
+Copies the install scripts put in `~/.local/bin` or
 `%USERPROFILE%\.meta\bin` (their defaults) stay; remove them or put
 `~/.cargo/bin` first in `PATH`. `agent` and `meta-plugins` in `.meta.yaml`
 are not needed for the build; `meta git` commands report them as missing
@@ -463,7 +458,7 @@ Meta is a Rust workspace of 10 crates:
 | `meta_rust_cli` | Rust/Cargo plugin |
 | `meta_mcp` | MCP server for AI agent integration |
 
-Each plugin is both a workspace member and a child repo in the `.meta.yaml` manifest — meta manages itself with itself.
+All of these crates live in this repo as members of one Cargo workspace. `.meta.yaml` lists the separate repos `agent` and `meta-plugins`, so meta still manages its own workspace with itself.
 
 See [docs/architecture_overview.md](docs/architecture_overview.md) for the full design.
 

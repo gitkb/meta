@@ -1,0 +1,492 @@
+use anyhow::Result;
+use chrono::Utc;
+use colored::*;
+use meta_core::display::escape;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use meta_cli::worktree::discover_worktree_members;
+use meta_git_lib::worktree::helpers::{owner_dir, require_meta_dir, resolve_worktree_root};
+use meta_git_lib::worktree::hooks::fire_post_prune;
+use meta_git_lib::worktree::record::{self, SetRecord};
+use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
+use meta_git_lib::worktree::types::*;
+use meta_git_lib::worktree::workspace::Workspace;
+
+use super::cli_types::PruneArgs;
+
+/// Helper to create a PruneEntry with consistent structure.
+fn create_prune_entry(
+    name: String,
+    path: String,
+    reason: impl Into<String>,
+    age_seconds: Option<u64>,
+) -> PruneEntry {
+    PruneEntry {
+        name,
+        path,
+        reason: reason.into(),
+        age_seconds,
+    }
+}
+
+/// Only a path that is really gone counts as missing. A dangling link or a
+/// path prune can't inspect (permission denied) exists, so it gets checked
+/// and kept, never forgotten.
+fn is_missing(path: &Path) -> bool {
+    matches!(path.symlink_metadata(), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// Every record naming each set path, with the admin directory it is in.
+type Records = BTreeMap<PathBuf, Vec<(PathBuf, SetRecord)>>;
+
+/// The sets meta created that have a record in a repository of
+/// `workspace`. There is no global list, and the worktree directory may be
+/// shared with other workspaces, so sets are found only through these
+/// records. Records that can't be used are returned as kept entries, named
+/// after their set when it is under `worktree_root`.
+fn find_sets(workspace: &Workspace, worktree_root: &Path) -> (Records, Vec<PruneEntry>) {
+    let mut found: Vec<(PathBuf, SetRecord)> = Vec::new();
+    let mut unusable: Vec<PruneEntry> = Vec::new();
+    // Records hold resolved paths
+    let worktree_root = worktree_root
+        .canonicalize()
+        .unwrap_or_else(|_| worktree_root.to_path_buf());
+    let mut not_used = |path: &Path, e: &anyhow::Error| {
+        let path = set_of_admin(path, &worktree_root).unwrap_or_else(|| path.to_path_buf());
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        unusable.push(create_prune_entry(
+            name.unwrap_or_default(),
+            path.display().to_string(),
+            format!("meta's records there can't be read: {e:#}"),
+            None,
+        ))
+    };
+    // Only some repositories can be searched: that is reported
+    for (path, e) in &workspace.unreadable {
+        not_used(path, e);
+    }
+    for git_dir in &workspace.repos {
+        for (admin, record) in record::in_repo(git_dir) {
+            match record {
+                // A workspace sharing this repository made it: its set, not ours
+                Ok(record) if !workspace.made_here(&record.project) => {}
+                Ok(record) => found.push((admin, record)),
+                Err(e) => not_used(&admin, &e),
+            }
+        }
+    }
+    let mut sets = Records::new();
+    let mut seen = BTreeSet::new();
+    for (admin, record) in found {
+        if seen.insert(admin.clone()) {
+            sets.entry(record.set.clone())
+                .or_default()
+                .push((admin, record));
+        }
+    }
+    (sets, unusable)
+}
+
+/// The set under `worktree_root` holding the worktree whose admin directory
+/// is `admin`, if git's link back to the worktree leads there.
+fn set_of_admin(admin: &Path, worktree_root: &Path) -> Option<PathBuf> {
+    let gitdir = std::fs::read_to_string(admin.join("gitdir")).ok()?;
+    // git may write it relative to `admin` (worktree.useRelativePaths)
+    let checkout = admin.join(gitdir.trim());
+    let checkout = checkout.canonicalize().unwrap_or(checkout);
+    let name = checkout
+        .strip_prefix(worktree_root)
+        .ok()?
+        .components()
+        .next()?;
+    Some(worktree_root.join(name))
+}
+
+/// Why an existing set with `record` is due for pruning, if it is: the
+/// reason and, for an expired TTL, its age. (A set whose repositories were
+/// removed from the project, or whose project is gone, is no longer this
+/// workspace's: prune leaves it.)
+fn eligible(record: &SetRecord, now: i64) -> Option<(String, Option<u64>)> {
+    // Check TTL expiration
+    let remaining = record.ttl_remaining(now).filter(|r| *r <= 0)?;
+    // Total age = configured TTL + seconds past expiry
+    let age = record
+        .ttl_seconds
+        .unwrap_or(0)
+        .saturating_add(remaining.unsigned_abs());
+    Some(("ttl_expired".to_string(), Some(age)))
+}
+
+pub(crate) fn handle_prune(
+    args: PruneArgs,
+    _verbose: bool,
+    json: bool,
+    strict: bool,
+) -> Result<()> {
+    let dry_run = args.dry_run;
+
+    let meta_dir = require_meta_dir()?;
+    // Hooks come from here: inside a set being pruned, its own config goes
+    // with it
+    let owner = owner_dir(&meta_dir);
+    let workspace = Workspace::of(&meta_dir);
+    let worktree_root = resolve_worktree_root(Some(&meta_dir))?;
+    let (sets, mut kept) = find_sets(&workspace, &worktree_root);
+    if sets.is_empty() && kept.is_empty() {
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&PruneOutput {
+                    removed: vec![],
+                    kept: vec![],
+                    dry_run,
+                })?
+            );
+        } else {
+            println!("No worktree sets of this workspace were found. Nothing to prune.");
+        }
+        return Ok(());
+    }
+
+    let now = Utc::now().timestamp();
+    let mut to_remove: Vec<(PruneEntry, SetRecord)> = Vec::new();
+
+    for (set, records) in &sets {
+        let path_key = set.display().to_string();
+        let Some((_, found)) = records.first() else {
+            continue;
+        };
+        let name = found.name();
+
+        // Check if path exists (orphaned detection). A set with a worktree
+        // still checked out (moved elsewhere) is left alone.
+        if is_missing(set) {
+            if !records
+                .iter()
+                .all(|(admin, _)| record::checkout_gone(admin))
+            {
+                continue;
+            }
+            to_remove.push((
+                create_prune_entry(name, path_key, "orphaned (missing directory)", None),
+                found.clone(),
+            ));
+            continue;
+        }
+
+        // The record the set's own worktrees hold decides, not an older one
+        // left in a repository; the removal check must see this one again
+        let members = discover_worktree_members(set).unwrap_or_default();
+        let record = match record::find(set, members.iter().map(|m| &m.path)) {
+            Some(record) => record,
+            // None of its worktrees holds a record (or prune can't read
+            // them). Records left by worktrees that are gone are git's to
+            // prune; any other stands, and the check decides, as it does
+            // for a path that now leads through a link.
+            None if is_plain_dir(set)
+                && records
+                    .iter()
+                    .all(|(admin, _)| record::checkout_gone(admin)) =>
+            {
+                continue
+            }
+            None => found.clone(),
+        };
+
+        if let Some((reason, age)) = eligible(&record, now) {
+            to_remove.push((create_prune_entry(name, path_key, reason, age), record));
+        }
+    }
+
+    // Prune never discards work: a candidate whose directory holds anything
+    // that deleting it would lose is kept, with the reason.
+    let mut candidates = Vec::new();
+    for (entry, record) in to_remove {
+        let wt_path = Path::new(&entry.path);
+        if is_missing(wt_path) {
+            candidates.push((entry, None));
+            continue;
+        }
+        if let Some(why) = path_moved(wt_path) {
+            kept.push(create_prune_entry(
+                entry.name,
+                entry.path,
+                format!("{}, but {why}", entry.reason),
+                entry.age_seconds,
+            ));
+            continue;
+        }
+        // A set holding another set is blocked by the check, and one holding
+        // another workspace's worktrees is that workspace's to prune.
+        let checked = check_worktree_removal(wt_path)
+            .map(|check| (workspace.foreign_members(wt_path, &check), check));
+        let problems = match checked {
+            Ok((foreign, _)) if !foreign.is_empty() => foreign.join("; "),
+            Ok((_, check)) if check.is_clear() && check.record() == Some(&record) => {
+                candidates.push((entry, Some(check)));
+                continue;
+            }
+            Ok((_, check)) if check.is_clear() && check.record().is_some() => {
+                "its record changed after prune read it".to_string()
+            }
+            Ok((_, check)) if check.is_clear() => "meta's record of it is gone".to_string(),
+            Ok((_, check)) => [check.blockers, check.unsaved].concat().join("; "),
+            Err(e) => format!("cannot inspect it: {e:#}"),
+        };
+        kept.push(create_prune_entry(
+            entry.name,
+            entry.path,
+            format!("{}, but {problems}", entry.reason),
+            entry.age_seconds,
+        ));
+    }
+
+    once_each(&mut kept);
+    if dry_run || candidates.is_empty() {
+        let would_remove: Vec<PruneEntry> = candidates.into_iter().map(|(e, _)| e).collect();
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&PruneOutput {
+                    removed: would_remove,
+                    kept: kept.clone(),
+                    dry_run,
+                })?
+            );
+        } else {
+            if would_remove.is_empty() {
+                println!("Nothing to prune.");
+            } else {
+                println!("Would prune {} worktree(s):", would_remove.len());
+                for entry in &would_remove {
+                    println!(
+                        "  {} ({}) — {}",
+                        escape(&entry.name),
+                        escape(&entry.reason),
+                        escape(&entry.path)
+                    );
+                }
+            }
+            print_kept(&kept);
+        }
+        if !dry_run {
+            warn_kept(&kept, strict)?;
+        }
+        return Ok(());
+    }
+
+    // Actually remove: each checked set, or the records of a missing one.
+    let mut removed = Vec::new();
+    let mut failed = Vec::new();
+    for (prune_entry, check) in candidates {
+        let wt_path = Path::new(&prune_entry.path);
+        let removal = match &check {
+            // Checked again: a directory above may have become a link since
+            Some(check) => match path_moved(wt_path) {
+                None => delete_checked_set(wt_path, check, false, false),
+                Some(why) => {
+                    kept.push(create_prune_entry(
+                        prune_entry.name,
+                        prune_entry.path,
+                        format!("{}, but {why}", prune_entry.reason),
+                        prune_entry.age_seconds,
+                    ));
+                    continue;
+                }
+            },
+            // A missing directory only loses its records. One that has
+            // reappeared since was never checked: keep it, nothing failed.
+            None if !is_missing(wt_path) => {
+                kept.push(create_prune_entry(
+                    prune_entry.name,
+                    prune_entry.path,
+                    format!("{}, but it reappeared", prune_entry.reason),
+                    prune_entry.age_seconds,
+                ));
+                continue;
+            }
+            None => forget(Path::new(&prune_entry.path), &sets),
+        };
+        match removal {
+            Ok(()) => removed.push(prune_entry),
+            Err(e) => {
+                failed.push(prune_entry.name.clone());
+                kept.push(create_prune_entry(
+                    prune_entry.name,
+                    prune_entry.path,
+                    format!("{}, but removing it failed: {e:#}", prune_entry.reason),
+                    prune_entry.age_seconds,
+                ));
+            }
+        }
+    }
+
+    // Fire post-prune hook
+    fire_post_prune(&removed, Some(&owner));
+    once_each(&mut kept);
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&PruneOutput {
+                removed,
+                kept: kept.clone(),
+                dry_run: false,
+            })?
+        );
+    } else {
+        println!("{} Pruned {} worktree(s):", "✓".green(), removed.len());
+        for entry in &removed {
+            println!(
+                "  {} ({}) — {}",
+                escape(&entry.name),
+                escape(&entry.reason),
+                escape(&entry.path)
+            );
+        }
+        print_kept(&kept);
+    }
+
+    if !failed.is_empty() {
+        anyhow::bail!("Failed to prune: {}", escape(&failed.join(", ")));
+    }
+    warn_kept(&kept, strict)
+}
+
+/// Delete the records of a set whose directory is gone, each only if its
+/// worktree is still gone and it is still the record prune read. Git's own
+/// entries for its worktrees stay, for `git worktree prune`.
+fn forget(set: &Path, sets: &Records) -> Result<()> {
+    for (admin, record) in sets.get(set).into_iter().flatten() {
+        if record::checkout_gone(admin) && record::read(admin)?.as_ref() == Some(record) {
+            record::delete(admin)?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether `path` is a directory reached without following any link.
+fn is_plain_dir(path: &Path) -> bool {
+    path.symlink_metadata().is_ok_and(|m| m.is_dir()) && path_moved(path).is_none()
+}
+
+/// Why the recorded path no longer resolves to itself, if it doesn't: a
+/// directory above it became a symlink, which could lead into another set,
+/// or it can't be resolved at all.
+/// Each record holds its set's resolved path from when it was created. A link at
+/// the set directory itself is left to the removal check, which refuses it.
+fn path_moved(path: &Path) -> Option<String> {
+    match path.symlink_metadata() {
+        Ok(meta) if !meta.file_type().is_symlink() => match path.canonicalize() {
+            Ok(resolved) if resolved == path => None,
+            Ok(_) => Some("a directory above it now leads elsewhere through a symlink".to_string()),
+            Err(e) => Some(format!("its path cannot be resolved ({e})")),
+        },
+        _ => None,
+    }
+}
+
+/// Keep the first entry for each path: a set kept for several reasons (an
+/// unusable record in each of its worktrees, say) is listed once.
+fn once_each(kept: &mut Vec<PruneEntry>) {
+    let mut paths = BTreeSet::new();
+    kept.retain(|e| paths.insert(e.path.clone()));
+}
+
+fn print_kept(kept: &[PruneEntry]) {
+    if kept.is_empty() {
+        return;
+    }
+    println!("Kept {} worktree(s):", kept.len());
+    for entry in kept {
+        println!(
+            "  {} ({}) — {}",
+            escape(&entry.name),
+            escape(&entry.reason),
+            escape(&entry.path)
+        );
+    }
+}
+
+/// Kept worktrees are a warning, and an error in strict mode.
+fn warn_kept(kept: &[PruneEntry], strict: bool) -> Result<()> {
+    if kept.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<_> = kept.iter().map(|e| escape(&e.name)).collect();
+    super::warn_or_bail(strict, format!("Kept worktrees: {}", names.join(", ")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_relative_gitdir_finds_its_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap().join("wt");
+        let checkout = root.join("broken/a");
+        std::fs::create_dir_all(&checkout).unwrap();
+        std::fs::write(checkout.join(".git"), "").unwrap();
+        let admin = tmp.path().join("repo/.git/worktrees/a");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::write(admin.join("gitdir"), "../../../../wt/broken/a/.git\n").unwrap();
+        assert_eq!(set_of_admin(&admin, &root), Some(root.join("broken")));
+    }
+
+    #[test]
+    fn kept_names_are_escaped_on_one_line() {
+        let kept = [create_prune_entry(
+            "bad\nFORGED\u{1b}[2J".to_string(),
+            String::new(),
+            "",
+            None,
+        )];
+        let message = warn_kept(&kept, true).unwrap_err().to_string();
+        assert!(
+            !message.contains('\n') && !message.contains('\u{1b}'),
+            "{message}"
+        );
+    }
+
+    // ── create_prune_entry ──────────────────────────────
+
+    #[test]
+    fn create_prune_entry_with_age() {
+        let entry = create_prune_entry(
+            "test-wt".to_string(),
+            "/path/to/wt".to_string(),
+            "ttl_expired",
+            Some(3600),
+        );
+        assert_eq!(entry.name, "test-wt");
+        assert_eq!(entry.path, "/path/to/wt");
+        assert_eq!(entry.reason, "ttl_expired");
+        assert_eq!(entry.age_seconds, Some(3600));
+    }
+
+    #[test]
+    fn create_prune_entry_without_age() {
+        let entry = create_prune_entry(
+            "test-wt".to_string(),
+            "/path/to/wt".to_string(),
+            "orphaned (missing directory)",
+            None,
+        );
+        assert_eq!(entry.name, "test-wt");
+        assert_eq!(entry.reason, "orphaned (missing directory)");
+        assert_eq!(entry.age_seconds, None);
+    }
+
+    #[test]
+    fn create_prune_entry_converts_into_string() {
+        let entry = create_prune_entry(
+            "test-wt".to_string(),
+            "/path/to/wt".to_string(),
+            String::from("test reason"),
+            None,
+        );
+        assert_eq!(entry.reason, "test reason");
+    }
+}

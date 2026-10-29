@@ -1,0 +1,25 @@
+[package]
+name = "meta_git_lib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Reusable git operations for meta plugins"
+
+[dependencies]
+meta_core = { path = "../meta_core" }
+meta_cli = { path = "../meta_cli", package = "meta" }
+loop_lib = { path = "../loop_lib" }
+anyhow = "1"
+indicatif = "0.17"
+console = "0.15"
+dirs = "5.0"
+chrono = { version = "0.4", features = ["serde"] }
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml_ng = "0.10"
+
+[dev-dependencies]
+tempfile = "3.3"
+serial_test = "3.0"

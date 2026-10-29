@@ -52,7 +52,7 @@ those steps need `bash`, `git`, `make` and Rust.
 # Homebrew
 brew upgrade meta-cli
 
-# From source: git pull in meta and each child repo, then
+# From source: git pull in your meta checkout, then
 make install
 
 # Script install

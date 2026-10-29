@@ -1,0 +1,21 @@
+[package]
+name = "meta-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP server for meta - exposes multi-repo operations to AI tools"
+
+[[bin]]
+name = "meta-mcp"
+path = "src/main.rs"
+
+[dependencies]
+meta_core = { path = "../meta_core" }
+meta_cli = { path = "../meta_cli", package = "meta" }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3"

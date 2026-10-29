@@ -2,8 +2,6 @@
 
 **loop** is a command line utility for running commands in multiple repositories or directories in parallel. It is designed for monorepos and multi-package projects, making repetitive tasks like dependency management, testing, and code generation fast and easy. The utility consists of two main parts: [loop_cli](../loop_cli/README.md) (the CLI app) and [loop_lib](../loop_lib/src/lib.rs) (the Rust library for programmatic use).
 
-[![Loop System](../docs/assets/meta-cli-screenshot.png)](../docs/assets/meta-cli-screenshot.png)
-
 ---
 
 ## Table of Contents
@@ -73,7 +71,7 @@ See [FAQ / Troubleshooting](loop_faq_troubleshooting.md).
 ## Contribution Notes
 
 - Written in Rust; see [Cargo.toml](../loop_lib/Cargo.toml).
-- Contributions should follow the [contributing guidelines](../contributing.md).
+- Contributions should follow the [contributing guidelines](contributing.md).
 - Add new features in `loop_lib/src/` (library) or CLI enhancements in `loop_cli/src/`.
 - Include tests for all changes.
 
@@ -88,4 +86,4 @@ See [FAQ / Troubleshooting](loop_faq_troubleshooting.md).
 
 - [loop_cli – CLI Usage](../loop_cli/README.md)
 - [loop_lib – Rust Library](../loop_lib/src/lib.rs)
-- [Meta Main Documentation](../../README.md)
+- [Meta Main Documentation](../README.md)

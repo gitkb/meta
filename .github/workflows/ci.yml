@@ -53,6 +53,31 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  crates:
+    name: Check Each Crate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "crates"
+
+      # A workspace build unifies features across crates, which can hide a
+      # crate that only compiles with its siblings' features
+      - name: Check each crate on its own
+        run: |
+          for p in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name'); do
+            echo "::group::$p"
+            cargo check -p "$p" --all-targets --locked
+            echo "::endgroup::"
+          done
+
   integration:
     name: Integration Tests
     runs-on: ${{ matrix.os }}

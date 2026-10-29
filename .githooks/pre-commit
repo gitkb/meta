@@ -2,8 +2,7 @@
 # Git pre-commit hook for meta workspace
 # Runs cargo fmt --check before commit
 #
-# Install in each repo: git config core.hooksPath /path/to/meta/.githooks
-# Or symlink: ln -sf ../../../.githooks/pre-commit .git/hooks/pre-commit
+# Install with: make install-hooks
 
 set -e
 

@@ -7,7 +7,7 @@ Loop is a command-line tool that executes commands across multiple directories s
 Loop is installed automatically with `meta`. For standalone use:
 
 ```bash
-cargo install --git https://github.com/gitkb/meta --bin loop
+cargo install --git https://github.com/gitkb/meta --locked loop_cli
 ```
 
 ## Usage

@@ -103,13 +103,6 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace --locked
 
-      - name: Verify binaries
-        run: |
-          ls -lh target/debug/meta target/debug/meta-git
-          ./target/debug/meta --version
-          ./target/debug/meta-git --meta-plugin-info | jq .name
-        shell: bash
-
       - name: Install bats
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
@@ -117,6 +110,13 @@ jobs:
           else
             brew install bats-core
           fi
+        shell: bash
+
+      - name: Verify binaries
+        run: |
+          ls -lh target/debug/meta target/debug/meta-git
+          ./target/debug/meta --version
+          ./target/debug/meta-git --meta-plugin-info | jq .name
         shell: bash
 
       - name: Run integration tests

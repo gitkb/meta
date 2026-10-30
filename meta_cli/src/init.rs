@@ -1125,19 +1125,25 @@ mod tests {
     }
 
     #[test]
-    fn test_update_keeps_skill_folders_meta_did_not_ship() {
-        let dir = tempdir().unwrap();
-        // A folder holding only a `SKILL.md`, without meta's marker, is not meta's
-        let other = dir.path().join(".claude/skills/meta-git");
-        fs::create_dir_all(&other).unwrap();
-        fs::write(other.join("SKILL.md"), "another tool").unwrap();
+    fn test_update_keeps_unmarked_skill_folders() {
+        // A folder holding only a `SKILL.md`, without meta's marker, is not meta's,
+        // even when it holds the text meta ships
+        let shipped = SKILLS
+            .iter()
+            .find(|(name, _)| *name == "meta-git")
+            .unwrap()
+            .1;
+        for text in ["another tool", shipped] {
+            let dir = tempdir().unwrap();
+            let other = dir.path().join(".claude/skills/meta-git");
+            fs::create_dir_all(&other).unwrap();
+            fs::write(other.join("SKILL.md"), text).unwrap();
 
-        for (force, update) in [(false, true), (true, false)] {
-            install_claude_integration_to(dir.path(), force, update, false).unwrap();
-            assert_eq!(
-                fs::read_to_string(other.join("SKILL.md")).unwrap(),
-                "another tool"
-            );
+            for (force, update) in [(false, true), (true, false)] {
+                install_claude_integration_to(dir.path(), force, update, false).unwrap();
+                assert!(!fs::symlink_metadata(&other).unwrap().is_symlink());
+                assert_eq!(fs::read_to_string(other.join("SKILL.md")).unwrap(), text);
+            }
         }
     }
 

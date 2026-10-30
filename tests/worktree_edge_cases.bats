@@ -757,14 +757,14 @@ J
     rm -rf "$OUTSIDE"
 }
 
-@test "a create that failed after its adds can be retried with --from-ref" {
+@test "a create that failed after its adds can be retried with a commit-ish" {
     git -C backend branch base-ref
     mkdir "$TEST_DIR/.gitignore"
-    run "$META_BIN" git worktree create fr --repo backend --from-ref base-ref
+    run "$META_BIN" git worktree create fr base-ref --repo backend
     rmdir "$TEST_DIR/.gitignore"
     [ "$status" -ne 0 ]
     # The branch it made is gone with the worktree, so -b works again
-    run "$META_BIN" git worktree create fr --repo backend --from-ref base-ref
+    run "$META_BIN" git worktree create fr base-ref --repo backend
     [ "$status" -eq 0 ]
 }
 

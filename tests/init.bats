@@ -488,3 +488,17 @@ PY
     [[ "$output" != *"Hooks:"* ]]
     [[ "$output" == *"--update preserves settings"* ]]
 }
+
+@test "init claude does not read a settings.json reached through a link" {
+    # A settings.json holding meta's hooks, elsewhere
+    mkdir other
+    (cd other && echo 'projects: {}' > .meta.yaml && "$META_BIN" init claude >/dev/null)
+    grep -q SessionStart other/.claude/settings.json
+    mkdir -p .claude
+    ln -s ../other/.claude/settings.json .claude/settings.json
+
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"reached through the symlink"* ]]
+    [[ "$output" != *"Hooks:"* ]]
+}

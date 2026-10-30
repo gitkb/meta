@@ -218,10 +218,10 @@ fn install_claude_integration_to(
     if update {
         println!("Skipped .claude/settings.json (--update preserves settings)");
         skipped += 1;
-    } else if let Some(link) = settings_link {
+    } else if let Some(link) = &settings_link {
         println!(
             "Skipped .claude/settings.json (reached through the symlink {}, not followed)",
-            escape_path(&link)
+            escape_path(link)
         );
         skipped += 1;
     } else if let Some(plan) = settings_plan {
@@ -231,8 +231,10 @@ fn install_claude_integration_to(
         }
         println!("{} {}", plan.message, escape_path(&settings_path));
     }
-    let present_hooks = fs::read_to_string(&settings_path)
-        .ok()
+    // A settings.json reached through a link is not read either
+    let present_hooks = (settings_link.is_none())
+        .then_some(&settings_path)
+        .and_then(|path| fs::read_to_string(path).ok())
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
         .map(|settings| installed_hooks(&settings))
         .unwrap_or_default();

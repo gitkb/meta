@@ -185,13 +185,15 @@ meta-git --meta-plugin-info
 echo '{"command":"status","args":[],"projects":[...]}' | meta-git --meta-plugin-exec
 ```
 
-**Response:**
+**Response** (a plan meta runs through `loop_lib`; a plugin may instead print plain text, which meta shows as is):
 ```json
 {
-  "success": true,
-  "results": [
-    {"project": "api", "success": true, "output": "..."}
-  ]
+  "plan": {
+    "commands": [
+      {"dir": "./api", "argv": ["git", "status"]}
+    ],
+    "parallel": false
+  }
 }
 ```
 

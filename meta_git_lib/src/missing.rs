@@ -6,7 +6,7 @@ pub fn print_missing_repo(url: &str) {
     println!("  URL: {}", style(url).dim());
     println!(
         "  {}",
-        style("→ Run `meta project update` to clone this repository.")
+        style("→ Run `meta git update` to clone this repository.")
             .yellow()
             .bold()
     );

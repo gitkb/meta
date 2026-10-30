@@ -9,7 +9,7 @@ use meta_git_lib::worktree::types::*;
 
 use super::cli_types::DiffArgs;
 
-pub(crate) fn handle_diff(args: DiffArgs, _verbose: bool, json: bool) -> Result<()> {
+pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
     let name = &args.name;
     let base_ref = &args.base;
 

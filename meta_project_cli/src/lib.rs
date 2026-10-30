@@ -134,7 +134,7 @@ pub fn execute_command(
     // missing repos in its own .meta.yaml (meta_cli sends the list either way;
     // without --recursive only the root config counts)
     if options.recursive && !provided_projects.is_empty() {
-        return execute_command_recursive(command, options, provided_projects, cwd);
+        return execute_command_recursive(command, provided_projects, cwd);
     }
 
     // The workspace's own config: the nearest one at or above cwd, as meta
@@ -278,11 +278,10 @@ Examples:
 /// its own .meta.yaml file with additional projects to check/sync.
 fn execute_command_recursive(
     command: &str,
-    _options: &ExecuteOptions,
     provided_projects: &[String],
     cwd: &Path,
 ) -> CommandResult {
-    let mut all_missing: Vec<(String, String)> = Vec::new();
+    let mut all_missing: Vec<String> = Vec::new();
 
     // Check the root meta config first
     // A config that is refused is an error, not "nothing missing"
@@ -295,9 +294,7 @@ fn execute_command_recursive(
             Ok(projects) => projects,
             Err(e) => return CommandResult::Error(format!("{e:#}")),
         };
-        for (name, url) in find_missing_projects(&projects, cwd) {
-            all_missing.push((name, url));
-        }
+        all_missing.extend(find_missing_projects(&projects, cwd));
     }
 
     // Check each provided project directory for its own meta config
@@ -313,11 +310,7 @@ fn execute_command_recursive(
                 Ok(projects) => projects,
                 Err(e) => return CommandResult::Error(format!("{e:#}")),
             };
-            for (name, url) in find_missing_projects(&projects, &project_dir) {
-                // Use the full path relative to cwd
-                let full_path = format!("{project_path}/{name}");
-                all_missing.push((full_path, url));
-            }
+            all_missing.extend(find_missing_projects(&projects, &project_dir));
         }
     }
 
@@ -326,11 +319,7 @@ fn execute_command_recursive(
             if all_missing.is_empty() {
                 CommandResult::Message("All projects are cloned and present.".to_string())
             } else {
-                // Print all missing repos
-                for (_, url) in &all_missing {
-                    meta_git_lib::print_missing_repo(url);
-                }
-                println!();
+                print_missing(&all_missing);
                 CommandResult::Message(format!(
                     "{} project(s) missing. Run 'meta git update' to clone them.",
                     all_missing.len()
@@ -738,20 +727,18 @@ fn parse_meta_projects(meta_path: &Path) -> anyhow::Result<HashMap<String, Strin
     Ok(map)
 }
 
-fn find_missing_projects(
-    projects: &HashMap<String, String>,
-    base_dir: &Path,
-) -> Vec<(String, String)> {
+/// The URLs of the projects not cloned under `base_dir`.
+fn find_missing_projects(projects: &HashMap<String, String>, base_dir: &Path) -> Vec<String> {
     projects
         .iter()
         .filter(|(name, _)| !base_dir.join(name).is_dir())
-        .map(|(name, url)| (name.clone(), url.clone()))
+        .map(|(_, url)| url.clone())
         .collect()
 }
 
-fn print_missing(missing: &[(String, String)]) {
-    if !missing.is_empty() {
-        for (_, url) in missing {
+fn print_missing(urls: &[String]) {
+    if !urls.is_empty() {
+        for url in urls {
             meta_git_lib::print_missing_repo(url);
         }
         println!();
@@ -771,6 +758,14 @@ mod tests {
         }
     }
 
+    /// The text of an `Error` result, or `None` for any other result.
+    fn error(result: CommandResult) -> Option<String> {
+        match result {
+            CommandResult::Error(msg) => Some(msg),
+            _ => None,
+        }
+    }
+
     fn comparable_path(path: &Path) -> String {
         comparable_path_str(&path.to_string_lossy())
     }
@@ -786,7 +781,8 @@ mod tests {
         let options = ExecuteOptions::default();
         let result = execute_command("project check", &[], &options, &[], temp_dir.path());
 
-        assert!(matches!(result, CommandResult::Error(msg) if msg.contains("No .meta.yaml")));
+        let msg = error(result).unwrap();
+        assert!(msg.contains("No .meta.yaml"), "{msg}");
     }
 
     #[test]
@@ -1507,7 +1503,7 @@ projects:
 
             let msg = message(result).unwrap();
             let parsed: Vec<String> = serde_json::from_str(&msg).unwrap();
-            assert_eq!(parsed, vec!["b"]);
+            assert_eq!(parsed, vec!["b"], "for args: {args:?}");
         }
     }
 
@@ -1572,7 +1568,8 @@ projects:
             &[],
             temp_dir.path(),
         );
-        assert!(matches!(result, CommandResult::Error(msg) if msg.contains("exactly one")));
+        let msg = error(result).unwrap();
+        assert!(msg.contains("exactly one"), "{msg}");
     }
 
     #[test]
@@ -1596,8 +1593,7 @@ projects:
             &[],
             temp_dir.path(),
         );
-        assert!(
-            matches!(result, CommandResult::Error(msg) if msg.contains("Unknown project or alias"))
-        );
+        let msg = error(result).unwrap();
+        assert!(msg.contains("Unknown project or alias"), "{msg}");
     }
 }

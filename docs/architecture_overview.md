@@ -75,7 +75,7 @@ The main CLI entry point responsible for:
 
 Key modules:
 - `main.rs` - Entry point, argument parsing
-- `config.rs` - Configuration loading and parsing
+- `meta_core::config` - Configuration loading and parsing
 - `subprocess_plugins.rs` - Plugin discovery and execution
 - `query.rs` - Query DSL implementation
 - `dependency_graph.rs` - Dependency tracking and analysis
@@ -346,7 +346,7 @@ pub struct ProjectDependencies {
 | Module | Purpose |
 |--------|---------|
 | `meta_cli/src/main.rs` | CLI entry, arg parsing |
-| `meta_cli/src/config.rs` | Config loading |
+| `meta_core/src/config.rs` | Config loading |
 | `meta_cli/src/subprocess_plugins.rs` | Plugin discovery/execution |
 | `meta_cli/src/query.rs` | Query DSL |
 | `meta_cli/src/dependency_graph.rs` | Dependency analysis |

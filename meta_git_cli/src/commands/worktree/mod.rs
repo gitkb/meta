@@ -130,8 +130,8 @@ fn handle_worktree_command(
         WorktreeCommands::Add(args) => add::handle_add(args, verbose, json),
         WorktreeCommands::Remove(args) => remove::handle_remove(args, verbose, json),
         WorktreeCommands::List(args) => list::handle_list(args, verbose, json, cwd),
-        WorktreeCommands::Status(args) => status::handle_status(args, verbose, json),
-        WorktreeCommands::Diff(args) => diff::handle_diff(args, verbose, json),
+        WorktreeCommands::Status(args) => status::handle_status(args, json),
+        WorktreeCommands::Diff(args) => diff::handle_diff(args, json),
         WorktreeCommands::Exec(args) => exec::handle_exec(args, verbose, json),
         WorktreeCommands::Prune(args) => prune::handle_prune(args, verbose, json, global_strict),
         WorktreeCommands::Unknown(args) => {

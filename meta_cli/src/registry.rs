@@ -109,7 +109,6 @@ pub enum InstallScope {
     Global,
     /// Project-local installation to .meta/plugins/
     Local,
-    // Future: Custom(PathBuf) for --path flag in M5
 }
 
 impl PluginManifest {

@@ -1199,23 +1199,6 @@ mod tests {
     }
 
     #[test]
-    fn test_update_keeps_single_file_skill_folders_outside_claude() {
-        let dir = tempdir().unwrap();
-        // Older releases never wrote real folders into .agents/skills/
-        let other = dir.path().join(".agents/skills/meta-git");
-        fs::create_dir_all(&other).unwrap();
-        fs::write(other.join("SKILL.md"), "another tool").unwrap();
-
-        install_claude_integration_to(dir.path(), true, false, false).unwrap();
-
-        assert_eq!(
-            fs::read_to_string(other.join("SKILL.md")).unwrap(),
-            "another tool"
-        );
-        assert_linked(dir.path(), ".claude/skills", "meta-git");
-    }
-
-    #[test]
     fn test_update_replaces_git_link_placeholders() {
         let dir = tempdir().unwrap();
         // What git checks a link out as with core.symlinks=false
@@ -1316,12 +1299,6 @@ mod tests {
         fs::create_dir_all(&other).unwrap();
         fs::write(other.join("SKILL.md"), "other tool").unwrap();
         symlink_dir("../../.other/skills/meta-git", skills_dir.join("meta-git")).unwrap();
-        // Flat-file name, but a link
-        symlink_dir(
-            "../../.other/skills/meta-git/SKILL.md",
-            skills_dir.join("meta-exec.md"),
-        )
-        .unwrap();
 
         install_claude_integration_to(dir.path(), true, false, false).unwrap();
 
@@ -1333,7 +1310,6 @@ mod tests {
             fs::read_to_string(other.join("SKILL.md")).unwrap(),
             "other tool"
         );
-        assert!(fs::symlink_metadata(skills_dir.join("meta-exec.md")).is_ok());
     }
 
     #[test]

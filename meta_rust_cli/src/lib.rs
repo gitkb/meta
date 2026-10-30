@@ -78,16 +78,22 @@ mod tests {
         std::fs::write(path, contents).unwrap();
     }
 
-    fn plan(args: &[&str], projects: &[&Path], options: &PluginRequestOptions) -> Vec<String> {
+    /// The planned commands as `dir: argv`, or `None` for any other result.
+    fn plan(
+        args: &[&str],
+        projects: &[&Path],
+        options: &PluginRequestOptions,
+    ) -> Option<Vec<String>> {
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let projects: Vec<String> = projects.iter().map(|p| p.display().to_string()).collect();
         match execute_command(&args, options, &projects, Path::new(".")) {
-            CommandResult::Plan(commands, _) => commands
-                .into_iter()
-                .map(|c| format!("{}: {:?}", c.dir, c.argv))
-                .collect(),
-            // Planning nothing fails every caller's assert
-            _ => Vec::new(),
+            CommandResult::Plan(commands, _) => Some(
+                commands
+                    .into_iter()
+                    .map(|c| format!("{}: {:?}", c.dir, c.argv))
+                    .collect(),
+            ),
+            _ => None,
         }
     }
 
@@ -103,7 +109,7 @@ mod tests {
         write(&docs, "README.md", "");
 
         let args = ["fmt", "--check", "--", "--config", "a b"];
-        let commands = plan(&args, &[root, &rust, &docs], &Default::default());
+        let commands = plan(&args, &[root, &rust, &docs], &Default::default()).unwrap();
 
         let expected = format!(
             "{}: {:?}",
@@ -121,8 +127,8 @@ mod tests {
         write(&member, "Cargo.toml", "[package]\nname = \"member\"\n");
 
         // meta_cli sends only the repos --include/--exclude select
-        let all = plan(&["run"], &[root, &member], &Default::default());
-        let only_member = plan(&["run"], &[&member], &Default::default());
+        let all = plan(&["run"], &[root, &member], &Default::default()).unwrap();
+        let only_member = plan(&["run"], &[&member], &Default::default()).unwrap();
 
         let run_in = |dir: &Path| format!("{}: {:?}", dir.display(), ["cargo", "run"]);
         assert_eq!(all, [run_in(root), run_in(&member)]);
@@ -137,7 +143,8 @@ mod tests {
             &["test", "--", "--help"],
             &[temp.path()],
             &Default::default(),
-        );
+        )
+        .unwrap();
         let expected = format!(
             "{}: {:?}",
             temp.path().display(),

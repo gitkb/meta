@@ -194,4 +194,4 @@ Skills are embedded in the `meta` binary and updated with each release. To get t
 1. Update meta: `brew upgrade meta-cli` or reinstall
 2. Refresh skills: `meta init claude --update`
 
-`--update` overwrites the skill and rule files with the latest versions, turns older layouts into links, and leaves `settings.json` alone; `--force` does the same and also merges meta's hooks into `settings.json`, never replacing it.
+`--update` overwrites the skill and rule files with the latest versions, replaces meta's marked copies and link placeholders with links, and leaves `settings.json` alone; `--force` does the same and also merges meta's hooks into `settings.json`, never replacing it.

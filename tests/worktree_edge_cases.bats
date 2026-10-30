@@ -83,23 +83,23 @@ teardown() {
 
 # ============ Strict Mode (Phase 2) ============
 
-@test "worktree create --strict fails when --from-ref skips repos" {
+@test "worktree create --strict fails when the commit-ish skips repos" {
     # Create a branch that only exists in backend
     git -C backend branch feature-branch
 
-    # Try to create worktree with --strict --from-ref (should fail because frontend/common lack the ref)
-    run "$META_BIN" git worktree create strict-test --from-ref feature-branch --strict --all
+    # Try to create worktree with --strict and a commit-ish (should fail because frontend/common lack the ref)
+    run "$META_BIN" git worktree create strict-test feature-branch --strict --all
     [ "$status" -ne 0 ]
     [[ "$output" == *"strict"* ]]
     [[ "$output" == *"Skipping"* ]] || [[ "$output" == *"not found"* ]]
 }
 
-@test "worktree create without --strict warns but continues when --from-ref skips repos" {
+@test "worktree create without --strict warns but continues when the commit-ish skips repos" {
     # Create a branch that only exists in backend
     git -C backend branch partial-branch
 
     # Create worktree without --strict (should warn but succeed)
-    run "$META_BIN" git worktree create warn-test --from-ref partial-branch --all
+    run "$META_BIN" git worktree create warn-test partial-branch --all
     [ "$status" -eq 0 ]
     [[ "$output" == *"warning"* ]] || [[ "$output" == *"Skipping"* ]]
     # At least backend should have been created
@@ -115,7 +115,7 @@ teardown() {
     git branch shared-branch
 
     # Create worktree with --strict (should succeed)
-    run "$META_BIN" git worktree create strict-ok --from-ref shared-branch --strict --all
+    run "$META_BIN" git worktree create strict-ok shared-branch --strict --all
     [ "$status" -eq 0 ]
     [ -d ".worktrees/strict-ok/backend" ]
     [ -d ".worktrees/strict-ok/frontend" ]
@@ -127,19 +127,19 @@ teardown() {
     git -C backend branch unique-branch
 
     # Attempt with --strict should show which repo was skipped (use --no-deps to avoid root repo)
-    run "$META_BIN" git worktree create strict-error --from-ref unique-branch --strict --repo backend --repo frontend --no-deps
+    run "$META_BIN" git worktree create strict-error unique-branch --strict --repo backend --repo frontend --no-deps
     [ "$status" -ne 0 ]
     [[ "$output" == *"frontend"* ]] || [[ "$output" == *"common"* ]]
 }
 
 # ============ Global Strict Mode (Phase 5) ============
 
-@test "global --strict flag fails when --from-ref skips repos" {
+@test "global --strict flag fails when the commit-ish skips repos" {
     # Create a branch that only exists in backend
     git -C backend branch global-strict-branch
 
     # Global --strict should fail like local --strict
-    run "$META_BIN" --strict git worktree create global-strict-test --from-ref global-strict-branch --all
+    run "$META_BIN" --strict git worktree create global-strict-test global-strict-branch --all
     [ "$status" -ne 0 ]
     [[ "$output" == *"strict"* ]]
 }
@@ -152,7 +152,7 @@ teardown() {
     git branch global-ok-branch
 
     # Global --strict should succeed
-    run "$META_BIN" --strict git worktree create global-ok --from-ref global-ok-branch --all
+    run "$META_BIN" --strict git worktree create global-ok global-ok-branch --all
     [ "$status" -eq 0 ]
     [ -d ".worktrees/global-ok/backend" ]
 }
@@ -162,7 +162,7 @@ teardown() {
     git -C backend branch combined-strict-branch
 
     # Both flags together should still work
-    run "$META_BIN" --strict git worktree create combined-strict --from-ref combined-strict-branch --strict --all
+    run "$META_BIN" --strict git worktree create combined-strict combined-strict-branch --strict --all
     [ "$status" -ne 0 ]
     [[ "$output" == *"strict"* ]]
 }
@@ -173,7 +173,7 @@ teardown() {
     [ -d ".worktrees/prune-strict-test" ]
 
     # Clean up normally - this shouldn't fail
-    run "$META_BIN" --strict git worktree destroy prune-strict-test
+    run "$META_BIN" --strict git worktree remove prune-strict-test
     [ "$status" -eq 0 ]
 }
 
@@ -485,7 +485,7 @@ for repo in data['repos']:
     done
 
     # Create with strict mode (use --no-deps to avoid root repo which doesn't have the branch)
-    "$META_BIN" git worktree create strict-prune --from-ref strict-prune-branch --strict --repo backend --repo frontend --no-deps
+    "$META_BIN" git worktree create strict-prune strict-prune-branch --strict --repo backend --repo frontend --no-deps
     [ -d ".worktrees/strict-prune" ]
 
     # Remove directory
@@ -528,7 +528,7 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
     [ -d ".worktrees/valid-for-prune" ]
 
     # Cleanup
-    "$META_BIN" git worktree destroy valid-for-prune
+    "$META_BIN" git worktree remove valid-for-prune
 }
 
 @test "context cache handles corrupted cache file gracefully" {

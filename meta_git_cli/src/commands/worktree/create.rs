@@ -50,14 +50,7 @@ pub(crate) fn handle_create(
             )?;
         }
     }
-    // Merge positional <commit-ish> with hidden --from-ref (clap prevents both)
-    if args.from_ref.is_some() {
-        log::warn!(
-            "--from-ref is deprecated; use positional: meta worktree create <name> <commit-ish>"
-        );
-    }
-    let from_ref_merged = args.commit_ish.or(args.from_ref);
-    let from_ref = from_ref_merged.as_deref();
+    let from_ref = args.commit_ish.as_deref();
     let from_pr_spec = args.from_pr.as_deref();
 
     // Belt-and-suspenders: clap enforces conflicts, but guard against programmatic construction

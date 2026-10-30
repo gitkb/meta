@@ -8,22 +8,6 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-/// Patterns that indicate SSH rate-limiting or connection issues
-const SSH_ERROR_PATTERNS: &[&str] = &[
-    "Connection closed by",
-    "Operation timed out",
-    "ssh_dispatch_run_fatal",
-    "Connection reset by peer",
-    "Connection refused",
-];
-
-/// Check if an error message indicates SSH rate-limiting
-pub fn is_ssh_rate_limit_error(error_output: &str) -> bool {
-    SSH_ERROR_PATTERNS
-        .iter()
-        .any(|pattern| error_output.contains(pattern))
-}
-
 /// Validate that a hostname contains only valid characters.
 ///
 /// Valid hostnames contain:
@@ -244,30 +228,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_ssh_rate_limit_error() {
-        // Test all known SSH error patterns
-        assert!(is_ssh_rate_limit_error(
-            "Connection closed by 140.82.113.4 port 22"
-        ));
-        assert!(is_ssh_rate_limit_error(
-            "ssh: connect to host github.com port 22: Operation timed out"
-        ));
-        assert!(is_ssh_rate_limit_error(
-            "ssh_dispatch_run_fatal: Connection to 140.82.114.3 port 22"
-        ));
-        assert!(is_ssh_rate_limit_error("Connection reset by peer"));
-        assert!(is_ssh_rate_limit_error("Connection refused"));
-
-        // Test non-matching cases
-        assert!(!is_ssh_rate_limit_error("Already up to date."));
-        assert!(!is_ssh_rate_limit_error("fatal: not a git repository"));
-        assert!(!is_ssh_rate_limit_error(
-            "error: pathspec 'foo' did not match any file(s)"
-        ));
-        assert!(!is_ssh_rate_limit_error(""));
-    }
-
-    #[test]
     fn test_extract_ssh_host_scp_syntax() {
         assert_eq!(
             extract_ssh_host("git@github.com:org/repo.git"),
@@ -399,14 +359,6 @@ mod tests {
             fs::metadata(&sockets_dir).unwrap().permissions().mode() & 0o777,
             0o700
         );
-    }
-
-    #[test]
-    fn test_is_ssh_rate_limit_error_case_sensitivity() {
-        // Should match exact case
-        assert!(is_ssh_rate_limit_error("Connection closed by"));
-        // Should not match different case (patterns are case-sensitive)
-        assert!(!is_ssh_rate_limit_error("connection closed by"));
     }
 
     // ============ URL Normalization Tests ============

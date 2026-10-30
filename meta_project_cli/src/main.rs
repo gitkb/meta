@@ -1,7 +1,7 @@
 //! meta-project subprocess plugin
 
 use indexmap::IndexMap;
-use meta_cli::display::escape_lines;
+use meta_core::display::escape_lines;
 use meta_plugin_protocol::{
     run_plugin, CommandResult, PluginDefinition, PluginHelp, PluginInfo, PluginRequest,
 };

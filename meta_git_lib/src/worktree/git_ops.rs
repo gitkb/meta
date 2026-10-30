@@ -753,10 +753,7 @@ mod tests {
             .unwrap();
         assert!(status.success());
 
-        let error = match git_status_summary(tmp.path()) {
-            Ok(_) => panic!("corrupt checked-out repository should be rejected"),
-            Err(error) => error.to_string(),
-        };
+        let error = git_status_summary(tmp.path()).err().unwrap().to_string();
         assert!(error.contains("core.bare=true"));
         assert!(error.contains(&format!(
             "git -C '{}' config --local core.bare false",

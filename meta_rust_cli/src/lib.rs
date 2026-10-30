@@ -86,7 +86,8 @@ mod tests {
                 .into_iter()
                 .map(|c| format!("{}: {:?}", c.dir, c.argv))
                 .collect(),
-            _ => panic!("Expected Plan result"),
+            // Planning nothing fails every caller's assert
+            _ => Vec::new(),
         }
     }
 

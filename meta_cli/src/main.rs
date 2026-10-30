@@ -11,7 +11,8 @@ mod init;
 mod registry;
 mod subprocess_plugins;
 use meta_cli::{repo_filter, worktree};
-use subprocess_plugins::{PluginRequestOptions, SubprocessPluginManager};
+use meta_plugin_protocol::PluginRequestOptions;
+use subprocess_plugins::SubprocessPluginManager;
 
 // === CLI Structs ===
 
@@ -579,13 +580,9 @@ fn run_cli() -> Result<()> {
             };
             init::handle_init_command(cmd, cli.verbose)
         }
-        Some(Commands::Plugin(args)) => handle_plugin_command(
-            args.command,
-            cli.verbose,
-            cli.json,
-            cli.help,
-            &subprocess_plugins,
-        ),
+        Some(Commands::Plugin(args)) => {
+            handle_plugin_command(args.command, cli.json, cli.help, &subprocess_plugins)
+        }
         Some(Commands::Exec(args)) => {
             // Handle help flag for exec command specifically
             if cli.help {
@@ -1080,11 +1077,11 @@ fn handle_command_dispatch(
 // === Plugin Management ===
 
 /// Create a plugin installer for the specified scope (local or global)
-fn create_installer(local: bool, verbose: bool) -> Result<registry::PluginInstaller> {
+fn create_installer(local: bool) -> Result<registry::PluginInstaller> {
     if local {
-        registry::PluginInstaller::new_local(verbose)
+        registry::PluginInstaller::new_local()
     } else {
-        registry::PluginInstaller::new(verbose)
+        registry::PluginInstaller::new()
     }
 }
 
@@ -1100,7 +1097,6 @@ fn format_plugin_location(local: bool) -> &'static str {
 /// Handle plugin management subcommands with typed args.
 fn handle_plugin_command(
     command: Option<PluginCommands>,
-    verbose: bool,
     json: bool,
     help: bool,
     subprocess_plugins: &SubprocessPluginManager,
@@ -1124,7 +1120,7 @@ fn handle_plugin_command(
             let Some(query) = query else {
                 anyhow::bail!("Usage: meta plugin search <QUERY>");
             };
-            let client = RegistryClient::new(verbose)?;
+            let client = RegistryClient::new()?;
             let results = client.search(&query)?;
 
             if json {
@@ -1153,7 +1149,7 @@ fn handle_plugin_command(
                 anyhow::bail!("Usage: meta plugin install <NAME> [--local]");
             };
             use registry::GitHubShorthand;
-            let installer = create_installer(local, verbose)?;
+            let installer = create_installer(local)?;
             let location = format_plugin_location(local);
 
             // Detect input type and route accordingly
@@ -1177,7 +1173,7 @@ fn handle_plugin_command(
                 }
             } else {
                 // Registry-based install
-                let client = RegistryClient::new(verbose)?;
+                let client = RegistryClient::new()?;
 
                 // Try simple registry format first (M6: plugins/{name} contains GitHub shorthand)
                 match client.resolve_plugin_source(&name) {
@@ -1219,7 +1215,7 @@ fn handle_plugin_command(
                 return Ok(());
             }
             if local {
-                let installer = PluginInstaller::new_local(verbose)?;
+                let installer = PluginInstaller::new_local()?;
                 let plugins = installer.list_plugins_detailed()?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&plugins)?);
@@ -1288,7 +1284,7 @@ fn handle_plugin_command(
             let Some(name) = name else {
                 anyhow::bail!("Usage: meta plugin uninstall <NAME> [--local]");
             };
-            let installer = create_installer(local, verbose)?;
+            let installer = create_installer(local)?;
             let location = format_plugin_location(local);
             installer.uninstall(&name)?;
 
@@ -1301,7 +1297,7 @@ fn handle_plugin_command(
                 print_plugin_update_help();
                 return Ok(());
             }
-            let installer = create_installer(local, verbose)?;
+            let installer = create_installer(local)?;
             let location = format_plugin_location(local);
 
             if let Some(plugin_name) = name {

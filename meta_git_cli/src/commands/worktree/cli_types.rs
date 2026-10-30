@@ -13,10 +13,7 @@ pub enum WorktreeCommands {
     /// Add a repo to an existing worktree set
     Add(AddArgs),
     /// Remove a worktree set
-    Remove(DestroyArgs),
-    /// Remove a worktree set (alias for remove)
-    #[command(hide = true)]
-    Destroy(DestroyArgs),
+    Remove(RemoveArgs),
     /// List worktree sets (defaults to the current set when inside one)
     List(ListArgs),
     /// Show detailed status of a worktree set
@@ -55,10 +52,6 @@ pub struct CreateArgs {
     /// Preview planned worktree operations without creating anything
     #[arg(long)]
     pub dry_run: bool,
-
-    /// Alias for positional <COMMIT-ISH> (hidden, kept for backward compatibility)
-    #[arg(long, value_name = "REF", hide = true, conflicts_with_all = ["commit_ish", "from_pr"])]
-    pub from_ref: Option<String>,
 
     /// Start from a PR's head branch (owner/repo#N)
     #[arg(long, value_name = "OWNER/REPO#N", conflicts_with = "commit_ish")]
@@ -115,7 +108,7 @@ pub struct AddArgs {
 }
 
 #[derive(Args)]
-pub struct DestroyArgs {
+pub struct RemoveArgs {
     /// Worktree name
     pub name: String,
 
@@ -199,10 +192,6 @@ pub struct ExecArgs {
     /// Record custom metadata for ephemeral worktree (key=value)
     #[arg(long = "meta", value_name = "KEY=VALUE")]
     pub custom_meta: Vec<String>,
-
-    /// Alias for positional <COMMIT-ISH> (hidden, kept for backward compatibility)
-    #[arg(long, value_name = "REF", hide = true, conflicts_with_all = ["commit_ish", "from_pr"])]
-    pub from_ref: Option<String>,
 
     /// Start from a PR's head branch (ephemeral only, owner/repo#N)
     #[arg(long, value_name = "OWNER/REPO#N", conflicts_with = "commit_ish")]

@@ -13,7 +13,6 @@ description = "Multi-repo management CLI with AI integration"
 [dependencies]
 meta_core = { path = "../meta_core" }
 meta_plugin_protocol = { path = "../meta_plugin_protocol" }
-thiserror = "1.0"
 anyhow = "1.0"
 clap = { version = "4.3", features = ["derive"] }
 colored = "2.0"
@@ -22,7 +21,7 @@ rayon = "1.5"
 walkdir = "2.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml = "0.9"
+serde_yaml_ng = "0.10"
 log = "0.4"
 env_logger = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
@@ -34,11 +33,9 @@ zip = { version = "9.0.4", default-features = false, features = ["aes-crypto", "
 tempfile = "3.3"
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+rustix = { version = "1", features = ["process"] }
 
 [dev-dependencies]
-assert_cmd = "2.0"
-predicates = "2.1"
 indexmap = "2"
 
 [[bin]]
@@ -66,3 +63,6 @@ pkg-url = "{ repo }/releases/download/v{ version }/meta-linux-arm64.tar.gz"
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
 pkg-url = "{ repo }/releases/download/v{ version }/meta-windows-x64.zip"
 pkg-fmt = "zip"
+
+[lints]
+workspace = true

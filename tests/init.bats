@@ -249,27 +249,7 @@ EOF
     [ "$status" -eq 0 ]
 }
 
-@test "init claude --update turns skill folders in .claude/skills into links" {
-    # The previous layout: real folders holding the shipped SKILL.md
-    for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
-        mkdir -p ".claude/skills/$name"
-        cp "$BATS_TEST_DIRNAME/../meta_cli/.claude/skills/$name/SKILL.md" ".claude/skills/$name/SKILL.md"
-    done
-    mkdir .claude/skills/my-skill
-    echo "mine" > .claude/skills/my-skill/SKILL.md
-
-    run "$META_BIN" init claude --update
-    [ "$status" -eq 0 ]
-
-    for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
-        [ "$(readlink ".claude/skills/$name")" = "../../.meta/skills/$name" ]
-    done
-    run grep "Meta Workspace Skill" .claude/skills/meta-workspace/SKILL.md
-    [ "$status" -eq 0 ]
-    [ "$(cat .claude/skills/my-skill/SKILL.md)" = "mine" ]
-}
-
-@test "init claude --update keeps a skill folder with text meta never shipped" {
+@test "init claude --update keeps a skill folder meta did not mark" {
     mkdir -p .claude/skills/meta-git
     echo "another tool" > .claude/skills/meta-git/SKILL.md
 
@@ -291,42 +271,6 @@ EOF
     [ "$(readlink .claude/skills/meta-git)" = "../../.other/meta-git" ]
     [ "$(cat .other/meta-git/SKILL.md)" = "other tool" ]
     [[ "$output" == *"not created by meta"* ]]
-}
-
-@test "init claude keeps old flat skill files without --update" {
-    mkdir -p .claude/skills
-    echo "custom content" > .claude/skills/meta-git.md
-
-    run "$META_BIN" init claude
-    [ "$status" -eq 0 ]
-
-    [ "$(cat .claude/skills/meta-git.md)" = "custom content" ]
-    [ -f ".claude/skills/meta-git/SKILL.md" ]
-}
-
-@test "init claude --update replaces old flat skill files" {
-    mkdir -p .claude/skills
-    # Old flat files start with the shipped heading, e.g. "# Meta Git Skill"
-    for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
-        local word="${name#meta-}"
-        word="$(printf %s "${word:0:1}" | tr a-z A-Z)${word:1}"
-        printf '# Meta %s Skill\nold content\n' "$word" > ".claude/skills/$name.md"
-    done
-    echo "mine" > .claude/skills/my-skill.md
-    echo "# Another tool" > .claude/skills/meta-git.md
-
-    run "$META_BIN" init claude --update
-    [ "$status" -eq 0 ]
-
-    for name in meta-workspace meta-exec meta-plugins meta-worktree meta-safety; do
-        [ ! -e ".claude/skills/$name.md" ]
-    done
-    for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
-        [ "$(readlink ".claude/skills/$name")" = "../../.meta/skills/$name" ]
-    done
-    [ "$(cat .claude/skills/my-skill.md)" = "mine" ]
-    # A same-named file meta never shipped stays
-    [ "$(cat .claude/skills/meta-git.md)" = "# Another tool" ]
 }
 
 @test "init claude --update refreshes rule files" {
@@ -524,21 +468,6 @@ PY
 import os
 assert os.stat('.claude/settings.json').st_mtime < 1000000000
 PY
-}
-
-@test "init reports preserved flat skill file and symlink without verbose" {
-    mkdir -p .claude/skills
-    echo 'foreign skill' > .claude/skills/meta-safety.md
-    run "$META_BIN" init claude
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"meta-safety.md (not created by meta, left alone)"* ]]
-    [ "$(cat .claude/skills/meta-safety.md)" = 'foreign skill' ]
-    rm .claude/skills/meta-safety.md
-    ln -s missing-target .claude/skills/meta-safety.md
-    run "$META_BIN" init claude
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"meta-safety.md (not created by meta, left alone)"* ]]
-    [ "$(readlink .claude/skills/meta-safety.md)" = missing-target ]
 }
 
 @test "init prints marketplace hint without calling claude" {

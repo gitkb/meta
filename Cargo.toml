@@ -19,3 +19,28 @@ version = "0.2.22"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/gitkb/meta"
+
+[workspace.lints.rust]
+unused_must_use = "forbid"
+unconditional_recursion = "forbid"
+unsafe_code = "forbid"
+
+# deny, not forbid: clap's derive allows whole clippy groups on the code it
+# generates, which forbid would reject
+[workspace.lints.clippy]
+suspicious = { level = "deny", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+mem_forget = "deny"
+read_zero_byte_vec = "deny"
+debug_assert_with_mut_call = "deny"
+unchecked_time_subtraction = "deny"
+unused_result_ok = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+undocumented_unsafe_blocks = "deny"
+cast_lossless = "deny"
+large_stack_arrays = "deny"
+panic = "deny"
+unreachable = "deny"

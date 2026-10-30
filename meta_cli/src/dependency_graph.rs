@@ -139,14 +139,6 @@ impl DependencyGraph {
             .unwrap_or_default()
     }
 
-    /// Get direct dependents of a project (projects that depend on it)
-    pub fn get_dependents(&self, project: &str) -> Vec<&str> {
-        self.dependents
-            .get(project)
-            .map(|deps| deps.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default()
-    }
-
     /// Get all transitive dependencies of a project
     pub fn get_all_dependencies(&self, project: &str) -> Vec<&str> {
         let mut visited = HashSet::new();
@@ -303,51 +295,6 @@ impl DependencyGraph {
     pub fn all_projects(&self) -> Vec<&ProjectDependencies> {
         self.projects.values().collect()
     }
-
-    /// Check for circular dependencies
-    pub fn detect_cycles(&self) -> Vec<Vec<String>> {
-        let mut cycles = Vec::new();
-        let mut visited = HashSet::new();
-        let mut rec_stack = HashSet::new();
-        let mut path = Vec::new();
-
-        for name in self.projects.keys() {
-            if !visited.contains(name.as_str()) {
-                self.dfs_cycle(name, &mut visited, &mut rec_stack, &mut path, &mut cycles);
-            }
-        }
-
-        cycles
-    }
-
-    fn dfs_cycle(
-        &self,
-        node: &str,
-        visited: &mut HashSet<String>,
-        rec_stack: &mut HashSet<String>,
-        path: &mut Vec<String>,
-        cycles: &mut Vec<Vec<String>>,
-    ) {
-        visited.insert(node.to_string());
-        rec_stack.insert(node.to_string());
-        path.push(node.to_string());
-
-        if let Some(deps) = self.dependencies.get(node) {
-            for dep in deps {
-                if !visited.contains(dep) {
-                    self.dfs_cycle(dep, visited, rec_stack, path, cycles);
-                } else if rec_stack.contains(dep) {
-                    // Found a cycle
-                    let cycle_start = path.iter().position(|n| n == dep).unwrap();
-                    let cycle: Vec<String> = path[cycle_start..].to_vec();
-                    cycles.push(cycle);
-                }
-            }
-        }
-
-        path.pop();
-        rec_stack.remove(node);
-    }
 }
 
 /// Result of impact analysis
@@ -357,72 +304,6 @@ pub struct ImpactAnalysis {
     pub direct_dependents: Vec<String>,
     pub transitive_dependents: Vec<String>,
     pub total_affected: usize,
-}
-
-/// Dependency graph summary for reporting
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DependencyGraphSummary {
-    pub total_projects: usize,
-    pub total_edges: usize,
-    pub has_cycles: bool,
-    pub root_projects: Vec<String>,
-    pub leaf_projects: Vec<String>,
-    pub most_depended_on: Vec<(String, usize)>,
-}
-
-impl DependencyGraph {
-    /// Generate a summary of the dependency graph
-    pub fn summary(&self) -> DependencyGraphSummary {
-        let total_edges: usize = self.dependencies.values().map(|v| v.len()).sum();
-
-        // Root projects: no dependencies
-        let root_projects: Vec<String> = self
-            .projects
-            .keys()
-            .filter(|name| {
-                self.dependencies
-                    .get(*name)
-                    .map(|deps| deps.is_empty())
-                    .unwrap_or(true)
-            })
-            .cloned()
-            .collect();
-
-        // Leaf projects: no dependents
-        let leaf_projects: Vec<String> = self
-            .projects
-            .keys()
-            .filter(|name| {
-                self.dependents
-                    .get(*name)
-                    .map(|deps| deps.is_empty())
-                    .unwrap_or(true)
-            })
-            .cloned()
-            .collect();
-
-        // Most depended on
-        let mut dependent_counts: Vec<(String, usize)> = self
-            .dependents
-            .iter()
-            .map(|(name, deps)| (name.clone(), deps.len()))
-            .collect();
-        dependent_counts.sort_by_key(|d| std::cmp::Reverse(d.1));
-        let most_depended_on: Vec<(String, usize)> = dependent_counts
-            .into_iter()
-            .filter(|(_, count)| *count > 0)
-            .take(5)
-            .collect();
-
-        DependencyGraphSummary {
-            total_projects: self.projects.len(),
-            total_edges,
-            has_cycles: !self.detect_cycles().is_empty(),
-            root_projects,
-            leaf_projects,
-            most_depended_on,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -487,16 +368,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_dependents() {
-        let projects = create_test_projects();
-        let graph = DependencyGraph::build(projects).unwrap();
-
-        let dependents = graph.get_dependents("shared-utils");
-        assert!(dependents.contains(&"auth-service"));
-        assert!(dependents.contains(&"api-service"));
-    }
-
-    #[test]
     fn test_impact_analysis() {
         let projects = create_test_projects();
         let graph = DependencyGraph::build(projects).unwrap();
@@ -544,17 +415,5 @@ mod tests {
         // web-app depends on "api-v2" which is provided by api-service
         let deps = graph.get_dependencies("web-app");
         assert!(deps.contains(&"api-service"));
-    }
-
-    #[test]
-    fn test_summary() {
-        let projects = create_test_projects();
-        let graph = DependencyGraph::build(projects).unwrap();
-
-        let summary = graph.summary();
-        assert_eq!(summary.total_projects, 4);
-        assert!(!summary.has_cycles);
-        assert!(summary.root_projects.contains(&"shared-utils".to_string()));
-        assert!(summary.leaf_projects.contains(&"web-app".to_string()));
     }
 }

@@ -95,12 +95,9 @@ pub struct PluginInfo {
 /// Where a plugin is installed
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "lowercase")]
-#[allow(dead_code)] // Bundled and ProjectLocal variants used by plugin discovery system
 pub enum PluginLocation {
     /// Installed in ~/.meta/plugins/
     Installed,
-    /// Found in PATH (bundled with meta)
-    Bundled,
     /// Found in project-local .meta/plugins/
     ProjectLocal,
 }
@@ -220,7 +217,7 @@ impl RegistryConfig {
                 result.with_context(|| format!("Failed to read {}", escape_path(&config_path)))?
             }
         };
-        serde_yaml::from_str(&content).with_context(|| "Failed to parse registry config")
+        serde_yaml_ng::from_str(&content).with_context(|| "Failed to parse registry config")
     }
 
     /// Get the config file path
@@ -241,29 +238,17 @@ impl RegistryConfig {
 /// Plugin registry client
 pub struct RegistryClient {
     registries: Vec<String>,
-    #[allow(dead_code)] // Reserved for future debug output implementation
-    verbose: bool,
 }
 
 impl RegistryClient {
     /// Create a new registry client
-    pub fn new(verbose: bool) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         // A config that cannot be read must not fall back to the default
         // registry: it may list a private one with the same plugin names
         let config = RegistryConfig::load()?;
         Ok(Self {
             registries: config.get_registries(),
-            verbose,
         })
-    }
-
-    /// Create a new registry client with custom registries
-    #[allow(dead_code)]
-    pub fn with_registries(registries: Vec<String>, verbose: bool) -> Self {
-        Self {
-            registries,
-            verbose,
-        }
     }
 
     /// Fetch the registry index
@@ -604,19 +589,15 @@ fn make_executable(_path: &Path) -> Result<()> {
 #[derive(Debug)]
 pub struct PluginInstaller {
     plugins_dir: PathBuf,
-    #[allow(dead_code)] // Reserved for future logging implementation
-    verbose: bool,
-    #[allow(dead_code)] // Public API for querying installer scope (used in tests)
     scope: InstallScope,
 }
 
 impl PluginInstaller {
     /// Create a new plugin installer for global plugins
-    pub fn new(verbose: bool) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let plugins_dir = Self::default_plugins_dir()?;
         Ok(Self {
             plugins_dir,
-            verbose,
             scope: InstallScope::Global,
         })
     }
@@ -624,25 +605,18 @@ impl PluginInstaller {
     /// Create a new plugin installer for project-local plugins
     /// Create a local installer starting from the given directory.
     /// Used for testing without changing current_dir.
-    fn new_local_from(start_dir: &Path, verbose: bool) -> Result<Self> {
+    fn new_local_from(start_dir: &Path) -> Result<Self> {
         let workspace_root = Self::find_workspace_root_from(start_dir)?;
         let plugins_dir = workspace_root.join(LOCAL_PLUGINS_DIR);
         Ok(Self {
             plugins_dir,
-            verbose,
             scope: InstallScope::Local,
         })
     }
 
-    pub fn new_local(verbose: bool) -> Result<Self> {
+    pub fn new_local() -> Result<Self> {
         let cwd = std::env::current_dir().context("Failed to get current directory")?;
-        Self::new_local_from(&cwd, verbose)
-    }
-
-    /// Get the installation scope of this installer
-    #[allow(dead_code)] // Public API for querying installer scope (tested indirectly)
-    pub fn scope(&self) -> &InstallScope {
-        &self.scope
+        Self::new_local_from(&cwd)
     }
 
     /// Find the nearest directory holding a config file (not a bare `.meta/`).
@@ -1355,7 +1329,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().join("plugins"),
-            verbose: false,
             scope: InstallScope::Local,
         };
         installer.save_manifest(&PluginManifest::default()).unwrap();
@@ -1372,7 +1345,6 @@ mod tests {
 
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -1387,22 +1359,12 @@ mod tests {
 
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
         // Uninstall should fail for non-existent plugin
         let result = installer.uninstall("nonexistent");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_registry_client_with_custom_registries() {
-        let client =
-            RegistryClient::with_registries(vec!["https://test.registry.com".to_string()], false);
-
-        assert_eq!(client.registries.len(), 1);
-        assert_eq!(client.registries[0], "https://test.registry.com");
     }
 
     #[test]
@@ -1435,7 +1397,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -1472,7 +1433,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -1512,7 +1472,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -1541,7 +1500,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -1606,7 +1564,6 @@ mod tests {
             }
             let installer = PluginInstaller {
                 plugins_dir: dir.path().to_path_buf(),
-                verbose: false,
                 scope: InstallScope::Global,
             };
 
@@ -1654,7 +1611,6 @@ mod tests {
                 }
                 let installer = PluginInstaller {
                     plugins_dir: plugins_dir.clone(),
-                    verbose: false,
                     scope: InstallScope::Global,
                 };
 
@@ -1684,7 +1640,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -1762,7 +1717,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -1790,7 +1744,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -1807,7 +1760,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -1936,7 +1888,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -2041,7 +1992,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -2055,7 +2005,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
             plugins_dir: dir.path().to_path_buf(),
-            verbose: false,
             scope: InstallScope::Global,
         };
 
@@ -2170,7 +2119,7 @@ mod tests {
         let plugins_dir = temp.path().join(LOCAL_PLUGINS_DIR);
         std::fs::create_dir_all(&plugins_dir).unwrap();
 
-        let result = PluginInstaller::new_local_from(temp.path(), false);
+        let result = PluginInstaller::new_local_from(temp.path());
 
         assert!(result.is_ok());
         let installer = result.unwrap();
@@ -2186,8 +2135,7 @@ mod tests {
     fn test_new_local_fails_outside_workspace() {
         let temp = tempfile::tempdir().unwrap();
 
-        let result =
-            PluginInstaller::new_local_from(temp.path().ancestors().last().unwrap(), false);
+        let result = PluginInstaller::new_local_from(temp.path().ancestors().last().unwrap());
 
         assert!(result.is_err());
         assert!(result
@@ -2200,7 +2148,7 @@ mod tests {
     fn local_plugins_gitignore_is_created_and_existing_file_is_kept() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join(".meta.yaml"), "projects: {}").unwrap();
-        let installer = PluginInstaller::new_local_from(temp.path(), false).unwrap();
+        let installer = PluginInstaller::new_local_from(temp.path()).unwrap();
         installer.ensure_plugins_dir().unwrap();
         let path = installer.plugins_dir.join(".gitignore");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "*\n");
@@ -2228,7 +2176,7 @@ mod tests {
 
     #[test]
     fn test_resolve_plugin_source_invalid_name() {
-        let client = RegistryClient::new(false).unwrap();
+        let client = RegistryClient::new().unwrap();
         let result = client.resolve_plugin_source("nonexistent-plugin-12345");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));

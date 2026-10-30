@@ -415,11 +415,10 @@ mod tests {
     #[test]
     fn test_parse_modified_in_query() {
         let query = Query::parse("modified_in:24h").unwrap();
-        assert_eq!(query.conditions.len(), 1);
-        match &query.conditions[0] {
-            QueryCondition::ModifiedIn(d) => assert_eq!(d.as_secs(), 86400),
-            _ => panic!("Expected ModifiedIn condition"),
-        }
+        assert_eq!(
+            query.conditions,
+            [QueryCondition::ModifiedIn(Duration::from_secs(86400))]
+        );
     }
 
     #[test]

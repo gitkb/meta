@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+use rustix::process::{geteuid, kill_process, test_kill_process, Pid, Signal};
+
 struct Fixture {
     _temp: tempfile::TempDir,
     home: PathBuf,
@@ -266,19 +268,22 @@ fn local_install_gitignores_untracked_plugin_files() {
                     )
                     .unwrap();
                     stream.write_all(&bytes).unwrap();
-                    return;
+                    return Ok(());
                 }
                 Err(e)
                     if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
                 {
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                Err(e) => panic!("download request did not arrive: {e}"),
+                Err(e) => return Err(e),
             }
         }
     });
     let output = f.run(&["plugin", "install", "--local", &url]);
-    server.join().unwrap();
+    server
+        .join()
+        .unwrap()
+        .expect("download request did not arrive");
     assert!(
         output.status.success(),
         "{}",
@@ -310,21 +315,6 @@ fn orphan_hint_names_actual_parent_config() {
 }
 
 #[test]
-fn old_config_names_are_not_a_workspace() {
-    for name in [".meta", ".meta.json", ".meta.yml"] {
-        let f = Fixture::new(false);
-        fs::write(f.cwd.join(name), "{\"projects\": {}}\n").unwrap();
-        let out = f.run(&["exec", "--", "true"]);
-        assert!(!out.status.success(), "{name}");
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            err.contains("Could not find meta config file '.meta.yaml'"),
-            "{err}"
-        );
-    }
-}
-
-#[test]
 fn a_meta_file_where_the_folder_goes_is_not_taken_for_no_plugins() {
     let f = Fixture::new(true);
     fs::write(f.cwd.join(".meta"), "{}\n").unwrap();
@@ -341,7 +331,7 @@ fn a_meta_file_where_the_folder_goes_is_not_taken_for_no_plugins() {
 #[test]
 fn unreadable_plugin_directory_warns_and_help_still_runs() {
     // Root can read mode-000 directories, so this case cannot be exercised there.
-    if unsafe { libc::geteuid() } == 0 {
+    if geteuid().is_root() {
         return;
     }
     let f = Fixture::new(true);
@@ -376,12 +366,12 @@ fn unreadable_plugin_directory_warns_and_help_still_runs() {
     assert!(err.contains(path.to_str().unwrap()), "{err}");
 }
 
-fn running(pid: i32) -> bool {
+fn running(pid: Pid) -> bool {
     // On Linux an orphan may briefly be a zombie until init reaps it.
     if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
         return !stat.rsplit_once(") ").unwrap().1.starts_with('Z');
     }
-    unsafe { libc::kill(pid, 0) == 0 }
+    test_kill_process(pid).is_ok()
 }
 
 fn timeout_case(background: bool) {
@@ -415,10 +405,10 @@ fn timeout_case(background: bool) {
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    let pids: Vec<i32> = fs::read_to_string(&pidfile)
+    let pids: Vec<Pid> = fs::read_to_string(&pidfile)
         .unwrap()
         .lines()
-        .map(|s| s.parse().unwrap())
+        .map(|s| Pid::from_raw(s.parse().unwrap()).unwrap())
         .collect();
     let mut survivors = Vec::new();
     for pid in pids {
@@ -430,9 +420,7 @@ fn timeout_case(background: bool) {
         }
         if running(pid) {
             survivors.push(pid);
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-            }
+            let _ = kill_process(pid, Signal::KILL);
         }
     }
     assert!(

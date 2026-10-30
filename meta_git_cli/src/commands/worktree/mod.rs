@@ -128,9 +128,7 @@ fn handle_worktree_command(
     match command {
         WorktreeCommands::Create(args) => create::handle_create(args, verbose, json, global_strict),
         WorktreeCommands::Add(args) => add::handle_add(args, verbose, json),
-        WorktreeCommands::Remove(args) | WorktreeCommands::Destroy(args) => {
-            remove::handle_remove(args, verbose, json)
-        }
+        WorktreeCommands::Remove(args) => remove::handle_remove(args, verbose, json),
         WorktreeCommands::List(args) => list::handle_list(args, verbose, json, cwd),
         WorktreeCommands::Status(args) => status::handle_status(args, verbose, json),
         WorktreeCommands::Diff(args) => diff::handle_diff(args, verbose, json),
@@ -211,7 +209,7 @@ fn write_worktree_help(w: &mut dyn std::io::Write) {
     let _ = writeln!(w, "  --branch <NAME>          Override default branch name");
     let _ = writeln!(
         w,
-        "  --from-ref <REF>         Start from a specific tag/SHA"
+        "  <COMMIT-ISH>             Start from a tag, SHA or branch (after the name)"
     );
     let _ = writeln!(
         w,

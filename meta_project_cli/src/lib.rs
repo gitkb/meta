@@ -11,19 +11,14 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 
-pub use meta_plugin_protocol::{
-    output_execution_plan, CommandResult, ExecutionPlan, PlanResponse, PlannedCommand,
-};
+use meta_plugin_protocol::CommandResult;
 
 /// Options passed to execute_command
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ExecuteOptions {
-    pub dry_run: bool,
     pub json_output: bool,
     pub recursive: bool,
     pub depth: Option<usize>,
-    pub verbose: bool,
-    pub parallel: bool,
     /// `--include` or `--exclude` was given
     pub filtered: bool,
 }
@@ -726,6 +721,7 @@ fn print_missing(urls: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_plugin_protocol::{ExecutionPlan, PlanResponse, PlannedCommand};
     use tempfile::TempDir;
 
     /// The text of a `Message` result, or `None` for any other result.

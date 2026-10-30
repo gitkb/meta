@@ -58,10 +58,6 @@ The `.looprc` file controls which directories are targeted and how commands are 
 - `filter`: Applies inclusion/exclusion logic.
 - `report`: Aggregates and formats results.
 
-## Visual Overview
-
-![Loop System Architecture](../../docs/assets/meta-cli-screenshot.png)
-
 ## See Also
 
 - [Loop Overview](loop.md)

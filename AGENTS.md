@@ -1,5 +1,5 @@
-## Project Architecture: Meta-Repo (NOT a monorepo)
+## Project Layout
 
-This is a **meta-repo** — a workspace of independent git repositories managed by the `meta` CLI tool. Each directory listed in `.meta.yaml` (the project config) is a **separate git repo** with its own remote, commits, and history. NEVER treat this as a monorepo. New crates must be separate git repos added to `.meta.yaml` and `.gitignore`.
+All of meta's crates are folders in this one git repo and members of the root Cargo workspace; a change across crates is one PR. `.meta.yaml` lists the separate repos `agent` and `meta-plugins`, which are cloned into gitignored folders. A new crate is a new folder added to the workspace `members`.
 
 READ .kb/AGENTS.md

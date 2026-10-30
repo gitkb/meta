@@ -1,15 +1,15 @@
 # Dependencies
 node_modules/
-.pnp
-.pnp.js
+/.pnp
+/.pnp.js
 
 # Testing
-coverage/
+/coverage/
 
 # Production
-build/
-dist/
-out/
+/build/
+/dist/
+/out/
 
 # Development
 .DS_Store
@@ -37,32 +37,22 @@ yarn-error.log*
 target
 
 # Model files
-models/
-*.bin
+/models/
+/*.bin
 
 # Cache
-.cache/
+/.cache/
 
-.context-old/
-imported/
+/.context-old/
+/imported/
 
 # AI
 .aider*
 
 # child repositories
-agent/
-loop_cli/
-loop_lib/
-meta_cli/
-meta_core/
-meta_git_cli/
-meta_git_lib/
-meta_mcp/
-meta_plugin_protocol/
-meta_project_cli/
-meta_rust_cli/
-claude-plugins/
-codex-plugins/
+/agent/
+/claude-plugins/
+/codex-plugins/
 /meta-plugins/
 
 # plugins (built locally, not committed)
@@ -71,6 +61,6 @@ codex-plugins/
 # GitKB
 .kb/.cache/
 .kb/workspace/
-.worktrees/
+/.worktrees/
 
 .env

@@ -2,8 +2,7 @@
 # Git pre-push hook for meta workspace
 # Runs the same checks as CI to catch issues before push
 #
-# Install in each repo: git config core.hooksPath /path/to/meta/.githooks
-# Or symlink: ln -sf ../../../.githooks/pre-push .git/hooks/pre-push
+# Install with: make install-hooks
 
 set -e
 

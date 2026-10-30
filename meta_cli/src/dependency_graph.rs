@@ -1,0 +1,560 @@
+//! Dependency tracking and impact analysis for meta projects
+//!
+//! Supports extended .meta.yaml schema with provides/depends_on fields:
+//!
+//! ```yaml
+//! projects:
+//!   api-service:
+//!     repo: git@github.com:org/api.git
+//!     tags: [backend]
+//!     provides: [api-v2]
+//!     depends_on:
+//!       - auth-service
+//!       - shared-utils
+//! ```
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+use meta_core::config::ProjectInfo;
+
+/// Represents a project with dependency information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectDependencies {
+    pub name: String,
+    pub path: String,
+    /// Git remote URL. Should be present for all normal projects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    pub tags: Vec<String>,
+    /// What this project provides (e.g., APIs, libraries)
+    pub provides: Vec<String>,
+    /// What this project depends on (other project names or provided items)
+    pub depends_on: Vec<String>,
+}
+
+impl From<ProjectInfo> for ProjectDependencies {
+    fn from(p: ProjectInfo) -> Self {
+        Self {
+            name: p.name,
+            path: p.path,
+            repo: p.repo,
+            tags: p.tags,
+            provides: p.provides,
+            depends_on: p.depends_on,
+        }
+    }
+}
+
+/// Dependency graph for analyzing relationships between projects
+#[derive(Debug, Clone)]
+pub struct DependencyGraph {
+    /// Map from project name to project info
+    projects: HashMap<String, ProjectDependencies>,
+    /// Map from provided item to project name that provides it
+    providers: HashMap<String, String>,
+    /// Adjacency list: project -> projects it depends on
+    dependencies: HashMap<String, Vec<String>>,
+    /// Reverse adjacency list: project -> projects that depend on it
+    dependents: HashMap<String, Vec<String>>,
+}
+
+impl DependencyGraph {
+    /// Build a dependency graph from a list of projects
+    pub fn build(projects: Vec<ProjectDependencies>) -> Result<Self> {
+        let mut graph = DependencyGraph {
+            projects: HashMap::new(),
+            providers: HashMap::new(),
+            dependencies: HashMap::new(),
+            dependents: HashMap::new(),
+        };
+
+        // First pass: register all projects and their provides
+        for project in &projects {
+            graph.projects.insert(project.name.clone(), project.clone());
+
+            // Register provided items
+            for provided in &project.provides {
+                if let Some(existing) = graph.providers.get(provided) {
+                    log::warn!(
+                        "Multiple projects provide '{}': {} and {}",
+                        provided,
+                        existing,
+                        project.name
+                    );
+                }
+                graph
+                    .providers
+                    .insert(provided.clone(), project.name.clone());
+            }
+
+            // Initialize adjacency lists
+            graph.dependencies.insert(project.name.clone(), Vec::new());
+            graph.dependents.insert(project.name.clone(), Vec::new());
+        }
+
+        // Second pass: resolve dependencies
+        for project in &projects {
+            for dep in &project.depends_on {
+                // Try to resolve the dependency
+                let resolved = if graph.projects.contains_key(dep) {
+                    // Direct project reference
+                    dep.clone()
+                } else if let Some(provider) = graph.providers.get(dep) {
+                    // Provided item reference
+                    provider.clone()
+                } else {
+                    log::warn!(
+                        "Unresolved dependency '{}' in project '{}'",
+                        dep,
+                        project.name
+                    );
+                    continue;
+                };
+
+                // Add to adjacency lists
+                graph
+                    .dependencies
+                    .get_mut(&project.name)
+                    .unwrap()
+                    .push(resolved.clone());
+
+                graph
+                    .dependents
+                    .get_mut(&resolved)
+                    .unwrap()
+                    .push(project.name.clone());
+            }
+        }
+
+        Ok(graph)
+    }
+
+    /// Get direct dependencies of a project
+    pub fn get_dependencies(&self, project: &str) -> Vec<&str> {
+        self.dependencies
+            .get(project)
+            .map(|deps| deps.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Get direct dependents of a project (projects that depend on it)
+    pub fn get_dependents(&self, project: &str) -> Vec<&str> {
+        self.dependents
+            .get(project)
+            .map(|deps| deps.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Get all transitive dependencies of a project
+    pub fn get_all_dependencies(&self, project: &str) -> Vec<&str> {
+        let mut visited = HashSet::new();
+        let mut result = Vec::new();
+        let mut queue = VecDeque::new();
+
+        if let Some(deps) = self.dependencies.get(project) {
+            for dep in deps {
+                queue.push_back(dep.as_str());
+            }
+        }
+
+        while let Some(current) = queue.pop_front() {
+            if visited.contains(current) {
+                continue;
+            }
+            visited.insert(current);
+            result.push(current);
+
+            if let Some(deps) = self.dependencies.get(current) {
+                for dep in deps {
+                    if !visited.contains(dep.as_str()) {
+                        queue.push_back(dep.as_str());
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Get all transitive dependents (impact analysis)
+    /// Returns all projects that would be affected if the given project changes
+    pub fn analyze_impact(&self, project: &str) -> ImpactAnalysis {
+        let mut visited = HashSet::new();
+        let mut direct_dependents = Vec::new();
+        let mut transitive_dependents = Vec::new();
+        let mut queue = VecDeque::new();
+
+        // Get direct dependents
+        if let Some(deps) = self.dependents.get(project) {
+            for dep in deps {
+                direct_dependents.push(dep.clone());
+                queue.push_back((dep.as_str(), 1));
+            }
+        }
+
+        // BFS to find all transitive dependents
+        while let Some((current, depth)) = queue.pop_front() {
+            if visited.contains(current) {
+                continue;
+            }
+            visited.insert(current);
+
+            if depth > 1 {
+                transitive_dependents.push(current.to_string());
+            }
+
+            if let Some(deps) = self.dependents.get(current) {
+                for dep in deps {
+                    if !visited.contains(dep.as_str()) {
+                        queue.push_back((dep.as_str(), depth + 1));
+                    }
+                }
+            }
+        }
+
+        ImpactAnalysis {
+            project: project.to_string(),
+            direct_dependents,
+            transitive_dependents,
+            total_affected: visited.len(),
+        }
+    }
+
+    /// Get topological sort order for building/testing
+    /// Returns projects in order such that dependencies come before dependents
+    pub fn execution_order(&self) -> Result<Vec<&str>> {
+        let mut in_degree: HashMap<&str, usize> = HashMap::new();
+        let mut result = Vec::new();
+        let mut queue = VecDeque::new();
+
+        // Initialize in-degrees to 0
+        for name in self.projects.keys() {
+            in_degree.insert(name.as_str(), 0);
+        }
+
+        // Calculate in-degrees: for each project, count how many dependencies it has
+        // A project can only be processed after all its dependencies are processed
+        for (project, deps) in &self.dependencies {
+            // The in-degree is the number of dependencies this project has
+            in_degree.insert(project.as_str(), deps.len());
+        }
+
+        // Start with nodes that have no dependencies (in_degree = 0)
+        for (name, &degree) in &in_degree {
+            if degree == 0 {
+                queue.push_back(*name);
+            }
+        }
+
+        // Process queue using Kahn's algorithm
+        while let Some(current) = queue.pop_front() {
+            result.push(current);
+
+            // For each project that depends on 'current', decrease its in-degree
+            if let Some(dependents) = self.dependents.get(current) {
+                for dependent in dependents {
+                    let degree = in_degree.get_mut(dependent.as_str()).unwrap();
+                    *degree -= 1;
+                    if *degree == 0 {
+                        queue.push_back(dependent.as_str());
+                    }
+                }
+            }
+        }
+
+        // Check for cycles
+        if result.len() != self.projects.len() {
+            anyhow::bail!(
+                "Dependency cycle detected! Processed {} of {} projects",
+                result.len(),
+                self.projects.len()
+            );
+        }
+
+        Ok(result)
+    }
+
+    /// Get execution order filtered by tags
+    pub fn execution_order_filtered(&self, tags: &[String]) -> Result<Vec<&str>> {
+        let all_order = self.execution_order()?;
+
+        let filtered: Vec<&str> = all_order
+            .into_iter()
+            .filter(|name| {
+                if let Some(project) = self.projects.get(*name) {
+                    tags.is_empty() || project.tags.iter().any(|t| tags.contains(t))
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        Ok(filtered)
+    }
+
+    /// Get project info
+    pub fn get_project(&self, name: &str) -> Option<&ProjectDependencies> {
+        self.projects.get(name)
+    }
+
+    /// Get all projects
+    pub fn all_projects(&self) -> Vec<&ProjectDependencies> {
+        self.projects.values().collect()
+    }
+
+    /// Check for circular dependencies
+    pub fn detect_cycles(&self) -> Vec<Vec<String>> {
+        let mut cycles = Vec::new();
+        let mut visited = HashSet::new();
+        let mut rec_stack = HashSet::new();
+        let mut path = Vec::new();
+
+        for name in self.projects.keys() {
+            if !visited.contains(name.as_str()) {
+                self.dfs_cycle(name, &mut visited, &mut rec_stack, &mut path, &mut cycles);
+            }
+        }
+
+        cycles
+    }
+
+    fn dfs_cycle(
+        &self,
+        node: &str,
+        visited: &mut HashSet<String>,
+        rec_stack: &mut HashSet<String>,
+        path: &mut Vec<String>,
+        cycles: &mut Vec<Vec<String>>,
+    ) {
+        visited.insert(node.to_string());
+        rec_stack.insert(node.to_string());
+        path.push(node.to_string());
+
+        if let Some(deps) = self.dependencies.get(node) {
+            for dep in deps {
+                if !visited.contains(dep) {
+                    self.dfs_cycle(dep, visited, rec_stack, path, cycles);
+                } else if rec_stack.contains(dep) {
+                    // Found a cycle
+                    let cycle_start = path.iter().position(|n| n == dep).unwrap();
+                    let cycle: Vec<String> = path[cycle_start..].to_vec();
+                    cycles.push(cycle);
+                }
+            }
+        }
+
+        path.pop();
+        rec_stack.remove(node);
+    }
+}
+
+/// Result of impact analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImpactAnalysis {
+    pub project: String,
+    pub direct_dependents: Vec<String>,
+    pub transitive_dependents: Vec<String>,
+    pub total_affected: usize,
+}
+
+/// Dependency graph summary for reporting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DependencyGraphSummary {
+    pub total_projects: usize,
+    pub total_edges: usize,
+    pub has_cycles: bool,
+    pub root_projects: Vec<String>,
+    pub leaf_projects: Vec<String>,
+    pub most_depended_on: Vec<(String, usize)>,
+}
+
+impl DependencyGraph {
+    /// Generate a summary of the dependency graph
+    pub fn summary(&self) -> DependencyGraphSummary {
+        let total_edges: usize = self.dependencies.values().map(|v| v.len()).sum();
+
+        // Root projects: no dependencies
+        let root_projects: Vec<String> = self
+            .projects
+            .keys()
+            .filter(|name| {
+                self.dependencies
+                    .get(*name)
+                    .map(|deps| deps.is_empty())
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+
+        // Leaf projects: no dependents
+        let leaf_projects: Vec<String> = self
+            .projects
+            .keys()
+            .filter(|name| {
+                self.dependents
+                    .get(*name)
+                    .map(|deps| deps.is_empty())
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+
+        // Most depended on
+        let mut dependent_counts: Vec<(String, usize)> = self
+            .dependents
+            .iter()
+            .map(|(name, deps)| (name.clone(), deps.len()))
+            .collect();
+        dependent_counts.sort_by_key(|d| std::cmp::Reverse(d.1));
+        let most_depended_on: Vec<(String, usize)> = dependent_counts
+            .into_iter()
+            .filter(|(_, count)| *count > 0)
+            .take(5)
+            .collect();
+
+        DependencyGraphSummary {
+            total_projects: self.projects.len(),
+            total_edges,
+            has_cycles: !self.detect_cycles().is_empty(),
+            root_projects,
+            leaf_projects,
+            most_depended_on,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_projects() -> Vec<ProjectDependencies> {
+        vec![
+            ProjectDependencies {
+                name: "shared-utils".to_string(),
+                path: "shared-utils".to_string(),
+                repo: Some("git@github.com:org/shared-utils.git".to_string()),
+                tags: vec!["lib".to_string()],
+                provides: vec!["utils".to_string()],
+                depends_on: vec![],
+            },
+            ProjectDependencies {
+                name: "auth-service".to_string(),
+                path: "auth-service".to_string(),
+                repo: Some("git@github.com:org/auth-service.git".to_string()),
+                tags: vec!["backend".to_string()],
+                provides: vec!["auth-api".to_string()],
+                depends_on: vec!["shared-utils".to_string()],
+            },
+            ProjectDependencies {
+                name: "api-service".to_string(),
+                path: "api-service".to_string(),
+                repo: Some("git@github.com:org/api-service.git".to_string()),
+                tags: vec!["backend".to_string()],
+                provides: vec!["api-v2".to_string()],
+                depends_on: vec!["auth-service".to_string(), "shared-utils".to_string()],
+            },
+            ProjectDependencies {
+                name: "web-app".to_string(),
+                path: "web-app".to_string(),
+                repo: Some("git@github.com:org/web-app.git".to_string()),
+                tags: vec!["frontend".to_string()],
+                provides: vec![],
+                depends_on: vec!["api-v2".to_string()], // Depends on provided item
+            },
+        ]
+    }
+
+    #[test]
+    fn test_build_graph() {
+        let projects = create_test_projects();
+        let graph = DependencyGraph::build(projects).unwrap();
+
+        assert_eq!(graph.projects.len(), 4);
+        assert!(graph.providers.contains_key("utils"));
+        assert!(graph.providers.contains_key("auth-api"));
+    }
+
+    #[test]
+    fn test_get_dependencies() {
+        let projects = create_test_projects();
+        let graph = DependencyGraph::build(projects).unwrap();
+
+        let deps = graph.get_dependencies("api-service");
+        assert!(deps.contains(&"auth-service"));
+        assert!(deps.contains(&"shared-utils"));
+    }
+
+    #[test]
+    fn test_get_dependents() {
+        let projects = create_test_projects();
+        let graph = DependencyGraph::build(projects).unwrap();
+
+        let dependents = graph.get_dependents("shared-utils");
+        assert!(dependents.contains(&"auth-service"));
+        assert!(dependents.contains(&"api-service"));
+    }
+
+    #[test]
+    fn test_impact_analysis() {
+        let projects = create_test_projects();
+        let graph = DependencyGraph::build(projects).unwrap();
+
+        let impact = graph.analyze_impact("shared-utils");
+        assert_eq!(impact.project, "shared-utils");
+        assert!(impact
+            .direct_dependents
+            .contains(&"auth-service".to_string()));
+        assert!(impact
+            .direct_dependents
+            .contains(&"api-service".to_string()));
+        // web-app depends on api-service which depends on shared-utils
+        assert!(impact
+            .transitive_dependents
+            .contains(&"web-app".to_string()));
+    }
+
+    #[test]
+    fn test_execution_order() {
+        let projects = create_test_projects();
+        let graph = DependencyGraph::build(projects).unwrap();
+
+        let order = graph.execution_order().unwrap();
+
+        // shared-utils should come before auth-service
+        let shared_pos = order.iter().position(|&n| n == "shared-utils").unwrap();
+        let auth_pos = order.iter().position(|&n| n == "auth-service").unwrap();
+        assert!(shared_pos < auth_pos);
+
+        // auth-service should come before api-service
+        let api_pos = order.iter().position(|&n| n == "api-service").unwrap();
+        assert!(auth_pos < api_pos);
+
+        // api-service should come before web-app
+        let web_pos = order.iter().position(|&n| n == "web-app").unwrap();
+        assert!(api_pos < web_pos);
+    }
+
+    #[test]
+    fn test_provided_item_resolution() {
+        let projects = create_test_projects();
+        let graph = DependencyGraph::build(projects).unwrap();
+
+        // web-app depends on "api-v2" which is provided by api-service
+        let deps = graph.get_dependencies("web-app");
+        assert!(deps.contains(&"api-service"));
+    }
+
+    #[test]
+    fn test_summary() {
+        let projects = create_test_projects();
+        let graph = DependencyGraph::build(projects).unwrap();
+
+        let summary = graph.summary();
+        assert_eq!(summary.total_projects, 4);
+        assert!(!summary.has_cycles);
+        assert!(summary.root_projects.contains(&"shared-utils".to_string()));
+        assert!(summary.leaf_projects.contains(&"web-app".to_string()));
+    }
+}

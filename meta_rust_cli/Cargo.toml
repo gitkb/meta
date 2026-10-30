@@ -1,0 +1,23 @@
+[package]
+name = "meta_rust_cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust plugin for meta CLI to run any cargo command across Rust repos"
+
+[[bin]]
+name = "meta-rust"
+path = "src/main.rs"
+
+[lib]
+name = "meta_rust_cli"
+path = "src/lib.rs"
+
+[dependencies]
+meta_plugin_protocol = { path = "../meta_plugin_protocol" }
+colored = "2"
+indexmap = "2"
+
+[dev-dependencies]
+tempfile = "3"

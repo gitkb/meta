@@ -1,21 +1,16 @@
-## Project Architecture: Meta-Repo (NOT a monorepo)
+## Project Layout
 
-This is a **meta-repo** — a workspace of independent git repositories managed by the `meta` CLI tool. Each directory listed in `.meta.yaml` (the project config) is a **separate git repo** with its own remote, commits, and history.
+All of meta's crates (`meta_cli/`, `meta_core/`, `loop_lib/` and the rest) are folders in this one git repo and members of the root Cargo workspace (`Cargo.toml`). A change across crates is one commit and one PR here. A new crate is a new folder added to the workspace `members`.
 
-**Critical rules:**
-- NEVER assume this is a monorepo. There is no single shared git history.
-- Each workspace member (e.g., `meta_cli/`, `meta_core/`, `loop_lib/`) is its own git repo cloned from its own GitHub remote.
-- The root `.gitignore` ignores all child repos because they are NOT part of the parent repo.
-- The root `Cargo.toml` defines a Rust workspace for local development convenience, but each member builds and publishes independently.
-- When creating a new crate/package, it MUST be initialized as a separate git repo, pushed to GitHub under `gitkb/`, and added to both `.meta.yaml` (projects config) and `.gitignore`.
+The repo is also a meta workspace: `.meta.yaml` lists two separate repos, `agent` and `meta-plugins`, which are cloned into gitignored folders and keep their own history. Neither is needed to build the workspace.
 
 **Project config (`.meta.yaml`):**
 ```yaml
 projects:
-  meta_cli:
-    repo: git@github.com:gitkb/meta_cli.git
-  meta_core:
-    repo: git@github.com:gitkb/meta_core.git
+  agent:
+    repo: git@github.com:gitkb/agent.git
+  meta-plugins:
+    repo: git@github.com:gitkb/meta-plugins.git
 ```
 
 **Nested meta repos:** Use `meta: true` when a child project contains its own `.meta.yaml`:
@@ -33,7 +28,7 @@ meta project list -r     # Shows full tree
 meta exec -r cargo test  # Runs across all nested repos
 ```
 
-**What `meta` does:** Clones all child repos, runs commands across them in parallel (`meta exec`), manages git worktrees across the entire workspace (`meta git worktree`), and provides project-level coordination.
+**What `meta` does:** Clones the repos a workspace lists, runs commands across them in parallel (`meta exec`), manages git worktrees across the entire workspace (`meta git worktree`), and provides project-level coordination.
 
 ## Logging & Debugging
 

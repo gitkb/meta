@@ -1,0 +1,28 @@
+[package]
+name = "meta_project_cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Project management plugin for meta CLI to sync and update project repositories"
+
+[[bin]]
+name = "meta-project"
+path = "src/main.rs"
+
+[lib]
+name = "meta_project_cli"
+path = "src/lib.rs"
+
+[dependencies]
+meta_plugin_protocol = { path = "../meta_plugin_protocol" }
+anyhow = "1"
+colored = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+meta_cli = { path = "../meta_cli", package = "meta" }
+meta_git_lib = { path = "../meta_git_lib" }
+indexmap = "2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,105 @@
+use anyhow::Result;
+use colored::*;
+use meta_core::display::{escape, escape_path};
+
+use meta_git_lib::worktree::helpers::*;
+use meta_git_lib::worktree::hooks::fire_post_destroy;
+use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
+use meta_git_lib::worktree::types::*;
+use meta_git_lib::worktree::workspace::Workspace;
+
+use super::cli_types::DestroyArgs;
+
+pub(crate) fn handle_remove(args: DestroyArgs, verbose: bool, json: bool) -> Result<()> {
+    let name = &args.name;
+    validate_worktree_name(name)?;
+    let force = args.force;
+
+    let meta_dir = require_meta_dir()?;
+    // Hooks come from here: inside the set being removed, its own config
+    // goes with it
+    let owner = owner_dir(&meta_dir);
+    let worktree_root = resolve_worktree_root(Some(&meta_dir))?;
+    let wt_dir = worktree_set_dir(&worktree_root, name)?;
+
+    if !wt_dir.exists() {
+        anyhow::bail!("Worktree '{}' not found at {}", name, escape_path(&wt_dir));
+    }
+
+    let check = check_worktree_removal(&wt_dir)?;
+    // Only this workspace's sets: a shared worktree directory may hold
+    // another workspace's. No flag overrides this.
+    let workspace = Workspace::of(&meta_dir);
+    let foreign = workspace.foreign_members(&wt_dir, &check);
+    if !foreign.is_empty() {
+        // Repositories meta couldn't read make sets from them look foreign
+        let unreadable: String = workspace
+            .unreadable
+            .iter()
+            .map(|(path, e)| format!("\n  {}: {}", escape_path(path), escape(&format!("{e:#}"))))
+            .collect();
+        anyhow::bail!(
+            "Refusing to remove worktree '{name}': it is not a set of this workspace ({}):\n  {}\n\
+             Remove it from the workspace that made it.{}",
+            escape_path(&workspace.root),
+            foreign.join("\n  "),
+            if unreadable.is_empty() {
+                String::new()
+            } else {
+                format!("\nParts of this workspace couldn't be read:{unreadable}")
+            }
+        );
+    }
+    if !check.blockers.is_empty() {
+        anyhow::bail!(
+            "Refusing to remove worktree '{name}':\n  {}\n\
+             meta only deletes linked worktrees it can check; move or delete these yourself first.",
+            check.blockers.join("\n  ")
+        );
+    }
+    // Only delete what meta created: it records each worktree it makes.
+    if check.record().is_none() {
+        anyhow::bail!(
+            "Refusing to remove {}: meta has no record of creating a worktree set there.\n{}",
+            escape_path(&wt_dir),
+            if check.members.is_empty() {
+                "It holds no worktrees (any it had are gone, and their records with them); \
+                 delete it yourself if you don't need what is left in it."
+            } else {
+                "If it was made by hand or by an older meta (which kept its records elsewhere), \
+                 run 'git worktree remove' for each worktree in it, then delete it."
+            }
+        );
+    }
+    if !check.unsaved.is_empty() {
+        let found = check.unsaved.join("\n  ");
+        if !force {
+            anyhow::bail!(
+                "Worktree '{name}' has work that removing it would lose:\n  {found}\n\
+                 Commit and push it, or use --force to discard it."
+            );
+        }
+        eprintln!(
+            "{} discarding work in worktree '{name}':\n  {found}",
+            "warning:".yellow().bold()
+        );
+    }
+
+    // Remove exactly what was checked, nested worktrees first
+    delete_checked_set(&wt_dir, &check, force, verbose)?;
+
+    // Fire post-destroy hook
+    fire_post_destroy(name, &wt_dir, force, Some(&owner));
+
+    if json {
+        let output = DestroyOutput {
+            name: name.to_string(),
+            path: wt_dir.display().to_string(),
+            repos_removed: check.members.len(),
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("{} Removed worktree '{}'", "✓".green(), name.bold());
+    }
+    Ok(())
+}

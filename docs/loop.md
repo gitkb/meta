@@ -1,8 +1,6 @@
 # loop – Command Line Utility
 
-**loop** is a command line utility for running commands in multiple repositories or directories in parallel. It is designed for monorepos and multi-package projects, making repetitive tasks like dependency management, testing, and code generation fast and easy. The utility consists of two main parts: [loop_cli](../../loop_cli/README.md) (the CLI app) and [loop_lib](../../loop_lib/README.md) (the Rust library for programmatic use).
-
-[![Loop System](../docs/assets/meta-cli-screenshot.png)](../docs/assets/meta-cli-screenshot.png)
+**loop** is a command line utility for running commands in multiple repositories or directories in parallel. It is designed for monorepos and multi-package projects, making repetitive tasks like dependency management, testing, and code generation fast and easy. The utility consists of two main parts: [loop_cli](../loop_cli/README.md) (the CLI app) and [loop_lib](../loop_lib/src/lib.rs) (the Rust library for programmatic use).
 
 ---
 
@@ -22,7 +20,7 @@
 
 ## Overview
 
-**loop** lets you run a command in multiple repositories or directories at once. By default, it runs in all child repositories of the current directory, but you can use expressive options to control exactly where your command will run. You can also specify defaults in a `.looprc` config file. For developers, the [loop_lib](../../loop_lib/README.md) library exposes these capabilities for programmatic use, including directory filtering and config parsing.
+**loop** lets you run a command in multiple repositories or directories at once. By default, it runs in all child repositories of the current directory, but you can use expressive options to control exactly where your command will run. You can also specify defaults in a `.looprc` config file. For developers, the [loop_lib](../loop_lib/src/lib.rs) library exposes these capabilities for programmatic use, including directory filtering and config parsing.
 
 ## Key Features
 
@@ -53,10 +51,10 @@ loop npm install
 loop cargo test
 ```
 
-- To include or exclude specific directories, use CLI options (see [loop_cli/README.md](../../loop_cli/README.md)).
+- To include or exclude specific directories, use CLI options (see [loop_cli/README.md](../loop_cli/README.md)).
 - To set persistent defaults, create a `.looprc` file in your project root.
 
-See [loop_cli/README.md](../../loop_cli/README.md) for full CLI usage and [loop_lib/README.md](../../loop_lib/README.md) for library integration.
+See [loop_cli/README.md](../loop_cli/README.md) for full CLI usage and [loop_lib/src/lib.rs](../loop_lib/src/lib.rs) for library integration.
 
 ## Architecture Summary
 
@@ -72,8 +70,8 @@ See [FAQ / Troubleshooting](loop_faq_troubleshooting.md).
 
 ## Contribution Notes
 
-- Written in Rust; see [Cargo.toml](../../loop_lib/Cargo.toml).
-- Contributions should follow the [contributing guidelines](../contributing.md).
+- Written in Rust; see [Cargo.toml](../loop_lib/Cargo.toml).
+- Contributions should follow the [contributing guidelines](contributing.md).
 - Add new features in `loop_lib/src/` (library) or CLI enhancements in `loop_cli/src/`.
 - Include tests for all changes.
 
@@ -86,6 +84,6 @@ See [FAQ / Troubleshooting](loop_faq_troubleshooting.md).
 
 ## Cross-References
 
-- [loop_cli – CLI Usage](../../loop_cli/README.md)
-- [loop_lib – Rust Library](../../loop_lib/README.md)
-- [Meta Main Documentation](../../README.md)
+- [loop_cli – CLI Usage](../loop_cli/README.md)
+- [loop_lib – Rust Library](../loop_lib/src/lib.rs)
+- [Meta Main Documentation](../README.md)

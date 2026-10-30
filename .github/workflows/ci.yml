@@ -22,10 +22,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Clone child repos
-        shell: bash
-        run: .github/scripts/clone-child-repos.sh
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -44,9 +40,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Clone child repos
-        run: .github/scripts/clone-child-repos.sh
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -60,6 +53,34 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  crates:
+    name: Check Each Crate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "crates"
+
+      # A workspace build unifies features across crates, which can hide a
+      # crate that only compiles with its siblings' features
+      - name: Check each crate on its own
+        run: |
+          set -o pipefail
+          pkgs=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+          [ -n "$pkgs" ]
+          for p in $pkgs; do
+            echo "::group::$p"
+            cargo check -p "$p" --all-targets --locked
+            echo "::endgroup::"
+          done
+
   integration:
     name: Integration Tests
     runs-on: ${{ matrix.os }}
@@ -70,9 +91,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Clone child repos
-        run: .github/scripts/clone-child-repos.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -85,20 +103,20 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace --locked
 
+      - name: Install bats
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y bats jq python3
+          else
+            brew install bats-core
+          fi
+        shell: bash
+
       - name: Verify binaries
         run: |
           ls -lh target/debug/meta target/debug/meta-git
           ./target/debug/meta --version
           ./target/debug/meta-git --meta-plugin-info | jq .name
-        shell: bash
-
-      - name: Install bats
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get update && sudo apt-get install -y bats
-          else
-            brew install bats-core
-          fi
         shell: bash
 
       - name: Run integration tests
@@ -111,9 +129,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Clone child repos
-        run: .github/scripts/clone-child-repos.sh
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

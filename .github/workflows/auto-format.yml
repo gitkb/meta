@@ -1,0 +1,56 @@
+name: Auto Format
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-format-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: Auto Format
+    runs-on: ubuntu-latest
+    # Skip if:
+    # - PR from fork (can't push back)
+    # - Commit by github-actions[bot] (prevent infinite loop)
+    if: |
+      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      github.actor != 'github-actions[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          # Use PAT to trigger downstream workflows; fallback to GITHUB_TOKEN
+          token: ${{ secrets.PARENT_REPO_PAT || github.token }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Run cargo fmt
+        run: cargo fmt --all
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "formatted=false" >> $GITHUB_OUTPUT
+          else
+            echo "formatted=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push
+        if: steps.changes.outputs.formatted == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "style: auto-format code"
+          git push

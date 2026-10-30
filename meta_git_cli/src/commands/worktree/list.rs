@@ -99,12 +99,7 @@ fn repo_entries(
 }
 
 /// A selected set fails closed. All-set listing retains healthy sets and warnings.
-pub(crate) fn handle_list(
-    args: ListArgs,
-    _verbose: bool,
-    json: bool,
-    cwd: &std::path::Path,
-) -> Result<()> {
+pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> Result<()> {
     let cwd = cwd.canonicalize()?;
     let location = detect_worktree_location(&cwd);
     let worktree_root = match (&location, std::env::var_os("META_WORKTREES")) {

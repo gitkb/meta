@@ -13,7 +13,7 @@ meta init claude
 # Refresh skills and rules, keep settings.json
 meta init claude --update
 
-# Rewrite skills and rules meta installed, and merge settings.json
+# Overwrite meta's skill and rule files, and merge settings.json
 meta init claude --force
 ```
 

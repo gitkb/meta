@@ -129,11 +129,11 @@ fn handle_worktree_command(
         WorktreeCommands::Create(args) => create::handle_create(args, verbose, json, global_strict),
         WorktreeCommands::Add(args) => add::handle_add(args, verbose, json),
         WorktreeCommands::Remove(args) => remove::handle_remove(args, verbose, json),
-        WorktreeCommands::List(args) => list::handle_list(args, verbose, json, cwd),
+        WorktreeCommands::List(args) => list::handle_list(args, json, cwd),
         WorktreeCommands::Status(args) => status::handle_status(args, json),
         WorktreeCommands::Diff(args) => diff::handle_diff(args, json),
         WorktreeCommands::Exec(args) => exec::handle_exec(args, verbose, json),
-        WorktreeCommands::Prune(args) => prune::handle_prune(args, verbose, json, global_strict),
+        WorktreeCommands::Prune(args) => prune::handle_prune(args, json, global_strict),
         WorktreeCommands::Unknown(args) => {
             let cmd = escape(args.first().map(|s| s.as_str()).unwrap_or(""));
             eprintln!(

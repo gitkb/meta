@@ -94,7 +94,7 @@ Shared plugin protocol types for meta subprocess plugins:
 - Defines communication protocol between the meta CLI host and subprocess plugins
 - `PluginInfo` - Metadata about a plugin (name, version, commands)
 - `PluginRequest` - Host-to-plugin request format (JSON on stdin)
-- `PluginResponse` - Plugin-to-host response format
+- `PlanResponse` - Plugin-to-host response: the commands to run
 - `PluginHelp` - Structured help information for plugin commands
 
 ### loop_lib

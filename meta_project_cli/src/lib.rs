@@ -693,28 +693,6 @@ fn find_dependents(project_name: &str, all_projects: &[ProjectInfo]) -> Option<V
 // Helper Functions
 // ============================================================================
 
-/// Get help text for the plugin
-pub fn get_help_text() -> &'static str {
-    r#"meta project - Project Inspection Plugin
-
-Commands:
-  meta project list         List all projects defined in .meta.yaml (alias: ls)
-  meta project check        Check if all projects in .meta.yaml are cloned locally
-  meta project dependents   List projects that depend on a given project
-
-Options for list:
-  --json               Output as JSON
-  --recursive, -r      Include nested meta repo children
-  --depth N            Maximum recursion depth (default: unlimited)
-
-Examples:
-  meta project dependents meta_git_lib          # Who depends on meta_git_lib?
-  meta project dependents meta_git_lib --json   # JSON output
-
-To clone missing projects, use: meta git update
-"#
-}
-
 fn parse_meta_projects(meta_path: &Path) -> anyhow::Result<HashMap<String, String>> {
     let (projects, _ignore) = config::parse_meta_config(meta_path)?;
     let mut map = HashMap::new();
@@ -832,15 +810,6 @@ mod tests {
         assert!(
             matches!(result, CommandResult::ShowHelp(Some(msg)) if msg.contains("meta git update"))
         );
-    }
-
-    #[test]
-    fn test_get_help_text() {
-        let help = get_help_text();
-        assert!(help.contains("project check"));
-        assert!(help.contains("project list"));
-        assert!(help.contains("meta git update")); // Points to the right command
-        assert!(!help.contains("project sync")); // sync is removed
     }
 
     #[test]

@@ -272,56 +272,6 @@ fn execute_raw_git_command(
     }
 }
 
-/// Get help text for the plugin
-pub fn get_help_text() -> &'static str {
-    r#"meta git - Meta CLI Git Plugin
-
-SPECIAL COMMANDS:
-  These commands have meta-specific implementations:
-
-  meta git clone <meta-repo-url> [options]
-    Clones the meta repository and all child repositories defined in its manifest.
-
-    Options:
-      --recursive       Clone nested meta repositories recursively
-      --meta-depth N    Limit recursive meta-repo discovery to N levels deep
-      --parallel N      Clone up to N repositories in parallel
-      --depth N         Create a shallow clone with truncated history
-
-  meta git update
-    Updates all repositories by cloning any missing repos and pulling the latest
-    changes. Runs in parallel for efficiency.
-
-  meta git commit --edit
-    Opens an editor to create different commit messages for each repo.
-
-PASS-THROUGH COMMANDS:
-  All other git commands are passed through to each repository:
-
-    meta git status      - Run 'git status' in all repos
-    meta git pull        - Run 'git pull' in all repos
-    meta git push        - Run 'git push' in all repos
-    meta git checkout    - Run 'git checkout' in all repos
-    meta git <any>       - Run 'git <any>' in all repos
-
-FILTERING OPTIONS:
-  These meta/loop options work with all pass-through commands:
-
-    --tag <tags>        Filter by project tag(s), comma-separated
-    --include-only      Only run in specified directories
-    --exclude           Skip specified directories
-    --parallel          Run commands in parallel
-
-Examples:
-  meta git clone https://github.com/example/meta-repo.git
-  meta git status
-  meta git pull --rebase
-  meta git pull --tag backend
-  meta git commit --edit
-  meta git checkout -b feature/new --include-only api,frontend
-"#
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,14 +319,6 @@ mod tests {
         let result = execute_command("git unknown", &[], &[], &options, Path::new("."));
         // Should return a Plan (to run `git unknown` in all repos), not ShowHelp
         assert!(matches!(result, CommandResult::Plan(_, _)));
-    }
-
-    #[test]
-    fn test_get_help_text() {
-        let help = get_help_text();
-        assert!(help.contains("meta git clone"));
-        assert!(help.contains("meta git update"));
-        assert!(!help.contains("meta git setup-ssh"));
     }
 
     #[test]
@@ -524,14 +466,6 @@ the only commit message
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].0, "only_repo");
         assert_eq!(commits[0].1, "the only commit message");
-    }
-
-    #[test]
-    fn test_help_text_contains_commit_edit() {
-        let help = get_help_text();
-        assert!(help.contains("meta git commit --edit"));
-        assert!(help.contains("PASS-THROUGH COMMANDS"));
-        assert!(help.contains("FILTERING OPTIONS"));
     }
 
     // ============ Execution Plan Tests ============

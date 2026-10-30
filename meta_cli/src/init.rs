@@ -232,9 +232,10 @@ fn install_claude_integration_to(
         println!("{} {}", plan.message, escape_path(&settings_path));
     }
     // A settings.json reached through a link is not read either
-    let present_hooks = (settings_link.is_none())
-        .then_some(&settings_path)
-        .and_then(|path| fs::read_to_string(path).ok())
+    let present_hooks = settings_link
+        .is_none()
+        .then(|| fs::read_to_string(&settings_path).ok())
+        .flatten()
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
         .map(|settings| installed_hooks(&settings))
         .unwrap_or_default();

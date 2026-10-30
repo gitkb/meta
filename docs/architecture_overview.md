@@ -176,13 +176,13 @@ meta-git --meta-plugin-info
   "name": "git",
   "version": "0.1.0",
   "description": "Git operations for meta repositories",
-  "commands": ["clone", "status", "update", "commit"]
+  "commands": ["git clone", "git status", "git update", "git commit"]
 }
 ```
 
 **Execution Request:**
 ```bash
-echo '{"command":"status","args":[],"projects":[...]}' | meta-git --meta-plugin-exec
+echo '{"command":"git status","args":[],"projects":[...],"cwd":"..."}' | meta-git --meta-plugin-exec
 ```
 
 **Response** (a plan meta runs through `loop_lib`; a plugin may instead print plain text, which meta shows as is):

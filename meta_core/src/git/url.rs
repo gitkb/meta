@@ -224,6 +224,9 @@ impl GitUrl {
             .rsplit(['/', '\\', ':'])
             .next()
             .filter(|name| !name.is_empty())
+            // a name the printed URL lacks holds a credential (a URL in a
+            // helper's command reads as an scp path)
+            .filter(|name| self.redacted().contains(name))
     }
 
     /// The last two components of the path, `owner/repo`, without `.git`.
@@ -406,6 +409,7 @@ mod tests {
             "ext::ssh -p 2222 host %S 'repo'",
             "fd::7,8",
             "codecommit::us-east-1://profile@repo",
+            "ext::sh -c curl% https://alice:ghp_SECRET@host",
         ] {
             let url = parse(url);
             assert!(matches!(url.parts(), Parts::Helper(_)), "{url:?}");
@@ -416,6 +420,7 @@ mod tests {
         for url in [
             "persistent-https::https://alice:ghp_SECRET@example.invalid/",
             "codecommit::us-east-1://profile@repo",
+            "ext::sh -c curl% https://alice:ghp_SECRET@host",
         ] {
             assert_eq!(parse(url).name(), None, "{url}");
         }
@@ -528,6 +533,10 @@ mod tests {
         assert_eq!(
             redact_urls(r#"{"a":"https://h","b":"git@h:b","c":"https://t'x@h"}"#),
             r#"{"a":"https://h","b":"git@h:b","c":"https://***@h"}"#
+        );
+        assert_eq!(
+            redact_urls("x 'https://a'b:t@h/r' y"),
+            "x 'https://***@h/r' y"
         );
         assert_eq!(redact_urls("-+https://a:t@h"), "-+https://***@h");
         assert!(matches!(

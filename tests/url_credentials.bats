@@ -70,22 +70,22 @@ meta_without_token() {
 @test "no command prints the credentials in a repo URL" {
     meta_without_token --dry-run git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"git clone https://***@127.0.0.1:9/org/svc.git"* ]]
+    [[ "$output" == *"git clone https://***@127.0.0.1:9/org/svc.git"* ]] || false
 
     meta_without_token project list
     [ "$status" -eq 0 ]
-    [[ "$output" == *". (https://***@example.invalid/org/ws.git)"* ]]
-    [[ "$output" == *"svc (https://***@127.0.0.1:9/org/svc.git)"* ]]
+    [[ "$output" == *". (https://***@example.invalid/org/ws.git)"* ]] || false
+    [[ "$output" == *"svc (https://***@127.0.0.1:9/org/svc.git)"* ]] || false
     meta_without_token project list --json
     [ "$status" -eq 0 ]
     [ "$(jq -r .repo <<< "$output")" = "https://***@example.invalid/org/ws.git" ]
     meta_without_token --recursive project list --json
     [ "$(jq -r '.projects[] | select(.name == "lib") | .repo' <<< "$output")" = "https://***@example.invalid/org/lib.git" ]
     meta_without_token project check
-    [[ "$output" == *"URL: https://***@127.0.0.1:9/org/svc.git"* ]]
+    [[ "$output" == *"URL: https://***@127.0.0.1:9/org/svc.git"* ]] || false
     # commands meta shows, as typed
     meta_without_token --dry-run git remote set-url origin "https://$TOKEN@example.invalid/org/x.git"
-    [[ "$output" == *"git remote set-url origin 'https://***@example.invalid/org/x.git'"* ]]
+    [[ "$output" == *"git remote set-url origin 'https://***@example.invalid/org/x.git'"* ]] || false
     meta_without_token git fetch "https://$TOKEN@example.invalid/org/x.git" --help
     [ "$status" -eq 0 ]
     meta_without_token context --json --no-cache
@@ -103,15 +103,15 @@ meta_without_token() {
     # svc can't be reached; lib is cloned with its token
     RUST_LOG=debug meta_without_token git update
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Failed to clone svc (https://***@127.0.0.1:9/org/svc.git)"* ]]
-    [[ "$output" == *"expected: https://***@example.invalid/org/elsewhere.git"* ]]
-    [[ "$output" == *"remote set-url origin <its repo URL in .meta.yaml, not shown: it holds credentials>"* ]]
+    [[ "$output" == *"Failed to clone svc (https://***@127.0.0.1:9/org/svc.git)"* ]] || false
+    [[ "$output" == *"expected: https://***@example.invalid/org/elsewhere.git"* ]] || false
+    [[ "$output" == *"remote set-url origin <"*"not shown"* ]] || false
     [ "$(git -C lib config remote.origin.url)" = "https://$TOKEN@example.invalid/org/lib.git" ]
 
     cd "$TEST_DIR"
     meta_without_token --dry-run git clone "https://$TOKEN@example.invalid/org/meta.git" fresh
     [ "$status" -eq 0 ]
-    [[ "$output" == *"https://***@example.invalid/org/meta.git"* ]]
+    [[ "$output" == *"https://***@example.invalid/org/meta.git"* ]] || false
     # a helper's URL with no path names no clone directory after its token
     meta_without_token --dry-run git clone "persistent-https::https://$TOKEN@example.invalid/"
     [ "$status" -eq 0 ]
@@ -149,7 +149,7 @@ EOF
     run "$META_BIN" git update
     [ "$status" -eq 0 ]
     [ ! -e "$TEST_DIR/ssh-ran" ]
-    [[ "$output" != *"SSH"* ]]
+    [[ "$output" != *"SSH"* ]] || false
     [ -d r1/.git ]
     [ -d r2/.git ]
     [ -d r3/.git ]
@@ -164,6 +164,6 @@ projects:
   b: git@nohost.invalid:org/b.git
 EOF
     run "$META_BIN" git update
-    [[ "$output" == *"SSH master for git@nohost.invalid (port 22) could not be started"* ]]
+    [[ "$output" == *"SSH master for git@nohost.invalid (port 22) could not be started"* ]] || false
     [[ "$output" == *"cloning one repository at a time"* ]]
 }

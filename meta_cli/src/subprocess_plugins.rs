@@ -342,7 +342,13 @@ impl SubprocessPluginManager {
             options: options.clone(),
         };
 
-        let request_json = serde_json::to_string(&request)?;
+        // the protocol is JSON: a path that isn't UTF-8 can't be sent
+        let request_json = serde_json::to_string(&request).with_context(|| {
+            format!(
+                "Cannot send the request to plugin {} (is a path not UTF-8?)",
+                escape(&plugin.info.name)
+            )
+        })?;
 
         if self.verbose {
             println!(

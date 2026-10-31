@@ -42,8 +42,12 @@ impl McpServer {
                         "{}: has uncommitted changes or untracked files",
                         project.name
                     )),
-                    _ => refused.push(format!(
-                        "{}: not the root of a git repository with a commit",
+                    (Err(e), _) => refused.push(format!(
+                        "{}: not the root of a git repository with a commit ({e:#})",
+                        project.name
+                    )),
+                    (Ok(_), Err(e)) => refused.push(format!(
+                        "{}: cannot tell whether it is clean ({e:#})",
                         project.name
                     )),
                 }
@@ -511,11 +515,13 @@ mod tests {
         std::fs::write(tmp.path().join(".meta.yaml"), r#"{"projects":{"a":"x"}}"#).unwrap();
         let a = tmp.path().join("a");
         let head = git(&a, &["rev-parse", "HEAD"]);
-        let script = "echo x > README && git commit -qam x && touch ../committed; \
-                      trap 'exit 0' TERM; sleep 60 & wait";
+        let script = "trap 'exit 0' TERM; echo x > README && git commit -qam x && \
+                      touch ../committed; sleep 60 & wait";
         let args = json!({"command": ["sh", "-c", script], "atomic": true});
         let reply = cancel_batch_at(&server, tmp.path(), args, "committed").unwrap();
         assert!(reply.is_error, "{}", reply.text);
+        let result: serde_json::Value = serde_json::from_str(&reply.text).unwrap();
+        assert_eq!(result["results"][0]["exit_code"], 0, "{result}");
         assert!(
             reply.text.contains(r#""status": "success""#),
             "{}",

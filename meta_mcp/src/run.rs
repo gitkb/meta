@@ -318,7 +318,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pid = dir.path().join("pid");
         assert!(calls.start("1".to_string()));
-        let started = std::time::Instant::now();
+        let mut cancelled = None;
         std::thread::scope(|scope| {
             let run = scope.spawn(|| {
                 let script = "(sleep 60 & exec setsid sleep 61) >/dev/null 2>&1 & \
@@ -329,13 +329,24 @@ mod tests {
                         .current_dir(dir.path()),
                 )
             });
-            wait_for("the script to start", || pid.exists());
+            // the parent has left the group (it leads a session of its own),
+            // so the child it started before is the one no one will reap
+            let session = || {
+                let pid = std::fs::read_to_string(&pid).ok()?;
+                let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid.trim())).ok()?;
+                let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+                Some(fields.get(3)? == &pid.trim())
+            };
+            wait_for("the parent to leave the group", || session() == Some(true));
+            cancelled = Some(std::time::Instant::now());
             calls.cancel("1");
             drop(run.join().unwrap());
         });
-        let elapsed = started.elapsed();
+        let elapsed = cancelled.unwrap().elapsed();
         let parent = std::fs::read_to_string(&pid).unwrap();
         drop(Command::new("kill").arg(parent.trim()).status());
+        // it waited for the zombie, then gave up
+        assert!(elapsed >= 2 * GRACE, "{elapsed:?}");
         assert!(elapsed < 2 * GRACE + Duration::from_secs(5), "{elapsed:?}");
     }
 

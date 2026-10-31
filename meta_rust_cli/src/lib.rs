@@ -19,11 +19,7 @@ pub fn execute_command(
     // `meta cargo` and any `--help`/`-h` show this plugin's help instead of
     // running cargo once per repo. meta_cli sends help requests without the
     // repo list, so cargo's own help could not reach each repo anyway.
-    let help = args
-        .iter()
-        .take_while(|a| *a != "--")
-        .any(|a| a == "--help" || a == "-h");
-    if args.is_empty() || help {
+    if args.is_empty() || meta_plugin_protocol::has_help_token("", args) {
         return CommandResult::ShowHelp(None);
     }
 

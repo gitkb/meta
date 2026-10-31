@@ -16,13 +16,11 @@
 
 use anyhow::{Context, Result};
 use meta_core::display::escape;
+use meta_core::git::RepoStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, SystemTime};
-
-use crate::git_utils;
 
 /// Represents a query filter condition
 #[derive(Debug, Clone, PartialEq)]
@@ -105,8 +103,8 @@ impl Query {
             "branch" => Ok(QueryCondition::Branch(value.to_string())),
             "tag" => Ok(QueryCondition::Tag(value.to_string())),
             "modified_in" | "modified" => {
-                let duration = parse_duration(value)?;
-                Ok(QueryCondition::ModifiedIn(duration))
+                let secs = meta_core::duration::parse_duration(value)?;
+                Ok(QueryCondition::ModifiedIn(Duration::from_secs(secs)))
             }
             "language" | "lang" => Ok(QueryCondition::Language(value.to_lowercase())),
             "has_unpushed" | "unpushed" => {
@@ -129,38 +127,6 @@ impl Query {
     }
 }
 
-/// Parse a duration string like "24h", "7d", "30m"
-fn parse_duration(s: &str) -> Result<Duration> {
-    let s = s.trim().to_lowercase();
-
-    if s.ends_with('h') {
-        let hours: u64 = s[..s.len() - 1]
-            .parse()
-            .with_context(|| format!("Invalid hours value: '{}'", escape(&s)))?;
-        Ok(Duration::from_secs(hours * 3600))
-    } else if s.ends_with('d') {
-        let days: u64 = s[..s.len() - 1]
-            .parse()
-            .with_context(|| format!("Invalid days value: '{}'", escape(&s)))?;
-        Ok(Duration::from_secs(days * 86400))
-    } else if s.ends_with('m') {
-        let minutes: u64 = s[..s.len() - 1]
-            .parse()
-            .with_context(|| format!("Invalid minutes value: '{}'", escape(&s)))?;
-        Ok(Duration::from_secs(minutes * 60))
-    } else if s.ends_with('w') {
-        let weeks: u64 = s[..s.len() - 1]
-            .parse()
-            .with_context(|| format!("Invalid weeks value: '{}'", escape(&s)))?;
-        Ok(Duration::from_secs(weeks * 604800))
-    } else {
-        anyhow::bail!(
-            "Invalid duration format: '{}'. Use format like '24h', '7d', '30m', '2w'",
-            escape(&s)
-        )
-    }
-}
-
 /// Repository state information collected for querying
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoState {
@@ -172,8 +138,8 @@ pub struct RepoState {
     pub has_staged: bool,
     pub has_unstaged: bool,
     pub has_untracked: bool,
-    pub ahead: i32,
-    pub behind: i32,
+    pub ahead: usize,
+    pub behind: usize,
     pub last_commit_time: Option<i64>,
     pub last_commit_hash: Option<String>,
     pub last_commit_message: Option<String>,
@@ -185,34 +151,25 @@ impl RepoState {
     pub fn collect(name: &str, path: &Path, tags: &[String]) -> Result<Self> {
         let path_str = path.to_string_lossy().to_string();
 
-        // Get current branch
-        let branch = get_git_output(path, &["rev-parse", "--abbrev-ref", "HEAD"])
-            .unwrap_or_else(|_| "unknown".to_string());
-
-        // Get status
-        let status_output = get_git_output(path, &["status", "--porcelain"]).unwrap_or_default();
-        let has_staged = status_output.lines().any(|l| {
-            let chars: Vec<char> = l.chars().collect();
-            !chars.is_empty() && chars[0] != ' ' && chars[0] != '?'
-        });
-        let has_unstaged = status_output.lines().any(|l| {
-            let chars: Vec<char> = l.chars().collect();
-            chars.len() > 1 && chars[1] != ' '
-        });
-        let has_untracked = status_output.lines().any(|l| l.starts_with("??"));
-        let is_dirty = has_staged || has_unstaged || has_untracked;
-
-        // Get ahead/behind
-        let (ahead, behind) = git_utils::ahead_behind(path)
-            .map(|(a, b)| (a as i32, b as i32))
-            .unwrap_or((0, 0));
-
-        // Get last commit info
-        let last_commit_hash = get_git_output(path, &["rev-parse", "HEAD"]).ok();
-        let last_commit_time = get_git_output(path, &["log", "-1", "--format=%ct"])
-            .ok()
-            .and_then(|s| s.trim().parse::<i64>().ok());
-        let last_commit_message = get_git_output(path, &["log", "-1", "--format=%s"]).ok();
+        // A repo git can't read shows as on branch "unknown", clean
+        let status = RepoStatus::read(path).ok();
+        let branch = match &status {
+            Some(status) => status.branch.clone().unwrap_or_else(|| "HEAD".to_string()),
+            None => "unknown".to_string(),
+        };
+        let status = status.unwrap_or_default();
+        let (ahead, behind) = status.ahead_behind.unwrap_or_default();
+        let last_commit = status
+            .oid
+            .as_ref()
+            .and_then(|_| meta_core::git::query(path, ["log", "-1", "--format=%ct%n%s"]));
+        let (last_commit_time, last_commit_message) = match last_commit.as_deref() {
+            Some(log) => {
+                let (time, message) = log.split_once('\n').unwrap_or((log, ""));
+                (time.parse().ok(), Some(message.to_string()))
+            }
+            None => (None, None),
+        };
 
         // Detect build systems
         let build_systems = detect_build_systems(path);
@@ -222,14 +179,14 @@ impl RepoState {
             path: path_str,
             branch,
             tags: tags.to_vec(),
-            is_dirty,
-            has_staged,
-            has_unstaged,
-            has_untracked,
+            is_dirty: status.is_dirty(),
+            has_staged: status.has_staged(),
+            has_unstaged: status.has_unstaged(),
+            has_untracked: status.has_untracked(),
             ahead,
             behind,
             last_commit_time,
-            last_commit_hash,
+            last_commit_hash: status.oid,
             last_commit_message,
             build_systems,
         })
@@ -272,24 +229,6 @@ impl RepoState {
             QueryCondition::AheadOfRemote(expected) => (self.ahead > 0) == *expected,
             QueryCondition::BehindRemote(expected) => (self.behind > 0) == *expected,
         }
-    }
-}
-
-/// Get output from a git command
-fn get_git_output(path: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(path)
-        .output()
-        .with_context(|| format!("Failed to run git {args:?}"))?;
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        anyhow::bail!(
-            "Git command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
     }
 }
 
@@ -419,14 +358,6 @@ mod tests {
             query.conditions,
             [QueryCondition::ModifiedIn(Duration::from_secs(86400))]
         );
-    }
-
-    #[test]
-    fn test_parse_duration() {
-        assert_eq!(parse_duration("24h").unwrap().as_secs(), 86400);
-        assert_eq!(parse_duration("7d").unwrap().as_secs(), 604800);
-        assert_eq!(parse_duration("30m").unwrap().as_secs(), 1800);
-        assert_eq!(parse_duration("2w").unwrap().as_secs(), 1209600);
     }
 
     #[test]

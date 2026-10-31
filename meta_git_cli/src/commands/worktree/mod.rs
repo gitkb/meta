@@ -108,7 +108,7 @@ pub fn execute_worktree_command(
                     // Actual parse errors: clap's message names the problem
                     // and where to get help; the whole git help would bury it
                     let message =
-                        meta_cli::args::escaped_error::<WorktreeParser>(&clap_args).to_string();
+                        meta_core::args::escaped_error::<WorktreeParser>(&clap_args).to_string();
                     let message = message.strip_prefix("error: ").unwrap_or(&message);
                     CommandResult::Error(message.trim_end().to_string())
                 }

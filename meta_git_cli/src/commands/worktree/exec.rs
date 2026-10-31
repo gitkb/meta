@@ -30,7 +30,7 @@ fn build_loop_config(
         let paths: Vec<PathBuf> = repos.iter().map(|r| r.path.clone()).collect();
         match meta_cli::worktree::set_config(wt_dir, &paths, None)? {
             Some(config) => {
-                let (projects, _) = meta_core::config::parse_meta_config(&config)?;
+                let projects = meta_core::config::Workspace::load(&config)?.projects;
                 let tree = meta_cli::worktree::set_tree(wt_dir, &paths, &projects)?;
                 repo_filter::repo_names(wt_dir, &projects, &tree)
             }
@@ -176,8 +176,8 @@ fn handle_ephemeral_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<()
     };
 
     // Resolve worktree path for exec
-    let meta_dir = find_meta_dir();
-    let worktree_root = resolve_worktree_root(meta_dir.as_deref())?;
+    let configs = Configs::find_optional()?;
+    let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner))?;
     let wt_dir = worktree_set_dir(&worktree_root, &name)?;
 
     // Run the command

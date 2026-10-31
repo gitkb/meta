@@ -1,0 +1,231 @@
+//! A repository's state from one `git status --porcelain=v2 --branch -z`.
+
+use std::path::Path;
+
+/// What `git status` says about a checkout: its branch, how it stands
+/// against its upstream, and each changed path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepoStatus {
+    /// The branch checked out; `None` when HEAD is detached.
+    pub branch: Option<String>,
+    /// The commit HEAD names; `None` before the first commit.
+    pub oid: Option<String>,
+    /// The upstream branch, short (`origin/main`); `None` without one.
+    pub upstream: Option<String>,
+    /// Commits ahead of and behind the upstream; `None` without one (or
+    /// when the upstream branch is gone).
+    pub ahead_behind: Option<(usize, usize)>,
+    pub entries: Vec<StatusEntry>,
+}
+
+/// One path `git status` lists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatusEntry {
+    /// A tracked path (for a rename, the new one) that differs in the index
+    /// (`staged`), in the work tree (`unstaged`), or both. A conflicted path
+    /// counts as both.
+    Changed {
+        path: String,
+        staged: bool,
+        unstaged: bool,
+    },
+    Untracked(String),
+}
+
+impl RepoStatus {
+    /// The status of the checkout at `dir`. Untracked files and the
+    /// upstream counts are always read: a config that hides them
+    /// (`status.showUntrackedFiles=no`, `status.aheadBehind=false`) must not
+    /// make a checkout look clean.
+    pub fn read(dir: &Path) -> anyhow::Result<Self> {
+        Ok(Self::parse(&super::run(
+            dir,
+            [
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "-z",
+                "--untracked-files=normal",
+                "--ahead-behind",
+            ],
+        )?))
+    }
+
+    fn parse(output: &str) -> Self {
+        let mut status = Self::default();
+        let mut records = output.split('\0').filter(|r| !r.is_empty());
+        while let Some(record) = records.next() {
+            let (kind, rest) = record.split_once(' ').unwrap_or((record, ""));
+            match kind {
+                "#" => status.header(rest),
+                "?" => status
+                    .entries
+                    .push(StatusEntry::Untracked(rest.to_string())),
+                // `1 XY sub mH mI mW hH hI path`, `2 ... Xscore path` then
+                // the old path as its own record, `u XY sub m1 m2 m3 mW h1
+                // h2 h3 path`; the path may hold spaces, so it is what is
+                // left after the fixed fields
+                "1" | "2" | "u" => {
+                    let fields = match kind {
+                        "1" => 7,
+                        "2" => 8,
+                        _ => 9,
+                    };
+                    let mut parts = rest.splitn(fields + 1, ' ');
+                    let xy = parts.next().unwrap_or_default();
+                    let path = parts.nth(fields - 1).unwrap_or_default().to_string();
+                    let mut codes = xy.chars();
+                    let mut changed = || codes.next().is_some_and(|c| c != '.');
+                    status.entries.push(StatusEntry::Changed {
+                        path,
+                        staged: changed(),
+                        unstaged: changed(),
+                    });
+                    if kind == "2" {
+                        records.next();
+                    }
+                }
+                _ => {}
+            }
+        }
+        status
+    }
+
+    fn header(&mut self, line: &str) {
+        let Some((key, value)) = line.split_once(' ') else {
+            return;
+        };
+        match key {
+            "branch.oid" if value != "(initial)" => self.oid = Some(value.to_string()),
+            "branch.head" if value != "(detached)" => self.branch = Some(value.to_string()),
+            "branch.upstream" => self.upstream = Some(value.to_string()),
+            "branch.ab" => {
+                let mut counts = value
+                    .split(' ')
+                    .map(|n| n.trim_start_matches(['+', '-']).parse::<usize>());
+                if let (Some(Ok(ahead)), Some(Ok(behind))) = (counts.next(), counts.next()) {
+                    self.ahead_behind = Some((ahead, behind));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether anything is changed or untracked.
+    pub fn is_dirty(&self) -> bool {
+        !self.entries.is_empty()
+    }
+
+    /// The changed tracked paths (for a rename, the new one).
+    pub fn changed_paths(&self) -> impl Iterator<Item = &str> {
+        self.entries.iter().filter_map(|e| match e {
+            StatusEntry::Changed { path, .. } => Some(path.as_str()),
+            StatusEntry::Untracked(_) => None,
+        })
+    }
+
+    pub fn untracked_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| matches!(e, StatusEntry::Untracked(_)))
+            .count()
+    }
+
+    pub fn has_staged(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| matches!(e, StatusEntry::Changed { staged: true, .. }))
+    }
+
+    pub fn has_unstaged(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| matches!(e, StatusEntry::Changed { unstaged: true, .. }))
+    }
+
+    pub fn has_untracked(&self) -> bool {
+        self.untracked_count() > 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::run;
+
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), ["init", "-q", "-b", "main"]).unwrap();
+        dir
+    }
+
+    fn commit(dir: &Path, file: &str) {
+        std::fs::write(dir.join(file), file).unwrap();
+        run(dir, ["add", file]).unwrap();
+        run(
+            dir,
+            [
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-qm",
+                file,
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reads_branch_changes_and_upstream() {
+        let upstream = repo();
+        commit(upstream.path(), "a");
+        let dir = tempfile::tempdir().unwrap();
+        let clone = dir.path().join("clone");
+        run(
+            dir.path(),
+            [
+                "clone".as_ref(),
+                "-q".as_ref(),
+                upstream.path().as_os_str(),
+                clone.as_os_str(),
+            ],
+        )
+        .unwrap();
+        commit(&clone, "b");
+        commit(upstream.path(), "c");
+        run(&clone, ["fetch", "-q"]).unwrap();
+        std::fs::write(clone.join("a"), "changed").unwrap();
+        std::fs::write(clone.join("new file"), "").unwrap();
+        run(&clone, ["mv", "b", "b renamed"]).unwrap();
+
+        let status = RepoStatus::read(&clone).unwrap();
+        assert_eq!(status.branch.as_deref(), Some("main"));
+        assert_eq!(status.ahead_behind, Some((1, 1)));
+        assert_eq!(status.upstream.as_deref(), Some("origin/main"));
+        assert!(status.oid.is_some());
+        let mut changed: Vec<_> = status.changed_paths().collect();
+        changed.sort_unstable();
+        assert_eq!(changed, ["a", "b renamed"]);
+        assert_eq!(status.untracked_count(), 1);
+        assert!(status.has_staged() && status.has_unstaged() && status.is_dirty());
+    }
+
+    #[test]
+    fn a_new_repo_has_no_commit_or_upstream() {
+        let dir = repo();
+        let status = RepoStatus::read(dir.path()).unwrap();
+        assert_eq!(status.branch.as_deref(), Some("main"));
+        assert_eq!((&status.oid, status.ahead_behind), (&None, None));
+        assert!(!status.is_dirty());
+    }
+
+    #[test]
+    fn detached_head_has_no_branch() {
+        let dir = repo();
+        commit(dir.path(), "a");
+        run(dir.path(), ["checkout", "-q", "--detach"]).unwrap();
+        assert_eq!(RepoStatus::read(dir.path()).unwrap().branch, None);
+    }
+}

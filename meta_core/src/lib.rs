@@ -7,9 +7,13 @@
 
 use std::path::PathBuf;
 
+pub mod args;
 pub mod config;
 pub mod data_dir;
 pub mod display;
+pub mod duration;
+pub mod git;
+pub mod gitdir;
 pub mod store;
 
 /// Default meta data directory name.

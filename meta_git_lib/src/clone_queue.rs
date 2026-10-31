@@ -95,12 +95,24 @@ impl CloneQueue {
             }
         }
 
-        let Some(meta_path) = config::find_meta_config_in(base_dir)? else {
-            debug!("No .meta.yaml found in {}", escape_path(base_dir));
-            return Ok(0);
-        };
+        match config::Workspace::in_dir(base_dir)? {
+            Some(workspace) => self.push_from_workspace(&workspace, depth_level),
+            None => {
+                debug!("No .meta.yaml found in {}", escape_path(base_dir));
+                Ok(0)
+            }
+        }
+    }
 
-        let (projects, _) = config::parse_meta_config(&meta_path)?;
+    /// Add the missing projects of `workspace`, found at `depth_level`, and
+    /// those of the meta repos nested in it.
+    pub fn push_from_workspace(
+        &self,
+        workspace: &config::Workspace,
+        depth_level: usize,
+    ) -> anyhow::Result<usize> {
+        let base_dir = workspace.dir.as_path();
+        let projects = &workspace.projects;
         debug!(
             "Discovered {} projects in {} at depth {}",
             projects.len(),
@@ -121,7 +133,7 @@ impl CloneQueue {
             }
 
             // Skip projects without a repo URL (cannot clone)
-            let Some(url) = project.repo else {
+            let Some(url) = project.repo.clone() else {
                 continue;
             };
 

@@ -5,7 +5,6 @@ use meta_core::display::escape_lines;
 use meta_plugin_protocol::{
     run_plugin, CommandResult, PluginDefinition, PluginHelp, PluginInfo, PluginRequest,
 };
-use std::path::PathBuf;
 
 fn main() {
     let mut help_commands = IndexMap::new();
@@ -60,15 +59,6 @@ fn execute(request: PluginRequest) -> CommandResult {
 }
 
 fn execute_request(request: PluginRequest) -> CommandResult {
-    let cwd = if request.cwd.is_empty() {
-        match std::env::current_dir() {
-            Ok(d) => d,
-            Err(e) => return CommandResult::Error(format!("Failed to get working directory: {e}")),
-        }
-    } else {
-        PathBuf::from(&request.cwd)
-    };
-
     let options = meta_project_cli::ExecuteOptions {
         json_output: request.options.json_output,
         recursive: request.options.recursive,
@@ -82,6 +72,6 @@ fn execute_request(request: PluginRequest) -> CommandResult {
         &request.args,
         &options,
         &request.projects,
-        &cwd,
+        &request.cwd,
     )
 }

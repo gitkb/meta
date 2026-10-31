@@ -5,9 +5,9 @@
 
 use anyhow::{Context, Result};
 use meta_cli::dependency_graph::{self, ProjectDependencies};
-use meta_cli::git_utils;
 use meta_cli::query::{Query, RepoState, WorkspaceState};
 use meta_core::config::{self, ProjectInfo};
+use meta_core::git::{git, RepoStatus};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
@@ -1128,12 +1128,11 @@ impl McpServer {
                 continue;
             }
 
-            let mut cmd = Command::new("git");
+            let mut cmd = git(&project_path);
             cmd.arg("diff");
             if staged {
                 cmd.arg("--staged");
             }
-            cmd.current_dir(&project_path);
 
             let output = cmd.output()?;
             let diff = String::from_utf8_lossy(&output.stdout);
@@ -1175,43 +1174,10 @@ impl McpServer {
                 continue;
             }
 
-            // Get current branch
-            let current_branch =
-                git_utils::current_branch(&project_path).unwrap_or_else(|| "HEAD".to_string());
-
-            // Get tracking branch info
-            let tracking_output = Command::new("git")
-                .args([
-                    "for-each-ref",
-                    "--format=%(upstream:short)",
-                    &format!("refs/heads/{current_branch}"),
-                ])
-                .current_dir(&project_path)
-                .output()?;
-            let tracking_branch = String::from_utf8_lossy(&tracking_output.stdout)
-                .trim()
-                .to_string();
-
-            // Get ahead/behind counts
-            let mut ahead = 0;
-            let mut behind = 0;
-            if !tracking_branch.is_empty() {
-                let ahead_behind = Command::new("git")
-                    .args([
-                        "rev-list",
-                        "--left-right",
-                        "--count",
-                        &format!("{current_branch}...{tracking_branch}"),
-                    ])
-                    .current_dir(&project_path)
-                    .output()?;
-                let counts = String::from_utf8_lossy(&ahead_behind.stdout);
-                let parts: Vec<&str> = counts.trim().split('\t').collect();
-                if parts.len() == 2 {
-                    ahead = parts[0].parse().unwrap_or(0);
-                    behind = parts[1].parse().unwrap_or(0);
-                }
-            }
+            let status = RepoStatus::read(&project_path).unwrap_or_default();
+            let current_branch = status.branch.unwrap_or_else(|| "HEAD".to_string());
+            let tracking_branch = status.upstream.unwrap_or_default();
+            let (ahead, behind) = status.ahead_behind.unwrap_or_default();
 
             results.push(serde_json::json!({
                 "project": project.name,
@@ -1348,13 +1314,7 @@ impl McpServer {
             }
 
             // Execute git commit for this project
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(&project_path)
-                .arg("commit")
-                .arg("-m")
-                .arg(message)
-                .output();
+            let output = git(&project_path).args(["commit", "-m", message]).output();
 
             match output {
                 Ok(out) => {
@@ -2065,7 +2025,9 @@ impl McpServer {
                 continue;
             }
 
-            let output = Command::new(program)
+            // In each project's own repository, whatever a git hook around
+            // this server set
+            let output = meta_core::git::clear_repo_env(&mut Command::new(program))
                 .args(program_args)
                 .current_dir(&project_path)
                 .output();
@@ -2142,12 +2104,11 @@ impl McpServer {
         git_dir.push(path.join(".git"));
         let mut work_tree = std::ffi::OsString::from("--work-tree=");
         work_tree.push(path);
-        let output = Command::new("git")
+        let output = git(path)
             .args(["-c", "submodule.recurse=false"])
             .arg(git_dir)
             .arg(work_tree)
             .args(args)
-            .current_dir(path)
             .output()
             .with_context(|| format!("Failed to run git {args:?} in {}", path.display()))?;
         if output.status.success() {
@@ -2239,10 +2200,9 @@ impl McpServer {
     // ========================================================================
 
     fn load_projects(&self, meta_dir: &std::path::Path) -> Result<Vec<ProjectInfo>> {
-        let config_path = config::find_meta_config(meta_dir, None)?
-            .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
-        let (projects, _ignore) = config::parse_meta_config(&config_path)?;
-        Ok(projects)
+        Ok(config::Workspace::find(meta_dir, None)?
+            .ok_or_else(|| anyhow::anyhow!("No meta config found"))?
+            .projects)
     }
 }
 

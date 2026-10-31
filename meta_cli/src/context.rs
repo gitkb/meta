@@ -12,9 +12,9 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use crate::dependency_graph::DependencyGraph;
-use crate::git_utils;
 use meta_core::config::{self, ProjectInfo};
 use meta_core::display::{escape, escape_path};
+use meta_core::git::RepoStatus;
 
 // ── Cache ───────────────────────────────────────────────
 
@@ -103,13 +103,9 @@ fn is_cache_valid(cached: &CachedContext, current_root: &PathBuf) -> bool {
 pub fn handle_context(json: bool, no_status: bool, no_cache: bool, verbose: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("Failed to get current directory")?;
 
-    let config_path = config::find_meta_config(&cwd, None)?
+    let workspace = config::Workspace::find(&cwd, None)?
         .ok_or_else(|| anyhow::anyhow!("Not a meta workspace (no .meta.yaml found)"))?;
-
-    let meta_dir = config_path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Invalid config path"))?
-        .to_path_buf();
+    let meta_dir = workspace.dir.clone();
 
     // Try cache if not bypassed
     if !no_cache && !no_status {
@@ -135,13 +131,13 @@ pub fn handle_context(json: bool, no_status: bool, no_cache: bool, verbose: bool
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let (projects, _ignore_list) = config::parse_meta_config(&config_path)?;
+    let projects = workspace.projects;
 
     if verbose {
         eprintln!(
             "Found {} projects in {}",
             projects.len(),
-            escape_path(&config_path)
+            escape_path(&workspace.config_path)
         );
     }
 
@@ -153,16 +149,11 @@ pub fn handle_context(json: bool, no_status: bool, no_cache: bool, verbose: bool
             .map(|p| {
                 let mut ctx = RepoContext::from_project(p);
                 let repo_path = meta_dir.join(&p.path);
-                if repo_path.exists() {
-                    ctx.branch = git_utils::current_branch(&repo_path);
-                    ctx.dirty = git_utils::is_dirty(&repo_path);
-                    ctx.modified_count = git_utils::dirty_file_count(&repo_path);
-
-                    // Get ahead/behind counts
-                    if let Some((ahead, behind)) = git_utils::ahead_behind(&repo_path) {
-                        ctx.ahead = Some(ahead);
-                        ctx.behind = Some(behind);
-                    }
+                if let Ok(status) = RepoStatus::read(&repo_path) {
+                    ctx.branch = status.branch.clone();
+                    ctx.dirty = Some(status.is_dirty());
+                    ctx.modified_count = Some(status.entries.len());
+                    (ctx.ahead, ctx.behind) = status.ahead_behind.unzip();
                 }
                 ctx
             })

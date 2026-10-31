@@ -1,6 +1,6 @@
 //! Command-line errors that never echo control characters.
 
-use meta_core::display::escape;
+use crate::display::escape;
 use std::ffi::OsStr;
 
 /// The error to show for `args` that `P` rejected. Clap quotes rejected

@@ -5,6 +5,8 @@ use meta_core::display::{escape, escape_path};
 use std::collections::{HashMap, HashSet};
 
 use meta_cli::dependency_graph::{DependencyGraph, ProjectDependencies};
+use meta_core::config::Workspace;
+use meta_core::duration::format_duration;
 use meta_git_lib::worktree::git_ops::*;
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::hooks::fire_post_create;
@@ -38,8 +40,8 @@ pub(crate) fn handle_create(
     // Parse custom metadata, collecting any invalid entries for strict mode
     let mut custom_meta = HashMap::new();
     for s in &args.custom_meta {
-        if let Some(eq_pos) = s.find('=') {
-            custom_meta.insert(s[..eq_pos].to_string(), s[eq_pos + 1..].to_string());
+        if let Some((key, value)) = s.split_once('=') {
+            custom_meta.insert(key.to_string(), value.to_string());
         } else {
             super::warn_or_bail(
                 strict,
@@ -80,13 +82,20 @@ pub(crate) fn handle_create(
         }
     }
 
-    let nearest_meta_dir = require_meta_dir()?;
-    let meta_dir = if recursive {
-        meta_core::config::find_root_meta_dir(&nearest_meta_dir)?
-    } else {
-        nearest_meta_dir
+    let configs = Configs::find()?;
+    // --recursive works from the root of the workspace tree
+    let configs = match recursive {
+        true => {
+            let root = meta_core::config::find_root_meta_dir(&configs.here.dir)?;
+            match Workspace::in_dir(&root)? {
+                Some(workspace) if root != configs.here.dir => Configs::of(workspace)?,
+                _ => configs,
+            }
+        }
+        false => configs,
     };
-    let worktree_root = resolve_worktree_root(Some(&meta_dir))?;
+    let meta_dir = configs.here.dir.clone();
+    let worktree_root = resolve_worktree_root(Some(&configs.owner))?;
 
     // Check if worktree already exists
     let wt_dir = worktree_set_dir(&worktree_root, name)?;
@@ -101,7 +110,7 @@ pub(crate) fn handle_create(
 
     // Parse .meta.yaml to get project list
     // When --all is specified, include root repo "." if it's a git repository
-    let projects = meta_git_lib::worktree::helpers::load_projects_with_root(&meta_dir, use_all)?;
+    let projects = projects_with_root(&configs.here, use_all);
 
     // Determine which repos to include: Vec<(alias, source_path, branch)>
     let repos_to_create: Vec<(String, std::path::PathBuf, String)> = if use_all {
@@ -112,7 +121,7 @@ pub(crate) fn handle_create(
             .collect();
         // --recursive: every repo of the nested tree, by its full path
         if recursive {
-            let tree = meta_core::config::walk_meta_tree(&meta_dir, None)?;
+            let tree = meta_core::config::walk_projects(&meta_dir, &configs.here.projects, None)?;
             all.extend(
                 meta_core::config::build_project_map(&tree, &meta_dir, "")
                     .into_iter()
@@ -140,7 +149,7 @@ pub(crate) fn handle_create(
                     resolve_branch(name, branch_flag, spec.branch.as_deref()),
                 ));
             } else {
-                let (source, _project) = lookup_nested_project(&meta_dir, &spec.alias)?;
+                let (source, _project) = lookup_nested_project(&configs.here, &spec.alias)?;
                 list.push((
                     spec.alias.clone(),
                     source,
@@ -152,7 +161,7 @@ pub(crate) fn handle_create(
     } else {
         // Default: auto-include root repo + resolve dependencies
         resolve_repos_with_dependencies(
-            &meta_dir,
+            &configs.here,
             &projects,
             repo_specs,
             name,
@@ -165,7 +174,7 @@ pub(crate) fn handle_create(
     // For nested aliases like "gitkb/core", ensure intermediate meta: true
     // parents ("gitkb") get worktrees too — the thin spine from root to target.
     let mut repos_to_create =
-        ensure_intermediate_parents(&meta_dir, repos_to_create, name, branch_flag)?;
+        ensure_intermediate_parents(&configs.here, repos_to_create, name, branch_flag)?;
     // One worktree per place in the set: a repeated --repo, or a repo named
     // both by its name and by its path, would try the same add twice
     let mut branches: HashMap<String, &str> = HashMap::new();
@@ -251,7 +260,7 @@ pub(crate) fn handle_create(
     let mut created_repos = Vec::new();
     let mut new_branches = Vec::new();
     // The checkout whose sets these are: inside a set, the one it stands for
-    let owner = owner_dir(&meta_dir);
+    let owner = &configs.owner.dir;
     let built = (|| -> Result<()> {
         // Each worktree gets this record as soon as it exists, so `remove`
         // and `prune` know meta made it; a worktree that can't be recorded
@@ -262,7 +271,7 @@ pub(crate) fn handle_create(
                 .with_context(|| format!("Cannot resolve {}", escape_path(&wt_dir)))?,
             // Inside a set, the checkout it stands for: a record never names
             // a set's checkout, which can be removed before this set
-            project: owner.clone(),
+            project: owner.to_path_buf(),
             created_at: Utc::now().to_rfc3339(),
             ephemeral,
             ttl_seconds,
@@ -378,7 +387,7 @@ pub(crate) fn handle_create(
             .and_then(|n| n.to_str())
             .unwrap_or(".worktrees");
         // in the checkout whose sets these are
-        ensure_worktrees_in_gitignore(&owner, dirname, json)
+        ensure_worktrees_in_gitignore(owner, dirname, json)
     })();
     built.map_err(|e| roll_back(&wt_dir, &new_branches, e))?;
 
@@ -390,7 +399,7 @@ pub(crate) fn handle_create(
         ephemeral,
         ttl_seconds,
         &custom_meta,
-        Some(&owner),
+        Some(&configs.owner),
     );
 
     // Output
@@ -614,7 +623,7 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
 /// (which should already be the root), building a dependency graph where all
 /// project names and deps use full paths (e.g., "open-source/gitkb/core").
 fn resolve_repos_with_dependencies(
-    meta_dir: &std::path::Path,
+    workspace: &Workspace,
     projects: &[meta_core::config::ProjectInfo],
     repo_specs: &[meta_git_lib::worktree::RepoSpec],
     worktree_name: &str,
@@ -622,9 +631,10 @@ fn resolve_repos_with_dependencies(
     verbose: bool,
     recursive: bool,
 ) -> Result<Vec<(String, std::path::PathBuf, String)>> {
+    let meta_dir = workspace.dir.as_path();
     // Build dependency graph — either flat (current level) or nested (full tree)
     let graph = if recursive {
-        build_nested_dep_graph(meta_dir)?
+        build_nested_dep_graph(workspace)?
     } else {
         let project_deps: Vec<_> = projects.iter().map(|p| p.clone().into()).collect();
         DependencyGraph::build(project_deps)?
@@ -720,7 +730,7 @@ fn resolve_repos_with_dependencies(
             continue;
         }
 
-        let (source, _project) = lookup_nested_project(meta_dir, alias)?;
+        let (source, _project) = lookup_nested_project(workspace, alias)?;
         let per_branch = resolved_branch_map.get(alias.as_str()).copied().flatten();
         list.push((
             alias.clone(),
@@ -778,9 +788,9 @@ fn resolve_alias_in_graph(graph: &DependencyGraph, alias: &str) -> Result<String
 /// Example: project "core" at path "open-source/gitkb/core" with
 /// `depends_on: ["vendor/tree-sitter-markdown"]` becomes
 /// `depends_on: ["open-source/gitkb/vendor/tree-sitter-markdown"]`.
-fn build_nested_dep_graph(meta_dir: &std::path::Path) -> Result<DependencyGraph> {
-    let tree = meta_core::config::walk_meta_tree(meta_dir, None)?;
-    let project_map = meta_core::config::build_project_map(&tree, meta_dir, "");
+fn build_nested_dep_graph(workspace: &Workspace) -> Result<DependencyGraph> {
+    let tree = meta_core::config::walk_projects(&workspace.dir, &workspace.projects, None)?;
+    let project_map = meta_core::config::build_project_map(&tree, &workspace.dir, "");
 
     let mut project_deps = Vec::new();
     for (full_path, (_fs_path, info)) in &project_map {
@@ -816,20 +826,19 @@ fn build_nested_dep_graph(meta_dir: &std::path::Path) -> Result<DependencyGraph>
     DependencyGraph::build(project_deps)
 }
 
-/// The source of the project at `place` from `meta_dir`, reading only the
+/// The source of the project at `place` in `workspace`, reading only the
 /// configs of the meta repos on the way to it.
-fn project_at(meta_dir: &std::path::Path, place: &str) -> Result<Option<std::path::PathBuf>> {
-    let Some(config) = meta_core::config::find_meta_config_in(meta_dir)? else {
-        return Ok(None);
-    };
-    let (projects, _) = meta_core::config::parse_meta_config(&config)?;
-    for project in &projects {
+fn project_at(workspace: &Workspace, place: &str) -> Result<Option<std::path::PathBuf>> {
+    for project in &workspace.projects {
+        let path = workspace.dir.join(&project.path);
         if project.path == place {
-            return Ok(Some(meta_dir.join(&project.path)));
+            return Ok(Some(path));
         }
         if let Some(rest) = place.strip_prefix(&format!("{}/", project.path)) {
-            if let Some(found) = project_at(&meta_dir.join(&project.path), rest)? {
-                return Ok(Some(found));
+            if let Some(nested) = Workspace::in_dir(&path)? {
+                if let Some(found) = project_at(&nested, rest)? {
+                    return Ok(Some(found));
+                }
             }
         }
     }
@@ -846,11 +855,12 @@ fn project_at(meta_dir: &std::path::Path, place: &str) -> Result<Option<std::pat
 /// that are needed, not siblings. Asking for `gitkb/core` adds `gitkb` but
 /// NOT `gitkb/ui`, `gitkb/docs`, etc.
 fn ensure_intermediate_parents(
-    meta_dir: &std::path::Path,
+    workspace: &Workspace,
     repos: Vec<(String, std::path::PathBuf, String)>,
     worktree_name: &str,
     branch_flag: Option<&str>,
 ) -> Result<Vec<(String, std::path::PathBuf, String)>> {
+    let meta_dir = workspace.dir.as_path();
     // Where the selected repos go: a parent is there when a repo is at its
     // path, whatever name selected it
     let existing: HashSet<String> = repos
@@ -883,7 +893,7 @@ fn ensure_intermediate_parents(
             // A parent is the project at that path, not one by that name; a
             // repo the workspace doesn't list is not added (remove would
             // refuse it as foreign)
-            let Some(parent_source) = project_at(meta_dir, &parent_alias)? else {
+            let Some(parent_source) = project_at(workspace, &parent_alias)? else {
                 // A plain directory on the way is no parent; a repo that
                 // isn't a project is worth saying so
                 if !meta_dir.join(&parent_alias).join(".git").exists() {

@@ -291,6 +291,9 @@ fn build_command(
         .ok_or_else(|| anyhow::anyhow!("No command given"))?;
     let mut cmd = Command::new(program);
     cmd.args(args).current_dir(dir);
+    // Each directory is its own repository: a GIT_DIR from a git hook around
+    // meta would point git in every one of them at the hook's
+    meta_core::git::clear_repo_env(&mut cmd);
     // Plugin-specified environment variables (e.g., GIT_PAGER=cat)
     if let Some(extra) = extra_env {
         cmd.envs(extra);

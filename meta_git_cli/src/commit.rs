@@ -2,38 +2,28 @@ use console::style;
 use meta_core::config;
 use meta_core::display::{escape, escape_path};
 use meta_plugin_protocol::{CommandResult, PlannedCommand, PluginRequestOptions};
+use std::path::Path;
 use std::process::Command;
+
+/// Commit what is staged, in every repo that has staged changes.
+#[derive(clap::Parser)]
+pub(crate) struct CommitArgs {
+    /// Write each repo's message in your editor
+    #[arg(short, long)]
+    edit: bool,
+    /// Use this message in every repo
+    #[arg(short, long)]
+    message: Option<String>,
+}
 
 /// Execute git commit with optional --edit flag for per-repo messages
 pub(crate) fn execute_git_commit(
-    args: &[String],
+    args: CommitArgs,
     projects: &[String],
     options: &PluginRequestOptions,
     cwd: &std::path::Path,
 ) -> anyhow::Result<CommandResult> {
-    // Parse arguments
-    let mut use_editor = false;
-    let mut message: Option<String> = None;
-    let mut idx = 0;
-
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--edit" | "-e" => {
-                use_editor = true;
-                idx += 1;
-            }
-            "-m" | "--message" => {
-                if idx + 1 < args.len() {
-                    message = Some(args[idx + 1].clone());
-                    idx += 2;
-                } else {
-                    idx += 1;
-                }
-            }
-            // Skip other args like "git", "commit"
-            _ => idx += 1,
-        }
-    }
+    let (use_editor, message) = (args.edit, args.message);
 
     // Get list of directories to check for staged changes
     let dirs_to_check: Vec<String> = if !projects.is_empty() {
@@ -41,13 +31,13 @@ pub(crate) fn execute_git_commit(
         projects.to_vec()
     } else {
         // Fall back to reading local meta config
-        let Some(meta_path) = config::find_meta_config_in(cwd)? else {
+        let Some(workspace) = config::Workspace::in_dir(cwd)? else {
             return Ok(CommandResult::Message(format!(
                 "No .meta.yaml found in {}",
                 escape_path(cwd)
             )));
         };
-        let (projects, _) = config::parse_meta_config(&meta_path)?;
+        let projects = workspace.projects;
 
         let mut dirs = vec![".".to_string()];
         dirs.extend(projects.iter().map(|p| p.path.clone()));
@@ -64,8 +54,8 @@ pub(crate) fn execute_git_commit(
             cwd.join(dir)
         };
 
-        if path.exists() && has_staged_changes(&path.to_string_lossy()) {
-            let staged = get_staged_files(&path.to_string_lossy());
+        let staged = staged_files(&path);
+        if !staged.is_empty() {
             repos_with_changes.push((dir.clone(), path.to_string_lossy().to_string(), staged));
         }
     }
@@ -121,35 +111,11 @@ pub(crate) fn execute_git_commit(
     Ok(CommandResult::Message(String::new()))
 }
 
-/// Check if a repo has staged changes
-fn has_staged_changes(path: &str) -> bool {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["diff", "--cached", "--quiet"])
-        .status();
-
-    match output {
-        Ok(status) => !status.success(), // Non-zero exit means there are changes
-        Err(_) => false,
-    }
-}
-
-/// Get list of staged files in a repo
-fn get_staged_files(path: &str) -> Vec<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["diff", "--cached", "--name-only"])
-        .output();
-
-    match output {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(String::from)
-            .collect(),
-        _ => vec![],
-    }
+/// The staged files of the repo at `path` (none if git can't tell).
+fn staged_files(path: &std::path::Path) -> Vec<String> {
+    meta_core::git::query(path, ["diff", "--cached", "--name-only"])
+        .map(|out| out.lines().map(String::from).collect())
+        .unwrap_or_default()
 }
 
 /// Execute commit with editor for per-repo messages
@@ -225,12 +191,8 @@ fn execute_editor_commit(repos: &[(String, String, Vec<String>)]) -> anyhow::Res
             style(escape(repo_name)).bold()
         );
 
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .arg("commit")
-            .arg("-m")
-            .arg(message)
+        let status = meta_core::git::git(Path::new(path))
+            .args(["commit", "-m", message])
             .status();
 
         match status {

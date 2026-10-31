@@ -1,103 +1,58 @@
 use crate::clone_worker::clone_with_queue;
-use crate::ssh_setup;
+use crate::ssh;
 use console::style;
 use indicatif::MultiProgress;
 use meta_core::config;
 use meta_git_lib::clone_queue::CloneQueue;
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
-use std::process::Command;
 use std::sync::Arc;
 
+/// Clone a meta repository, then the repos its .meta.yaml lists.
+#[derive(clap::Parser)]
+pub(crate) struct CloneArgs {
+    /// The meta repository to clone
+    url: String,
+    /// Where to clone it (default: the repository's name)
+    dir: Option<String>,
+    /// Also clone the repos of the meta repos nested in it
+    #[arg(short, long)]
+    recursive: bool,
+    /// How many levels of nested meta repos to follow with --recursive
+    #[arg(long, value_name = "N")]
+    meta_depth: Option<usize>,
+    /// How many repos to clone at once
+    #[arg(long, value_name = "N", default_value = "4")]
+    parallel: std::num::NonZeroUsize,
+    /// Clone only this many commits of each repo (git clone --depth)
+    #[arg(long, value_name = "N")]
+    depth: Option<usize>,
+}
+
 pub(crate) fn execute_git_clone(
-    args: &[String],
+    args: CloneArgs,
     options: &PluginRequestOptions,
     cwd: &std::path::Path,
 ) -> anyhow::Result<CommandResult> {
     let dry_run = options.dry_run;
-
-    // Default options - limit to 4 concurrent clones to avoid SSH multiplexing issues
-    // Start with --recursive from CLI options (passed via PluginRequestOptions)
-    let mut recursive = options.recursive;
-    let mut parallel = 4_usize;
-    let mut depth: Option<String> = options.depth.map(|d| d.to_string());
-    let mut meta_depth: Option<usize> = None; // Limit recursion depth for nested .meta.yaml files
-
-    let mut url = String::new();
-    let mut dir_arg: Option<String> = None;
-    let mut idx = 0;
-    let mut git_clone_args: Vec<String> = Vec::new();
-
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--recursive" | "-r" => {
-                recursive = true;
-                idx += 1;
-            }
-            "--meta-depth" => {
-                if idx + 1 < args.len() {
-                    meta_depth = args[idx + 1].parse().ok();
-                    idx += 2;
-                } else {
-                    idx += 1;
-                }
-            }
-            "--parallel" => {
-                if idx + 1 < args.len() {
-                    parallel = args[idx + 1].parse().unwrap_or(4);
-                    idx += 2;
-                } else {
-                    idx += 1;
-                }
-            }
-            "--depth" => {
-                if idx + 1 < args.len() {
-                    let d = args[idx + 1].clone();
-                    depth = Some(d.clone());
-                    git_clone_args.push("--depth".to_string());
-                    git_clone_args.push(d);
-                    idx += 2;
-                } else {
-                    idx += 1;
-                }
-            }
-            s if s.starts_with('-') => {
-                idx += 1; // skip unknown option
-            }
-            s => {
-                if url.is_empty() {
-                    url = s.to_string();
-                } else if dir_arg.is_none() {
-                    dir_arg = Some(s.to_string());
-                }
-                idx += 1;
-            }
-        }
-    }
-
-    if url.is_empty() {
-        return Ok(CommandResult::Error(
-            "No repository URL provided".to_string(),
-        ));
-    }
-
-    // If depth was set from options but not added to git_clone_args yet, add it now
-    if let Some(ref d) = depth {
-        if !git_clone_args.contains(&"--depth".to_string()) {
-            git_clone_args.push("--depth".to_string());
-            git_clone_args.push(d.clone());
-        }
-    }
+    // meta's own --recursive and --depth, taken before the plugin ran
+    let recursive = args.recursive || options.recursive;
+    let depth = args.depth.or(options.depth).map(|d| d.to_string());
+    let meta_depth = args.meta_depth;
+    let mut parallel = args.parallel.get();
+    let url = args.url;
+    let dir_arg = args.dir;
+    let git_clone_args: Vec<String> = depth
+        .iter()
+        .flat_map(|d| ["--depth".to_string(), d.clone()])
+        .collect();
 
     // Derive directory name
-    let clone_dir = if let Some(ref dir) = dir_arg {
-        dir.clone()
-    } else {
-        url.trim_end_matches(".git")
-            .rsplit('/')
-            .next()
-            .unwrap_or("meta")
-            .to_string()
-    };
+    let clone_dir = dir_arg.clone().unwrap_or_else(|| {
+        url.parse::<meta_core::git::GitUrl>()
+            .ok()
+            .and_then(|u| u.name().map(str::to_string))
+            .unwrap_or_else(|| "meta".to_string())
+    });
 
     // Build the git clone command string for display/dry-run
     let mut clone_cmd_str = "git clone".to_string();
@@ -119,16 +74,16 @@ pub(crate) fn execute_git_clone(
     }
 
     // Set up SSH ControlMaster for the meta repo's host before cloning
-    let mut ssh_cmd = match ssh_setup::establish_ssh_masters(&[url.as_str()]) {
-        ssh_setup::SshMasters::OurSockets(dir) => Some(ssh_setup::git_ssh_command(&dir)),
-        ssh_setup::SshMasters::UserManaged | ssh_setup::SshMasters::Failed => None,
+    let mut ssh_cmd = match ssh::establish_ssh_masters(&[url.as_str()]) {
+        ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
+        ssh::SshMasters::UserManaged | ssh::SshMasters::Failed => None,
     };
 
     println!(
         "Cloning meta repository: {}",
         meta_core::display::escape(&url)
     );
-    let mut clone_cmd = Command::new("git");
+    let mut clone_cmd = meta_core::git::git(cwd);
     clone_cmd.arg("clone").args(&git_clone_args).arg(&url);
     if let Some(ref dir) = dir_arg {
         clone_cmd.arg(dir);
@@ -136,7 +91,6 @@ pub(crate) fn execute_git_clone(
     if let Some(ref ssh) = ssh_cmd {
         clone_cmd.env("GIT_SSH_COMMAND", ssh);
     }
-    clone_cmd.current_dir(cwd);
     let status = clone_cmd.status()?;
     if !status.success() {
         return Ok(CommandResult::Error(
@@ -170,16 +124,16 @@ pub(crate) fn execute_git_clone(
     let queue_urls = queue.peek_urls();
     if !queue_urls.is_empty() {
         let url_refs: Vec<&str> = queue_urls.iter().map(|s| s.as_str()).collect();
-        match ssh_setup::establish_ssh_masters(&url_refs) {
-            ssh_setup::SshMasters::OurSockets(sockets_dir) => {
-                ssh_cmd = Some(ssh_setup::git_ssh_command(&sockets_dir));
+        match ssh::establish_ssh_masters(&url_refs) {
+            ssh::SshMasters::OurSockets(sockets_dir) => {
+                ssh_cmd = Some(ssh::git_ssh_command(&sockets_dir));
             }
-            ssh_setup::SshMasters::UserManaged => {} // parallel OK, no override needed
-            ssh_setup::SshMasters::Failed if ssh_cmd.is_none() => {
+            ssh::SshMasters::UserManaged => {} // parallel OK, no override needed
+            ssh::SshMasters::Failed if ssh_cmd.is_none() => {
                 log::warn!("SSH multiplexing setup failed, falling back to serial cloning");
                 parallel = 1;
             }
-            ssh_setup::SshMasters::Failed => {} // initial host works
+            ssh::SshMasters::Failed => {} // initial host works
         }
     }
 

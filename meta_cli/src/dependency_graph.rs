@@ -170,6 +170,26 @@ impl DependencyGraph {
         result
     }
 
+    /// The projects that depend directly on `project` (a project's name, or
+    /// a capability one provides), sorted, each once; `None` when no project
+    /// has that name or provides it.
+    pub fn dependents_of(&self, project: &str) -> Option<Vec<&str>> {
+        let name = match self.projects.get_key_value(project) {
+            Some((name, _)) => name,
+            None => self.providers.get(project)?,
+        };
+        let mut dependents: Vec<&str> = self
+            .dependents
+            .get(name)?
+            .iter()
+            .map(String::as_str)
+            .filter(|d| d != name)
+            .collect();
+        dependents.sort_unstable();
+        dependents.dedup();
+        Some(dependents)
+    }
+
     /// Get all transitive dependents (impact analysis)
     /// Returns all projects that would be affected if the given project changes
     pub fn analyze_impact(&self, project: &str) -> ImpactAnalysis {
@@ -415,5 +435,33 @@ mod tests {
         // web-app depends on "api-v2" which is provided by api-service
         let deps = graph.get_dependencies("web-app");
         assert!(deps.contains(&"api-service"));
+    }
+
+    #[test]
+    fn dependents_of_a_name_or_a_capability() {
+        let project = |name: &str, provides: &[&str], depends_on: &[&str]| ProjectDependencies {
+            name: name.to_string(),
+            path: name.to_string(),
+            repo: None,
+            tags: vec![],
+            provides: provides.iter().map(|s| s.to_string()).collect(),
+            depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
+        };
+        let graph = DependencyGraph::build(vec![
+            project("loop_lib", &["loop-lib"], &[]),
+            project("util", &[], &[]),
+            project("provider", &["util"], &["provider"]),
+            project("meta_cli", &[], &["loop-lib", "loop_lib", "util"]),
+            project("plugin", &[], &["loop_lib", "Loop-Lib"]),
+        ])
+        .unwrap();
+        // by name or by what it provides, each dependent once, sorted
+        for query in ["loop_lib", "loop-lib"] {
+            assert_eq!(graph.dependents_of(query), Some(vec!["meta_cli", "plugin"]));
+        }
+        // a name wins over a capability; a project never depends on itself
+        assert_eq!(graph.dependents_of("util"), Some(vec!["meta_cli"]));
+        assert_eq!(graph.dependents_of("provider"), Some(vec![]));
+        assert_eq!(graph.dependents_of("nonexistent"), None);
     }
 }

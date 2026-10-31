@@ -32,6 +32,11 @@ console = "0.15"
 log = "0.4"
 colored = "2"
 indexmap = "2"
+dirs = "5"
+shlex = "1"
+
+[dev-dependencies]
+serial_test = "3.0"
 
 [lints]
 workspace = true

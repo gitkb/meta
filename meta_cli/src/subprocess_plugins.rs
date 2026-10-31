@@ -338,7 +338,7 @@ impl SubprocessPluginManager {
             command,
             args: remaining_args.to_vec(),
             projects: projects.to_vec(),
-            cwd: std::env::current_dir()?.to_string_lossy().to_string(),
+            cwd: std::env::current_dir()?,
             options: options.clone(),
         };
 
@@ -657,81 +657,7 @@ impl SubprocessPluginManager {
         }
 
         // Fall back to generating help from plugin info
-        Some(self.generate_fallback_help(plugin))
-    }
-
-    /// Generate help text from PluginInfo when plugin doesn't support --help
-    fn generate_fallback_help(&self, plugin: &SubprocessPlugin) -> String {
-        let info = &plugin.info;
-        let mut help = String::new();
-        // Every value comes from the plugin: each stays on its line
-        let name = escape(&info.name);
-        let version = escape(&info.version);
-        let description = escape(info.description.as_deref().unwrap_or("Meta CLI plugin"));
-
-        // Header
-        help.push_str(&format!("meta-{name} v{version} - {description}\n\n"));
-
-        // If plugin has structured help, use it
-        if let Some(ref plugin_help) = info.help {
-            help.push_str("USAGE:\n");
-            let usage = escape(&plugin_help.usage);
-            help.push_str(&format!("    {usage}\n\n"));
-
-            // Use command_sections if present, otherwise fall back to flat commands
-            if !plugin_help.command_sections.is_empty() {
-                for (section_title, commands) in &plugin_help.command_sections {
-                    help.push_str(&format!("{}:\n", escape(section_title)));
-                    for (cmd, desc) in commands {
-                        let (cmd, desc) = (escape(cmd), escape(desc));
-                        help.push_str(&format!("    {cmd:<16} {desc}\n"));
-                    }
-                    help.push('\n');
-                }
-            } else if !plugin_help.commands.is_empty() {
-                help.push_str("COMMANDS:\n");
-                let mut cmds: Vec<_> = plugin_help.commands.iter().collect();
-                cmds.sort_by(|a, b| a.0.cmp(b.0));
-                for (cmd, desc) in cmds {
-                    let (cmd, desc) = (escape(cmd), escape(desc));
-                    help.push_str(&format!("    {cmd:<16} {desc}\n"));
-                }
-                help.push('\n');
-            }
-
-            if !plugin_help.examples.is_empty() {
-                help.push_str("EXAMPLES:\n");
-                for example in &plugin_help.examples {
-                    help.push_str(&format!("    {}\n", escape(example)));
-                }
-                help.push('\n');
-            }
-
-            if let Some(ref note) = plugin_help.note {
-                help.push_str(&format!("NOTE:\n    {}\n", escape(note)));
-            }
-        } else {
-            // Basic fallback from command list
-            help.push_str("USAGE:\n");
-            help.push_str(&format!("    meta {name} <command> [args...]\n\n"));
-
-            if !info.commands.is_empty() {
-                help.push_str("COMMANDS:\n");
-                let prefix = format!("{} ", info.name);
-                for cmd in &info.commands {
-                    // Strip "git " prefix for display
-                    let display_cmd = escape(cmd.strip_prefix(&prefix).unwrap_or(cmd));
-                    help.push_str(&format!("    {display_cmd}\n"));
-                }
-                help.push('\n');
-            }
-
-            help.push_str(&format!(
-                "NOTE:\n    To run raw {name} commands: meta exec -- {name} <command>\n"
-            ));
-        }
-
-        help
+        Some(meta_plugin_protocol::help_text(&plugin.info))
     }
 }
 
@@ -796,7 +722,7 @@ mod tests {
             command: "git status".to_string(),
             args: vec!["--verbose".to_string()],
             projects: vec!["project1".to_string(), "project2".to_string()],
-            cwd: "/home/user/workspace".to_string(),
+            cwd: "/home/user/workspace".into(),
             options: PluginRequestOptions {
                 json_output: true,
                 verbose: false,
@@ -906,95 +832,6 @@ mod tests {
     fn test_is_executable_nonexistent() {
         let path = std::path::Path::new("/nonexistent/path/to/binary");
         assert!(!is_executable(path));
-    }
-
-    #[test]
-    fn test_generate_fallback_help_without_structured_help() {
-        let manager = SubprocessPluginManager::new();
-        let plugin = SubprocessPlugin {
-            path: std::path::PathBuf::from("/fake/path/meta-test"),
-            info: PluginInfo {
-                name: "test".to_string(),
-                version: "1.0.0".to_string(),
-                commands: vec!["test run".to_string(), "test check".to_string()],
-                description: Some("A test plugin".to_string()),
-                help: None,
-            },
-        };
-
-        let help = manager.generate_fallback_help(&plugin);
-        assert!(help.contains("meta-test v1.0.0"));
-        assert!(help.contains("A test plugin"));
-        assert!(help.contains("USAGE:"));
-        assert!(help.contains("meta test <command>"));
-        assert!(help.contains("COMMANDS:"));
-        assert!(help.contains("run"));
-        assert!(help.contains("check"));
-        assert!(help.contains("NOTE:"));
-        assert!(help.contains("meta exec -- test"));
-    }
-
-    #[test]
-    fn test_generate_fallback_help_with_structured_help() {
-        let manager = SubprocessPluginManager::new();
-        let mut commands = indexmap::IndexMap::new();
-        commands.insert("build".to_string(), "Build the project".to_string());
-        commands.insert("test".to_string(), "Run tests".to_string());
-
-        let plugin = SubprocessPlugin {
-            path: std::path::PathBuf::from("/fake/path/meta-rust"),
-            info: PluginInfo {
-                name: "rust".to_string(),
-                version: "2.0.0".to_string(),
-                commands: vec!["rust build".to_string()],
-                description: Some("Rust plugin".to_string()),
-                help: Some(PluginHelp {
-                    usage: "meta rust <command> [args...]".to_string(),
-                    commands,
-                    command_sections: indexmap::IndexMap::new(),
-                    examples: vec![
-                        "meta rust build".to_string(),
-                        "meta rust test --all".to_string(),
-                    ],
-                    note: Some("Custom note here".to_string()),
-                }),
-            },
-        };
-
-        let help = manager.generate_fallback_help(&plugin);
-        assert!(help.contains("meta-rust v2.0.0"));
-        assert!(help.contains("Rust plugin"));
-        assert!(help.contains("USAGE:"));
-        assert!(help.contains("meta rust <command> [args...]"));
-        assert!(help.contains("COMMANDS:"));
-        assert!(help.contains("build"));
-        assert!(help.contains("Build the project"));
-        assert!(help.contains("test"));
-        assert!(help.contains("Run tests"));
-        assert!(help.contains("EXAMPLES:"));
-        assert!(help.contains("meta rust build"));
-        assert!(help.contains("meta rust test --all"));
-        assert!(help.contains("NOTE:"));
-        assert!(help.contains("Custom note here"));
-    }
-
-    #[test]
-    fn test_generate_fallback_help_no_description() {
-        let manager = SubprocessPluginManager::new();
-        let plugin = SubprocessPlugin {
-            path: std::path::PathBuf::from("/fake/path/meta-simple"),
-            info: PluginInfo {
-                name: "simple".to_string(),
-                version: "0.1.0".to_string(),
-                commands: vec![],
-                description: None,
-                help: None,
-            },
-        };
-
-        let help = manager.generate_fallback_help(&plugin);
-        assert!(help.contains("meta-simple v0.1.0"));
-        assert!(help.contains("Meta CLI plugin")); // Default description
     }
 
     #[test]
@@ -1204,7 +1041,7 @@ mod tests {
             command: "git status".to_string(),
             args: vec![],
             projects: vec!["proj1".to_string()],
-            cwd: "/workspace".to_string(),
+            cwd: "/workspace".into(),
             options: PluginRequestOptions {
                 json_output: false,
                 verbose: false,
@@ -1224,7 +1061,7 @@ mod tests {
             command: "build".to_string(),
             args: vec!["--release".to_string()],
             projects: vec![],
-            cwd: ".".to_string(),
+            cwd: ".".into(),
             options: PluginRequestOptions {
                 json_output: true,
                 verbose: true,

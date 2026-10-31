@@ -1,5 +1,5 @@
 use crate::clone_worker::clone_with_queue;
-use crate::ssh_setup;
+use crate::ssh;
 use console::style;
 use indicatif::MultiProgress;
 use meta_core::config;
@@ -18,69 +18,58 @@ pub(crate) fn execute_git_update(
     // Determine if we're in recursive mode (projects list provided by meta_cli)
     let recursive = !projects.is_empty();
 
-    // Build list of directories to check for .meta.yaml files
-    let dirs_to_check: Vec<PathBuf> = if recursive {
-        // In recursive mode, check each directory that has a .meta.yaml file
-        // A .meta.yaml that can't be examined is an error, not "no nested repos"
-        let mut dirs = Vec::new();
-        for p in projects {
-            let path = if p == "." {
-                cwd.to_path_buf()
-            } else {
-                cwd.join(p)
-            };
-            if config::find_meta_config_in(&path)?.is_some() {
-                dirs.push(path);
-            }
-        }
-        dirs
+    // The meta roots to update: in recursive mode (projects list provided
+    // by meta_cli) each of its directories that has a .meta.yaml, else cwd.
+    // A config that can't be read is an error, not "no nested repos".
+    let dirs: Vec<PathBuf> = if recursive {
+        projects
+            .iter()
+            .map(|p| {
+                if p == "." {
+                    cwd.to_path_buf()
+                } else {
+                    cwd.join(p)
+                }
+            })
+            .collect()
     } else {
-        // Normal mode - just check current directory
         vec![cwd.to_path_buf()]
     };
-
-    // Check for remote URL mismatches in all meta roots
-    for dir in &dirs_to_check {
-        crate::ssh::warn_remote_mismatches(dir);
+    let mut roots = Vec::new();
+    for dir in dirs {
+        if let Some(workspace) = config::Workspace::in_dir(&dir)? {
+            roots.push((dir, workspace));
+        }
     }
 
-    // First pass: check for orphaned repos and warn user
-    for dir in &dirs_to_check {
-        let Some(meta_path) = config::find_meta_config_in(dir)? else {
-            continue;
-        };
+    for (_, workspace) in &roots {
+        crate::ssh::warn_remote_mismatches(workspace);
+    }
 
-        let (projects, _) = match config::parse_meta_config(&meta_path) {
-            Ok(result) => result,
-            Err(_) => continue,
-        };
-
-        // Check for orphaned repositories (exist locally but not in .meta.yaml)
-        let config_projects: HashSet<String> = projects.iter().map(|p| p.path.clone()).collect();
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    // Check if it's a git repo and not in config
-                    if path.join(".git").exists()
-                        && !name.starts_with('.')
-                        && !config_projects.contains(name)
-                    {
-                        let relative_path = if dir.as_path() == cwd {
-                            name.to_string()
-                        } else {
-                            dir.join(name).to_string_lossy().to_string()
-                        };
-                        let shown = escape(&relative_path);
-                        eprintln!(
-                            "{} {} exists locally but is not in .meta.yaml. To remove: rm -rf {}",
-                            style("⚠").yellow(),
-                            style(&shown).yellow().bold(),
-                            shown
-                        );
-                    }
-                }
+    // Repos that exist locally but are not in .meta.yaml
+    for (dir, workspace) in &roots {
+        let config_projects: HashSet<&str> =
+            workspace.projects.iter().map(|p| p.path.as_str()).collect();
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if path.is_dir()
+                && path.join(".git").exists()
+                && !name.starts_with('.')
+                && !config_projects.contains(name)
+            {
+                let relative_path = if dir.as_path() == cwd {
+                    name.to_string()
+                } else {
+                    dir.join(name).to_string_lossy().to_string()
+                };
+                let shown = escape(&relative_path);
+                eprintln!(
+                    "{} {} exists locally but is not in .meta.yaml. To remove: rm -rf {}",
+                    style("⚠").yellow(),
+                    style(&shown).yellow().bold(),
+                    shown
+                );
             }
         }
     }
@@ -90,10 +79,10 @@ pub(crate) fn execute_git_update(
     let queue = Arc::new(CloneQueue::new(None, meta_depth)); // No git depth for update
 
     // Seed the queue from all known .meta.yaml files
-    for dir in &dirs_to_check {
+    for (dir, workspace) in &roots {
         // Determine relative depth based on whether it's the cwd or nested
         let depth_level = if dir.as_path() == cwd { 0 } else { 1 };
-        queue.push_from_meta(dir, depth_level)?;
+        queue.push_from_workspace(workspace, depth_level)?;
     }
 
     let (_, initial_count) = queue.get_counts();
@@ -125,10 +114,10 @@ pub(crate) fn execute_git_update(
     let mut parallel = 4_usize;
     let ssh_cmd = if !queue_urls.is_empty() {
         let url_refs: Vec<&str> = queue_urls.iter().map(|s| s.as_str()).collect();
-        match ssh_setup::establish_ssh_masters(&url_refs) {
-            ssh_setup::SshMasters::OurSockets(dir) => Some(ssh_setup::git_ssh_command(&dir)),
-            ssh_setup::SshMasters::UserManaged => None, // parallel OK
-            ssh_setup::SshMasters::Failed => {
+        match ssh::establish_ssh_masters(&url_refs) {
+            ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
+            ssh::SshMasters::UserManaged => None, // parallel OK
+            ssh::SshMasters::Failed => {
                 log::warn!("SSH multiplexing setup failed, falling back to serial cloning");
                 parallel = 1;
                 None

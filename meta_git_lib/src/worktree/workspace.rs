@@ -5,7 +5,6 @@
 //! are kept (`META_WORKTREES` may be shared, or point into another
 //! workspace) doesn't change that.
 
-use anyhow::{Context, Result};
 use meta_core::display::escape_path;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -43,7 +42,7 @@ impl Workspace {
         }
         let mut repos = Vec::new();
         for path in paths {
-            match repo_git_dir(&path) {
+            match meta_core::gitdir::common_dir(&path) {
                 Ok(Some(git_dir)) => repos.push(git_dir),
                 Ok(None) => {}
                 Err(e) => unreadable.push((path, e)),
@@ -119,48 +118,5 @@ impl Workspace {
                 }
             })
             .collect()
-    }
-}
-
-/// The git directory holding the worktrees of the repository at `repo`:
-/// `None` if there is no repository there (not cloned).
-pub fn repo_git_dir(repo: &Path) -> Result<Option<PathBuf>> {
-    let dot_git = repo.join(".git");
-    // Links are followed: a `.git` linked to the real git directory is one
-    let meta = match std::fs::metadata(&dot_git) {
-        Ok(meta) => meta,
-        // A bare repository is its own git directory
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let bare = repo.join("HEAD").is_file()
-                && repo.join("objects").is_dir()
-                && repo.join("refs").is_dir();
-            return Ok(bare.then(|| repo.to_path_buf()));
-        }
-        Err(e) => {
-            return Err(
-                anyhow::Error::from(e).context(format!("Cannot inspect {}", escape_path(&dot_git)))
-            )
-        }
-    };
-    if meta.is_dir() {
-        return Ok(Some(dot_git));
-    }
-    // A `.git` file: a linked worktree's (its admin directory names the
-    // repository's git directory in `commondir`) or a `--separate-git-dir`
-    // checkout's (it names the git directory itself, with no `commondir`)
-    let content = std::fs::read_to_string(&dot_git)
-        .with_context(|| format!("Cannot read {}", escape_path(&dot_git)))?;
-    let target = content
-        .trim()
-        .strip_prefix("gitdir:")
-        .map(|target| repo.join(target.trim()))
-        .with_context(|| format!("{} has no gitdir line", escape_path(&dot_git)))?;
-    let commondir = target.join("commondir");
-    match std::fs::read_to_string(&commondir) {
-        Ok(common) => Ok(Some(target.join(common.trim()))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Some(target)),
-        Err(e) => {
-            Err(anyhow::Error::from(e).context(format!("Cannot read {}", escape_path(&commondir))))
-        }
     }
 }

@@ -12,6 +12,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
+use std::path::PathBuf;
 
 // ============================================================================
 // Plugin Discovery Types
@@ -64,8 +65,10 @@ pub struct PluginRequest {
     pub args: Vec<String>,
     #[serde(default)]
     pub projects: Vec<String>,
+    /// Where the command runs; a plugin given none uses its own working
+    /// directory ([`run_plugin`] fills it in).
     #[serde(default)]
-    pub cwd: String,
+    pub cwd: PathBuf,
     #[serde(default)]
     pub options: PluginRequestOptions,
 }
@@ -213,55 +216,93 @@ pub fn read_request_from_stdin() -> anyhow::Result<PluginRequest> {
     Ok(request)
 }
 
-/// Write plugin help text to a writer.
-fn write_plugin_help(info: &PluginInfo, w: &mut dyn std::io::Write) {
-    if let Some(help) = &info.help {
-        let _ = writeln!(w, "{}", help.usage);
-        let _ = writeln!(w);
-
-        // Use command_sections if present, otherwise fall back to flat commands
-        if !help.command_sections.is_empty() {
-            for (section_title, commands) in &help.command_sections {
-                let _ = writeln!(w, "{section_title}:");
-                for (cmd, desc) in commands {
-                    let _ = writeln!(w, "  {cmd:<20} {desc}");
-                }
-                let _ = writeln!(w);
-            }
-        } else if !help.commands.is_empty() {
-            let _ = writeln!(w, "Commands:");
-            for (cmd, desc) in &help.commands {
-                let _ = writeln!(w, "  {cmd:<20} {desc}");
-            }
-            let _ = writeln!(w);
-        }
-
-        if !help.examples.is_empty() {
-            let _ = writeln!(w, "Examples:");
-            for ex in &help.examples {
-                let _ = writeln!(w, "  {ex}");
-            }
-            let _ = writeln!(w);
-        }
-        if let Some(note) = &help.note {
-            let _ = writeln!(w, "{note}");
-        }
-    } else {
-        let _ = writeln!(w, "meta {} v{}", info.name, info.version);
+/// A plugin's help, from its info. Every value comes from the plugin, so
+/// each is escaped onto its own line.
+pub fn help_text(info: &PluginInfo) -> String {
+    use meta_core::display::escape;
+    let mut out = String::new();
+    let mut line = |text: &str| {
+        out.push_str(text);
+        out.push('\n');
+    };
+    let Some(help) = &info.help else {
+        line(&format!(
+            "meta {} v{}",
+            escape(&info.name),
+            escape(&info.version)
+        ));
         if let Some(desc) = &info.description {
-            let _ = writeln!(w, "{desc}");
+            line(&escape(desc));
         }
+        if !info.commands.is_empty() {
+            line("");
+            line("Commands:");
+            for cmd in &info.commands {
+                line(&format!("  {}", escape(cmd)));
+            }
+        }
+        return out;
+    };
+    line(&escape(&help.usage));
+    line("");
+    let flat = "Commands".to_string();
+    let sections: Vec<_> = if help.command_sections.is_empty() {
+        vec![(&flat, &help.commands)]
+    } else {
+        help.command_sections.iter().collect()
+    };
+    for (title, commands) in sections.into_iter().filter(|(_, c)| !c.is_empty()) {
+        line(&format!("{}:", escape(title)));
+        for (cmd, desc) in commands {
+            line(&format!("  {:<20} {}", escape(cmd), escape(desc)));
+        }
+        line("");
     }
+    if !help.examples.is_empty() {
+        line("Examples:");
+        for ex in &help.examples {
+            line(&format!("  {}", escape(ex)));
+        }
+        line("");
+    }
+    if let Some(note) = &help.note {
+        line(&escape(note));
+    }
+    out
 }
 
-/// Print plugin help text to stdout.
-fn print_plugin_help(info: &PluginInfo) {
-    write_plugin_help(info, &mut std::io::stdout());
+/// Whether `--help`/`-h` comes before `--` among the command's words and
+/// its arguments; after `--`, they are arguments for the command.
+pub fn has_help_token(command: &str, args: &[String]) -> bool {
+    command
+        .split_whitespace()
+        .chain(
+            args.iter()
+                .map(String::as_str)
+                .take_while(|arg| *arg != "--"),
+        )
+        .any(|arg| arg == "--help" || arg == "-h")
 }
 
-/// Print plugin help text to stderr (for error cases where meta captures stdout).
-fn eprint_plugin_help(info: &PluginInfo) {
-    write_plugin_help(info, &mut std::io::stderr());
+/// Parse the arguments of `meta <command>` with `P`: its help (or version)
+/// as a message, its error, escaped, as an error.
+pub fn parse_args<P: clap::Parser>(command: &str, args: &[String]) -> Result<P, CommandResult> {
+    let argv: Vec<String> = std::iter::once(format!("meta {command}"))
+        .chain(args.iter().cloned())
+        .collect();
+    P::try_parse_from(&argv).map_err(|e| {
+        use clap::error::ErrorKind;
+        match e.kind() {
+            ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+                CommandResult::Message(e.render().to_string().trim_end().to_string())
+            }
+            _ => {
+                let message = meta_core::args::escaped_error::<P>(&argv).to_string();
+                let message = message.strip_prefix("error: ").unwrap_or(&message);
+                CommandResult::Error(message.trim_end().to_string())
+            }
+        }
+    })
 }
 
 // ============================================================================
@@ -301,13 +342,22 @@ pub fn run_plugin(plugin: PluginDefinition) {
             println!("{json}");
         }
         "--meta-plugin-exec" => {
-            let request = match read_request_from_stdin() {
+            let mut request = match read_request_from_stdin() {
                 Ok(req) => req,
                 Err(e) => {
                     eprintln!("Failed to parse plugin request: {e}");
                     std::process::exit(1);
                 }
             };
+            if request.cwd.as_os_str().is_empty() {
+                match std::env::current_dir() {
+                    Ok(cwd) => request.cwd = cwd,
+                    Err(e) => {
+                        eprintln!("Error: Failed to get working directory: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
 
             match (plugin.execute)(request) {
                 CommandResult::Plan(commands, parallel) => {
@@ -331,17 +381,17 @@ pub fn run_plugin(plugin: PluginDefinition) {
                         eprintln!("error: {err}");
                         eprintln!();
                         // Print help to stderr when there's an error (so it's visible even if meta captures stdout)
-                        eprint_plugin_help(&plugin.info);
+                        eprint!("{}", help_text(&plugin.info));
                         std::process::exit(1);
                     } else {
-                        print_plugin_help(&plugin.info);
+                        print!("{}", help_text(&plugin.info));
                         std::process::exit(0);
                     }
                 }
             }
         }
         "--help" | "-h" => {
-            print_plugin_help(&plugin.info);
+            print!("{}", help_text(&plugin.info));
         }
         _ => {
             eprintln!("Unknown flag: {}. This binary is a meta plugin.", args[1]);

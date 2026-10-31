@@ -938,6 +938,7 @@ name = "meta_core"
 version = "0.2.22"
 dependencies = [
  "anyhow",
+ "clap",
  "dirs",
  "serde",
  "serde_json",
@@ -954,6 +955,7 @@ dependencies = [
  "clap",
  "colored",
  "console",
+ "dirs",
  "indexmap",
  "indicatif",
  "log",
@@ -965,6 +967,8 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "serial_test",
+ "shlex",
  "tempfile",
 ]
 
@@ -975,14 +979,12 @@ dependencies = [
  "anyhow",
  "chrono",
  "console",
- "dirs",
  "log",
  "meta",
  "meta_core",
  "serde",
  "serde_json",
- "serde_yaml_ng",
- "serial_test",
+ "shlex",
  "tempfile",
 ]
 
@@ -991,8 +993,10 @@ name = "meta_plugin_protocol"
 version = "0.2.22"
 dependencies = [
  "anyhow",
+ "clap",
  "env_logger",
  "indexmap",
+ "meta_core",
  "serde",
  "serde_json",
 ]
@@ -1002,6 +1006,7 @@ name = "meta_project_cli"
 version = "0.2.22"
 dependencies = [
  "anyhow",
+ "clap",
  "indexmap",
  "meta",
  "meta_core",

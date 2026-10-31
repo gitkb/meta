@@ -10,7 +10,7 @@ use meta_core::display::{escape, escape_lines, escape_path};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use crate::git_utils;
+use meta_core::gitdir;
 
 /// Discovered information about a repo within a worktree set.
 #[derive(Debug, Clone, Serialize)]
@@ -155,8 +155,8 @@ fn readable_tree(
             let children = nested
                 .as_ref()
                 .filter(|_| visited.insert(path.canonicalize().unwrap_or_else(|_| path.clone())))
-                .and_then(|config| config::parse_meta_config(config).ok())
-                .map(|(projects, _)| readable_tree(&path, &projects, visited))
+                .and_then(|config| config::Workspace::load(config).ok())
+                .map(|nested| readable_tree(&path, &nested.projects, visited))
                 .unwrap_or_default();
             config::MetaTreeNode {
                 info: project.clone(),
@@ -222,8 +222,10 @@ pub fn holds_meta_checkout(dir: &Path) -> bool {
             // whose git directory can't be found (moved, with relative paths)
             // may be meta's too: it is not taken for a plain clone
             Ok(_) => {
-                let meta_made =
-                    meta_core::config::gitfile_target(entry.path()).is_none_or(|admin| {
+                let meta_made = gitdir::gitfile_target(entry.path())
+                    .ok()
+                    .flatten()
+                    .is_none_or(|admin| {
                         // only a record that is surely absent says "not meta's"
                         !admin.is_dir()
                             || !matches!(
@@ -254,7 +256,9 @@ pub fn discover_worktree_repos(task_dir: &Path) -> Result<Vec<WorktreeRepoInfo>>
 
 fn with_branch(member: WorktreeMemberInfo) -> WorktreeRepoInfo {
     WorktreeRepoInfo {
-        branch: git_utils::current_branch(&member.path).unwrap_or_else(|| "HEAD".to_string()),
+        branch: meta_core::git::query(&member.path, ["branch", "--show-current"])
+            .filter(|branch| !branch.is_empty())
+            .unwrap_or_else(|| "HEAD".to_string()),
         alias: member.alias,
         path: member.path,
         source_path: member.source_path,
@@ -274,7 +278,7 @@ pub fn discover_worktree_members(task_dir: &Path) -> Result<Vec<WorktreeMemberIn
         .map(|m| m.is_file())
         .unwrap_or(false)
     {
-        let source = source_repo_from_gitfile(&dot_git)?;
+        let source = source_repo(task_dir)?;
         repos.push(WorktreeMemberInfo {
             alias: ".".to_string(),
             path: task_dir.to_path_buf(),
@@ -343,7 +347,7 @@ fn discover_repos_recursive(
                 continue;
             }
             // This is a worktree repo — use relative path from root as alias
-            let source = match source_repo_from_gitfile(&sub_git) {
+            let source = match source_repo(&sub_path) {
                 Ok(s) => s,
                 Err(e) => {
                     log::debug!(
@@ -472,8 +476,8 @@ pub fn discover_worktree_members_recursive(task_dir: &Path) -> Result<Vec<Worktr
         if !metadata.is_file() || !scanned.member(task_dir, path) {
             continue;
         }
-        validate_worktree_gitfile(&git_file)?;
-        let source_path = source_repo_from_gitfile(&git_file)?;
+        gitdir::linked(path)?;
+        let source_path = source_repo(path)?;
         let alias = if path == task_dir {
             ".".to_string()
         } else {
@@ -489,82 +493,30 @@ pub fn discover_worktree_members_recursive(task_dir: &Path) -> Result<Vec<Worktr
     Ok(repos)
 }
 
-/// Require a live linked-worktree admin directory and matching backlink.
-/// Kept separate from legacy discovery so strict checks remain opt-in.
-fn validate_worktree_gitfile(git_file: &Path) -> Result<()> {
-    let content = std::fs::read_to_string(git_file)?;
-    let target = content
-        .trim()
-        .strip_prefix("gitdir: ")
-        .ok_or_else(|| anyhow::anyhow!("Invalid .git file format at {}", escape_path(git_file)))?;
-    let admin = git_file
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join(target)
-        .canonicalize()
-        .with_context(|| format!("Missing worktree metadata for {}", escape_path(git_file)))?;
-    anyhow::ensure!(
-        admin.join("HEAD").is_file(),
-        "Missing worktree HEAD at {}",
-        escape_path(&admin)
-    );
-    let common = std::fs::read_to_string(admin.join("commondir"))?;
-    let common = admin.join(common.trim()).canonicalize()?;
-    anyhow::ensure!(
-        common.join("HEAD").is_file() && common.join("objects").is_dir(),
-        "Incomplete common Git metadata at {}",
-        escape_path(&common)
-    );
-    let backlink = std::fs::read_to_string(admin.join("gitdir"))?;
-    anyhow::ensure!(
-        admin.join(backlink.trim()).canonicalize()? == git_file.canonicalize()?,
-        "Worktree metadata backlink does not match {}",
-        escape_path(git_file)
-    );
-    Ok(())
-}
-
-/// Parse a .git file to find the primary checkout path.
-/// .git file contains: "gitdir: /path/to/primary/.git/worktrees/<name>"
-fn source_repo_from_gitfile(git_file: &Path) -> Result<PathBuf> {
-    let content = std::fs::read_to_string(git_file)
-        .with_context(|| format!("Failed to read .git file at {}", escape_path(git_file)))?;
-
-    let gitdir = content
-        .trim()
-        .strip_prefix("gitdir: ")
-        .ok_or_else(|| anyhow::anyhow!("Invalid .git file format at {}", escape_path(git_file)))?;
-
-    // gitdir points to: /path/to/primary/.git/worktrees/<name>
-    // We need: /path/to/primary/
-    let gitdir_path = PathBuf::from(gitdir);
-    let gitdir_path = if gitdir_path.is_absolute() {
-        gitdir_path
+/// The checkout the linked worktree at `checkout` was made from: the
+/// directory above the git directory that holds its admin directory
+/// (`<repo>/.git/worktrees/<id>`). An absolute `gitdir:` is taken as written.
+fn source_repo(checkout: &Path) -> Result<PathBuf> {
+    let target = gitdir::read_gitfile(checkout)?
+        .with_context(|| format!("{} has no .git file", escape_path(checkout)))?;
+    let admin = if target.is_absolute() {
+        target
     } else {
-        git_file
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join(gitdir_path)
+        checkout
+            .join(&target)
             .canonicalize()
-            .with_context(|| format!("Cannot resolve gitdir from {}", escape_path(git_file)))?
+            .with_context(|| format!("Cannot resolve gitdir of {}", escape_path(checkout)))?
     };
-    // Walk up: worktrees/<name> -> .git -> repo root
-    let dot_git_dir = gitdir_path
-        .parent() // strip worktree name
-        .and_then(|p| p.parent()) // strip "worktrees"
-        .ok_or_else(|| {
-            anyhow::anyhow!("Cannot derive source repo from gitdir: {}", escape(gitdir))
-        })?;
-
-    // dot_git_dir is now the .git directory; parent is the repo root
-    let repo_root = dot_git_dir.parent().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Cannot find repo root from .git dir: {}",
-            escape_path(dot_git_dir)
-        )
-    })?;
-
-    Ok(repo_root.to_path_buf())
+    admin
+        .ancestors()
+        .nth(3)
+        .map(Path::to_path_buf)
+        .with_context(|| {
+            format!(
+                "Cannot derive source repo from gitdir {}",
+                escape_path(&admin)
+            )
+        })
 }
 
 #[cfg(test)]
@@ -585,8 +537,9 @@ mod recursive_tests {
         };
         config(&workspace, r#""parent": {"repo": "x", "meta": true}"#);
         config(&workspace.join("parent"), r#""x": "x""#);
-        let (projects, _) =
-            meta_core::config::parse_meta_config(&workspace.join(".meta.yaml")).unwrap();
+        let projects = meta_core::config::Workspace::load(&workspace.join(".meta.yaml"))
+            .unwrap()
+            .projects;
         let tree = meta_core::config::walk_projects(&workspace, &projects, None).unwrap();
 
         // the set doesn't hold parent: the workspace's config tells about x
@@ -762,7 +715,7 @@ mod recursive_tests {
             format!("gitdir: ../.sources/repo0/.git/worktrees/{name}\n"),
         )
         .unwrap();
-        assert_eq!(source_repo_from_gitfile(&git_file).unwrap(), source);
+        assert_eq!(source_repo(&root).unwrap(), source);
         assert_eq!(
             discover_worktree_repos_recursive(&root).unwrap()[0].source_path,
             source

@@ -338,8 +338,10 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
 }
 
 /// Check if a repo's `origin` remote is exactly the given owner/repo.
+/// The URL git fetches from is what counts here, `insteadOf` rewrites
+/// applied (an origin of `gh:repo` may be GitHub's `org/repo`).
 pub fn repo_matches_spec(repo_path: &Path, spec: &str) -> bool {
-    meta_core::git::remote_url(repo_path)
+    meta_core::git::query(repo_path, ["remote", "get-url", "origin"])
         .and_then(|url| url.parse::<meta_core::git::GitUrl>().ok()?.owner_repo())
         .is_some_and(|owner_repo| owner_repo.eq_ignore_ascii_case(spec))
 }
@@ -490,13 +492,7 @@ mod tests {
     #[test]
     fn repo_matches_spec_requires_the_exact_repo() {
         let tmp = tempfile::tempdir().unwrap();
-        let run = |args: &[&str]| {
-            std::process::Command::new("git")
-                .args(args)
-                .current_dir(tmp.path())
-                .output()
-                .unwrap()
-        };
+        let run = |args: &[&str]| meta_core::git::run(tmp.path(), args).unwrap();
         run(&["init", "-q"]);
         run(&[
             "remote",
@@ -507,6 +503,10 @@ mod tests {
         assert!(!repo_matches_spec(tmp.path(), "org/api"));
         assert!(!repo_matches_spec(tmp.path(), "api-legacy"));
         assert!(repo_matches_spec(tmp.path(), "org/api-legacy"));
+        // through an alias, as git fetches it
+        run(&["remote", "set-url", "origin", "gh:api.git"]);
+        run(&["config", "url.git@github.com:org/.insteadOf", "gh:"]);
+        assert!(repo_matches_spec(tmp.path(), "org/api"));
     }
 
     // ── resolve_branch ──────────────────────────────────────

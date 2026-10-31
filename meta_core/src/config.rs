@@ -185,15 +185,25 @@ pub fn redact_config_text(text: &str) -> Cow<'_, str> {
             true => Cow::Borrowed(
                 "<not shown: the config can't be read, and an escaped URL in it may hold credentials>",
             ),
-            false => redact_urls(text),
+            false => redact_lines(text),
         };
     };
     let in_values = redact_strings(&mut values);
-    match in_values || redact_urls(text) != text {
+    match in_values || redact_lines(text) != text {
         true => Cow::Owned(serde_yaml_ng::to_string(&values).unwrap_or_else(|_| {
             "<not shown: the config could not be written out again>".to_string()
         })),
         false => Cow::Borrowed(text),
+    }
+}
+
+/// [`redact_urls`] line by line: no config value holds a line break, so a
+/// URL in a config ends at one.
+fn redact_lines(text: &str) -> Cow<'_, str> {
+    let lines: Vec<_> = text.split_inclusive('\n').map(redact_urls).collect();
+    match lines.iter().all(|line| matches!(line, Cow::Borrowed(_))) {
+        true => Cow::Borrowed(text),
+        false => Cow::Owned(lines.concat()),
     }
 }
 

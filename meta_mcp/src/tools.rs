@@ -2117,11 +2117,15 @@ mod tests {
             assert!(result.contains("git@h:b.git"), "{result}");
         }
         // a config without credentials comes back as written, commands with
-        // a URL and an `@` in them included
-        let config = "# Team workspace\nprojects:\n  a: git@h:a.git\nworktree:\n  hooks:\n    post-create: npm config set registry https://npm.example && git config user.email bot@example\n";
-        std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
-        let result = call(&server, "meta_get_config", json!({})).unwrap().text;
-        assert!(result.ends_with(config), "{result}");
+        // a URL and an `@` in them included, and a URL's scan ends at a line
+        for config in [
+            "# Team workspace\nprojects:\n  a: git@h:a.git\nworktree:\n  hooks:\n    post-create: npm config set registry https://npm.example && git config user.email bot@example\n",
+            "# Cache: redis://cache.internal:6379 (ask ops)\nprojects:\n  a: git@h:a.git\n",
+        ] {
+            std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
+            let result = call(&server, "meta_get_config", json!({})).unwrap().text;
+            assert!(result.ends_with(config), "{result}");
+        }
         // a tag may hold one too
         std::fs::write(
             tmp.path().join(".meta.yaml"),

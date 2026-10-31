@@ -127,10 +127,12 @@ impl GitUrl {
         Some(format!("{owner}/{repo}"))
     }
 
-    /// The path's components, last first, the last without `.git`.
+    /// The path's components, last first, the last without `.git` (a
+    /// trailing `/.git` goes too, as git drops it).
     fn components(&self) -> impl Iterator<Item = &str> {
         let path = self.path.trim_end_matches(['/', '\\']);
         let path = path.strip_suffix(".git").unwrap_or(path);
+        let path = path.trim_end_matches(['/', '\\']);
         path.rsplit(['/', '\\']).take_while(|p| !p.is_empty())
     }
 }
@@ -232,5 +234,6 @@ mod tests {
         }
         assert_eq!(parse("api").owner_repo(), None);
         assert_eq!(parse("git@host:repo.git").name(), Some("repo"));
+        assert_eq!(parse("/srv/repo/.git").name(), Some("repo"));
     }
 }

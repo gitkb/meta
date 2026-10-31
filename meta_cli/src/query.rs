@@ -155,7 +155,8 @@ impl RepoState {
         let status = RepoStatus::read(path).ok();
         let branch = match &status {
             Some(status) => status.branch.clone().unwrap_or_else(|| "HEAD".to_string()),
-            None => "unknown".to_string(),
+            // a bare repository has a branch but no status
+            None => meta_core::git::current_branch(path).unwrap_or_else(|| "unknown".to_string()),
         };
         let status = status.unwrap_or_default();
         let (ahead, behind) = status.ahead_behind.unwrap_or_default();

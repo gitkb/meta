@@ -1,4 +1,5 @@
-//! meta run from a git hook acts on its workspace's repos, not the hook's.
+//! meta's git: run from a git hook it acts on its workspace's repos, not
+//! the hook's; and what it reads from each kind of repository.
 
 use meta_core::git::run;
 use std::path::Path;
@@ -87,4 +88,32 @@ fn a_hooks_repository_variables_do_not_reach_metas_git() {
         "{}",
         String::from_utf8_lossy(&out.stdout)
     );
+}
+
+#[test]
+fn context_shows_the_branch_of_a_bare_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workspace = tmp.path().canonicalize().unwrap();
+    run(&workspace, ["init", "-q", "--bare", "-b", "main", "mirror"]).unwrap();
+    std::fs::write(
+        workspace.join(".meta.yaml"),
+        "projects:\n  mirror:\n    path: mirror\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_meta"))
+        .args(["context", "--json", "--no-cache"])
+        .current_dir(&workspace)
+        .env("HOME", &workspace)
+        .env("XDG_CONFIG_HOME", workspace.join("xdg"))
+        .env("GIT_CONFIG_GLOBAL", workspace.join("no-gitconfig"))
+        .env("META_DATA_DIR", workspace.join("meta-data"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let context: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(context["repos"][0]["branch"], "main", "{context}");
 }

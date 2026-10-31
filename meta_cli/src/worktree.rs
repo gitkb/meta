@@ -256,9 +256,7 @@ pub fn discover_worktree_repos(task_dir: &Path) -> Result<Vec<WorktreeRepoInfo>>
 
 fn with_branch(member: WorktreeMemberInfo) -> WorktreeRepoInfo {
     WorktreeRepoInfo {
-        branch: meta_core::git::query(&member.path, ["branch", "--show-current"])
-            .filter(|branch| !branch.is_empty())
-            .unwrap_or_else(|| "HEAD".to_string()),
+        branch: meta_core::git::current_branch(&member.path).unwrap_or_else(|| "HEAD".to_string()),
         alias: member.alias,
         path: member.path,
         source_path: member.source_path,

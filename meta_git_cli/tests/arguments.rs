@@ -121,15 +121,13 @@ fn worktree_list_finds_the_workspace_of_the_requests_directory() {
         "projects:\n  a:\n    path: a\n",
     )
     .unwrap();
+    // through meta's own git, so no git variable around the test reaches it
     let git = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = meta_core::git::git(&repo)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(["-c", "commit.gpgsign=false"])
             .args(args)
-            .current_dir(&repo)
             .env("GIT_CONFIG_GLOBAL", tmp.join("no-gitconfig"))
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
             .output()
             .unwrap();
         assert!(out.status.success(), "{}", text(&out));

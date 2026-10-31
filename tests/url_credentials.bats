@@ -85,8 +85,15 @@ meta_without_token() {
     [[ "$output" == *"URL: https://***@127.0.0.1:9/org/svc.git"* ]]
     meta_without_token context --json --no-cache
     [ "$(jq -r '.repos[] | select(.name == "svc") | .repo' <<< "$output")" = "https://***@127.0.0.1:9/org/svc.git" ]
+    # the cache it writes, and what it shows from it
     meta_without_token context --json
     [ "$status" -eq 0 ]
+    meta_without_token context --json
+    [ "$(jq -r '.repos[] | select(.name == "svc") | .repo' <<< "$output")" = "https://***@127.0.0.1:9/org/svc.git" ]
+    run grep -rlq "127.0.0.1:9/org/svc.git" "$META_DATA_DIR"
+    [ "$status" -eq 0 ]
+    run grep -rq "$TOKEN" "$META_DATA_DIR"
+    [ "$status" -eq 1 ]
 
     # svc can't be reached; lib is cloned with its token
     RUST_LOG=debug meta_without_token git update

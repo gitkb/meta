@@ -962,7 +962,7 @@ impl McpServer {
         let path = config::find_meta_config_in(meta_dir)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
         let content = std::fs::read_to_string(&path)?;
-        let content = meta_core::git::redact_urls(&content);
+        let content = config::redact_config_text(&content);
         Ok(format!("Config file: {}\n\n{}", path.display(), content))
     }
 
@@ -2678,6 +2678,16 @@ mod tests {
             result.ends_with("projects:\n  a: https://***@h/a.git\n  b: git@h:b.git\n"),
             "{result}"
         );
+        // JSON may spell a URL so no scan of the text reads it
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            r#"{"projects": {"a": "https:\/\/alice:ghp_SECRET@h\/a.git", "b": "git@h:b.git"}}"#,
+        )
+        .unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(!result.contains("ghp_SECRET"), "{result}");
+        assert!(result.contains("https://***@h/a.git"), "{result}");
+        assert!(result.contains("git@h:b.git"), "{result}");
     }
 
     #[test]

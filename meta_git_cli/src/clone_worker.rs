@@ -320,9 +320,19 @@ impl StderrTail {
                     .read_until(b'\n', &mut buf)
                     .is_ok_and(|n| n > 0)
                 {
+                    let cut = buf.len() as u64 == Self::LINE_BYTES && !buf.ends_with(b"\n");
+                    let text = String::from_utf8_lossy(&buf);
+                    let mut line = text.trim_end();
+                    if cut {
+                        // the rest of a long line goes, and so does its last
+                        // word, which may be the start of a URL
+                        let _ = reader.skip_until(b'\n');
+                        line = line
+                            .rsplit_once(char::is_whitespace)
+                            .map_or("", |(kept, _)| kept);
+                    }
                     // git's own errors may show the URL with its credentials
-                    let line = String::from_utf8_lossy(&buf);
-                    let line = meta_core::git::redact_urls(line.trim_end()).into_owned();
+                    let line = meta_core::git::redact_urls(line).into_owned();
                     buf.clear();
                     on_line(&line);
                     let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());
@@ -363,6 +373,27 @@ mod tests {
         assert_eq!(seen.load(Ordering::SeqCst), 100_000);
         assert_eq!(text.lines().count(), StderrTail::KEPT_LINES);
         assert!(text.ends_with("line 99999"));
+    }
+
+    #[test]
+    fn stderr_tail_shows_no_credentials() {
+        // a URL that a cut at LINE_BYTES would split
+        let pad = "x ".repeat(2041);
+        let output =
+            format!("{pad}https://alice:ghp_SECRET@h/r\nfatal: 'https://a:ghp_SECRET@h/r'\n");
+        let shown = Arc::new(Mutex::new(String::new()));
+        let seen = Arc::clone(&shown);
+        let tail = StderrTail::spawn(Some(std::io::Cursor::new(output)), move |line| {
+            seen.lock().unwrap().push_str(line);
+        });
+        let text = tail.text();
+        assert!(text.ends_with("fatal: 'https://***@h/r'"), "{text}");
+        for printed in [text, shown.lock().unwrap().clone()] {
+            assert!(
+                !printed.contains("ghp_SECRET") && !printed.contains("alice"),
+                "{printed}"
+            );
+        }
     }
 
     #[test]

@@ -293,7 +293,7 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
         Err(e) => return CommandResult::Error(format!("{e}")),
     };
 
-    let root_repo = meta_core::git::remote_url(&start_dir).unwrap_or_default();
+    let root_repo = meta_core::git::remote_url(&start_dir);
     let project_nodes: Vec<ProjectTreeNode> = tree.iter().map(to_project_tree_node).collect();
     let abs_cwd = cwd
         .canonicalize()
@@ -345,7 +345,7 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
             .unwrap_or(abs_root);
         let output = ProjectListOutput {
             path: ".".to_string(),
-            repo: root_repo,
+            repo: root_repo.unwrap_or_default(),
             root: abs_root,
             cwd: abs_cwd_string,
             worktree: linked_worktree,
@@ -358,7 +358,7 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
         CommandResult::Message(json)
     } else {
         let mut output = String::new();
-        output.push_str(&format!(". ({})\n", remote_label(Some(&root_repo))));
+        output.push_str(&format!(". ({})\n", remote_label(root_repo.as_ref())));
         format_project_tree(&project_nodes, &mut output, "");
         if output.ends_with('\n') {
             output.pop();
@@ -380,8 +380,7 @@ fn to_project_tree_node(node: &MetaTreeNode) -> ProjectTreeNode {
 
 /// A project's remote URL as shown in `meta project list`.
 fn remote_label(repo: Option<&GitUrl>) -> String {
-    repo.filter(|r| !r.is_empty())
-        .map_or_else(|| "no remote".to_string(), GitUrl::to_string)
+    repo.map_or_else(|| "no remote".to_string(), GitUrl::to_string)
 }
 
 /// Format a project tree with box-drawing characters: each project's name, its

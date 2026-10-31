@@ -74,6 +74,11 @@ fn clone_and_commit_refuse_what_they_do_not_take() {
             &["--depth", "https://a:ghp_SECRET@h/r", "u"],
             "invalid value 'https://***@h/r'",
         ),
+        (
+            "git clone",
+            &["--depth", "https://a'b:ghp_SECRET@h/r", "u"],
+            "invalid value 'https://***@h/r'",
+        ),
     ] {
         let out = meta_git(tmp.path(), command, args, json!({}));
         assert!(!out.status.success(), "{args:?}: {}", text(&out));

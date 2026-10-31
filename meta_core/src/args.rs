@@ -1,7 +1,6 @@
 //! Command-line errors that never echo control characters.
 
-use crate::display::escape;
-use crate::git::redact_urls;
+use crate::git::GitUrl;
 use std::ffi::OsStr;
 
 /// The error to show for `args` that `P` rejected. Clap quotes rejected
@@ -14,7 +13,7 @@ pub fn escaped_error<P: clap::Parser>(
 ) -> clap::Error {
     let shown = args
         .into_iter()
-        .map(|arg| escape(&redact_urls(&arg.as_ref().to_string_lossy())).into_owned())
+        .map(|arg| GitUrl::from(arg.as_ref().to_string_lossy().into_owned()).to_string())
         .collect::<Vec<_>>();
     match P::try_parse_from(shown) {
         Err(e) => e,

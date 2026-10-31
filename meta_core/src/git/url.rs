@@ -9,7 +9,7 @@ use std::fmt;
 /// `Debug`, `Serialize`) hides the password or token it may carry
 /// (`https://***@host/org/repo`); the URL itself reaches only git's argv,
 /// through [`GitUrl::as_git_arg`].
-#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GitUrl(String);
 
 /// A [`GitUrl`] taken apart as git does, in the order git checks the forms.
@@ -17,9 +17,7 @@ pub struct GitUrl(String);
 enum Parts<'a> {
     /// `<transport>::<address>`: git hands the address to
     /// `git-remote-<transport>` (`ext::`, `fd::`, `codecommit::`).
-    Helper {
-        address: &'a str,
-    },
+    Helper(&'a str),
     /// `scheme://[userinfo@]host[:port]/path`
     Url {
         scheme: &'a str,
@@ -47,14 +45,6 @@ impl From<String> for GitUrl {
 impl From<&str> for GitUrl {
     fn from(url: &str) -> Self {
         GitUrl(url.to_string())
-    }
-}
-
-impl std::str::FromStr for GitUrl {
-    type Err = std::convert::Infallible;
-
-    fn from_str(url: &str) -> Result<Self, Self::Err> {
-        Ok(url.into())
     }
 }
 
@@ -95,20 +85,16 @@ impl GitUrl {
         &self.0
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
     /// The URL without the credentials in it (see [`redact_urls`]; its
     /// authority ends only at `/`, `?` or `#`).
-    fn redacted(&self) -> Cow<'_, str> {
+    pub(crate) fn redacted(&self) -> Cow<'_, str> {
         redact(&self.0, |c| matches!(c, '/' | '?' | '#'))
     }
 
     /// Whether printing this URL hides credentials it holds: a command
     /// shown with it won't run as printed.
     pub fn hides_credentials(&self) -> bool {
-        matches!(self.redacted(), Cow::Owned(_))
+        self.redacted() != self.0
     }
 
     /// The URL taken apart as git does.
@@ -117,7 +103,7 @@ impl GitUrl {
         // A remote helper comes first: `ext::ssh -p 2222 host` is no scp
         if let Some((transport, address)) = url.split_once("::") {
             if is_scheme(transport) {
-                return Parts::Helper { address };
+                return Parts::Helper(address);
             }
         }
         if let Some((scheme, rest)) = url.split_once("://").filter(|(s, _)| is_scheme(s)) {
@@ -191,11 +177,6 @@ impl GitUrl {
         (valid_host(host) && user.is_none_or(is_plain_user)).then_some((user, host, port))
     }
 
-    /// Whether git reaches this remote through ssh (see [`GitUrl::ssh`]).
-    pub fn is_ssh(&self) -> bool {
-        self.ssh().is_some()
-    }
-
     /// Whether `other` names the same repository: the same URL but for
     /// `.git`, a trailing `/`, an ssh port or ssh's default user `git`.
     pub fn same_repository(&self, other: &GitUrl) -> bool {
@@ -218,7 +199,7 @@ impl GitUrl {
                 ..
             } => (scheme, userinfo, host, port),
             Parts::Scp { user, host, .. } => ("ssh", user, host, None),
-            Parts::Helper { .. } => return self.0.trim().to_string(),
+            Parts::Helper(_) => return self.0.trim().to_string(),
             Parts::Local(_) => return path.to_string(),
         };
         let user = user.map(|u| format!("{u}@")).unwrap_or_default();
@@ -257,7 +238,7 @@ impl GitUrl {
     /// The path without a trailing `/`, `.git` or `/.git`, as git drops them.
     fn repo_path(&self) -> &str {
         let path = match self.parts() {
-            Parts::Helper { address: path, .. }
+            Parts::Helper(path)
             | Parts::Url { path, .. }
             | Parts::Scp { path, .. }
             | Parts::Local(path) => path,
@@ -272,11 +253,9 @@ impl GitUrl {
 /// `scheme://userinfo@host` in it hidden: `https://alice:token@host/repo`
 /// becomes `https://***@host/repo`. An ssh user name alone stays
 /// (`ssh://git@host/repo`): it is no secret. A URL's authority ends at
-/// `/`, `?`, `#`, whitespace or a quote, and runs to its last `@`.
+/// `/`, `?`, `#` or whitespace, and runs to its last `@`.
 pub fn redact_urls(text: &str) -> Cow<'_, str> {
-    redact(text, |c| {
-        matches!(c, '/' | '?' | '#' | '\'' | '"' | '`' | '<' | '>') || c.is_whitespace()
-    })
+    redact(text, |c| matches!(c, '/' | '?' | '#') || c.is_whitespace())
 }
 
 /// [`redact_urls`], with the authority ending where `ends` says.
@@ -406,7 +385,7 @@ mod tests {
         // what isn't a scheme is no URL
         assert_eq!(parse("/srv/a://b").parts(), Parts::Local("/srv/a://b"));
         // git fails on a port that isn't one; meta doesn't reach it over ssh
-        assert!(!parse("ssh://host:port/repo").is_ssh());
+        assert!(parse("ssh://host:port/repo").ssh().is_none());
     }
 
     #[test]
@@ -418,30 +397,30 @@ mod tests {
             "codecommit::us-east-1://profile@repo",
         ] {
             let url = parse(url);
-            assert!(matches!(url.parts(), Parts::Helper { .. }), "{url:?}");
-            assert!(!url.is_ssh(), "{url:?}");
+            assert!(matches!(url.parts(), Parts::Helper(_)), "{url:?}");
+            assert!(url.ssh().is_none(), "{url:?}");
         }
         assert_eq!(parse("ext::sh -c git% %s% /srv/r1.git").name(), Some("r1"));
         // git allows a helper name to start with a digit
-        assert!(matches!(parse("9p::x").parts(), Parts::Helper { .. }));
+        assert!(matches!(parse("9p::x").parts(), Parts::Helper(_)));
         // not a helper name: what git reads as scp-like or local
-        assert!(parse("host:repo::x").is_ssh());
+        assert!(parse("host:repo::x").ssh().is_some());
         assert_eq!(parse("./a::b").parts(), Parts::Local("./a::b"));
     }
 
     #[test]
     fn only_plain_ssh_hosts_are_ssh() {
-        assert!(parse("git@github.com:org/repo").is_ssh());
-        assert!(parse("ssh://git@github.com/org/repo").is_ssh());
-        assert!(parse("SSH://git@github.com/org/repo").is_ssh());
-        assert!(parse("host.local:repo").is_ssh());
-        assert!(!parse("https://github.com/org/repo").is_ssh());
-        assert!(!parse("/srv/repo").is_ssh());
-        assert!(!parse("ssh://user:pw@host/repo").is_ssh());
+        assert!(parse("git@github.com:org/repo").ssh().is_some());
+        assert!(parse("ssh://git@github.com/org/repo").ssh().is_some());
+        assert!(parse("SSH://git@github.com/org/repo").ssh().is_some());
+        assert!(parse("host.local:repo").ssh().is_some());
+        assert!(parse("https://github.com/org/repo").ssh().is_none());
+        assert!(parse("/srv/repo").ssh().is_none());
+        assert!(parse("ssh://user:pw@host/repo").ssh().is_none());
         // what ssh would read as an option
-        assert!(!parse("ssh://-oProxyCommand=x@host/repo").is_ssh());
-        assert!(!parse("ssh://-oProxyCommand/repo").is_ssh());
-        assert!(!parse("git@bad..host:repo").is_ssh());
+        assert!(parse("ssh://-oProxyCommand=x@host/repo").ssh().is_none());
+        assert!(parse("ssh://-oProxyCommand/repo").ssh().is_none());
+        assert!(parse("git@bad..host:repo").ssh().is_none());
     }
 
     #[test]
@@ -462,6 +441,9 @@ mod tests {
             ),
             ("ssh://git:ghp_SECRET@host/r", "ssh://***@host/r"),
             ("ssh://git%3Aghp_SECRET@host/r", "ssh://***@host/r"),
+            // one URL's authority ends only at `/`, `?` or `#`
+            ("https://a b:ghp_SECRET@h/r", "https://***@h/r"),
+            ("https://a'b:ghp_SECRET@h/r", "https://***@h/r"),
             // an `@` after the host is no userinfo
             ("https://host?a=b@c", "https://host?a=b@c"),
             ("https://host#x@y", "https://host#x@y"),

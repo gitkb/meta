@@ -8,6 +8,7 @@ use crate::git::GitUrl;
 use crate::gitdir;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -170,6 +171,43 @@ fn config_file(path: PathBuf) -> anyhow::Result<Option<PathBuf>> {
     }
     std::fs::File::open(&path).with_context(|| format!("Cannot read {}", escape_path(&path)))?;
     Ok(Some(path))
+}
+
+/// A config file's text without the credentials in its URLs: as written,
+/// unless a value still holds one that the scan of the text missed (JSON's
+/// `\/` or `\u` escapes); then its values, written out again.
+pub fn redact_config_text(text: &str) -> Cow<'_, str> {
+    let shown = crate::git::redact_urls(text);
+    let Ok(mut values) = serde_yaml_ng::from_str(&shown) else {
+        return shown;
+    };
+    match redact_strings(&mut values) {
+        true => Cow::Owned(serde_yaml_ng::to_string(&values).unwrap_or_default()),
+        false => shown,
+    }
+}
+
+/// Redact each string in `value` as a [`GitUrl`] prints; whether one changed.
+fn redact_strings(value: &mut serde_yaml_ng::Value) -> bool {
+    use serde_yaml_ng::Value;
+    match value {
+        Value::String(s) => {
+            let url = GitUrl::from(s.as_str());
+            let hidden = url.hides_credentials();
+            if hidden {
+                *s = url.redacted().into_owned();
+            }
+            hidden
+        }
+        Value::Sequence(items) => items
+            .iter_mut()
+            .fold(false, |hid, v| redact_strings(v) | hid),
+        Value::Mapping(map) => map
+            .values_mut()
+            .fold(false, |hid, v| redact_strings(v) | hid),
+        Value::Tagged(tagged) => redact_strings(&mut tagged.value),
+        _ => false,
+    }
 }
 
 /// The [`META_CONFIG_NAME`] file directly in `dir`. A candidate that cannot
@@ -613,7 +651,7 @@ fn validate_project(
         ));
     }
     if let Some(repo) = &info.repo {
-        if repo.is_empty() {
+        if repo.raw().is_empty() {
             return Err("repo is empty".into());
         }
         // printed as a GitUrl prints: escaped, without its credentials

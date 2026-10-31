@@ -2724,14 +2724,17 @@ mod tests {
             result.contains("a: https://h\n") && result.contains("repo: git@h:b.git"),
             "{result}"
         );
-        // one meta can't read shows nothing an escape could hide
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
+        // one meta can't read (a duplicate key) shows nothing an escape
+        // could hide
+        for config in [
             r#"{"projects":{"a":"https:\/\/alice:ghp_SECRET@h\/a","b":"x","b":"y"}}"#,
-        )
-        .unwrap();
-        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
-        assert!(!result.contains("ghp_SECRET"), "{result}");
+            "projects:\n  a: \"https://alice:ghp_SECRET\\x40h/a\"\n  b: x\n  b: y\n",
+            "projects:\n  a: \"https://alice:ghp_SECRET\\U00000040h/a\"\n  b: x\n  b: y\n",
+        ] {
+            std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
+            let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+            assert!(!result.contains("ghp_SECRET"), "{result}");
+        }
         // or a YAML escape
         std::fs::write(
             tmp.path().join(".meta.yaml"),

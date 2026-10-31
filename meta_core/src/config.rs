@@ -176,12 +176,12 @@ fn config_file(path: PathBuf) -> anyhow::Result<Option<PathBuf>> {
 /// A config file's text without the credentials in its URLs: as written,
 /// unless a value or the text holds one. Then the values are written out
 /// again as YAML, redacted, without the file's comments: the text may spell
-/// a URL so that no scan of it reads it (JSON's `\/` or `\u` escapes), and
+/// a URL so that no scan of it reads it (YAML's and JSON's `\` escapes), and
 /// a scan of compact JSON can run across fields. A file that can't be read
-/// is shown with its URLs redacted, or not at all if it holds such escapes.
+/// is shown with its URLs redacted, or not at all if it holds a `\`.
 pub fn redact_config_text(text: &str) -> Cow<'_, str> {
     let Ok(mut values) = serde_yaml_ng::from_str(text) else {
-        return match text.contains("\\/") || text.contains("\\u") {
+        return match text.contains('\\') {
             true => Cow::Borrowed(
                 "<not shown: the config can't be read, and an escaped URL in it may hold credentials>",
             ),

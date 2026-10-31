@@ -4,7 +4,7 @@
 //! meta's YAML configuration files.
 
 use crate::display::{escape, escape_path, is_unsafe_char};
-use crate::git::GitUrl;
+use crate::git::{redact_urls, GitUrl};
 use crate::gitdir;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -185,11 +185,11 @@ pub fn redact_config_text(text: &str) -> Cow<'_, str> {
             true => Cow::Borrowed(
                 "<not shown: the config can't be read, and an escaped URL in it may hold credentials>",
             ),
-            false => crate::git::redact_urls(text),
+            false => redact_urls(text),
         };
     };
     let in_values = redact_strings(&mut values);
-    match in_values || crate::git::redact_urls(text) != text {
+    match in_values || redact_urls(text) != text {
         true => Cow::Owned(serde_yaml_ng::to_string(&values).unwrap_or_else(|_| {
             "<not shown: the config could not be written out again>".to_string()
         })),
@@ -203,7 +203,7 @@ fn redact_strings(value: &mut serde_yaml_ng::Value) -> bool {
     use serde_yaml_ng::Value;
     match value {
         Value::String(s) => {
-            let shown = crate::git::redact_urls(s);
+            let shown = redact_urls(s);
             let hidden = shown != s.as_str();
             if hidden {
                 *s = shown.into_owned();
@@ -500,11 +500,11 @@ impl Workspace {
     /// load with the file and project named. The error shows no credentials:
     /// a URL may sit where a name, a path or a tag goes.
     pub fn load(meta_path: &Path) -> anyhow::Result<Self> {
-        Self::load_unchecked_errors(meta_path)
-            .map_err(|e| anyhow::anyhow!("{}", crate::git::redact_urls(&format!("{e:#}"))))
+        Self::read_unredacted(meta_path)
+            .map_err(|e| anyhow::anyhow!("{}", redact_urls(&format!("{e:#}"))))
     }
 
-    fn load_unchecked_errors(meta_path: &Path) -> anyhow::Result<Self> {
+    fn read_unredacted(meta_path: &Path) -> anyhow::Result<Self> {
         let config_str = std::fs::read_to_string(meta_path).with_context(|| {
             format!(
                 "Failed to read meta config file: '{}'",

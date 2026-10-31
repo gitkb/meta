@@ -10,7 +10,7 @@ mod status;
 mod url;
 
 pub use status::{RepoStatus, StatusEntry};
-pub use url::{redact_urls, GitUrl};
+pub use url::{redact_url, redact_urls, GitUrl};
 
 /// The variables that tie git to one repository, which git itself clears
 /// when it runs in another (`git rev-parse --local-env-vars`, less the

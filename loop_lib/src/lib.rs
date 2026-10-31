@@ -279,7 +279,7 @@ fn resolve_aliases(argv: &[String], aliases: &HashMap<String, String>) -> Result
 pub fn display_command(argv: &[String]) -> String {
     let shown: Vec<String> = argv
         .iter()
-        .map(|arg| meta_core::git::redact_urls(arg).into_owned())
+        .map(|arg| meta_core::git::redact_url(arg).into_owned())
         .collect();
     shlex::try_join(shown.iter().map(String::as_str)).unwrap_or_else(|_| shown.join(" "))
 }

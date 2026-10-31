@@ -419,6 +419,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_failed_fetch_shows_no_credentials() {
+        let tmp = init_git_repo();
+        // git refuses this URL before connecting, and quotes it whole
+        git(tmp.path())
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "http://a:ghp_SECRET%0A@127.0.0.1:9/r",
+            ])
+            .status()
+            .unwrap();
+        let message = format!("{:#}", git_fetch_branch(tmp.path(), "b").unwrap_err());
+        assert!(message.contains("http://***@127.0.0.1:9/r"), "{message}");
+        assert!(!message.contains("ghp_SECRET"), "{message}");
+    }
+
     /// Create a minimal git repo in a tempdir and return the tempdir handle.
     fn init_git_repo() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();

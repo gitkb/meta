@@ -121,8 +121,8 @@ fn handle_worktree_command(
         WorktreeCommands::Exec(args) => exec::handle_exec(args, verbose, json),
         WorktreeCommands::Prune(args) => prune::handle_prune(args, json, global_strict),
         WorktreeCommands::Unknown(args) => {
-            // shown as a URL shows: escaped, without credentials
-            let cmd = meta_core::git::GitUrl::from(args.first().cloned().unwrap_or_default());
+            let cmd = args.first().map_or("", String::as_str);
+            let cmd = escape(&meta_core::git::redact_url(cmd)).into_owned();
             // the help, then the error, which meta prints once
             eprint_worktree_help();
             anyhow::bail!("unrecognized worktree subcommand '{cmd}'");

@@ -146,10 +146,9 @@ impl GitUrl {
         &self.0
     }
 
-    /// The URL without the credentials in it (see [`redact_urls`]; its
-    /// authority ends only at `/`, `?` or `#`).
+    /// The URL without the credentials in it (see [`redact_url`]).
     fn redacted(&self) -> Cow<'_, str> {
-        redact(&self.0, |c| matches!(c, '/' | '?' | '#'))
+        redact_url(&self.0)
     }
 
     /// Whether printing this URL hides credentials it holds: a command
@@ -272,6 +271,12 @@ pub fn redact_urls(text: &str) -> Cow<'_, str> {
     redact(text, |c| {
         matches!(c, '/' | '?' | '#') || c.is_ascii_whitespace()
     })
+}
+
+/// One URL, or one command-line word, without the credentials in it (see
+/// [`redact_urls`]): its authority ends only at `/`, `?` or `#`.
+pub fn redact_url(url: &str) -> Cow<'_, str> {
+    redact(url, |c| matches!(c, '/' | '?' | '#'))
 }
 
 /// [`redact_urls`], with the authority ending where `ends` says.

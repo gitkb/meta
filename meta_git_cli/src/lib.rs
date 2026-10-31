@@ -145,8 +145,8 @@ fn build_passthrough_git_help(
         .chain(git_args.iter().cloned())
         .collect();
     let display_command = loop_lib::display_command(&git_argv);
-    // shown as a URL shows: escaped, without credentials
-    let subcommand = meta_core::git::GitUrl::from(subcommand.as_str());
+    let subcommand =
+        meta_core::display::escape(&meta_core::git::redact_url(subcommand)).into_owned();
     let scope = match get_project_directories_with_fallback(projects, cwd) {
         Ok(dirs) => {
             if dirs.is_empty() {

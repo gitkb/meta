@@ -83,6 +83,11 @@ meta_without_token() {
     [ "$(jq -r '.projects[] | select(.name == "lib") | .repo' <<< "$output")" = "https://***@example.invalid/org/lib.git" ]
     meta_without_token project check
     [[ "$output" == *"URL: https://***@127.0.0.1:9/org/svc.git"* ]]
+    # commands meta shows, as typed
+    meta_without_token --dry-run git remote set-url origin "https://$TOKEN@example.invalid/org/x.git"
+    [[ "$output" == *"git remote set-url origin 'https://***@example.invalid/org/x.git'"* ]]
+    meta_without_token git fetch "https://$TOKEN@example.invalid/org/x.git" --help
+    [ "$status" -eq 0 ]
     meta_without_token context --json --no-cache
     [ "$(jq -r '.repos[] | select(.name == "svc") | .repo' <<< "$output")" = "https://***@127.0.0.1:9/org/svc.git" ]
     # the cache it writes, and what it shows from it

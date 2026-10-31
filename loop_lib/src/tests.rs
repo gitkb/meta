@@ -482,6 +482,22 @@ fn test_dry_run_does_not_execute() {
 }
 
 #[test]
+fn shown_commands_hide_credentials() {
+    let argv = [
+        "git",
+        "remote",
+        "set-url",
+        "origin",
+        "https://a:ghp_SECRET@h/r",
+    ]
+    .map(String::from);
+    assert_eq!(
+        display_command(&argv),
+        "git remote set-url origin 'https://***@h/r'"
+    );
+}
+
+#[test]
 fn test_dry_run_returns_success() {
     let temp_dir = TempDir::new().unwrap();
 

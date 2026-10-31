@@ -274,9 +274,14 @@ fn resolve_aliases(argv: &[String], aliases: &HashMap<String, String>) -> Result
     Ok(words)
 }
 
-/// `argv` as one line, quoted so that it reads back as the same words.
+/// `argv` as one line, quoted so that it reads back as the same words, with
+/// the credentials in URLs hidden: it is for showing, never for running.
 pub fn display_command(argv: &[String]) -> String {
-    shlex::try_join(argv.iter().map(String::as_str)).unwrap_or_else(|_| argv.join(" "))
+    let shown: Vec<String> = argv
+        .iter()
+        .map(|arg| meta_core::git::redact_urls(arg).into_owned())
+        .collect();
+    shlex::try_join(shown.iter().map(String::as_str)).unwrap_or_else(|_| shown.join(" "))
 }
 
 /// The process for `argv` in `dir`. The program runs directly: no shell sees

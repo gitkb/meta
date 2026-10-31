@@ -67,7 +67,7 @@ Runs `meta exec` with the given program and arguments.
 ```
 
 #### meta_get_config
-Get the raw meta configuration file.
+Get the meta configuration file as written, with the credentials in its URLs hidden (`https://***@host/org/repo`).
 
 **Parameters:** None
 

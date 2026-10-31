@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use meta_core::display::{escape, escape_path};
 use std::path::{Path, PathBuf};
 
-use super::types::WorktreeContext;
+use meta_core::config::{ProjectInfo, Workspace};
 
 pub fn validate_worktree_name(name: &str) -> Result<()> {
     if name.is_empty() {
@@ -26,81 +26,74 @@ pub fn validate_worktree_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn resolve_worktree_root(meta_dir: Option<&Path>) -> Result<PathBuf> {
-    // 1. Check META_WORKTREES env var
+/// The configs a worktree command reads, each loaded once: `here`, the
+/// nearest at or above where it runs, and `owner`, whose sets and settings
+/// (`worktrees_dir`, hooks) these are: inside a set, the checkout the set
+/// stands for, which outlives it; else `here`.
+#[derive(Debug, Clone)]
+pub struct Configs {
+    pub here: Workspace,
+    pub owner: Workspace,
+}
+
+impl Configs {
+    /// The configs of the workspace at or above `start`; an error outside one.
+    pub fn find(start: &Path) -> Result<Self> {
+        Self::find_optional(start)?
+            .ok_or_else(|| anyhow::anyhow!("Not inside a meta project (no .meta.yaml found)"))
+    }
+
+    /// Like [`Configs::find`], `None` outside a workspace.
+    pub fn find_optional(start: &Path) -> Result<Option<Self>> {
+        Workspace::find(start, None)?.map(Self::of).transpose()
+    }
+
+    /// The configs for `here`. A source checkout without a config is still
+    /// the owner, with no settings of its own.
+    pub fn of(here: Workspace) -> Result<Self> {
+        let Some(source) = meta_core::config::set_source(&here.dir).filter(|s| s.is_dir()) else {
+            return Ok(Self {
+                owner: here.clone(),
+                here,
+            });
+        };
+        let owner = Workspace::in_dir(&source)?.unwrap_or_else(|| Workspace {
+            config_path: source.join(meta_core::config::META_CONFIG_NAME),
+            dir: source,
+            projects: Vec::new(),
+            ignore: Vec::new(),
+            defaults: Default::default(),
+            worktrees_dir: None,
+            worktree: Default::default(),
+        });
+        Ok(Self { here, owner })
+    }
+}
+
+/// Where worktree sets go: `META_WORKTREES`, else the `worktrees_dir` of
+/// `owner`'s config (checked when it was loaded), else its `.worktrees`;
+/// outside a workspace, `.worktrees` in `cwd`.
+pub fn resolve_worktree_root(owner: Option<&Workspace>, cwd: &Path) -> Result<PathBuf> {
     if let Ok(env_path) = std::env::var("META_WORKTREES") {
         return Ok(PathBuf::from(env_path));
     }
-    // 2. Check worktrees_dir in .meta.yaml. In a worktree set, of the
-    // checkout it stands for: its sets live where that one's do
-    if let Some(dir) = meta_dir.map(owner_dir) {
-        let dir = dir.as_path();
-        // The config's rules for the worktree directory (inside the
-        // workspace, not inside a project, not into .git) hold here too,
-        // whoever ran this plugin
-        if let Some(config) = meta_core::config::find_meta_config_in(dir)? {
-            meta_core::config::parse_meta_config(&config)?;
-        }
-        if let Some(configured) = read_worktrees_dir_from_config(dir)? {
-            // Worktrees are created and removed there, so a committed config
-            // may not point it outside the workspace
-            let relative = meta_core::config::relative_dir(dir, &configured).map_err(|why| {
-                anyhow::anyhow!(
-                    "Invalid worktrees_dir in the .meta.yaml of {}: {why} (use META_WORKTREES \
-                     for a directory elsewhere)",
-                    escape_path(dir)
-                )
-            })?;
-            return Ok(dir.join(relative));
-        }
-        // 3. Default: .worktrees/ relative to meta root, held to the same
-        // rules: a committed symlink there must not send worktrees (and their
-        // removal) outside the workspace or into .git
-        let root = dir.join(".worktrees");
-        meta_core::config::relative_dir(dir, ".worktrees").map_err(|why| {
-            anyhow::anyhow!(
-                "Refusing to keep worktrees in {}: {why}",
-                escape_path(&root)
-            )
-        })?;
-        return Ok(root);
-    }
-    // Fallback if no meta dir found
-    let cwd = std::env::current_dir()?;
-    Ok(cwd.join(".worktrees"))
-}
-
-/// The config file in `meta_dir` (see
-/// [`meta_core::config::find_meta_config_in`]) as a JSON value, if there is
-/// one. One that can't be read or parsed is an error.
-pub fn read_meta_config_value(meta_dir: &Path) -> Result<Option<serde_json::Value>> {
-    let Some(path) = meta_core::config::find_meta_config_in(meta_dir)? else {
-        return Ok(None);
+    let Some(owner) = owner else {
+        return Ok(cwd.join(".worktrees"));
     };
-    let content = std::fs::read_to_string(&path)
-        .with_context(|| format!("Cannot read {}", escape_path(&path)))?;
-    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&content)
-        .map_err(anyhow::Error::from)
-        .and_then(|v| serde_json::to_value(v).map_err(anyhow::Error::from))
-        .map(Some)
-        .with_context(|| format!("Cannot parse {}", escape_path(&path)))
-}
-
-pub fn read_worktrees_dir_from_config(meta_dir: &Path) -> Result<Option<String>> {
-    Ok(read_meta_config_value(meta_dir)?
-        .and_then(|config| config.get("worktrees_dir")?.as_str().map(str::to_string)))
-}
-
-pub fn find_meta_dir() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    meta_core::config::nearest_meta_dir(&cwd).ok().flatten()
-}
-
-/// Like `find_meta_dir()` but returns an error if not found.
-pub fn require_meta_dir() -> Result<PathBuf> {
-    let cwd = std::env::current_dir()?;
-    meta_core::config::nearest_meta_dir(&cwd)?
-        .ok_or_else(|| anyhow::anyhow!("Not inside a meta project (no .meta.yaml found)"))
+    if let Some(configured) = &owner.worktrees_dir {
+        return Ok(owner.dir.join(configured));
+    }
+    // The default is held to the same rules: a committed symlink there must
+    // not send worktrees (and their removal) outside the workspace or into
+    // .git
+    let root = owner.dir.join(".worktrees");
+    meta_core::config::relative_dir(&owner.dir, ".worktrees").map_err(|why| {
+        anyhow::anyhow!(
+            "Refusing to keep worktrees in {}: {why}",
+            escape_path(&root)
+        )
+    })?;
+    Ok(root)
 }
 
 /// The directory of the worktree set `name` under `worktree_root`. A symlink
@@ -131,31 +124,17 @@ pub fn worktree_set_dir(worktree_root: &Path, name: &str) -> Result<PathBuf> {
     Ok(worktree_root.join(name))
 }
 
-/// Resolve worktree context for a named worktree.
-/// Returns meta_dir (for hooks), worktree_root, and the specific worktree directory.
-pub fn resolve_worktree_context(name: &str) -> Result<WorktreeContext> {
-    let meta_dir = find_meta_dir();
-    let worktree_root = resolve_worktree_root(meta_dir.as_deref())?;
-    let wt_dir = worktree_set_dir(&worktree_root, name)?;
-    Ok(WorktreeContext {
-        meta_dir,
-        worktree_root,
-        wt_dir,
-    })
-}
-
-/// Resolve worktree context and verify the worktree exists.
-pub fn resolve_existing_worktree(name: &str) -> Result<WorktreeContext> {
+/// The directory of the existing worktree set `name`.
+pub fn resolve_existing_worktree(name: &str) -> Result<PathBuf> {
     validate_worktree_name(name)?;
-    let ctx = resolve_worktree_context(name)?;
-    if !ctx.wt_dir.exists() {
-        anyhow::bail!(
-            "Worktree '{}' not found at {}",
-            name,
-            escape_path(&ctx.wt_dir)
-        );
+    let cwd = std::env::current_dir()?;
+    let configs = Configs::find_optional(&cwd)?;
+    let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
+    let wt_dir = worktree_set_dir(&worktree_root, name)?;
+    if !wt_dir.exists() {
+        anyhow::bail!("Worktree '{}' not found at {}", name, escape_path(&wt_dir));
     }
-    Ok(ctx)
+    Ok(wt_dir)
 }
 
 /// Resolve, validate existence, and discover repos in a named worktree.
@@ -164,62 +143,39 @@ pub fn resolve_existing_worktree(name: &str) -> Result<WorktreeContext> {
 pub fn discover_and_validate_worktree(
     name: &str,
 ) -> Result<Vec<meta_cli::worktree::WorktreeRepoInfo>> {
-    let ctx = resolve_existing_worktree(name)?;
-    let repos = meta_cli::worktree::discover_worktree_repos(&ctx.wt_dir)?;
+    let wt_dir = resolve_existing_worktree(name)?;
+    let repos = meta_cli::worktree::discover_worktree_repos(&wt_dir)?;
     if repos.is_empty() {
         anyhow::bail!("No repos found in worktree '{}'", escape(name));
     }
     Ok(repos)
 }
 
-/// Load and parse the .meta.yaml, returning the project list.
-pub fn load_projects(meta_dir: &Path) -> Result<Vec<meta_core::config::ProjectInfo>> {
-    let config_path = meta_core::config::find_meta_config(meta_dir, None)?
-        .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(meta_dir)))?;
-    let (projects, _) = meta_core::config::parse_meta_config(&config_path)?;
-    Ok(projects)
-}
-
-/// Load projects and optionally include the root repo as ".".
-///
-/// When `include_root` is true and the meta_dir is itself a git repository,
-/// the root repo is prepended to the list as "." (alias "."). This ensures
-/// the root repo (which child repos may depend on) is processed first.
+/// The projects of `workspace`, with its root repo first as "." when
+/// `include_root` is set and the workspace directory is itself a git
+/// repository.
 ///
 /// The root repo is an implicit dependency of child repos because it contains:
 /// - Workspace configuration (Cargo.toml)
 /// - Shared config files (.claude/, etc.)
 /// - Build scripts and other shared resources
-pub fn load_projects_with_root(
-    meta_dir: &Path,
-    include_root: bool,
-) -> Result<Vec<meta_core::config::ProjectInfo>> {
-    let mut projects = load_projects(meta_dir)?;
-
-    if include_root && meta_dir.join(".git").exists() {
-        // Prepend root repo so it's processed first (dependencies come first)
-        projects.insert(
-            0,
-            meta_core::config::ProjectInfo {
-                name: ".".to_string(),
-                path: ".".to_string(),
-                repo: None, // Root repo doesn't have a remote URL in this context
-                tags: vec![],
-                provides: vec![],
-                depends_on: vec![],
-                meta: false,
-            },
-        );
-    }
-
-    Ok(projects)
+pub fn projects_with_root(workspace: &Workspace, include_root: bool) -> Vec<ProjectInfo> {
+    let root = (include_root && workspace.dir.join(".git").exists()).then(|| ProjectInfo {
+        name: ".".to_string(),
+        path: ".".to_string(),
+        repo: None,
+        tags: vec![],
+        provides: vec![],
+        depends_on: vec![],
+        meta: false,
+    });
+    root.into_iter()
+        .chain(workspace.projects.iter().cloned())
+        .collect()
 }
 
 /// Look up a project by alias, returning an error with valid aliases on miss.
-pub fn lookup_project<'a>(
-    projects: &'a [meta_core::config::ProjectInfo],
-    alias: &str,
-) -> Result<&'a meta_core::config::ProjectInfo> {
+pub fn lookup_project<'a>(projects: &'a [ProjectInfo], alias: &str) -> Result<&'a ProjectInfo> {
     projects.iter().find(|p| p.name == alias).ok_or_else(|| {
         let valid: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
         anyhow::anyhow!(
@@ -228,14 +184,6 @@ pub fn lookup_project<'a>(
             escape(&valid.join(", "))
         )
     })
-}
-
-/// The meta directory whose sets and settings (such as hooks) `meta_dir`'s
-/// are: inside a set, the checkout the set stands for, which outlives it.
-pub fn owner_dir(meta_dir: &Path) -> PathBuf {
-    meta_core::config::set_source(meta_dir)
-        .filter(|source| source.is_dir())
-        .unwrap_or_else(|| meta_dir.to_path_buf())
 }
 
 /// Where the repo at `source`, found from `meta_dir` under `alias`, goes in
@@ -286,13 +234,11 @@ pub fn dest_in_set(wt_dir: &Path, place: &str) -> Result<PathBuf, String> {
 /// For nested paths, walks the meta tree recursively to find the project.
 ///
 /// Returns the resolved path and project info.
-pub fn lookup_nested_project(
-    meta_dir: &Path,
-    alias: &str,
-) -> Result<(PathBuf, meta_core::config::ProjectInfo)> {
+pub fn lookup_nested_project(workspace: &Workspace, alias: &str) -> Result<(PathBuf, ProjectInfo)> {
+    let meta_dir = workspace.dir.as_path();
     // If alias contains '/', use recursive lookup
     if alias.contains('/') {
-        let tree = meta_core::config::walk_meta_tree(meta_dir, None)?;
+        let tree = meta_core::config::walk_projects(meta_dir, &workspace.projects, None)?;
 
         // Build a map of full path -> ProjectInfo
         let project_map = meta_core::config::build_project_map(&tree, meta_dir, "");
@@ -313,8 +259,7 @@ pub fn lookup_nested_project(
         })
     } else {
         // Existing flat lookup for simple aliases
-        let projects = load_projects(meta_dir)?;
-        let project = lookup_project(&projects, alias)?;
+        let project = lookup_project(&workspace.projects, alias)?;
         Ok((meta_dir.join(&project.path), project.clone()))
     }
 }
@@ -328,69 +273,6 @@ pub fn resolve_branch(
         .or(branch_flag)
         .map(|s| s.to_string())
         .unwrap_or_else(|| task_name.to_string())
-}
-
-/// Parse a human-friendly duration string to seconds.
-/// Supported formats: "30s", "5m", "1h", "2d", "1w", or bare seconds "300".
-/// The result always fits in an `i64`, so timestamp arithmetic can't wrap.
-pub fn parse_duration(s: &str) -> Result<u64> {
-    let s = s.trim();
-    if s.is_empty() {
-        anyhow::bail!("Empty duration string");
-    }
-
-    // Bare number: treat as seconds
-    let (num_str, multiplier) = if s.chars().all(|c| c.is_ascii_digit()) {
-        (s, 1)
-    } else {
-        let suffix_at = s.len() - s.chars().last().map_or(0, char::len_utf8);
-        let (num_str, suffix) = s.split_at(suffix_at);
-        let multiplier = match suffix {
-            "s" => 1,
-            "m" => 60,
-            "h" => 3600,
-            "d" => 86400,
-            "w" => 604800,
-            _ => anyhow::bail!(
-                "Invalid duration suffix '{}'. Use s (seconds), m (minutes), h (hours), d (days), or w (weeks)",
-                escape(suffix)
-            ),
-        };
-        (num_str, multiplier)
-    };
-    let num: u64 = num_str.parse().with_context(|| {
-        format!(
-            "Invalid duration '{}': use a number with an optional s, m, h, d or w suffix",
-            escape(s)
-        )
-    })?;
-
-    num.checked_mul(multiplier)
-        .filter(|secs| i64::try_from(*secs).is_ok())
-        .ok_or_else(|| anyhow::anyhow!("Duration '{}' is too large", escape(s)))
-}
-
-/// Format seconds into a human-friendly duration string.
-/// Returns the largest appropriate unit (e.g., "2h" not "7200s").
-pub fn format_duration(secs: i64) -> String {
-    let abs_secs = secs.unsigned_abs();
-    let prefix = if secs < 0 { "-" } else { "" };
-
-    if abs_secs >= 604800 && abs_secs.is_multiple_of(604800) {
-        let weeks = abs_secs / 604800;
-        format!("{prefix}{weeks}w")
-    } else if abs_secs >= 86400 && abs_secs.is_multiple_of(86400) {
-        let days = abs_secs / 86400;
-        format!("{prefix}{days}d")
-    } else if abs_secs >= 3600 && abs_secs.is_multiple_of(3600) {
-        let hours = abs_secs / 3600;
-        format!("{prefix}{hours}h")
-    } else if abs_secs >= 60 && abs_secs.is_multiple_of(60) {
-        let mins = abs_secs / 60;
-        format!("{prefix}{mins}m")
-    } else {
-        format!("{prefix}{abs_secs}s")
-    }
 }
 
 /// Parse `--from-pr owner/repo#N` format and resolve the PR's head branch.
@@ -456,30 +338,12 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
 }
 
 /// Check if a repo's `origin` remote is exactly the given owner/repo.
+/// The URL git fetches from is what counts here, `insteadOf` rewrites
+/// applied (an origin of `gh:repo` may be GitHub's `org/repo`).
 pub fn repo_matches_spec(repo_path: &Path, spec: &str) -> bool {
-    use std::process::Command;
-
-    let output = Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(repo_path)
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => remote_owner_repo(&String::from_utf8_lossy(&o.stdout))
-            .is_some_and(|owner_repo| owner_repo.eq_ignore_ascii_case(spec)),
-        _ => false,
-    }
-}
-
-/// The trailing `owner/repo` of a remote URL such as `git@github.com:owner/repo.git`,
-/// `https://github.com/owner/repo`, `ssh://git@host/owner/repo.git` or a local path.
-fn remote_owner_repo(url: &str) -> Option<String> {
-    let path = url.trim().trim_end_matches('/');
-    let path = path.strip_suffix(".git").unwrap_or(path);
-    let mut parts = path.rsplit(['/', ':', '\\']);
-    let repo = parts.next().filter(|p| !p.is_empty())?;
-    let owner = parts.next().filter(|p| !p.is_empty())?;
-    Some(format!("{owner}/{repo}"))
+    meta_core::git::query(repo_path, ["remote", "get-url", "origin"])
+        .and_then(|url| url.parse::<meta_core::git::GitUrl>().ok()?.owner_repo())
+        .is_some_and(|owner_repo| owner_repo.eq_ignore_ascii_case(spec))
 }
 
 pub fn ensure_worktrees_in_gitignore(
@@ -568,6 +432,10 @@ mod tests {
         assert!(err.to_string().contains("only ASCII alphanumeric"));
     }
 
+    fn workspace(dir: &Path) -> Workspace {
+        Workspace::in_dir(dir).unwrap().unwrap()
+    }
+
     /// A user-given name in an error is shown escaped, so the error stays
     /// one line with no control characters.
     fn assert_escaped(err: anyhow::Error) {
@@ -617,111 +485,14 @@ mod tests {
         )
         .unwrap();
         for alias in ["a\nFORGED", "vendor/\nFORGED", "vendor/\x1b[2J"] {
-            assert_escaped(lookup_nested_project(tmp.path(), alias).unwrap_err());
+            assert_escaped(lookup_nested_project(&workspace(tmp.path()), alias).unwrap_err());
         }
-    }
-
-    // ── parse_duration ──────────────────────────────────────
-
-    #[test]
-    fn parse_duration_bare_seconds() {
-        assert_eq!(parse_duration("300").unwrap(), 300);
-    }
-
-    #[test]
-    fn parse_duration_seconds_suffix() {
-        assert_eq!(parse_duration("30s").unwrap(), 30);
-    }
-
-    #[test]
-    fn parse_duration_minutes() {
-        assert_eq!(parse_duration("5m").unwrap(), 300);
-    }
-
-    #[test]
-    fn parse_duration_hours() {
-        assert_eq!(parse_duration("2h").unwrap(), 7200);
-    }
-
-    #[test]
-    fn parse_duration_days() {
-        assert_eq!(parse_duration("1d").unwrap(), 86400);
-    }
-
-    #[test]
-    fn parse_duration_weeks() {
-        assert_eq!(parse_duration("1w").unwrap(), 604800);
-    }
-
-    #[test]
-    fn parse_duration_trims_whitespace() {
-        assert_eq!(parse_duration("  5m  ").unwrap(), 300);
-    }
-
-    #[test]
-    fn parse_duration_rejects_empty() {
-        assert!(parse_duration("").is_err());
-        assert!(parse_duration("   ").is_err());
-    }
-
-    #[test]
-    fn parse_duration_rejects_invalid_suffix() {
-        let err = parse_duration("10x").unwrap_err();
-        assert!(err.to_string().contains("Invalid duration suffix"));
-    }
-
-    #[test]
-    fn parse_duration_rejects_non_numeric() {
-        assert!(parse_duration("abcs").is_err());
-        assert!(parse_duration("5é").is_err());
-    }
-
-    #[test]
-    fn parse_duration_rejects_values_that_overflow() {
-        for input in [
-            "18446744073709551615",
-            "30500000000000w",
-            "9223372036854775808",
-        ] {
-            let err = parse_duration(input).unwrap_err();
-            assert!(err.to_string().contains("too large"), "{input}: {err}");
-        }
-        assert_eq!(
-            parse_duration("9223372036854775807").unwrap(),
-            i64::MAX as u64
-        );
-    }
-
-    // ── remote_owner_repo ───────────────────────────────────
-
-    #[test]
-    fn remote_owner_repo_parses_common_url_forms() {
-        for url in [
-            "git@github.com:org/api.git",
-            "https://github.com/org/api",
-            "https://github.com/org/api.git/\n",
-            "ssh://git@github.example.com:22/org/api.git",
-            "C:\\remotes\\org\\api.git",
-        ] {
-            assert_eq!(remote_owner_repo(url).as_deref(), Some("org/api"), "{url}");
-        }
-        assert_eq!(
-            remote_owner_repo("git@github.com:org/api-legacy.git").as_deref(),
-            Some("org/api-legacy")
-        );
-        assert_eq!(remote_owner_repo("api"), None);
     }
 
     #[test]
     fn repo_matches_spec_requires_the_exact_repo() {
         let tmp = tempfile::tempdir().unwrap();
-        let run = |args: &[&str]| {
-            std::process::Command::new("git")
-                .args(args)
-                .current_dir(tmp.path())
-                .output()
-                .unwrap()
-        };
+        let run = |args: &[&str]| meta_core::git::run(tmp.path(), args).unwrap();
         run(&["init", "-q"]);
         run(&[
             "remote",
@@ -732,65 +503,10 @@ mod tests {
         assert!(!repo_matches_spec(tmp.path(), "org/api"));
         assert!(!repo_matches_spec(tmp.path(), "api-legacy"));
         assert!(repo_matches_spec(tmp.path(), "org/api-legacy"));
-    }
-
-    // ── format_duration ─────────────────────────────────────
-
-    #[test]
-    fn format_duration_seconds() {
-        assert_eq!(format_duration(45), "45s");
-    }
-
-    #[test]
-    fn format_duration_exact_minutes() {
-        assert_eq!(format_duration(300), "5m");
-    }
-
-    #[test]
-    fn format_duration_exact_hours() {
-        assert_eq!(format_duration(7200), "2h");
-    }
-
-    #[test]
-    fn format_duration_exact_days() {
-        assert_eq!(format_duration(86400), "1d");
-    }
-
-    #[test]
-    fn format_duration_exact_weeks() {
-        assert_eq!(format_duration(604800), "1w");
-    }
-
-    #[test]
-    fn format_duration_non_exact_falls_to_seconds() {
-        // 90 seconds = 1m30s, but since 90 % 60 != 0, falls through to seconds
-        assert_eq!(format_duration(90), "90s");
-    }
-
-    #[test]
-    fn format_duration_zero() {
-        assert_eq!(format_duration(0), "0s");
-    }
-
-    #[test]
-    fn format_duration_negative() {
-        assert_eq!(format_duration(-3600), "-1h");
-    }
-
-    #[test]
-    fn format_duration_negative_seconds() {
-        assert_eq!(format_duration(-45), "-45s");
-    }
-
-    // ── parse_duration / format_duration round-trip ──────────
-
-    #[test]
-    fn duration_round_trip_exact_units() {
-        for input in &["30s", "5m", "2h", "1d", "1w"] {
-            let secs = parse_duration(input).unwrap();
-            let formatted = format_duration(secs as i64);
-            assert_eq!(&formatted, input, "round-trip failed for {input}");
-        }
+        // through an alias, as git fetches it
+        run(&["remote", "set-url", "origin", "gh:api.git"]);
+        run(&["config", "url.git@github.com:org/.insteadOf", "gh:"]);
+        assert!(repo_matches_spec(tmp.path(), "org/api"));
     }
 
     // ── resolve_branch ──────────────────────────────────────
@@ -858,7 +574,7 @@ mod tests {
         .unwrap();
         std::fs::create_dir(tmp.path().join("backend")).unwrap();
 
-        let (path, info) = lookup_nested_project(tmp.path(), "backend").unwrap();
+        let (path, info) = lookup_nested_project(&workspace(tmp.path()), "backend").unwrap();
         assert_eq!(info.name, "backend");
         assert_eq!(path, tmp.path().join("backend"));
     }
@@ -884,7 +600,8 @@ mod tests {
         )
         .unwrap();
 
-        let (path, info) = lookup_nested_project(tmp.path(), "vendor/nested-lib").unwrap();
+        let (path, info) =
+            lookup_nested_project(&workspace(tmp.path()), "vendor/nested-lib").unwrap();
         assert_eq!(info.name, "nested-lib");
         assert_eq!(path, tmp.path().join("vendor/nested-lib"));
     }
@@ -900,7 +617,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = lookup_nested_project(tmp.path(), "vendor/nonexistent");
+        let result = lookup_nested_project(&workspace(tmp.path()), "vendor/nonexistent");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Unknown nested repo"));
@@ -916,7 +633,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = lookup_nested_project(tmp.path(), "nonexistent");
+        let result = lookup_nested_project(&workspace(tmp.path()), "nonexistent");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Unknown repo alias"));
@@ -980,7 +697,8 @@ mod tests {
         .unwrap();
 
         // Lookup by the full path (vendor/packages/mylib)
-        let (path, info) = lookup_nested_project(tmp.path(), "vendor/packages/mylib").unwrap();
+        let (path, info) =
+            lookup_nested_project(&workspace(tmp.path()), "vendor/packages/mylib").unwrap();
         assert_eq!(info.name, "mylib");
         assert_eq!(path, tmp.path().join("vendor/packages/mylib"));
     }
@@ -1016,7 +734,8 @@ mod tests {
         .unwrap();
 
         // Lookup the deeply nested project
-        let (path, info) = lookup_nested_project(tmp.path(), "vendor/sub-vendor/deep-lib").unwrap();
+        let (path, info) =
+            lookup_nested_project(&workspace(tmp.path()), "vendor/sub-vendor/deep-lib").unwrap();
         assert_eq!(info.name, "deep-lib");
         assert_eq!(path, tmp.path().join("vendor/sub-vendor/deep-lib"));
     }

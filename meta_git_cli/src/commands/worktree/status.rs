@@ -3,10 +3,8 @@ use colored::*;
 use meta_core::display::escape;
 use rayon::prelude::*;
 
-use meta_git_lib::worktree::git_ops::*;
-use meta_git_lib::worktree::helpers::{
-    discover_and_validate_worktree, resolve_existing_worktree, validate_worktree_name,
-};
+use meta_git_lib::worktree::git_ops::repo_status;
+use meta_git_lib::worktree::helpers::resolve_existing_worktree;
 use meta_git_lib::worktree::types::*;
 
 use super::cli_types::StatusArgs;
@@ -14,42 +12,43 @@ use super::cli_types::StatusArgs;
 /// Render a named set, preserving legacy defaults unless recursive is requested.
 pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
     let name = &args.name;
-
-    let repos = if args.recursive {
-        validate_worktree_name(name)?;
-        let ctx = resolve_existing_worktree(name)?;
-        let repos = meta_cli::worktree::discover_worktree_repos_recursive(&ctx.wt_dir)?;
-        anyhow::ensure!(!repos.is_empty(), "No repos found in worktree '{name}'");
-        repos
+    let wt_dir = resolve_existing_worktree(name)?;
+    // Membership without git; then one status per repo
+    let members = if args.recursive {
+        meta_cli::worktree::discover_worktree_members_recursive(&wt_dir)?
     } else {
-        discover_and_validate_worktree(name)?
+        meta_cli::worktree::discover_worktree_members(&wt_dir)?
     };
+    anyhow::ensure!(
+        !members.is_empty(),
+        "No repos found in worktree '{}'",
+        escape(name)
+    );
 
-    let statuses: Vec<StatusRepoEntry> = repos
+    let statuses: Vec<StatusRepoEntry> = members
         .par_iter()
         .map(|r| {
-            let observed = git_status_summary(&r.path);
-            let summary = if args.recursive {
+            let observed = repo_status(&r.path);
+            let status = if args.recursive {
                 observed?
             } else {
-                observed.unwrap_or(GitStatusSummary {
-                    dirty: false,
-                    modified_files: vec![],
-                    untracked_count: 0,
+                // what can't be read shows clean, with the branch and
+                // upstream git still names
+                observed.unwrap_or_else(|_| {
+                    meta_core::git::RepoStatus::refs(&r.path).unwrap_or_default()
                 })
             };
-            let (ahead, behind) = git_ahead_behind(&r.path).unwrap_or((0, 0));
-
+            let (ahead, behind) = status.ahead_behind.unwrap_or_default();
             Ok(StatusRepoEntry {
                 alias: r.alias.clone(),
                 path: r.path.display().to_string(),
-                branch: r.branch.clone(),
-                dirty: summary.dirty,
-                modified_count: summary.modified_files.len(),
-                untracked_count: summary.untracked_count,
+                branch: status.branch.clone().unwrap_or_else(|| "HEAD".to_string()),
+                dirty: status.is_dirty(),
+                modified_count: status.changed_paths().count(),
+                untracked_count: status.untracked_count(),
                 ahead,
                 behind,
-                modified_files: summary.modified_files,
+                modified_files: status.changed_paths().map(str::to_string).collect(),
             })
         })
         .collect::<Result<Vec<_>>>()?;

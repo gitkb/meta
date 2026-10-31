@@ -119,6 +119,17 @@ EOF
     [ ! -e ".worktrees/corrupt-source/backend" ]
 }
 
+@test "worktree status still names the branch of a member whose config says bare" {
+    run "$META_BIN" git worktree create bare-member --repo backend
+    [ "$status" -eq 0 ]
+    git -C backend config --local core.bare true
+
+    run "$META_BIN" git worktree status bare-member --json
+    git -C backend config --local core.bare false
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | jq -r '.repos[] | select(.alias == "backend") | .branch')" = "bare-member" ]
+}
+
 @test "worktree create --all creates worktrees for all repos" {
     run "$META_BIN" git worktree create full-task --all
     [ "$status" -eq 0 ]

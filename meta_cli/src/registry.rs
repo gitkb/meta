@@ -952,7 +952,14 @@ impl PluginInstaller {
 
         for plugin_name in installed {
             let plugin_path = self.plugins_dir.join(plugin_name);
-            self.validate_plugin(&plugin_path).with_context(|| {
+            // A plugin answers --meta-plugin-info with its info, in time
+            let answered =
+                crate::subprocess_plugins::probe_plugin_info(&plugin_path).and_then(|info| {
+                    info.map(|_| ()).ok_or_else(|| {
+                        anyhow::anyhow!("Plugin did not answer --meta-plugin-info with its info")
+                    })
+                });
+            answered.with_context(|| {
                 // Remove invalid plugin on failure
                 let _ = std::fs::remove_file(&plugin_path);
                 format!("Plugin validation failed for {}", escape(plugin_name))
@@ -1034,30 +1041,6 @@ impl PluginInstaller {
         }
 
         Ok(installed)
-    }
-
-    /// Validate a plugin by running --meta-plugin-info
-    fn validate_plugin(&self, plugin_path: &Path) -> Result<()> {
-        use std::process::Command;
-
-        let output = Command::new(plugin_path)
-            .arg("--meta-plugin-info")
-            .output()
-            .with_context(|| format!("Failed to execute {}", escape_path(plugin_path)))?;
-
-        if !output.status.success() {
-            anyhow::bail!(
-                "Plugin did not respond to --meta-plugin-info (exit code: {:?})",
-                output.status.code()
-            );
-        }
-
-        // Try to parse the output as JSON to verify it's valid
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let _: serde_json::Value = serde_json::from_str(&stdout)
-            .with_context(|| "Plugin --meta-plugin-info output is not valid JSON")?;
-
-        Ok(())
     }
 
     /// Get the download URL for a specific platform
@@ -1897,11 +1880,11 @@ mod tests {
         drop(file);
 
         // Validation should fail and the file should still be there
-        // (cleanup happens inside validate_plugin which is called by validate_installed)
+        // (cleanup happens inside validate_installed)
         let result = installer.validate_installed(&["meta-invalid".to_string()]);
         assert!(result.is_err());
 
-        // Note: The actual removal happens in validate_plugin's error context,
+        // Note: The actual removal happens in validate_installed's error context,
         // so the file may or may not exist depending on the error
     }
 

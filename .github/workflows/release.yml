@@ -231,30 +231,32 @@ jobs:
 
       # Publish in dependency order
       # Tier 1: No internal dependencies
-      - name: Publish meta_plugin_protocol
-        run: cargo publish -p meta_plugin_protocol --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
-
       - name: Publish meta_core
         run: cargo publish -p meta_core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
         continue-on-error: true
 
       # Tier 2: Depends on tier 1
-      # loop_lib's meta_core requirement is "<1" so child-repo CI (which builds
-      # meta_core as 0.0.0 or 0.1.0) resolves; publish it with an ordinary
-      # requirement on the meta_core released alongside it.
+      # meta_plugin_protocol's, loop_lib's and loop_cli's meta_core requirement is "<1"
+      # so the workspace resolves whatever its version; publish them with an
+      # ordinary requirement on the meta_core released alongside them.
       # (its own step, so a failed rewrite fails the release)
-      - name: Pin loop_lib's meta_core requirement
+      - name: Pin the meta_core requirement
         run: |
-          sed -i 's|meta_core = { path = "../meta_core", version = "<1" }|meta_core = { path = "../meta_core", version = "'"$(cat VERSION)"'" }|' loop_lib/Cargo.toml
-          grep -qF "meta_core = { path = \"../meta_core\", version = \"$(cat VERSION)\" }" loop_lib/Cargo.toml
+          for crate in meta_plugin_protocol loop_lib loop_cli; do
+            sed -i 's|meta_core = { path = "../meta_core", version = "<1" }|meta_core = { path = "../meta_core", version = "'"$(cat VERSION)"'" }|' "$crate/Cargo.toml"
+            grep -qF "meta_core = { path = \"../meta_core\", version = \"$(cat VERSION)\" }" "$crate/Cargo.toml"
+          done
+
+      - name: Publish meta_plugin_protocol
+        run: cargo publish -p meta_plugin_protocol --allow-dirty --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
 
       - name: Publish loop_lib
         run: cargo publish -p loop_lib --allow-dirty --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
         continue-on-error: true  # May already be published
 
       - name: Publish loop_cli
-        run: cargo publish -p loop_cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p loop_cli --allow-dirty --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
         continue-on-error: true
 
       - name: Publish meta

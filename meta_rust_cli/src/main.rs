@@ -4,7 +4,6 @@ use indexmap::IndexMap;
 use meta_plugin_protocol::{
     run_plugin, CommandResult, PluginDefinition, PluginHelp, PluginInfo, PluginRequest,
 };
-use std::path::PathBuf;
 
 fn main() {
     let mut help_commands = IndexMap::new();
@@ -42,14 +41,10 @@ fn main() {
 }
 
 fn execute(request: PluginRequest) -> CommandResult {
-    let cwd = if request.cwd.is_empty() {
-        match std::env::current_dir() {
-            Ok(d) => d,
-            Err(e) => return CommandResult::Error(format!("Failed to get working directory: {e}")),
-        }
-    } else {
-        PathBuf::from(&request.cwd)
-    };
-
-    meta_rust_cli::execute_command(&request.args, &request.options, &request.projects, &cwd)
+    meta_rust_cli::execute_command(
+        &request.args,
+        &request.options,
+        &request.projects,
+        &request.cwd,
+    )
 }

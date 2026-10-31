@@ -45,7 +45,7 @@ RUST_LOG=meta_git_cli=debug meta git push
 RUST_LOG=debug meta git push
 
 # Debug specific modules
-RUST_LOG=meta_git_cli::ssh_setup=debug meta git push
+RUST_LOG=meta_git_cli::ssh=debug meta git push
 ```
 
 **Crate names for RUST_LOG:**

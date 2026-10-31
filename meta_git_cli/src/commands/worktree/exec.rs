@@ -30,7 +30,7 @@ fn build_loop_config(
         let paths: Vec<PathBuf> = repos.iter().map(|r| r.path.clone()).collect();
         match meta_cli::worktree::set_config(wt_dir, &paths, None)? {
             Some(config) => {
-                let (projects, _) = meta_core::config::parse_meta_config(&config)?;
+                let projects = meta_core::config::Workspace::load(&config)?.projects;
                 let tree = meta_cli::worktree::set_tree(wt_dir, &paths, &projects)?;
                 repo_filter::repo_names(wt_dir, &projects, &tree)
             }
@@ -117,7 +117,7 @@ pub(crate) fn handle_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<(
     let repos = discover_and_validate_worktree(name)?;
 
     let config = build_loop_config(
-        &resolve_existing_worktree(name)?.wt_dir,
+        &resolve_existing_worktree(name)?,
         &repos,
         args.include,
         args.exclude,
@@ -176,8 +176,9 @@ fn handle_ephemeral_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<()
     };
 
     // Resolve worktree path for exec
-    let meta_dir = find_meta_dir();
-    let worktree_root = resolve_worktree_root(meta_dir.as_deref())?;
+    let cwd = std::env::current_dir()?;
+    let configs = Configs::find_optional(&cwd)?;
+    let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
     let wt_dir = worktree_set_dir(&worktree_root, &name)?;
 
     // Run the command

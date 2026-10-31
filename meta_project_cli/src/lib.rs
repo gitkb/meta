@@ -2,16 +2,16 @@
 //!
 //! Provides project management commands for meta repositories.
 
+use meta_cli::dependency_graph::DependencyGraph;
 use meta_cli::worktree;
-use meta_core::config::{self, MetaTreeNode, ProjectInfo};
+use meta_core::config::{self, MetaTreeNode};
 use meta_core::display::{escape, escape_path};
 use serde::Serialize;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
-use std::process::Command;
 
-use meta_plugin_protocol::CommandResult;
+use meta_plugin_protocol::{has_help_token, parse_args, CommandResult};
 
 /// Options passed to execute_command
 #[derive(Debug, Default, Clone, Copy)]
@@ -67,6 +67,68 @@ pub struct ProjectListWorktree {
 // Command Execution
 // ============================================================================
 
+/// `meta project list`
+#[derive(clap::Parser)]
+#[command(
+    about = "Inspect the meta repo graph",
+    after_help = "Agent hints:
+  Use `meta project list --recursive --json` before broad changes to discover the full repo graph.
+  Use non-recursive output for a quick human-readable view of the current meta repo.
+
+Examples:
+  meta project list
+  meta project list --recursive
+  meta project list --recursive --json"
+)]
+struct ListArgs {
+    /// Emit a structured tree with root, cwd, project paths, repo URLs, tags, and nested projects
+    #[arg(long)]
+    json: bool,
+    /// Include projects from nested meta repos
+    #[arg(short, long)]
+    recursive: bool,
+    /// Limit recursive traversal depth
+    #[arg(long, value_name = "N")]
+    depth: Option<usize>,
+}
+
+/// `meta project check`
+#[derive(clap::Parser)]
+#[command(
+    about = "Verify configured projects are present (meta --recursive checks nested meta repos as well)",
+    after_help = "Agent hints:
+  Run this when commands fail because a child checkout is missing.
+  Missing repos can usually be cloned with `meta git update`.
+
+Examples:
+  meta project check
+  meta --recursive project check"
+)]
+struct CheckArgs {}
+
+/// `meta project dependents`
+#[derive(clap::Parser)]
+#[command(
+    about = "Find projects that depend on another project",
+    after_help = "Agent hints:
+  Use this before changing shared libraries or APIs to identify likely blast radius.
+  Pair with `meta project list --recursive --json` when working across nested meta repos.
+
+Examples:
+  meta project dependents meta_core
+  meta project dependents auth --json"
+)]
+struct DependentsArgs {
+    /// Project name or provided capability to search for
+    project: String,
+    /// Emit machine-readable dependent project records
+    #[arg(long)]
+    json: bool,
+    /// Look in the root workspace of nested meta repos
+    #[arg(short, long)]
+    recursive: bool,
+}
+
 /// Execute a project command and return the result
 ///
 /// If `provided_projects` is not empty, it will be used instead of reading from .meta.yaml file.
@@ -78,173 +140,55 @@ pub fn execute_command(
     provided_projects: &[String],
     cwd: &Path,
 ) -> CommandResult {
-    if has_help_token(command, args) {
-        return project_command_help(command);
-    }
-
-    // meta_cli sends an unclaimed `project <word>` as `project` plus args
-    if command == "project" {
-        let typed: Vec<&str> = std::iter::once(command)
-            .chain(args.iter().map(String::as_str))
-            .collect();
-        return CommandResult::ShowHelp(Some(format!(
-            "unrecognized command '{}'. Use 'meta git update' to sync projects.",
-            escape(&typed.join(" "))
-        )));
-    }
-
-    // project dependents reads the dependency graph directly
-    if command == "project dependents" {
-        return handle_project_dependents(args, options, cwd);
-    }
-
-    // project list/ls handles its own config discovery
-    if command == "project list" || command == "project ls" {
-        // It lists the whole tree, so a filter would be silently ignored
-        let trailing_filter = args.iter().any(|a| {
-            a.starts_with("--include")
-                || a.starts_with("--exclude")
-                || (a.starts_with("-i") || a.starts_with("-e")) && !a.starts_with("--")
-        });
-        if options.filtered || trailing_filter {
-            return CommandResult::Error(
-                "meta project list does not take --include/--exclude".to_string(),
-            );
-        }
-        // Check if --json was passed as a trailing arg (not extracted by meta_cli
-        // because it could be intended for a subcommand in non-plugin contexts)
-        let json_from_args = args.iter().any(|a| a == "--json");
-        let effective_options = if json_from_args && !options.json_output {
-            ExecuteOptions {
-                json_output: true,
-                ..*options
-            }
-        } else {
-            ExecuteOptions { ..*options }
-        };
-        return handle_project_list(cwd, &effective_options);
-    }
-
-    // With --recursive, check each project directory meta_cli provided for
-    // missing repos in its own .meta.yaml (meta_cli sends the list either way;
-    // without --recursive only the root config counts)
-    if options.recursive && !provided_projects.is_empty() {
-        return execute_command_recursive(command, provided_projects, cwd);
-    }
-
-    // The workspace's own config: the nearest one at or above cwd, as meta
-    // finds it (an unreadable config is an error)
-    let meta_path = match config::find_meta_config(cwd, None) {
-        Ok(Some(path)) => path,
-        Ok(None) => {
-            return CommandResult::Error(format!("No .meta.yaml found in {}", escape_path(cwd)))
-        }
-        Err(e) => return CommandResult::Error(format!("{e:#}")),
-    };
-    let projects = match parse_meta_projects(&meta_path) {
-        Ok(projects) => projects,
-        Err(e) => return CommandResult::Error(format!("Failed to parse meta config: {e:#}")),
-    };
-    let root = meta_path.parent().unwrap_or(cwd);
-    let missing = find_missing_projects(&projects, root);
-
     match command {
-        "project check" => {
-            if missing.is_empty() {
-                CommandResult::Message("All projects are cloned and present.".to_string())
-            } else {
-                // Print missing repos (uses visual formatting)
-                print_missing(&missing);
-                CommandResult::Message(format!(
-                    "{} project(s) missing. Run 'meta git update' to clone them.",
-                    missing.len()
-                ))
+        "project list" | "project ls" => {
+            // It lists the whole tree, so a filter would be silently ignored
+            if options.filtered {
+                return CommandResult::Error(
+                    "meta project list does not take --include/--exclude".to_string(),
+                );
+            }
+            match parse_args::<ListArgs>(command, args) {
+                Ok(list) => handle_project_list(
+                    cwd,
+                    &ExecuteOptions {
+                        json_output: options.json_output || list.json,
+                        recursive: options.recursive || list.recursive,
+                        depth: list.depth.or(options.depth),
+                        filtered: false,
+                    },
+                ),
+                Err(result) => result,
             }
         }
-        _ => CommandResult::ShowHelp(Some(format!(
-            "unrecognized command '{}'. Use 'meta git update' to sync projects.",
-            escape(command)
-        ))),
+        "project dependents" => match parse_args::<DependentsArgs>(command, args) {
+            Ok(dependents) => handle_project_dependents(
+                &dependents.project,
+                options.json_output || dependents.json,
+                options.recursive || dependents.recursive,
+                cwd,
+            ),
+            Err(result) => result,
+        },
+        "project check" => match parse_args::<CheckArgs>(command, args) {
+            Ok(CheckArgs {}) => check(options, provided_projects, cwd),
+            Err(result) => result,
+        },
+        // meta_cli sends an unclaimed `project <word>` as `project` plus args
+        _ if has_help_token(command, args) => CommandResult::Message(PROJECT_HELP.to_string()),
+        _ => {
+            let typed: Vec<&str> = std::iter::once(command)
+                .chain(args.iter().map(String::as_str))
+                .collect();
+            CommandResult::ShowHelp(Some(format!(
+                "unrecognized command '{}'. Use 'meta git update' to sync projects.",
+                escape(&typed.join(" "))
+            )))
+        }
     }
 }
 
-/// A `--help`/`-h` before `--`; after it, they are arguments for the command.
-fn has_help_token(command: &str, args: &[String]) -> bool {
-    command
-        .split_whitespace()
-        .chain(
-            args.iter()
-                .map(String::as_str)
-                .take_while(|arg| *arg != "--"),
-        )
-        .any(|arg| arg == "--help" || arg == "-h")
-}
-
-fn project_command_help(command: &str) -> CommandResult {
-    let words: Vec<&str> = command
-        .split_whitespace()
-        .filter(|word| *word != "--help" && *word != "-h")
-        .collect();
-    let subcommand = words.get(1).copied();
-
-    let help = match subcommand {
-        Some("list") | Some("ls") => {
-            r#"meta project list - Inspect the meta repo graph
-
-Usage: meta project list [OPTIONS]
-
-Options:
-  --json          Emit a structured tree with root, cwd, project paths, repo URLs, tags, and nested projects
-  --recursive    Include projects from nested meta repos
-  --depth <N>    Limit recursive traversal depth
-
-Agent hints:
-  Use `meta project list --recursive --json` before broad changes to discover the full repo graph.
-  Use non-recursive output for a quick human-readable view of the current meta repo.
-
-Examples:
-  meta project list
-  meta project list --recursive
-  meta project list --recursive --json"#
-        }
-        Some("check") => {
-            r#"meta project check - Verify configured projects are present
-
-Usage: meta project check [OPTIONS]
-
-Options:
-  --recursive    Check nested meta repos as well
-  --depth <N>    Limit recursive traversal depth
-
-Agent hints:
-  Run this when commands fail because a child checkout is missing.
-  Missing repos can usually be cloned with `meta git update`.
-
-Examples:
-  meta project check
-  meta project check --recursive"#
-        }
-        Some("dependents") => {
-            r#"meta project dependents - Find projects that depend on another project
-
-Usage: meta project dependents <PROJECT> [OPTIONS]
-
-Arguments:
-  <PROJECT>      Project name or provided capability to search for
-
-Options:
-  --json         Emit machine-readable dependent project records
-
-Agent hints:
-  Use this before changing shared libraries or APIs to identify likely blast radius.
-  Pair with `meta project list --recursive --json` when working across nested meta repos.
-
-Examples:
-  meta project dependents meta_core
-  meta project dependents auth --json"#
-        }
-        _ => {
-            r#"meta project - Inspect and validate meta workspace projects
+const PROJECT_HELP: &str = "meta project - Inspect and validate meta workspace projects
 
 Usage: meta project <COMMAND>
 
@@ -255,77 +199,58 @@ Commands:
 
 Agent hints:
   Prefer `meta project list --recursive --json` for codebase discovery.
-  Use `meta project check --recursive` before assuming a repo is intentionally absent.
+  Use `meta --recursive project check` before assuming a repo is intentionally absent.
 
 Examples:
   meta project list --recursive --json
   meta project check
-  meta project dependents meta_core"#
-        }
-    };
+  meta project dependents meta_core";
 
-    CommandResult::Message(help.to_string())
+/// `meta project check`: every project of the workspace is cloned.
+fn check(options: &ExecuteOptions, provided_projects: &[String], cwd: &Path) -> CommandResult {
+    match missing_projects(options, provided_projects, cwd) {
+        Err(e) => CommandResult::Error(format!("{e:#}")),
+        Ok(missing) if missing.is_empty() => {
+            CommandResult::Message("All projects are cloned and present.".to_string())
+        }
+        Ok(missing) => {
+            print_missing(&missing);
+            CommandResult::Message(format!(
+                "{} project(s) missing. Run 'meta git update' to clone them.",
+                missing.len()
+            ))
+        }
+    }
 }
 
-/// Execute a project command recursively across provided project directories
-///
-/// This handles the case when --recursive is used. Each project directory may have
-/// its own .meta.yaml file with additional projects to check/sync.
-fn execute_command_recursive(
-    command: &str,
+/// The URLs of the projects not cloned: those of the nearest config at or
+/// above cwd; with meta's --recursive, those of cwd's config and of each
+/// meta repo meta_cli sent. A config that can't be read is an error, not
+/// "nothing missing".
+fn missing_projects(
+    options: &ExecuteOptions,
     provided_projects: &[String],
     cwd: &Path,
-) -> CommandResult {
-    let mut all_missing: Vec<String> = Vec::new();
-
-    // Check the root meta config first
-    // A config that is refused is an error, not "nothing missing"
-    let root = match config::find_meta_config_in(cwd) {
-        Ok(found) => found,
-        Err(e) => return CommandResult::Error(format!("{e:#}")),
-    };
-    if let Some(root_meta_path) = root {
-        let projects = match parse_meta_projects(&root_meta_path) {
-            Ok(projects) => projects,
-            Err(e) => return CommandResult::Error(format!("{e:#}")),
-        };
-        all_missing.extend(find_missing_projects(&projects, cwd));
+) -> anyhow::Result<Vec<String>> {
+    if !options.recursive || provided_projects.is_empty() {
+        let workspace = config::Workspace::find(cwd, None)?
+            .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
+        return Ok(find_missing_projects(&workspace));
     }
-
-    // Check each provided project directory for its own meta config
-    for project_path in provided_projects {
-        let project_dir = cwd.join(project_path);
-        // One that can't be examined is an error, not "nothing missing"
-        let nested = match config::find_meta_config_in(&project_dir) {
-            Ok(found) => found,
-            Err(e) => return CommandResult::Error(format!("{e:#}")),
-        };
-        if let Some(nested_meta_path) = nested {
-            let projects = match parse_meta_projects(&nested_meta_path) {
-                Ok(projects) => projects,
-                Err(e) => return CommandResult::Error(format!("{e:#}")),
-            };
-            all_missing.extend(find_missing_projects(&projects, &project_dir));
+    let mut seen = HashSet::new();
+    let mut missing = Vec::new();
+    for dir in
+        std::iter::once(cwd.to_path_buf()).chain(provided_projects.iter().map(|p| cwd.join(p)))
+    {
+        let key = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        if !seen.insert(key) {
+            continue;
+        }
+        if let Some(workspace) = config::Workspace::in_dir(&dir)? {
+            missing.extend(find_missing_projects(&workspace));
         }
     }
-
-    match command {
-        "project check" => {
-            if all_missing.is_empty() {
-                CommandResult::Message("All projects are cloned and present.".to_string())
-            } else {
-                print_missing(&all_missing);
-                CommandResult::Message(format!(
-                    "{} project(s) missing. Run 'meta git update' to clone them.",
-                    all_missing.len()
-                ))
-            }
-        }
-        _ => CommandResult::ShowHelp(Some(format!(
-            "unrecognized command '{}'. Use 'meta git update' to sync projects.",
-            escape(command)
-        ))),
-    }
+    Ok(missing)
 }
 
 // ============================================================================
@@ -367,7 +292,7 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
         Err(e) => return CommandResult::Error(format!("{e}")),
     };
 
-    let root_repo = get_git_remote_url(&start_dir).unwrap_or_default();
+    let root_repo = meta_core::git::remote_url(&start_dir).unwrap_or_default();
     let project_nodes: Vec<ProjectTreeNode> = tree.iter().map(to_project_tree_node).collect();
     let abs_cwd = cwd
         .canonicalize()
@@ -452,21 +377,6 @@ fn to_project_tree_node(node: &MetaTreeNode) -> ProjectTreeNode {
     }
 }
 
-/// Get the git remote origin URL for a directory
-fn get_git_remote_url(dir: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .args(["config", "--get", "remote.origin.url"])
-        .current_dir(dir)
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
-}
-
 /// A project's remote URL as shown in `meta project list`.
 fn remote_label(repo: Option<&str>) -> Cow<'_, str> {
     repo.filter(|r| !r.is_empty())
@@ -527,185 +437,53 @@ fn format_project_tree(nodes: &[ProjectTreeNode], output: &mut String, prefix: &
 /// Finds all projects that directly depend on the given project (via `depends_on`
 /// matching the project's name or any of its `provides` entries).
 fn handle_project_dependents(
-    args: &[String],
-    options: &ExecuteOptions,
+    project_name: &str,
+    json: bool,
+    recursive: bool,
     cwd: &Path,
 ) -> CommandResult {
-    // Check if --json was passed as a trailing arg (not extracted by meta_cli)
-    let json_from_args = args.iter().any(|a| a == "--json");
-    let effective_options = if json_from_args && !options.json_output {
-        ExecuteOptions {
-            json_output: true,
-            ..*options
+    match dependents(project_name, recursive, cwd) {
+        Err(e) => CommandResult::Error(format!("{e:#}")),
+        Ok(dependents) if json => match serde_json::to_string(&dependents) {
+            Ok(json) => CommandResult::Message(json),
+            Err(e) => CommandResult::Error(format!("Failed to serialize JSON: {e}")),
+        },
+        Ok(dependents) if dependents.is_empty() => {
+            CommandResult::Message(format!("No projects depend on '{}'.", escape(project_name)))
         }
-    } else {
-        ExecuteOptions { ..*options }
-    };
-    let options = &effective_options;
-
-    let mut positionals = Vec::new();
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--json" | "--recursive" | "-r" | "--verbose" | "--parallel" => {}
-            "--depth" => {
-                iter.next();
-            }
-            _ if arg.starts_with("--depth=") => {}
-            _ if !arg.starts_with('-') => positionals.push(arg),
-            _ => {}
-        }
-    }
-
-    let project_name = match positionals.as_slice() {
-        [name] => (*name).clone(),
-        [] => {
-            return CommandResult::ShowHelp(Some(
-                "Usage: meta project dependents <project-name>".to_string(),
-            ))
-        }
-        _ => {
-            return CommandResult::Error(
-                "Expected exactly one <project-name> argument.".to_string(),
-            )
-        }
-    };
-
-    // Find the root meta config
-    let nearest_meta_path = match config::find_meta_config(cwd, None) {
-        Ok(Some(path)) => path,
-        Ok(None) => {
-            return CommandResult::Error(format!("No .meta.yaml found in {}", escape_path(cwd)))
-        }
-        Err(e) => return CommandResult::Error(format!("{e:#}")),
-    };
-    let nearest_meta_dir = nearest_meta_path.parent().unwrap_or(Path::new("."));
-    let start_dir = if options.recursive {
-        match config::find_root_meta_dir(nearest_meta_dir) {
-            Ok(root) => root,
-            Err(e) => return CommandResult::Error(format!("{e:#}")),
-        }
-    } else {
-        nearest_meta_dir.to_path_buf()
-    };
-
-    let found = match config::find_meta_config_in(&start_dir) {
-        Ok(found) => found,
-        Err(e) => return CommandResult::Error(format!("{e:#}")),
-    };
-    let Some(meta_path) = found else {
-        return CommandResult::Error(format!(
-            "No .meta.yaml found in {}",
-            escape_path(&start_dir)
-        ));
-    };
-
-    let (all_projects, _ignore) = match config::parse_meta_config(&meta_path) {
-        Ok(result) => result,
-        Err(e) => return CommandResult::Error(format!("Failed to parse meta config: {e}")),
-    };
-
-    let Some(dependents) = find_dependents(&project_name, &all_projects) else {
-        return CommandResult::Error(format!(
-            "Unknown project or alias: {}",
-            escape(&project_name)
-        ));
-    };
-
-    if options.json_output {
-        let json = match serde_json::to_string(&dependents) {
-            Ok(j) => j,
-            Err(e) => return CommandResult::Error(format!("Failed to serialize JSON: {e}")),
-        };
-        CommandResult::Message(json)
-    } else {
-        if dependents.is_empty() {
-            CommandResult::Message(format!(
-                "No projects depend on '{}'.",
-                escape(&project_name)
-            ))
-        } else {
+        Ok(dependents) => {
             let names: Vec<_> = dependents.iter().map(|d| escape(d)).collect();
             CommandResult::Message(names.join("\n"))
         }
     }
 }
 
-/// Normalize a dependency token for case- and separator-insensitive matching.
-///
-/// Folds hyphens to underscores and lowercases the string so that
-/// `loop-lib`, `loop_lib`, and `Loop_Lib` all resolve to the same token.
-fn normalize_token(s: &str) -> String {
-    s.replace('-', "_").to_lowercase()
-}
-
-/// Find all projects that depend on the given project.
-///
-/// A project B depends on project A if B's `depends_on` contains:
-/// - A's name directly, OR
-/// - Any of A's `provides` entries
-///
-/// Token matching is normalized (hyphens ↔ underscores, case-insensitive).
-fn find_dependents(project_name: &str, all_projects: &[ProjectInfo]) -> Option<Vec<String>> {
-    // Resolve the target project by normalized name or alias
-    let normalized_query = normalize_token(project_name);
-    let target = all_projects
-        .iter()
-        .find(|project| normalize_token(&project.name) == normalized_query)
-        .or_else(|| {
-            all_projects.iter().find(|project| {
-                project
-                    .provides
-                    .iter()
-                    .any(|token| normalize_token(token) == normalized_query)
-            })
-        })?;
-
-    // Build the set of normalized tokens that the target provides
-    let mut provided_tokens: HashSet<String> = HashSet::new();
-    provided_tokens.insert(normalize_token(&target.name));
-    for token in &target.provides {
-        provided_tokens.insert(normalize_token(token));
+/// The projects of the nearest workspace (with meta's --recursive, of the
+/// root workspace) that depend directly on `project_name`.
+fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result<Vec<String>> {
+    let mut workspace = config::Workspace::find(cwd, None)?
+        .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
+    if recursive {
+        workspace = workspace.root()?;
     }
-
-    // Find all projects whose depends_on intersects with provided_tokens
-    let mut dependents: Vec<String> = all_projects
-        .iter()
-        .filter(|p| p.name != target.name)
-        .filter(|p| {
-            p.depends_on
-                .iter()
-                .any(|dep| provided_tokens.contains(&normalize_token(dep)))
-        })
-        .map(|p| p.name.clone())
-        .collect();
-
-    dependents.sort();
-    Some(dependents)
+    let graph = DependencyGraph::build(workspace.projects.into_iter().map(Into::into).collect())?;
+    let dependents = graph
+        .dependents_of(project_name)
+        .ok_or_else(|| anyhow::anyhow!("Unknown project or alias: {}", escape(project_name)))?;
+    Ok(dependents.into_iter().map(str::to_string).collect())
 }
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-fn parse_meta_projects(meta_path: &Path) -> anyhow::Result<HashMap<String, String>> {
-    let (projects, _ignore) = config::parse_meta_config(meta_path)?;
-    let mut map = HashMap::new();
-    for p in projects {
-        // Skip projects without a repo URL (cannot clone)
-        if let Some(repo) = p.repo {
-            map.insert(p.path.clone(), repo);
-        }
-    }
-    Ok(map)
-}
-
-/// The URLs of the projects not cloned under `base_dir`.
-fn find_missing_projects(projects: &HashMap<String, String>, base_dir: &Path) -> Vec<String> {
-    projects
+/// The URLs of the projects of `workspace` that aren't cloned.
+fn find_missing_projects(workspace: &config::Workspace) -> Vec<String> {
+    workspace
+        .projects
         .iter()
-        .filter(|(name, _)| !base_dir.join(name).is_dir())
-        .map(|(_, url)| url.clone())
+        .filter(|p| !workspace.dir.join(&p.path).is_dir())
+        .filter_map(|p| p.repo.clone())
         .collect()
 }
 
@@ -786,6 +564,53 @@ mod tests {
 
         let msg = message(result).unwrap();
         assert!(msg.contains("All projects are cloned"));
+    }
+
+    #[test]
+    fn arguments_after_the_command_and_each_config_once() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().canonicalize().unwrap();
+        std::fs::write(
+            root.join(".meta.yaml"),
+            "projects:\n  zed: git@x:o/zed.git\n  c:\n    repo: git@x:o/c.git\n    meta: true\n  \
+             user:\n    repo: git@x:o/user.git\n    depends_on: [c]\n  alpha: git@x:o/alpha.git\n",
+        )
+        .unwrap();
+        let nested = root.join("c");
+        std::fs::create_dir_all(nested.join("g")).unwrap();
+        std::fs::write(nested.join(".meta.yaml"), "projects:\n  g: git@x:o/g.git\n").unwrap();
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let run = |command: &str, a: &[&str], cwd: &Path| {
+            execute_command(command, &args(a), &ExecuteOptions::default(), &[], cwd)
+        };
+
+        // meta_cli sends the root among the repos: each config counts once,
+        // and what is missing comes in project order
+        let recursive = ExecuteOptions {
+            recursive: true,
+            ..Default::default()
+        };
+        let provided = [root.to_string_lossy().into_owned(), "c".to_string()];
+        assert_eq!(
+            missing_projects(&recursive, &provided, &root).unwrap(),
+            ["git@x:o/alpha.git", "git@x:o/user.git", "git@x:o/zed.git"]
+        );
+        assert!(error(run("project check", &["x"], &root))
+            .unwrap()
+            .contains("unexpected argument"));
+
+        // list's own -r and --depth
+        let listed = |a: &[&str]| message(run("project list", a, &root)).unwrap();
+        assert!(!listed(&[]).contains(" g "), "{}", listed(&[]));
+        assert!(listed(&["-r"]).contains(" g "), "{}", listed(&["-r"]));
+        assert!(!listed(&["-r", "--depth", "0"]).contains(" g "));
+
+        // dependents' own -r: the root workspace, from inside a nested one
+        assert!(error(run("project dependents", &["c"], &nested)).is_some());
+        assert_eq!(
+            message(run("project dependents", &["c", "-r"], &nested)).unwrap(),
+            "user"
+        );
     }
 
     #[test]
@@ -1044,7 +869,7 @@ mod tests {
         .unwrap();
 
         let git = |args: &[&str]| {
-            let output = Command::new("git")
+            let output = std::process::Command::new("git")
                 .args(args)
                 .current_dir(temp_dir.path())
                 .output()
@@ -1238,102 +1063,6 @@ mod tests {
         assert_eq!(projects[0]["name"], "grandchild");
     }
 
-    // ── find_dependents ────────────────────────────────────────
-
-    fn make_project(name: &str, provides: &[&str], depends_on: &[&str]) -> ProjectInfo {
-        ProjectInfo {
-            name: name.to_string(),
-            path: name.to_string(),
-            repo: Some(format!("git@github.com:org/{name}.git")),
-            tags: vec![],
-            provides: provides.iter().map(|s| s.to_string()).collect(),
-            depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
-            meta: false,
-        }
-    }
-
-    #[test]
-    fn test_find_dependents_by_name() {
-        let projects = vec![
-            make_project("a", &[], &[]),
-            make_project("b", &[], &["a"]),
-            make_project("c", &[], &["b"]),
-        ];
-        assert_eq!(find_dependents("a", &projects), Some(vec!["b".to_string()]));
-        assert_eq!(find_dependents("b", &projects), Some(vec!["c".to_string()]));
-        assert_eq!(find_dependents("c", &projects), Some(vec![]));
-    }
-
-    #[test]
-    fn test_find_dependents_by_provides() {
-        let projects = vec![
-            make_project("loop_lib", &["loop-lib"], &[]),
-            make_project("meta_cli", &[], &["loop-lib"]),
-            make_project("meta_git_cli", &[], &["loop-lib"]),
-        ];
-        assert_eq!(
-            find_dependents("loop_lib", &projects),
-            Some(vec!["meta_cli".to_string(), "meta_git_cli".to_string()])
-        );
-    }
-
-    #[test]
-    fn test_find_dependents_normalized_tokens() {
-        // depends_on uses underscore, provides uses hyphen — should still match
-        let projects = vec![
-            make_project("loop_lib", &["loop-lib"], &[]),
-            make_project("consumer_a", &[], &["loop_lib"]),
-            make_project("consumer_b", &[], &["Loop-Lib"]),
-        ];
-        assert_eq!(
-            find_dependents("loop_lib", &projects),
-            Some(vec!["consumer_a".to_string(), "consumer_b".to_string()])
-        );
-    }
-
-    #[test]
-    fn test_find_dependents_by_alias_query() {
-        // Querying by a provides alias should resolve the target and find all dependents
-        let projects = vec![
-            make_project("loop_lib", &["loop-lib"], &[]),
-            make_project("meta_cli", &[], &["loop-lib"]),
-            make_project("meta_git_cli", &[], &["loop_lib"]),
-        ];
-        // Query by alias "loop-lib" should find the target "loop_lib" and collect all dependents
-        assert_eq!(
-            find_dependents("loop-lib", &projects),
-            Some(vec!["meta_cli".to_string(), "meta_git_cli".to_string()])
-        );
-    }
-
-    #[test]
-    fn test_find_dependents_exact_name_before_alias() {
-        // T10: If one project merely provides `util` and another is named `util`,
-        // the exact name match should win regardless of iteration order.
-        let projects = vec![
-            make_project("provider", &["util"], &[]),
-            make_project("util", &[], &[]),
-            make_project("consumer", &[], &["util"]),
-        ];
-        // Querying "util" should resolve to the project *named* "util", not "provider"
-        let deps = find_dependents("util", &projects).unwrap();
-        assert_eq!(deps, vec!["consumer"]);
-        // "provider" should NOT appear as a dependent
-        assert!(!deps.contains(&"provider".to_string()));
-    }
-
-    #[test]
-    fn test_find_dependents_no_match() {
-        let projects = vec![make_project("a", &[], &[]), make_project("b", &[], &[])];
-        assert_eq!(find_dependents("a", &projects), Some(vec![]));
-    }
-
-    #[test]
-    fn test_find_dependents_unknown_project() {
-        let projects = vec![make_project("a", &[], &[])];
-        assert_eq!(find_dependents("nonexistent", &projects), None);
-    }
-
     #[test]
     fn test_project_dependents_command() {
         let temp_dir = TempDir::new().unwrap();
@@ -1473,68 +1202,30 @@ projects:
     }
 
     #[test]
-    fn test_project_dependents_depth_flag_skipped() {
-        // T12: --depth N should not be treated as a positional arg
+    fn test_project_dependents_rejects_what_it_does_not_take() {
         let temp_dir = TempDir::new().unwrap();
         std::fs::write(
             temp_dir.path().join(".meta.yaml"),
-            r#"
-projects:
-  lib_a:
-    repo: git@github.com:org/lib_a.git
-  app_b:
-    repo: git@github.com:org/app_b.git
-    depends_on: [lib_a]
-"#,
+            "projects:\n  a:\n    repo: git@github.com:org/a.git\n",
         )
         .unwrap();
-
-        // --depth 1 lib_a: "1" should NOT be picked as project name
-        let result = execute_command(
-            "project dependents",
-            &["--depth".to_string(), "1".to_string(), "lib_a".to_string()],
-            &ExecuteOptions::default(),
-            &[],
-            temp_dir.path(),
-        );
-        let msg = message(result).unwrap();
-        assert_eq!(msg.trim(), "app_b");
-
-        // --depth=1 lib_a variant
-        let result = execute_command(
-            "project dependents",
-            &["--depth=1".to_string(), "lib_a".to_string()],
-            &ExecuteOptions::default(),
-            &[],
-            temp_dir.path(),
-        );
-        let msg = message(result).unwrap();
-        assert_eq!(msg.trim(), "app_b");
-    }
-
-    #[test]
-    fn test_project_dependents_multiple_positionals_error() {
-        // T12: multiple positional args should error
-        let temp_dir = TempDir::new().unwrap();
-        std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
-            r#"
-projects:
-  a:
-    repo: git@github.com:org/a.git
-"#,
-        )
-        .unwrap();
-
-        let result = execute_command(
-            "project dependents",
-            &["a".to_string(), "b".to_string()],
-            &ExecuteOptions::default(),
-            &[],
-            temp_dir.path(),
-        );
-        let msg = error(result).unwrap();
-        assert!(msg.contains("exactly one"), "{msg}");
+        for args in [
+            &["a", "b"][..],
+            &["--depth", "1", "a"],
+            &["a", "--bogus\x1b[2J"],
+        ] {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            let result = execute_command(
+                "project dependents",
+                &args,
+                &ExecuteOptions::default(),
+                &[],
+                temp_dir.path(),
+            );
+            let msg = error(result).unwrap();
+            assert!(msg.contains("unexpected argument"), "{args:?}: {msg}");
+            assert!(!msg.contains('\x1b'), "{msg}");
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use meta_cli::worktree::discover_worktree_members;
-use meta_git_lib::worktree::helpers::{owner_dir, require_meta_dir, resolve_worktree_root};
+use meta_git_lib::worktree::helpers::{resolve_worktree_root, Configs};
 use meta_git_lib::worktree::hooks::fire_post_prune;
 use meta_git_lib::worktree::record::{self, SetRecord};
 use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
@@ -121,12 +121,12 @@ fn eligible(record: &SetRecord, now: i64) -> Option<(String, Option<u64>)> {
 pub(crate) fn handle_prune(args: PruneArgs, json: bool, strict: bool) -> Result<()> {
     let dry_run = args.dry_run;
 
-    let meta_dir = require_meta_dir()?;
-    // Hooks come from here: inside a set being pruned, its own config goes
-    // with it
-    let owner = owner_dir(&meta_dir);
-    let workspace = Workspace::of(&meta_dir);
-    let worktree_root = resolve_worktree_root(Some(&meta_dir))?;
+    // Hooks come from the owner: inside a set being pruned, its own config
+    // goes with it
+    let cwd = std::env::current_dir()?;
+    let configs = Configs::find(&cwd)?;
+    let workspace = Workspace::of(&configs.here);
+    let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
     if sets.is_empty() && kept.is_empty() {
         if json {
@@ -318,7 +318,7 @@ pub(crate) fn handle_prune(args: PruneArgs, json: bool, strict: bool) -> Result<
     }
 
     // Fire post-prune hook
-    fire_post_prune(&removed, Some(&owner));
+    fire_post_prune(&removed, Some(&configs.owner));
     once_each(&mut kept);
 
     if json {

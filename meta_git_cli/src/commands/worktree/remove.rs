@@ -15,11 +15,11 @@ pub(crate) fn handle_remove(args: RemoveArgs, verbose: bool, json: bool) -> Resu
     validate_worktree_name(name)?;
     let force = args.force;
 
-    let meta_dir = require_meta_dir()?;
-    // Hooks come from here: inside the set being removed, its own config
-    // goes with it
-    let owner = owner_dir(&meta_dir);
-    let worktree_root = resolve_worktree_root(Some(&meta_dir))?;
+    // Hooks come from the owner: inside the set being removed, its own
+    // config goes with it
+    let cwd = std::env::current_dir()?;
+    let configs = Configs::find(&cwd)?;
+    let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
     let wt_dir = worktree_set_dir(&worktree_root, name)?;
 
     if !wt_dir.exists() {
@@ -29,7 +29,7 @@ pub(crate) fn handle_remove(args: RemoveArgs, verbose: bool, json: bool) -> Resu
     let check = check_worktree_removal(&wt_dir)?;
     // Only this workspace's sets: a shared worktree directory may hold
     // another workspace's. No flag overrides this.
-    let workspace = Workspace::of(&meta_dir);
+    let workspace = Workspace::of(&configs.here);
     let foreign = workspace.foreign_members(&wt_dir, &check);
     if !foreign.is_empty() {
         // Repositories meta couldn't read make sets from them look foreign
@@ -89,7 +89,7 @@ pub(crate) fn handle_remove(args: RemoveArgs, verbose: bool, json: bool) -> Resu
     delete_checked_set(&wt_dir, &check, force, verbose)?;
 
     // Fire post-destroy hook
-    fire_post_destroy(name, &wt_dir, force, Some(&owner));
+    fire_post_destroy(name, &wt_dir, force, Some(&configs.owner));
 
     if json {
         let output = DestroyOutput {

@@ -182,7 +182,7 @@ Copies the install scripts put in `~/.local/bin` or `%USERPROFILE%\.meta\bin`
 
 ## Configuration
 
-Meta projects are configured by one YAML file in the repository root: `.meta.yaml`. It is the only name meta looks for; `--config <FILE>` reads another file instead.
+Meta projects are configured by one YAML file at the top of the workspace: `.meta.yaml`. It is the only name meta looks for, in the current directory and then each one above it; `--config <FILE>` looks for another name the same way.
 
 ### Simple Format
 
@@ -236,6 +236,8 @@ projects:
 - `repo` does not start with `-`.
 - Tags contain no whitespace and no `,`.
 - `worktrees_dir`, if set, lies inside the workspace (relative, or absolute but inside), not inside a project and not in `.git`. For a directory elsewhere, set `META_WORKTREES`.
+- A key meta doesn't know at the top level, under `defaults` or under `worktree` is an error, so a misspelling isn't ignored. Project entries may carry keys of their own for other tools.
+- Each `worktree.hooks` value is a command string (`false` or `123` is refused, not run).
 
 The same rules apply to every meta config that a recursive command reads, including one inside a cloned project: a refused nested config stops the command rather than silently leaving out that part of the tree.
 

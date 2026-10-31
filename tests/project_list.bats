@@ -373,12 +373,13 @@ J
             run "$META_BIN" "$flag" frontend project "$command" --recursive --json
             [ "$status" -ne 0 ]
             [[ "$output" == *"meta project list does not take --include/--exclude"* ]]
-            # after the subcommand too, and in --flag=value form
+            # after the subcommand too, and in --flag=value form: not one
+            # of its arguments
             short="${flag:1:2}"
             for trailing in "$flag frontend" "$flag=frontend" "${short}frontend"; do
                 run "$META_BIN" project "$command" $trailing --json
                 [ "$status" -ne 0 ]
-                [[ "$output" == *"meta project list does not take --include/--exclude"* ]]
+                [[ "$output" == *"unexpected argument"* ]]
             done
         done
     done

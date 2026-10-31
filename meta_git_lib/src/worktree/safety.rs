@@ -7,8 +7,10 @@ use anyhow::{Context, Result};
 use meta_core::display::{escape, escape_path};
 use std::path::{Path, PathBuf};
 
-use super::git_ops::{git_command, remove_worktree_repos};
+use super::git_ops::remove_worktree_repos;
 use super::record::{self, SetRecord};
+use meta_core::git::git;
+use meta_core::gitdir;
 
 /// A linked worktree checkout inside a set, the git directory of the
 /// repository it belongs to (where `git worktree remove` runs), and meta's
@@ -307,7 +309,11 @@ fn add_member(
 /// admin directory: `None` if it isn't a linked worktree or has no record,
 /// an error if it has a record that can't be trusted.
 pub fn member_record(checkout: &Path) -> Result<Option<(PathBuf, SetRecord)>> {
-    let Ok((admin, repo_git_dir)) = linked_worktree_dirs(checkout) else {
+    let Ok(gitdir::Linked {
+        admin,
+        common: repo_git_dir,
+    }) = gitdir::linked(checkout)
+    else {
         return Ok(None);
     };
     Ok(trusted_record(&admin, &repo_git_dir)?.map(|record| (admin, record)))
@@ -347,75 +353,20 @@ enum GitEntry {
 fn git_entry(dir: &Path) -> Result<GitEntry> {
     let git = dir.join(".git");
     match git.symlink_metadata() {
-        Ok(meta) if meta.is_file() => Ok(match linked_worktree_dirs(dir) {
-            Ok(dirs) => GitEntry::Worktree(dirs),
+        Ok(meta) if meta.is_file() => Ok(match gitdir::linked(dir) {
+            Ok(linked) => GitEntry::Worktree((linked.admin, linked.common)),
             Err(e) => GitEntry::Repository(format!("not a linked worktree ({e:#})")),
         }),
         Ok(_) => Ok(GitEntry::Repository(
             "a git repository, not a linked worktree".to_string(),
         )),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let bare = dir.join("HEAD").is_file()
-                && dir.join("objects").is_dir()
-                && dir.join("refs").is_dir();
-            Ok(if bare {
-                GitEntry::Repository("a bare git repository".to_string())
-            } else {
-                GitEntry::None
-            })
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(if gitdir::is_bare(dir) {
+            GitEntry::Repository("a bare git repository".to_string())
+        } else {
+            GitEntry::None
+        }),
         Err(e) => Err(e).with_context(|| format!("Cannot inspect {}", escape_path(&git))),
     }
-}
-
-/// The admin directory of the linked worktree checked out at `checkout`, in
-/// its repository's git directory (see [`linked_worktree_dirs`]).
-pub fn linked_worktree_admin_dir(checkout: &Path) -> Result<PathBuf> {
-    linked_worktree_dirs(checkout).map(|(admin, _)| admin)
-}
-
-/// Follow a checkout's `.git` file to its admin directory and its
-/// repository's git directory, requiring the linked-worktree layout: an
-/// admin directory with a `commondir` and a `gitdir` that points back at
-/// this checkout. A `--separate-git-dir` checkout or a submodule fails this.
-fn linked_worktree_dirs(checkout: &Path) -> Result<(PathBuf, PathBuf)> {
-    let git_file = checkout.join(".git");
-    let content = std::fs::read_to_string(&git_file).context("cannot read .git")?;
-    let admin = content
-        .trim()
-        .strip_prefix("gitdir:")
-        .map(|target| checkout.join(target.trim()))
-        .context(".git has no gitdir line")?;
-    anyhow::ensure!(
-        admin.exists(),
-        "its git metadata {} is missing; was the repository moved or deleted?",
-        escape_path(&admin)
-    );
-    let common = std::fs::read_to_string(admin.join("commondir")).with_context(|| {
-        if admin.components().any(|c| c.as_os_str() == "modules") {
-            format!(
-                "{} looks like a submodule; meta can't remove sets that contain submodules",
-                escape_path(&admin)
-            )
-        } else {
-            format!("{} has no commondir", escape_path(&admin))
-        }
-    })?;
-    let backlink = std::fs::read_to_string(admin.join("gitdir"))
-        .with_context(|| format!("{} has no gitdir", escape_path(&admin)))?;
-    let points_back = admin
-        .join(backlink.trim())
-        .canonicalize()
-        .ok()
-        .is_some_and(|target| git_file.canonicalize().ok() == Some(target));
-    anyhow::ensure!(
-        points_back,
-        "{} belongs to another checkout (if this set was moved, run \
-         'git worktree repair' in its repository)",
-        escape_path(&admin)
-    );
-    let common = admin.join(common.trim());
-    Ok((admin, common))
 }
 
 /// Walk the set without following links. `owned` means a repository above
@@ -461,7 +412,7 @@ fn scan(
 /// Describe the work in one checkout that deleting it would lose, and return
 /// git's complete output alongside for exact comparison.
 fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String)> {
-    let output = git_command(repo)
+    let output = git(repo)
         .args(["status", "--porcelain", "-z", "--untracked-files=all"])
         .output()
         .context("cannot run git status")?;
@@ -518,7 +469,7 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
         ));
     }
 
-    let output = git_command(repo)
+    let output = git(repo)
         .args([
             "rev-list",
             "HEAD",
@@ -543,7 +494,7 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
         ));
     }
     // Staged content, which the status codes alone don't show.
-    let staged = git_command(repo)
+    let staged = git(repo)
         .args(["diff", "--cached", "--raw", "-z", "--no-renames"])
         .output()
         .context("cannot run git diff --cached")?;
@@ -574,7 +525,7 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
 /// so meta counts them as unsaved instead of guessing. Files absent from
 /// disk (a sparse checkout) hold nothing.
 fn hidden_files(repo: &Path) -> Result<Vec<(String, PathBuf)>> {
-    let output = git_command(repo)
+    let output = git(repo)
         .args(["ls-files", "-v", "-z"])
         .output()
         .context("cannot run git ls-files")?;
@@ -622,7 +573,7 @@ fn path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
 /// autostash, say) lives in the worktree's git directory, which removal
 /// deletes.
 fn operation_in_progress(repo: &Path) -> Result<Option<&'static str>> {
-    let output = git_command(repo)
+    let output = git(repo)
         .args(["rev-parse", "--git-dir"])
         .output()
         .context("cannot run git rev-parse")?;
@@ -745,7 +696,7 @@ mod tests {
     }
 
     fn mark(checkout: &Path, record: &SetRecord) {
-        record::write(&linked_worktree_admin_dir(checkout).unwrap(), record).unwrap();
+        record::write(&gitdir::linked(checkout).unwrap().admin, record).unwrap();
     }
 
     #[test]
@@ -808,7 +759,7 @@ mod tests {
         // it: the backlink holds, but git doesn't keep it there
         let fake = tmp.path().join("fake");
         repo_with_worktree(tmp.path(), "real", &fake.join("real"));
-        let admin = linked_worktree_admin_dir(&fake.join("real")).unwrap();
+        let admin = gitdir::linked(&fake.join("real")).unwrap().admin;
         let copy = fake.join("admin");
         std::fs::create_dir(&copy).unwrap();
         for file in ["HEAD", "commondir", "gitdir"] {

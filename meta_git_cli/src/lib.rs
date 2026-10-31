@@ -8,14 +8,13 @@ mod commit;
 mod git_env;
 mod helpers;
 mod ssh;
-mod ssh_setup;
 mod status;
 mod update;
 
 mod commands;
 
 use log::debug;
-use meta_plugin_protocol::{CommandResult, PlannedCommand, PluginRequestOptions};
+use meta_plugin_protocol::{has_help_token, CommandResult, PlannedCommand, PluginRequestOptions};
 use std::path::Path;
 
 use helpers::get_project_directories_with_fallback;
@@ -55,6 +54,36 @@ pub fn execute_command(
         return commands::worktree::execute_worktree_command(command, args, options, cwd);
     }
 
+    // These act on repos they find themselves, not on the selected ones
+    if matches!(command, "git update" | "git clone")
+        && (options.include_filters.is_some() || options.exclude_filters.is_some())
+    {
+        return CommandResult::Error(format!(
+            "meta {command} finds its repos itself (in the .meta.yaml files); it does not take --include/--exclude"
+        ));
+    }
+
+    // Commands meta adapts parse their own arguments, help included
+    match command {
+        "git clone" => {
+            return match meta_plugin_protocol::parse_args(command, args) {
+                Ok(args) => finish(clone::execute_git_clone(args, options, cwd)),
+                Err(result) => result,
+            }
+        }
+        "git commit" => {
+            // meta sends a help request without its repos: whatever clap
+            // makes of the arguments, it never commits
+            let help = ["--help".to_string()];
+            let args = if help_requested { &help[..] } else { args };
+            return match meta_plugin_protocol::parse_args(command, args) {
+                Ok(args) => finish(commit::execute_git_commit(args, projects, options, cwd)),
+                Err(result) => result,
+            };
+        }
+        _ => {}
+    }
+
     if help_requested {
         if let Some(help) = build_passthrough_git_help(command, args, projects, cwd) {
             return CommandResult::Message(help);
@@ -62,27 +91,16 @@ pub fn execute_command(
         return CommandResult::ShowHelp(None);
     }
 
-    let result = match command {
-        // These act on repos they find themselves, not on the selected ones
-        "git update" | "git clone"
-            if options.include_filters.is_some() || options.exclude_filters.is_some() =>
-        {
-            Err(anyhow::anyhow!(
-                "meta {command} finds its repos itself (in the .meta.yaml files); it does not take --include/--exclude"
-            ))
-        }
+    finish(match command {
         "git status" => status::execute_git_status(projects, options, cwd),
-        "git clone" => clone::execute_git_clone(args, options, cwd),
         "git update" => update::execute_git_update(projects, options.dry_run, cwd),
-        "git commit" => commit::execute_git_commit(args, projects, options, cwd),
         // Fallback: run raw git command across all repos
         _ => return execute_raw_git_command(command, args, projects, options, cwd),
-    };
+    })
+}
 
-    match result {
-        Ok(cmd_result) => cmd_result,
-        Err(e) => CommandResult::Error(format!("{e:#}")),
-    }
+fn finish(result: anyhow::Result<CommandResult>) -> CommandResult {
+    result.unwrap_or_else(|e| CommandResult::Error(format!("{e:#}")))
 }
 
 /// Check if a git command accesses remote repositories
@@ -90,18 +108,6 @@ fn is_remote_command(argv: &[String]) -> bool {
     let remote_commands = ["push", "pull", "fetch", "clone", "ls-remote"];
     argv.get(1)
         .is_some_and(|subcommand| remote_commands.contains(&subcommand.as_str()))
-}
-
-/// A `--help`/`-h` before `--`; after it, they are arguments for the command.
-fn has_help_token(command: &str, args: &[String]) -> bool {
-    command
-        .split_whitespace()
-        .chain(
-            args.iter()
-                .map(String::as_str)
-                .take_while(|arg| *arg != "--"),
-        )
-        .any(|arg| arg == "--help" || arg == "-h")
 }
 
 fn build_passthrough_git_help(
@@ -219,7 +225,11 @@ fn execute_raw_git_command(
     // For remote commands running in parallel, establish SSH ControlMaster
     // connections and inject GIT_SSH_COMMAND into each planned command.
     if options.parallel && is_remote_command(&argv) {
-        let urls = ssh::discover_ssh_urls(cwd);
+        let urls = meta_core::config::Workspace::find(cwd, None)
+            .ok()
+            .flatten()
+            .map(|workspace| ssh::ssh_urls(&workspace.projects))
+            .unwrap_or_default();
 
         // HTTPS-only workspaces don't need SSH multiplexing
         if urls.is_empty() {
@@ -228,12 +238,10 @@ fn execute_raw_git_command(
 
         let url_refs: Vec<&str> = urls.iter().map(|s| s.as_str()).collect();
 
-        let (ssh_env, parallel_ok) = match ssh_setup::establish_ssh_masters(&url_refs) {
-            ssh_setup::SshMasters::OurSockets(dir) => {
-                (Some(ssh_setup::git_ssh_command(&dir)), true)
-            }
-            ssh_setup::SshMasters::UserManaged => (None, true),
-            ssh_setup::SshMasters::Failed => (None, false),
+        let (ssh_env, parallel_ok) = match ssh::establish_ssh_masters(&url_refs) {
+            ssh::SshMasters::OurSockets(dir) => (Some(ssh::git_ssh_command(&dir)), true),
+            ssh::SshMasters::UserManaged => (None, true),
+            ssh::SshMasters::Failed => (None, false),
         };
 
         // Inject GIT_SSH_COMMAND into every planned command's env
@@ -304,7 +312,9 @@ mod tests {
             r#"{"projects": {"foo": "git@github.com:org/foo.git", "bar": "git@github.com:org/bar.git"}}"#,
         )
         .unwrap();
-        let (projects, _) = meta_core::config::parse_meta_config(&meta_path).unwrap();
+        let projects = meta_core::config::Workspace::load(&meta_path)
+            .unwrap()
+            .projects;
         assert_eq!(projects.len(), 2);
         let names: std::collections::HashSet<_> =
             projects.iter().map(|p| p.name.as_str()).collect();
@@ -730,6 +740,23 @@ the only commit message
         assert_eq!(dirs[1], "alpha");
         assert_eq!(dirs[2], "middle");
         assert_eq!(dirs[3], "zebra");
+    }
+
+    #[test]
+    fn test_get_project_directories_from_inside_a_project() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        std::fs::write(
+            root.join(".meta.yaml"),
+            r#"{"projects": {"a": "u", "b": "u"}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir(root.join("a")).unwrap();
+
+        // every repo the command runs in, not just the one cwd is in
+        let dirs = get_project_directories(&root.join("a")).unwrap();
+        let full = |path: &std::path::Path| path.to_string_lossy().into_owned();
+        assert_eq!(dirs, [full(root), ".".to_string(), full(&root.join("b"))]);
     }
 
     #[test]

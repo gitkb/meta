@@ -6,7 +6,6 @@ use meta_cli::worktree::discover_worktree_repos;
 use meta_git_lib::worktree::git_ops::git_worktree_add;
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::record;
-use meta_git_lib::worktree::safety::linked_worktree_admin_dir;
 use meta_git_lib::worktree::types::*;
 
 use super::cli_types::AddArgs;
@@ -25,8 +24,10 @@ pub(crate) fn handle_add(args: AddArgs, verbose: bool, json: bool) -> Result<()>
         );
     }
 
-    let meta_dir = require_meta_dir()?;
-    let worktree_root = resolve_worktree_root(Some(&meta_dir))?;
+    let cwd = std::env::current_dir()?;
+    let configs = Configs::find(&cwd)?;
+    let meta_dir = &configs.here.dir;
+    let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
     let wt_dir = worktree_set_dir(&worktree_root, name)?;
 
     if !wt_dir.exists() {
@@ -49,9 +50,9 @@ pub(crate) fn handle_add(args: AddArgs, verbose: bool, json: bool) -> Result<()>
     let mut planned: Vec<(&RepoSpec, std::path::PathBuf, String)> = Vec::new();
     for spec in repo_specs {
         // Use recursive lookup for nested paths (containing '/')
-        let (source, _project) = lookup_nested_project(&meta_dir, &spec.alias)?;
+        let (source, _project) = lookup_nested_project(&configs.here, &spec.alias)?;
         // The repo goes where it is in the workspace
-        let place = place_in_set(&meta_dir, &spec.alias, &source);
+        let place = place_in_set(meta_dir, &spec.alias, &source);
         // As in create: a repo given twice, by name or by path, is one
         // worktree, and refused on two branches
         if let Some((first, ..)) = planned.iter().find(|(_, _, p)| same_place(p, &place)) {
@@ -154,8 +155,8 @@ pub(crate) fn handle_add(args: AddArgs, verbose: bool, json: bool) -> Result<()>
         };
         // A worktree that can't be recorded is reported as failed, not added
         if let Some(set_record) = &set_record {
-            if let Err(e) =
-                linked_worktree_admin_dir(&dest).and_then(|admin| record::write(&admin, set_record))
+            if let Err(e) = meta_core::gitdir::linked(&dest)
+                .and_then(|linked| record::write(&linked.admin, set_record))
             {
                 failed = Some(e.context(format!(
                     "Added '{}', but cannot record it in worktree '{name}'",

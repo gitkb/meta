@@ -10,7 +10,8 @@ use meta_cli::worktree::{
     detect_worktree_location, discover_worktree_members, discover_worktree_members_recursive,
     discover_worktree_repos, discover_worktree_repos_recursive, WorktreeMemberInfo,
 };
-use meta_git_lib::worktree::git_ops::git_status_summary;
+use meta_core::duration::format_duration;
+use meta_git_lib::worktree::git_ops::repo_status;
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::record::{self, SetRecord};
 use meta_git_lib::worktree::types::ListRepoEntry;
@@ -82,11 +83,11 @@ fn repo_entries(
     let entries = repos
         .par_iter()
         .map(|repo| {
-            let status = git_status_summary(&repo.path);
+            let status = repo_status(&repo.path);
             let dirty = if args.recursive || selected {
-                status?.dirty
+                status?.is_dirty()
             } else {
-                status.map(|s| s.dirty).unwrap_or(false)
+                status.is_ok_and(|s| s.is_dirty())
             };
             Ok(RepoEntry::Observed(ListRepoEntry {
                 alias: repo.alias.clone(),
@@ -108,9 +109,8 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
             .expect("worktree location has a parent")
             .to_path_buf(),
         _ => {
-            let meta_dir = meta_core::config::find_meta_config(&cwd, None)?
-                .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
-            let root = resolve_worktree_root(Some(meta_dir.as_deref().unwrap_or(&cwd)))?;
+            let configs = Configs::find_optional(&cwd)?;
+            let root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
             if root.is_absolute() {
                 root
             } else {

@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use colored::*;
 use loop_lib::run;
-use meta_core::config::{self, find_meta_config, parse_meta_config, MetaTreeNode, ProjectInfo};
+use meta_core::config::{self, find_meta_config, MetaTreeNode, ProjectInfo, Workspace};
 use meta_core::display::{escape, escape_lines, escape_path};
 use std::io::Write;
 use std::path::PathBuf;
@@ -534,7 +534,7 @@ fn run_cli() -> Result<()> {
         })
         .init();
 
-    let mut cli: Cli = meta_cli::args::parse();
+    let mut cli: Cli = meta_core::args::parse();
 
     log::debug!("cli.json = {}", cli.json);
 
@@ -701,23 +701,10 @@ fn handle_command_dispatch(
     let recursive = cli.recursive;
     let dry_run = cli.dry_run;
     let depth = cli.depth;
-    // Determine parallel mode: --parallel wins, then --sequential, then config default (true)
-    let parallel = if cli.parallel {
-        log::debug!("parallel=true (--parallel flag)");
-        true
-    } else if cli.sequential {
-        log::debug!("parallel=false (--sequential flag)");
-        false
-    } else {
-        // Load default from .meta.yaml (defaults to parallel: true if not specified)
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let defaults = config::load_meta_defaults(&cwd);
-        log::debug!(
-            "parallel={} (from config defaults, cwd={})",
-            defaults.parallel,
-            escape_path(&cwd)
-        );
-        defaults.parallel
+    // --parallel wins, then --sequential, then the default of the config
+    // the command runs from (parallel without one)
+    let parallel_for = |defaults: Option<&config::MetaDefaults>| {
+        cli.parallel || !cli.sequential && defaults.is_none_or(|d| d.parallel)
     };
 
     let command_str = loop_lib::display_command(&command_args);
@@ -792,7 +779,9 @@ fn handle_command_dispatch(
             if let Some(config_path) =
                 worktree::set_config(&task_dir, &wt_paths, cli.config.as_ref())?
             {
-                let (meta_projects, ignore_list) = parse_meta_config(&config_path)?;
+                let workspace = Workspace::load(&config_path)?;
+                let parallel = parallel_for(Some(&workspace.defaults));
+                let (meta_projects, ignore_list) = (workspace.projects, workspace.ignore);
 
                 // A set lays its repos out as the workspace: a checkout's path
                 // in the set is its project's path, nested meta repos included.
@@ -926,6 +915,7 @@ fn handle_command_dispatch(
                 wt_paths.iter().map(|p| p.display().to_string()).collect();
 
             let directories = select_repos(cli, directories, &task_dir, Vec::new)?;
+            let parallel = parallel_for(None);
 
             let config = loop_lib::LoopConfig {
                 directories,
@@ -947,29 +937,29 @@ fn handle_command_dispatch(
         }
     }
 
-    let absolute_path = match find_meta_config(&current_dir, cli.config.as_ref())? {
-        Some(path) => path,
-        None => {
-            let config_name = cli
-                .config
-                .as_ref()
-                .map(|p| escape_path(p))
-                .unwrap_or_else(|| config::META_CONFIG_NAME.to_string());
-            eprintln!("Error: Could not find meta config file '{config_name}'");
-            eprintln!("Searched from {} up to root", escape_path(&current_dir));
-            std::process::exit(1);
-        }
+    let Some(workspace) = Workspace::find(&current_dir, cli.config.as_ref())? else {
+        let config_name = cli
+            .config
+            .as_ref()
+            .map(|p| escape_path(p))
+            .unwrap_or_else(|| config::META_CONFIG_NAME.to_string());
+        eprintln!("Error: Could not find meta config file '{config_name}'");
+        eprintln!("Searched from {} up to root", escape_path(&current_dir));
+        std::process::exit(1);
     };
-
-    let meta_dir = absolute_path.parent().unwrap_or(std::path::Path::new("."));
+    let meta_dir = workspace.dir.as_path();
+    let parallel = parallel_for(Some(&workspace.defaults));
 
     if cli.verbose {
         println!("{}", "Verbose mode enabled".green());
-        println!("Resolved config file path: {}", escape_path(&absolute_path));
+        println!(
+            "Resolved config file path: {}",
+            escape_path(&workspace.config_path)
+        );
         println!("Executing command: {}", escape(&command_str));
     }
 
-    let (meta_projects, ignore_list) = parse_meta_config(&absolute_path)?;
+    let meta_projects = &workspace.projects;
 
     // Filter projects by tags if --tag is specified
     let filtered_projects: Vec<&ProjectInfo> = if let Some(ref tag_filter) = cli.tag {
@@ -1002,12 +992,9 @@ fn handle_command_dispatch(
             let depth_str = depth.map_or("unlimited".to_string(), |d| d.to_string());
             println!("Recursive mode enabled, max depth: {depth_str}");
         }
-        // The walk reads the default config file; with --config, start from
-        // the chosen one and walk only the nested meta repos
-        tree = match cli.config {
-            Some(_) => config::walk_projects(meta_dir, &meta_projects, depth)?,
-            None => config::walk_meta_tree(meta_dir, depth)?,
-        };
+        // From the config already loaded (the default or --config's), into
+        // the nested meta repos
+        tree = config::walk_projects(meta_dir, meta_projects, depth)?;
         project_paths = vec![meta_dir_str.clone()];
         let flat = flatten_with_tag_filter(&tree, &cli.tag);
         project_paths.extend(
@@ -1018,13 +1005,13 @@ fn handle_command_dispatch(
 
     // Commands and plugins get only the selected repos
     let project_paths = select_repos(cli, project_paths, meta_dir, || {
-        repo_filter::repo_names(meta_dir, &meta_projects, &tree)
+        repo_filter::repo_names(meta_dir, meta_projects, &tree)
     })?;
 
     let config = loop_lib::LoopConfig {
         add_aliases_to_global_looprc: cli.add_aliases_to_global_looprc,
         directories: project_paths.clone(),
-        ignore: ignore_list,
+        ignore: workspace.ignore.clone(),
         verbose: cli.verbose,
         silent: cli.silent,
         parallel,
@@ -1613,7 +1600,9 @@ mod tests {
         )
         .unwrap();
 
-        let (projects, ignore) = parse_meta_config(file.path()).unwrap();
+        let Workspace {
+            projects, ignore, ..
+        } = Workspace::load(file.path()).unwrap();
         assert_eq!(projects.len(), 2);
 
         let names: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
@@ -1649,7 +1638,9 @@ mod tests {
         )
         .unwrap();
 
-        let (projects, _ignore) = parse_meta_config(file.path()).unwrap();
+        let projects = meta_core::config::Workspace::load(file.path())
+            .unwrap()
+            .projects;
         assert_eq!(projects.len(), 1);
 
         let api = &projects[0];
@@ -1660,27 +1651,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_meta_config_missing_keys() {
-        let mut file = NamedTempFile::new().unwrap();
-        write!(
-            file,
-            r#"{{
-                "not_projects": {{}}
-            }}"#
-        )
-        .unwrap();
-
-        let (projects, ignore) = parse_meta_config(file.path()).unwrap();
-        assert!(projects.is_empty());
-        assert!(ignore.is_empty());
-    }
-
-    #[test]
     fn test_parse_meta_config_invalid_json() {
         let mut file = NamedTempFile::new().unwrap();
         write!(file, "invalid json").unwrap();
 
-        let result = parse_meta_config(file.path());
+        let result = meta_core::config::Workspace::load(file.path());
         assert!(result.is_err());
     }
 
@@ -1706,7 +1681,9 @@ ignore:
         )
         .unwrap();
 
-        let (projects, ignore) = parse_meta_config(&yaml_path).unwrap();
+        let Workspace {
+            projects, ignore, ..
+        } = Workspace::load(&yaml_path).unwrap();
         assert_eq!(projects.len(), 2);
 
         let web_app = projects.iter().find(|p| p.name == "web-app").unwrap();
@@ -1762,7 +1739,9 @@ projects:
         )
         .unwrap();
 
-        let (projects, _ignore) = parse_meta_config(&yaml_path).unwrap();
+        let projects = meta_core::config::Workspace::load(&yaml_path)
+            .unwrap()
+            .projects;
         assert_eq!(projects.len(), 3);
 
         let frontend = projects.iter().find(|p| p.name == "frontend").unwrap();
@@ -1927,7 +1906,9 @@ projects:
         )
         .unwrap();
 
-        let (projects, _) = parse_meta_config(&meta_path).unwrap();
+        let projects = meta_core::config::Workspace::load(&meta_path)
+            .unwrap()
+            .projects;
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "myproject");
         assert_eq!(projects[0].path, "myproject"); // Path defaults to name

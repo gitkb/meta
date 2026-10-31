@@ -4,43 +4,21 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use super::helpers::read_meta_config_value;
 use super::types::{CreateRepoEntry, PruneEntry};
+use meta_core::config::Workspace;
 
-/// Fire a worktree lifecycle hook if configured in `.meta.yaml`.
-///
-/// Reads the `.meta.yaml` config for `worktree.hooks.<hook_name>`.
-/// If configured, spawns the command and pipes `payload` JSON to stdin.
+/// Fire a worktree lifecycle hook if `owner`'s `.meta.yaml` configures one
+/// (`worktree.hooks.<hook_name>`): spawn the command and pipe `payload` JSON
+/// to its stdin.
 /// The hook's stderr goes to meta's stderr, as git does for its hooks; a
 /// pipe that nobody reads would block a verbose hook forever.
 /// Hook failure prints a warning but doesn't block the operation.
-pub fn fire_worktree_hook(hook_name: &str, payload: &serde_json::Value, meta_dir: Option<&Path>) {
-    let dir = match meta_dir {
-        Some(d) => d,
-        None => return,
+pub fn fire_worktree_hook(hook_name: &str, payload: &serde_json::Value, owner: Option<&Workspace>) {
+    let Some(owner) = owner else {
+        return;
     };
-
-    let config = match read_meta_config_value(dir) {
-        Ok(Some(c)) => c,
-        Ok(None) => return,
-        Err(e) => {
-            log::warn!(
-                "Hook '{hook_name}' not run: {}",
-                meta_core::display::escape_lines(&format!("{e:#}"))
-            );
-            return;
-        }
-    };
-
-    let hook_cmd = config
-        .get("worktree")
-        .and_then(|wt| wt.get("hooks"))
-        .and_then(|hooks| hooks.get(hook_name))
-        .and_then(|v| v.as_str());
-
-    let cmd_str = match hook_cmd {
-        Some(c) => c,
-        None => return,
+    let Some(cmd_str) = owner.worktree.hooks.get(hook_name) else {
+        return;
     };
 
     let payload_json = match serde_json::to_string(payload) {
@@ -50,9 +28,11 @@ pub fn fire_worktree_hook(hook_name: &str, payload: &serde_json::Value, meta_dir
 
     // From the directory whose config names the hook: a set removed from
     // inside it takes the caller's directory with it
-    let result = Command::new("sh")
+    let mut command = Command::new("sh");
+    meta_core::git::clear_repo_env(&mut command);
+    let result = command
         .args(["-c", cmd_str])
-        .current_dir(dir)
+        .current_dir(&owner.dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
@@ -86,7 +66,7 @@ pub fn fire_post_create(
     ephemeral: bool,
     ttl_seconds: Option<u64>,
     custom: &HashMap<String, String>,
-    meta_dir: Option<&Path>,
+    owner: Option<&Workspace>,
 ) {
     let payload = serde_json::json!({
         "action": "create",
@@ -97,25 +77,25 @@ pub fn fire_post_create(
         "ttl_seconds": ttl_seconds,
         "custom": custom,
     });
-    fire_worktree_hook("post-create", &payload, meta_dir);
+    fire_worktree_hook("post-create", &payload, owner);
 }
 
 /// Fire post-destroy hook with structured payload.
-pub fn fire_post_destroy(name: &str, path: &Path, force: bool, meta_dir: Option<&Path>) {
+pub fn fire_post_destroy(name: &str, path: &Path, force: bool, owner: Option<&Workspace>) {
     let payload = serde_json::json!({
         "action": "destroy",
         "name": name,
         "path": path.display().to_string(),
         "force": force,
     });
-    fire_worktree_hook("post-destroy", &payload, meta_dir);
+    fire_worktree_hook("post-destroy", &payload, owner);
 }
 
 /// Fire post-prune hook with structured payload.
-pub fn fire_post_prune(removed: &[PruneEntry], meta_dir: Option<&Path>) {
+pub fn fire_post_prune(removed: &[PruneEntry], owner: Option<&Workspace>) {
     let payload = serde_json::json!({
         "action": "prune",
         "removed": removed,
     });
-    fire_worktree_hook("post-prune", &payload, meta_dir);
+    fire_worktree_hook("post-prune", &payload, owner);
 }

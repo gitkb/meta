@@ -76,6 +76,15 @@ pub fn escape_path(path: &std::path::Path) -> String {
     escape(&path.to_string_lossy()).into_owned()
 }
 
+/// `value` quoted for a POSIX shell, for commands meta prints for the user
+/// to paste: plain words stay as they are. A NUL byte, which no shell word
+/// can hold, leaves nothing to quote.
+pub fn shell_quote(value: &str) -> String {
+    shlex::try_quote(value)
+        .map(|quoted| quoted.into_owned())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

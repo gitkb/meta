@@ -2,7 +2,6 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 // ==================== Domain Types ====================
 
@@ -37,15 +36,6 @@ impl std::str::FromStr for RepoSpec {
             }),
         }
     }
-}
-
-// ==================== Internal Types ====================
-
-/// Resolved worktree context for operations that need meta_dir, worktree_root, and worktree path.
-pub struct WorktreeContext {
-    pub meta_dir: Option<PathBuf>,
-    pub worktree_root: PathBuf,
-    pub wt_dir: PathBuf,
 }
 
 // ==================== JSON Output Structures ====================
@@ -124,8 +114,8 @@ pub struct StatusRepoEntry {
     pub dirty: bool,
     pub modified_count: usize,
     pub untracked_count: usize,
-    pub ahead: u32,
-    pub behind: u32,
+    pub ahead: usize,
+    pub behind: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub modified_files: Vec<String>,
 }
@@ -172,15 +162,6 @@ pub struct PruneEntry {
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub age_seconds: Option<u64>,
-}
-
-// ==================== Git Status ====================
-
-/// Combined git status summary from a single `git status --porcelain` call.
-pub struct GitStatusSummary {
-    pub dirty: bool,
-    pub modified_files: Vec<String>,
-    pub untracked_count: usize,
 }
 
 #[cfg(test)]

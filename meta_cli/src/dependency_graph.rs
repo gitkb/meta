@@ -170,6 +170,31 @@ impl DependencyGraph {
         result
     }
 
+    /// The projects that depend directly on `project` (a project's name, or
+    /// else a capability one provides: the first such project by name),
+    /// through its name or anything it provides, sorted; `None` when no
+    /// project has that name or provides it.
+    pub fn dependents_of(&self, project: &str) -> Option<Vec<&str>> {
+        let target = self.projects.get(project).or_else(|| {
+            self.projects
+                .values()
+                .filter(|p| p.provides.iter().any(|t| t == project))
+                .min_by_key(|p| &p.name)
+        })?;
+        let names: Vec<&str> = std::iter::once(target.name.as_str())
+            .chain(target.provides.iter().map(String::as_str))
+            .collect();
+        let mut dependents: Vec<&str> = self
+            .projects
+            .values()
+            .filter(|p| p.name != target.name)
+            .filter(|p| p.depends_on.iter().any(|d| names.contains(&d.as_str())))
+            .map(|p| p.name.as_str())
+            .collect();
+        dependents.sort_unstable();
+        Some(dependents)
+    }
+
     /// Get all transitive dependents (impact analysis)
     /// Returns all projects that would be affected if the given project changes
     pub fn analyze_impact(&self, project: &str) -> ImpactAnalysis {
@@ -415,5 +440,41 @@ mod tests {
         // web-app depends on "api-v2" which is provided by api-service
         let deps = graph.get_dependencies("web-app");
         assert!(deps.contains(&"api-service"));
+    }
+
+    #[test]
+    fn dependents_of_a_name_or_a_capability() {
+        let project = |name: &str, provides: &[&str], depends_on: &[&str]| ProjectDependencies {
+            name: name.to_string(),
+            path: name.to_string(),
+            repo: None,
+            tags: vec![],
+            provides: provides.iter().map(|s| s.to_string()).collect(),
+            depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
+        };
+        let graph = DependencyGraph::build(vec![
+            project("loop_lib", &["loop-lib"], &[]),
+            project("util", &[], &[]),
+            project("provider", &["util"], &["provider"]),
+            project("meta_cli", &[], &["loop-lib", "loop_lib", "util"]),
+            project("plugin", &[], &["loop_lib", "Loop-Lib"]),
+            project("db_a", &["db"], &[]),
+            project("db_b", &["db"], &[]),
+            project("app", &[], &["db"]),
+        ])
+        .unwrap();
+        // by name or by what it provides, each dependent once, sorted
+        for query in ["loop_lib", "loop-lib"] {
+            assert_eq!(graph.dependents_of(query), Some(vec!["meta_cli", "plugin"]));
+        }
+        // a name wins over a capability; what a project provides counts
+        // for it; a project never depends on itself
+        assert_eq!(graph.dependents_of("util"), Some(vec!["meta_cli"]));
+        assert_eq!(graph.dependents_of("provider"), Some(vec!["meta_cli"]));
+        assert_eq!(graph.dependents_of("nonexistent"), None);
+        // what several provide counts for each of them
+        for provider in ["db_a", "db_b", "db"] {
+            assert_eq!(graph.dependents_of(provider), Some(vec!["app"]));
+        }
     }
 }

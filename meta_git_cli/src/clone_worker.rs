@@ -2,7 +2,7 @@ use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use log::debug;
 use meta_git_lib::clone_queue::{CloneQueue, CloneTask};
-use std::process::Command;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -193,11 +193,12 @@ fn clone_single_repo(
     }
 
     // Build git clone command
-    let mut cmd = Command::new("git");
-    cmd.arg("clone").arg(&task.url).arg(&task.target_path);
+    let mut cmd = meta_core::git::git(Path::new("."));
+    cmd.arg("clone");
     if let Some(d) = queue.git_depth() {
         cmd.arg("--depth").arg(d);
     }
+    cmd.arg("--").arg(&task.url).arg(&task.target_path);
     if let Some(ssh) = ssh_cmd {
         cmd.env("GIT_SSH_COMMAND", ssh);
     }

@@ -482,6 +482,18 @@ fn test_dry_run_does_not_execute() {
 }
 
 #[test]
+fn a_broken_alias_shows_no_credentials() {
+    let aliases = HashMap::from([(
+        "sync".to_string(),
+        "git fetch https://a:ghp_SECRET@h/r \"".to_string(),
+    )]);
+    let err = resolve_aliases(&["sync".to_string()], &aliases).unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("https://***@h/r"), "{message}");
+    assert!(!message.contains("ghp_SECRET"), "{message}");
+}
+
+#[test]
 fn shown_commands_hide_credentials() {
     let argv = [
         "git",

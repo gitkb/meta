@@ -267,7 +267,7 @@ fn resolve_aliases(argv: &[String], aliases: &HashMap<String, String>) -> Result
             format!(
                 "Alias '{}' is not a command: {}",
                 escape(program),
-                escape(alias)
+                escape(&meta_core::git::redact_urls(alias))
             )
         })?;
     words.extend_from_slice(args);

@@ -84,7 +84,12 @@ pub(crate) fn execute_git_clone(
         meta_core::display::escape(&url)
     );
     let mut clone_cmd = meta_core::git::git(cwd);
-    clone_cmd.arg("clone").args(&git_clone_args).arg(&url);
+    // after `--`, a URL can't be read as an option (`--upload-pack=...`)
+    clone_cmd
+        .arg("clone")
+        .args(&git_clone_args)
+        .arg("--")
+        .arg(&url);
     if let Some(ref dir) = dir_arg {
         clone_cmd.arg(dir);
     }

@@ -196,6 +196,7 @@ mod tests {
         commit(&clone, "b");
         commit(upstream.path(), "c");
         run(&clone, ["fetch", "-q"]).unwrap();
+        run(&clone, ["config", "status.aheadBehind", "false"]).unwrap();
         std::fs::write(clone.join("a"), "changed").unwrap();
         std::fs::write(clone.join("new file"), "").unwrap();
         run(&clone, ["mv", "b", "b renamed"]).unwrap();
@@ -210,6 +211,33 @@ mod tests {
         assert_eq!(changed, ["a", "b renamed"]);
         assert_eq!(status.untracked_count(), 1);
         assert!(status.has_staged() && status.has_unstaged() && status.is_dirty());
+    }
+
+    #[test]
+    fn each_kind_of_change_is_told_apart() {
+        let dir = repo();
+        commit(dir.path(), "a");
+        let status = |dir: &Path| RepoStatus::read(dir).unwrap();
+        let kinds = |s: &RepoStatus| {
+            (
+                s.has_staged(),
+                s.has_unstaged(),
+                s.has_untracked(),
+                s.is_dirty(),
+            )
+        };
+
+        std::fs::write(dir.path().join("new"), "").unwrap();
+        // what a config hides is still there
+        run(dir.path(), ["config", "status.showUntrackedFiles", "no"]).unwrap();
+        run(dir.path(), ["config", "status.aheadBehind", "false"]).unwrap();
+        assert_eq!(kinds(&status(dir.path())), (false, false, true, true));
+        std::fs::remove_file(dir.path().join("new")).unwrap();
+
+        std::fs::write(dir.path().join("a"), "changed").unwrap();
+        assert_eq!(kinds(&status(dir.path())), (false, true, false, true));
+        run(dir.path(), ["add", "a"]).unwrap();
+        assert_eq!(kinds(&status(dir.path())), (true, false, false, true));
     }
 
     #[test]

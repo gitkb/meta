@@ -35,7 +35,6 @@ indexmap = "2"
 dirs = "5"
 
 [dev-dependencies]
-serial_test = "3.0"
 shlex = "1"
 
 [lints]

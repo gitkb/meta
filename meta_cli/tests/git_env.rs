@@ -1,37 +1,31 @@
 //! meta run from a git hook acts on its workspace's repos, not the hook's.
 
+use meta_core::git::run;
 use std::path::Path;
 use std::process::{Command, Output};
 
-/// A repository at `dir` with one commit, on `branch`.
+/// A repository at `dir` with one commit, on `branch`. Set up through
+/// meta's own git, so a hook running this test can't commit into its repo.
 fn repo(dir: &Path, branch: &str) {
     std::fs::create_dir_all(dir).unwrap();
-    for args in [
-        &["init", "-q", "-b", branch][..],
-        &[
+    run(dir, ["init", "-q", "-b", branch]).unwrap();
+    run(
+        dir,
+        [
             "-c",
             "user.name=t",
             "-c",
             "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "-q",
             "--allow-empty",
             "-m",
             "first",
         ],
-    ] {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_GLOBAL", dir.join("no-gitconfig"))
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
+    )
+    .unwrap();
 }
 
 #[test]

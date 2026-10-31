@@ -115,12 +115,12 @@ pub fn establish_ssh_masters(urls: &[&str]) -> SshMasters {
         return SshMasters::UserManaged;
     }
 
-    let sockets_dir = match ensure_ssh_sockets_dir() {
-        Ok(Some(dir)) => dir,
-        Ok(None) => {
-            warn!("Could not determine HOME directory for SSH sockets");
-            return SshMasters::Failed;
-        }
+    let Some(home) = dirs::home_dir() else {
+        warn!("Could not determine HOME directory for SSH sockets");
+        return SshMasters::Failed;
+    };
+    let sockets_dir = match ensure_ssh_sockets_dir(&home) {
+        Ok(dir) => dir,
         Err(e) => {
             warn!("Failed to create SSH sockets directory: {e}");
             return SshMasters::Failed;
@@ -214,13 +214,10 @@ pub fn git_ssh_command(sockets_dir: &Path) -> String {
     )
 }
 
-/// `~/.ssh/sockets`, created if missing, with `~/.ssh` and it kept at mode
-/// `0o700` on Unix (a directory made with a loose umask is tightened).
-/// `None` when there is no home directory.
-fn ensure_ssh_sockets_dir() -> std::io::Result<Option<PathBuf>> {
-    let Some(sockets_dir) = dirs::home_dir().map(|h| h.join(".ssh").join("sockets")) else {
-        return Ok(None);
-    };
+/// `.ssh/sockets` in `home`, created if missing, with `.ssh` and it kept at
+/// mode `0o700` on Unix (a directory made with a loose umask is tightened).
+fn ensure_ssh_sockets_dir(home: &Path) -> std::io::Result<PathBuf> {
+    let sockets_dir = home.join(".ssh").join("sockets");
     std::fs::create_dir_all(&sockets_dir)?;
     #[cfg(unix)]
     {
@@ -232,7 +229,7 @@ fn ensure_ssh_sockets_dir() -> std::io::Result<Option<PathBuf>> {
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
         }
     }
-    Ok(Some(sockets_dir))
+    Ok(sockets_dir)
 }
 
 /// Warn about checkouts whose `origin` differs from the URL `workspace`
@@ -306,7 +303,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[serial_test::serial]
     fn sockets_dir_is_private() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -314,14 +310,7 @@ mod tests {
         let sockets = tmp.path().join(".ssh/sockets");
         std::fs::create_dir_all(&sockets).unwrap();
         std::fs::set_permissions(&sockets, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let home = std::env::var_os("HOME");
-        std::env::set_var("HOME", tmp.path());
-        let result = ensure_ssh_sockets_dir();
-        match home {
-            Some(home) => std::env::set_var("HOME", home),
-            None => std::env::remove_var("HOME"),
-        }
-        assert_eq!(result.unwrap(), Some(sockets.clone()));
+        assert_eq!(ensure_ssh_sockets_dir(tmp.path()).unwrap(), sockets);
         for dir in [&sockets, &tmp.path().join(".ssh")] {
             let mode = std::fs::metadata(dir).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o700, "{}", dir.display());

@@ -1,40 +1,49 @@
 //! `defaults` come from the config meta runs with, wherever it was found.
 
-/// `defaults: {parallel: false}` holds when meta runs from a project's
-/// directory, below the config: two repos holding one lock at once would
-/// fail.
+/// `defaults: {parallel: false}` holds when meta runs below the config, and
+/// when `--config` names it over a `.meta.yaml` that runs in parallel: two
+/// repos holding one lock at once would fail.
 #[cfg(unix)]
 #[test]
-fn sequential_default_holds_below_the_config() {
-    let tmp = tempfile::tempdir().unwrap();
-    let tmp = tmp.path().canonicalize().unwrap();
-    let workspace = tmp.join("workspace");
-    for project in ["a", "b"] {
-        std::fs::create_dir_all(workspace.join(project)).unwrap();
+fn sequential_default_holds_wherever_the_config_is() {
+    let projects = "projects:\n  a:\n    path: a\n  b:\n    path: b\n";
+    let sequential = format!("defaults:\n  parallel: false\n{projects}");
+    for (default_config, chosen, run_in, args) in [
+        (sequential.as_str(), None, "a", &["exec"][..]),
+        (
+            projects,
+            Some("sequential.yaml"),
+            ".",
+            &["--config", "sequential.yaml", "exec"],
+        ),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tmp.path().canonicalize().unwrap();
+        let workspace = tmp.join("workspace");
+        for project in ["a", "b"] {
+            std::fs::create_dir_all(workspace.join(project)).unwrap();
+        }
+        std::fs::write(workspace.join(".meta.yaml"), default_config).unwrap();
+        if let Some(name) = chosen {
+            std::fs::write(workspace.join(name), &sequential).unwrap();
+        }
+        let lock = tmp.join("lock").to_string_lossy().into_owned();
+        let take_lock = format!("mkdir {lock} && sleep 0.5 && rmdir {lock}");
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_meta"))
+            .args(args)
+            .args(["--", "sh", "-c", &take_lock])
+            .current_dir(workspace.join(run_in))
+            .env("HOME", &tmp)
+            .env("XDG_CONFIG_HOME", tmp.join("xdg"))
+            .env("GIT_CONFIG_GLOBAL", tmp.join("no-gitconfig"))
+            .env("META_DATA_DIR", tmp.join("meta-data"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
-    std::fs::write(
-        workspace.join(".meta.yaml"),
-        "defaults:\n  parallel: false\nprojects:\n  a:\n    path: a\n  b:\n    path: b\n",
-    )
-    .unwrap();
-    let lock = tmp.join("lock");
-    let take_lock = format!(
-        "mkdir {0} && sleep 0.5 && rmdir {0}",
-        lock.to_string_lossy()
-    );
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_meta"))
-        .args(["exec", "--", "sh", "-c", &take_lock])
-        .current_dir(workspace.join("a"))
-        .env("HOME", &tmp)
-        .env("XDG_CONFIG_HOME", tmp.join("xdg"))
-        .env("GIT_CONFIG_GLOBAL", tmp.join("no-gitconfig"))
-        .env("META_DATA_DIR", tmp.join("meta-data"))
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
 }

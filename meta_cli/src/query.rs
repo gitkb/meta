@@ -361,6 +361,19 @@ mod tests {
     }
 
     #[test]
+    fn untracked_files_are_neither_staged_nor_unstaged() {
+        let dir = tempfile::tempdir().unwrap();
+        meta_core::git::run(dir.path(), ["init", "-q", "-b", "main"]).unwrap();
+        std::fs::write(dir.path().join("new"), "").unwrap();
+        let state = RepoState::collect("r", dir.path(), &[]).unwrap();
+        assert!(state.is_dirty && state.has_untracked);
+        assert!(!state.has_staged && !state.has_unstaged);
+        // before the first commit, the branch it will be on
+        assert_eq!(state.branch, "main");
+        assert_eq!(state.last_commit_hash, None);
+    }
+
+    #[test]
     fn test_repo_state_matches() {
         let repo = RepoState {
             name: "test".to_string(),

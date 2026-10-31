@@ -29,7 +29,7 @@ pub(crate) fn handle_remove(args: RemoveArgs, verbose: bool, json: bool) -> Resu
     let check = check_worktree_removal(&wt_dir)?;
     // Only this workspace's sets: a shared worktree directory may hold
     // another workspace's. No flag overrides this.
-    let workspace = Workspace::of(&configs.here.dir);
+    let workspace = Workspace::of(&configs.here);
     let foreign = workspace.foreign_members(&wt_dir, &check);
     if !foreign.is_empty() {
         // Repositories meta couldn't read make sets from them look foreign

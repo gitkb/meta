@@ -125,7 +125,7 @@ pub(crate) fn handle_prune(args: PruneArgs, json: bool, strict: bool) -> Result<
     // goes with it
     let cwd = std::env::current_dir()?;
     let configs = Configs::find(&cwd)?;
-    let workspace = Workspace::of(&configs.here.dir);
+    let workspace = Workspace::of(&configs.here);
     let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
     if sets.is_empty() && kept.is_empty() {

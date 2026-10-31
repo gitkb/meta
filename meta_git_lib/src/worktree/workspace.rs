@@ -27,12 +27,18 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// The workspace `meta_dir` belongs to (see [`meta_core::config::workspace_root`]).
-    pub fn of(meta_dir: &Path) -> Workspace {
-        let root = meta_core::config::workspace_root(meta_dir);
+    /// The workspace `here` belongs to (see
+    /// [`meta_core::config::workspace_root`]); `here`'s config, already
+    /// loaded, when it is the root.
+    pub fn of(here: &meta_core::config::Workspace) -> Workspace {
+        let root = meta_core::config::workspace_root(&here.dir);
         let mut paths = vec![root.clone()];
         let mut unreadable = Vec::new();
-        match meta_core::config::walk_meta_tree(&root, None) {
+        let tree = match root == here.dir {
+            true => meta_core::config::walk_projects(&here.dir, &here.projects, None),
+            false => meta_core::config::walk_meta_tree(&root, None),
+        };
+        match tree {
             Ok(tree) => paths.extend(
                 meta_core::config::build_project_map(&tree, &root, "")
                     .into_values()

@@ -7,7 +7,7 @@
 //! `GIT_SSH_COMMAND` this module returns.
 
 use console::style;
-use log::{debug, warn};
+use log::debug;
 use meta_core::config::{ProjectInfo, Workspace};
 use meta_core::display::escape;
 use meta_core::display::shell_quote;
@@ -116,13 +116,13 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
     }
 
     let Some(home) = dirs::home_dir() else {
-        warn!("Could not determine HOME directory for SSH sockets");
+        warn("could not find the HOME directory for SSH sockets");
         return SshMasters::Failed;
     };
     let sockets_dir = match ensure_ssh_sockets_dir(&home) {
         Ok(dir) => dir,
         Err(e) => {
-            warn!("Failed to create SSH sockets directory: {e}");
+            warn(format!("could not create the SSH sockets directory: {e}"));
             return SshMasters::Failed;
         }
     };
@@ -182,11 +182,11 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
             );
             any_succeeded = true;
         } else {
-            warn!(
+            warn(format!(
                 "SSH master for {} (port {}) could not be started",
-                target.destination(),
+                escape(&target.destination()),
                 target.port
-            );
+            ));
         }
     }
 
@@ -201,6 +201,11 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
     } else {
         SshMasters::Failed
     }
+}
+
+/// Tell the user, on stderr, what meta couldn't set up.
+pub(crate) fn warn(message: impl std::fmt::Display) {
+    eprintln!("{} {message}", style("⚠").yellow().bold());
 }
 
 /// A `GIT_SSH_COMMAND` value that reuses established ControlMaster

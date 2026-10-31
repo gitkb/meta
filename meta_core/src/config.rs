@@ -172,6 +172,23 @@ fn config_file(path: PathBuf) -> anyhow::Result<Option<PathBuf>> {
     Ok(Some(path))
 }
 
+/// Whether a key or value anywhere in the YAML `text` is a URL with
+/// credentials ([`GitUrl::has_credentials`]). Text that isn't YAML holds none
+/// that meta reads.
+pub fn holds_credentials(text: &str) -> bool {
+    fn holds(value: &serde_yaml_ng::Value) -> bool {
+        use serde_yaml_ng::Value;
+        match value {
+            Value::String(s) => GitUrl::from(s.as_str()).has_credentials(),
+            Value::Sequence(items) => items.iter().any(holds),
+            Value::Mapping(map) => map.iter().any(|(k, v)| holds(k) || holds(v)),
+            Value::Tagged(tagged) => holds(&tagged.value),
+            _ => false,
+        }
+    }
+    serde_yaml_ng::from_str(text).is_ok_and(|value| holds(&value))
+}
+
 /// The [`META_CONFIG_NAME`] file directly in `dir`. A candidate that cannot
 /// be examined is an error. A `.meta` directory (for plugins and skills) is
 /// never a config.

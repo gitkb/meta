@@ -707,15 +707,16 @@ impl McpServer {
 
     fn get_config(&self, _args: NoArgs) -> Result<String> {
         // Found, not read as a config: a broken one is shown as it is,
-        // unless meta refuses it for the credentials it holds
+        // unless it holds credentials
         let path = config::find_meta_config_in(self.meta_dir()?)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
-        if let Err(e) = config::Workspace::load(&path) {
-            if format!("{e:#}").contains(meta_core::git::CREDENTIALS_REFUSED) {
-                return Err(e);
-            }
-        }
         let content = std::fs::read_to_string(&path)?;
+        anyhow::ensure!(
+            !config::holds_credentials(&content),
+            "A value in {} {}",
+            path.display(),
+            meta_core::git::CREDENTIALS_REFUSED
+        );
         Ok(format!("Config file: {}\n\n{}", path.display(), content))
     }
 
@@ -2089,12 +2090,22 @@ mod tests {
 
     #[test]
     fn get_config_refuses_a_config_with_credentials() {
-        let (server, _tmp) = server("projects:\n  a: https://alice:ghp_SECRET@h/a.git\n");
-        let err = call(&server, "meta_get_config", json!({}))
-            .err()
-            .map(|e| format!("{e:#}"))
-            .unwrap_or_default();
-        assert!(err.contains(meta_core::git::CREDENTIALS_REFUSED), "{err}");
-        assert!(!err.contains("ghp_SECRET"), "{err}");
+        let (server, tmp) = server("projects: {}\n");
+        // also where meta's own load stops before it: after a bad project,
+        // beside an unknown key, or in a key of a project's own
+        for config in [
+            "projects:\n  a: https://alice:ghp_SECRET@h/a.git\n",
+            "projects:\n  a:\n    repo: x\n    tags: [bad tag]\n  b: https://ghp_SECRET@h/b.git\n",
+            "unknown_top: 1\nprojects:\n  b: https://ghp_SECRET@h/b.git\n",
+            "projects:\n  b:\n    repo: x\n    mirror: ssh://git:ghp_SECRET@h/b.git\n",
+        ] {
+            std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
+            let err = call(&server, "meta_get_config", json!({}))
+                .err()
+                .map(|e| format!("{e:#}"))
+                .unwrap_or_default();
+            assert!(err.contains(meta_core::git::CREDENTIALS_REFUSED), "{err}");
+            assert!(!err.contains("ghp_SECRET"), "{err}");
+        }
     }
 }

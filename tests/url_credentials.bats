@@ -74,7 +74,7 @@ EOF
     cd "$TEST_DIR"
     for dry in --dry-run ""; do
         # shellcheck disable=SC2086
-        meta_without_token $dry git clone "https://$TOKEN@example.invalid/org/meta.git" fresh
+        RUST_LOG=debug meta_without_token $dry git clone "https://$TOKEN@example.invalid/org/meta.git" fresh
         [ "$status" -ne 0 ]
         [[ "$output" == *"The URL https://***@example.invalid/org/meta.git holds a password or token"* ]] || false
         [ ! -e fresh ]
@@ -136,4 +136,17 @@ EOF
     [ -d r1/.git ]
     [ -d r2/.git ]
     [ -d r3/.git ]
+}
+
+@test "a failed ssh setup says so" {
+    printf '#!/bin/sh\nexit 255\n' > "$TEST_DIR/bin/ssh"
+    chmod +x "$TEST_DIR/bin/ssh"
+    cat > .meta.yaml <<EOF
+projects:
+  a: git@nohost.invalid:org/a.git
+  b: git@nohost.invalid:org/b.git
+EOF
+    run "$META_BIN" git update
+    [[ "$output" == *"SSH master for git@nohost.invalid (port 22) could not be started"* ]] || false
+    [[ "$output" == *"cloning one repository at a time"* ]]
 }

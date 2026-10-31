@@ -74,9 +74,9 @@ pub(crate) fn execute_git_clone(
         }
     });
 
-    // The clone, shown as it runs (display_command hides the URL's
-    // credentials): the URL after `--`, so it can't be read as an option,
-    // and the directory meta reads next named explicitly
+    // The clone, shown as it runs (the URL holds no credentials: refused
+    // above): the URL after `--`, so it can't be read as an option, and the
+    // directory meta reads next named explicitly
     let clone_argv: Vec<String> = ["git", "clone"]
         .into_iter()
         .map(str::to_string)
@@ -147,7 +147,7 @@ pub(crate) fn execute_git_clone(
             }
             ssh::SshMasters::UserManaged => {} // parallel OK, no override needed
             ssh::SshMasters::Failed if ssh_cmd.is_none() => {
-                log::warn!("SSH multiplexing setup failed, falling back to serial cloning");
+                ssh::warn("SSH multiplexing could not be set up: cloning one repository at a time");
                 parallel = 1;
             }
             ssh::SshMasters::Failed => {} // initial host works

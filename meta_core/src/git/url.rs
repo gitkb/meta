@@ -140,7 +140,8 @@ impl<'de> serde::Deserialize<'de> for GitUrl {
 /// instead.
 pub const CREDENTIALS_REFUSED: &str = "holds a password or token, which meta refuses: \
      remove it from the URL and let a git credential helper supply it \
-     (for GitHub: gh auth setup-git)";
+     (for GitHub: gh auth setup-git); a user name goes in \
+     git config credential.<url>.username";
 
 impl GitUrl {
     /// The URL as configured, for git's argv and nothing else.
@@ -178,28 +179,25 @@ impl GitUrl {
     /// name there (`https://ghp_…@github.com/…`). A user name alone, such as
     /// ssh's `git@`, is none. ext::'s address is a command, no URL.
     fn credentials(&self) -> Option<Range<usize>> {
-        let mut at = self.0.len() - self.0.trim_start().len();
-        let mut url = self.0.get(at..)?;
-        while let Some((transport, address)) = url.split_once("::") {
-            if transport == "ext" {
-                return None;
-            }
-            if !is_scheme(transport) {
-                break;
-            }
-            at += transport.len() + 2;
-            url = address;
+        if self.0.trim_start().starts_with("ext::") {
+            return None;
         }
-        let (scheme, rest) = url.split_once("://").filter(|(s, _)| is_scheme(s))?;
-        let authority = rest.split(['/', '?', '#']).next()?;
-        let (userinfo, _) = authority.rsplit_once('@')?;
+        let Parts::Url {
+            scheme,
+            userinfo: Some(userinfo),
+            ..
+        } = self.repository()
+        else {
+            return None;
+        };
         let curl = matches!(
             scheme.to_ascii_lowercase().as_str(),
             "http" | "https" | "ftp" | "ftps"
         );
         let password = userinfo.contains(':') || userinfo.to_ascii_lowercase().contains("%3a");
-        let start = at + scheme.len() + 3;
-        (!userinfo.is_empty() && (curl || password)).then_some(start..start + userinfo.len())
+        (!userinfo.is_empty() && (curl || password))
+            .then(|| self.0.substr_range(userinfo).map(Range::from))
+            .flatten()
     }
 
     /// The URL taken apart as git does.

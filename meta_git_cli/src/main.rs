@@ -68,7 +68,7 @@ fn main() {
             ],
             description: Some("Git operations for meta repositories".to_string()),
             help: Some(PluginHelp {
-                usage: "meta git - Git operations for multi-repo workspaces\n\nUsage: meta git <COMMAND> [OPTIONS]".to_string(),
+                usage: "Usage: meta git <COMMAND> [OPTIONS]".to_string(),
                 commands: IndexMap::new(), // Using command_sections instead
                 command_sections,
                 examples: vec![
@@ -79,7 +79,8 @@ fn main() {
                     "meta git worktree create feature-x --repo api --repo web".to_string(),
                 ],
                 note: Some(
-                    "For git commands not listed above, use: meta exec -- git <command>".to_string(),
+                    "For git commands not listed above, use: meta exec -- git <command>"
+                        .to_string(),
                 ),
             }),
         },

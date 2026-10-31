@@ -80,8 +80,25 @@ impl Default for MetaDefaults {
 #[serde(deny_unknown_fields)]
 pub struct WorktreeConfig {
     /// Shell commands run at worktree events (`post-create`, ...), by event.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "commands")]
     pub hooks: BTreeMap<String, String>,
+}
+
+/// A map of commands, each a YAML string: YAML would read `false` or `123`
+/// as the command "false" or "123".
+fn commands<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, String>, D::Error> {
+    BTreeMap::<String, serde_yaml_ng::Value>::deserialize(deserializer)?
+        .into_iter()
+        .map(|(name, value)| match value {
+            serde_yaml_ng::Value::String(command) => Ok((name, command)),
+            _ => Err(serde::de::Error::custom(format!(
+                "hook '{}' must be a command string",
+                escape(&name)
+            ))),
+        })
+        .collect()
 }
 
 /// The meta configuration file structure. A key it doesn't know is an
@@ -1429,6 +1446,9 @@ mod tests {
             "worktree_dir: x\n",
             "defaults:\n  paralel: false\n",
             "worktree:\n  hook: {}\n",
+            "worktree:\n  hooks:\n    post-create: false\n",
+            "worktree:\n  hooks:\n    post-create: 123\n",
+            "worktree:\n  hooks:\n    post-create:\n",
         ] {
             assert!(load(typo).is_err(), "{typo}");
         }

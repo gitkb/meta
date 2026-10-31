@@ -969,9 +969,10 @@ fn handle_command_dispatch(
         if cli.verbose {
             println!(
                 "Filtering projects by tags: {:?}",
-                tag_filter
+                // redacted whole: a password may hold a comma
+                meta_core::git::redact_urls(tag_filter)
                     .split(',')
-                    .map(|s| meta_core::git::redact_urls(s.trim()))
+                    .map(str::trim)
                     .collect::<Vec<_>>()
             );
         }

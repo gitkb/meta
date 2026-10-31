@@ -98,6 +98,10 @@ meta_without_token() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"'https://***@example.invalid/org/x.yaml'"* ]] || false
     meta_without_token --verbose --tag "https://$TOKEN@example.invalid/org/x" exec -- true
+    # a comma in a password: the value is split there
+    meta_without_token --verbose --tag "https://a,$TOKEN@example.invalid/org/x" exec -- true
+    meta_without_token --include "https://a,$TOKEN@example.invalid/org/x" exec -- true
+    [ "$status" -ne 0 ]
     meta_without_token project "https://$TOKEN@example.invalid/org/x.git"
     [[ "$output" == *"unrecognized command 'project https://***@example.invalid/org/x.git'"* ]] || false
     meta_without_token git worktree create x --repo moved --from-pr "https://$TOKEN@127.0.0.1:9/o/r/pull/zz"

@@ -821,12 +821,14 @@ impl McpServer {
             _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
         };
 
+        // A reply may repeat a URL the client passed, or one from a repo or
+        // a command's output: it reaches the client without credentials
         match result {
             Ok(text) => {
                 let call_result = CallToolResult {
                     content: vec![ToolContent {
                         content_type: "text".to_string(),
-                        text,
+                        text: meta_core::git::redact_urls(&text).into_owned(),
                     }],
                     is_error: None,
                 };
@@ -836,7 +838,6 @@ impl McpServer {
                 let call_result = CallToolResult {
                     content: vec![ToolContent {
                         content_type: "text".to_string(),
-                        // an error may repeat a URL the client passed
                         text: meta_core::git::redact_urls(&e.to_string()).into_owned(),
                     }],
                     is_error: Some(true),
@@ -2665,6 +2666,24 @@ mod tests {
         let result = server.tool_get_config(&serde_json::json!({})).unwrap();
         assert!(result.contains(".meta.yaml"));
         assert!(result.contains("projects: {}"));
+    }
+
+    #[test]
+    fn test_tool_replies_hide_credentials() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
+        let server = McpServer {
+            meta_dir: Some(tmp.path().to_path_buf()),
+        };
+        let request: JsonRpcRequest = serde_json::from_value(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "meta_execution_order",
+                       "arguments": {"tag": "https://alice:ghp_SECRET@h/r"}}
+        }))
+        .unwrap();
+        let reply = serde_json::to_string(&server.handle_request(&request)).unwrap();
+        assert!(reply.contains("https://***@h/r"), "{reply}");
+        assert!(!reply.contains("ghp_SECRET"), "{reply}");
     }
 
     #[test]

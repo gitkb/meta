@@ -203,9 +203,10 @@ impl McpServer {
         std::thread::scope(|scope| {
             let worker = scope.spawn(|| {
                 for message in queue {
-                    if let Some(answer) = self.answer(message) {
-                        write_answer(&output, &answer)?;
-                    }
+                    self.calls.answering(|| match self.answer(message) {
+                        Some(answer) => write_answer(&output, &answer),
+                        None => Ok(()),
+                    })?;
                 }
                 Ok(())
             });
@@ -390,6 +391,12 @@ impl McpServer {
             "tools/list" => self.handle_list_tools(),
             "tools/call" => {
                 if !self.calls.start(id.to_string()) {
+                    if self.calls.stopping() {
+                        let _ = writeln!(
+                            std::io::stderr(),
+                            "meta-mcp: request {id} not started: the server is stopping"
+                        );
+                    }
                     return None;
                 }
                 let result = self.handle_call_tool(&request.params);

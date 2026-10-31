@@ -530,32 +530,55 @@ fn a_command_too_long_to_start_says_why() {
 }
 
 /// A signal that ends the server, sent to its process group, also stops the
-/// running tool's programs, which run in a group of their own, and a call
-/// waiting behind it never starts.
+/// running tool's programs, which run in a group of their own; an atomic
+/// batch it stopped is rolled back and on record before the server ends, and
+/// a call waiting behind it never starts.
 #[test]
 #[cfg(unix)]
 fn stopping_the_server_stops_its_running_tool() {
     use std::os::unix::process::CommandExt;
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path();
-    std::fs::create_dir(ws.join("a")).unwrap();
+    let a = ws.join("a");
+    std::fs::create_dir(&a).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.name", "t"],
+        &["config", "user.email", "t@example.com"],
+        &["commit", "-q", "--allow-empty", "-m", "before"],
+    ] {
+        git(&a, args);
+    }
     std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
+    let head = || {
+        let mut rev_parse = isolated(meta_core::git::git(&a), &a);
+        let out = rev_parse
+            .args(["log", "-1", "--format=%s"])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap()
+    };
     let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), ws);
     server
         .process_group(0)
         .stdin(Stdio::piped())
-        .stdout(Stdio::null());
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
     let mut server = server.spawn().unwrap();
     let mut stdin = server.stdin.take().unwrap();
-    for (id, file) in [(1, "pid"), (2, "waiting")] {
-        let script =
-            format!("sleep 60 & echo $! > ../{file}.tmp && mv ../{file}.tmp ../{file}; wait");
+    for (id, file, atomic) in [(1, "pid", true), (2, "waiting", false)] {
+        let script = format!(
+            "git commit -q --allow-empty -m during; \
+             sleep 60 & echo $! > ../{file}.tmp && mv ../{file}.tmp ../{file}; wait"
+        );
         let call = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
-            "params": {"name": "meta_batch_execute", "arguments": {"command": ["sh", "-c", script]}}});
+            "params": {"name": "meta_batch_execute",
+                "arguments": {"command": ["sh", "-c", script], "atomic": atomic}}});
         writeln!(stdin, "{call}").unwrap();
     }
     let pid = ws.join("pid");
     wait_for("the tool to start", || pid.exists());
+    assert_eq!(head(), "during\n");
     let group = format!("-{}", server.id());
     assert!(Command::new("kill")
         .args(["-TERM", "--", &group])
@@ -578,4 +601,74 @@ fn stopping_the_server_stops_its_running_tool() {
     };
     wait_for("the tool's sleep to end", gone);
     assert!(!ws.join("waiting").exists(), "the waiting call started");
+    assert_eq!(head(), "before\n");
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
+    assert!(
+        stderr.contains("request 1 was cancelled") && stderr.contains("rollback"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("request 2 not started"), "{stderr}");
+}
+
+/// A signal that comes while an atomic batch is rolling back lets the
+/// rollback finish, however long it takes, before the server ends.
+#[test]
+#[cfg(unix)]
+fn stopping_the_server_lets_a_rollback_finish() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let a = ws.join("a");
+    std::fs::create_dir(&a).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.name", "t"],
+        &["config", "user.email", "t@example.com"],
+        &["commit", "-q", "--allow-empty", "-m", "before"],
+    ] {
+        git(&a, args);
+    }
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
+    // the rollback's git asks this hook, which holds it past the old 5 s stop
+    let hook = ws.join("hook");
+    let script = "#!/bin/sh\n[ -e ../in-hook ] || { touch ../in-hook; sleep 6; }\n";
+    std::fs::write(&hook, script).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), ws);
+    server
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let mut server = server.spawn().unwrap();
+    let mut stdin = server.stdin.take().unwrap();
+    let command = "git commit -q --allow-empty -m during && \
+                   git config core.fsmonitor ../hook && exit 1";
+    let call = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "meta_batch_execute",
+            "arguments": {"command": ["sh", "-c", command], "atomic": true}}});
+    writeln!(stdin, "{call}").unwrap();
+    wait_for("the rollback to reach the hook", || {
+        ws.join("in-hook").exists()
+    });
+    let group = format!("-{}", server.id());
+    assert!(Command::new("kill")
+        .args(["-TERM", "--", &group])
+        .status()
+        .unwrap()
+        .success());
+    let mut status = None;
+    wait_for("the server to exit", || {
+        status = server.try_wait().unwrap();
+        status.is_some()
+    });
+    assert_eq!(status.unwrap().code(), Some(128 + 15), "{status:?}");
+    let mut log = isolated(meta_core::git::git(&a), &a);
+    let out = log.args(["log", "-1", "--format=%s"]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "before\n");
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
+    assert!(stderr.contains(r#"\"status\": \"success\""#), "{stderr}");
 }

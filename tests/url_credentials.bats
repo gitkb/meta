@@ -234,6 +234,35 @@ EOF
     [ -d r3/.git ]
 }
 
+@test "a remote helper's own output shows no credentials" {
+    # a helper that prints the address it got, without `foo::` (so a space
+    # in the password ends no scan): whole, then in a line meta's read cuts
+    # inside a second copy
+    cat > "$TEST_DIR/bin/git-remote-foo" <<'EOF'
+#!/bin/sh
+echo "fatal: cannot open $2" >&2
+printf 'fatal: %s %03990d retry %s\n' "$2" 0 "$2" >&2
+exit 1
+EOF
+    chmod +x "$TEST_DIR/bin/git-remote-foo"
+    url="foo::https://alice:p w$TOKEN@127.0.0.1:9/owner/svc.git"
+    printf 'projects:\n  svc: "%s"\n' "$url" > .meta.yaml
+    meta_without_token git update
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"fatal: cannot open https://***@127.0.0.1:9/owner/svc.git"* ]] || false
+    [[ "$output" != *"SECRET"* ]] || false
+    # the same, when the --from-pr fetch fails
+    git init -q -b main svc
+    git -C svc commit -q --allow-empty -m init
+    git -C svc remote add origin "$url"
+    printf '#!/bin/sh\necho feature\n' > "$TEST_DIR/bin/gh"
+    chmod +x "$TEST_DIR/bin/gh"
+    meta_without_token git worktree create pr --repo svc --from-pr owner/svc#1
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"fatal: cannot open https://***@127.0.0.1:9/owner/svc.git"* ]] || false
+    [[ "$output" != *"SECRET"* ]] || false
+}
+
 @test "a failed ssh setup says so" {
     printf '#!/bin/sh\nexit 255\n' > "$TEST_DIR/bin/ssh"
     chmod +x "$TEST_DIR/bin/ssh"

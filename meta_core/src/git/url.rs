@@ -315,9 +315,10 @@ fn ends_in_text(c: char) -> bool {
 pub const GIT_MESSAGE_BYTES: usize = 4096;
 
 /// git's own output without the credentials in it (see [`redact_urls`]). A
-/// line git may have cut ([`GIT_MESSAGE_BYTES`] less its newline, or more)
-/// loses its last word, and then a URL whose authority runs to its end:
-/// either may be a URL whose `@` was cut off.
+/// line git may have cut ([`GIT_MESSAGE_BYTES`] less its newline, or more;
+/// so `text` as git wrote it, untrimmed) loses its last word, and then a URL
+/// whose authority runs to its end, spaces after it aside: either may be a
+/// URL whose `@` was cut off.
 pub fn redact_git_output(text: &str) -> String {
     text.lines()
         .map(|line| {
@@ -325,7 +326,8 @@ pub fn redact_git_output(text: &str) -> String {
                 true => {
                     let line = line
                         .rsplit_once(|c: char| c.is_ascii_whitespace())
-                        .map_or("", |(kept, _)| kept);
+                        .map_or("", |(kept, _)| kept)
+                        .trim_ascii_end();
                     authorities(line, ends_in_text)
                         .into_iter()
                         .find(|(_, authority)| authority.end == line.len())
@@ -704,6 +706,10 @@ mod tests {
         let cut = format!("e: foo::https://a:ghp_SECRET {}@h/r", "x".repeat(4100));
         let cut = cut.get(..GIT_MESSAGE_BYTES - 1).unwrap();
         assert_eq!(redact_git_output(cut), "e: foo::https://");
+        // or among the spaces in it
+        let cut = format!("e: https://a:ghp_SECRET{}", " ".repeat(4100));
+        let cut = cut.get(..GIT_MESSAGE_BYTES - 1).unwrap();
+        assert_eq!(redact_git_output(cut), "e: https://");
     }
 
     #[test]

@@ -10,7 +10,7 @@ mod status;
 mod url;
 
 pub use status::{RepoStatus, StatusEntry};
-pub use url::{redact_url, redact_urls, GitUrl};
+pub use url::{redact_git_output, redact_url, redact_urls, GitUrl, GIT_MESSAGE_BYTES};
 
 /// The variables that tie git to one repository, which git itself clears
 /// when it runs in another (`git rev-parse --local-env-vars`, less the
@@ -77,7 +77,9 @@ where
             "git {} failed in {}: {}",
             escape(&shown()),
             escape_path(dir),
-            escape(String::from_utf8_lossy(&output.stderr).trim())
+            escape(&redact_git_output(
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout)

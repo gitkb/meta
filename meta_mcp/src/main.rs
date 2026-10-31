@@ -2705,6 +2705,17 @@ mod tests {
         std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
         let result = server.tool_get_config(&serde_json::json!({})).unwrap();
         assert!(result.ends_with(config), "{result}");
+        // a tag may hold one too
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            "projects: {}\nextra: !https://alice:ghp_SECRET@h/r value\n",
+        )
+        .unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(
+            !result.contains("ghp_SECRET") && result.contains("value"),
+            "{result}"
+        );
         // a key may be a URL too
         std::fs::write(
             tmp.path().join(".meta.yaml"),

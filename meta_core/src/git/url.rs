@@ -273,6 +273,28 @@ pub fn redact_urls(text: &str) -> Cow<'_, str> {
     })
 }
 
+/// The most bytes git writes for one message, its newline included: git cuts
+/// a longer one (`vreportf` in usage.c), possibly inside a URL.
+pub const GIT_MESSAGE_BYTES: usize = 4096;
+
+/// git's own output without the credentials in it (see [`redact_urls`]). A
+/// line git may have cut ([`GIT_MESSAGE_BYTES`] less its newline, or more)
+/// loses its last word, which may be a URL whose `@` was cut off.
+pub fn redact_git_output(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let line = match line.len() >= GIT_MESSAGE_BYTES - 1 {
+                true => line
+                    .rsplit_once(|c: char| c.is_ascii_whitespace())
+                    .map_or("", |(kept, _)| kept),
+                false => line,
+            };
+            redact_urls(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// One URL, or one command-line word, without the credentials in it (see
 /// [`redact_urls`]): its authority ends only at `/`, `?` or `#`.
 pub fn redact_url(url: &str) -> Cow<'_, str> {
@@ -553,6 +575,20 @@ mod tests {
             redact_urls("no URL: a@b, ://x@y"),
             Cow::Borrowed(_)
         ));
+    }
+
+    #[test]
+    fn git_output_shows_no_credentials() {
+        // a message git cut inside a URL, a Unicode space in its password
+        let cut = format!(
+            "warning: https://alice:ghp_SECRET\u{2003}{}",
+            "x".repeat(4100)
+        );
+        let cut = cut.get(..GIT_MESSAGE_BYTES - 1).unwrap();
+        assert_eq!(
+            redact_git_output(&format!("{cut}\nfatal: 'https://a:ghp_SECRET@h/r'")),
+            "warning:\nfatal: 'https://***@h/r'"
+        );
     }
 
     #[test]

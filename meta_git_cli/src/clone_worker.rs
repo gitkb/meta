@@ -299,7 +299,7 @@ struct StderrTail {
 
 impl StderrTail {
     const KEPT_LINES: usize = 20;
-    const LINE_BYTES: u64 = 4096;
+    const LINE_BYTES: u64 = meta_core::git::GIT_MESSAGE_BYTES as u64;
 
     fn spawn(
         stderr: Option<impl std::io::Read + Send + 'static>,
@@ -320,21 +320,14 @@ impl StderrTail {
                     .read_until(b'\n', &mut buf)
                     .is_ok_and(|n| n > 0)
                 {
-                    let text = String::from_utf8_lossy(&buf);
-                    let mut line = text.trim_end();
-                    // A line that fills LINE_BYTES was cut, here or by git,
-                    // whose messages stop at 4096 bytes: the rest of it goes,
-                    // and so does its last word, which may start a URL
-                    if buf.len() as u64 == Self::LINE_BYTES {
-                        if !buf.ends_with(b"\n") {
-                            let _ = reader.skip_until(b'\n');
-                        }
-                        line = line
-                            .rsplit_once(char::is_whitespace)
-                            .map_or("", |(kept, _)| kept);
+                    // The rest of a line cut here goes; redact_git_output
+                    // takes the last word of a line this long, cut here or
+                    // by git, which may start a URL
+                    if buf.len() as u64 == Self::LINE_BYTES && !buf.ends_with(b"\n") {
+                        let _ = reader.skip_until(b'\n');
                     }
-                    // git's own errors may show the URL with its credentials
-                    let line = meta_core::git::redact_urls(line).into_owned();
+                    let line = String::from_utf8_lossy(&buf);
+                    let line = meta_core::git::redact_git_output(line.trim_end());
                     buf.clear();
                     on_line(&line);
                     let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());

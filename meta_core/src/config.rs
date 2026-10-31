@@ -225,7 +225,17 @@ fn redact_strings(value: &mut serde_yaml_ng::Value) -> bool {
                 .collect();
             hid
         }
-        Value::Tagged(tagged) => redact_strings(&mut tagged.value),
+        Value::Tagged(tagged) => {
+            let hid = redact_strings(&mut tagged.value);
+            let tag = tagged.tag.to_string();
+            if redact_urls(&tag) == tag {
+                return hid;
+            }
+            // a tag that holds credentials goes; its value stays
+            let inner = std::mem::take(&mut tagged.value);
+            *value = inner;
+            true
+        }
         _ => false,
     }
 }

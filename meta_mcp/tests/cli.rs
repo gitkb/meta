@@ -18,6 +18,19 @@ fn isolated(mut command: Command, dir: &Path) -> Command {
     command
 }
 
+/// Waits until `done` holds, failing the test after 20 seconds.
+#[cfg(unix)]
+fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !done() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "waited too long for {what}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// git `args` in `dir`, with no user configuration.
 fn git(dir: &Path, args: &[&str]) {
     let mut git = isolated(meta_core::git::git(dir), dir);
@@ -435,4 +448,331 @@ fn search_reports_a_plain_project_it_cannot_fence_off() {
             .is_some_and(|e| e.contains("path list separator")),
         "{found}"
     );
+}
+
+/// While a tool runs, `ping` and `tools/list` are answered; cancelling it
+/// stops what it started, and it gets no reply.
+#[test]
+#[cfg(unix)]
+fn a_running_call_can_be_cancelled_and_others_are_answered_meanwhile() {
+    use std::io::{BufRead, BufReader};
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    std::fs::create_dir(ws.join("a")).unwrap();
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
+    let mut child = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), ws)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut replies = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut send = |message: serde_json::Value| writeln!(stdin, "{message}").unwrap();
+    let script = "sleep 60 & echo $$ $! > ../pids.tmp && mv ../pids.tmp ../pids; wait";
+    send(
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+        "name": "meta_batch_execute", "arguments": {"command": ["sh", "-c", script]}}}),
+    );
+    let pids = ws.join("pids");
+    wait_for("the script to start", || pids.exists());
+    let started = std::time::Instant::now();
+    send(serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "ping"}));
+    send(serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "tools/list"}));
+    for id in [3, 4] {
+        let reply: serde_json::Value =
+            serde_json::from_str(&replies.next().unwrap().unwrap()).unwrap();
+        assert_eq!(reply["id"], id, "{reply}");
+    }
+    send(
+        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+        "params": {"requestId": 2, "reason": "test"}}),
+    );
+    drop(send);
+    drop(stdin);
+    assert!(replies.next().is_none(), "the cancelled call was answered");
+    assert!(child.wait().unwrap().success());
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    for pid in std::fs::read_to_string(pids).unwrap().split_whitespace() {
+        wait_for(&format!("{pid} to end"), || gone(pid));
+    }
+}
+
+/// A spawn error reaches the client with its cause (agent-17: `E2BIG`).
+#[test]
+#[cfg(unix)]
+fn a_command_too_long_to_start_says_why() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
+    // a `meta` to find, so starting it fails for its arguments' size alone
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::write(bin.join("meta"), "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(bin.join("meta"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "meta_exec",
+            "arguments": {"command": ["echo", "y".repeat(3_000_000)]}}});
+    let out = meta_mcp(tmp.path(), &[], &request.to_string(), &[("PATH", &bin)]);
+    let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(reply["result"]["isError"], true, "{reply}");
+    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("Argument list too long"),
+        "{}",
+        &text[..text.len().min(300)]
+    );
+}
+
+/// Whether the process `pid` is gone.
+#[cfg(unix)]
+fn gone(pid: &str) -> bool {
+    !Command::new("kill")
+        .args(["-0", pid])
+        .status()
+        .unwrap()
+        .success()
+}
+
+/// A repo at `dir` with one commit, `before`, and an identity of its own.
+#[cfg(unix)]
+fn repo_with_a_commit(dir: &Path) {
+    std::fs::create_dir(dir).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.name", "t"],
+        &["config", "user.email", "t@example.com"],
+        &["commit", "-q", "--allow-empty", "-m", "before"],
+    ] {
+        git(dir, args);
+    }
+}
+
+/// The subject of the last commit in `dir`.
+#[cfg(unix)]
+fn last_commit(dir: &Path) -> String {
+    let mut log = isolated(meta_core::git::git(dir), dir);
+    let out = log.args(["log", "-1", "--format=%s"]).output().unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// meta-mcp in `ws`, leading a process group of its own, with `calls` sent;
+/// stdout dropped, stderr kept. Its stdin comes back too: while it is open
+/// the server isn't told to end, only signalled.
+#[cfg(unix)]
+fn server_in_its_group(
+    ws: &Path,
+    calls: &[serde_json::Value],
+) -> (std::process::Child, std::process::ChildStdin) {
+    use std::os::unix::process::CommandExt;
+    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), ws);
+    server
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let mut server = server.spawn().unwrap();
+    let mut stdin = server.stdin.take().unwrap();
+    for call in calls {
+        writeln!(stdin, "{call}").unwrap();
+    }
+    (server, stdin)
+}
+
+/// SIGTERM to the server's whole process group; its stderr once it has
+/// exited, as a signal ends it (128 + 15).
+#[cfg(unix)]
+fn stop_group(mut server: std::process::Child) -> String {
+    let group = format!("-{}", server.id());
+    let kill = Command::new("kill").args(["-TERM", "--", &group]).status();
+    assert!(kill.unwrap().success());
+    let mut status = None;
+    wait_for("the server to exit", || {
+        status = server.try_wait().unwrap();
+        status.is_some()
+    });
+    assert_eq!(status.unwrap().code(), Some(128 + 15), "{status:?}");
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
+    stderr
+}
+
+/// An atomic or plain `meta_batch_execute` of `script` in `sh`.
+#[cfg(unix)]
+fn batch(id: u32, script: &str, atomic: bool) -> serde_json::Value {
+    serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": {"name": "meta_batch_execute",
+            "arguments": {"command": ["sh", "-c", script], "atomic": atomic}}})
+}
+
+/// A signal that ends the server, sent to its process group, also stops the
+/// running tool's programs, which run in a group of their own; an atomic
+/// batch it stopped is rolled back and on record before the server ends, and
+/// a call waiting behind it never starts.
+#[test]
+#[cfg(unix)]
+fn stopping_the_server_stops_its_running_tool() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let a = ws.join("a");
+    repo_with_a_commit(&a);
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
+    let script = |file: &str| {
+        format!(
+            "git commit -q --allow-empty -m during; \
+             sleep 60 & echo $! > ../{file}.tmp && mv ../{file}.tmp ../{file}; wait"
+        )
+    };
+    let calls = [
+        batch(1, &script("pid"), true),
+        batch(2, &script("waiting"), false),
+    ];
+    let (server, _stdin) = server_in_its_group(ws, &calls);
+    let pid = ws.join("pid");
+    wait_for("the tool to start", || pid.exists());
+    assert_eq!(last_commit(&a), "during\n");
+    let stderr = stop_group(server);
+    let sleep = std::fs::read_to_string(&pid).unwrap();
+    wait_for("the tool's sleep to end", || gone(sleep.trim()));
+    assert!(!ws.join("waiting").exists(), "the waiting call started");
+    assert_eq!(last_commit(&a), "before\n");
+    assert!(
+        stderr.contains("request 1 was cancelled") && stderr.contains("rollback"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("request 2 not started"), "{stderr}");
+}
+
+/// A signal that comes while an atomic batch is rolling back lets the
+/// rollback finish, however long it takes, before the server ends.
+#[test]
+#[cfg(unix)]
+fn stopping_the_server_lets_a_rollback_finish() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let a = ws.join("a");
+    repo_with_a_commit(&a);
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
+    // the rollback's git asks this hook, which holds it longer than a
+    // cancelled program is given (2 s grace, 4 s at most)
+    let hook = ws.join("hook");
+    let script = "#!/bin/sh\n[ -e ../in-hook ] || { touch ../in-hook; sleep 6; }\n";
+    std::fs::write(&hook, script).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let command = "git commit -q --allow-empty -m during && \
+                   git config core.fsmonitor ../hook && exit 1";
+    let (server, _stdin) = server_in_its_group(ws, &[batch(1, command, true)]);
+    wait_for("the rollback to reach the hook", || {
+        ws.join("in-hook").exists()
+    });
+    let stderr = stop_group(server);
+    assert_eq!(last_commit(&a), "before\n");
+    assert!(stderr.contains(r#"\"status\": \"success\""#), "{stderr}");
+}
+
+/// When its output is gone, the server ends, though its input stays open,
+/// and the reply it owed goes to stderr.
+#[test]
+#[cfg(unix)]
+fn a_server_whose_output_is_gone_ends() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
+    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), tmp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(server.stdout.take());
+    let mut stdin = server.stdin.take().unwrap();
+    let call = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "meta_get_config"}});
+    // again until it ends: a child another test forks may hold the read
+    // end for a moment, and a reply written then goes through
+    let mut status = None;
+    wait_for("the server to end", || {
+        let _ = writeln!(stdin, "{call}");
+        status = server.try_wait().unwrap();
+        status.is_some()
+    });
+    assert_eq!(status.unwrap().code(), Some(1), "{status:?}");
+    drop(stdin);
+    // the reply it couldn't send is on record
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
+    assert!(
+        stderr.contains("the reply was:") && stderr.contains(r#""id":1"#),
+        "{stderr}"
+    );
+}
+
+/// When the output is found gone while answering a ping, the running tool is
+/// stopped too, so the server ends though the tool never would.
+#[test]
+#[cfg(unix)]
+fn a_server_whose_output_is_gone_stops_its_running_tool() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    std::fs::create_dir(ws.join("a")).unwrap();
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
+    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), ws)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    drop(server.stdout.take());
+    let mut stdin = server.stdin.take().unwrap();
+    let script = "sleep 60 & echo $! > ../pid.tmp && mv ../pid.tmp ../pid; wait";
+    writeln!(stdin, "{}", batch(1, script, false)).unwrap();
+    let pid = ws.join("pid");
+    wait_for("the tool to start", || pid.exists());
+    // pings until it ends (see `a_server_whose_output_is_gone_ends`)
+    let mut status = None;
+    wait_for("the server to end", || {
+        let _ = writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"ping"}}"#);
+        status = server.try_wait().unwrap();
+        status.is_some()
+    });
+    assert_eq!(status.unwrap().code(), Some(1), "{status:?}");
+    let sleep = std::fs::read_to_string(&pid).unwrap();
+    wait_for("the tool's sleep to end", || gone(sleep.trim()));
+    drop(stdin);
+}
+
+/// A server that finds its output gone while sending a tool's reply drops
+/// the calls still waiting, each said on stderr.
+#[test]
+#[cfg(unix)]
+fn a_server_whose_output_is_gone_drops_its_waiting_calls() {
+    let tmp = tempfile::tempdir().unwrap();
+    // a project for the first call to sleep in
+    std::fs::create_dir(tmp.path().join("a")).unwrap();
+    std::fs::write(tmp.path().join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
+    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), tmp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(server.stdout.take());
+    let mut stdin = server.stdin.take().unwrap();
+    // the other calls wait while the first one sleeps; should a reply go
+    // through (see `a_server_whose_output_is_gone_ends`), the next fails
+    writeln!(stdin, "{}", batch(1, "sleep 1", false)).unwrap();
+    for id in 2..5 {
+        let call = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "meta_get_config"}});
+        writeln!(stdin, "{call}").unwrap();
+    }
+    let mut status = None;
+    wait_for("the server to end", || {
+        status = server.try_wait().unwrap();
+        status.is_some()
+    });
+    assert_eq!(status.unwrap().code(), Some(1), "{status:?}");
+    drop(stdin);
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
+    assert!(stderr.contains("not started"), "{stderr}");
 }

@@ -187,6 +187,13 @@ preview() {
     [[ "$output" == *'"dry_run": true'* ]]
 }
 
+@test "a preview's git status leaves every index as it was" {
+    # same content, new time: a status that could take the index lock
+    # would refresh the index and write it
+    touch -t 202001010000 .worktrees/clean/backend/README.md
+    preview 0 git worktree remove clean
+}
+
 @test "worktree remove --force previews the work it would discard" {
     preview 0 git worktree remove dirty --force
     [[ "$output" == *"would discard work in worktree 'dirty'"* ]]

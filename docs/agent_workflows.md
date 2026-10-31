@@ -229,7 +229,7 @@ Use `meta_execution_order` before building:
 ```
 
 ### 6. Handle Failures Gracefully
-Always check the `is_error` field in responses and handle appropriately.
+A tool's result has `isError: true` when the tool itself failed, or when every repository it acted in failed. A tool that acts in several repositories reports each one; when only some failed, `isError` is not set, so also check each repository's `success`.
 
 ## Error Recovery
 

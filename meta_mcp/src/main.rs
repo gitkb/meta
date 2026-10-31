@@ -158,7 +158,28 @@ impl McpServer {
         }
     }
 
+    /// Serves stdin and stdout. On Unix a signal that ends the server
+    /// (SIGTERM, SIGINT, SIGHUP) first stops the running tool's programs,
+    /// which run in a process group of their own and wouldn't get it.
     fn run(&self) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+            let mut signals = signal_hook::iterator::Signals::new([SIGTERM, SIGINT, SIGHUP])?;
+            let handle = signals.handle();
+            std::thread::scope(|scope| {
+                scope.spawn(move || {
+                    if let Some(signal) = signals.forever().next() {
+                        self.calls.stop_running();
+                        std::process::exit(128 + signal);
+                    }
+                });
+                let served = self.serve(std::io::stdin().lock(), std::io::stdout());
+                handle.close();
+                served
+            })
+        }
+        #[cfg(not(unix))]
         self.serve(std::io::stdin().lock(), std::io::stdout())
     }
 

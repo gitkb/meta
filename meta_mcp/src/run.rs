@@ -63,6 +63,18 @@ impl Calls {
         !self.cancelled.swap(false, Ordering::SeqCst)
     }
 
+    /// Cancels whatever call runs, and waits (as long as a cancel takes)
+    /// until it has stopped.
+    pub(crate) fn stop_running(&self) {
+        let deadline = Instant::now() + 2 * GRACE + Duration::from_secs(1);
+        if self.state().running.is_some() {
+            self.cancelled.store(true, Ordering::SeqCst);
+        }
+        while self.state().running.is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     /// Cancels the call `id`: a waiting one never starts, the running one's
     /// program is stopped. Other ids (done, or never seen) are ignored.
     pub(crate) fn cancel(&self, id: &str) {
@@ -120,6 +132,8 @@ impl Calls {
         // nothing waits for a pipe held from outside the group.
         let mut status = None;
         let mut terminated: Option<Instant> = None;
+        // short programs end soon; a long one is looked at less often
+        let mut nap = Duration::from_millis(1);
         loop {
             if status.is_none() {
                 status = child.try_wait()?;
@@ -147,7 +161,8 @@ impl Calls {
                 Some(at) if at.elapsed() > GRACE => stop(&mut child, true),
                 Some(_) => {}
             }
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::sleep(nap);
+            nap = (nap * 2).min(Duration::from_millis(if cancelled { 5 } else { 50 }));
         }
         let status = status
             .ok_or_else(|| std::io::Error::other("the program did not stop when cancelled"))?;
@@ -224,6 +239,27 @@ mod tests {
     use super::*;
     use crate::test_support::{gone, wait_for};
 
+    /// The name of the program `pid` runs.
+    #[cfg(unix)]
+    fn program(pid: &str) -> String {
+        let out = Command::new("ps")
+            .args(["-o", "comm=", "-p", pid])
+            .output()
+            .unwrap();
+        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        name.rsplit('/').next().unwrap_or_default().to_string()
+    }
+
+    /// Whether `pid` leads a session of its own (it called setsid).
+    #[cfg(target_os = "linux")]
+    fn leads_a_session(pid: &str) -> bool {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let fields: Vec<&str> = stat
+            .rsplit_once(')')
+            .map_or(vec![], |(_, rest)| rest.split_whitespace().collect());
+        fields.get(3) == Some(&pid)
+    }
+
     #[test]
     #[cfg(unix)]
     fn output_lines_stops_at_the_cap_and_says_so() {
@@ -258,7 +294,12 @@ mod tests {
                         .current_dir(dir.path()),
                 )
             });
-            wait_for("the script to start", || pids.exists());
+            // the child has set its trap: it is `sleep` now
+            let child = || {
+                let pids = std::fs::read_to_string(&pids).ok()?;
+                Some(program(pids.split_whitespace().nth(1)?) == "sleep")
+            };
+            wait_for("the child to ignore SIGTERM", || child() == Some(true));
             calls.cancel("1");
             let out = run.join().unwrap().unwrap();
             assert!(!out.status.success());
@@ -299,7 +340,8 @@ mod tests {
                         .current_dir(dir.path()),
                 )
             });
-            wait_for("the script to start", || pid.exists());
+            let escaped = || Some(leads_a_session(std::fs::read_to_string(&pid).ok()?.trim()));
+            wait_for("the child to leave the group", || escaped() == Some(true));
             calls.cancel("1");
             assert!(run.join().unwrap().is_ok());
         });
@@ -331,13 +373,8 @@ mod tests {
             });
             // the parent has left the group (it leads a session of its own),
             // so the child it started before is the one no one will reap
-            let session = || {
-                let pid = std::fs::read_to_string(&pid).ok()?;
-                let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid.trim())).ok()?;
-                let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
-                Some(fields.get(3)? == &pid.trim())
-            };
-            wait_for("the parent to leave the group", || session() == Some(true));
+            let escaped = || Some(leads_a_session(std::fs::read_to_string(&pid).ok()?.trim()));
+            wait_for("the parent to leave the group", || escaped() == Some(true));
             cancelled = Some(std::time::Instant::now());
             calls.cancel("1");
             drop(run.join().unwrap());

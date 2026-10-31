@@ -1,5 +1,125 @@
 # Changelog
 
+## [0.3.0](https://github.com/gitkb/meta/compare/v0.2.22...v0.3.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* one config load, one git wrapper, one parser per thing ([#139](https://github.com/gitkb/meta/issues/139))
+* turn on the first clippy lint group and delete dead code ([#137](https://github.com/gitkb/meta/issues/137))
+* existing checkouts must move their child clones aside before pulling; see the PR description.
+* rename a .meta or .meta.json config to .meta.yaml (same content).
+* **plugins:** rename a .meta.yml config to .meta.yaml.
+* **worktree:** keep worktree records beside git, drop the global store ([#126](https://github.com/gitkb/meta/issues/126))
+* drop the permission, ownership and symlink trust checks ([#125](https://github.com/gitkb/meta/issues/125))
+
+### Features
+
+* **meta_git_cli:** sync 5492231 ([#103](https://github.com/gitkb/meta/issues/103)) ([d57b145](https://github.com/gitkb/meta/commit/d57b14576dbf575975b6dcf5948971360c8e7a78))
+* **meta_git_cli:** sync 6ff549a ([#99](https://github.com/gitkb/meta/issues/99)) ([51c6bd6](https://github.com/gitkb/meta/commit/51c6bd6f8ebd4b0d2f668a9b272892dce326cbd2))
+* **meta_git_cli:** sync d5e05ca ([#101](https://github.com/gitkb/meta/issues/101)) ([79b4b7c](https://github.com/gitkb/meta/commit/79b4b7c0e105df49931c3a5f7c864c5d9d3f1f8d))
+* **meta_project_cli:** sync 93f40bf ([#104](https://github.com/gitkb/meta/issues/104)) ([5bef81e](https://github.com/gitkb/meta/commit/5bef81ede61503c7e73510727aab21c33035d083))
+* org rename ([#94](https://github.com/gitkb/meta/issues/94)) ([a44337c](https://github.com/gitkb/meta/commit/a44337ce03373e3a7cf892c4cc451b1f6d88b08b))
+* **skills:** keep meta's skills in .meta/skills, linked for Claude a… ([ed594b9](https://github.com/gitkb/meta/commit/ed594b94ce69e0002103957a411ef51585fcf69e))
+* **skills:** keep meta's skills in .meta/skills, linked for Claude and Codex ([#105](https://github.com/gitkb/meta/issues/105)) ([ed594b9](https://github.com/gitkb/meta/commit/ed594b94ce69e0002103957a411ef51585fcf69e))
+* **worktree:** keep worktree records beside git, drop the global store ([#126](https://github.com/gitkb/meta/issues/126)) ([6bc56f7](https://github.com/gitkb/meta/commit/6bc56f75b89f2095dcd8887918303fc671243ca9))
+
+
+### Bug Fixes
+
+* --from-pr matches the URL git fetches from (insteadOf applied) [… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* a .git file names its checkout, not a bundle's clone [[tasks/har… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* a bracketed URL host only at the start or after @, as git reads … ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* a bundle clones into its name without .bundle; refs need a repos… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* a bundle file's clone keeps its own name less .bundle [[tasks/ha… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* bare projects keep their branch; isolate the list fixture; clone… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* bugs from the 2026-10-29 audit and the meta[#135](https://github.com/gitkb/meta/issues/135) Ubuntu test ([#140](https://github.com/gitkb/meta/issues/140)) ([4b0f44e](https://github.com/gitkb/meta/commit/4b0f44eccc0f3fac78cfae8b968d48aa8a71f864))
+* bugs from the 2026-10-29 audit and the meta[#135](https://github.com/gitkb/meta/issues/135) Ubuntu test [[ta… ([4b0f44e](https://github.com/gitkb/meta/commit/4b0f44eccc0f3fac78cfae8b968d48aa8a71f864))
+* **build:** install and ship meta-rust again ([f591502](https://github.com/gitkb/meta/commit/f5915022c9212f28d05f6712cc0ec18effd04075))
+* **build:** install meta-mcp and loop; keep Cargo.lock in step at rel… ([d1803e5](https://github.com/gitkb/meta/commit/d1803e5b99e8a0e57ac31668c5c5c343ff79467a))
+* **build:** install meta-mcp and loop; keep Cargo.lock in step at release ([#109](https://github.com/gitkb/meta/issues/109)) ([d1803e5](https://github.com/gitkb/meta/commit/d1803e5b99e8a0e57ac31668c5c5c343ff79467a))
+* **build:** make install overwrites untracked binaries; drop meta-rust ([f591502](https://github.com/gitkb/meta/commit/f5915022c9212f28d05f6712cc0ec18effd04075))
+* **build:** make install overwrites untracked binaries; ship meta-rust ([#110](https://github.com/gitkb/meta/issues/110)) ([f591502](https://github.com/gitkb/meta/commit/f5915022c9212f28d05f6712cc0ec18effd04075))
+* **build:** make uninstall still removes meta-rust ([f591502](https://github.com/gitkb/meta/commit/f5915022c9212f28d05f6712cc0ec18effd04075))
+* **build:** uninstall by package name so a version bump can't hide an… ([d1803e5](https://github.com/gitkb/meta/commit/d1803e5b99e8a0e57ac31668c5c5c343ff79467a))
+* **ci:** refresh Cargo.lock in child sync PRs; leave release builds u… ([d1803e5](https://github.com/gitkb/meta/commit/d1803e5b99e8a0e57ac31668c5c5c343ff79467a))
+* clone passes the URL after --; isolate and add tests from review… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* CodeRabbit findings [[tasks/harmony-2947]] ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* CodeRabbit round: loop -e ., stricter HEAD link, unreadable HEAD… ([4b0f44e](https://github.com/gitkb/meta/commit/4b0f44eccc0f3fac78cfae8b968d48aa8a71f864))
+* **deps:** update rustls, rustls-webpki and tar for security advisori… ([69d26f0](https://github.com/gitkb/meta/commit/69d26f08bbec069a26597e7e4d01cde67f95664e))
+* **deps:** update rustls, rustls-webpki, tar, webpki-roots and crossbeam-epoch; turn on Renovate lock maintenance ([#136](https://github.com/gitkb/meta/issues/136)) ([69d26f0](https://github.com/gitkb/meta/commit/69d26f08bbec069a26597e7e4d01cde67f95664e))
+* **deps:** update webpki-roots and crossbeam-epoch for RustSec adviso… ([69d26f0](https://github.com/gitkb/meta/commit/69d26f08bbec069a26597e7e4d01cde67f95664e))
+* drop the last --from-ref calls and stale upgrade docs [[tasks/ha… ([145f2f3](https://github.com/gitkb/meta/commit/145f2f3c681356fe1104a02c5738be9a68b913c0))
+* drop the permission, ownership and symlink trust checks ([039b252](https://github.com/gitkb/meta/commit/039b252ac45376d1df31e323e64490aa611d3406))
+* drop the permission, ownership and symlink trust checks ([#125](https://github.com/gitkb/meta/issues/125)) ([039b252](https://github.com/gitkb/meta/commit/039b252ac45376d1df31e323e64490aa611d3406))
+* hooks must be strings; one-line git plugin usage [[tasks/harmony… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* **hooks:** isolate Git-local test environment ([#98](https://github.com/gitkb/meta/issues/98)) ([ae5818b](https://github.com/gitkb/meta/commit/ae5818b2dc4f93e61af30dd42c776cf781e23daa))
+* **init:** don't read a settings.json reached through a link [[tasks/… ([145f2f3](https://github.com/gitkb/meta/commit/145f2f3c681356fe1104a02c5738be9a68b913c0))
+* **install:** stop on unsupported platforms, explain broken transfers… ([91883f3](https://github.com/gitkb/meta/commit/91883f3570b8392bb6137ea62dc58ba8c6429940))
+* **install:** verify release checksums and report download errors ([91883f3](https://github.com/gitkb/meta/commit/91883f3570b8392bb6137ea62dc58ba8c6429940))
+* **install:** verify release checksums and report download errors ([#121](https://github.com/gitkb/meta/issues/121)) ([91883f3](https://github.com/gitkb/meta/commit/91883f3570b8392bb6137ea62dc58ba8c6429940))
+* keep the gitdir wording in the source-repo error [[tasks/harmony… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* **loop_cli:** sync 2a1b17a ([#120](https://github.com/gitkb/meta/issues/120)) ([10003a2](https://github.com/gitkb/meta/commit/10003a27dde5378092ecda9c82726d4223231330))
+* **loop_cli:** sync 2b51829 ([#123](https://github.com/gitkb/meta/issues/123)) ([b352712](https://github.com/gitkb/meta/commit/b352712530488e341a1716aff63ae1f158d0a288))
+* **loop_cli:** sync 5910ed3 ([#134](https://github.com/gitkb/meta/issues/134)) ([c2afaeb](https://github.com/gitkb/meta/commit/c2afaeb96c8fb567f325e0d498da4da0e365dc3a))
+* **loop_cli:** sync d551fc8 ([#130](https://github.com/gitkb/meta/issues/130)) ([894fc0b](https://github.com/gitkb/meta/commit/894fc0b81afb4903694f9855894108b2acfcf872))
+* **meta_git_cli:** sync 396a60a ([#133](https://github.com/gitkb/meta/issues/133)) ([ffb1c22](https://github.com/gitkb/meta/commit/ffb1c227a939e236299a57b8c71d4100c193ce72))
+* **meta_git_cli:** sync 79af652 ([#119](https://github.com/gitkb/meta/issues/119)) ([5a63ddc](https://github.com/gitkb/meta/commit/5a63ddc30f7c904fb79182d660b412d43fc14ead))
+* **meta_git_cli:** sync bfa2aa8 ([#129](https://github.com/gitkb/meta/issues/129)) ([1f0ae60](https://github.com/gitkb/meta/commit/1f0ae6002ac9e761143eecad983b38ef8c32823e))
+* **meta_git_cli:** sync c24c7a5 ([#127](https://github.com/gitkb/meta/issues/127)) ([954d9ae](https://github.com/gitkb/meta/commit/954d9aef52aeee4772f44932e5aefeb0fd87b538))
+* **meta_mcp:** sync 16ea505 ([#106](https://github.com/gitkb/meta/issues/106)) ([d023c63](https://github.com/gitkb/meta/commit/d023c639c0e978c7b389064604299e4f0f6ae62f))
+* **meta_mcp:** sync 4045c82 ([#108](https://github.com/gitkb/meta/issues/108)) ([9c034a8](https://github.com/gitkb/meta/commit/9c034a838c6c5b36b70ff285d7850c6f27ba6281))
+* **meta_mcp:** sync 7a07f39 ([#124](https://github.com/gitkb/meta/issues/124)) ([3df134e](https://github.com/gitkb/meta/commit/3df134e56b0e20eb9bd6914c6061b733635b7dd4))
+* **meta_mcp:** sync b91929b ([#112](https://github.com/gitkb/meta/issues/112)) ([d54e450](https://github.com/gitkb/meta/commit/d54e4506a66868a642f0773fd2fca7a0b667e7f1))
+* **meta_mcp:** sync c586106 ([#117](https://github.com/gitkb/meta/issues/117)) ([3d5689b](https://github.com/gitkb/meta/commit/3d5689b396b07ef2543dc947354cb9ae7a8c141e))
+* **meta_project_cli:** sync a1e85ae ([#118](https://github.com/gitkb/meta/issues/118)) ([17cd9a3](https://github.com/gitkb/meta/commit/17cd9a33cd41f5ee66e1de3558a31630c8c071ab))
+* **meta_rust_cli:** sync 35eac6e ([#111](https://github.com/gitkb/meta/issues/111)) ([4dc5fa3](https://github.com/gitkb/meta/commit/4dc5fa318f3e4c4e87a85273005d5bf6b755ab05))
+* only a real bare repository takes RepoStatus's bare path [[tasks… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* plugin fallback lists every repo of the workspace above cwd; scp… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* read a bare repository's branch, commit and upstream in RepoStat… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* remove agent plugins ([#96](https://github.com/gitkb/meta/issues/96)) ([4d8adcc](https://github.com/gitkb/meta/commit/4d8adcc7e2b3a684e344180f6698a9a56c81bcc4))
+* review round 1: nested search, strict skip, stricter git dirs, p… ([4b0f44e](https://github.com/gitkb/meta/commit/4b0f44eccc0f3fac78cfae8b968d48aa8a71f864))
+* review round 2: removal stays conservative, search errors and co… ([4b0f44e](https://github.com/gitkb/meta/commit/4b0f44eccc0f3fac78cfae8b968d48aa8a71f864))
+* review round 3: unreadable HEAD as git sees it, each project sea… ([4b0f44e](https://github.com/gitkb/meta/commit/4b0f44eccc0f3fac78cfae8b968d48aa8a71f864))
+* review round 4: git dirs git can enter, per-level search errors,… ([4b0f44e](https://github.com/gitkb/meta/commit/4b0f44eccc0f3fac78cfae8b968d48aa8a71f864))
+* review round 5: the enterable-objects test asserts, HEAD read la… ([4b0f44e](https://github.com/gitkb/meta/commit/4b0f44eccc0f3fac78cfae8b968d48aa8a71f864))
+* review round 6: real-path search ceiling, worktree add refuses n… ([4b0f44e](https://github.com/gitkb/meta/commit/4b0f44eccc0f3fac78cfae8b968d48aa8a71f864))
+* round 1 review findings [[tasks/harmony-2947]] ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* run commands as argv, never through a shell; --include/--exclude name whole repos ([#113](https://github.com/gitkb/meta/issues/113)) ([47eeca3](https://github.com/gitkb/meta/commit/47eeca361965690b3d26c37802596b6fe37acffc))
+* run commands as argv, never through a shell; whole-repo filters ([47eeca3](https://github.com/gitkb/meta/commit/47eeca361965690b3d26c37802596b6fe37acffc))
+* say why a plugin request can't be sent [[tasks/harmony-2947]] ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* show a core.bare checkout's refs in query, context and meta-mcp;… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* **skills:** copy Claude skills from meta_cli and test the new layout ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** copy Claude skills from meta_cli and test the new layout ([#102](https://github.com/gitkb/meta/issues/102)) ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** make skills drops stale copies; sync from meta_cli ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** make skills stages copies before replacing them ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** make skills stops on a failed copy; document all six skills ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** sync skills from meta_cli ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** sync skills from meta_cli ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** sync skills from meta_cli ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* **skills:** sync skills from meta_cli, bump the plugin version ([586c985](https://github.com/gitkb/meta/commit/586c985347c863ea06777fbf6e20d1ce27011da6))
+* stable .meta handling, workspace-scoped worktree cleanup, init keeps settings ([#128](https://github.com/gitkb/meta/issues/128)) ([3644067](https://github.com/gitkb/meta/commit/36440671a2a6b8d20a2733c9802681aa71c4f458))
+* validate .meta config, recover store locks, escape untrusted output ([#114](https://github.com/gitkb/meta/issues/114)) ([7cac339](https://github.com/gitkb/meta/commit/7cac339f5fc77e5c73d34b2aeeb4821bfa99dfeb))
+* worktree list uses the request's directory; round 2 tests and cl… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* worktree status reads a member's refs when its status can't be r… ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* **worktree:** a create rolls back even when it could not write a record ([6bc56f7](https://github.com/gitkb/meta/commit/6bc56f75b89f2095dcd8887918303fc671243ca9))
+* **worktree:** prune checks a TTL when a set proves not orphaned; rep… ([6bc56f7](https://github.com/gitkb/meta/commit/6bc56f75b89f2095dcd8887918303fc671243ca9))
+* **worktree:** trust only records in git's layout, judge prune by the… ([6bc56f7](https://github.com/gitkb/meta/commit/6bc56f75b89f2095dcd8887918303fc671243ca9))
+* **worktree:** write records with git's permissions; prune handles mo… ([6bc56f7](https://github.com/gitkb/meta/commit/6bc56f75b89f2095dcd8887918303fc671243ca9))
+
+
+### Documentation
+
+* **plugins:** META_DATA_DIR moves the global plugins folder ([1eacb24](https://github.com/gitkb/meta/commit/1eacb24cceb18bd9f75a9d253b871876d3245aab))
+
+
+### Code Refactoring
+
+* meta reads only .meta.yaml ([#132](https://github.com/gitkb/meta/issues/132)) ([1eacb24](https://github.com/gitkb/meta/commit/1eacb24cceb18bd9f75a9d253b871876d3245aab))
+* move the child crates into this repo [[tasks/harmony-2901]] ([#135](https://github.com/gitkb/meta/issues/135)) ([2a303c7](https://github.com/gitkb/meta/commit/2a303c77e12196b3382b2aeef3a282ca5d390eb1))
+* one config load, one git wrapper, one parser per thing ([#139](https://github.com/gitkb/meta/issues/139)) ([9d16e22](https://github.com/gitkb/meta/commit/9d16e2299e8fbee053f9fee508001e1849055a1f))
+* turn on the first clippy lint group and delete dead code ([#137](https://github.com/gitkb/meta/issues/137)) ([145f2f3](https://github.com/gitkb/meta/commit/145f2f3c681356fe1104a02c5738be9a68b913c0))
+
 ## [0.2.22](https://github.com/gitkb/meta/compare/v0.2.21...v0.2.22) (2026-05-19)
 
 

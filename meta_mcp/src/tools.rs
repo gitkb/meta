@@ -852,7 +852,11 @@ impl McpServer {
             .output(git(&workspace.dir).args(["check-ref-format", "--branch", &args.branch]))
             .context("Cannot run git check-ref-format")?;
         if !check.status.success() {
-            anyhow::bail!("'{}' is not a valid branch name", escape(&args.branch));
+            // git's reason: a name it refuses, or a config it can't read
+            match String::from_utf8_lossy(&check.stderr).trim() {
+                "" => anyhow::bail!("'{}' is not a valid branch name", escape(&args.branch)),
+                why => anyhow::bail!("{why}"),
+            }
         }
         let mut git_args = vec!["git", "checkout"];
         if args.create == Some(true) {
@@ -1888,6 +1892,24 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.to_string().contains("No meta config found"), "{err}");
+    }
+
+    #[test]
+    fn checkout_says_why_git_refused_the_branch() {
+        let (server, tmp) = server("projects: {}\n");
+        init_repo(tmp.path());
+        let refused = |branch: &str| {
+            let reply = call(&server, "meta_git_checkout", json!({"branch": branch}));
+            format!("{:#}", reply.err().unwrap())
+        };
+        assert!(refused("--orphan=evil").contains("is not a valid branch name"));
+        // a valid name, but a config git can't read: git's words, not a guess
+        std::fs::write(tmp.path().join(".git/config"), "[broken").unwrap();
+        let err = refused("feature/demo");
+        assert!(
+            err.contains("fatal:") && !err.contains("not a valid branch name"),
+            "{err}"
+        );
     }
 
     #[test]

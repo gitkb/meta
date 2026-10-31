@@ -203,10 +203,16 @@ impl McpServer {
         std::thread::scope(|scope| {
             let worker = scope.spawn(|| {
                 for message in queue {
-                    self.calls.answering(|| match self.answer(message) {
+                    let written = self.calls.answering(|| match self.answer(message) {
                         Some(answer) => write_answer(&output, &answer),
                         None => Ok(()),
-                    })?;
+                    });
+                    // No more answers can go out, and the reader may wait for
+                    // input that never comes: the server ends here
+                    if let Err(e) = written {
+                        let _ = writeln!(std::io::stderr(), "Error: {e:#}");
+                        std::process::exit(1);
+                    }
                 }
                 Ok(())
             });

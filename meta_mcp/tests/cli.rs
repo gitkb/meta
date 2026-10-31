@@ -668,3 +668,29 @@ fn stopping_the_server_lets_a_rollback_finish() {
     assert_eq!(last_commit(&a), "before\n");
     assert!(stderr.contains(r#"\"status\": \"success\""#), "{stderr}");
 }
+
+/// When its output is gone, the server ends, though its input stays open.
+#[test]
+#[cfg(unix)]
+fn a_server_whose_output_is_gone_ends() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
+    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), tmp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    drop(server.stdout.take());
+    let mut stdin = server.stdin.take().unwrap();
+    let call = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "meta_get_config"}});
+    writeln!(stdin, "{call}").unwrap();
+    let mut status = None;
+    wait_for("the server to end", || {
+        status = server.try_wait().unwrap();
+        status.is_some()
+    });
+    assert_eq!(status.unwrap().code(), Some(1), "{status:?}");
+    drop(stdin);
+}

@@ -44,6 +44,8 @@ impl Calls {
     pub(crate) fn queue(&self, id: String) {
         let mut state = self.state();
         if state.stopping {
+            // said with the state free: stderr may be slow to take it
+            drop(state);
             not_started(&id);
         } else {
             state.queued.insert(id, false);
@@ -77,17 +79,21 @@ impl Calls {
     /// Cancels the running call, starts no other, and waits until it has
     /// ended, an atomic batch's rollback included, and its answer is out.
     pub(crate) fn stop_running(&self) {
-        {
+        let dropped: Vec<String> = {
             let mut state = self.state();
             state.stopping = true;
             if state.running.is_some() {
                 self.cancelled.store(true, Ordering::SeqCst);
             }
-            for (id, cancelled) in state.queued.drain() {
-                if !cancelled {
-                    not_started(&id);
-                }
-            }
+            let queued = state.queued.drain();
+            queued
+                .filter(|(_, cancelled)| !cancelled)
+                .map(|(id, _)| id)
+                .collect()
+        };
+        // said with the state free: stderr may be slow to take it
+        for id in dropped {
+            not_started(&id);
         }
         while {
             let state = self.state();
@@ -449,6 +455,7 @@ mod tests {
         });
         assert!(!calls.start("1".to_string()));
         calls.queue("2".to_string());
+        assert!(calls.state().queued.is_empty());
         assert!(!calls.start("2".to_string()));
     }
 

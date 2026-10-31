@@ -214,24 +214,22 @@ pub(crate) fn handle_create(
         (alias != ".", place.split('/').count())
     });
 
-    // A preview makes the checks a run makes before asking GitHub for a
-    // PR's branch
-    if let Some(spec) = from_pr_spec.filter(|_| mode.is_preview()) {
-        let (pr_repo, pr_num) = parse_from_pr(spec)?;
-        let matched = repos_to_create
-            .iter()
-            .any(|(alias, source, _)| alias != "." && repo_matches_spec(source, &pr_repo));
-        if !matched {
-            anyhow::bail!(
-                "No selected repo has origin '{}', so PR #{pr_num} can't be applied",
-                escape(&pr_repo)
-            );
-        }
-    }
-
-    // A preview skips what the run below skips: a repo without the
-    // commit-ish (the run checks again, after fetching a PR's branch)
+    // A preview makes the checks a run makes (all but asking GitHub for a
+    // PR's branch), skips what it skips and fails where it fails
     if mode.is_preview() {
+        if let Some(spec) = from_pr_spec {
+            let (pr_repo, pr_num) = parse_from_pr(spec)?;
+            let Some((_, _, branch)) = repos_to_create
+                .iter_mut()
+                .find(|(alias, source, _)| alias != "." && repo_matches_spec(source, &pr_repo))
+            else {
+                anyhow::bail!(
+                    "No selected repo has origin '{}', so PR #{pr_num} can't be applied",
+                    escape(&pr_repo)
+                );
+            };
+            *branch = format!("<the head branch of {spec}>");
+        }
         let mut kept = Vec::new();
         for repo in repos_to_create {
             match missing_ref(&repo.1, from_ref)? {
@@ -246,9 +244,7 @@ pub(crate) fn handle_create(
                 None => kept.push(repo),
             }
         }
-        repos_to_create = kept;
-        // and fails where it fails: nothing left to create
-        if repos_to_create.is_empty() {
+        if kept.is_empty() {
             match from_ref {
                 Some(r) => anyhow::bail!(
                     "No selected repo has ref '{}'; no worktree was created",
@@ -257,14 +253,14 @@ pub(crate) fn handle_create(
                 None => anyhow::bail!("No repos selected; no worktree was created"),
             }
         }
-    }
-
-    if mode.is_preview() {
+        for (_, source, _) in &kept {
+            ensure_checkout_config_is_not_bare(source)?;
+        }
         let plan = CreateDryRunPlan {
             name,
             meta_dir: &meta_dir,
             wt_dir: &wt_dir,
-            repos_to_create: &repos_to_create,
+            repos_to_create: &kept,
             from_ref,
             from_pr_spec,
             ephemeral,

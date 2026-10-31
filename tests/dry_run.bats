@@ -24,7 +24,7 @@ setup() {
     # Programs a preview must never start: each records that it ran
     STUBS="$SANDBOX/stubs"
     mkdir -p "$STUBS"
-    for stub in ssh editor; do
+    for stub in ssh editor gh; do
         printf '#!/bin/sh\necho "%s $*" >> "%s"\nexit 1\n' "$stub" "$CALLS" > "$STUBS/$stub"
         chmod +x "$STUBS/$stub"
     done
@@ -122,11 +122,27 @@ preview() {
     [[ "$output" == *"Would create worktree set 'new'"* ]]
 }
 
+@test "worktree create -r previews the nested repos when --dry-run comes first" {
+    # backend is a meta repo of its own, with lib in it
+    git init --quiet --initial-branch=main backend/lib
+    echo lib > backend/lib/README.md
+    git -C backend/lib add README.md
+    git -C backend/lib commit --quiet -m lib
+    printf '{"projects": {"lib": "file:///nowhere/lib.git"}}\n' > backend/.meta.yaml
+    preview 0 -r git worktree --dry-run create t --all
+    [[ "$output" == *"backend/lib:"* ]]
+}
+
 @test "worktree add previews" {
     preview 0 git worktree add clean --repo frontend
     [[ "$output" == *"Would add to worktree set 'clean'"* ]]
     preview 0 --json git worktree add clean --repo frontend
     python3 -c 'import json, sys; out = json.load(sys.stdin); assert out["dry_run"] and out["repos"][0]["alias"] == "frontend", out' <<< "$output"
+    # meta's own check of the checkout fails a preview as a run
+    git -C frontend config core.bare true
+    preview 1 git worktree add clean --repo frontend
+    [[ "$output" == *"core.bare=true"* ]]
+    git -C frontend config core.bare false
 }
 
 @test "a preview with nothing to create fails as a run does" {
@@ -144,6 +160,10 @@ preview() {
     [[ "$output" == *"Invalid --from-pr format"* ]]
     preview 1 git worktree create p --repo backend --from-pr someorg/unrelated#5
     [[ "$output" == *"No selected repo has origin 'someorg/unrelated'"* ]]
+    # a PR of a selected repo previews with no call to GitHub (the gh stub)
+    git -C backend remote set-url origin git@github.com:org/backend.git
+    preview 0 git worktree create p --repo backend --from-pr org/backend#12
+    [[ "$output" == *"<the head branch of org/backend#12>"* ]]
 }
 
 @test "worktree remove previews" {
@@ -179,6 +199,12 @@ preview() {
     [[ "$output" == *"Would prune 1 worktree(s)"* ]]
     preview 0 --json git worktree prune
     [[ "$output" == *'"dry_run": true'* ]]
+    # a set prune keeps fails --strict, in a preview as in a run
+    meta git worktree create kept --repo backend --ephemeral --ttl 1s >/dev/null
+    echo work > .worktrees/kept/backend/untracked
+    sleep 2
+    preview 1 --strict git worktree prune
+    [[ "$output" == *"Kept worktrees: kept"* ]]
 }
 
 @test "worktree exec previews" {
@@ -257,7 +283,7 @@ preview() {
 
 @test "init claude previews" {
     preview 0 init claude
-    [[ "$output" == *"would write"*"settings.json"* ]] || [[ "$output" == *"Would create"*"settings.json"* ]]
+    [[ "$output" == *"Would create"*"settings.json"* ]]
     [[ "$output" == *"nothing was written"* ]]
 }
 

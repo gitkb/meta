@@ -253,7 +253,7 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
             if would_remove.is_empty() {
                 println!("Nothing to prune.");
             } else {
-                println!("Would prune {} worktree(s):", would_remove.len());
+                println!("[DRY RUN] Would prune {} worktree(s):", would_remove.len());
                 for entry in &would_remove {
                     println!(
                         "  {} ({}) — {}",
@@ -265,9 +265,7 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
             }
             print_kept(&kept);
         }
-        if !dry_run {
-            warn_kept(&kept, strict)?;
-        }
+        warn_kept(&kept, strict)?;
         return Ok(());
     }
 

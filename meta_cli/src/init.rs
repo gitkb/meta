@@ -259,10 +259,7 @@ fn install_claude_integration_to(
     let verbose = init.verbose;
     let preview = init.mode.is_preview();
     if preview {
-        println!(
-            "[DRY RUN] Nothing is written. In {}:",
-            escape_path(target_dir)
-        );
+        println!("[DRY RUN] In {}:", escape_path(target_dir));
     }
 
     // Build and validate settings before writing any skills or rules.

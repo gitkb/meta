@@ -6,7 +6,9 @@ use meta_core::git::{git, RepoStatus};
 use std::path::Path;
 use std::process::Stdio;
 
-fn ensure_checkout_config_is_not_bare(repo_path: &Path) -> Result<()> {
+/// An error if the checkout at `repo_path` has `core.bare=true` in its
+/// config: git would make no worktree of it.
+pub fn ensure_checkout_config_is_not_bare(repo_path: &Path) -> Result<()> {
     if !repo_path.join(".git").exists() {
         return Ok(());
     }

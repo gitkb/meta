@@ -4,7 +4,9 @@ use meta_core::display::{escape, escape_path};
 use meta_core::ExecutionMode;
 
 use meta_cli::worktree::discover_worktree_repos;
-use meta_git_lib::worktree::git_ops::git_worktree_add;
+use meta_git_lib::worktree::git_ops::{
+    ensure_checkout_config_is_not_bare, git_rev_parse, git_worktree_add,
+};
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::record;
 use meta_git_lib::worktree::types::*;
@@ -118,23 +120,17 @@ pub(crate) fn handle_add(
     }
 
     if mode.is_preview() {
-        let repos: Vec<CreateRepoEntry> = planned
-            .iter()
-            .map(|(spec, source, place)| {
-                let branch = resolve_branch(name, None, spec.branch.as_deref());
-                let local = format!("refs/heads/{branch}");
-                CreateRepoEntry {
-                    alias: spec.alias.clone(),
-                    path: wt_dir.join(place).display().to_string(),
-                    created_branch: meta_core::git::query(
-                        source,
-                        ["rev-parse", "--verify", "--quiet", &local],
-                    )
-                    .is_none(),
-                    branch,
-                }
-            })
-            .collect();
+        let mut repos = Vec::new();
+        for (spec, source, place) in &planned {
+            ensure_checkout_config_is_not_bare(source)?;
+            let branch = resolve_branch(name, None, spec.branch.as_deref());
+            repos.push(CreateRepoEntry {
+                alias: spec.alias.clone(),
+                path: wt_dir.join(place).display().to_string(),
+                created_branch: git_rev_parse(source, &format!("refs/heads/{branch}"))?.is_none(),
+                branch,
+            });
+        }
         if json {
             let output = AddOutput {
                 name: name.to_string(),

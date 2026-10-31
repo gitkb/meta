@@ -8,7 +8,7 @@ use std::process::Command;
 /// Commit what is staged, in every repo that has staged changes.
 #[derive(clap::Parser)]
 pub(crate) struct CommitArgs {
-    /// Write each repo's message in your editor
+    /// Write each repo's message in your editor (needs a terminal)
     #[arg(short, long)]
     edit: bool,
     /// Use this message in every repo

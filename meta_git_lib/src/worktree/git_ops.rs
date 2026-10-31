@@ -30,10 +30,11 @@ pub fn ensure_checkout_config_is_not_bare(repo_path: &Path) -> Result<()> {
             );
         }
     } else if output.status.code() != Some(1) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(
             "Failed to inspect core.bare for '{}': {}",
             escape_path(repo_path),
-            meta_core::git::shown_stderr(&output.stderr)
+            escape(stderr.trim())
         );
     }
 
@@ -131,6 +132,7 @@ pub fn git_worktree_add(
     };
     let output = git(repo_path).args(&args).output()?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         let from = match &start {
             WorktreeStart::Ref { name, .. } => format!(", ref: {}", escape(name)),
             _ => String::new(),
@@ -139,7 +141,7 @@ pub fn git_worktree_add(
             "git worktree add failed for '{}' (branch: {}{from}): {}",
             escape_path(repo_path),
             escape(branch),
-            meta_core::git::shown_stderr(&output.stderr)
+            escape(stderr.trim())
         );
     }
     Ok(start.new_branch_at())
@@ -156,10 +158,8 @@ pub fn git_worktree_remove(repo_path: &Path, worktree_path: &Path, force: bool) 
     let output = git(repo_path).args(&args).output()?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "git worktree remove failed: {}",
-            meta_core::git::shown_stderr(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git worktree remove failed: {}", escape(stderr.trim()));
     }
     Ok(())
 }
@@ -259,7 +259,7 @@ pub fn git_rev_parse(repo_path: &Path, rev: &str) -> Result<Option<String>> {
         "git rev-parse {} failed in {}: {}",
         escape(rev),
         escape_path(repo_path),
-        meta_core::git::shown_stderr(&output.stderr)
+        escape(stderr.trim())
     )
 }
 
@@ -285,7 +285,7 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
         _ => anyhow::bail!(
             "Cannot inspect '{}': {}",
             escape(branch),
-            meta_core::git::shown_stderr(&symbolic.stderr)
+            escape(String::from_utf8_lossy(&symbolic.stderr).trim())
         ),
     }
 
@@ -296,7 +296,7 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
         list.status.success(),
         "Cannot list the worktrees of {}: {}",
         escape_path(repo_path),
-        meta_core::git::shown_stderr(&list.stderr)
+        escape(String::from_utf8_lossy(&list.stderr).trim())
     );
     let wanted = format!("branch {full}");
     if String::from_utf8_lossy(&list.stdout)
@@ -313,7 +313,7 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
         output.status.success(),
         "Cannot find the git directory of {}: {}",
         escape_path(repo_path),
-        meta_core::git::shown_stderr(&output.stderr)
+        escape(String::from_utf8_lossy(&output.stderr).trim())
     );
     // Relative output is relative to the repository, where git ran.
     let common =
@@ -385,10 +385,11 @@ pub fn git_delete_branch_at(repo_path: &Path, branch: &str, expected: &str) -> R
         ])
         .output()?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(
             "Branch '{}' no longer points where it was created; kept ({})",
             escape(branch),
-            meta_core::git::shown_stderr(&output.stderr)
+            escape(stderr.trim())
         );
     }
     // Upstream settings of a deleted branch; there may be none.
@@ -407,15 +408,10 @@ pub fn git_fetch_branch(repo_path: &Path, branch: &str) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // git's own errors may show the URL with its credentials, and a
-        // remote helper origin's address in any form
-        let origin = meta_core::git::remote_url(repo_path);
-        let shown = meta_core::git::redact_git_output(&stderr, origin.as_ref());
-        let shown = shown.trim_ascii();
         anyhow::bail!(
             "Failed to fetch branch '{}': {}",
             escape(branch),
-            escape(shown)
+            escape(stderr.trim())
         );
     }
     Ok(())
@@ -438,24 +434,6 @@ mod tests {
             !message.contains('\n') && !message.contains('\u{1b}'),
             "{message}"
         );
-    }
-
-    #[test]
-    fn a_failed_fetch_shows_no_credentials() {
-        let tmp = init_git_repo();
-        // git refuses this URL before connecting, and quotes it whole
-        git(tmp.path())
-            .args([
-                "remote",
-                "add",
-                "origin",
-                "http://a:ghp_SECRET%0A@127.0.0.1:9/r",
-            ])
-            .status()
-            .unwrap();
-        let message = format!("{:#}", git_fetch_branch(tmp.path(), "b").unwrap_err());
-        assert!(message.contains("http://***@127.0.0.1:9/r"), "{message}");
-        assert!(!message.contains("ghp_SECRET"), "{message}");
     }
 
     /// Create a minimal git repo in a tempdir and return the tempdir handle.

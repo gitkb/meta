@@ -102,8 +102,7 @@ impl McpServer {
                     results.push(serde_json::json!({
                         "project": project.name,
                         "success": false,
-                        // the program the client passed, without credentials
-                        "error": format!("Cannot run {}: {e}", meta_core::git::redact_urls(program))
+                        "error": format!("Cannot run {program}: {e}")
                     }));
                 }
             }
@@ -146,7 +145,7 @@ impl McpServer {
         Ok(Reply {
             is_error: if atomic { has_failure } else { all_failed },
             text: serde_json::to_string_pretty(&serde_json::json!({
-                "command": args.command.iter().map(|word| meta_core::git::redact_urls(word)).collect::<Vec<_>>(),
+                "command": args.command,
                 "results": results,
                 "has_failure": has_failure,
                 "rollback": rollback

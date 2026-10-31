@@ -1,26 +1,24 @@
 //! Command-line errors that never echo control characters.
 
 use crate::display::escape;
-use crate::git::redact_url;
 use std::ffi::OsStr;
 
 /// The error to show for `args` that `P` rejected. Clap quotes rejected
-/// values as given, so the error comes from parsing the escaped arguments
-/// without the credentials in URLs: the same error, with values that can't
-/// move the cursor, forge a line or show a token. If those arguments parse,
-/// a plain error stands in.
+/// values as given, so the error comes from parsing the escaped arguments:
+/// the same error, with values that can't move the cursor or forge a line.
+/// If the escaped arguments parse, a plain error stands in.
 pub fn escaped_error<P: clap::Parser>(
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
 ) -> clap::Error {
     let shown = args
         .into_iter()
-        .map(|arg| escape(&redact_url(&arg.as_ref().to_string_lossy())).into_owned())
+        .map(|arg| escape(&arg.as_ref().to_string_lossy()).into_owned())
         .collect::<Vec<_>>();
     match P::try_parse_from(shown) {
         Err(e) => e,
         Ok(_) => P::command().error(
             clap::error::ErrorKind::InvalidValue,
-            "an argument contains a control character or a credential",
+            "an argument contains a control character",
         ),
     }
 }

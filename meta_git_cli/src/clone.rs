@@ -40,6 +40,11 @@ pub(crate) fn execute_git_clone(
     let meta_depth = args.meta_depth;
     let mut parallel = args.parallel.get();
     let url = args.url;
+    anyhow::ensure!(
+        !url.has_credentials(),
+        "The URL {url} {}",
+        meta_core::git::CREDENTIALS_REFUSED
+    );
     let git_clone_args: Vec<String> = depth
         .iter()
         .flat_map(|d| ["--depth".to_string(), d.clone()])
@@ -142,7 +147,7 @@ pub(crate) fn execute_git_clone(
             }
             ssh::SshMasters::UserManaged => {} // parallel OK, no override needed
             ssh::SshMasters::Failed if ssh_cmd.is_none() => {
-                ssh::warn("SSH multiplexing could not be set up: cloning one repository at a time");
+                log::warn!("SSH multiplexing setup failed, falling back to serial cloning");
                 parallel = 1;
             }
             ssh::SshMasters::Failed => {} // initial host works

@@ -356,7 +356,7 @@ pub(crate) fn handle_create(
                     eprintln!(
                         "Creating meta repo worktree at {} (branch: {})",
                         escape_path(&wt_dir),
-                        escape(&meta_core::git::redact_urls(branch))
+                        escape(branch)
                     );
                 }
                 let created_branch = journal_new_branch(source, branch, &mut new_branches, || {
@@ -413,7 +413,7 @@ pub(crate) fn handle_create(
                     "Creating worktree for '{}' at {} (branch: {})",
                     escape(alias),
                     escape_path(&dest),
-                    escape(&meta_core::git::redact_urls(branch))
+                    escape(branch)
                 );
             }
 
@@ -470,7 +470,7 @@ pub(crate) fn handle_create(
             repos: created_repos,
             ephemeral,
             ttl_seconds,
-            custom: super::shown_meta(custom_meta),
+            custom: custom_meta,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
@@ -610,15 +610,12 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
     println!();
 
     if let Some(from_ref) = plan.from_ref {
-        println!(
-            "Start ref: {}",
-            escape(&meta_core::git::redact_urls(from_ref))
-        );
+        println!("Start ref: {}", escape(from_ref));
     }
     if let Some(from_pr_spec) = plan.from_pr_spec {
         println!(
             "PR source: would resolve {} and fetch the matching head branch",
-            escape(&meta_core::git::redact_urls(from_pr_spec))
+            escape(from_pr_spec)
         );
     }
     if plan.ephemeral {
@@ -632,8 +629,7 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
             "Metadata: {}",
             plan.custom_meta
                 .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .map(|kv| escape(&meta_core::git::redact_urls(&kv)).into_owned())
+                .map(|(k, v)| format!("{}={}", escape(k), escape(v)))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -666,11 +662,8 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
             println!("    (a link: if the root checkout holds it, the repo goes where it leads)");
         }
         println!("    dest:   {}", escape_path(&dest));
-        println!(
-            "    branch: {}",
-            escape(&meta_core::git::redact_urls(branch))
-        );
-        println!("    bash:   {}", escape(&meta_core::git::redact_urls(&cmd)));
+        println!("    branch: {}", escape(branch));
+        println!("    bash:   {}", escape(&cmd));
     }
 
     println!();

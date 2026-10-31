@@ -130,8 +130,7 @@ fn handle_worktree_command(
         WorktreeCommands::Exec(args) => exec::handle_exec(args, mode, verbose, json),
         WorktreeCommands::Prune => prune::handle_prune(mode, json, global_strict),
         WorktreeCommands::Unknown(args) => {
-            let cmd = args.first().map_or("", String::as_str);
-            let cmd = escape(&meta_core::git::redact_url(cmd)).into_owned();
+            let cmd = escape(args.first().map(|s| s.as_str()).unwrap_or(""));
             // the help, then the error, which meta prints once
             eprint_worktree_help();
             anyhow::bail!("unrecognized worktree subcommand '{cmd}'");
@@ -175,25 +174,13 @@ pub(crate) fn not_a_repository(alias: &str, source: &Path) -> Result<Option<Stri
     }))
 }
 
-/// Worktree metadata as shown: keys and values without credentials (the
-/// record keeps them as typed).
-pub(crate) fn shown_meta(
-    meta: std::collections::HashMap<String, String>,
-) -> std::collections::HashMap<String, String> {
-    let redact = |text: &str| meta_core::git::redact_urls(text).into_owned();
-    meta.into_iter()
-        .map(|(k, v)| (redact(&k), redact(&v)))
-        .collect()
-}
-
 /// Print a warning; the message can carry paths and names from git and
 /// the filesystem.
 pub(crate) fn warn(message: impl std::fmt::Display) {
     eprintln!(
         "{} {}",
         "warning:".yellow().bold(),
-        // a warning may repeat a value typed as a URL
-        escape_lines(&meta_core::git::redact_urls(&message.to_string()))
+        escape_lines(&message.to_string())
     );
 }
 

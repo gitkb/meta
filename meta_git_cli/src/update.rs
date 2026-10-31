@@ -116,7 +116,7 @@ pub(crate) fn execute_git_update(
             ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
             ssh::SshMasters::UserManaged => None, // parallel OK
             ssh::SshMasters::Failed => {
-                ssh::warn("SSH multiplexing could not be set up: cloning one repository at a time");
+                log::warn!("SSH multiplexing setup failed, falling back to serial cloning");
                 parallel = 1;
                 None
             }

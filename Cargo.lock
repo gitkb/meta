@@ -864,6 +864,7 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "env_logger",
  "flate2",
  "indexmap",
  "log",

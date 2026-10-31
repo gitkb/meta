@@ -127,9 +127,7 @@ pub(crate) fn handle_add(
                 alias: spec.alias.clone(),
                 path: wt_dir.join(place).display().to_string(),
                 created_branch: start.new_branch_at().is_some(),
-                // shown, never run: without credentials (git refuses a URL
-                // as a branch name, so only a preview can hold one)
-                branch: meta_core::git::redact_urls(&branch).into_owned(),
+                branch,
             });
         }
         if json {
@@ -189,7 +187,7 @@ pub(crate) fn handle_add(
                 "Adding worktree for '{}' at {} (branch: {})",
                 escape(&spec.alias),
                 escape_path(&dest),
-                escape(&meta_core::git::redact_urls(&branch))
+                escape(&branch)
             );
         }
 

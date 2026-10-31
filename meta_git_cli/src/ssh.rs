@@ -7,7 +7,7 @@
 //! `GIT_SSH_COMMAND` this module returns.
 
 use console::style;
-use log::debug;
+use log::{debug, warn};
 use meta_core::config::{ProjectInfo, Workspace};
 use meta_core::display::escape;
 use meta_core::display::shell_quote;
@@ -116,13 +116,13 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
     }
 
     let Some(home) = dirs::home_dir() else {
-        warn("could not find the HOME directory for SSH sockets");
+        warn!("Could not determine HOME directory for SSH sockets");
         return SshMasters::Failed;
     };
     let sockets_dir = match ensure_ssh_sockets_dir(&home) {
         Ok(dir) => dir,
         Err(e) => {
-            warn(format!("could not create the SSH sockets directory: {e}"));
+            warn!("Failed to create SSH sockets directory: {e}");
             return SshMasters::Failed;
         }
     };
@@ -182,11 +182,11 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
             );
             any_succeeded = true;
         } else {
-            warn(format!(
+            warn!(
                 "SSH master for {} (port {}) could not be started",
-                escape(&target.destination()),
+                target.destination(),
                 target.port
-            ));
+            );
         }
     }
 
@@ -201,11 +201,6 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
     } else {
         SshMasters::Failed
     }
-}
-
-/// Tell the user, on stderr, what meta couldn't set up.
-pub(crate) fn warn(message: impl std::fmt::Display) {
-    eprintln!("{} {message}", style("⚠").yellow().bold());
 }
 
 /// A `GIT_SSH_COMMAND` value that reuses established ControlMaster
@@ -267,23 +262,17 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
         eprintln!("  {}", style(escape(&project.name)).bold());
         eprintln!("    actual:   {}", style(actual).red());
         eprintln!("    expected: {}", style(expected).green());
-        if actual.to_string() == expected.to_string() {
-            eprintln!("    (they differ only in their credentials)");
-        }
     }
     eprintln!();
     eprintln!("  Fix manually with:");
     for (project, expected, _) in &mismatches {
-        // a URL shown without its credentials would set a broken origin
-        let url = match expected.hides_credentials() {
-            true => "<its repo URL in .meta.yaml, not shown: it holds credentials>".to_string(),
-            false => shell_quote(&expected.to_string()),
-        };
         eprintln!(
-            "    git -C {} remote set-url origin {url}",
+            "    git -C {} remote set-url origin {}",
             escape(&shell_quote(
                 &workspace.dir.join(&project.path).to_string_lossy()
             )),
+            // printed as a URL prints: escaped (no config URL holds credentials)
+            shell_quote(&expected.to_string())
         );
     }
 }

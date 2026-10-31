@@ -421,7 +421,7 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
     anyhow::ensure!(
         output.status.success(),
         "git status failed: {}",
-        meta_core::git::shown_stderr(&output.stderr)
+        escape(String::from_utf8_lossy(&output.stderr).trim())
     );
     // Exact, for the re-check: raw bytes, not a lossy decoding.
     let text = format!("{:?}", output.stdout);
@@ -485,7 +485,7 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
     anyhow::ensure!(
         output.status.success(),
         "git rev-list failed: {}",
-        meta_core::git::shown_stderr(&output.stderr)
+        escape(String::from_utf8_lossy(&output.stderr).trim())
     );
     let commits = String::from_utf8_lossy(&output.stdout).into_owned();
     let stranded = commits.lines().count();
@@ -503,7 +503,7 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
     anyhow::ensure!(
         staged.status.success(),
         "git diff --cached failed: {}",
-        meta_core::git::shown_stderr(&staged.stderr)
+        escape(String::from_utf8_lossy(&staged.stderr).trim())
     );
     let staged = String::from_utf8_lossy(&staged.stdout).into_owned();
     let files: Vec<String> = modified
@@ -534,7 +534,7 @@ fn hidden_files(repo: &Path) -> Result<Vec<(String, PathBuf)>> {
     anyhow::ensure!(
         output.status.success(),
         "git ls-files failed: {}",
-        meta_core::git::shown_stderr(&output.stderr)
+        escape(String::from_utf8_lossy(&output.stderr).trim())
     );
     // Entries are "<tag> <path>"; a lowercase tag means assume-unchanged,
     // "S" skip-worktree.
@@ -582,7 +582,7 @@ fn operation_in_progress(repo: &Path) -> Result<Option<&'static str>> {
     anyhow::ensure!(
         output.status.success(),
         "git rev-parse --git-dir failed: {}",
-        meta_core::git::shown_stderr(&output.stderr)
+        escape(String::from_utf8_lossy(&output.stderr).trim())
     );
     let git_dir = repo.join(String::from_utf8_lossy(&output.stdout).trim_end_matches(['\n', '\r']));
     let markers = [

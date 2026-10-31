@@ -471,8 +471,7 @@ impl McpServer {
             result: None,
             error: Some(JsonRpcError {
                 code,
-                // it may repeat what the client sent
-                message: meta_core::git::redact_urls(&message).into_owned(),
+                message,
                 data: None,
             }),
         }
@@ -526,12 +525,7 @@ impl McpServer {
         };
         let (text, is_error) = match result {
             Ok(reply) => (reply.text, reply.is_error),
-            // it may repeat a URL the client passed; a reply's command
-            // output passes through
-            Err(e) => (
-                meta_core::git::redact_urls(&format!("{e:#}")).into_owned(),
-                true,
-            ),
+            Err(e) => (format!("{e:#}"), true),
         };
         Ok(serde_json::to_value(CallToolResult {
             content: vec![ToolContent {
@@ -782,91 +776,6 @@ mod tests {
         assert_eq!(replies[1]["id"], 2, "{replies}");
         assert_eq!(replies[2]["error"]["code"], -32600, "{replies}");
         assert!(tmp.path().join("a/ran").exists());
-    }
-
-    /// The reply to a `tools/call` of `name` with `arguments`, as JSON text.
-    fn call_text(server: &McpServer, name: &str, arguments: serde_json::Value) -> String {
-        let reply = server.handle_call_tool(&json!({"name": name, "arguments": arguments}));
-        serde_json::to_string(&reply.unwrap()).unwrap()
-    }
-
-    #[test]
-    fn replies_echo_no_credentials_and_pass_output_through() {
-        let (server, _tmp) = test_support::workspace();
-        let secret = "https://alice:ghp_SECRET@h/r";
-        // output with a URL, a newline and an e-mail address in it comes
-        // back whole (a scan of the reply's JSON text read it as userinfo)
-        let reply: serde_json::Value = serde_json::from_str(&call_text(
-            &server,
-            "meta_batch_execute",
-            // printf makes the newline: Windows (msys) splits an argument
-            // at one
-            json!({"command": ["printf", r"homepage=https://example.com\nauthor=bob@example.com"]}),
-        ))
-        .unwrap();
-        let text = reply["content"][0]["text"].as_str().unwrap();
-        let result: serde_json::Value = serde_json::from_str(text).unwrap();
-        assert_eq!(result["has_failure"], false, "{result}");
-        assert_eq!(
-            result["results"][0]["stdout"], "homepage=https://example.com\nauthor=bob@example.com",
-            "{result}"
-        );
-        // in a reply or in an error
-        for (name, arguments) in [
-            ("meta_batch_execute", json!({"command": ["true", secret]})),
-            // a program that can't start
-            ("meta_batch_execute", json!({"command": [secret]})),
-            // a value of the wrong type, too long to show whole
-            (
-                "meta_git_checkout",
-                json!({"branch": "b", "create": format!("https://alice:ghp_SECRET{}@h/r", "x".repeat(300))}),
-            ),
-            // a helper gets its URL as typed, a space in it too
-            (
-                "meta_batch_execute",
-                json!({"command": ["true", "foo::https://alice:ghp_SECRET w@h/r"]}),
-            ),
-            (
-                "meta_query_repos",
-                json!({"query": format!("branch:{secret}")}),
-            ),
-            ("meta_analyze_impact", json!({"project": secret})),
-            (
-                "meta_get_project_path",
-                json!({"project": format!("{secret}.git")}),
-            ),
-            ("meta_execution_order", json!({"tag": secret})),
-            (
-                "meta_git_multi_commit",
-                json!({"commits": [{"project": "a", "message": format!("see {secret}")}]}),
-            ),
-        ] {
-            let reply = call_text(&server, name, arguments);
-            assert!(reply.contains("https://***@h/r"), "{name}: {reply}");
-            assert!(!reply.contains("ghp_SECRET"), "{name}: {reply}");
-        }
-    }
-
-    #[test]
-    fn a_cut_refusal_of_a_branch_hides_credentials() {
-        let (server, _tmp) = test_support::workspace();
-        // git cuts its message before the `@`
-        let branch = format!("https://alice:ghp_SECRET{}@h/r", "x".repeat(5000));
-        let reply = call_text(&server, "meta_git_checkout", json!({"branch": branch}));
-        assert!(reply.contains("isError"), "{reply}");
-        assert!(!reply.contains("ghp_SECRET"), "{reply}");
-    }
-
-    #[test]
-    fn protocol_errors_hide_credentials() {
-        let (server, _tmp) = test_support::server("projects: {}\n");
-        let request: JsonRpcRequest = serde_json::from_value(json!({
-            "jsonrpc": "2.0", "id": 1, "method": "https://alice:ghp_SECRET@h/r"
-        }))
-        .unwrap();
-        let reply = serde_json::to_string(&server.handle_request(&request)).unwrap();
-        assert!(reply.contains("https://***@h/r"), "{reply}");
-        assert!(!reply.contains("ghp_SECRET"), "{reply}");
     }
 
     #[test]

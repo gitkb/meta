@@ -33,6 +33,7 @@ pub fn execute_command(
     cwd: &Path,
 ) -> CommandResult {
     debug!("[meta_git_cli] Plugin invoked with command: '{command}'");
+    debug!("[meta_git_cli] Args: {args:?}");
     debug!(
         "[meta_git_cli] Options: parallel={}, mode={:?}, verbose={}, recursive={}, depth={:?}",
         options.parallel,
@@ -149,8 +150,6 @@ fn build_passthrough_git_help(
         .chain(git_args.iter().cloned())
         .collect();
     let display_command = loop_lib::display_command(&git_argv);
-    let subcommand =
-        meta_core::display::escape(&meta_core::git::redact_url(subcommand)).into_owned();
     let scope = match get_project_directories_with_fallback(projects, cwd) {
         Ok(dirs) => {
             if dirs.is_empty() {
@@ -245,10 +244,7 @@ fn execute_raw_git_command(
         let (ssh_env, parallel_ok) = match ssh::establish_ssh_masters(&urls) {
             ssh::SshMasters::OurSockets(dir) => (Some(ssh::git_ssh_command(&dir)), true),
             ssh::SshMasters::UserManaged => (None, true),
-            ssh::SshMasters::Failed => {
-                ssh::warn("SSH multiplexing could not be set up: running one repository at a time");
-                (None, false)
-            }
+            ssh::SshMasters::Failed => (None, false),
         };
 
         // Inject GIT_SSH_COMMAND into every planned command's env

@@ -97,9 +97,7 @@ fn invalid(
     what: impl std::fmt::Display,
     given: Option<&serde_json::Value>,
 ) -> anyhow::Error {
-    // without credentials before it is cut, which may cut a URL's `@` off
-    let given = given.map(ToString::to_string).unwrap_or_default();
-    let mut given = meta_core::git::redact_urls(&given).into_owned();
+    let mut given = given.map(ToString::to_string).unwrap_or_default();
     if given.len() > 200 {
         let end = given.floor_char_boundary(200);
         given.truncate(end);
@@ -174,7 +172,7 @@ pub(crate) static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
         ),
         tool(
             "meta_get_config",
-            "Get the meta repository configuration including all projects, tags, and settings (credentials in URLs hidden)",
+            "Get the meta repository configuration including all projects, tags, and settings",
             McpServer::get_config,
         ),
         tool(
@@ -708,17 +706,17 @@ impl McpServer {
     }
 
     fn get_config(&self, _args: NoArgs) -> Result<String> {
-        // Found, not read as a config: a broken one is shown as it is
+        // Found, not read as a config: a broken one is shown as it is,
+        // unless meta refuses it for the credentials it holds
         let path = config::find_meta_config_in(self.meta_dir()?)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
+        if let Err(e) = config::Workspace::load(&path) {
+            if format!("{e:#}").contains(meta_core::git::CREDENTIALS_REFUSED) {
+                return Err(e);
+            }
+        }
         let content = std::fs::read_to_string(&path)?;
-        // without the credentials in its URLs
-        let shown = config::redact_config_text(&content);
-        let note = match shown == content {
-            true => "",
-            false => " (not the file as written: credentials, if any, hidden)",
-        };
-        Ok(format!("Config file: {}{note}\n\n{shown}", path.display()))
+        Ok(format!("Config file: {}\n\n{}", path.display(), content))
     }
 
     fn get_project_path(&self, args: ProjectArgs) -> Result<String> {
@@ -835,10 +833,8 @@ impl McpServer {
         meta_args.extend(files.iter().map(String::as_str));
         let scope = Scope::of(args.project, args.tag)?;
         let reply = self.run_meta(&self.workspace()?, &scope, &meta_args)?;
-        // the files the client passed, without credentials
-        let staged = meta_core::git::redact_urls(&files.join(", ")).into_owned();
         Ok(Reply {
-            text: format!("Staged files: {staged}\n{}", reply.text),
+            text: format!("Staged files: {}\n{}", files.join(", "), reply.text),
             ..reply
         })
     }
@@ -862,11 +858,8 @@ impl McpServer {
             .output(git(&workspace.dir).args(["check-ref-format", "--branch", &args.branch]))
             .context("Cannot run git check-ref-format")?;
         if !check.status.success() {
-            // git's reason: a name it refuses (cut, if long), or a config
-            // it can't read
-            let why =
-                meta_core::git::redact_git_output(&String::from_utf8_lossy(&check.stderr), None);
-            match why.trim() {
+            // git's reason: a name it refuses, or a config it can't read
+            match String::from_utf8_lossy(&check.stderr).trim() {
                 "" => anyhow::bail!("'{}' is not a valid branch name", escape(&args.branch)),
                 why => anyhow::bail!("{}", escape(why)),
             }
@@ -925,13 +918,6 @@ impl McpServer {
                 message: commit.message,
                 error,
             });
-        }
-        // what the client passed, echoed back without credentials
-        let redact = |text: &str| meta_core::git::redact_urls(text).into_owned();
-        for result in &mut results {
-            result.project = redact(&result.project);
-            result.message = redact(&result.message);
-            result.error = result.error.as_deref().map(redact);
         }
         let succeeded = results.iter().filter(|r| r.success).count();
         Ok(Reply {
@@ -1285,8 +1271,7 @@ impl McpServer {
             }
         }
         Ok(serde_json::to_string_pretty(&serde_json::json!({
-            // what the client passed, without credentials
-            "query": meta_core::git::redact_urls(&args.query),
+            "query": args.query,
             "matches": matching.len(),
             "projects": matching
         }))?)
@@ -1343,7 +1328,7 @@ impl McpServer {
         Ok(serde_json::to_string_pretty(&serde_json::json!({
             "execution_order": order,
             "count": order.len(),
-            "tag_filter": scope.tags().map(meta_core::git::redact_urls)
+            "tag_filter": scope.tags()
         }))?)
     }
 }
@@ -2083,109 +2068,6 @@ mod tests {
     }
 
     #[test]
-    fn get_config_hides_credentials() {
-        let (server, tmp) =
-            server("projects:\n  a: https://alice:ghp_SECRET@h/a.git\n  b: git@h:b.git\n");
-        let result = call(&server, "meta_get_config", json!({})).unwrap().text;
-        assert!(
-            result.ends_with("projects:\n  a: https://***@h/a.git\n  b: git@h:b.git\n"),
-            "{result}"
-        );
-        assert!(
-            result.contains("(not the file as written: credentials, if any, hidden)"),
-            "{result}"
-        );
-        // JSON may spell a URL so no scan of the text reads it
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            r#"{"projects": {"a": "https:\/\/alice:ghp_SECRET@h\/a.git", "b": "git@h:b.git"}}"#,
-        )
-        .unwrap();
-        let result = call(&server, "meta_get_config", json!({})).unwrap().text;
-        assert!(!result.contains("ghp_SECRET"), "{result}");
-        assert!(result.contains("https://***@h/a.git"), "{result}");
-        assert!(result.contains("git@h:b.git"), "{result}");
-        // even next to values a scan of the text would run across
-        for config in [
-            r#"{"projects":{"a":"https://h","b":{"repo":"git@h:b.git"},"c":"https:\/\/alice:ghp_SECRET@h\/r.git"}}"#,
-            r#"{"projects":{"a":"https://ONE@h","b":'git@h:b.git',"c":"https:\/\/ghp_SECRET@h\/r"}}"#,
-            r#"{"projects":{"a":{"repo":"https://h","tags":["ops@x"]},"b":"git@h:b.git","c":"https:\/\/alice:ghp_SECRET@h\/c.git"}}"#,
-        ] {
-            std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
-            let result = call(&server, "meta_get_config", json!({})).unwrap().text;
-            assert!(!result.contains("ghp_SECRET"), "{result}");
-            assert!(result.contains("git@h:b.git"), "{result}");
-        }
-        // a config without credentials comes back as written, commands with
-        // a URL and an `@` in them included, and a URL's scan ends at a line
-        for config in [
-            "# Team workspace\nprojects:\n  a: git@h:a.git\nworktree:\n  hooks:\n    post-create: npm config set registry https://npm.example && git config user.email bot@example\n",
-            "# Cache: redis://cache.internal:6379 (ask ops)\nprojects:\n  a: git@h:a.git\n",
-        ] {
-            std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
-            let result = call(&server, "meta_get_config", json!({})).unwrap().text;
-            assert!(result.ends_with(config), "{result}");
-        }
-        // a tag may hold one too
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            "projects: {}\nextra: !https://alice:ghp_SECRET@h/r value\n",
-        )
-        .unwrap();
-        let result = call(&server, "meta_get_config", json!({})).unwrap().text;
-        assert!(
-            !result.contains("ghp_SECRET") && result.contains("value"),
-            "{result}"
-        );
-        // a helper's URL is one URL, a space in its password included
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            "projects:\n  a: \"foo::https://alice:ghp_SECRET w@h/r\"\n",
-        )
-        .unwrap();
-        let result = call(&server, "meta_get_config", json!({})).unwrap().text;
-        assert!(!result.contains("ghp_SECRET"), "{result}");
-        // a key may be a URL too
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            "projects:\n  a:\n    repo: https://t@h/a.git\n    extra:\n      https://alice:ghp_SECRET@h/r.git: true\n",
-        )
-        .unwrap();
-        let result = call(&server, "meta_get_config", json!({})).unwrap().text;
-        assert!(!result.contains("ghp_SECRET"), "{result}");
-        // compact JSON a scan would run across comes back whole, as YAML
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            r#"{"projects":{"a":"https://h","b":{"repo":"git@h:b.git"}}}"#,
-        )
-        .unwrap();
-        let result = call(&server, "meta_get_config", json!({})).unwrap().text;
-        assert!(
-            result.contains("a: https://h\n") && result.contains("repo: git@h:b.git"),
-            "{result}"
-        );
-        // one meta can't read (a duplicate key) shows nothing an escape
-        // could hide
-        for config in [
-            r#"{"projects":{"a":"https:\/\/alice:ghp_SECRET@h\/a","b":"x","b":"y"}}"#,
-            "projects:\n  a: \"https://alice:ghp_SECRET\\x40h/a\"\n  b: x\n  b: y\n",
-            "projects:\n  a: \"https://alice:ghp_SECRET\\U00000040h/a\"\n  b: x\n  b: y\n",
-        ] {
-            std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
-            let result = call(&server, "meta_get_config", json!({})).unwrap().text;
-            assert!(!result.contains("ghp_SECRET"), "{result}");
-        }
-        // or a YAML escape
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            "projects:\n  a: \"https://alice:ghp_SECRET\\u0040h/a.git\"\n",
-        )
-        .unwrap();
-        let result = call(&server, "meta_get_config", json!({})).unwrap().text;
-        assert!(!result.contains("ghp_SECRET"), "{result}");
-    }
-
-    #[test]
     fn get_config_ignores_meta_directory_and_shows_a_broken_config() {
         let (server, tmp) = server("projects: {}\n");
         std::fs::create_dir_all(tmp.path().join(".meta/skills")).unwrap();
@@ -2203,5 +2085,16 @@ mod tests {
             "{}",
             reply.text
         );
+    }
+
+    #[test]
+    fn get_config_refuses_a_config_with_credentials() {
+        let (server, _tmp) = server("projects:\n  a: https://alice:ghp_SECRET@h/a.git\n");
+        let err = call(&server, "meta_get_config", json!({}))
+            .err()
+            .map(|e| format!("{e:#}"))
+            .unwrap_or_default();
+        assert!(err.contains(meta_core::git::CREDENTIALS_REFUSED), "{err}");
+        assert!(!err.contains("ghp_SECRET"), "{err}");
     }
 }

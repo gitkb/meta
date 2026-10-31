@@ -10,7 +10,7 @@ mod status;
 mod url;
 
 pub use status::{RepoStatus, StatusEntry};
-pub use url::{redact_git_output, redact_url, redact_urls, GitUrl, GIT_MESSAGE_BYTES};
+pub use url::{GitUrl, CREDENTIALS_REFUSED};
 
 /// The variables that tie git to one repository, which git itself clears
 /// when it runs in another (`git rev-parse --local-env-vars`, less the
@@ -63,7 +63,7 @@ where
     let args: Vec<S> = args.into_iter().collect();
     let shown = || {
         args.iter()
-            .map(|a| redact_urls(&a.as_ref().to_string_lossy()).into_owned())
+            .map(|a| a.as_ref().to_string_lossy())
             .collect::<Vec<_>>()
             .join(" ")
     };
@@ -79,19 +79,12 @@ where
             "git {} failed in {}: {}",
             escape(&shown()),
             escape_path(dir),
-            shown_stderr(&output.stderr)
+            escape(String::from_utf8_lossy(&output.stderr).trim())
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout)
         .trim_end_matches(['\n', '\r'])
         .to_string())
-}
-
-/// git's `stderr` for an error message: without credentials (see
-/// [`redact_git_output`]; git may have cut a line inside a URL), trimmed and
-/// escaped.
-pub fn shown_stderr(stderr: &[u8]) -> String {
-    escape(redact_git_output(&String::from_utf8_lossy(stderr), None).trim()).into_owned()
 }
 
 /// The output of `git <args>` in `dir` (see [`run`]), or `None` if git fails.

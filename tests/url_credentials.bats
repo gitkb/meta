@@ -251,7 +251,7 @@ EOF
     meta_without_token git update
     [ "$status" -ne 0 ]
     [[ "$output" == *"fatal: cannot open https://***@127.0.0.1:9/owner/svc.git"* ]] || false
-    [[ "$output" != *"SECRET"* ]] || false
+    [[ "$output" != *"SECRET"* && "$output" != *"alice:"* ]] || false
     # the same, when the --from-pr fetch fails
     git init -q -b main svc
     git -C svc commit -q --allow-empty -m init
@@ -261,7 +261,7 @@ EOF
     meta_without_token git worktree create pr --repo svc --from-pr owner/svc#1
     [ "$status" -ne 0 ]
     [[ "$output" == *"fatal: cannot open https://***@127.0.0.1:9/owner/svc.git"* ]] || false
-    [[ "$output" != *"SECRET"* ]] || false
+    [[ "$output" != *"SECRET"* && "$output" != *"alice:"* ]] || false
 }
 
 @test "a failed ssh setup says so" {

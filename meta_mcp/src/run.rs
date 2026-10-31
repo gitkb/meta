@@ -131,7 +131,10 @@ impl Calls {
                 } else {
                     !stdout.is_finished() || !stderr.is_finished()
                 };
-            if !running {
+            // A cancelled call waits no longer than twice the grace: a dead
+            // process no one reaps still counts as in its group
+            let given_up = terminated.is_some_and(|at| at.elapsed() > 2 * GRACE);
+            if !running || given_up {
                 break;
             }
             // SIGTERM once, then SIGKILL until the group is gone
@@ -146,7 +149,8 @@ impl Calls {
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        let status = status.ok_or_else(|| std::io::Error::other("the program's status is lost"))?;
+        let status = status
+            .ok_or_else(|| std::io::Error::other("the program did not stop when cancelled"))?;
         let lost = || std::io::Error::other("reading the program's output failed");
         // A reader still waiting (cancelled) is left behind with what it read
         let (stdout, truncated) = if stdout.is_finished() {
@@ -185,7 +189,9 @@ fn read_lines(pipe: impl Read, max: usize) -> std::io::Result<(Vec<u8>, bool)> {
 /// Whether anything is left of the program's process group, after the
 /// program itself ended. Elsewhere than Unix there is no group to wait for.
 fn group_alive(child: &Child) -> bool {
-    // The group's id can't be another's while any of it lives
+    // The group's id can't be another's while any of it lives. Accepted:
+    // once the group is empty its id could be reused before the next check,
+    // which needs pid wraparound within a few milliseconds.
     #[cfg(unix)]
     return rustix::process::test_kill_process_group(rustix::process::Pid::from_child(child))
         .is_ok();
@@ -303,6 +309,36 @@ mod tests {
         assert!(elapsed < GRACE + Duration::from_secs(5), "{elapsed:?}");
     }
 
+    /// A dead member of the group that no one reaps doesn't keep a
+    /// cancelled call waiting: its parent left the group and never waits.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_cancelled_call_does_not_wait_for_a_zombie_in_its_group() {
+        let calls = Calls::default();
+        let dir = tempfile::tempdir().unwrap();
+        let pid = dir.path().join("pid");
+        assert!(calls.start("1".to_string()));
+        let started = std::time::Instant::now();
+        std::thread::scope(|scope| {
+            let run = scope.spawn(|| {
+                let script = "(sleep 60 & exec setsid sleep 61) >/dev/null 2>&1 & \
+                              echo $! > pid.tmp && mv pid.tmp pid; wait";
+                calls.output(
+                    Command::new("sh")
+                        .args(["-c", script])
+                        .current_dir(dir.path()),
+                )
+            });
+            wait_for("the script to start", || pid.exists());
+            calls.cancel("1");
+            drop(run.join().unwrap());
+        });
+        let elapsed = started.elapsed();
+        let parent = std::fs::read_to_string(&pid).unwrap();
+        drop(Command::new("kill").arg(parent.trim()).status());
+        assert!(elapsed < 2 * GRACE + Duration::from_secs(5), "{elapsed:?}");
+    }
+
     #[test]
     fn a_cancel_for_a_waiting_call_skips_it_and_others_are_ignored() {
         let calls = Calls::default();
@@ -313,8 +349,11 @@ mod tests {
         assert!(!calls.start("1".to_string()));
         assert!(calls.start("2".to_string()));
         assert!(calls.finish());
-        // done: a late cancel changes nothing
+        // done: a late cancel changes nothing, and a refused call is dropped
         calls.cancel("2");
+        calls.queue("4".to_string());
+        calls.forget("4");
+        assert!(calls.state().queued.is_empty());
         assert!(calls.start("3".to_string()));
         assert!(calls.finish());
     }

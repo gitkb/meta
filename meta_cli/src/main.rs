@@ -509,8 +509,9 @@ fn main() -> std::process::ExitCode {
         }
         Err(e) => {
             // as Rust prints an error returned from main, but escaped: it can
-            // carry paths and names from git and the filesystem
-            eprintln!("Error: {}", escape_lines(&format!("{e:?}")));
+            // carry paths and names from git and the filesystem, and URLs
+            let message = meta_core::git::redact_urls(&format!("{e:?}")).into_owned();
+            eprintln!("Error: {}", escape_lines(&message));
             std::process::ExitCode::FAILURE
         }
     }

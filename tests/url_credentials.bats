@@ -90,6 +90,14 @@ meta_without_token() {
     # commands meta shows, as typed
     meta_without_token "https://$TOKEN@example.invalid/org/x.git"
     [[ "$output" == *"unrecognized command 'https://***@example.invalid/org/x.git'"* ]] || false
+    # errors and plans repeating a URL typed where a name or spec goes
+    meta_without_token --include "https://$TOKEN@example.invalid/org/x.git" exec -- true
+    [ "$status" -ne 0 ]
+    meta_without_token git worktree create x --repo moved --from-pr "https://$TOKEN@127.0.0.1:9/o/r/pull/zz"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"https://***@127.0.0.1:9/o/r/pull/zz"* ]] || false
+    meta_without_token --dry-run git worktree create x --repo moved --from-pr "https://$TOKEN@127.0.0.1:9/o/r#5"
+    [[ "$output" == *"would resolve https://***@127.0.0.1:9/o/r#5"* ]] || false
     meta_without_token git worktree "https://$TOKEN@example.invalid/org/x.git"
     [[ "$output" == *"unrecognized worktree subcommand 'https://***@example.invalid/org/x.git'"* ]] || false
     meta_without_token --dry-run git remote set-url origin "https://$TOKEN@example.invalid/org/x.git"

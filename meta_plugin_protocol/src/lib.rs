@@ -373,12 +373,13 @@ pub fn run_plugin(plugin: PluginDefinition) {
                     }
                 }
                 CommandResult::Error(e) => {
-                    eprintln!("Error: {e}");
+                    // an error may repeat a URL the user typed
+                    eprintln!("Error: {}", meta_core::git::redact_urls(&e));
                     std::process::exit(1);
                 }
                 CommandResult::ShowHelp(maybe_error) => {
                     if let Some(ref err) = maybe_error {
-                        eprintln!("error: {err}");
+                        eprintln!("error: {}", meta_core::git::redact_urls(err));
                         eprintln!();
                         // Print help to stderr when there's an error (so it's visible even if meta captures stdout)
                         eprint!("{}", help_text(&plugin.info));

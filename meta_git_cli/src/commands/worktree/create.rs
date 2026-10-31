@@ -566,7 +566,7 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
     if let Some(from_pr_spec) = plan.from_pr_spec {
         println!(
             "PR source: would resolve {} and fetch the matching head branch",
-            escape(from_pr_spec)
+            escape(&meta_core::git::redact_urls(from_pr_spec))
         );
     }
     if plan.ephemeral {

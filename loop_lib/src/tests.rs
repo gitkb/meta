@@ -495,6 +495,9 @@ fn shown_commands_hide_credentials() {
         display_command(&argv),
         "git remote set-url origin 'https://***@h/r'"
     );
+    // git sends a quote in a password
+    let argv = ["git", "fetch", "http://a\"b:ghp_SECRET@h/r"].map(String::from);
+    assert_eq!(display_command(&argv), "git fetch 'http://***@h/r'");
 }
 
 #[test]

@@ -266,12 +266,10 @@ impl GitUrl {
 /// `scheme://userinfo@host` in it hidden: `https://alice:token@host/repo`
 /// becomes `https://***@host/repo`. An ssh user name alone stays
 /// (`ssh://git@host/repo`): it is no secret. A URL's authority ends at
-/// `/`, `?`, `#`, whitespace or a character a URL can't hold unencoded
-/// (`"`, `<`, `>`, `` ` ``, `{`, `}`), and runs to its last `@`.
+/// `/`, `?`, `#` or whitespace (which git's curl refuses in a URL; quotes
+/// it sends), and runs to its last `@`.
 pub fn redact_urls(text: &str) -> Cow<'_, str> {
-    redact(text, |c| {
-        matches!(c, '/' | '?' | '#' | '"' | '<' | '>' | '`' | '{' | '}') || c.is_whitespace()
-    })
+    redact(text, |c| matches!(c, '/' | '?' | '#') || c.is_whitespace())
 }
 
 /// [`redact_urls`], with the authority ending where `ends` says.
@@ -524,15 +522,15 @@ mod tests {
             "fatal: unable to access 'https://***@h/r/': x\n\
              and 'git+https://***@h' or ssh://git@h/r"
         );
-        // in text, a URL ends at whitespace or what no URL holds unencoded,
-        // but not at `'`, which a password may hold
+        // in text, a URL ends at whitespace, but not at a quote, which a
+        // password may hold
         assert_eq!(
             redact_urls("a: https://h\nb: git@h:r\nc: 'https://t@h'"),
             "a: https://h\nb: git@h:r\nc: 'https://***@h'"
         );
         assert_eq!(
-            redact_urls(r#"{"a":"https://h","b":"git@h:b","c":"https://t'x@h"}"#),
-            r#"{"a":"https://h","b":"git@h:b","c":"https://***@h"}"#
+            redact_urls(r#"git fetch "http://a"b:t@h/r" x"#),
+            r#"git fetch "http://***@h/r" x"#
         );
         assert_eq!(
             redact_urls("x 'https://a'b:t@h/r' y"),

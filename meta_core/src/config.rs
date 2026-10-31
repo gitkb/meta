@@ -173,12 +173,12 @@ fn config_file(path: PathBuf) -> anyhow::Result<Option<PathBuf>> {
     Ok(Some(path))
 }
 
-/// A config file's text without the credentials in its URLs. When a value
-/// holds one, the values are written out again as YAML, redacted, without
-/// the file's comments: the text may spell a URL so that no scan of it
-/// reads it (JSON's `\/` or `\u` escapes). Otherwise the text as written,
-/// with any URL in it (a comment's, say) redacted. A file that can't be
-/// read and holds such escapes isn't shown.
+/// A config file's text without the credentials in its URLs: as written,
+/// unless a value or the text holds one. Then the values are written out
+/// again as YAML, redacted, without the file's comments: the text may spell
+/// a URL so that no scan of it reads it (JSON's `\/` or `\u` escapes), and
+/// a scan of compact JSON can run across fields. A file that can't be read
+/// is shown with its URLs redacted, or not at all if it holds such escapes.
 pub fn redact_config_text(text: &str) -> Cow<'_, str> {
     let Ok(mut values) = serde_yaml_ng::from_str(text) else {
         return match text.contains("\\/") || text.contains("\\u") {
@@ -188,9 +188,10 @@ pub fn redact_config_text(text: &str) -> Cow<'_, str> {
             false => crate::git::redact_urls(text),
         };
     };
-    match redact_strings(&mut values) {
+    let in_values = redact_strings(&mut values);
+    match in_values || crate::git::redact_urls(text) != text {
         true => Cow::Owned(serde_yaml_ng::to_string(&values).unwrap_or_default()),
-        false => crate::git::redact_urls(text),
+        false => Cow::Borrowed(text),
     }
 }
 

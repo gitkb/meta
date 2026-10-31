@@ -2705,6 +2705,17 @@ mod tests {
         std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
         let result = server.tool_get_config(&serde_json::json!({})).unwrap();
         assert!(result.ends_with(config), "{result}");
+        // compact JSON a scan would run across comes back whole, as YAML
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            r#"{"projects":{"a":"https://h","b":{"repo":"git@h:b.git"}}}"#,
+        )
+        .unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(
+            result.contains("a: https://h\n") && result.contains("repo: git@h:b.git"),
+            "{result}"
+        );
         // one meta can't read shows nothing an escape could hide
         std::fs::write(
             tmp.path().join(".meta.yaml"),

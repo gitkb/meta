@@ -77,6 +77,7 @@ pub(crate) fn handle_remove(
             }
         );
     }
+    let preview = mode.is_preview();
     if !check.unsaved.is_empty() {
         let found = check.unsaved.join("\n  ");
         if !force {
@@ -88,7 +89,7 @@ pub(crate) fn handle_remove(
         eprintln!(
             "{} {} work in worktree '{name}':\n  {found}",
             "warning:".yellow().bold(),
-            if mode.is_preview() {
+            if preview {
                 "would discard"
             } else {
                 "discarding"
@@ -96,7 +97,7 @@ pub(crate) fn handle_remove(
         );
     }
 
-    if !mode.is_preview() {
+    if !preview {
         // Remove exactly what was checked, nested worktrees first
         delete_checked_set(&wt_dir, &check, force, verbose)?;
 
@@ -109,10 +110,10 @@ pub(crate) fn handle_remove(
             name: name.to_string(),
             path: wt_dir.display().to_string(),
             repos_removed: check.members.len(),
-            dry_run: mode.is_preview(),
+            dry_run: preview,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
-    } else if mode.is_preview() {
+    } else if preview {
         println!(
             "Would remove worktree '{}' at {}:",
             escape(name),

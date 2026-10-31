@@ -120,6 +120,8 @@ preview() {
 @test "worktree add previews" {
     preview 0 git worktree add clean --repo frontend
     [[ "$output" == *"Would add to worktree set 'clean'"* ]]
+    preview 0 --json git worktree add clean --repo frontend
+    python3 -c 'import json, sys; out = json.load(sys.stdin); assert out["dry_run"] and out["repos"][0]["alias"] == "frontend", out' <<< "$output"
 }
 
 @test "worktree remove previews" {
@@ -163,7 +165,12 @@ preview() {
 @test "worktree exec --ephemeral creates, runs and removes nothing" {
     preview 0 git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
     [[ "$output" == *"Would create worktree set 'eph'"* ]]
-    [[ "$output" == *"Then would run \`touch made-by-exec\`"* ]]
+    [[ "$output" == *"Then would run \`touch made-by-exec\` in ., backend and remove the set."* ]]
+    # its filters select as in a run, and a name that is none is an error
+    preview 0 git worktree exec eph --ephemeral --repo backend --include backend -- touch made-by-exec
+    [[ "$output" == *"Then would run \`touch made-by-exec\` in backend and remove the set."* ]]
+    preview 1 git worktree exec eph --ephemeral --repo backend --include typo -- touch made-by-exec
+    [[ "$output" == *"typo"* ]]
 }
 
 @test "exec previews" {

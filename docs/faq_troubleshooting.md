@@ -144,7 +144,7 @@ meta --dry-run exec -- rm -rf node_modules
 meta --dry-run git worktree remove my-set --force
 ```
 
-Nothing is changed in preview: commands print what they would do. A command that can't preview (such as `meta plugin install`) refuses `--dry-run` with an error.
+meta's own commands change nothing in preview: they print what they would do. A command that can't preview (such as `meta plugin install`) refuses `--dry-run` with an error.
 
 ### Q: How do I get JSON output for scripting?
 

@@ -92,7 +92,7 @@ pub fn execute_worktree_command(
         Ok(parsed) => match handle_worktree_command(
             parsed.command,
             // meta's --dry-run, or the worktree command's own
-            options.mode().or_dry_run(parsed.dry_run),
+            ExecutionMode::from_dry_run(options.dry_run || parsed.dry_run),
             options.verbose,
             options.json_output,
             options.strict,
@@ -116,7 +116,7 @@ fn handle_worktree_command(
 ) -> Result<()> {
     match command {
         WorktreeCommands::Create(args) => {
-            create::handle_create(args, mode, verbose, json, global_strict)
+            create::handle_create(args, mode, verbose, json, global_strict).map(|_| ())
         }
         WorktreeCommands::Add(args) => add::handle_add(args, mode, verbose, json),
         WorktreeCommands::Remove(args) => remove::handle_remove(args, mode, verbose, json),

@@ -822,11 +822,15 @@ without_terminal() {
 @test "meta git commit --edit runs git's editor, arguments included" {
     echo change >> "$TEST_DIR/frontend/README.md"
     git -C "$TEST_DIR/frontend" add README.md
-    git -C "$TEST_DIR/frontend" config core.editor "sed -i.bak -e '/^# Enter commit message/i from core.editor'"
+    # an editor taking an argument: it puts the message above each prompt line
+    printf '#!/bin/sh\nawk -v m="$1" '"'"'/^# Enter commit message/ { print m } { print }'"'"' "$2" > "$2.new" && mv "$2.new" "$2"\n' > "$TEST_DIR/msg-editor"
+    chmod 755 "$TEST_DIR/msg-editor"
+    git -C "$TEST_DIR/frontend" config core.editor "'$TEST_DIR/msg-editor' 'from core.editor'"
 
-    # as in git, core.editor comes before VISUAL and EDITOR
+    # as in git, core.editor comes before VISUAL and EDITOR; the editor runs
+    # in the repo, so a relative data dir must still name the right file
     unset GIT_EDITOR
-    VISUAL=nosuch EDITOR=nosuch run with_terminal "$META_BIN" git commit --edit
+    META_DATA_DIR=rel-data VISUAL=nosuch EDITOR=nosuch run with_terminal "$META_BIN" git commit --edit
     [ "$status" -eq 0 ]
     [ "$(git -C "$TEST_DIR/frontend" log -1 --format=%s)" = "from core.editor" ]
 }

@@ -70,6 +70,8 @@ pub struct ListOutput {
 pub struct AddOutput {
     pub name: String,
     pub repos: Vec<CreateRepoEntry>,
+    /// A preview: nothing was added
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Serialize)]

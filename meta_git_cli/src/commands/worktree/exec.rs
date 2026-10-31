@@ -170,12 +170,36 @@ fn handle_ephemeral_exec(
         eprintln!("Creating ephemeral worktree '{name}'...");
     }
     // Ephemeral worktrees use global_strict=false to ensure creation succeeds
-    super::create::handle_create(create_args, mode, verbose, json, false)?;
-    // A preview made no set to run in or remove
+    let planned = super::create::handle_create(create_args, mode, verbose, json, false)?;
+    // A preview made no set: the filters select among the planned checkouts,
+    // named as the workspace names them, as a run would among the made ones
     if mode.is_preview() {
+        let cwd = std::env::current_dir()?;
+        let configs = Configs::find_optional(&cwd)?;
+        let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
+        let wt_dir = worktree_set_dir(&worktree_root, &name)?;
+        let dirs: Vec<String> = planned.iter().map(|p| p.display().to_string()).collect();
+        let names = match &configs {
+            Some(configs) => {
+                let here = &configs.here;
+                let tree = meta_core::config::walk_projects(&here.dir, &here.projects, None)?;
+                repo_filter::repo_names(&here.dir, &here.projects, &tree)
+            }
+            None => Vec::new(),
+        };
+        let selected = repo_filter::select(&args.include, &args.exclude, &dirs, &wt_dir, &names)?;
+        let shown: Vec<String> = selected
+            .iter()
+            .map(|dir| match Path::new(dir).strip_prefix(&wt_dir) {
+                Ok(place) if place.as_os_str().is_empty() => ".".to_string(),
+                Ok(place) => place.display().to_string(),
+                Err(_) => dir.clone(),
+            })
+            .collect();
         println!(
-            "Then would run `{}` in each repo of the set and remove it.",
-            escape(&loop_lib::display_command(cmd_parts))
+            "Then would run `{}` in {} and remove the set.",
+            escape(&loop_lib::display_command(cmd_parts)),
+            escape(&shown.join(", "))
         );
         return Ok(());
     }

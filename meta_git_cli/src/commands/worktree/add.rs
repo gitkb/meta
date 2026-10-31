@@ -118,15 +118,41 @@ pub(crate) fn handle_add(
     }
 
     if mode.is_preview() {
-        println!("[DRY RUN] Would add to worktree set '{}':", escape(name));
-        for (spec, source, place) in &planned {
-            println!(
-                "  {}: {} -> {} (branch: {})",
-                escape(&spec.alias),
-                escape_path(source),
-                escape_path(&wt_dir.join(place)),
-                escape(&resolve_branch(name, None, spec.branch.as_deref()))
-            );
+        let repos: Vec<CreateRepoEntry> = planned
+            .iter()
+            .map(|(spec, source, place)| {
+                let branch = resolve_branch(name, None, spec.branch.as_deref());
+                let local = format!("refs/heads/{branch}");
+                CreateRepoEntry {
+                    alias: spec.alias.clone(),
+                    path: wt_dir.join(place).display().to_string(),
+                    created_branch: meta_core::git::query(
+                        source,
+                        ["rev-parse", "--verify", "--quiet", &local],
+                    )
+                    .is_none(),
+                    branch,
+                }
+            })
+            .collect();
+        if json {
+            let output = AddOutput {
+                name: name.to_string(),
+                repos,
+                dry_run: true,
+            };
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            println!("[DRY RUN] Would add to worktree set '{}':", escape(name));
+            for r in &repos {
+                println!(
+                    "  {} at {} (branch: {}{})",
+                    escape(&r.alias),
+                    escape(&r.path),
+                    escape(&r.branch),
+                    if r.created_branch { ", new" } else { "" }
+                );
+            }
         }
         return Ok(());
     }
@@ -202,6 +228,7 @@ pub(crate) fn handle_add(
         let output = AddOutput {
             name: name.to_string(),
             repos: added,
+            dry_run: false,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {

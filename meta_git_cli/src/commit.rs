@@ -67,14 +67,16 @@ pub(crate) fn execute_git_commit(
         ));
     }
 
-    if use_editor && options.mode().is_preview() {
-        println!("[DRY RUN] Would open the editor for a message for each of:");
-        for (name, _path, files) in &repos_with_changes {
-            println!("  {} ({} files)", style(escape(name)).cyan(), files.len());
+    if use_editor {
+        if options.mode().is_preview() {
+            println!("[DRY RUN] Would open the editor for a message for each of:");
+            for (name, _path, files) in &repos_with_changes {
+                println!("  {} ({} files)", style(escape(name)).cyan(), files.len());
+            }
+        } else {
+            // Open editor for per-repo messages (interactive, cannot use ExecutionPlan)
+            execute_editor_commit(&repos_with_changes)?;
         }
-    } else if use_editor {
-        // Open editor for per-repo messages (interactive, cannot use ExecutionPlan)
-        execute_editor_commit(&repos_with_changes)?;
     } else if let Some(msg) = message {
         // Apply same message to all repos - use ExecutionPlan for proper dry-run support
         let commands: Vec<PlannedCommand> = repos_with_changes
@@ -130,9 +132,10 @@ fn execute_editor_commit(repos: &[(String, String, Vec<String>)]) -> anyhow::Res
 
     // The editor git would use, from the first repo's config; asked first,
     // so a missing one or a missing terminal fails before anything is written
-    let first = repos
-        .first()
-        .map_or(Path::new("."), |(_, path, _)| Path::new(path));
+    let Some((_, first, _)) = repos.first() else {
+        return Ok(());
+    };
+    let first = Path::new(first);
     let editor = meta_core::git::run(first, ["var", "GIT_EDITOR"]).context(
         "git has no editor to use: set GIT_EDITOR, core.editor, VISUAL or EDITOR, or use -m <message>",
     )?;
@@ -165,10 +168,12 @@ fn execute_editor_commit(repos: &[(String, String, Vec<String>)]) -> anyhow::Res
     }
 
     // Write to a new temp file (created exclusively, mode 0600, removed on
-    // drop) in meta's private data dir, never in a shared directory like /tmp
+    // drop) in meta's private data dir, never in a shared directory like /tmp;
+    // named absolutely, as the editor runs in the repo
+    let dir = std::path::absolute(meta_core::data_dir::data_subdir("tmp")?)?;
     let mut file = tempfile::Builder::new()
         .prefix("META_COMMIT_EDITMSG-")
-        .tempfile_in(meta_core::data_dir::data_subdir("tmp")?)?;
+        .tempfile_in(dir)?;
     file.write_all(template.as_bytes())?;
     file.flush()?;
     // Close it (some editors on Windows cannot replace an open file); the
@@ -265,9 +270,10 @@ fn editor_command(repo: &Path, editor: &str) -> anyhow::Result<Command> {
     if !editor.contains(|c| "|&;<>()$`\\\"' \t\n*?[#~=%".contains(c)) {
         return Ok(Command::new(editor));
     }
-    // Git for Windows brings its own sh, which needn't be on PATH
+    // Git for Windows brings its own sh, which needn't be on PATH; a git
+    // older than 2.46 can't name it, and then sh must be on PATH
     let shell = if cfg!(windows) {
-        meta_core::git::run(repo, ["var", "GIT_SHELL_PATH"])?
+        meta_core::git::query(repo, ["var", "GIT_SHELL_PATH"]).unwrap_or_else(|| "sh".to_string())
     } else {
         "sh".to_string()
     };
@@ -378,18 +384,26 @@ mod tests {
     #[test]
     fn a_failed_commit_fails_the_command_after_the_others() {
         let dir = tempfile::tempdir().unwrap();
+        // Each its own repository, so git never finds one around the
+        // temporary directory; "a" has nothing staged, so its commit fails
         let repo = |name: &str| {
             let path = dir.path().join(name);
             std::fs::create_dir(&path).unwrap();
+            meta_core::git::run(&path, ["init", "-q"]).unwrap();
+            meta_core::git::run(&path, ["config", "user.name", "Test"]).unwrap();
+            meta_core::git::run(&path, ["config", "user.email", "t@example.invalid"]).unwrap();
             (name.to_string(), path.display().to_string(), vec![])
         };
-        // neither is a repository, so both commits fail
         let repos = [repo("a"), repo("b")];
+        std::fs::write(dir.path().join("b/file"), "x").unwrap();
+        meta_core::git::run(&dir.path().join("b"), ["add", "file"]).unwrap();
         let commits = [
             ("a".to_string(), "one".to_string()),
             ("b".to_string(), "two".to_string()),
         ];
         let err = commit_each(&repos, &commits).unwrap_err();
-        assert_eq!(err.to_string(), "Committed 0 repo(s), 2 failed");
+        assert_eq!(err.to_string(), "Committed 1 repo(s), 1 failed");
+        let subject = meta_core::git::run(&dir.path().join("b"), ["log", "-1", "--format=%s"]);
+        assert_eq!(subject.unwrap(), "two");
     }
 }

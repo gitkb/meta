@@ -717,7 +717,7 @@ fn handle_command_dispatch(
     // Command args pass through untouched to avoid collisions with
     // identically-named flags (e.g., grep --include, git clone --depth).
     let recursive = cli.recursive;
-    let mode = cli.mode();
+    let dry_run = cli.dry_run;
     let depth = cli.depth;
     // --parallel wins, then --sequential, then the default of the config
     // the command runs from (parallel without one)
@@ -741,7 +741,7 @@ fn handle_command_dispatch(
             json_output: cli.json,
             verbose: cli.verbose,
             parallel: false,
-            dry_run: mode.is_preview(),
+            dry_run,
             silent: cli.silent,
             recursive,
             depth,
@@ -870,7 +870,7 @@ fn handle_command_dispatch(
                     verbose: cli.verbose,
                     silent: cli.silent,
                     parallel,
-                    dry_run: mode.is_preview(),
+                    dry_run,
                     json_output: cli.json,
                     add_aliases_to_global_looprc: false,
                     spawn_stagger_ms: 0,
@@ -884,7 +884,7 @@ fn handle_command_dispatch(
                     json_output: cli.json,
                     verbose: cli.verbose,
                     parallel,
-                    dry_run: mode.is_preview(),
+                    dry_run,
                     silent: cli.silent,
                     recursive,
                     depth,
@@ -941,7 +941,7 @@ fn handle_command_dispatch(
                 verbose: cli.verbose,
                 silent: cli.silent,
                 parallel, // Use the determined parallel mode, not hardcoded false
-                dry_run: mode.is_preview(),
+                dry_run,
                 json_output: cli.json,
                 add_aliases_to_global_looprc: false,
                 spawn_stagger_ms: 0,
@@ -1033,7 +1033,7 @@ fn handle_command_dispatch(
         verbose: cli.verbose,
         silent: cli.silent,
         parallel,
-        dry_run: mode.is_preview(),
+        dry_run,
         json_output: cli.json,
         spawn_stagger_ms: 0,
         env: None,
@@ -1046,7 +1046,7 @@ fn handle_command_dispatch(
         json_output: cli.json,
         verbose: cli.verbose,
         parallel,
-        dry_run: mode.is_preview(),
+        dry_run,
         silent: cli.silent,
         recursive,
         depth,
@@ -1118,16 +1118,18 @@ fn handle_plugin_command(
     };
 
     // These change installed plugins and have no preview
-    let changing = match &command {
-        PluginCommands::Install { .. } => Some("install"),
-        PluginCommands::Uninstall { .. } => Some("uninstall"),
-        PluginCommands::Update { check: false, .. } => Some("update"),
-        _ => None,
-    };
-    if let Some(name) = changing.filter(|_| mode.is_preview() && !help) {
-        anyhow::bail!(
-            "meta plugin {name} has no preview, so it refuses --dry-run; nothing was changed"
-        );
+    if mode.is_preview() && !help {
+        let changing = match &command {
+            PluginCommands::Install { .. } => Some("install"),
+            PluginCommands::Uninstall { .. } => Some("uninstall"),
+            PluginCommands::Update { check: false, .. } => Some("update"),
+            _ => None,
+        };
+        if let Some(name) = changing {
+            anyhow::bail!(
+                "meta plugin {name} has no preview, so it refuses --dry-run; nothing was changed"
+            );
+        }
     }
 
     match command {

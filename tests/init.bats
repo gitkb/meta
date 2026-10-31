@@ -443,8 +443,10 @@ PY
 }
 
 @test "without agent, init claude skips the guard hook and adds it once agent is there" {
+    # Only the stubs on meta's PATH, so an agent installed on this machine isn't found
+    init_claude() { PATH="$STUB_DIR" "$META_BIN" init claude; }
     rm "$STUB_DIR/agent"
-    run "$META_BIN" init claude
+    run init_claude
     [ "$status" -eq 0 ]
     [[ "$output" == *"Skipped the PreToolUse hook \`agent guard\`"* ]]
     [[ "$output" == *"run \`meta init claude\` again"* ]]
@@ -453,14 +455,14 @@ PY
 
     printf '#!/bin/sh\nexit 0\n' > "$STUB_DIR/agent"
     chmod +x "$STUB_DIR/agent"
-    run "$META_BIN" init claude
+    run init_claude
     [ "$status" -eq 0 ]
     [[ "$output" == *"Added PreToolUse hooks to"* ]]
     [ "$(grep -c "agent guard" .claude/settings.json)" -eq 1 ]
 
     # A guard already there is never taken out
     rm "$STUB_DIR/agent"
-    run "$META_BIN" init claude
+    run init_claude
     [ "$status" -eq 0 ]
     [[ "$output" != *"Skipped the PreToolUse hook"* ]]
     [ "$(grep -c "agent guard" .claude/settings.json)" -eq 1 ]

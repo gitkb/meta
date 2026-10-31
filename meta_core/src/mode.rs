@@ -3,9 +3,8 @@
 /// How a command runs: for real, or as a preview (`--dry-run`) that
 /// changes nothing. Resolved once from the user's flags and handed to every
 /// command that changes something, so none can miss it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {
-    #[default]
     Execute,
     Preview,
 }
@@ -22,10 +21,5 @@ impl ExecutionMode {
 
     pub fn is_preview(self) -> bool {
         self == Self::Preview
-    }
-
-    /// A preview if either this or `dry_run` asks for one.
-    pub fn or_dry_run(self, dry_run: bool) -> Self {
-        Self::from_dry_run(self.is_preview() || dry_run)
     }
 }

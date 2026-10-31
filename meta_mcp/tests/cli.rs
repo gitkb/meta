@@ -18,6 +18,18 @@ fn isolated(mut command: Command, dir: &Path) -> Command {
     command
 }
 
+/// Waits until `done` holds, failing the test after 20 seconds.
+fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !done() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "waited too long for {what}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// git `args` in `dir`, with no user configuration.
 fn git(dir: &Path, args: &[&str]) {
     let mut git = isolated(meta_core::git::git(dir), dir);
@@ -134,12 +146,17 @@ fn build_test_and_clean_run_in_each_projects_own_repository() {
     }
 }
 
-/// One tool call's text, as JSON.
-fn call(dir: &Path, tool: &str, arguments: serde_json::Value) -> serde_json::Value {
+/// The reply to one tool call.
+fn call_reply(dir: &Path, tool: &str, arguments: serde_json::Value) -> serde_json::Value {
     let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": tool, "arguments": arguments}});
     let out = meta_mcp(dir, &[], &request.to_string(), &[]);
-    let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+/// One tool call's text, as JSON.
+fn call(dir: &Path, tool: &str, arguments: serde_json::Value) -> serde_json::Value {
+    let reply = call_reply(dir, tool, arguments);
     let text = reply["result"]["content"][0]["text"]
         .as_str()
         .unwrap_or_default();
@@ -461,9 +478,7 @@ fn a_running_call_can_be_cancelled_and_others_are_answered_meanwhile() {
         "name": "meta_batch_execute", "arguments": {"command": ["sh", "-c", script]}}}),
     );
     let pids = ws.join("pids");
-    while !pids.exists() {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    wait_for("the script to start", || pids.exists());
     let started = std::time::Instant::now();
     send(serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "ping"}));
     send(serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "tools/list"}));
@@ -482,7 +497,33 @@ fn a_running_call_can_be_cancelled_and_others_are_answered_meanwhile() {
     assert!(child.wait().unwrap().success());
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
     for pid in std::fs::read_to_string(pids).unwrap().split_whitespace() {
-        let alive = Command::new("kill").args(["-0", pid]).output().unwrap();
-        assert!(!alive.status.success(), "{pid} still runs");
+        let gone = || {
+            !Command::new("kill")
+                .args(["-0", pid])
+                .status()
+                .unwrap()
+                .success()
+        };
+        wait_for(&format!("{pid} to end"), gone);
     }
+}
+
+/// A spawn error reaches the client with its cause (agent-17: `E2BIG`).
+#[test]
+#[cfg(unix)]
+fn a_command_too_long_to_start_says_why() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
+    let reply = call_reply(
+        tmp.path(),
+        "meta_exec",
+        serde_json::json!({"command": ["echo", "y".repeat(3_000_000)]}),
+    );
+    assert_eq!(reply["result"]["isError"], true, "{reply}");
+    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("Argument list too long"),
+        "{}",
+        &text[..text.len().min(300)]
+    );
 }

@@ -307,6 +307,10 @@ impl McpServer {
     fn handle_message(&self, message: serde_json::Value) -> Option<JsonRpcResponse> {
         let id = message.get("id").filter(|id| valid_id(id)).cloned();
         let invalid = |reason: &str| {
+            // a tool call refused here never starts
+            if let Some(id) = &id {
+                self.calls.forget(&id.to_string());
+            }
             Some(self.error_response(
                 Some(id.clone().unwrap_or(serde_json::Value::Null)),
                 -32600,

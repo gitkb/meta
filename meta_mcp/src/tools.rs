@@ -44,14 +44,14 @@ pub(crate) struct Tool {
 type Call = dyn Fn(&McpServer, serde_json::Value) -> Result<Reply> + Send + Sync;
 
 impl Tool {
-    /// Runs the tool, once its arguments are read as its type: a wrong type
-    /// or an unknown argument is an error naming the tool, the argument and
-    /// the value, before anything runs.
     pub(crate) fn call(&self, server: &McpServer, arguments: serde_json::Value) -> Result<Reply> {
         (self.call)(server, arguments)
     }
 }
 
+/// The tool `name`, which runs `run` once its arguments are read as `A`: a
+/// wrong type or an unknown argument is an error naming the tool, the
+/// argument and the value, before anything runs.
 fn tool<A, R>(
     name: &'static str,
     description: &'static str,
@@ -61,50 +61,76 @@ where
     A: DeserializeOwned + JsonSchema + 'static,
     R: Into<Reply> + 'static,
 {
+    let schema = input_schema::<A>();
     Tool {
         name,
         description,
-        input_schema: input_schema::<A>(),
+        input_schema: schema.clone(),
         call: Box::new(move |server, arguments| {
-            let parsed = serde_path_to_error::deserialize(&arguments)
-                .map_err(|e| invalid_arguments(name, &arguments, &e))?;
+            // serde would also read a struct from a list of its fields' values
+            if let Some((path, given)) = not_an_object(&schema, &arguments, ".".to_string()) {
+                return Err(invalid(name, &path, "not an object", Some(given)));
+            }
+            let parsed = serde_path_to_error::deserialize(&arguments).map_err(|e| {
+                use serde_path_to_error::Segment;
+                let given = e
+                    .path()
+                    .iter()
+                    .try_fold(&arguments, |value, segment| match segment {
+                        Segment::Seq { index } => value.get(index),
+                        Segment::Map { key } => value.get(key),
+                        Segment::Enum { .. } | Segment::Unknown => None,
+                    });
+                invalid(name, &e.path().to_string(), e.inner(), given)
+            })?;
             run(server, parsed).map(Into::into)
         }),
     }
 }
 
-/// The error for `arguments` that `name` can't take: the argument, what is
-/// wrong, and the value given there (for an unknown argument, the object
-/// holding it).
-fn invalid_arguments(
+/// The error for arguments `name` can't take: where (`.` for the whole),
+/// what is wrong, and the value given there (for an unknown argument, the
+/// object holding it).
+fn invalid(
     name: &str,
-    arguments: &serde_json::Value,
-    error: &serde_path_to_error::Error<serde_json::Error>,
+    path: &str,
+    what: impl std::fmt::Display,
+    given: Option<&serde_json::Value>,
 ) -> anyhow::Error {
-    use serde_path_to_error::Segment;
-    let given = error
-        .path()
-        .iter()
-        .try_fold(arguments, |value, segment| match segment {
-            Segment::Seq { index } => value.get(index),
-            Segment::Map { key } => value.get(key),
-            Segment::Enum { .. } | Segment::Unknown => None,
-        });
     let mut given = given.map(ToString::to_string).unwrap_or_default();
     if given.len() > 200 {
         let end = given.floor_char_boundary(200);
         given.truncate(end);
         given.push_str("...");
     }
-    match error.path().to_string().as_str() {
-        "." => anyhow::anyhow!(
-            "Invalid arguments for {name}: {} (given {given})",
-            error.inner()
-        ),
-        path => anyhow::anyhow!(
-            "Invalid arguments for {name}: {path}: {} (given {given})",
-            error.inner()
-        ),
+    match path {
+        "." => anyhow::anyhow!("Invalid arguments for {name}: {what} (given {given})"),
+        path => anyhow::anyhow!("Invalid arguments for {name}: {path}: {what} (given {given})"),
+    }
+}
+
+/// The first place in `value` that `schema` says holds an object but
+/// doesn't, with its path from `path`.
+fn not_an_object<'a>(
+    schema: &serde_json::Value,
+    value: &'a serde_json::Value,
+    path: String,
+) -> Option<(String, &'a serde_json::Value)> {
+    if schema.get("type") == Some(&serde_json::json!("object")) && !value.is_object() {
+        return Some((path, value));
+    }
+    match value {
+        serde_json::Value::Object(fields) => fields.iter().find_map(|(key, field)| {
+            let path = match path.as_str() {
+                "." => key.clone(),
+                path => format!("{path}.{key}"),
+            };
+            not_an_object(schema.get("properties")?.get(key)?, field, path)
+        }),
+        serde_json::Value::Array(items) => items.iter().enumerate().find_map(|(index, item)| {
+            not_an_object(schema.get("items")?, item, format!("{path}[{index}]"))
+        }),
+        _ => None,
     }
 }
 
@@ -445,6 +471,7 @@ pub(crate) struct BatchArgs {
 /// The workspace a tool acts in: its root, and the projects its config lists.
 pub(crate) struct Workspace {
     pub(crate) dir: PathBuf,
+    config_path: PathBuf,
     pub(crate) projects: Vec<ProjectInfo>,
 }
 
@@ -543,7 +570,7 @@ fn has_any_tag(tags: &str, project_tags: &[String]) -> bool {
 
 /// Whether results that each succeeded or not mean the tool failed: there
 /// were some, and none succeeded.
-fn all_failed(mut successes: impl Iterator<Item = bool>) -> bool {
+pub(crate) fn all_failed(mut successes: impl Iterator<Item = bool>) -> bool {
     match successes.next() {
         None => false,
         Some(first) => !first && successes.all(|success| !success),
@@ -555,12 +582,20 @@ impl McpServer {
     pub(crate) fn workspace(&self) -> Result<Workspace> {
         let dir = self
             .meta_dir
-            .clone()
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
-        let projects = config::Workspace::find(&dir, None)?
-            .ok_or_else(|| anyhow::anyhow!("No meta config found"))?
-            .projects;
-        Ok(Workspace { dir, projects })
+        let config::Workspace {
+            dir,
+            config_path,
+            projects,
+            ..
+        } = config::Workspace::find(dir, None)?
+            .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
+        Ok(Workspace {
+            dir,
+            config_path,
+            projects,
+        })
     }
 
     /// `meta` in the workspace root.
@@ -650,9 +685,7 @@ impl McpServer {
     }
 
     fn get_config(&self, _args: NoArgs) -> Result<String> {
-        let workspace = self.workspace()?;
-        let path = config::find_meta_config_in(&workspace.dir)?
-            .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
+        let path = self.workspace()?.config_path;
         let content = std::fs::read_to_string(&path)?;
         Ok(format!("Config file: {}\n\n{}", path.display(), content))
     }
@@ -998,7 +1031,7 @@ impl McpServer {
     // Discovery tools
     // ========================================================================
 
-    fn search_code(&self, args: SearchArgs) -> Result<String> {
+    fn search_code(&self, args: SearchArgs) -> Result<Reply> {
         /// The most matches given for one project.
         const MAX_MATCHES: usize = 50;
 
@@ -1013,6 +1046,8 @@ impl McpServer {
         search_targets(&workspace.dir, "", &workspace.projects, &mut targets);
 
         let mut results = Vec::new();
+        // whether a project gave an answer, matches or none
+        let mut answered = false;
 
         for SearchTarget {
             path: name,
@@ -1124,6 +1159,7 @@ impl McpServer {
                 ("", _) => Some(format!("git grep failed: {}", out.status)),
                 (stderr, _) => Some(stderr.to_string()),
             };
+            answered |= error.is_none() || !matches.is_empty();
             if matches.is_empty() && error.is_none() {
                 continue;
             }
@@ -1141,7 +1177,11 @@ impl McpServer {
             results.push(entry.into());
         }
 
-        Ok(serde_json::to_string_pretty(&results)?)
+        // no answer: whatever is listed is an error
+        Ok(Reply {
+            is_error: !answered && !results.is_empty(),
+            text: serde_json::to_string_pretty(&results)?,
+        })
     }
 
     fn get_file_tree(&self, args: FileTreeArgs) -> Result<String> {
@@ -1226,15 +1266,10 @@ impl McpServer {
     }
 
     fn analyze_impact(&self, args: ProjectArgs) -> Result<String> {
-        let graph = self.dependency_graph()?;
-        if graph.get_project(&args.project).is_none() {
-            anyhow::bail!(
-                "Project '{}' not found in .meta.yaml",
-                escape(&args.project)
-            );
-        }
+        // The root depends on nothing and nothing on it: no dependents
+        let project = self.workspace()?.project(&args.project)?;
         Ok(serde_json::to_string_pretty(
-            &graph.analyze_impact(&args.project),
+            &self.dependency_graph()?.analyze_impact(&project.name),
         )?)
     }
 
@@ -1526,6 +1561,18 @@ mod tests {
                 tool.name
             );
 
+            // arguments by position, as serde would read a struct
+            let err = format!(
+                "{:#}",
+                call(&server, tool.name, json!([[], null])).err().unwrap()
+            );
+            assert!(err.contains("not an object"), "{err}");
+            if tool.name == "meta_git_multi_commit" {
+                let positional = json!({"commits": [["a", "m"]]});
+                let err = format!("{:#}", call(&server, tool.name, positional).err().unwrap());
+                assert!(err.contains("commits[0]: not an object"), "{err}");
+            }
+
             // an argument it doesn't advertise: named, with its value
             let mut unknown = smallest.clone();
             unknown["tags"] = json!("nomatch");
@@ -1591,6 +1638,12 @@ mod tests {
         };
         assert_eq!(path("a"), Some(tmp.path().join("dir/a")));
         assert_eq!(path("."), Some(tmp.path().to_path_buf()));
+        let impact = json(call(
+            &server,
+            "meta_analyze_impact",
+            json!({"project": "."}),
+        ));
+        assert_eq!(impact["total_affected"], 0, "{impact}");
         let outside = tmp.path().join("..").to_string_lossy().into_owned();
         // not a path, not an unknown name, in any tool that takes one
         for project in ["dir/a", "../x", outside.as_str(), "no-such"] {
@@ -1699,6 +1752,12 @@ mod tests {
         assert!(found[0].get("error").is_none(), "{found}");
         assert_eq!(found[1]["matches"].as_array().unwrap().len(), 50);
         assert!(found[1].get("truncated").is_none(), "{found}");
+
+        // no match is an answer; a search git refuses everywhere is a failure
+        let none = call(&server, "meta_search_code", json!({"pattern": "absent"})).unwrap();
+        assert!(!none.is_error, "{}", none.text);
+        let refused = call(&server, "meta_search_code", json!({"pattern": "["})).unwrap();
+        assert!(refused.is_error, "{}", refused.text);
     }
 
     #[test]

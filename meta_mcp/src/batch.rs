@@ -1,11 +1,19 @@
 //! `meta_batch_execute`: a command in each project, and the rollback of an
 //! atomic batch that failed.
 
-use crate::tools::{BatchArgs, Reply, Scope};
+use crate::tools::{all_failed, BatchArgs, Reply, Scope};
 use crate::McpServer;
 use anyhow::{Context, Result};
 use meta_core::git::git;
 use std::process::Command;
+
+/// What a cancel does to a git command of the batch: the pre-check stops,
+/// the rollback finishes.
+#[derive(Clone, Copy)]
+enum OnCancel {
+    Stop,
+    Finish,
+}
 
 impl McpServer {
     pub(crate) fn batch_execute(&self, args: BatchArgs) -> Result<Reply> {
@@ -23,12 +31,11 @@ impl McpServer {
             for project in &targets {
                 let path = &project.dir;
                 // The branch is empty for a detached HEAD.
-                let head = self
-                    .repo_git(path, &["rev-parse", "--verify", "HEAD"])
-                    .and_then(|commit| {
-                        let branch = self.repo_git(path, &["branch", "--show-current"])?;
-                        Ok(((!branch.is_empty()).then_some(branch), commit))
-                    });
+                let git = |args: &[&str]| self.repo_git(path, args, OnCancel::Stop);
+                let head = git(&["rev-parse", "--verify", "HEAD"]).and_then(|commit| {
+                    let branch = git(&["branch", "--show-current"])?;
+                    Ok(((!branch.is_empty()).then_some(branch), commit))
+                });
                 match (head, self.is_clean(path)) {
                     (Ok(head), Ok(true)) => before.push(head),
                     (Ok(_), Ok(false)) => refused.push(format!(
@@ -75,7 +82,8 @@ impl McpServer {
             match self.calls.output(&mut command) {
                 Ok(out) => {
                     let success = out.status.success();
-                    has_failure |= !success;
+                    // a cancelled command failed, whatever it exited with
+                    has_failure |= !success || self.calls.cancelled();
                     results.push(serde_json::json!({
                         "project": project.name,
                         "success": success,
@@ -128,7 +136,7 @@ impl McpServer {
         });
 
         // An atomic batch fails as a whole; otherwise only when nothing worked
-        let all_failed = !results.is_empty() && results.iter().all(|r| r["success"] == false);
+        let all_failed = all_failed(results.iter().map(|r| r["success"] == true));
         Ok(Reply {
             is_error: if atomic { has_failure } else { all_failed },
             text: serde_json::to_string_pretty(&serde_json::json!({
@@ -144,23 +152,32 @@ impl McpServer {
     /// named, so git never falls back to an enclosing repository, and it
     /// never recurses into submodules, which are repositories of their own)
     /// and returns the trimmed stdout, or an error with git's stderr.
-    fn repo_git(&self, path: &std::path::Path, args: &[&str]) -> Result<String> {
+    fn repo_git(
+        &self,
+        path: &std::path::Path,
+        args: &[&str],
+        on_cancel: OnCancel,
+    ) -> Result<String> {
         let mut git_dir = std::ffi::OsString::from("--git-dir=");
         git_dir.push(path.join(".git"));
         let mut work_tree = std::ffi::OsString::from("--work-tree=");
         work_tree.push(path);
-        let output = git(path)
+        let mut command = git(path);
+        command
             .args(["-c", "submodule.recurse=false"])
             .arg(git_dir)
             .arg(work_tree)
-            .args(args)
-            .output()
-            .with_context(|| {
-                format!(
-                    "Failed to run git {args:?} in {}",
-                    meta_core::display::escape_path(path)
-                )
-            })?;
+            .args(args);
+        let output = match on_cancel {
+            OnCancel::Stop => self.calls.output(&mut command),
+            OnCancel::Finish => command.output(),
+        }
+        .with_context(|| {
+            format!(
+                "Failed to run git {args:?} in {}",
+                meta_core::display::escape_path(path)
+            )
+        })?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
         } else {
@@ -176,7 +193,11 @@ impl McpServer {
     /// Whether the repository at `path` has no uncommitted changes and no
     /// untracked files, whatever `status.showUntrackedFiles` says.
     fn is_clean(&self, path: &std::path::Path) -> Result<bool> {
-        let status = self.repo_git(path, &["status", "--porcelain", "--untracked-files=normal"])?;
+        let status = self.repo_git(
+            path,
+            &["status", "--porcelain", "--untracked-files=normal"],
+            OnCancel::Stop,
+        )?;
         Ok(status.is_empty())
     }
 
@@ -191,33 +212,29 @@ impl McpServer {
         branch: Option<&str>,
         commit: &str,
     ) -> Result<(Option<String>, Vec<String>)> {
-        let commit = self.repo_git(
-            path,
-            &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
-        )?;
-        let mut replaced = vec![self.repo_git(path, &["rev-parse", "--verify", "HEAD"])?];
+        // The rollback finishes even when the call was cancelled
+        let git = |args: &[&str]| self.repo_git(path, args, OnCancel::Finish);
+        let commit = git(&["rev-parse", "--verify", &format!("{commit}^{{commit}}")])?;
+        let mut replaced = vec![git(&["rev-parse", "--verify", "HEAD"])?];
         if let Some(branch) = branch {
             // Empty when the branch is gone.
             let tip = format!("refs/heads/{branch}");
-            replaced.push(self.repo_git(path, &["for-each-ref", "--format=%(objectname)", &tip])?);
+            replaced.push(git(&["for-each-ref", "--format=%(objectname)", &tip])?);
         }
         replaced.retain(|replaced| !replaced.is_empty() && *replaced != commit);
         replaced.dedup();
 
         // `stash list` is empty, not an error, when there is no stash.
-        let stash_head = || self.repo_git(path, &["stash", "list", "-n1", "--format=%H"]);
+        let stash_head = || git(&["stash", "list", "-n1", "--format=%H"]);
         let old_stash = stash_head()?;
-        self.repo_git(
-            path,
-            &[
-                "stash",
-                "push",
-                "--include-untracked",
-                "--quiet",
-                "-m",
-                "meta-restore-backup",
-            ],
-        )?;
+        git(&[
+            "stash",
+            "push",
+            "--include-untracked",
+            "--quiet",
+            "-m",
+            "meta-restore-backup",
+        ])?;
         let stash = stash_head()
             .context("uncommitted changes may be in a new stash entry, see `git stash list`")?;
         let stash = (stash != old_stash).then_some(stash);
@@ -225,11 +242,10 @@ impl McpServer {
             Some(branch) => ["checkout", "--quiet", "-B", branch, &commit, "--"].to_vec(),
             None => ["checkout", "--quiet", "--detach", &commit, "--"].to_vec(),
         };
-        self.repo_git(path, &checkout)
-            .with_context(|| match &stash {
-                Some(stash) => format!("uncommitted changes are saved in stash {stash}"),
-                None => "there were no uncommitted changes to save".to_string(),
-            })?;
+        git(&checkout).with_context(|| match &stash {
+            Some(stash) => format!("uncommitted changes are saved in stash {stash}"),
+            None => "there were no uncommitted changes to save".to_string(),
+        })?;
         Ok((stash, replaced))
     }
 }
@@ -466,6 +482,67 @@ mod tests {
         let sub = a.join("sub");
         assert_eq!(git(&sub, &["log", "-1", "--format=%s"]), "y\n");
         assert_eq!(git(&sub, &["branch", "--show-current"]), "main\n");
+    }
+
+    /// Runs `meta_batch_execute` with `args` as call 1, and cancels it once
+    /// `marker` (in the workspace) exists.
+    #[cfg(unix)]
+    fn cancel_batch_at(
+        server: &McpServer,
+        tmp: &std::path::Path,
+        args: serde_json::Value,
+        marker: &str,
+    ) -> Result<crate::tools::Reply> {
+        assert!(server.calls.start("1".to_string()));
+        let reply = std::thread::scope(|scope| {
+            let run = scope.spawn(|| call(server, "meta_batch_execute", args));
+            crate::test_support::wait_for(marker, || tmp.join(marker).exists());
+            server.calls.cancel("1");
+            run.join().unwrap()
+        });
+        assert!(!server.calls.finish());
+        reply
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_cancelled_atomic_batch_is_rolled_back_whatever_its_command_exits_with() {
+        let (server, tmp) = workspace();
+        std::fs::write(tmp.path().join(".meta.yaml"), r#"{"projects":{"a":"x"}}"#).unwrap();
+        let a = tmp.path().join("a");
+        let head = git(&a, &["rev-parse", "HEAD"]);
+        let script = "echo x > README && git commit -qam x && touch ../committed; \
+                      trap 'exit 0' TERM; sleep 60 & wait";
+        let args = json!({"command": ["sh", "-c", script], "atomic": true});
+        let reply = cancel_batch_at(&server, tmp.path(), args, "committed").unwrap();
+        assert!(reply.is_error, "{}", reply.text);
+        assert!(
+            reply.text.contains(r#""status": "success""#),
+            "{}",
+            reply.text
+        );
+        assert_eq!(git(&a, &["rev-parse", "HEAD"]), head);
+        assert_eq!(git(&a, &["branch", "--show-current"]), "main\n");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_cancel_stops_the_atomic_check_before_anything_runs() {
+        use std::os::unix::fs::PermissionsExt;
+        let (server, tmp) = workspace();
+        let a = tmp.path().join("a");
+        // a slow fsmonitor hook holds up the check that `a` is clean
+        let hook = tmp.path().join("hook");
+        let marker = tmp.path().join("in-hook");
+        let script = format!("#!/bin/sh\ntouch '{}'\nexec sleep 60\n", marker.display());
+        std::fs::write(&hook, script).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        git(&a, &["config", "core.fsmonitor", hook.to_str().unwrap()]);
+        let started = std::time::Instant::now();
+        let args = json!({"command": ["touch", "ran"], "atomic": true});
+        assert!(cancel_batch_at(&server, tmp.path(), args, "in-hook").is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert!(!a.join("ran").exists() && !tmp.path().join("b/ran").exists());
     }
 
     #[test]

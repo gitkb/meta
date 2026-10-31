@@ -41,6 +41,11 @@ impl Calls {
         self.state().queued.insert(id, false);
     }
 
+    /// Drops the call `id`, read but refused before it could start.
+    pub(crate) fn forget(&self, id: &str) {
+        self.state().queued.remove(id);
+    }
+
     /// Starts the call `id`, unless it was cancelled while it waited.
     pub(crate) fn start(&self, id: String) -> bool {
         let mut state = self.state();
@@ -67,6 +72,11 @@ impl Calls {
         } else if let Some(cancelled) = state.queued.get_mut(id) {
             *cancelled = true;
         }
+    }
+
+    /// Whether the running call was cancelled.
+    pub(crate) fn cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
     }
 
     /// Runs `command` to its end, as `Command::output`, but with no input,
@@ -105,24 +115,50 @@ impl Calls {
             stderr.read_to_end(&mut bytes).map(|_| bytes)
         });
         // Until it has ended and its pipes are closed: something it started
-        // in the background may still hold them
+        // in the background may still hold them. Once cancelled, until its
+        // whole process group is gone, even what closed its pipes; then
+        // nothing waits for a pipe held from outside the group.
         let mut status = None;
         let mut terminated: Option<Instant> = None;
-        while status.is_none() || !stdout.is_finished() || !stderr.is_finished() {
+        loop {
             if status.is_none() {
                 status = child.try_wait()?;
             }
-            if self.cancelled.load(Ordering::SeqCst) {
-                let kill = terminated.is_some_and(|at| at.elapsed() > GRACE);
-                stop(&mut child, kill);
-                terminated.get_or_insert_with(Instant::now);
+            let cancelled = self.cancelled.load(Ordering::SeqCst);
+            let running = status.is_none()
+                || if cancelled {
+                    group_alive(&child)
+                } else {
+                    !stdout.is_finished() || !stderr.is_finished()
+                };
+            if !running {
+                break;
+            }
+            // SIGTERM once, then SIGKILL until the group is gone
+            match terminated {
+                _ if !cancelled => {}
+                None => {
+                    stop(&mut child, false);
+                    terminated = Some(Instant::now());
+                }
+                Some(at) if at.elapsed() > GRACE => stop(&mut child, true),
+                Some(_) => {}
             }
             std::thread::sleep(Duration::from_millis(5));
         }
         let status = status.ok_or_else(|| std::io::Error::other("the program's status is lost"))?;
         let lost = || std::io::Error::other("reading the program's output failed");
-        let (stdout, truncated) = stdout.join().map_err(|_| lost())??;
-        let stderr = stderr.join().map_err(|_| lost())??;
+        // A reader still waiting (cancelled) is left behind with what it read
+        let (stdout, truncated) = if stdout.is_finished() {
+            stdout.join().map_err(|_| lost())??
+        } else {
+            (Vec::new(), false)
+        };
+        let stderr = if stderr.is_finished() {
+            stderr.join().map_err(|_| lost())??
+        } else {
+            Vec::new()
+        };
         Ok((
             Output {
                 status,
@@ -146,6 +182,20 @@ fn read_lines(pipe: impl Read, max: usize) -> std::io::Result<(Vec<u8>, bool)> {
     Ok((bytes, !reader.fill_buf()?.is_empty()))
 }
 
+/// Whether anything is left of the program's process group, after the
+/// program itself ended. Elsewhere than Unix there is no group to wait for.
+fn group_alive(child: &Child) -> bool {
+    // The group's id can't be another's while any of it lives
+    #[cfg(unix)]
+    return rustix::process::test_kill_process_group(rustix::process::Pid::from_child(child))
+        .is_ok();
+    #[cfg(not(unix))]
+    {
+        let _ = child;
+        false
+    }
+}
+
 /// Asks the program and everything in its process group to stop, or kills
 /// them. Elsewhere than Unix only the program itself is killed.
 fn stop(child: &mut Child, kill: bool) {
@@ -166,6 +216,7 @@ fn stop(child: &mut Child, kill: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{gone, wait_for};
 
     #[test]
     #[cfg(unix)]
@@ -181,7 +232,8 @@ mod tests {
     }
 
     /// Cancelling the running call stops its program and what that started,
-    /// even one that ignores SIGTERM, and the call starts nothing more.
+    /// even one that ignores SIGTERM and holds none of its pipes, and the
+    /// call starts nothing more.
     #[test]
     #[cfg(unix)]
     fn cancel_stops_the_program_and_its_children() {
@@ -192,24 +244,22 @@ mod tests {
         let started = std::time::Instant::now();
         std::thread::scope(|scope| {
             let run = scope.spawn(|| {
-                let script = "trap '' TERM; sleep 60 & echo $$ $! > pids; wait";
+                let script = "(trap '' TERM; exec sleep 60) >/dev/null 2>&1 & \
+                              echo $$ $! > pids.tmp && mv pids.tmp pids; wait";
                 calls.output(
                     Command::new("sh")
                         .args(["-c", script])
                         .current_dir(dir.path()),
                 )
             });
-            while std::fs::read_to_string(&pids).map_or(true, |p| !p.ends_with('\n')) {
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            wait_for("the script to start", || pids.exists());
             calls.cancel("1");
             let out = run.join().unwrap().unwrap();
             assert!(!out.status.success());
         });
         assert!(started.elapsed() < GRACE + Duration::from_secs(5));
         for pid in std::fs::read_to_string(&pids).unwrap().split_whitespace() {
-            let alive = Command::new("kill").args(["-0", pid]).output().unwrap();
-            assert!(!alive.status.success(), "{pid} still runs");
+            wait_for(&format!("{pid} to end"), || gone(pid));
         }
         let err = calls.output(&mut Command::new("true")).unwrap_err();
         assert!(err.to_string().contains("cancelled"), "{err}");
@@ -222,6 +272,35 @@ mod tests {
             .status
             .success());
         assert!(calls.finish());
+    }
+
+    /// A process that left the group but holds its pipes doesn't keep a
+    /// cancelled call waiting.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_cancelled_call_does_not_wait_for_pipes_held_outside_its_group() {
+        let calls = Calls::default();
+        let dir = tempfile::tempdir().unwrap();
+        let pid = dir.path().join("pid");
+        assert!(calls.start("1".to_string()));
+        let started = std::time::Instant::now();
+        std::thread::scope(|scope| {
+            let run = scope.spawn(|| {
+                let script = "setsid sleep 60 & echo $! > pid.tmp && mv pid.tmp pid; wait";
+                calls.output(
+                    Command::new("sh")
+                        .args(["-c", script])
+                        .current_dir(dir.path()),
+                )
+            });
+            wait_for("the script to start", || pid.exists());
+            calls.cancel("1");
+            assert!(run.join().unwrap().is_ok());
+        });
+        let elapsed = started.elapsed();
+        let escaped = std::fs::read_to_string(&pid).unwrap();
+        drop(Command::new("kill").arg(escaped.trim()).status());
+        assert!(elapsed < GRACE + Duration::from_secs(5), "{elapsed:?}");
     }
 
     #[test]

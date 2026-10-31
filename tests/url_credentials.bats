@@ -94,6 +94,9 @@ meta_without_token() {
     meta_without_token --include "https://$TOKEN@example.invalid/org/x.git" exec -- true
     [ "$status" -ne 0 ]
     [[ "$output" == *"--include 'https://***@example.invalid/org/x.git'"* ]] || false
+    # log records (a plugin download URL, logged at info)
+    RUST_LOG=info meta_without_token plugin install "https://u:$TOKEN@127.0.0.1:9/x.tar.gz"
+    [[ "$output" == *"https://***@127.0.0.1:9/x.tar.gz"* ]] || false
     meta_without_token --config "https://$TOKEN@example.invalid/org/x.yaml" exec -- true
     [ "$status" -ne 0 ]
     [[ "$output" == *"'https://***@example.invalid/org/x.yaml'"* ]] || false

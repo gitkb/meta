@@ -519,7 +519,8 @@ fn main() -> std::process::ExitCode {
 
 fn run_cli() -> Result<()> {
     // Log records carry names, versions, paths and URLs from config, the
-    // filesystem and plugin registries: escape them like other output
+    // filesystem and plugin registries: escape them like other output, and
+    // show no credentials
     env_logger::Builder::from_default_env()
         .format(|buf, record| {
             use std::io::Write;
@@ -530,7 +531,7 @@ fn run_cli() -> Result<()> {
                 record.level(),
                 record.target(),
                 // Newlines too: one from data could forge a log line
-                escape(&record.args().to_string())
+                escape(&meta_core::git::redact_urls(&record.args().to_string()))
             )
         })
         .init();

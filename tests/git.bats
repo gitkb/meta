@@ -782,6 +782,17 @@ EOF
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only | LC_ALL=C sort | tr '\n' ' ')" = "--help -h " ]
 }
 
+# Run a command on a terminal of its own (a pseudo-terminal it is in the
+# foreground of), as a user at a shell is; the editor needs one
+with_terminal() {
+    python3 -c 'import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))' "$@"
+}
+
+# Run a command with no terminal at all, as an agent or a CI job is
+without_terminal() {
+    python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" </dev/null
+}
+
 @test "meta git commit --edit uses a private temp file it removes" {
     export META_DATA_DIR="$TEST_DIR/data"
     mkdir -p "$META_DATA_DIR"
@@ -793,8 +804,8 @@ EOF
     git -C "$TEST_DIR/frontend" add README.md
 
     # The editor leaves every message empty, so nothing is committed
-    EDITOR="$TEST_DIR/editor" run "$META_BIN" git commit --edit
-    EDITOR="$TEST_DIR/editor" EDITOR_EXIT=1 run "$META_BIN" git commit --edit
+    GIT_EDITOR="$TEST_DIR/editor" run with_terminal "$META_BIN" git commit --edit
+    GIT_EDITOR="$TEST_DIR/editor" EDITOR_EXIT=1 run with_terminal "$META_BIN" git commit --edit
     [ "$status" -ne 0 ]
 
     [ "$(wc -l < "$LOG")" -eq 2 ]
@@ -806,6 +817,32 @@ EOF
         [ ! -e "$path" ]
     done
     [ "$(grep -c -- ' -rw-------$' "$LOG")" -eq 2 ]
+}
+
+@test "meta git commit --edit runs git's editor, arguments included" {
+    echo change >> "$TEST_DIR/frontend/README.md"
+    git -C "$TEST_DIR/frontend" add README.md
+    git -C "$TEST_DIR/frontend" config core.editor "sed -i.bak -e '/^# Enter commit message/i from core.editor'"
+
+    # as in git, core.editor comes before VISUAL and EDITOR
+    unset GIT_EDITOR
+    VISUAL=nosuch EDITOR=nosuch run with_terminal "$META_BIN" git commit --edit
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_DIR/frontend" log -1 --format=%s)" = "from core.editor" ]
+}
+
+@test "meta git commit --edit without a terminal fails at once, naming the editor" {
+    echo change >> "$TEST_DIR/frontend/README.md"
+    git -C "$TEST_DIR/frontend" add README.md
+    LOG="$TEST_DIR/editor.log"
+    printf '#!/bin/sh\necho ran >> "%s"\n' "$LOG" > "$TEST_DIR/editor"
+    chmod 755 "$TEST_DIR/editor"
+
+    GIT_EDITOR="$TEST_DIR/editor" run without_terminal "$META_BIN" git commit --edit
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"The editor '$TEST_DIR/editor' needs the terminal"*"Use -m <message> instead."* ]]
+    [ ! -e "$LOG" ]
+    [ -n "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" ]
 }
 
 @test "meta git commit escapes repo paths in its summary" {

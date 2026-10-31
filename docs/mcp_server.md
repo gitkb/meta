@@ -218,7 +218,7 @@ Clean build artifacts.
 ### Discovery Tools
 
 #### meta_search_code
-Search for patterns across all repositories with `git grep`: tracked and untracked files, but not `.git` or what `.gitignore` leaves out. A project that fails to search reports an `error` instead of `matches`.
+Search for patterns across all repositories, those nested in meta projects too, with `git grep`: tracked files, and untracked files that `.gitignore` doesn't ignore; never `.git`. A project that fails to search reports an `error` instead of `matches`.
 
 **Parameters:**
 - `pattern` (required): Search pattern (regex)
@@ -231,7 +231,9 @@ Get file tree structure for projects.
 **Parameters:**
 - `project` (optional): Filter to specific project
 - `tag` (optional): Filter by tag
-- `depth` (optional): Max depth (default: 3)
+- `depth` (optional): Max depth, a non-negative integer (default: 3)
+
+A symbolic link is listed as `{"type": "symlink", "name": ...}` and not followed.
 
 #### meta_list_plugins
 List installed meta plugins.

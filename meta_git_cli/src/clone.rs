@@ -62,7 +62,7 @@ pub(crate) fn execute_git_clone(
             Some(bundle) => {
                 let bundle = bundle.to_string_lossy();
                 // git takes what follows a `:` as the name, as for a URL
-                let bundle = bundle.rsplit(':').next().unwrap_or_default();
+                let bundle = bundle.rsplit_once(':').map_or(&*bundle, |(_, name)| name);
                 bundle.strip_suffix(".bundle").unwrap_or(bundle).to_string()
             }
             None => url

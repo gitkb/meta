@@ -90,21 +90,21 @@ fn test_expand_directories() {
 
 #[test]
 fn test_should_ignore() {
-    let path = Path::new("/some/path/.git/file");
     let ignore = vec![".git".to_string()];
-    assert!(should_ignore(path, &ignore));
-
-    let path = Path::new("/some/path/normal/file");
-    assert!(!should_ignore(path, &ignore));
+    assert!(should_ignore(Path::new("/some/path/.git"), &ignore));
+    assert!(!should_ignore(Path::new("/some/path/normal"), &ignore));
 
     // whole names, not parts of one
     assert!(!should_ignore(Path::new("/w/.github"), &ignore));
     let ignore = vec!["a".to_string(), "vendor/old".to_string()];
-    assert!(should_ignore(Path::new("/w/a/src"), &ignore));
+    assert!(should_ignore(Path::new("./a"), &ignore));
+    assert!(should_ignore(Path::new("a"), &["./a".to_string()]));
     assert!(!should_ignore(Path::new("/w/abc"), &ignore));
     assert!(!should_ignore(Path::new("/w/data"), &ignore));
     assert!(should_ignore(Path::new("/w/vendor/old"), &ignore));
     assert!(!should_ignore(Path::new("/w/old"), &ignore));
+    // the directories above don't count
+    assert!(!should_ignore(Path::new("/a/ws/b"), &ignore));
 }
 
 #[test]

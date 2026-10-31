@@ -174,6 +174,7 @@ teardown() {
     rm -rf "$TEST_DIR/shared"
     mkdir "$TEST_DIR/shared"
     run "$META_BIN" git update
+    [ "$status" -eq 0 ]
     [[ "$output" != *"mismatch"* ]]
     [[ "$output" != *"remote set-url"* ]]
 }

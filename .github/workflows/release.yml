@@ -232,9 +232,12 @@ jobs:
       # The libraries third-party plugins build on, in dependency order. The
       # other crates are `publish = false`: their names belong to others on
       # crates.io, or they depend on one that does. A failed publish fails
-      # the job.
+      # the job; a rerun goes past a version crates.io already has.
       - name: Publish meta_core
-        run: cargo publish -p meta_core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p meta_core 2>&1) && echo "$out" || { echo "$out"; grep -q "already exists" <<<"$out"; }
 
       # meta_plugin_protocol's and loop_lib's meta_core requirement is "<1" so
       # the workspace resolves whatever its version; publish them with an
@@ -248,10 +251,16 @@ jobs:
           done
 
       - name: Publish meta_plugin_protocol
-        run: cargo publish -p meta_plugin_protocol --allow-dirty --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p meta_plugin_protocol --allow-dirty 2>&1) && echo "$out" || { echo "$out"; grep -q "already exists" <<<"$out"; }
 
       - name: Publish loop_lib
-        run: cargo publish -p loop_lib --allow-dirty --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p loop_lib --allow-dirty 2>&1) && echo "$out" || { echo "$out"; grep -q "already exists" <<<"$out"; }
 
   update-homebrew:
     name: Update Homebrew Formula

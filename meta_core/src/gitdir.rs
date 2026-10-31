@@ -38,9 +38,23 @@ pub fn gitfile_target(checkout: &Path) -> anyhow::Result<Option<PathBuf>> {
     Ok(read_gitfile(checkout)?.map(|target| checkout.join(target)))
 }
 
-/// Whether `dir` looks like a bare repository: its own git directory.
+/// Whether `dir` is a git directory, as git decides before using one:
+/// `objects` and `refs` directories, and a `HEAD` naming a ref under
+/// `refs/` (as a symlink, or `ref: refs/...`) or holding a commit id.
+/// Anything less, and git looks past it to the repository around.
 pub fn is_bare(dir: &Path) -> bool {
-    dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir()
+    let head = dir.join("HEAD");
+    let valid_head = match std::fs::read_link(&head) {
+        Ok(target) => target.starts_with("refs"),
+        Err(_) => {
+            let head = std::fs::read_to_string(&head).unwrap_or_default();
+            let head = head.trim_end();
+            head.strip_prefix("ref:")
+                .is_some_and(|target| target.trim_start().starts_with("refs/"))
+                || (head.len() >= 40 && head.chars().all(|c| c.is_ascii_hexdigit()))
+        }
+    };
+    valid_head && dir.join("objects").is_dir() && dir.join("refs").is_dir()
 }
 
 /// The git directory the repository at `dir` keeps its objects, refs and
@@ -96,7 +110,7 @@ pub fn linked(checkout: &Path) -> anyhow::Result<Linked> {
     })?;
     let common = admin.join(common.trim_end_matches(['\n', '\r']));
     anyhow::ensure!(
-        common.join("HEAD").is_file() && common.join("objects").is_dir(),
+        is_bare(&common),
         "{} is not a git directory",
         escape_path(&common)
     );
@@ -171,6 +185,19 @@ mod tests {
         let empty = tmp.path().join("empty");
         std::fs::create_dir_all(empty.join(".git")).unwrap();
         assert_eq!(common_dir(&empty).unwrap(), None);
+        // a git directory whose HEAD git can't read is none either
+        let truncated = repo.join(".git/HEAD");
+        let head = std::fs::read_to_string(&truncated).unwrap();
+        std::fs::write(&truncated, "").unwrap();
+        assert_eq!(common_dir(&repo).unwrap(), None);
+        std::fs::write(&truncated, head).unwrap();
+        // HEAD as a symlink to a branch that is only in packed-refs
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(&truncated).unwrap();
+            std::os::unix::fs::symlink("refs/heads/packed", &truncated).unwrap();
+            assert!(common_dir(&repo).unwrap().is_some());
+        }
 
         let linked = linked(&wt).unwrap();
         assert_eq!(linked.common.canonicalize().unwrap(), git_dir);

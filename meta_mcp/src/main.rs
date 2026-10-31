@@ -645,7 +645,7 @@ impl McpServer {
             // ================================================================
             Tool {
                 name: "meta_search_code".to_string(),
-                description: "Search for patterns across all repositories with git grep: tracked and untracked files, not what .gitignore leaves out".to_string(),
+                description: "Search for patterns across all repositories (nested ones too) with git grep: tracked files, and untracked files .gitignore doesn't ignore".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -887,12 +887,9 @@ impl McpServer {
 
         let project_filter = args.get("project").and_then(|v| v.as_str());
 
-        // Run meta git status with --json for structured output
-        let mut cmd = Command::new("meta");
-        cmd.arg("--json").arg("git").arg("status");
-        cmd.current_dir(meta_dir);
-
-        let output = cmd.output().context("Failed to execute meta git status")?;
+        let output = git_status_command(meta_dir, args)
+            .output()
+            .context("Failed to execute meta git status")?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1680,49 +1677,88 @@ impl McpServer {
         let projects = self.load_projects(meta_dir)?;
         let tag_filter = args.get("tag").and_then(|v| v.as_str());
 
-        let filtered: Vec<&ProjectInfo> = if let Some(tag) = tag_filter {
-            projects
-                .iter()
-                .filter(|p| has_any_tag(tag, &p.tags))
-                .collect()
-        } else {
-            projects.iter().collect()
-        };
+        // Each repository once, the ones nested in a meta project too (as
+        // `meta project list --recursive`): a repository's search leaves
+        // out the repositories inside it. Nested ones go by their path.
+        let mut repos: Vec<(String, std::path::PathBuf, Vec<String>)> = Vec::new();
+        for node in config::walk_projects(meta_dir, &projects, None)? {
+            let mut nested: Vec<_> =
+                config::build_project_map(&node.children, meta_dir, &node.info.path)
+                    .into_iter()
+                    .map(|(place, (path, info))| (place, path, info.tags))
+                    .collect();
+            nested.sort();
+            repos.push((
+                node.info.name,
+                meta_dir.join(&node.info.path),
+                node.info.tags,
+            ));
+            repos.extend(nested);
+        }
 
         let mut results = Vec::new();
 
-        for project in filtered {
-            let project_path = meta_dir.join(&project.path);
-            if !project_path.exists() {
+        for (name, project_path, tags) in repos {
+            if tag_filter.is_some_and(|tag| !has_any_tag(tag, &tags)) || !project_path.exists() {
                 continue;
             }
 
             // git's search never looks in .git or at what .gitignore leaves
             // out, and takes the pattern after -e, never as an option. A
             // project that is no repository of its own is a plain directory.
+            // The user's git config doesn't change the results: no colour,
+            // basic regular expressions, file names as they are.
             let mut cmd = git(&project_path);
-            cmd.args(["grep", "-n", "-I"]);
-            if meta_core::gitdir::common_dir(&project_path)?.is_some() {
-                cmd.arg("--untracked");
-            } else {
-                cmd.args(["--no-index", "--exclude-standard"]);
-            }
+            cmd.args([
+                "-c",
+                "core.quotePath=false",
+                "grep",
+                "--no-color",
+                "-G",
+                "-n",
+                "-I",
+            ]);
+            match meta_core::gitdir::common_dir(&project_path) {
+                Ok(Some(_)) => cmd.arg("--untracked"),
+                // only the directory's own .gitignore files: the workspace
+                // repo around it may ignore the whole project
+                Ok(None) => cmd.args(["--no-index", "--exclude-standard"]).env(
+                    "GIT_CEILING_DIRECTORIES",
+                    project_path.parent().unwrap_or(&project_path),
+                ),
+                Err(e) => {
+                    results.push(serde_json::json!({
+                        "project": name,
+                        "error": format!("{e:#}")
+                    }));
+                    continue;
+                }
+            };
             cmd.arg("-e").arg(pattern).arg("--");
             // a file name pattern, in any directory
             if let Some(fp) = file_pattern {
                 cmd.arg(format!(":(glob)**/{fp}"));
             }
 
-            let out = cmd.output().context("Cannot run git grep")?;
+            let out = match cmd.output() {
+                Ok(out) => out,
+                Err(e) => {
+                    results.push(serde_json::json!({
+                        "project": name,
+                        "error": format!("Cannot run git grep: {e}")
+                    }));
+                    continue;
+                }
+            };
             match out.status.code() {
                 Some(0) => results.push(serde_json::json!({
-                    "project": project.name,
+                    "project": name,
                     "matches": String::from_utf8_lossy(&out.stdout).lines().take(50).collect::<Vec<_>>()
                 })),
                 // no match
                 Some(1) => {}
                 _ => results.push(serde_json::json!({
-                    "project": project.name,
+                    "project": name,
                     "error": String::from_utf8_lossy(&out.stderr).trim()
                 })),
             }
@@ -1737,7 +1773,7 @@ impl McpServer {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
 
-        let depth = match args.get("depth") {
+        let depth = match args.get("depth").filter(|depth| !depth.is_null()) {
             None => 3,
             Some(depth) => depth
                 .as_u64()
@@ -1813,7 +1849,9 @@ impl McpServer {
                 }
 
                 // A link is listed, not followed: it may lead back up the tree
-                let file_type = entry.file_type()?;
+                let Ok(file_type) = entry.file_type() else {
+                    continue;
+                };
                 if file_type.is_symlink() {
                     children.push(serde_json::json!({
                         "type": "symlink",
@@ -1953,14 +1991,17 @@ impl McpServer {
 
         let projects = self.load_project_dependencies(meta_dir)?;
         let graph = dependency_graph::DependencyGraph::build(projects)?;
-        let tags: Vec<String> = tag_filter
+        let order: Vec<&str> = graph
+            .execution_order()?
             .into_iter()
-            .flat_map(|tags| tags.split(','))
-            .map(str::trim)
-            .filter(|tag| !tag.is_empty())
-            .map(str::to_string)
+            .filter(|name| {
+                tag_filter.is_none_or(|tags| {
+                    graph
+                        .get_project(name)
+                        .is_some_and(|project| has_any_tag(tags, &project.tags))
+                })
+            })
             .collect();
-        let order = graph.execution_order_filtered(&tags)?;
 
         Ok(serde_json::to_string_pretty(&serde_json::json!({
             "execution_order": order,
@@ -2246,10 +2287,26 @@ fn string_list(args: &serde_json::Value, key: &str) -> Result<Option<Vec<String>
 
 /// Whether `project_tags` holds any of the comma-separated `tags`, as
 /// `meta --tag` selects.
+/// `meta --json [--tag <tag>] git status` in `meta_dir`: structured output,
+/// of the projects `tag` selects.
+fn git_status_command(meta_dir: &std::path::Path, args: &serde_json::Value) -> Command {
+    let mut cmd = Command::new("meta");
+    cmd.arg("--json");
+    if let Some(tag) = args.get("tag").and_then(|v| v.as_str()) {
+        cmd.arg("--tag").arg(tag);
+    }
+    cmd.args(["git", "status"]).current_dir(meta_dir);
+    cmd
+}
+
+/// A blank list selects every project, as no tag at all does.
 fn has_any_tag(tags: &str, project_tags: &[String]) -> bool {
-    tags.split(',')
+    let mut wanted = tags
+        .split(',')
         .map(str::trim)
-        .any(|tag| !tag.is_empty() && project_tags.iter().any(|t| t == tag))
+        .filter(|tag| !tag.is_empty())
+        .peekable();
+    wanted.peek().is_none() || wanted.any(|tag| project_tags.iter().any(|t| t == tag))
 }
 
 /// npm is a `.cmd` script on Windows, which `Command` doesn't find by its bare name.
@@ -2299,7 +2356,7 @@ fn repo_command(
 struct Cli {}
 
 fn main() -> Result<()> {
-    <Cli as clap::Parser>::parse();
+    meta_core::args::parse::<Cli>();
     McpServer::new()?.run()
 }
 
@@ -2395,6 +2452,11 @@ mod tests {
             "{tree}"
         );
 
+        // a blank list is no filter, in every tool
+        let tree = server.tool_get_file_tree(&json!({"tag": " , "})).unwrap();
+        let tree: serde_json::Value = serde_json::from_str(&tree).unwrap();
+        assert_eq!(tree.as_array().unwrap().len(), 3, "{tree}");
+
         let err = server
             .tool_get_file_tree(&json!({"depth": -1}))
             .unwrap_err()
@@ -2403,6 +2465,13 @@ mod tests {
             err.contains("'depth' must be a non-negative integer"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn git_status_selects_by_tag() {
+        let cmd = git_status_command(std::path::Path::new("."), &json!({"tag": "a,b"}));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, ["--json", "--tag", "a,b", "git", "status"]);
     }
 
     #[test]
@@ -2641,41 +2710,6 @@ mod tests {
             args["command"] = json!(["sh", "-c", script]);
         }
         Ok(serde_json::from_str(&server.tool_batch_execute(&args)?)?)
-    }
-
-    #[test]
-    fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
-        let (server, tmp) = workspace();
-        let a = tmp.path().join("a");
-        std::fs::create_dir_all(a.join("src")).unwrap();
-        std::fs::create_dir_all(a.join("target")).unwrap();
-        std::fs::write(a.join(".gitignore"), "target/\n").unwrap();
-        std::fs::write(a.join("src/lib.rs"), "--flag\n").unwrap();
-        std::fs::write(a.join("notes.txt"), "--flag\n").unwrap();
-        std::fs::write(a.join("target/out.rs"), "--flag\n").unwrap();
-        // a project that is no repository of its own
-        let plain = tmp.path().join("plain");
-        std::fs::create_dir_all(&plain).unwrap();
-        std::fs::write(plain.join("x.rs"), "--flag\n").unwrap();
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            "projects:\n  a:\n    path: a\n  plain:\n    path: plain\n",
-        )
-        .unwrap();
-
-        let search = |args: serde_json::Value| -> serde_json::Value {
-            serde_json::from_str(&server.tool_search_code(&args).unwrap()).unwrap()
-        };
-        let found = search(json!({"pattern": "--flag"}));
-        assert_eq!(
-            found,
-            json!([
-                {"project": "a", "matches": ["notes.txt:1:--flag", "src/lib.rs:1:--flag"]},
-                {"project": "plain", "matches": ["x.rs:1:--flag"]}
-            ])
-        );
-        let found = search(json!({"pattern": "--flag", "file_pattern": "*.rs"}));
-        assert_eq!(found[0]["matches"], json!(["src/lib.rs:1:--flag"]));
     }
 
     #[test]

@@ -192,7 +192,7 @@ pub(crate) fn handle_create(
         if !use_all {
             anyhow::bail!("{why}");
         }
-        eprintln!("{} {why}, skipping", "warning:".yellow().bold());
+        super::warn_or_bail(strict, format!("{why}, skipping"))?;
     }
     let mut repos_to_create = cloned;
     // One worktree per place in the set: a repeated --repo, or a repo named
@@ -665,7 +665,7 @@ fn resolve_repos_with_dependencies(
 
     // Always include root repo "." unless user explicitly excluded it
     // (exclusion would need to be handled separately, for now always include)
-    if meta_dir.join(".git").exists() {
+    if meta_core::gitdir::common_dir(meta_dir)?.is_some() {
         repos_to_include.insert(".".to_string());
     }
 
@@ -916,7 +916,7 @@ fn ensure_intermediate_parents(
             let Some(parent_source) = project_at(workspace, &parent_alias)? else {
                 // A plain directory on the way is no parent; a repo that
                 // isn't a project is worth saying so
-                if !meta_dir.join(&parent_alias).join(".git").exists() {
+                if meta_core::gitdir::common_dir(&meta_dir.join(&parent_alias))?.is_none() {
                     continue;
                 }
                 eprintln!(
@@ -927,7 +927,7 @@ fn ensure_intermediate_parents(
                 );
                 continue;
             };
-            if !parent_source.join(".git").exists() {
+            if meta_core::gitdir::common_dir(&parent_source)?.is_none() {
                 eprintln!(
                     "{} Intermediate parent '{}' for nested repo '{}' is not cloned, skipping",
                     "warning:".yellow().bold(),

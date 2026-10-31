@@ -293,24 +293,6 @@ impl DependencyGraph {
         Ok(result)
     }
 
-    /// Get execution order filtered by tags
-    pub fn execution_order_filtered(&self, tags: &[String]) -> Result<Vec<&str>> {
-        let all_order = self.execution_order()?;
-
-        let filtered: Vec<&str> = all_order
-            .into_iter()
-            .filter(|name| {
-                if let Some(project) = self.projects.get(*name) {
-                    tags.is_empty() || project.tags.iter().any(|t| tags.contains(t))
-                } else {
-                    false
-                }
-            })
-            .collect();
-
-        Ok(filtered)
-    }
-
     /// Get project info
     pub fn get_project(&self, name: &str) -> Option<&ProjectDependencies> {
         self.projects.get(name)

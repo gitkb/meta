@@ -206,7 +206,7 @@ fn write_worktree_help(w: &mut dyn std::io::Write) {
     let _ = writeln!(w, "  --meta <KEY=VALUE>       Record custom metadata");
     let _ = writeln!(
         w,
-        "  --no-deps                Only the named repos, without their dependencies"
+        "  --no-deps                Only the named repos (and the repos they are nested in)"
     );
     let _ = writeln!(
         w,

@@ -145,6 +145,12 @@ EOF
     [ -d ".worktrees/some/backend" ]
     [ ! -e ".worktrees/some/frontend" ]
 
+    # all or nothing with --strict
+    run "$META_BIN" git worktree create strict --all --strict
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'frontend' is not cloned"* ]]
+    [ ! -e ".worktrees/strict" ]
+
     run "$META_BIN" git worktree create one --repo frontend
     [ "$status" -ne 0 ]
     [[ "$output" == *"'frontend' is not cloned at $TEST_DIR/frontend"* ]]

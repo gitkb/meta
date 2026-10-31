@@ -872,14 +872,21 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
     execute_commands_internal(config, commands)
 }
 
-/// Whether `path` is, or lies in, a directory an `ignore` entry names: a
-/// name (`.git`, `node_modules`) or a path (`vendor/old`), matched by whole
-/// components, so `.git` doesn't ignore `.github`.
+/// Whether the directory `path` is one an `ignore` entry names: by its name
+/// (`.git`, `node_modules`) or the end of its path (`vendor/old`), matched
+/// by whole components, so `.git` doesn't ignore `.github`. The directories
+/// above it don't count: they are where loop runs, not what it selects.
 pub fn should_ignore(path: &Path, ignore: &[String]) -> bool {
-    path.ancestors().any(|dir| {
-        ignore
-            .iter()
-            .any(|entry| !entry.is_empty() && dir.ends_with(entry))
+    // `./a` and `a` name the same directory
+    let named = |path: &Path| -> PathBuf {
+        path.components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .collect()
+    };
+    let path = named(path);
+    ignore.iter().any(|entry| {
+        let entry = named(Path::new(entry));
+        !entry.as_os_str().is_empty() && path.ends_with(entry)
     })
 }
 

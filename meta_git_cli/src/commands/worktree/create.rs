@@ -173,24 +173,15 @@ pub(crate) fn handle_create(
     let mut cloned = Vec::with_capacity(repos_to_create.len());
     for repo in repos_to_create {
         let (alias, source, _) = &repo;
-        if meta_core::gitdir::common_dir(source)?.is_some() {
+        let Some(why) = super::not_a_repository(alias, source)? else {
             cloned.push(repo);
             continue;
-        }
-        let why = match source.exists() {
-            false => format!(
-                "'{}' is not cloned at {} (run 'meta git update' to clone it)",
-                escape(alias),
-                escape_path(source)
-            ),
-            true => format!(
-                "'{}' at {} is not a git repository",
-                escape(alias),
-                escape_path(source)
-            ),
         };
-        if !use_all || strict {
+        if !use_all {
             anyhow::bail!("{why}");
+        }
+        if strict {
+            anyhow::bail!("{why} (strict mode)");
         }
         super::warn(format!("{why}, skipping"));
     }
@@ -939,7 +930,7 @@ fn ensure_intermediate_parents(
                     }
                 );
                 if strict {
-                    anyhow::bail!("{why}");
+                    anyhow::bail!("{why} (strict mode)");
                 }
                 super::warn(format!("{why}, skipping"));
                 continue;

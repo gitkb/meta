@@ -13,7 +13,7 @@ mod status;
 use anyhow::Result;
 use clap::Parser;
 use colored::*;
-use meta_core::display::{escape, escape_lines};
+use meta_core::display::{escape, escape_lines, escape_path};
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::path::Path;
 
@@ -144,6 +144,27 @@ pub(crate) fn warn_or_bail(strict: bool, message: impl std::fmt::Display) -> any
     Ok(())
 }
 
+/// Why the project `alias` at `source` has no repository to make a worktree
+/// of, if it has none: not cloned yet, or a directory git doesn't take for
+/// a repository (it would act on the one around it).
+pub(crate) fn not_a_repository(alias: &str, source: &Path) -> Result<Option<String>> {
+    if meta_core::gitdir::common_dir(source)?.is_some() {
+        return Ok(None);
+    }
+    Ok(Some(match source.exists() {
+        false => format!(
+            "'{}' is not cloned at {} (run 'meta git update' to clone it)",
+            escape(alias),
+            escape_path(source)
+        ),
+        true => format!(
+            "'{}' at {} is not a git repository",
+            escape(alias),
+            escape_path(source)
+        ),
+    }))
+}
+
 /// Print a warning; the message can carry paths and names from git and
 /// the filesystem.
 pub(crate) fn warn(message: impl std::fmt::Display) {
@@ -190,7 +211,7 @@ fn write_worktree_help(w: &mut dyn std::io::Write) {
     let _ = writeln!(w, "  --repo <ALIAS[:BRANCH]>  Add specific repo(s)");
     let _ = writeln!(
         w,
-        "  --all                    Add all repos from .meta.yaml"
+        "  --all                    Add all repos from .meta.yaml (uncloned ones skipped)"
     );
     let _ = writeln!(w, "  --branch <NAME>          Override default branch name");
     let _ = writeln!(

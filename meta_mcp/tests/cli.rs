@@ -388,3 +388,51 @@ fn search_leaves_a_linked_nested_project_to_itself() {
     );
     assert_eq!(found, serde_json::json!([]));
 }
+
+/// A plain project that is a link into a repository elsewhere in the
+/// workspace is searched by its real place: that repository's ignore rules
+/// don't hide it.
+#[test]
+#[cfg(unix)]
+fn search_fences_off_a_linked_plain_project_by_its_real_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    let nested = ws.join("nested");
+    std::fs::create_dir_all(nested.join("plain")).unwrap();
+    git(&nested, &["init", "-q"]);
+    std::fs::write(nested.join(".gitignore"), "plain/\n").unwrap();
+    std::fs::write(nested.join("plain/x.rs"), "--flag\n").unwrap();
+    std::os::unix::fs::symlink("nested/plain", ws.join("alias")).unwrap();
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  alias: {}\n").unwrap();
+    let found = call(
+        ws,
+        "meta_search_code",
+        serde_json::json!({"pattern": "--flag"}),
+    );
+    assert_eq!(
+        found,
+        serde_json::json!([{"project": "alias", "matches": ["x.rs:1:--flag"]}])
+    );
+}
+
+/// Windows' path list separator is `;`, which a directory name may hold.
+#[test]
+#[cfg(windows)]
+fn search_reports_a_plain_project_it_cannot_fence_off() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("a;b");
+    std::fs::create_dir_all(ws.join("plain")).unwrap();
+    std::fs::write(ws.join("plain/x.rs"), "--flag\n").unwrap();
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  plain: {}\n").unwrap();
+    let found = call(
+        &ws,
+        "meta_search_code",
+        serde_json::json!({"pattern": "--flag"}),
+    );
+    assert!(
+        found[0]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("path list separator")),
+        "{found}"
+    );
+}

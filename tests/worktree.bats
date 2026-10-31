@@ -137,7 +137,7 @@ EOF
     [ -d ".worktrees/full-task/frontend" ]
 }
 
-@test "worktree create --all skips a repo that is not cloned, and --repo refuses it" {
+@test "worktree create --all skips a repo that is not cloned; --repo and add refuse it" {
     rm -rf frontend
     run "$META_BIN" git worktree create some --all
     [ "$status" -eq 0 ]
@@ -156,6 +156,18 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"'frontend' is not cloned at $TEST_DIR/frontend"* ]]
     [ ! -e ".worktrees/one" ]
+
+    # nor added to a set; a directory that is no repository neither, not
+    # even as a worktree of the workspace repo around it
+    run "$META_BIN" git worktree add some --repo frontend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'frontend' is not cloned at $TEST_DIR/frontend"* ]]
+    mkdir -p frontend/.git
+    run "$META_BIN" git worktree add some --repo frontend:other
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'frontend' at $TEST_DIR/frontend is not a git repository"* ]]
+    [ ! -e ".worktrees/some/frontend" ]
+    if git rev-parse --verify --quiet refs/heads/other; then false; fi
 }
 
 @test "worktree create defaults branch name to task name" {

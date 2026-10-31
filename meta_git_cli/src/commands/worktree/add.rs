@@ -51,6 +51,11 @@ pub(crate) fn handle_add(args: AddArgs, verbose: bool, json: bool) -> Result<()>
     for spec in repo_specs {
         // Use recursive lookup for nested paths (containing '/')
         let (source, _project) = lookup_nested_project(&configs.here, &spec.alias)?;
+        // as in create: no worktree of a project not cloned, nor of the
+        // repository around a directory that is none
+        if let Some(why) = super::not_a_repository(&spec.alias, &source)? {
+            anyhow::bail!("{why}");
+        }
         // The repo goes where it is in the workspace
         let place = place_in_set(meta_dir, &spec.alias, &source);
         // As in create: a repo given twice, by name or by path, is one

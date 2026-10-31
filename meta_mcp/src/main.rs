@@ -1728,7 +1728,11 @@ impl McpServer {
                 // repo around it may ignore the whole project. The ceiling
                 // is a path list, which a separator in the path would split.
                 Ok(None) => {
-                    let ceiling = project_path.parent().unwrap_or(&project_path);
+                    // git compares the ceiling with the real path it runs in
+                    let real = project_path
+                        .canonicalize()
+                        .unwrap_or_else(|_| project_path.clone());
+                    let ceiling = real.parent().unwrap_or(&real);
                     if std::env::split_paths(ceiling).count() != 1 {
                         results.push(serde_json::json!({
                             "project": name,
@@ -2523,13 +2527,12 @@ mod tests {
             std::fs::create_dir_all(tmp.path().join(project).join("src")).unwrap();
         }
         // a link back up the tree, which a walk that follows it never leaves
+        // (Windows makes one only with Developer Mode)
         let link = tmp.path().join("a/src/up");
         #[cfg(unix)]
-        std::os::unix::fs::symlink("..", &link).unwrap();
+        let linked = std::os::unix::fs::symlink("..", &link).is_ok();
         #[cfg(windows)]
-        if std::os::windows::fs::symlink_dir("..", &link).is_err() {
-            return; // no symlinks without Developer Mode
-        }
+        let linked = std::os::windows::fs::symlink_dir("..", &link).is_ok();
 
         // any of the tags, as meta --tag
         let tree = server
@@ -2537,11 +2540,13 @@ mod tests {
             .unwrap();
         let tree: serde_json::Value = serde_json::from_str(&tree).unwrap();
         assert_eq!(tree.as_array().unwrap().len(), 2, "{tree}");
-        assert_eq!(
-            tree[0]["tree"][0]["children"],
-            json!([{"type": "symlink", "name": "up"}]),
-            "{tree}"
-        );
+        if linked {
+            assert_eq!(
+                tree[0]["tree"][0]["children"],
+                json!([{"type": "symlink", "name": "up"}]),
+                "{tree}"
+            );
+        }
 
         // a blank list is no filter, in every tool
         let tree = server.tool_get_file_tree(&json!({"tag": " , "})).unwrap();

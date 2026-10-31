@@ -78,7 +78,7 @@ Loop uses a `.looprc` file (JSON format) for persistent configuration:
 | Field | Type | Description |
 |-------|------|-------------|
 | `directories` | `string[]` | Directories to include |
-| `ignore` | `string[]` | Directories to exclude |
+| `ignore` | `string[]` | Directories to exclude, by name (`node_modules`) or path end (`vendor/old`), whole names only: `.git` doesn't exclude `.github` |
 | `verbose` | `bool` | Enable verbose output |
 | `silent` | `bool` | Suppress output |
 | `add_aliases_to_global_looprc` | `bool` | Enable alias support |

@@ -236,18 +236,43 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mode = |m| std::fs::Permissions::from_mode(m);
             std::fs::set_permissions(&truncated, mode(0o000)).unwrap();
-            if std::fs::read(&truncated).is_err() {
-                assert_eq!(common_dir(&repo).unwrap(), None);
-            }
+            let found = std::fs::read(&truncated)
+                .is_err()
+                .then(|| common_dir(&repo));
             std::fs::set_permissions(&truncated, mode(0o644)).unwrap();
+            if let Some(found) = found {
+                assert_eq!(found.unwrap(), None);
+            }
             // nor objects git can't look into
             let objects = repo.join(".git/objects");
             std::fs::set_permissions(&objects, mode(0o600)).unwrap();
-            // (listing needs read permission, entering needs search)
-            if objects.join(".").metadata().is_err() {
-                assert_eq!(common_dir(&repo).unwrap(), None);
-            }
+            // (listing needs read permission, entering needs search); the
+            // mode comes back first, so a failure leaves a removable tree
+            let found = objects
+                .join(".")
+                .metadata()
+                .is_err()
+                .then(|| common_dir(&repo));
             std::fs::set_permissions(&objects, mode(0o755)).unwrap();
+            if let Some(found) = found {
+                assert_eq!(found.unwrap(), None);
+            }
+
+            // a pipe named HEAD beside objects and refs is never opened
+            let plain = tmp.path().join("plain");
+            for dir in ["objects", "refs"] {
+                std::fs::create_dir_all(plain.join(dir)).unwrap();
+            }
+            let fifo = std::process::Command::new("mkfifo")
+                .arg(plain.join("HEAD"))
+                .status();
+            if fifo.is_ok_and(|status| status.success()) {
+                let (send, receive) = std::sync::mpsc::channel();
+                let dir = plain.clone();
+                std::thread::spawn(move || send.send(is_git_dir(&dir)));
+                let answer = receive.recv_timeout(std::time::Duration::from_secs(5));
+                assert_eq!(answer, Ok(false));
+            }
         }
 
         let linked = linked(&wt).unwrap();

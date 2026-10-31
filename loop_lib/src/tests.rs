@@ -482,6 +482,16 @@ fn test_dry_run_does_not_execute() {
 }
 
 #[test]
+fn the_looprc_preview_shows_no_credentials() {
+    let old = "{\n  \"aliases\": {\n    \"a\": \"git fetch http://alice:ghp_SECRET@h/r\"\n  }\n}";
+    let new = old.replace("\"a\"", "\"b\"");
+    for shown in [preview(old, &new), preview("", &new)] {
+        assert!(shown.contains("http://***@h/r"), "{shown}");
+        assert!(!shown.contains("ghp_SECRET"), "{shown}");
+    }
+}
+
+#[test]
 fn a_broken_alias_shows_no_credentials() {
     let aliases = HashMap::from([(
         "sync".to_string(),

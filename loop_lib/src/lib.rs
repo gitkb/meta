@@ -173,19 +173,8 @@ pub fn add_aliases_to_global_looprc() -> Result<()> {
     println!("Serializing config to string");
     let new_content = serde_json::to_string_pretty(&config)?;
 
-    // Show preview of changes
     println!("\nPreview of changes:");
-    if !existing_content.is_empty() {
-        for diff in diff::lines(&existing_content, &new_content) {
-            match diff {
-                diff::Result::Left(l) => println!("{}", format!("-{l}").red()),
-                diff::Result::Both(l, _) => println!(" {l}"),
-                diff::Result::Right(r) => println!("{}", format!("+{r}").green()),
-            }
-        }
-    } else {
-        println!("{}", new_content.green());
-    }
+    print!("{}", preview(&existing_content, &new_content));
 
     if !prompt_user("Do you want to apply these changes?")? {
         println!("Operation cancelled by user.");
@@ -272,6 +261,23 @@ fn resolve_aliases(argv: &[String], aliases: &HashMap<String, String>) -> Result
         })?;
     words.extend_from_slice(args);
     Ok(words)
+}
+
+/// The change from `existing` to `new` (a `.looprc`), line by line, without
+/// the credentials in URLs: aliases may hold them.
+fn preview(existing: &str, new: &str) -> String {
+    let shown = |line: &str| meta_core::git::redact_urls(line).into_owned();
+    if existing.is_empty() {
+        return format!("{}\n", shown(new).green());
+    }
+    diff::lines(existing, new)
+        .into_iter()
+        .map(|change| match change {
+            diff::Result::Left(l) => format!("{}\n", format!("-{}", shown(l)).red()),
+            diff::Result::Both(l, _) => format!(" {}\n", shown(l)),
+            diff::Result::Right(r) => format!("{}\n", format!("+{}", shown(r)).green()),
+        })
+        .collect()
 }
 
 /// `argv` as one line, quoted so that it reads back as the same words, with

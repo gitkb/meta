@@ -399,7 +399,9 @@ impl McpServer {
     /// one; this server acts only on a cancellation. A cancelled tool call
     /// gets no reply either, as MCP asks.
     fn handle_request(&self, request: &JsonRpcRequest) -> Option<JsonRpcResponse> {
-        if request.method == "notifications/cancelled" {
+        // only as a notification: with an id it is a request for a method
+        // that doesn't exist, and changes nothing
+        if request.method == "notifications/cancelled" && request.id.is_none() {
             self.cancel(Some(&request.params));
         }
         let id = request.id.clone()?;
@@ -756,14 +758,18 @@ mod tests {
         let (server, tmp) = test_support::workspace();
         let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "meta_batch_execute", "arguments": {"command": ["touch", "ran"]}}});
-        let cancel = json!({"jsonrpc": "1.0", "method": "notifications/cancelled",
+        let bad_version = json!({"jsonrpc": "1.0", "method": "notifications/cancelled",
+            "params": {"requestId": 2}});
+        // with an id: a request for a method that doesn't exist
+        let with_id = json!({"jsonrpc": "2.0", "id": 7, "method": "notifications/cancelled",
             "params": {"requestId": 2}});
         let mut output = Vec::new();
-        let input = format!("{}\n", json!([call, cancel]));
+        let input = format!("{}\n", json!([with_id, call, bad_version]));
         server.serve(input.as_bytes(), &mut output).unwrap();
         let replies: serde_json::Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(replies[0]["id"], 2, "{replies}");
-        assert_eq!(replies[1]["error"]["code"], -32600, "{replies}");
+        assert_eq!(replies[0]["error"]["code"], -32601, "{replies}");
+        assert_eq!(replies[1]["id"], 2, "{replies}");
+        assert_eq!(replies[2]["error"]["code"], -32600, "{replies}");
         assert!(tmp.path().join("a/ran").exists());
     }
 

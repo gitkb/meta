@@ -190,7 +190,9 @@ pub fn redact_config_text(text: &str) -> Cow<'_, str> {
     };
     let in_values = redact_strings(&mut values);
     match in_values || crate::git::redact_urls(text) != text {
-        true => Cow::Owned(serde_yaml_ng::to_string(&values).unwrap_or_default()),
+        true => Cow::Owned(serde_yaml_ng::to_string(&values).unwrap_or_else(|_| {
+            "<not shown: the config could not be written out again>".to_string()
+        })),
         false => Cow::Borrowed(text),
     }
 }
@@ -495,8 +497,14 @@ impl Workspace {
     ///
     /// Every project is checked by [`validate_project`] and no two projects
     /// may share or nest paths ([`check_no_overlap`]); a bad entry fails the
-    /// load with the file and project named.
+    /// load with the file and project named. The error shows no credentials:
+    /// a URL may sit where a name, a path or a tag goes.
     pub fn load(meta_path: &Path) -> anyhow::Result<Self> {
+        Self::load_unchecked_errors(meta_path)
+            .map_err(|e| anyhow::anyhow!("{}", crate::git::redact_urls(&format!("{e:#}"))))
+    }
+
+    fn load_unchecked_errors(meta_path: &Path) -> anyhow::Result<Self> {
         let config_str = std::fs::read_to_string(meta_path).with_context(|| {
             format!(
                 "Failed to read meta config file: '{}'",
@@ -504,15 +512,12 @@ impl Workspace {
             )
         })?;
 
-        // serde's message quotes the value it rejects, a URL's credentials too
-        let config: MetaConfig = serde_yaml_ng::from_str(&config_str)
-            .map_err(|e| anyhow::anyhow!("{}", crate::git::redact_urls(&e.to_string())))
-            .with_context(|| {
-                format!(
-                    "Failed to parse YAML config file: {}",
-                    escape_path(meta_path)
-                )
-            })?;
+        let config: MetaConfig = serde_yaml_ng::from_str(&config_str).with_context(|| {
+            format!(
+                "Failed to parse YAML config file: {}",
+                escape_path(meta_path)
+            )
+        })?;
 
         // Convert project entries to normalized, validated ProjectInfo
         // in name order, so the first bad entry reported is always the same one
@@ -1807,13 +1812,20 @@ mod tests {
     }
 
     #[test]
-    fn a_config_of_the_wrong_shape_shows_no_credentials() {
+    fn config_errors_show_no_credentials() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".meta.yaml");
-        std::fs::write(&path, "projects: https://alice:ghp_SECRET@h/r.git\n").unwrap();
-        let err = format!("{:#}", Workspace::load(&path).unwrap_err());
-        assert!(err.contains("https://***@h/r.git"), "{err}");
-        assert!(!err.contains("ghp_SECRET"), "{err}");
+        // the wrong shape, and a URL where a name or a path goes
+        for config in [
+            "projects: https://alice:ghp_SECRET@h/r.git\n",
+            "projects:\n  \"https://alice:ghp_SECRET@h/r.git\": r\n",
+            "projects:\n  r:\n    repo: git@h:r.git\n    path: https://alice:ghp_SECRET@h/r.git\n",
+        ] {
+            std::fs::write(&path, config).unwrap();
+            let err = format!("{:#}", Workspace::load(&path).unwrap_err());
+            assert!(err.contains("https://***@h/r.git"), "{err}");
+            assert!(!err.contains("ghp_SECRET"), "{err}");
+        }
     }
 
     #[test]

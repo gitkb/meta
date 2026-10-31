@@ -393,7 +393,8 @@ pub fn git_fetch_branch(repo_path: &Path, branch: &str) -> Result<()> {
         anyhow::bail!(
             "Failed to fetch branch '{}': {}",
             escape(branch),
-            escape(stderr.trim())
+            // git's own errors may show the URL with its credentials
+            escape(&meta_core::git::redact_urls(stderr.trim()))
         );
     }
     Ok(())

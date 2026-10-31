@@ -120,6 +120,15 @@ preview() {
 @test "worktree create previews" {
     preview 0 git worktree create new --all
     [[ "$output" == *"Would create worktree set 'new'"* ]]
+    # meta's own checks of each checkout fail a preview as a run
+    git -C backend config core.bare true
+    preview 1 git worktree create new --repo backend
+    [[ "$output" == *"core.bare=true"* ]]
+    git -C backend config core.bare false
+    git -C backend symbolic-ref HEAD refs/heads/unborn
+    preview 1 git worktree create new --repo backend --no-deps
+    [[ "$output" == *"has no commit to branch from"* ]]
+    git -C backend symbolic-ref HEAD refs/heads/main
 }
 
 @test "worktree create -r previews the nested repos when --dry-run comes first" {
@@ -143,6 +152,11 @@ preview() {
     preview 1 git worktree add clean --repo frontend
     [[ "$output" == *"core.bare=true"* ]]
     git -C frontend config core.bare false
+    # as is a repo with no commit for the new branch to start at
+    git -C frontend symbolic-ref HEAD refs/heads/unborn
+    preview 1 git worktree add clean --repo frontend
+    [[ "$output" == *"has no commit to branch from"* ]]
+    git -C frontend symbolic-ref HEAD refs/heads/main
 }
 
 @test "a preview with nothing to create fails as a run does" {

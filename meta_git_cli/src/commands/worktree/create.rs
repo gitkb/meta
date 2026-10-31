@@ -253,8 +253,15 @@ pub(crate) fn handle_create(
                 None => anyhow::bail!("No repos selected; no worktree was created"),
             }
         }
-        for (_, source, _) in &kept {
-            ensure_checkout_config_is_not_bare(source)?;
+        // what the run checks before each add; a PR's branch is fetched
+        // first, so its repo gets only the check that doesn't need it
+        let pr_branch = from_pr_spec.map(|spec| format!("<the head branch of {spec}>"));
+        for (_, source, branch) in &kept {
+            if pr_branch.as_ref() == Some(branch) {
+                ensure_checkout_config_is_not_bare(source)?;
+            } else {
+                worktree_start(source, branch, from_ref)?;
+            }
         }
         let plan = CreateDryRunPlan {
             name,

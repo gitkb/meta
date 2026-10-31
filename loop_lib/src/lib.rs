@@ -576,26 +576,26 @@ pub fn run(orig_config: &LoopConfig, argv: &[String]) -> Result<()> {
 }
 
 /// JSON output structure for command results
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct JsonOutput {
     pub success: bool,
     pub results: Vec<JsonCommandResult>,
     pub summary: JsonSummary,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct JsonCommandResult {
     pub directory: String,
     pub command: String,
     pub success: bool,
     pub exit_code: i32,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub stdout: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub stderr: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct JsonSummary {
     pub total: usize,
     pub succeeded: usize,

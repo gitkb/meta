@@ -171,9 +171,9 @@ For operations that must succeed together:
 ```
 
 If any repo fails:
-- Operation stops
-- All repos are rolled back to pre-execution state
-- Error details are returned
+- The command stops, and each repo it reached is put back on its branch and commit from before
+- `rollback.status` is `success` when every one of them was; otherwise `rollback.failed` lists each repo it couldn't put back, with git's reason, and that repo is left as the command left it
+- `rollback.restored` names, for each repo put back, the stash holding its uncommitted changes and the commits it replaced
 
 ## Query DSL Reference
 
@@ -184,7 +184,6 @@ The query DSL allows precise filtering:
 | `dirty:true` | Repos with uncommitted changes |
 | `dirty:false` | Clean repos |
 | `branch:main` | Repos on main branch |
-| `branch:feature/*` | Repos on feature branches |
 | `tag:backend` | Repos with backend tag |
 | `ahead:true` | Repos ahead of remote |
 | `behind:true` | Repos behind remote |
@@ -230,7 +229,7 @@ Use `meta_execution_order` before building:
 ```
 
 ### 6. Handle Failures Gracefully
-Always check the `is_error` field in responses and handle appropriately.
+A tool's result has `isError: true` when the tool itself failed, or when every repository it acted in failed. A tool that acts in several repositories reports each one; when only some failed, `isError` is not set, so also check each repository's entry: `success: false` or an `error` field means that repository failed (`meta_git_diff` and `meta_search_code` entries carry only `error`). An atomic `meta_batch_execute` that failed anywhere is an error as a whole: it tried to roll back. Read `rollback.status` (`success` or `failed`), `rollback.failed` (the repositories it couldn't put back), and in `restored` each repository's stash and replaced commits, before retrying.
 
 ## Error Recovery
 

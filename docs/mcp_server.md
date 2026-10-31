@@ -37,7 +37,13 @@ Configure in Claude Desktop's `claude_desktop_config.json`:
 
 ## Tool Reference
 
-A `tag` parameter takes one tag or a comma-separated list, and selects the projects that have any of them, as `meta --tag` does.
+Each tool takes only the arguments listed for it. A misspelled argument, or a value of the wrong type (`"atomic": "true"` for `true`), is an error that names the tool, the argument and the value, and nothing runs. `null` is the same as leaving an argument out.
+
+A `tag` parameter takes one tag or a comma-separated list, and selects the projects that have any of them, as `meta --tag` does. A blank list is no filter.
+
+A `project` parameter is a project's name in `.meta.yaml`, or `.` for the workspace root. It is never a path, so no tool can be pointed outside the workspace; a name the config doesn't list is an error. `meta_git_multi_commit` and `meta_git_diff` refuse a project folder that is not a git repository of its own (git would use the repository around it); the tools that run `meta` act in it as `meta` does. A tool that takes both `project` and `tag` refuses them together.
+
+Tools that act in several repositories report each one: its directory or name, whether it succeeded, and its output. The result is an error (`isError: true`) only when the tool itself failed or every repository failed; for the rest, an entry with `success: false` or an `error` field is a repository that failed (`meta_git_diff` and `meta_search_code` entries carry only `error`).
 
 ### Core Tools
 
@@ -126,20 +132,22 @@ Stage files across repositories.
 
 **Parameters:**
 - `files` (optional): Paths to stage, one per item, passed to git as given (default: `["."]`)
+- `project` (optional): Stage only in this project
 - `tag` (optional): Filter by tag
 
 #### meta_git_commit
-Create commits across repositories.
+Create commits across repositories, in each one with staged changes.
 
 **Parameters:**
 - `message` (required): Commit message
+- `project` (optional): Commit only in this project
 - `tag` (optional): Filter by tag
 
 #### meta_git_checkout
 Switch branches across repositories.
 
 **Parameters:**
-- `branch` (required): Branch name
+- `branch` (required): Branch name. One `git check-ref-format --branch` refuses (such as `--orphan=x`) is an error, and it is never taken for a file to restore.
 - `create` (optional): Create new branch
 - `tag` (optional): Filter by tag
 
@@ -156,6 +164,8 @@ Create commits with different messages for each repository. Useful for tailored 
   "message": "Commit message for this project"
 }
 ```
+
+Every `project` is checked before anything is committed: one `.meta.yaml` doesn't list is an error, and no commit is made. An entry that fails has git's reason in `error` (`nothing to commit`, say).
 
 **Example:**
 ```json
@@ -218,7 +228,7 @@ Clean build artifacts.
 ### Discovery Tools
 
 #### meta_search_code
-Search for patterns across all repositories, those nested in meta projects too, with `git grep`: tracked files, and untracked files that `.gitignore` doesn't ignore; never `.git`. Each project is listed by its path in the workspace, a nested one too (`platform/api`), and is searched once: a project's search leaves out the projects nested in it. A nested `.meta.yaml` that can't be read is its project's error, reported whatever the tag filter; the projects beside it are still searched. When git reports a problem, the project's entry has an `error`, beside any `matches` git still found (an unreadable file, say).
+Search for patterns across all repositories, those nested in meta projects too, with `git grep`: tracked files, and untracked files that `.gitignore` doesn't ignore; never `.git`. Each project is listed by its path in the workspace, a nested one too (`platform/api`), and is searched once: a project's search leaves out the projects nested in it. A nested `.meta.yaml` that can't be read is its project's error, reported whatever the tag filter; the projects beside it are still searched. When git reports a problem, the project's entry has an `error`, beside any `matches` git still found (an unreadable file, say). A project gives at most 50 matches; an entry cut there has `"truncated": true`.
 
 **Parameters:**
 - `pattern` (required): Search pattern, an extended regular expression (as `grep -E`)
@@ -259,7 +269,7 @@ Query repositories by state using a DSL.
 - `ahead:true` - Projects ahead of remote
 - `behind:true` - Projects behind remote
 
-Combine with AND: `dirty:true AND tag:backend AND branch:main`
+Combine with AND (in any case): `dirty:true AND tag:backend AND branch:main`. There is no `OR` or `NOT`, and a value holds no spaces: anything else in a query, or a condition with no value (`tag:`), is an error naming it.
 
 **Example:**
 ```json
@@ -375,9 +385,15 @@ projects:
 ## Error Handling
 
 All tools return structured responses. Errors include:
+- `-32700`: Parse error (a line that isn't JSON)
 - `-32600`: Invalid request
 - `-32601`: Method not found
-- `-32602`: Invalid params
 - `-32603`: Internal error
 
-Error responses include the tool result with `is_error: true`.
+A tool that fails answers with its result's `isError: true`; its text gives the error and what caused it.
+
+## Ping and cancellation
+
+`ping` is answered with `{}`. Tool calls run one at a time, in the order they arrive; `initialize`, `ping` and `tools/list` are answered meanwhile.
+
+`notifications/cancelled` stops a call: one still waiting never runs, and the program a running one started is stopped with what remains in its process group (on Unix its process group gets SIGTERM, then SIGKILL after 2 seconds; on Windows only the program itself is killed). What the call already did stays done. On Unix, a signal that ends the server (SIGTERM, SIGINT, SIGHUP, even when started ignoring them, as `nohup` does) first stops the running call's programs the same way, and starts no call still waiting (each gets a `request N not started` line on stderr); the server ends once that call has (an atomic batch's rollback included) and the reply to a call that already ended is written. A second signal ends it at once. The git status reads of `meta_git_branch`, `meta_query_repos` and `meta_workspace_state` are not stopped: those calls end when their reads do. On Unix a tool's programs run in a process group of their own, so one that asks on the terminal (an ssh passphrase or host-key prompt) waits there until the call is cancelled: use an ssh agent and known hosts. A cancelled call gets no reply; what it returned goes to the server's stderr, so an atomic batch's rollback (with its stash) is still on record.

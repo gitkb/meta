@@ -107,6 +107,9 @@ meta_without_token() {
     meta_without_token --dry-run git clone "https://$TOKEN@example.invalid/org/meta.git" fresh
     [ "$status" -eq 0 ]
     [[ "$output" == *"https://***@example.invalid/org/meta.git"* ]]
+    # a helper's URL with no path names no clone directory after its token
+    meta_without_token --dry-run git clone "persistent-https::https://$TOKEN@example.invalid/"
+    [ "$status" -eq 0 ]
     RUST_LOG=debug meta_without_token git clone "https://$TOKEN@example.invalid/org/meta.git" fresh
     [ "$status" -eq 0 ]
     [ -d fresh/lib/.git ]
@@ -127,11 +130,13 @@ done
 exit 1
 EOF
     chmod +x "$TEST_DIR/bin/rendezvous"
+    # `% ` is a space inside one of ext's arguments
+    remotes="${TEST_DIR// /% }/remotes"
     cat > .meta.yaml <<EOF
 projects:
-  r1: ext::rendezvous r1 $TEST_DIR/remotes/lib.git
-  r2: ext::rendezvous r2 $TEST_DIR/remotes/other.git
-  r3: ext::rendezvous r3 $TEST_DIR/remotes/meta.git
+  r1: ext::rendezvous r1 $remotes/lib.git
+  r2: ext::rendezvous r2 $remotes/other.git
+  r3: ext::rendezvous r3 $remotes/meta.git
 EOF
     # an ssh that would show it was run
     printf '#!/bin/sh\ntouch "%s/ssh-ran"\nexit 255\n' "$TEST_DIR" > "$TEST_DIR/bin/ssh"

@@ -320,13 +320,15 @@ impl StderrTail {
                     .read_until(b'\n', &mut buf)
                     .is_ok_and(|n| n > 0)
                 {
-                    let cut = buf.len() as u64 == Self::LINE_BYTES && !buf.ends_with(b"\n");
                     let text = String::from_utf8_lossy(&buf);
                     let mut line = text.trim_end();
-                    if cut {
-                        // the rest of a long line goes, and so does its last
-                        // word, which may be the start of a URL
-                        let _ = reader.skip_until(b'\n');
+                    // A line that fills LINE_BYTES was cut, here or by git,
+                    // whose messages stop at 4096 bytes: the rest of it goes,
+                    // and so does its last word, which may start a URL
+                    if buf.len() as u64 == Self::LINE_BYTES {
+                        if !buf.ends_with(b"\n") {
+                            let _ = reader.skip_until(b'\n');
+                        }
                         line = line
                             .rsplit_once(char::is_whitespace)
                             .map_or("", |(kept, _)| kept);
@@ -377,10 +379,14 @@ mod tests {
 
     #[test]
     fn stderr_tail_shows_no_credentials() {
-        // a URL that a cut at LINE_BYTES would split
+        // a URL that a cut at LINE_BYTES splits, one git cut itself (its
+        // messages stop at 4096 bytes), and a whole one
         let pad = "x ".repeat(2041);
-        let output =
-            format!("{pad}https://alice:ghp_SECRET@h/r\nfatal: 'https://a:ghp_SECRET@h/r'\n");
+        let git_cut = format!("warning: {}https://alice:ghp_SECRET", "y ".repeat(2031));
+        assert_eq!(git_cut.len() + 1, StderrTail::LINE_BYTES as usize);
+        let output = format!(
+            "{pad}https://alice:ghp_SECRET@h/r\n{git_cut}\nfatal: 'https://a:ghp_SECRET@h/r'\n"
+        );
         let shown = Arc::new(Mutex::new(String::new()));
         let seen = Arc::clone(&shown);
         let tail = StderrTail::spawn(Some(std::io::Cursor::new(output)), move |line| {

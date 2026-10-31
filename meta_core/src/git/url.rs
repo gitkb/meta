@@ -36,6 +36,67 @@ enum Parts<'a> {
     Local(&'a str),
 }
 
+impl<'a> Parts<'a> {
+    fn of(url: &'a str) -> Self {
+        let url = url.trim();
+        // A remote helper comes first: `ext::ssh -p 2222 host` is no scp
+        if let Some((transport, address)) = url.split_once("::") {
+            if is_scheme(transport) {
+                return Parts::Helper(address);
+            }
+        }
+        if let Some((scheme, rest)) = url.split_once("://").filter(|(s, _)| is_scheme(s)) {
+            // the authority ends where the path, query or fragment starts
+            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            let (authority, path) = rest.split_at_checked(end).unwrap_or((rest, ""));
+            let path = path.strip_prefix('/').unwrap_or(path);
+            let (userinfo, host_port) = match authority.rsplit_once('@') {
+                Some((userinfo, host_port)) => (Some(userinfo), host_port),
+                None => (None, authority),
+            };
+            // `[v6]:port`, `host:port` or a bare host
+            let (host, port) = match host_port.rsplit_once(':') {
+                Some((host, port)) if !port.contains(']') => (host, Some(port)),
+                _ => (host_port, None),
+            };
+            return Parts::Url {
+                scheme,
+                userinfo,
+                host,
+                port: port.filter(|p| !p.is_empty()),
+                path,
+            };
+        }
+        // As git: scp-like when a `:` comes before any `/`, and what is
+        // before it isn't a Windows drive letter. A bracketed host
+        // (`[::1]:repo`, `git@[::1]:repo`: at the start or right after the
+        // `@`) keeps its own colons.
+        let open = match url.starts_with('[') {
+            true => Some(0),
+            false => url.find("@[").map(|at| at + 1),
+        };
+        let host_end = open
+            .and_then(|open| Some(open + url.get(open..)?.find(']')?))
+            .unwrap_or(0);
+        let split = url
+            .get(host_end..)
+            .and_then(|rest| rest.find(':'))
+            .and_then(|at| Some((url.get(..host_end + at)?, url.get(host_end + at + 1..)?)));
+        match split {
+            Some((authority, path))
+                if !authority.contains('/') && !(authority.len() == 1 && cfg!(windows)) =>
+            {
+                let (user, host) = match authority.split_once('@') {
+                    Some((user, host)) => (Some(user), host),
+                    None => (None, authority),
+                };
+                Parts::Scp { user, host, path }
+            }
+            _ => Parts::Local(url),
+        }
+    }
+}
+
 impl From<String> for GitUrl {
     fn from(url: String) -> Self {
         GitUrl(url)
@@ -99,62 +160,7 @@ impl GitUrl {
 
     /// The URL taken apart as git does.
     fn parts(&self) -> Parts<'_> {
-        let url = self.0.trim();
-        // A remote helper comes first: `ext::ssh -p 2222 host` is no scp
-        if let Some((transport, address)) = url.split_once("::") {
-            if is_scheme(transport) {
-                return Parts::Helper(address);
-            }
-        }
-        if let Some((scheme, rest)) = url.split_once("://").filter(|(s, _)| is_scheme(s)) {
-            // the authority ends where the path, query or fragment starts
-            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-            let (authority, path) = rest.split_at_checked(end).unwrap_or((rest, ""));
-            let path = path.strip_prefix('/').unwrap_or(path);
-            let (userinfo, host_port) = match authority.rsplit_once('@') {
-                Some((userinfo, host_port)) => (Some(userinfo), host_port),
-                None => (None, authority),
-            };
-            // `[v6]:port`, `host:port` or a bare host
-            let (host, port) = match host_port.rsplit_once(':') {
-                Some((host, port)) if !port.contains(']') => (host, Some(port)),
-                _ => (host_port, None),
-            };
-            return Parts::Url {
-                scheme,
-                userinfo,
-                host,
-                port: port.filter(|p| !p.is_empty()),
-                path,
-            };
-        }
-        // As git: scp-like when a `:` comes before any `/`, and what is
-        // before it isn't a Windows drive letter. A bracketed host
-        // (`[::1]:repo`, `git@[::1]:repo`: at the start or right after the
-        // `@`) keeps its own colons.
-        let open = match url.starts_with('[') {
-            true => Some(0),
-            false => url.find("@[").map(|at| at + 1),
-        };
-        let host_end = open
-            .and_then(|open| Some(open + url.get(open..)?.find(']')?))
-            .unwrap_or(0);
-        let split = url
-            .get(host_end..)
-            .and_then(|rest| rest.find(':'))
-            .and_then(|at| Some((url.get(..host_end + at)?, url.get(host_end + at + 1..)?)));
-        match split {
-            Some((authority, path))
-                if !authority.contains('/') && !(authority.len() == 1 && cfg!(windows)) =>
-            {
-                let (user, host) = match authority.split_once('@') {
-                    Some((user, host)) => (Some(user), host),
-                    None => (None, authority),
-                };
-                Parts::Scp { user, host, path }
-            }
-            _ => Parts::Local(url),
-        }
+        Parts::of(&self.0)
     }
 
     /// Where git connects over ssh for this remote: user (if given), a
@@ -237,11 +243,15 @@ impl GitUrl {
 
     /// The path without a trailing `/`, `.git` or `/.git`, as git drops them.
     fn repo_path(&self) -> &str {
-        let path = match self.parts() {
-            Parts::Helper(path)
-            | Parts::Url { path, .. }
-            | Parts::Scp { path, .. }
-            | Parts::Local(path) => path,
+        // a helper's address may be a URL of its own
+        let mut parts = self.parts();
+        let path = loop {
+            match parts {
+                Parts::Helper(address) => parts = Parts::of(address),
+                Parts::Url { path, .. } | Parts::Scp { path, .. } | Parts::Local(path) => {
+                    break path
+                }
+            }
         };
         let path = path.trim_end_matches(['/', '\\']);
         let path = path.strip_suffix(".git").unwrap_or(path);
@@ -311,9 +321,7 @@ fn is_plain_user(user: &str) -> bool {
 }
 
 fn is_ssh_scheme(scheme: &str) -> bool {
-    ["ssh", "git+ssh", "ssh+git"]
-        .iter()
-        .any(|s| scheme.eq_ignore_ascii_case(s))
+    matches!(scheme, "ssh" | "git+ssh" | "ssh+git")
 }
 
 /// A host name or address with nothing else in it: letters, digits, `-`,
@@ -401,6 +409,17 @@ mod tests {
             assert!(url.ssh().is_none(), "{url:?}");
         }
         assert_eq!(parse("ext::sh -c git% %s% /srv/r1.git").name(), Some("r1"));
+        // the name of a URL a helper reads never holds its credentials
+        for url in [
+            "persistent-https::https://alice:ghp_SECRET@example.invalid/",
+            "codecommit::us-east-1://profile@repo",
+        ] {
+            assert_eq!(parse(url).name(), None, "{url}");
+        }
+        assert_eq!(
+            parse("persistent-https::https://ghp_SECRET@h/org/api.git").name(),
+            Some("api")
+        );
         // git allows a helper name to start with a digit
         assert!(matches!(parse("9p::x").parts(), Parts::Helper(_)));
         // not a helper name: what git reads as scp-like or local
@@ -412,7 +431,8 @@ mod tests {
     fn only_plain_ssh_hosts_are_ssh() {
         assert!(parse("git@github.com:org/repo").ssh().is_some());
         assert!(parse("ssh://git@github.com/org/repo").ssh().is_some());
-        assert!(parse("SSH://git@github.com/org/repo").ssh().is_some());
+        // git reads schemes case-sensitively: `SSH://` names a helper
+        assert!(parse("SSH://git@github.com/org/repo").ssh().is_none());
         assert!(parse("host.local:repo").ssh().is_some());
         assert!(parse("https://github.com/org/repo").ssh().is_none());
         assert!(parse("/srv/repo").ssh().is_none());

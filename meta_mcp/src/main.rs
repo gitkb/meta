@@ -2705,6 +2705,14 @@ mod tests {
         std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
         let result = server.tool_get_config(&serde_json::json!({})).unwrap();
         assert!(result.ends_with(config), "{result}");
+        // a key may be a URL too
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            "projects:\n  a:\n    repo: https://t@h/a.git\n    extra:\n      https://alice:ghp_SECRET@h/r.git: true\n",
+        )
+        .unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(!result.contains("ghp_SECRET"), "{result}");
         // compact JSON a scan would run across comes back whole, as YAML
         std::fs::write(
             tmp.path().join(".meta.yaml"),

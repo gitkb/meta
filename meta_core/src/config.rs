@@ -211,9 +211,18 @@ fn redact_strings(value: &mut serde_yaml_ng::Value) -> bool {
         Value::Sequence(items) => items
             .iter_mut()
             .fold(false, |hid, v| redact_strings(v) | hid),
-        Value::Mapping(map) => map
-            .values_mut()
-            .fold(false, |hid, v| redact_strings(v) | hid),
+        // keys too: a key may be a URL
+        Value::Mapping(map) => {
+            let mut hid = false;
+            *map = std::mem::take(map)
+                .into_iter()
+                .map(|(mut key, mut value)| {
+                    hid |= redact_strings(&mut key) | redact_strings(&mut value);
+                    (key, value)
+                })
+                .collect();
+            hid
+        }
         Value::Tagged(tagged) => redact_strings(&mut tagged.value),
         _ => false,
     }
@@ -495,12 +504,15 @@ impl Workspace {
             )
         })?;
 
-        let config: MetaConfig = serde_yaml_ng::from_str(&config_str).with_context(|| {
-            format!(
-                "Failed to parse YAML config file: {}",
-                escape_path(meta_path)
-            )
-        })?;
+        // serde's message quotes the value it rejects, a URL's credentials too
+        let config: MetaConfig = serde_yaml_ng::from_str(&config_str)
+            .map_err(|e| anyhow::anyhow!("{}", crate::git::redact_urls(&e.to_string())))
+            .with_context(|| {
+                format!(
+                    "Failed to parse YAML config file: {}",
+                    escape_path(meta_path)
+                )
+            })?;
 
         // Convert project entries to normalized, validated ProjectInfo
         // in name order, so the first bad entry reported is always the same one
@@ -1792,6 +1804,16 @@ mod tests {
     fn parse_err(json: &str) -> String {
         let dir = tempfile::tempdir().unwrap();
         parse_err_in(dir.path(), json)
+    }
+
+    #[test]
+    fn a_config_of_the_wrong_shape_shows_no_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".meta.yaml");
+        std::fs::write(&path, "projects: https://alice:ghp_SECRET@h/r.git\n").unwrap();
+        let err = format!("{:#}", Workspace::load(&path).unwrap_err());
+        assert!(err.contains("https://***@h/r.git"), "{err}");
+        assert!(!err.contains("ghp_SECRET"), "{err}");
     }
 
     #[test]

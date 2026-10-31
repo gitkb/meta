@@ -146,17 +146,12 @@ fn build_test_and_clean_run_in_each_projects_own_repository() {
     }
 }
 
-/// The reply to one tool call.
-fn call_reply(dir: &Path, tool: &str, arguments: serde_json::Value) -> serde_json::Value {
+/// One tool call's text, as JSON.
+fn call(dir: &Path, tool: &str, arguments: serde_json::Value) -> serde_json::Value {
     let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": tool, "arguments": arguments}});
     let out = meta_mcp(dir, &[], &request.to_string(), &[]);
-    serde_json::from_slice(&out.stdout).unwrap()
-}
-
-/// One tool call's text, as JSON.
-fn call(dir: &Path, tool: &str, arguments: serde_json::Value) -> serde_json::Value {
-    let reply = call_reply(dir, tool, arguments);
+    let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let text = reply["result"]["content"][0]["text"]
         .as_str()
         .unwrap_or_default();
@@ -512,13 +507,19 @@ fn a_running_call_can_be_cancelled_and_others_are_answered_meanwhile() {
 #[test]
 #[cfg(unix)]
 fn a_command_too_long_to_start_says_why() {
+    use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
-    let reply = call_reply(
-        tmp.path(),
-        "meta_exec",
-        serde_json::json!({"command": ["echo", "y".repeat(3_000_000)]}),
-    );
+    // a `meta` to find, so starting it fails for its arguments' size alone
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::write(bin.join("meta"), "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(bin.join("meta"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "meta_exec",
+            "arguments": {"command": ["echo", "y".repeat(3_000_000)]}}});
+    let out = meta_mcp(tmp.path(), &[], &request.to_string(), &[("PATH", &bin)]);
+    let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(reply["result"]["isError"], true, "{reply}");
     let text = reply["result"]["content"][0]["text"].as_str().unwrap();
     assert!(

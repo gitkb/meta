@@ -2,7 +2,6 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 // ==================== Domain Types ====================
 
@@ -37,15 +36,6 @@ impl std::str::FromStr for RepoSpec {
             }),
         }
     }
-}
-
-// ==================== Internal Types ====================
-
-/// Resolved worktree context for operations that need meta_dir, worktree_root, and worktree path.
-pub struct WorktreeContext {
-    pub configs: Option<super::helpers::Configs>,
-    pub worktree_root: PathBuf,
-    pub wt_dir: PathBuf,
 }
 
 // ==================== JSON Output Structures ====================

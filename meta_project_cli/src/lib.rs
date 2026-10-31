@@ -124,6 +124,9 @@ struct DependentsArgs {
     /// Emit machine-readable dependent project records
     #[arg(long)]
     json: bool,
+    /// Look in the root workspace of nested meta repos
+    #[arg(short, long)]
+    recursive: bool,
 }
 
 /// Execute a project command and return the result
@@ -162,7 +165,7 @@ pub fn execute_command(
             Ok(dependents) => handle_project_dependents(
                 &dependents.project,
                 options.json_output || dependents.json,
-                options.recursive,
+                options.recursive || dependents.recursive,
                 cwd,
             ),
             Err(result) => result,
@@ -461,11 +464,7 @@ fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result
     let mut workspace = config::Workspace::find(cwd, None)?
         .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
     if recursive {
-        let root = config::find_root_meta_dir(&workspace.dir)?;
-        if root != workspace.dir {
-            workspace = config::Workspace::in_dir(&root)?
-                .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(&root)))?;
-        }
+        workspace = workspace.root()?;
     }
     let graph = DependencyGraph::build(workspace.projects.into_iter().map(Into::into).collect())?;
     let dependents = graph

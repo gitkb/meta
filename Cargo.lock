@@ -943,6 +943,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "shlex",
  "tempfile",
 ]
 
@@ -984,7 +985,6 @@ dependencies = [
  "meta_core",
  "serde",
  "serde_json",
- "shlex",
  "tempfile",
 ]
 

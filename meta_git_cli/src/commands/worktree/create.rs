@@ -11,13 +11,11 @@ use meta_git_lib::worktree::git_ops::*;
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::hooks::fire_post_create;
 use meta_git_lib::worktree::record::{self, SetRecord};
-use meta_git_lib::worktree::safety::{
-    check_worktree_removal, delete_checked_set, linked_worktree_admin_dir,
-};
+use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
 use meta_git_lib::worktree::types::{CreateOutput, CreateRepoEntry};
 
 use super::cli_types::CreateArgs;
-use crate::helpers::shell_quote;
+use meta_core::display::shell_quote;
 
 pub(crate) fn handle_create(
     args: CreateArgs,
@@ -85,13 +83,7 @@ pub(crate) fn handle_create(
     let configs = Configs::find()?;
     // --recursive works from the root of the workspace tree
     let configs = match recursive {
-        true => {
-            let root = meta_core::config::find_root_meta_dir(&configs.here.dir)?;
-            match Workspace::in_dir(&root)? {
-                Some(workspace) if root != configs.here.dir => Configs::of(workspace)?,
-                _ => configs,
-            }
-        }
+        true => Configs::of(configs.here.root()?)?,
         false => configs,
     };
     let meta_dir = configs.here.dir.clone();
@@ -278,8 +270,8 @@ pub(crate) fn handle_create(
             custom: custom_meta.clone(),
         };
         let mark = |checkout: &std::path::Path| {
-            linked_worktree_admin_dir(checkout)
-                .and_then(|admin| record::write(&admin, &set_record))
+            meta_core::gitdir::linked(checkout)
+                .and_then(|linked| record::write(&linked.admin, &set_record))
                 .with_context(|| format!("Cannot record the worktree {}", escape_path(checkout)))
         };
         // If "." is included, create it first (it becomes the worktree root;
@@ -1001,7 +993,7 @@ mod tests {
             ttl_seconds: None,
             custom: HashMap::new(),
         };
-        record::write(&linked_worktree_admin_dir(&set).unwrap(), &set_record).unwrap();
+        record::write(&meta_core::gitdir::linked(&set).unwrap().admin, &set_record).unwrap();
         assert_eq!(
             check_worktree_removal(&set).unwrap().missing_records.len(),
             1

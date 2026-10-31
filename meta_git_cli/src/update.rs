@@ -37,17 +37,16 @@ pub(crate) fn execute_git_update(
     };
     let mut roots = Vec::new();
     for dir in dirs {
-        if let Some(workspace) = config::Workspace::in_dir(&dir)? {
-            roots.push((dir, workspace));
-        }
+        roots.extend(config::Workspace::in_dir(&dir)?);
     }
 
-    for (_, workspace) in &roots {
+    for workspace in &roots {
         crate::ssh::warn_remote_mismatches(workspace);
     }
 
     // Repos that exist locally but are not in .meta.yaml
-    for (dir, workspace) in &roots {
+    for workspace in &roots {
+        let dir = &workspace.dir;
         let config_projects: HashSet<&str> =
             workspace.projects.iter().map(|p| p.path.as_str()).collect();
         for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -79,7 +78,8 @@ pub(crate) fn execute_git_update(
     let queue = Arc::new(CloneQueue::new(None, meta_depth)); // No git depth for update
 
     // Seed the queue from all known .meta.yaml files
-    for (dir, workspace) in &roots {
+    for workspace in &roots {
+        let dir = &workspace.dir;
         // Determine relative depth based on whether it's the cwd or nested
         let depth_level = if dir.as_path() == cwd { 0 } else { 1 };
         queue.push_from_workspace(workspace, depth_level)?;

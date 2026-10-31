@@ -171,22 +171,27 @@ impl DependencyGraph {
     }
 
     /// The projects that depend directly on `project` (a project's name, or
-    /// a capability one provides), sorted, each once; `None` when no project
-    /// has that name or provides it.
+    /// else a capability one provides: the first such project by name),
+    /// through its name or anything it provides, sorted; `None` when no
+    /// project has that name or provides it.
     pub fn dependents_of(&self, project: &str) -> Option<Vec<&str>> {
-        let name = match self.projects.get_key_value(project) {
-            Some((name, _)) => name,
-            None => self.providers.get(project)?,
-        };
+        let target = self.projects.get(project).or_else(|| {
+            self.projects
+                .values()
+                .filter(|p| p.provides.iter().any(|t| t == project))
+                .min_by_key(|p| &p.name)
+        })?;
+        let names: Vec<&str> = std::iter::once(target.name.as_str())
+            .chain(target.provides.iter().map(String::as_str))
+            .collect();
         let mut dependents: Vec<&str> = self
-            .dependents
-            .get(name)?
-            .iter()
-            .map(String::as_str)
-            .filter(|d| d != name)
+            .projects
+            .values()
+            .filter(|p| p.name != target.name)
+            .filter(|p| p.depends_on.iter().any(|d| names.contains(&d.as_str())))
+            .map(|p| p.name.as_str())
             .collect();
         dependents.sort_unstable();
-        dependents.dedup();
         Some(dependents)
     }
 
@@ -453,15 +458,23 @@ mod tests {
             project("provider", &["util"], &["provider"]),
             project("meta_cli", &[], &["loop-lib", "loop_lib", "util"]),
             project("plugin", &[], &["loop_lib", "Loop-Lib"]),
+            project("db_a", &["db"], &[]),
+            project("db_b", &["db"], &[]),
+            project("app", &[], &["db"]),
         ])
         .unwrap();
         // by name or by what it provides, each dependent once, sorted
         for query in ["loop_lib", "loop-lib"] {
             assert_eq!(graph.dependents_of(query), Some(vec!["meta_cli", "plugin"]));
         }
-        // a name wins over a capability; a project never depends on itself
+        // a name wins over a capability; what a project provides counts
+        // for it; a project never depends on itself
         assert_eq!(graph.dependents_of("util"), Some(vec!["meta_cli"]));
-        assert_eq!(graph.dependents_of("provider"), Some(vec![]));
+        assert_eq!(graph.dependents_of("provider"), Some(vec!["meta_cli"]));
         assert_eq!(graph.dependents_of("nonexistent"), None);
+        // what several provide counts for each of them
+        for provider in ["db_a", "db_b", "db"] {
+            assert_eq!(graph.dependents_of(provider), Some(vec!["app"]));
+        }
     }
 }

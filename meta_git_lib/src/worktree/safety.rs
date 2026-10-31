@@ -309,7 +309,11 @@ fn add_member(
 /// admin directory: `None` if it isn't a linked worktree or has no record,
 /// an error if it has a record that can't be trusted.
 pub fn member_record(checkout: &Path) -> Result<Option<(PathBuf, SetRecord)>> {
-    let Ok((admin, repo_git_dir)) = linked_worktree_dirs(checkout) else {
+    let Ok(gitdir::Linked {
+        admin,
+        common: repo_git_dir,
+    }) = gitdir::linked(checkout)
+    else {
         return Ok(None);
     };
     Ok(trusted_record(&admin, &repo_git_dir)?.map(|record| (admin, record)))
@@ -349,8 +353,8 @@ enum GitEntry {
 fn git_entry(dir: &Path) -> Result<GitEntry> {
     let git = dir.join(".git");
     match git.symlink_metadata() {
-        Ok(meta) if meta.is_file() => Ok(match linked_worktree_dirs(dir) {
-            Ok(dirs) => GitEntry::Worktree(dirs),
+        Ok(meta) if meta.is_file() => Ok(match gitdir::linked(dir) {
+            Ok(linked) => GitEntry::Worktree((linked.admin, linked.common)),
             Err(e) => GitEntry::Repository(format!("not a linked worktree ({e:#})")),
         }),
         Ok(_) => Ok(GitEntry::Repository(
@@ -363,19 +367,6 @@ fn git_entry(dir: &Path) -> Result<GitEntry> {
         }),
         Err(e) => Err(e).with_context(|| format!("Cannot inspect {}", escape_path(&git))),
     }
-}
-
-/// The admin directory of the linked worktree checked out at `checkout`, in
-/// its repository's git directory (see [`linked_worktree_dirs`]).
-pub fn linked_worktree_admin_dir(checkout: &Path) -> Result<PathBuf> {
-    linked_worktree_dirs(checkout).map(|(admin, _)| admin)
-}
-
-/// The admin directory and repository git directory of the linked worktree
-/// at `checkout` (see [`gitdir::linked`]).
-fn linked_worktree_dirs(checkout: &Path) -> Result<(PathBuf, PathBuf)> {
-    let linked = gitdir::linked(checkout)?;
-    Ok((linked.admin, linked.common))
 }
 
 /// Walk the set without following links. `owned` means a repository above
@@ -705,7 +696,7 @@ mod tests {
     }
 
     fn mark(checkout: &Path, record: &SetRecord) {
-        record::write(&linked_worktree_admin_dir(checkout).unwrap(), record).unwrap();
+        record::write(&gitdir::linked(checkout).unwrap().admin, record).unwrap();
     }
 
     #[test]
@@ -768,7 +759,7 @@ mod tests {
         // it: the backlink holds, but git doesn't keep it there
         let fake = tmp.path().join("fake");
         repo_with_worktree(tmp.path(), "real", &fake.join("real"));
-        let admin = linked_worktree_admin_dir(&fake.join("real")).unwrap();
+        let admin = gitdir::linked(&fake.join("real")).unwrap().admin;
         let copy = fake.join("admin");
         std::fs::create_dir(&copy).unwrap();
         for file in ["HEAD", "commondir", "gitdir"] {

@@ -12,12 +12,12 @@ use super::cli_types::StatusArgs;
 /// Render a named set, preserving legacy defaults unless recursive is requested.
 pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
     let name = &args.name;
-    let ctx = resolve_existing_worktree(name)?;
+    let wt_dir = resolve_existing_worktree(name)?;
     // Membership without git; then one status per repo
     let members = if args.recursive {
-        meta_cli::worktree::discover_worktree_members_recursive(&ctx.wt_dir)?
+        meta_cli::worktree::discover_worktree_members_recursive(&wt_dir)?
     } else {
-        meta_cli::worktree::discover_worktree_members(&ctx.wt_dir)?
+        meta_cli::worktree::discover_worktree_members(&wt_dir)?
     };
     anyhow::ensure!(
         !members.is_empty(),

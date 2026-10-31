@@ -56,6 +56,10 @@ fn a_hooks_repository_variables_do_not_reach_metas_git() {
             .env("GIT_DIR", hook.join(".git"))
             .env("GIT_WORK_TREE", &hook)
             .env("GIT_INDEX_FILE", hook.join(".git/index"))
+            // the user's own settings, which git passes on to submodules too
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "meta.test")
+            .env("GIT_CONFIG_VALUE_0", "kept")
             .env("HOME", &tmp)
             .env("XDG_CONFIG_HOME", tmp.join("xdg"))
             .env("GIT_CONFIG_GLOBAL", tmp.join("no-gitconfig"))
@@ -75,11 +79,18 @@ fn a_hooks_repository_variables_do_not_reach_metas_git() {
         serde_json::from_slice(&meta(&["context", "--json", "--no-cache"]).stdout).unwrap();
     assert_eq!(context["repos"][0]["branch"], "on-a", "{context}");
 
-    // A command meta runs in each repo
+    // A command meta runs in each repo, with the user's settings
     let out = meta(&["exec", "--", "git", "branch", "--show-current"]);
     let shown = String::from_utf8_lossy(&out.stdout);
     assert!(
         shown.contains("on-a") && shown.contains("on-workspace") && !shown.contains("on-hook"),
         "{shown}"
+    );
+    let out = meta(&["exec", "--", "git", "config", "meta.test"]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).matches("kept").count(),
+        2,
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
     );
 }

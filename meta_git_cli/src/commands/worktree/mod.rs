@@ -21,7 +21,6 @@ use cli_types::WorktreeCommands;
 
 /// Clap parser wrapper for worktree subcommands.
 #[derive(Parser)]
-#[command(no_binary_name = true)]
 struct WorktreeParser {
     #[command(subcommand)]
     command: WorktreeCommands,
@@ -84,7 +83,12 @@ pub fn execute_worktree_command(
         return CommandResult::Message(String::new());
     }
 
-    match WorktreeParser::try_parse_from(&clap_args) {
+    let name = if command.starts_with("git ") {
+        "git worktree"
+    } else {
+        "worktree"
+    };
+    match meta_plugin_protocol::parse_args::<WorktreeParser>(name, &clap_args) {
         Ok(parsed) => match handle_worktree_command(
             parsed.command,
             options.verbose,
@@ -95,25 +99,7 @@ pub fn execute_worktree_command(
             Ok(()) => CommandResult::Message(String::new()),
             Err(e) => CommandResult::Error(format!("{e:#}")),
         },
-        Err(e) => {
-            // Clap treats --help and --version as "errors" with special ErrorKind
-            use clap::error::ErrorKind;
-            match e.kind() {
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
-                    // These are success cases - print and exit 0
-                    println!("{e}");
-                    CommandResult::Message(String::new())
-                }
-                _ => {
-                    // Actual parse errors: clap's message names the problem
-                    // and where to get help; the whole git help would bury it
-                    let message =
-                        meta_core::args::escaped_error::<WorktreeParser>(&clap_args).to_string();
-                    let message = message.strip_prefix("error: ").unwrap_or(&message);
-                    CommandResult::Error(message.trim_end().to_string())
-                }
-            }
-        }
+        Err(result) => result,
     }
 }
 

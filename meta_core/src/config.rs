@@ -410,6 +410,16 @@ impl Workspace {
             .transpose()
     }
 
+    /// The workspace at the top of the tree this one is nested in (see
+    /// [`find_root_meta_dir`]); this one at the top.
+    pub fn root(self) -> anyhow::Result<Self> {
+        let root = find_root_meta_dir(&self.dir)?;
+        if root == self.dir {
+            return Ok(self);
+        }
+        Ok(Self::in_dir(&root)?.unwrap_or(self))
+    }
+
     /// Read and check the config at `meta_path`.
     ///
     /// Every project is checked by [`validate_project`] and no two projects

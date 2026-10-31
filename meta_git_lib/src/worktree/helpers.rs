@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use meta_core::display::{escape, escape_path};
 use std::path::{Path, PathBuf};
 
-use super::types::WorktreeContext;
 use meta_core::config::{ProjectInfo, Workspace};
 
 pub fn validate_worktree_name(name: &str) -> Result<()> {
@@ -50,16 +49,25 @@ impl Configs {
         Workspace::find(&cwd, None)?.map(Self::of).transpose()
     }
 
-    /// The configs for `here`.
+    /// The configs for `here`. A source checkout without a config is still
+    /// the owner, with no settings of its own.
     pub fn of(here: Workspace) -> Result<Self> {
-        let owner = match meta_core::config::set_source(&here.dir).filter(|s| s.is_dir()) {
-            Some(source) => Workspace::in_dir(&source)?,
-            None => None,
+        let Some(source) = meta_core::config::set_source(&here.dir).filter(|s| s.is_dir()) else {
+            return Ok(Self {
+                owner: here.clone(),
+                here,
+            });
         };
-        Ok(Self {
-            owner: owner.unwrap_or_else(|| here.clone()),
-            here,
-        })
+        let owner = Workspace::in_dir(&source)?.unwrap_or_else(|| Workspace {
+            config_path: source.join(meta_core::config::META_CONFIG_NAME),
+            dir: source,
+            projects: Vec::new(),
+            ignore: Vec::new(),
+            defaults: Default::default(),
+            worktrees_dir: None,
+            worktree: Default::default(),
+        });
+        Ok(Self { here, owner })
     }
 }
 
@@ -117,31 +125,16 @@ pub fn worktree_set_dir(worktree_root: &Path, name: &str) -> Result<PathBuf> {
     Ok(worktree_root.join(name))
 }
 
-/// Resolve worktree context for a named worktree.
-/// Returns the configs (for hooks), worktree_root, and the specific worktree directory.
-pub fn resolve_worktree_context(name: &str) -> Result<WorktreeContext> {
+/// The directory of the existing worktree set `name`.
+pub fn resolve_existing_worktree(name: &str) -> Result<PathBuf> {
+    validate_worktree_name(name)?;
     let configs = Configs::find_optional()?;
     let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner))?;
     let wt_dir = worktree_set_dir(&worktree_root, name)?;
-    Ok(WorktreeContext {
-        configs,
-        worktree_root,
-        wt_dir,
-    })
-}
-
-/// Resolve worktree context and verify the worktree exists.
-pub fn resolve_existing_worktree(name: &str) -> Result<WorktreeContext> {
-    validate_worktree_name(name)?;
-    let ctx = resolve_worktree_context(name)?;
-    if !ctx.wt_dir.exists() {
-        anyhow::bail!(
-            "Worktree '{}' not found at {}",
-            name,
-            escape_path(&ctx.wt_dir)
-        );
+    if !wt_dir.exists() {
+        anyhow::bail!("Worktree '{}' not found at {}", name, escape_path(&wt_dir));
     }
-    Ok(ctx)
+    Ok(wt_dir)
 }
 
 /// Resolve, validate existence, and discover repos in a named worktree.
@@ -150,8 +143,8 @@ pub fn resolve_existing_worktree(name: &str) -> Result<WorktreeContext> {
 pub fn discover_and_validate_worktree(
     name: &str,
 ) -> Result<Vec<meta_cli::worktree::WorktreeRepoInfo>> {
-    let ctx = resolve_existing_worktree(name)?;
-    let repos = meta_cli::worktree::discover_worktree_repos(&ctx.wt_dir)?;
+    let wt_dir = resolve_existing_worktree(name)?;
+    let repos = meta_cli::worktree::discover_worktree_repos(&wt_dir)?;
     if repos.is_empty() {
         anyhow::bail!("No repos found in worktree '{}'", escape(name));
     }
@@ -437,12 +430,12 @@ mod tests {
         assert!(err.to_string().contains("only ASCII alphanumeric"));
     }
 
-    /// A user-given name in an error is shown escaped, so the error stays
-    /// one line with no control characters.
     fn workspace(dir: &Path) -> Workspace {
         Workspace::in_dir(dir).unwrap().unwrap()
     }
 
+    /// A user-given name in an error is shown escaped, so the error stays
+    /// one line with no control characters.
     fn assert_escaped(err: anyhow::Error) {
         let err = err.to_string();
         assert!(!err.contains('\n') && !err.contains('\x1b'), "{err:?}");

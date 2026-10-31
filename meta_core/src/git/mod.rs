@@ -13,15 +13,15 @@ pub use status::{RepoStatus, StatusEntry};
 pub use url::GitUrl;
 
 /// The variables that tie git to one repository, which git itself clears
-/// when it runs in another (`git rev-parse --local-env-vars`). A git hook or
-/// alias sets some of them (`GIT_DIR`, `GIT_INDEX_FILE`); left in place, git
-/// would act on that repository from every directory meta runs it in.
+/// when it runs in another (`git rev-parse --local-env-vars`, less the
+/// `-c`/`GIT_CONFIG_COUNT` settings git keeps for a submodule: they are the
+/// user's, not the repository's). A git hook or alias sets some of them
+/// (`GIT_DIR`, `GIT_INDEX_FILE`); left in place, git would act on that
+/// repository from every directory meta runs it in.
 pub const REPO_ENV_VARS: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_COMMON_DIR",
     "GIT_CONFIG",
-    "GIT_CONFIG_COUNT",
-    "GIT_CONFIG_PARAMETERS",
     "GIT_DIR",
     "GIT_GRAFT_FILE",
     "GIT_IMPLICIT_WORK_TREE",
@@ -108,7 +108,8 @@ mod tests {
     #[test]
     fn every_variable_git_reports_is_cleared() {
         let reported = run(Path::new("."), ["rev-parse", "--local-env-vars"]).unwrap();
-        for name in reported.lines() {
+        let kept = ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"];
+        for name in reported.lines().filter(|name| !kept.contains(name)) {
             assert!(REPO_ENV_VARS.contains(&name), "{name} is not cleared");
         }
     }

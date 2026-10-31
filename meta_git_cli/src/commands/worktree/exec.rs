@@ -117,7 +117,7 @@ pub(crate) fn handle_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<(
     let repos = discover_and_validate_worktree(name)?;
 
     let config = build_loop_config(
-        &resolve_existing_worktree(name)?.wt_dir,
+        &resolve_existing_worktree(name)?,
         &repos,
         args.include,
         args.exclude,

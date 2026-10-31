@@ -12,7 +12,7 @@ pub(crate) struct CommitArgs {
     #[arg(short, long)]
     edit: bool,
     /// Use this message in every repo
-    #[arg(short, long)]
+    #[arg(short, long, allow_hyphen_values = true)]
     message: Option<String>,
 }
 

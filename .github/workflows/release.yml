@@ -231,15 +231,15 @@ jobs:
 
       # Publish in dependency order
       # Tier 1: No internal dependencies
-      - name: Publish meta_plugin_protocol
-        run: cargo publish -p meta_plugin_protocol --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
-
       - name: Publish meta_core
         run: cargo publish -p meta_core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
         continue-on-error: true
 
       # Tier 2: Depends on tier 1
+      - name: Publish meta_plugin_protocol
+        run: cargo publish -p meta_plugin_protocol --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        continue-on-error: true
+
       # loop_lib's meta_core requirement is "<1" so child-repo CI (which builds
       # meta_core as 0.0.0 or 0.1.0) resolves; publish it with an ordinary
       # requirement on the meta_core released alongside it.

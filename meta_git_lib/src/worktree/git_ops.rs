@@ -22,7 +22,9 @@ fn ensure_checkout_config_is_not_bare(repo_path: &Path) -> Result<()> {
                 "Repository '{}' is a checked-out work tree but its shared Git config has \
                  core.bare=true.\nRepair it with:\n  git -C {} config --local core.bare false",
                 escape_path(repo_path),
-                escape(&shlex::try_quote(&repo_path.to_string_lossy()).unwrap_or_default())
+                escape(&meta_core::display::shell_quote(
+                    &repo_path.to_string_lossy()
+                ))
             );
         }
     } else if output.status.code() != Some(1) {
@@ -575,7 +577,7 @@ mod tests {
         assert!(error.contains("core.bare=true"));
         assert!(error.contains(&format!(
             "git -C {} config --local core.bare false",
-            shlex::try_quote(&tmp.path().to_string_lossy()).unwrap()
+            meta_core::display::shell_quote(&tmp.path().to_string_lossy())
         )));
     }
 

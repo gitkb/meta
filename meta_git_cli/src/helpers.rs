@@ -25,11 +25,3 @@ pub(crate) fn get_project_directories(cwd: &Path) -> anyhow::Result<Vec<String>>
     paths.insert(0, ".".to_string());
     Ok(paths)
 }
-
-/// `value` quoted for a POSIX shell, for commands meta prints for the user
-/// to paste: plain words stay as they are.
-pub(crate) fn shell_quote(value: &str) -> String {
-    shlex::try_quote(value)
-        .map(|quoted| quoted.into_owned())
-        .unwrap_or_default()
-}

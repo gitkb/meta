@@ -168,9 +168,8 @@ mod tests {
 
         let linked = linked(&wt).unwrap();
         assert_eq!(linked.common.canonicalize().unwrap(), git_dir);
-        assert!(linked
-            .admin
-            .starts_with(repo.join(".git").join("worktrees")));
+        let admin = linked.admin.canonicalize().unwrap();
+        assert!(admin.starts_with(git_dir.join("worktrees")), "{admin:?}");
         assert!(super::linked(&repo).is_err());
     }
 

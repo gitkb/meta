@@ -6,11 +6,11 @@
 //! dependency on `~/.ssh/config`), let them share one connection through the
 //! `GIT_SSH_COMMAND` this module returns.
 
-use crate::helpers::shell_quote;
 use console::style;
 use log::{debug, warn};
 use meta_core::config::{ProjectInfo, Workspace};
 use meta_core::display::escape;
+use meta_core::display::shell_quote;
 use meta_core::git::GitUrl;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -107,7 +107,7 @@ pub fn establish_ssh_masters(urls: &[&str]) -> SshMasters {
     let targets: Vec<SshTarget> = urls
         .iter()
         .filter_map(|url| SshTarget::of(url))
-        .filter(|t| seen.insert(format!("{}@{}:{}", t.resolved_user(), t.host, t.port)))
+        .filter(|t| seen.insert(t.socket_name()))
         .collect();
 
     // No SSH remotes — nothing to do, parallel execution is safe
@@ -146,14 +146,7 @@ pub fn establish_ssh_masters(urls: &[&str]) -> SshMasters {
         // A socket from a previous run, if its master is still live
         let socket_path = sockets_dir.join(target.socket_name());
         if socket_path.exists() {
-            let mut probe = Command::new("ssh");
-            probe
-                .args(["-O", "check", "-S"])
-                .arg(&socket_path)
-                .arg(target.destination())
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
+            let probe = target.ssh(&["-O", "check", "-S", &socket_path.to_string_lossy()]);
             if ran(probe) {
                 debug!(
                     "Reusing live socket for {} from previous run",

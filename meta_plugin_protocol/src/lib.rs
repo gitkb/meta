@@ -400,3 +400,35 @@ pub fn run_plugin(plugin: PluginDefinition) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn help_keeps_each_plugin_value_on_its_line() {
+        let forged = "x\u{1b}[2J\nFORGED".to_string();
+        let mut commands = IndexMap::new();
+        commands.insert(forged.clone(), forged.clone());
+        let mut info = PluginInfo {
+            name: forged.clone(),
+            version: forged.clone(),
+            commands: vec![forged.clone()],
+            description: Some(forged.clone()),
+            help: None,
+        };
+        let plain = help_text(&info);
+        info.help = Some(PluginHelp {
+            usage: forged.clone(),
+            commands,
+            command_sections: IndexMap::new(),
+            examples: vec![forged.clone()],
+            note: Some(forged),
+        });
+        for text in [plain, help_text(&info)] {
+            assert!(!text.contains('\u{1b}'), "{text}");
+            assert!(!text.lines().any(|l| l.starts_with("FORGED")), "{text}");
+            assert!(text.contains("x\\u{1b}[2J\\nFORGED"), "{text}");
+        }
+    }
+}

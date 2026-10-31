@@ -6,7 +6,6 @@ use meta_cli::worktree::discover_worktree_repos;
 use meta_git_lib::worktree::git_ops::git_worktree_add;
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::record;
-use meta_git_lib::worktree::safety::linked_worktree_admin_dir;
 use meta_git_lib::worktree::types::*;
 
 use super::cli_types::AddArgs;
@@ -155,8 +154,8 @@ pub(crate) fn handle_add(args: AddArgs, verbose: bool, json: bool) -> Result<()>
         };
         // A worktree that can't be recorded is reported as failed, not added
         if let Some(set_record) = &set_record {
-            if let Err(e) =
-                linked_worktree_admin_dir(&dest).and_then(|admin| record::write(&admin, set_record))
+            if let Err(e) = meta_core::gitdir::linked(&dest)
+                .and_then(|linked| record::write(&linked.admin, set_record))
             {
                 failed = Some(e.context(format!(
                     "Added '{}', but cannot record it in worktree '{name}'",

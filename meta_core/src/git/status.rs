@@ -38,6 +38,14 @@ impl RepoStatus {
     /// (`status.showUntrackedFiles=no`, `status.aheadBehind=false`) must not
     /// make a checkout look clean.
     pub fn read(dir: &Path) -> anyhow::Result<Self> {
+        // git would answer for the repository around a directory that has
+        // none of its own (a project not cloned yet, say)
+        if crate::gitdir::common_dir(dir)?.is_none() {
+            anyhow::bail!(
+                "{} is not a git repository",
+                crate::display::escape_path(dir)
+            );
+        }
         let status = super::run(
             dir,
             [
@@ -320,8 +328,11 @@ mod tests {
         assert_eq!(status.upstream.as_deref(), Some("origin/main"));
         assert_eq!(status.ahead_behind, Some((0, 1)));
         assert!(!status.is_dirty());
-        // what isn't a repository is still an error
+        // what isn't a repository is still an error, even inside one
         assert!(RepoStatus::read(dir.path()).is_err());
+        let inside = upstream.path().join("not-cloned");
+        std::fs::create_dir(&inside).unwrap();
+        assert!(RepoStatus::read(&inside).is_err());
         // and so is a checkout whose config says it is bare: it may hold
         // changes git can't report
         let checkout = repo();

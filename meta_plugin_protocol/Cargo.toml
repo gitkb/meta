@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Shared plugin protocol types for meta subprocess plugins"
 
 [dependencies]
-# Any 0.x, as for loop_lib; release.yml publishes meta_core first
+# Any 0.x, as for loop_lib; release.yml pins it and publishes meta_core first
 meta_core = { path = "../meta_core", version = "<1" }
 clap = "4.3"
 serde = { version = "1.0", features = ["derive"] }

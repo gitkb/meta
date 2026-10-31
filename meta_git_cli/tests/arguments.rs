@@ -80,8 +80,14 @@ fn clone_and_commit_refuse_what_they_do_not_take() {
 #[test]
 fn clone_and_commit_have_their_own_help() {
     let tmp = tempfile::tempdir().unwrap();
-    for command in ["git clone", "git commit"] {
-        let out = meta_git(tmp.path(), command, &["--help"], json!({}));
+    // meta sends a help request without its repos, so `-m --help` is help
+    // too, never a commit of every repo
+    for (command, args) in [
+        ("git clone", &["--help"][..]),
+        ("git commit", &["--help"]),
+        ("git commit", &["-m", "--help"]),
+    ] {
+        let out = meta_git(tmp.path(), command, args, json!({}));
         assert!(out.status.success(), "{}", text(&out));
         assert!(
             text(&out).contains(&format!("Usage: meta {command}")),

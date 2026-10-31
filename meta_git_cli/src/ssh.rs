@@ -269,7 +269,9 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
     for (project, expected, _) in &mismatches {
         eprintln!(
             "    git -C {} remote set-url origin {}",
-            escape(&shell_quote(&project.path)),
+            escape(&shell_quote(
+                &workspace.dir.join(&project.path).to_string_lossy()
+            )),
             escape(&shell_quote(expected))
         );
     }

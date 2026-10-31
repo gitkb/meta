@@ -18,7 +18,7 @@ pub(crate) fn get_project_directories_with_fallback(
 pub(crate) fn get_project_directories(cwd: &Path) -> anyhow::Result<Vec<String>> {
     // Without a .meta.yaml there is only the root; a .meta.yaml that is refused is an
     // error, not a reason to act on the root alone
-    let mut paths: Vec<String> = config::Workspace::find(cwd, None)?
+    let mut paths: Vec<String> = config::Workspace::in_dir(cwd)?
         .map(|workspace| workspace.projects.into_iter().map(|p| p.path).collect())
         .unwrap_or_default();
     paths.sort();

@@ -72,10 +72,14 @@ pub fn execute_command(
             }
         }
         "git commit" => {
+            // meta sends a help request without its repos: whatever clap
+            // makes of the arguments, it never commits
+            let help = ["--help".to_string()];
+            let args = if help_requested { &help[..] } else { args };
             return match meta_plugin_protocol::parse_args(command, args) {
                 Ok(args) => finish(commit::execute_git_commit(args, projects, options, cwd)),
                 Err(result) => result,
-            }
+            };
         }
         _ => {}
     }

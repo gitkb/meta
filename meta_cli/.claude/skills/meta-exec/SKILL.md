@@ -41,7 +41,7 @@ meta exec -- --version
 
 ## Parallel vs Sequential
 
-Commands run in parallel by default (the `.meta.yaml` meta runs with, found from cwd upward or named by `--config`, can set `defaults.parallel: false`). Use `--sequential` for live output in order, or `--parallel` to force concurrency:
+Commands run in parallel by default (a `.meta.yaml` can set `defaults.parallel: false`; meta reads it from the nearest config at or above the current directory, or from the one `--config` names). Use `--sequential` for live output in order, or `--parallel` to force concurrency:
 
 ```bash
 # Parallel (default) - faster, grouped output after completion

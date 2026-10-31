@@ -57,11 +57,15 @@ impl FromStr for GitUrl {
         }
         // As git: scp-like when a `:` comes before any `/`, and what is
         // before it isn't a Windows drive letter. A bracketed host
-        // (`git@[::1]:repo`) keeps its own colons.
-        let host_end = match (url.find('['), url.find(']')) {
-            (Some(open), Some(close)) if open < close => close,
-            _ => 0,
+        // (`[::1]:repo`, `git@[::1]:repo`: at the start or right after the
+        // `@`) keeps its own colons.
+        let open = match url.starts_with('[') {
+            true => Some(0),
+            false => url.find("@[").map(|at| at + 1),
         };
+        let host_end = open
+            .and_then(|open| Some(open + url.get(open..)?.find(']')?))
+            .unwrap_or(0);
         let split = url
             .get(host_end..)
             .and_then(|rest| rest.find(':'))
@@ -193,6 +197,12 @@ mod tests {
         assert_eq!((v6.host.as_str(), v6.path.as_str()), ("[::1]", "repo.git"));
         assert!(v6.is_ssh());
         assert_eq!(v6.name(), Some("repo"));
+        // brackets in the path are no host
+        let bracketed = parse("git@host:repo[1].git");
+        assert_eq!(
+            (bracketed.host.as_str(), bracketed.name()),
+            ("host", Some("repo[1]"))
+        );
         let https = parse("https://user:token@github.com/org/repo");
         assert_eq!(
             (https.host.as_str(), https.user.as_deref()),

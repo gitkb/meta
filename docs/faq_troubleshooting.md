@@ -194,7 +194,7 @@ meta git checkout -b feature/new-feature
 meta git commit --edit
 ```
 
-This opens the editor git uses (`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`) once, with a section for each repo that has staged changes. It needs a terminal: without one (for example in an agent or a CI job) it stops with an error; use `meta git commit -m "message"` there.
+This opens the editor git uses (`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`) once, with a section for each repo that has staged changes. It needs a terminal: without one (for example in an agent or a CI job) it stops with an error; use `meta git commit -m "message"` there. On Windows only a missing console is detected, so a hidden one still opens the editor.
 
 ---
 

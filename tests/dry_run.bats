@@ -64,9 +64,6 @@ EOF
         git clone --quiet "file://$SANDBOX/remotes/$repo.git" "$WS/$repo"
     done
     cd "$WS"
-    # a local plugin, for uninstall to refuse to remove
-    mkdir -p .meta/plugins
-    cp "$TARGET/meta-git" .meta/plugins/meta-git
 
     # A clean set, a set with work only --force discards, staged changes
     meta git worktree create clean --repo backend >/dev/null
@@ -130,9 +127,21 @@ preview() {
     python3 -c 'import json, sys; out = json.load(sys.stdin); assert out["dry_run"] and out["repos"][0]["alias"] == "frontend", out' <<< "$output"
 }
 
+@test "a preview with nothing to create fails as a run does" {
+    mkdir "$SANDBOX/empty"
+    printf '{"projects": {}}\n' > "$SANDBOX/empty/.meta.yaml"
+    cd "$SANDBOX/empty"
+    preview 1 git worktree create e --all
+    [[ "$output" == *"No repos selected; no worktree was created"* ]]
+    preview 1 git worktree exec e --ephemeral --all -- true
+    [[ "$output" == *"No repos selected; no worktree was created"* ]]
+}
+
 @test "worktree remove previews" {
     preview 0 git worktree remove clean
     [[ "$output" == *"Would remove worktree 'clean'"* ]]
+    preview 0 --json git worktree remove clean
+    [[ "$output" == *'"dry_run": true'* ]]
 }
 
 @test "worktree remove --force previews the work it would discard" {
@@ -171,7 +180,7 @@ preview() {
 @test "worktree exec --ephemeral creates, runs and removes nothing" {
     preview 0 git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
     [[ "$output" == *"Would create worktree set 'eph'"* ]]
-    [[ "$output" == *"Then would run \`touch made-by-exec\` in ., backend and remove the set."* ]]
+    [[ "$output" == *"Then would run \`touch made-by-exec\` in each repo planned above, and remove the set."* ]]
     # no nested config is read (here a broken one)
     printf '{broken' > "$WS/frontend/.meta.yaml"
     preview 0 git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
@@ -180,7 +189,8 @@ preview() {
     git -C "$WS/frontend" tag only-in-frontend
     preview 0 git worktree exec eph only-in-frontend --ephemeral --all -- touch made-by-exec
     [[ "$output" == *"Skipping 'backend': ref 'only-in-frontend' not found"* ]]
-    [[ "$output" == *"Then would run \`touch made-by-exec\` in frontend and remove the set."* ]]
+    [[ "$output" == *"frontend:"* ]]
+    [[ "$output" != *"backend:"* ]]
     # a ref no repo has fails as in a run
     preview 1 git worktree exec eph nosuchref --ephemeral --all -- touch made-by-exec
     [[ "$output" == *"No selected repo has ref 'nosuchref'; no worktree was created"* ]]
@@ -188,6 +198,8 @@ preview() {
     [[ "$output" == *"No selected repo has ref 'nosuchref'"* ]]
     # the set's own .meta.yaml, not yet made, names its repos for a filter
     preview 1 git worktree exec eph --ephemeral --repo backend --include backend -- touch made-by-exec
+    [[ "$output" == *"can't preview --include/--exclude of exec --ephemeral"* ]]
+    preview 1 git worktree exec eph --ephemeral --repo backend --exclude backend -- touch made-by-exec
     [[ "$output" == *"can't preview --include/--exclude of exec --ephemeral"* ]]
 }
 
@@ -243,6 +255,9 @@ preview() {
 }
 
 @test "plugin uninstall refuses --dry-run" {
+    # a local plugin, for uninstall to refuse to remove
+    mkdir -p .meta/plugins
+    cp "$TARGET/meta-git" .meta/plugins/meta-git
     preview 1 plugin uninstall --local meta-git
     [[ "$output" == *"meta plugin uninstall has no preview"* ]]
     [ -x .meta/plugins/meta-git ]

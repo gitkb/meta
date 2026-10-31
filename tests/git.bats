@@ -865,7 +865,7 @@ without_terminal() {
     git -C "$TEST_DIR/frontend" add README.md
     GIT_EDITOR="$TEST_DIR/no-such-editor" run with_terminal "$META_BIN" git commit --edit
     [ "$status" -ne 0 ]
-    [[ "$output" == *"no-such-editor"* ]]
+    [[ "$output" == *"The editor '$TEST_DIR/no-such-editor' failed"* ]]
     [ -n "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" ]
 }
 

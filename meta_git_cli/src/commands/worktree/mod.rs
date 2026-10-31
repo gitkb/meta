@@ -116,7 +116,7 @@ fn handle_worktree_command(
 ) -> Result<()> {
     match command {
         WorktreeCommands::Create(args) => {
-            create::handle_create(args, mode, verbose, json, global_strict).map(|_| ())
+            create::handle_create(args, mode, verbose, json, global_strict)
         }
         WorktreeCommands::Add(args) => add::handle_add(args, mode, verbose, json),
         WorktreeCommands::Remove(args) => remove::handle_remove(args, mode, verbose, json),

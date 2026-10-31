@@ -24,7 +24,7 @@ pub(crate) fn handle_create(
     verbose: bool,
     json: bool,
     global_strict: bool,
-) -> Result<Vec<std::path::PathBuf>> {
+) -> Result<()> {
     // Merge global --strict with local --strict (either enables strict mode)
     let strict = args.strict || global_strict;
 
@@ -232,29 +232,24 @@ pub(crate) fn handle_create(
             }
         }
         repos_to_create = kept;
-        if let (true, Some(r)) = (repos_to_create.is_empty(), from_ref) {
-            anyhow::bail!(
-                "No selected repo has ref '{}'; no worktree was created",
-                escape(r)
-            );
+        // and fails where it fails: nothing left to create
+        if repos_to_create.is_empty() {
+            match from_ref {
+                Some(r) => anyhow::bail!(
+                    "No selected repo has ref '{}'; no worktree was created",
+                    escape(r)
+                ),
+                None => anyhow::bail!("No repos selected; no worktree was created"),
+            }
         }
     }
-
-    // Where each repo's checkout goes in the set
-    let dests: Vec<std::path::PathBuf> = repos_to_create
-        .iter()
-        .map(|(alias, source, _)| match alias.as_str() {
-            "." => wt_dir.clone(),
-            _ => wt_dir.join(place_in_set(&meta_dir, alias, source)),
-        })
-        .collect();
 
     if mode.is_preview() {
         let plan = CreateDryRunPlan {
             name,
+            meta_dir: &meta_dir,
             wt_dir: &wt_dir,
             repos_to_create: &repos_to_create,
-            dests: &dests,
             from_ref,
             from_pr_spec,
             ephemeral,
@@ -262,7 +257,7 @@ pub(crate) fn handle_create(
             custom_meta: &custom_meta,
         };
         print_create_dry_run(&plan);
-        return Ok(dests);
+        return Ok(());
     }
 
     // Resolve/apply --from-pr: get PR head branch, override branch for the matching repo, and fetch
@@ -487,7 +482,7 @@ pub(crate) fn handle_create(
         }
     }
 
-    Ok(dests)
+    Ok(())
 }
 
 /// The commit-ish a repo doesn't have, if any: such repos are skipped. A
@@ -578,9 +573,9 @@ fn roll_back(
 
 struct CreateDryRunPlan<'a> {
     name: &'a str,
+    meta_dir: &'a std::path::Path,
     wt_dir: &'a std::path::Path,
     repos_to_create: &'a [(String, std::path::PathBuf, String)],
-    dests: &'a [std::path::PathBuf],
     from_ref: Option<&'a str>,
     from_pr_spec: Option<&'a str>,
     ephemeral: bool,
@@ -626,7 +621,12 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
     if plan.repos_to_create.is_empty() {
         println!("  (none)");
     }
-    for ((alias, source, branch), dest) in plan.repos_to_create.iter().zip(plan.dests) {
+    for (alias, source, branch) in plan.repos_to_create {
+        let dest = if alias == "." {
+            plan.wt_dir.to_path_buf()
+        } else {
+            plan.wt_dir.join(place_in_set(plan.meta_dir, alias, source))
+        };
         let mut cmd = format!(
             "git -C {} worktree add -b {} {}",
             shell_quote(&source.display().to_string()),
@@ -646,7 +646,7 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
         {
             println!("    (a link: if the root checkout holds it, the repo goes where it leads)");
         }
-        println!("    dest:   {}", escape_path(dest));
+        println!("    dest:   {}", escape_path(&dest));
         println!("    branch: {}", escape(branch));
         println!("    bash:   {}", escape(&cmd));
     }

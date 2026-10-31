@@ -302,7 +302,7 @@ impl Terminal {
         };
         #[cfg(windows)]
         let (input, output) = (open("CONIN$")?, open("CONOUT$")?);
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         let (input, output) = {
             let tty = open("/dev/tty")?;
             let foreground = rustix::termios::tcgetpgrp(&tty)

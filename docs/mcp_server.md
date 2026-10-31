@@ -37,6 +37,8 @@ Configure in Claude Desktop's `claude_desktop_config.json`:
 
 ## Tool Reference
 
+A `tag` parameter takes one tag or a comma-separated list, and selects the projects that have any of them, as `meta --tag` does.
+
 ### Core Tools
 
 #### meta_list_projects
@@ -216,11 +218,11 @@ Clean build artifacts.
 ### Discovery Tools
 
 #### meta_search_code
-Search for patterns across all repositories.
+Search for patterns across all repositories with `git grep`: tracked and untracked files, but not `.git` or what `.gitignore` leaves out. A project that fails to search reports an `error` instead of `matches`.
 
 **Parameters:**
 - `pattern` (required): Search pattern (regex)
-- `file_pattern` (optional): Filter by file pattern (e.g., "*.rs")
+- `file_pattern` (optional): Filter by file name pattern, in any directory (e.g., "*.rs")
 - `tag` (optional): Filter by tag
 
 #### meta_get_file_tree

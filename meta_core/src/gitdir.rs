@@ -47,12 +47,13 @@ pub fn is_bare(dir: &Path) -> bool {
 /// worktrees in: `.git` itself; for a linked worktree, what its admin
 /// directory's `commondir` names; for a `--separate-git-dir` checkout, what
 /// its `.git` file names; a bare repository itself. `None` when there is no
-/// repository at `dir`.
+/// repository at `dir`: a `.git` directory that isn't a git directory (an
+/// empty one, say) is none, as git looks past it to the repository around.
 pub fn common_dir(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
     let dot_git = dir.join(".git");
     let target = match gitfile_target(dir)? {
         Some(target) => target,
-        None if dot_git.is_dir() => return Ok(Some(dot_git)),
+        None if dot_git.is_dir() => return Ok(is_bare(&dot_git).then_some(dot_git)),
         None => return Ok(is_bare(dir).then(|| dir.to_path_buf())),
     };
     let commondir = target.join("commondir");
@@ -167,6 +168,9 @@ mod tests {
         assert_eq!(canonical(common_dir(&wt).unwrap()), git_dir);
         assert_eq!(canonical(common_dir(&repo.join(".git")).unwrap()), git_dir);
         assert_eq!(common_dir(tmp.path()).unwrap(), None);
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir_all(empty.join(".git")).unwrap();
+        assert_eq!(common_dir(&empty).unwrap(), None);
 
         let linked = linked(&wt).unwrap();
         assert_eq!(linked.common.canonicalize().unwrap(), git_dir);

@@ -781,7 +781,7 @@ fn handle_command_dispatch(
             {
                 let workspace = Workspace::load(&config_path)?;
                 let parallel = parallel_for(Some(&workspace.defaults));
-                let (meta_projects, ignore_list) = (workspace.projects, workspace.ignore);
+                let meta_projects = workspace.projects;
 
                 // A set lays its repos out as the workspace: a checkout's path
                 // in the set is its project's path, nested meta repos included.
@@ -848,7 +848,7 @@ fn handle_command_dispatch(
 
                 let config = loop_lib::LoopConfig {
                     directories: wt_directories.clone(),
-                    ignore: ignore_list,
+                    ignore: vec![],
                     verbose: cli.verbose,
                     silent: cli.silent,
                     parallel,
@@ -1011,7 +1011,7 @@ fn handle_command_dispatch(
     let config = loop_lib::LoopConfig {
         add_aliases_to_global_looprc: cli.add_aliases_to_global_looprc,
         directories: project_paths.clone(),
-        ignore: workspace.ignore.clone(),
+        ignore: vec![],
         verbose: cli.verbose,
         silent: cli.silent,
         parallel,
@@ -1594,15 +1594,12 @@ mod tests {
                 "projects": {{
                     "repo1": "git@github.com:org/repo1.git",
                     "repo2": "git@github.com:org/repo2.git"
-                }},
-                "ignore": ["target", "node_modules"]
+                }}
             }}"#
         )
         .unwrap();
 
-        let Workspace {
-            projects, ignore, ..
-        } = Workspace::load(file.path()).unwrap();
+        let Workspace { projects, .. } = Workspace::load(file.path()).unwrap();
         assert_eq!(projects.len(), 2);
 
         let names: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
@@ -1614,11 +1611,6 @@ mod tests {
         assert_eq!(repo1.path, "repo1");
         assert_eq!(repo1.repo.as_ref().unwrap(), "git@github.com:org/repo1.git");
         assert!(repo1.tags.is_empty());
-
-        assert_eq!(
-            ignore,
-            vec!["target".to_string(), "node_modules".to_string()]
-        );
     }
 
     #[test]
@@ -1674,16 +1666,11 @@ projects:
     tags:
       - backend
       - python
-ignore:
-  - node_modules
-  - __pycache__
 "#,
         )
         .unwrap();
 
-        let Workspace {
-            projects, ignore, ..
-        } = Workspace::load(&yaml_path).unwrap();
+        let Workspace { projects, .. } = Workspace::load(&yaml_path).unwrap();
         assert_eq!(projects.len(), 2);
 
         let web_app = projects.iter().find(|p| p.name == "web-app").unwrap();
@@ -1696,8 +1683,6 @@ ignore:
         let api = projects.iter().find(|p| p.name == "api").unwrap();
         assert_eq!(api.path, "backend/api"); // normalized
         assert_eq!(api.tags, vec!["backend", "python"]);
-
-        assert_eq!(ignore, vec!["node_modules", "__pycache__"]);
     }
 
     #[test]

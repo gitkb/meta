@@ -198,7 +198,6 @@ fn install_claude_integration_to(
                 escape_path(&rel),
                 escape_path(&link)
             );
-            skipped += 1;
             continue;
         }
 
@@ -217,13 +216,11 @@ fn install_claude_integration_to(
     // --update leaves settings untouched; --force uses the same merge as default.
     if update {
         println!("Skipped .claude/settings.json (--update preserves settings)");
-        skipped += 1;
     } else if let Some(link) = &settings_link {
         println!(
             "Skipped .claude/settings.json (reached through the symlink {}, not followed)",
             escape_path(link)
         );
-        skipped += 1;
     } else if let Some(plan) = settings_plan {
         if let Some(content) = plan.content {
             write_settings_atomic(&settings_path, &content)?;
@@ -261,17 +258,13 @@ fn install_claude_integration_to(
             skills.copied
         );
     }
+    // Only what --force or --update would refresh; every other skip has
+    // its own line above
     if skipped > 0 {
-        let hint = if update {
-            "(--update preserves settings)"
-        } else {
-            "(use --force or --update to refresh skills and rules)"
-        };
         println!(
-            "{} Skipped {} existing file(s) {}",
+            "{} Skipped {} existing file(s) (use --force or --update to refresh skills and rules)",
             "•".yellow(),
-            skipped,
-            hint
+            skipped
         );
     }
 
@@ -316,7 +309,8 @@ fn install_claude_integration_to(
 struct SkillsReport {
     /// `SKILL.md` files written into the tool's folder
     written: usize,
-    /// Existing entries left alone
+    /// Existing entries of the tool's own left alone, which `overwrite`
+    /// would refresh
     skipped: usize,
     /// Skill folders linked (or copied) into agent folders
     placed: usize,
@@ -420,7 +414,6 @@ fn install_skills_with(
                 escape_path(agent_dir),
                 escape_path(&link)
             );
-            report.skipped += 1;
             continue;
         }
         let skills_dir = root.join(agent_dir);
@@ -453,7 +446,6 @@ fn install_skills_with(
                         "Skipped".yellow(),
                         escape_path(&link)
                     );
-                    report.skipped += 1;
                     continue;
                 }
             }

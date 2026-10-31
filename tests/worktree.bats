@@ -137,6 +137,20 @@ EOF
     [ -d ".worktrees/full-task/frontend" ]
 }
 
+@test "worktree create --all skips a repo that is not cloned, and --repo refuses it" {
+    rm -rf frontend
+    run "$META_BIN" git worktree create some --all
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"'frontend' is not cloned at $TEST_DIR/frontend"*"skipping"* ]]
+    [ -d ".worktrees/some/backend" ]
+    [ ! -e ".worktrees/some/frontend" ]
+
+    run "$META_BIN" git worktree create one --repo frontend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'frontend' is not cloned at $TEST_DIR/frontend"* ]]
+    [ ! -e ".worktrees/one" ]
+}
+
 @test "worktree create defaults branch name to task name" {
     run "$META_BIN" git worktree create my-task --repo backend
     [ "$status" -eq 0 ]
@@ -644,8 +658,8 @@ assert d['totals']['files_changed'] >= 1
     cd "$TEST_DIR"
     run "$META_BIN" git worktree blablabla
     [ "$status" -eq 1 ]
-    [[ "$output" == *"unrecognized"* ]]
-    [[ "$output" == *"blablabla"* ]]
+    # the error, once
+    [ "$(grep -c "unrecognized worktree subcommand 'blablabla'" <<<"$output")" -eq 1 ]
     # Must show ACTUAL help content (not just a reference to --help)
     [[ "$output" == *"USAGE"* ]]
     [[ "$output" == *"create"* ]]

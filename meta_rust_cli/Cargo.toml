@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 description = "Rust plugin for meta CLI to run any cargo command across Rust repos"
 
 [[bin]]

@@ -872,8 +872,15 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
     execute_commands_internal(config, commands)
 }
 
+/// Whether `path` is, or lies in, a directory an `ignore` entry names: a
+/// name (`.git`, `node_modules`) or a path (`vendor/old`), matched by whole
+/// components, so `.git` doesn't ignore `.github`.
 pub fn should_ignore(path: &Path, ignore: &[String]) -> bool {
-    ignore.iter().any(|i| path.to_string_lossy().contains(i))
+    path.ancestors().any(|dir| {
+        ignore
+            .iter()
+            .any(|entry| !entry.is_empty() && dir.ends_with(entry))
+    })
 }
 
 pub fn parse_config(config_path: &Path) -> Result<LoopConfig> {

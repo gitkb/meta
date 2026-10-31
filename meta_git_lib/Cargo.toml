@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 description = "Reusable git operations for meta plugins"
 
 [dependencies]

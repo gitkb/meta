@@ -68,10 +68,20 @@ fn test_expand_directories() {
 
     let directories = vec![temp_dir.path().to_str().unwrap().to_string()];
     let ignore = vec![".git".to_string()];
+    fs::create_dir(temp_dir.path().join(".git")).unwrap();
+    fs::create_dir(temp_dir.path().join(".github")).unwrap();
 
     let expanded = crate::expand_directories(&directories, &ignore).unwrap();
 
-    assert_eq!(expanded.len(), 3); // Including the root directory itself
+    assert_eq!(expanded.len(), 4); // Including the root directory itself, not .git
+    assert!(expanded.contains(
+        &temp_dir
+            .path()
+            .join(".github")
+            .to_str()
+            .unwrap()
+            .to_string()
+    ));
     assert!(expanded.contains(&temp_dir.path().to_str().unwrap().to_string()));
     assert!(expanded.contains(&dir1.to_str().unwrap().to_string()));
     assert!(expanded.contains(&dir2.to_str().unwrap().to_string()));
@@ -86,6 +96,15 @@ fn test_should_ignore() {
 
     let path = Path::new("/some/path/normal/file");
     assert!(!should_ignore(path, &ignore));
+
+    // whole names, not parts of one
+    assert!(!should_ignore(Path::new("/w/.github"), &ignore));
+    let ignore = vec!["a".to_string(), "vendor/old".to_string()];
+    assert!(should_ignore(Path::new("/w/a/src"), &ignore));
+    assert!(!should_ignore(Path::new("/w/abc"), &ignore));
+    assert!(!should_ignore(Path::new("/w/data"), &ignore));
+    assert!(should_ignore(Path::new("/w/vendor/old"), &ignore));
+    assert!(!should_ignore(Path::new("/w/old"), &ignore));
 }
 
 #[test]

@@ -122,11 +122,7 @@ fn handle_worktree_command(
         WorktreeCommands::Prune(args) => prune::handle_prune(args, json, global_strict),
         WorktreeCommands::Unknown(args) => {
             let cmd = escape(args.first().map(|s| s.as_str()).unwrap_or(""));
-            eprintln!(
-                "{}: unrecognized worktree subcommand '{cmd}'",
-                "error".red().bold(),
-            );
-            eprintln!();
+            // the help, then the error, which meta prints once
             eprint_worktree_help();
             anyhow::bail!("unrecognized worktree subcommand '{cmd}'");
         }
@@ -208,6 +204,21 @@ fn write_worktree_help(w: &mut dyn std::io::Write) {
         "  --ttl <DURATION>         Time-to-live (30s, 5m, 1h, 2d, 1w)"
     );
     let _ = writeln!(w, "  --meta <KEY=VALUE>       Record custom metadata");
+    let _ = writeln!(
+        w,
+        "  --no-deps                Only the named repos, without their dependencies"
+    );
+    let _ = writeln!(
+        w,
+        "  --strict                 Fail where a repo would be skipped"
+    );
+    let _ = writeln!(
+        w,
+        "  -r, --recursive          Resolve dependencies across nested meta repos"
+    );
+    let _ = writeln!(w);
+    let _ = writeln!(w, "ADD OPTIONS:");
+    let _ = writeln!(w, "  --repo <ALIAS[:BRANCH]>  Repo(s) to add");
     let _ = writeln!(w);
     let _ = writeln!(w, "LIST / STATUS OPTIONS:");
     let _ = writeln!(
@@ -236,6 +247,14 @@ fn write_worktree_help(w: &mut dyn std::io::Write) {
     let _ = writeln!(w, "  --exclude <REPOS>        Skip specified repos");
     let _ = writeln!(w, "  --parallel               Run commands concurrently");
     let _ = writeln!(w, "  --ephemeral              Atomic create+exec+remove");
+    let _ = writeln!(
+        w,
+        "  --repo, --all, --branch, <COMMIT-ISH>, --from-pr, --meta"
+    );
+    let _ = writeln!(
+        w,
+        "                           As for create, with --ephemeral"
+    );
     let _ = writeln!(w);
     let _ = writeln!(w, "DIFF OPTIONS:");
     let _ = writeln!(
@@ -243,6 +262,9 @@ fn write_worktree_help(w: &mut dyn std::io::Write) {
         "  --base <BRANCH>          Base branch for comparison (default: main)"
     );
     let _ = writeln!(w, "  --stat                   Show diffstat summary only");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "PRUNE OPTIONS:");
+    let _ = writeln!(w, "  --dry-run                Preview without removing");
     let _ = writeln!(w);
     let _ = writeln!(
         w,
@@ -253,6 +275,40 @@ fn write_worktree_help(w: &mut dyn std::io::Write) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The overview names every option of each command in that command's
+    /// own section, so it can't fall behind what clap accepts.
+    #[test]
+    fn help_lists_every_option_under_its_command() {
+        let mut help = Vec::new();
+        write_worktree_help(&mut help);
+        let help = String::from_utf8(help).unwrap();
+        let parser = <WorktreeParser as clap::CommandFactory>::command();
+        for command in parser.get_subcommands() {
+            let name = command.get_name().to_uppercase();
+            // the sections whose heading names this command
+            let section: String = help
+                .split("\n\n")
+                .filter(|block| {
+                    block.lines().next().is_some_and(|heading| {
+                        heading.ends_with("OPTIONS:")
+                            && heading.split([' ', '/']).any(|word| word == name)
+                    })
+                })
+                .collect();
+            for arg in command.get_arguments() {
+                let id = arg.get_id().as_str();
+                if matches!(id, "name" | "command" | "help") {
+                    continue;
+                }
+                let shown = match arg.get_long() {
+                    Some(long) => format!("--{long}"),
+                    None => format!("<{}>", id.to_uppercase().replace('_', "-")),
+                };
+                assert!(section.contains(&shown), "{name} OPTIONS lacks {shown}");
+            }
+        }
+    }
 
     // ── warn_or_bail tests ─────────────────────────────────
 

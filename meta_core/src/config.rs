@@ -113,8 +113,6 @@ pub struct MetaConfig {
     #[serde(default, deserialize_with = "unique_projects")]
     pub projects: HashMap<String, ProjectEntry>,
     #[serde(default)]
-    pub ignore: Vec<String>,
-    #[serde(default)]
     pub defaults: MetaDefaults,
     /// Custom directory for worktrees (overrides default .worktrees/)
     #[serde(default)]
@@ -403,7 +401,6 @@ pub struct Workspace {
     pub config_path: PathBuf,
     /// Checked and normalized, in name order.
     pub projects: Vec<ProjectInfo>,
-    pub ignore: Vec<String>,
     pub defaults: MetaDefaults,
     /// `worktrees_dir` as configured, checked and in normal form relative
     /// to `dir` (to the checkout a set stands for, inside a set).
@@ -548,7 +545,6 @@ impl Workspace {
             dir: base_dir.to_path_buf(),
             config_path: meta_path.to_path_buf(),
             projects,
-            ignore: config.ignore,
             defaults: config.defaults,
             worktrees_dir: config.worktrees_dir.map(|_| worktrees),
             worktree: config.worktree,
@@ -1444,6 +1440,8 @@ mod tests {
         // a misspelled key is an error, at any level meta owns
         for typo in [
             "worktree_dir: x\n",
+            // there is no ignore list: --exclude leaves repos out
+            "ignore:\n  - node_modules\n",
             "defaults:\n  paralel: false\n",
             "worktree:\n  hook: {}\n",
             "worktree:\n  hooks:\n    post-create: false\n",
@@ -2386,6 +2384,16 @@ mod tests {
         .unwrap();
     }
 
+    /// A repository's git directory at `repo/.git`, as much of one as meta
+    /// reads: git calls a directory without these no repository.
+    fn git_dir(repo: &Path) {
+        let git = repo.join(".git");
+        for dir in ["objects", "refs"] {
+            std::fs::create_dir_all(git.join(dir)).unwrap();
+        }
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    }
+
     #[test]
     fn the_root_climbs_only_through_parents_that_list_the_child() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2439,6 +2447,7 @@ mod tests {
         meta_yaml(&set.join("child"), "");
         let record = serde_json::json!({ "project": top, "set": set }).to_string();
         for (checkout, repo) in [(&set, top.clone()), (&set.join("child"), top.join("child"))] {
+            git_dir(&repo);
             let admin = repo.join(".git/worktrees/ctx");
             std::fs::create_dir_all(&admin).unwrap();
             std::fs::write(admin.join("commondir"), "../..\n").unwrap();
@@ -2474,6 +2483,7 @@ mod tests {
         let set = top.join(".worktrees/s");
         let member = set.join("beta");
         std::fs::create_dir_all(&member).unwrap();
+        git_dir(&top.join("beta"));
         let admin = top.join("beta/.git/worktrees/s");
         std::fs::create_dir_all(&admin).unwrap();
         std::fs::write(admin.join("commondir"), "../..\n").unwrap();
@@ -2500,7 +2510,8 @@ mod tests {
         let set = top.join(".worktrees/s");
         let member = set.join("alternate");
         std::fs::create_dir_all(&member).unwrap();
-        std::fs::create_dir_all(top.join("alternate/.git")).unwrap();
+        git_dir(&top.join("alternate"));
+        git_dir(&top.join("real"));
         let admin = top.join("real/.git/worktrees/s");
         std::fs::create_dir_all(&admin).unwrap();
         std::fs::write(admin.join("commondir"), "../..\n").unwrap();
@@ -2541,6 +2552,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let top = tmp.path().canonicalize().unwrap();
         meta_yaml(&top, r#""app": {"repo": "x", "path": "real"}"#);
+        git_dir(&top.join("real"));
         let linked = |checkout: &Path, id: &str| {
             let admin = top.join("real/.git/worktrees").join(id);
             std::fs::create_dir_all(&admin).unwrap();

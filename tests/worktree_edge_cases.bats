@@ -588,6 +588,7 @@ EOF
 }
 
 @test "a registry config that cannot be examined is refused, not replaced by the default registry" {
+    [ "$(id -u)" -ne 0 ] || skip "root reads any directory"
     printf 'registries:\n  - https://registry.invalid/private\n' > "$META_DATA/config.yaml"
     chmod 600 "$META_DATA/config.yaml"
     chmod 600 "$META_DATA"
@@ -648,6 +649,7 @@ EOF
 }
 
 @test "ephemeral exec fails when its cleanup fails" {
+    [ "$(id -u)" -ne 0 ] || skip "root writes any directory"
     # The command itself makes its checkout undeletable before cleanup runs
     run "$META_BIN" git worktree exec --ephemeral eph-store --repo backend -- chmod 555 .
     chmod -R u+w "$TEST_DIR/.worktrees/eph-store"
@@ -656,6 +658,7 @@ EOF
 }
 
 @test "ephemeral exec reports a failed cleanup even when its command fails" {
+    [ "$(id -u)" -ne 0 ] || skip "root writes any directory"
     # chmod succeeds on the checkout, then fails on the missing file
     run "$META_BIN" git worktree exec --ephemeral eph-both --repo backend -- chmod 555 . "$TEST_DIR/missing"
     chmod -R u+w "$TEST_DIR/.worktrees/eph-both"
@@ -843,6 +846,7 @@ EOF
 }
 
 @test "worktree add records what it added when a later parent dir cannot be made" {
+    [ "$(id -u)" -ne 0 ] || skip "root writes any directory"
     mkdir -p "$TEST_DIR/group/deep/lib"
     git -C "$TEST_DIR/group" init --quiet --initial-branch=main
     printf '{"projects": {"deep/lib": "git@github.com:org/lib.git"}}' > "$TEST_DIR/group/.meta.yaml"

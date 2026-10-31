@@ -502,3 +502,16 @@ PY
     [[ "$output" == *"reached through the symlink"* ]]
     [[ "$output" != *"Hooks:"* ]]
 }
+
+@test "init claude offers --force and --update only for what they refresh" {
+    mkdir -p other/rules .claude
+    ln -s ../other/rules .claude/rules
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"reached through the symlink"* ]]
+    [[ "$output" != *"--force or --update"* ]]
+
+    run "$META_BIN" init claude --update
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Skipped "*" existing file(s)"* ]]
+}

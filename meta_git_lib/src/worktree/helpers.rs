@@ -61,7 +61,6 @@ impl Configs {
             config_path: source.join(meta_core::config::META_CONFIG_NAME),
             dir: source,
             projects: Vec::new(),
-            ignore: Vec::new(),
             defaults: Default::default(),
             worktrees_dir: None,
             worktree: Default::default(),

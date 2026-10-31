@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use colored::*;
-use loop_lib::{display_command, expand_directories, parse_config, run, LoopConfig};
+use loop_lib::{display_command, expand_directories, parse_config, run, should_ignore, LoopConfig};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -83,10 +83,15 @@ fn main() -> Result<()> {
     config.silent = cli.silent;
     config.add_aliases_to_global_looprc = cli.add_aliases_to_global_looprc;
 
-    // If no directories specified, use current and all child directories
+    // If no directories specified, use current and all child directories;
+    // exclusions hold for directories named outright too
     if config.directories.is_empty() {
         let dirs = expand_directories(&[".".to_string()], &config.ignore)?;
         config.directories = dirs;
+    } else {
+        config
+            .directories
+            .retain(|dir| !should_ignore(std::path::Path::new(dir), &config.ignore));
     }
 
     run(&config, &cli.command)?;

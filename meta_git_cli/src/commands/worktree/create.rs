@@ -166,8 +166,35 @@ pub(crate) fn handle_create(
 
     // For nested aliases like "gitkb/core", ensure intermediate meta: true
     // parents ("gitkb") get worktrees too — the thin spine from root to target.
-    let mut repos_to_create =
+    let repos_to_create =
         ensure_intermediate_parents(&configs.here, repos_to_create, name, branch_flag)?;
+    // A project not cloned yet has no repository to make a worktree of:
+    // --all goes on without it, a repo asked for (or needed) is an error
+    let mut cloned = Vec::with_capacity(repos_to_create.len());
+    for repo in repos_to_create {
+        let (alias, source, _) = &repo;
+        if meta_core::gitdir::common_dir(source)?.is_some() {
+            cloned.push(repo);
+            continue;
+        }
+        let why = match source.exists() {
+            false => format!(
+                "'{}' is not cloned at {} (run 'meta git update' to clone it)",
+                escape(alias),
+                escape_path(source)
+            ),
+            true => format!(
+                "'{}' at {} is not a git repository",
+                escape(alias),
+                escape_path(source)
+            ),
+        };
+        if !use_all {
+            anyhow::bail!("{why}");
+        }
+        eprintln!("{} {why}, skipping", "warning:".yellow().bold());
+    }
+    let mut repos_to_create = cloned;
     // One worktree per place in the set: a repeated --repo, or a repo named
     // both by its name and by its path, would try the same add twice
     let mut branches: HashMap<String, &str> = HashMap::new();

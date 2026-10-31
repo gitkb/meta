@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 description = "Project management plugin for meta CLI to sync and update project repositories"
 
 [[bin]]

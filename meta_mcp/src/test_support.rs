@@ -8,8 +8,8 @@ use std::process::Command;
 /// Gives this test process (and the git and tools it runs) a home, git
 /// config and meta data dir of its own, empty, so the user's settings
 /// (hooks, identity, aliases) can't change a test. Once, before any test
-/// here runs git; every value is the same whichever test sets it first.
-/// The folders stay empty, so every test process shares them.
+/// here runs git; every value is the same whichever test sets it first,
+/// and every test process shares them.
 fn isolate() {
     static ISOLATED: std::sync::Once = std::sync::Once::new();
     ISOLATED.call_once(|| {
@@ -19,11 +19,17 @@ fn isolate() {
             ("HOME", home.clone()),
             ("XDG_CONFIG_HOME", home.join("config")),
             ("XDG_DATA_HOME", home.join("data")),
-            ("GIT_CONFIG_GLOBAL", home.join("gitconfig")),
             ("META_DATA_DIR", home.join("meta")),
         ] {
             std::env::set_var(key, value);
         }
+        // a file no one can write, where there is one
+        let global = if cfg!(unix) {
+            std::path::PathBuf::from("/dev/null")
+        } else {
+            home.join("gitconfig")
+        };
+        std::env::set_var("GIT_CONFIG_GLOBAL", global);
         std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
     });
 }
@@ -48,8 +54,8 @@ pub(crate) fn init_repo(dir: &Path) {
     git(dir, &["init", "-q", "-b", "main"]);
     git(dir, &["config", "user.name", "t"]);
     git(dir, &["config", "user.email", "t@example.com"]);
-    let name = dir.file_name().unwrap().to_str().unwrap();
-    std::fs::write(dir.join("README"), name).unwrap();
+    let name = dir.file_name().unwrap().to_string_lossy();
+    std::fs::write(dir.join("README"), name.as_bytes()).unwrap();
     git(dir, &["add", "README"]);
     git(dir, &["commit", "-qm", "init"]);
 }

@@ -184,7 +184,6 @@ The query DSL allows precise filtering:
 | `dirty:true` | Repos with uncommitted changes |
 | `dirty:false` | Clean repos |
 | `branch:main` | Repos on main branch |
-| `branch:feature/*` | Repos on feature branches |
 | `tag:backend` | Repos with backend tag |
 | `ahead:true` | Repos ahead of remote |
 | `behind:true` | Repos behind remote |

@@ -411,7 +411,7 @@ pub(crate) struct ProjectCommit {
 pub(crate) struct TestArgs {
     /// Filter projects by tag (a comma-separated list selects any of them)
     tag: Option<String>,
-    /// Specific project to test, by its name in .meta.yaml or . for the workspace root (not with tag)
+    /// Specific project to test, by its name in .meta.yaml or . for the workspace root (optional, defaults to all; not with tag)
     project: Option<String>,
 }
 
@@ -583,7 +583,7 @@ impl McpServer {
             .meta_dir
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
-        let config::Workspace { dir, projects, .. } = config::Workspace::find(dir, None)?
+        let config::Workspace { dir, projects, .. } = config::Workspace::in_dir(dir)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
         Ok(Workspace { dir, projects })
     }
@@ -594,19 +594,22 @@ impl McpServer {
     fn own_repo_git(&self, target: &Target) -> Result<Command> {
         let out = self
             .calls
-            .output(git(&target.dir).args(["rev-parse", "--show-toplevel"]))
+            .output(git(&target.dir).args(["rev-parse", "--show-cdup"]))
             .context("Cannot run git rev-parse")?;
-        let toplevel = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-        let real = |path: &Path| path.canonicalize().ok();
-        if !out.status.success()
-            || real(&toplevel).is_none()
-            || real(&toplevel) != real(&target.dir)
-        {
-            anyhow::bail!(
-                "Project '{}' at {} is not a git repository of its own",
+        let at = || {
+            format!(
+                "Project '{}' at {}",
                 escape(&target.name),
                 meta_core::display::escape_path(&target.dir)
-            );
+            )
+        };
+        if !out.status.success() {
+            // git's reason: no repository, or one it won't open
+            anyhow::bail!("{}: {}", at(), String::from_utf8_lossy(&out.stderr).trim());
+        }
+        // the way up to the repository's top level: none at its top
+        if !out.stdout.iter().all(u8::is_ascii_whitespace) {
+            anyhow::bail!("{} is not a git repository of its own", at());
         }
         Ok(git(&target.dir))
     }
@@ -880,7 +883,7 @@ impl McpServer {
             let error = if !target.dir.exists() {
                 Some(format!(
                     "Project path does not exist: {}",
-                    target.dir.display()
+                    meta_core::display::escape_path(&target.dir)
                 ))
             } else {
                 let commit = self.own_repo_git(&target).and_then(|mut cmd| {
@@ -1798,6 +1801,16 @@ mod tests {
         );
         assert_eq!(git(tmp.path(), &["log", "--format=%s"]), "init\n");
 
+        // a repository git won't open: its reason, not a guess
+        std::fs::write(tmp.path().join("plain/.git"), "gitdir: /nonexistent\n").unwrap();
+        let commits = json!({"commits": [{"project": "plain", "message": "m"}]});
+        let reply = call(&server, "meta_git_multi_commit", commits).unwrap();
+        assert!(
+            reply.is_error && reply.text.contains("fatal: not a git repository"),
+            "{}",
+            reply.text
+        );
+
         // a workspace root that isn't a repository, inside one that is
         let outer = tempfile::tempdir().unwrap();
         init_repo(outer.path());
@@ -1814,6 +1827,27 @@ mod tests {
                 .is_error
         );
         assert_eq!(git(outer.path(), &["log", "--format=%s"]), "init\n");
+    }
+
+    /// The check reads no path from git, so any folder name works.
+    #[test]
+    fn a_repository_with_any_name_is_its_own() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut names = vec![std::ffi::OsString::from("ends in a space ")];
+        #[cfg(target_os = "linux")]
+        names.push(
+            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"byte \xff")
+                .to_os_string(),
+        );
+        for name in names {
+            let ws = tmp.path().join(name);
+            init_repo(&ws);
+            std::fs::write(ws.join(".meta.yaml"), "projects: {}\n").unwrap();
+            std::fs::write(ws.join("README"), "changed").unwrap();
+            let server = McpServer::in_dir(Some(ws.clone()));
+            let diff = json(call(&server, "meta_git_diff", json!({"project": "."})));
+            assert_eq!(diff.as_array().unwrap().len(), 1, "{ws:?}: {diff}");
+        }
     }
 
     #[test]

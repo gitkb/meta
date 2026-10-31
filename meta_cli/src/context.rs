@@ -149,11 +149,21 @@ pub fn handle_context(json: bool, no_status: bool, no_cache: bool, verbose: bool
             .map(|p| {
                 let mut ctx = RepoContext::from_project(p);
                 let repo_path = meta_dir.join(&p.path);
-                if let Ok(status) = RepoStatus::read(&repo_path) {
-                    ctx.branch = status.branch.clone();
-                    ctx.dirty = Some(status.is_dirty());
-                    ctx.modified_count = Some(status.entries.len());
-                    (ctx.ahead, ctx.behind) = status.ahead_behind.unzip();
+                match RepoStatus::read(&repo_path) {
+                    Ok(status) => {
+                        ctx.branch = status.branch.clone();
+                        ctx.dirty = Some(status.is_dirty());
+                        ctx.modified_count = Some(status.entries.len());
+                        (ctx.ahead, ctx.behind) = status.ahead_behind.unzip();
+                    }
+                    // a work tree git refuses (`core.bare=true`): its refs,
+                    // and no word on its changes
+                    Err(_) => {
+                        if let Some(refs) = RepoStatus::refs(&repo_path) {
+                            ctx.branch = refs.branch;
+                            (ctx.ahead, ctx.behind) = refs.ahead_behind.unzip();
+                        }
+                    }
                 }
                 ctx
             })

@@ -1174,7 +1174,10 @@ impl McpServer {
                 continue;
             }
 
-            let status = RepoStatus::read(&project_path).unwrap_or_default();
+            let status = RepoStatus::read(&project_path)
+                .ok()
+                .or_else(|| RepoStatus::refs(&project_path))
+                .unwrap_or_default();
             let current_branch = status.branch.unwrap_or_else(|| "HEAD".to_string());
             let tracking_branch = status.upstream.unwrap_or_default();
             let (ahead, behind) = status.ahead_behind.unwrap_or_default();

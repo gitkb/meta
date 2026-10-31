@@ -34,7 +34,9 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
             } else {
                 // what can't be read shows clean, with the branch and
                 // upstream git still names
-                observed.unwrap_or_else(|_| meta_core::git::RepoStatus::refs(&r.path))
+                observed.unwrap_or_else(|_| {
+                    meta_core::git::RepoStatus::refs(&r.path).unwrap_or_default()
+                })
             };
             let (ahead, behind) = status.ahead_behind.unwrap_or_default();
             Ok(StatusRepoEntry {

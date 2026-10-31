@@ -152,7 +152,11 @@ impl RepoState {
         let path_str = path.to_string_lossy().to_string();
 
         // A repo git can't read shows as on branch "unknown", clean
-        let status = RepoStatus::read(path).ok();
+        // a checkout whose work tree git refuses (`core.bare=true`) still
+        // has its branch, commits and upstream
+        let status = RepoStatus::read(path)
+            .ok()
+            .or_else(|| RepoStatus::refs(path));
         let branch = match &status {
             Some(status) => status.branch.clone().unwrap_or_else(|| "HEAD".to_string()),
             None => "unknown".to_string(),
@@ -396,6 +400,30 @@ mod tests {
         assert_eq!(state.last_commit_hash.as_deref(), Some(commit.as_str()));
         assert_eq!(state.last_commit_message.as_deref(), Some("first"));
         assert!(state.last_commit_time.is_some() && !state.is_dirty);
+    }
+
+    #[test]
+    fn a_checkout_git_calls_bare_keeps_its_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| meta_core::git::run(dir.path(), args).unwrap();
+        run(&["init", "-q", "-b", "main"]);
+        run(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "first",
+        ]);
+        run(&["config", "core.bare", "true"]);
+        let state = RepoState::collect("r", dir.path(), &[]).unwrap();
+        assert_eq!(state.branch, "main");
+        assert_eq!(state.last_commit_message.as_deref(), Some("first"));
     }
 
     #[test]

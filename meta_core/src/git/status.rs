@@ -63,7 +63,12 @@ impl RepoStatus {
             // nothing in it is changed; its branch and upstream still count.
             // A checkout whose config says `core.bare` is no bare repository:
             // its work tree may hold changes git can't report.
-            Err(_) if Self::is_bare(dir) => Ok(Self::refs(dir)),
+            Err(_) if Self::is_bare(dir) => Self::refs(dir).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{} is not a git repository",
+                    crate::display::escape_path(dir)
+                )
+            }),
             Err(e) => Err(e),
         }
     }
@@ -76,8 +81,11 @@ impl RepoStatus {
 
     /// What git says about the repository at `dir` without its work tree:
     /// branch, commit and upstream, and no entries. For a bare repository,
-    /// or one whose work tree can't be read (a caller says which).
-    pub fn refs(dir: &Path) -> Self {
+    /// or a checkout whose work tree git refuses (`core.bare=true`), for
+    /// callers that show what they can. `None` when `dir` has no repository
+    /// of its own.
+    pub fn refs(dir: &Path) -> Option<Self> {
+        crate::gitdir::common_dir(dir).ok()??;
         let upstream = super::query(dir, ["rev-parse", "--abbrev-ref", "@{upstream}"]);
         let ahead_behind = upstream
             .as_ref()
@@ -91,13 +99,13 @@ impl RepoStatus {
                 let (ahead, behind) = counts.split_once('\t')?;
                 Some((ahead.parse().ok()?, behind.parse().ok()?))
             });
-        Self {
+        Some(Self {
             branch: super::current_branch(dir),
             oid: super::query(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]),
             upstream,
             ahead_behind,
             entries: Vec::new(),
-        }
+        })
     }
 
     fn parse(output: &str) -> Self {
@@ -340,6 +348,10 @@ mod tests {
         std::fs::write(checkout.path().join("dirty"), "").unwrap();
         run(checkout.path(), ["config", "core.bare", "true"]).unwrap();
         assert!(RepoStatus::read(checkout.path()).is_err());
+        // whose refs can still be shown
+        let refs = RepoStatus::refs(checkout.path()).unwrap();
+        assert_eq!(refs.branch.as_deref(), Some("main"));
+        assert!(RepoStatus::refs(&inside).is_none());
     }
 
     #[test]

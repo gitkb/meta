@@ -127,7 +127,7 @@ EOF
     run "$META_BIN" git worktree status bare-member --json
     git -C backend config --local core.bare false
     [ "$status" -eq 0 ]
-    [[ "$output" == *'"branch": "bare-member"'* ]]
+    [ "$(printf '%s' "$output" | jq -r '.repos[] | select(.alias == "backend") | .branch')" = "bare-member" ]
 }
 
 @test "worktree create --all creates worktrees for all repos" {

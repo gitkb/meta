@@ -182,7 +182,7 @@ Copies the install scripts put in `~/.local/bin` or `%USERPROFILE%\.meta\bin`
 
 ## Configuration
 
-Meta projects are configured by one YAML file in the repository root: `.meta.yaml`. It is the only name meta looks for; `--config <FILE>` reads another file instead.
+Meta projects are configured by one YAML file at the top of the workspace: `.meta.yaml`. It is the only name meta looks for, in the current directory and then each one above it; `--config <FILE>` looks for another name the same way.
 
 ### Simple Format
 

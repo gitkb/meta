@@ -53,7 +53,7 @@ pub(crate) fn execute_git_update(
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if path.is_dir()
-                && path.join(".git").exists()
+                && matches!(meta_core::gitdir::common_dir(&path), Ok(Some(_)))
                 && !name.starts_with('.')
                 && !config_projects.contains(name)
             {

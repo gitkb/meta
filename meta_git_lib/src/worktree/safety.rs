@@ -360,11 +360,13 @@ fn git_entry(dir: &Path) -> Result<GitEntry> {
         Ok(_) => Ok(GitEntry::Repository(
             "a git repository, not a linked worktree".to_string(),
         )),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(if gitdir::is_bare(dir) {
-            GitEntry::Repository("a bare git repository".to_string())
-        } else {
-            GitEntry::None
-        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(if gitdir::looks_like_git_dir(dir) {
+                GitEntry::Repository("a bare git repository".to_string())
+            } else {
+                GitEntry::None
+            })
+        }
         Err(e) => Err(e).with_context(|| format!("Cannot inspect {}", escape_path(&git))),
     }
 }
@@ -839,11 +841,15 @@ mod tests {
         std::fs::create_dir_all(set.join("clone")).unwrap();
         git(&set.join("clone"), &["init", "-q"]);
         git(&set, &["init", "-q", "--bare", "mirror.git"]);
+        // a bare repository whose HEAD was damaged still holds its objects
+        git(&set, &["init", "-q", "--bare", "damaged.git"]);
+        std::fs::write(set.join("damaged.git/HEAD"), "").unwrap();
 
         let check = check_worktree_removal(&set).unwrap();
         let blockers = check.blockers.join("\n");
-        assert_eq!(check.blockers.len(), 2, "{blockers}");
+        assert_eq!(check.blockers.len(), 3, "{blockers}");
         assert!(blockers.contains("clone") && blockers.contains("mirror.git"));
+        assert!(blockers.contains("damaged.git"), "{blockers}");
         let unsaved = check.unsaved.join("\n").replace('\\', "/");
         assert!(
             unsaved.contains("sub/leaf: 1 file untracked: new.txt"),

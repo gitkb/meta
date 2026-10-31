@@ -207,7 +207,7 @@ has no record of (one added by hand with `git worktree add`); remove those with
 ## Strict Mode
 
 `--strict` on `create` (or global `meta --strict`) turns warnings such as a
-missing commit-ish in one repo into errors. A create that fails is rolled back:
+missing commit-ish in one repo, or a repo that isn't cloned, into errors. A create that fails is rolled back:
 the worktrees and branches it made are deleted again. If the rollback itself
 can't delete something, the error says what was left behind.
 
@@ -230,7 +230,7 @@ can't delete something, the error says what was left behind.
 |--------|-------------|
 | `[<commit-ish>]` | Start from a tag, SHA or branch (positional) |
 | `--repo <alias>[:<branch>]` | Add specific repo(s) |
-| `--all` | Add all repos at this meta level |
+| `--all` | Add all repos at this meta level (one not cloned is skipped with a warning) |
 | `--no-deps` | Skip automatic root and dependency selection (a repo nested inside another project's path still gets that parent project) |
 | `-r, --recursive` | Resolve across nested meta repos (root-relative aliases) |
 | `--branch <name>` | Override the branch name |
@@ -239,7 +239,7 @@ can't delete something, the error says what was left behind.
 | `--ephemeral` | Mark as ephemeral |
 | `--ttl <duration>` | Make `prune` remove it after this long |
 | `--meta <key=value>` | Record custom metadata |
-| `--strict` | Fail instead of warning on missing refs |
+| `--strict` | Fail instead of skipping a repo (missing ref, not cloned) |
 
 ### Exec Options
 

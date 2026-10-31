@@ -28,7 +28,7 @@ The loop system can execute commands in parallel across many directories. You ca
 ## Advanced Configuration
 
 - **Directory Globs**: Use wildcards in `.looprc` to target groups of directories.
-- **Ignore Patterns**: Exclude directories with the `ignore` field.
+- **Ignore**: Exclude directories with the `ignore` field (or `--exclude`): each entry is a directory's name (`node_modules`) or the end of its path (`vendor/old`), matched by whole names, so `.git` doesn't exclude `.github`. It applies to directories listed in `directories` or given with `--include` too.
 - **Verbose Output**: Enable detailed logs with `--verbose` or `"verbose": true` in config.
 
 ## Scripting with loop_cli

@@ -297,7 +297,6 @@ User: meta exec --tag frontend -- npm install
 ```rust
 pub struct MetaConfig {
     pub projects: HashMap<String, ProjectEntry>,
-    pub ignore: Option<Vec<String>>,
 }
 
 pub enum ProjectEntry {

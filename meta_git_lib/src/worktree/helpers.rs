@@ -61,7 +61,6 @@ impl Configs {
             config_path: source.join(meta_core::config::META_CONFIG_NAME),
             dir: source,
             projects: Vec::new(),
-            ignore: Vec::new(),
             defaults: Default::default(),
             worktrees_dir: None,
             worktree: Default::default(),
@@ -160,7 +159,9 @@ pub fn discover_and_validate_worktree(
 /// - Shared config files (.claude/, etc.)
 /// - Build scripts and other shared resources
 pub fn projects_with_root(workspace: &Workspace, include_root: bool) -> Vec<ProjectInfo> {
-    let root = (include_root && workspace.dir.join(".git").exists()).then(|| ProjectInfo {
+    // a repository, as git sees one (an empty .git is none)
+    let has_repo = !matches!(meta_core::gitdir::common_dir(&workspace.dir), Ok(None));
+    let root = (include_root && has_repo).then(|| ProjectInfo {
         name: ".".to_string(),
         path: ".".to_string(),
         repo: None,

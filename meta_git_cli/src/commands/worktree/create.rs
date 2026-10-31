@@ -166,8 +166,26 @@ pub(crate) fn handle_create(
 
     // For nested aliases like "gitkb/core", ensure intermediate meta: true
     // parents ("gitkb") get worktrees too — the thin spine from root to target.
-    let mut repos_to_create =
-        ensure_intermediate_parents(&configs.here, repos_to_create, name, branch_flag)?;
+    let repos_to_create =
+        ensure_intermediate_parents(&configs.here, repos_to_create, name, branch_flag, strict)?;
+    // A project not cloned yet has no repository to make a worktree of:
+    // --all goes on without it, a repo asked for (or needed) is an error
+    let mut cloned = Vec::with_capacity(repos_to_create.len());
+    for repo in repos_to_create {
+        let (alias, source, _) = &repo;
+        let Some(why) = super::not_a_repository(alias, source)? else {
+            cloned.push(repo);
+            continue;
+        };
+        if !use_all {
+            anyhow::bail!("{why}");
+        }
+        if strict {
+            anyhow::bail!("{why} (strict mode)");
+        }
+        super::warn(format!("{why}, skipping"));
+    }
+    let mut repos_to_create = cloned;
     // One worktree per place in the set: a repeated --repo, or a repo named
     // both by its name and by its path, would try the same add twice
     let mut branches: HashMap<String, &str> = HashMap::new();
@@ -638,7 +656,7 @@ fn resolve_repos_with_dependencies(
 
     // Always include root repo "." unless user explicitly excluded it
     // (exclusion would need to be handled separately, for now always include)
-    if meta_dir.join(".git").exists() {
+    if meta_core::gitdir::common_dir(meta_dir)?.is_some() {
         repos_to_include.insert(".".to_string());
     }
 
@@ -852,6 +870,7 @@ fn ensure_intermediate_parents(
     repos: Vec<(String, std::path::PathBuf, String)>,
     worktree_name: &str,
     branch_flag: Option<&str>,
+    strict: bool,
 ) -> Result<Vec<(String, std::path::PathBuf, String)>> {
     let meta_dir = workspace.dir.as_path();
     // Where the selected repos go: a parent is there when a repo is at its
@@ -889,7 +908,7 @@ fn ensure_intermediate_parents(
             let Some(parent_source) = project_at(workspace, &parent_alias)? else {
                 // A plain directory on the way is no parent; a repo that
                 // isn't a project is worth saying so
-                if !meta_dir.join(&parent_alias).join(".git").exists() {
+                if meta_core::gitdir::common_dir(&meta_dir.join(&parent_alias))?.is_none() {
                     continue;
                 }
                 eprintln!(
@@ -900,13 +919,20 @@ fn ensure_intermediate_parents(
                 );
                 continue;
             };
-            if !parent_source.join(".git").exists() {
-                eprintln!(
-                    "{} Intermediate parent '{}' for nested repo '{}' is not cloned, skipping",
-                    "warning:".yellow().bold(),
+            if meta_core::gitdir::common_dir(&parent_source)?.is_none() {
+                let why = format!(
+                    "Intermediate parent '{}' for nested repo '{}' {}",
                     escape(&parent_alias),
-                    escape(alias)
+                    escape(alias),
+                    match parent_source.exists() {
+                        false => "is not cloned",
+                        true => "is not a git repository",
+                    }
                 );
+                if strict {
+                    anyhow::bail!("{why} (strict mode)");
+                }
+                super::warn(format!("{why}, skipping"));
                 continue;
             }
 

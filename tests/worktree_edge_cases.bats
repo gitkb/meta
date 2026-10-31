@@ -588,6 +588,7 @@ EOF
 }
 
 @test "a registry config that cannot be examined is refused, not replaced by the default registry" {
+    [ "$(id -u)" -ne 0 ] || skip "root reads any directory"
     printf 'registries:\n  - https://registry.invalid/private\n' > "$META_DATA/config.yaml"
     chmod 600 "$META_DATA/config.yaml"
     chmod 600 "$META_DATA"
@@ -648,6 +649,7 @@ EOF
 }
 
 @test "ephemeral exec fails when its cleanup fails" {
+    [ "$(id -u)" -ne 0 ] || skip "root writes any directory"
     # The command itself makes its checkout undeletable before cleanup runs
     run "$META_BIN" git worktree exec --ephemeral eph-store --repo backend -- chmod 555 .
     chmod -R u+w "$TEST_DIR/.worktrees/eph-store"
@@ -656,6 +658,7 @@ EOF
 }
 
 @test "ephemeral exec reports a failed cleanup even when its command fails" {
+    [ "$(id -u)" -ne 0 ] || skip "root writes any directory"
     # chmod succeeds on the checkout, then fails on the missing file
     run "$META_BIN" git worktree exec --ephemeral eph-both --repo backend -- chmod 555 . "$TEST_DIR/missing"
     chmod -R u+w "$TEST_DIR/.worktrees/eph-both"
@@ -807,6 +810,24 @@ EOF
     if git -C "$TEST_DIR/unrelated" rev-parse --verify --quiet refs/heads/via-link; then false; fi
 }
 
+@test "create skips an intermediate parent whose .git is no repository" {
+    # vendor is a meta project with an empty .git; lib, nested in it, is cloned
+    mkdir -p "$TEST_DIR/vendor/.git" "$TEST_DIR/vendor/lib"
+    printf '{"projects": {"lib": "git@github.com:org/lib.git"}}' > "$TEST_DIR/vendor/.meta.yaml"
+    git -C "$TEST_DIR/vendor/lib" init --quiet --initial-branch=main
+    git -C "$TEST_DIR/vendor/lib" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    printf '{"projects": {"backend": "git@github.com:org/backend.git", "vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}' > "$TEST_DIR/.meta.yaml"
+    run "$META_BIN" git worktree create nested --no-deps --repo vendor/lib
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Intermediate parent 'vendor' for nested repo 'vendor/lib' is not a git repository, skipping"* ]]
+    [ -d "$TEST_DIR/.worktrees/nested/vendor/lib" ]
+
+    run "$META_BIN" git worktree create strict --no-deps --strict --repo vendor/lib
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"skipping"* ]]
+    [ ! -e "$TEST_DIR/.worktrees/strict" ]
+}
+
 @test "worktree add rechecks a destination after an earlier add in the same call" {
     OUT="$(cd "$(mktemp -d)" && pwd -P)"
     # group is a nested meta repo with its own core repo inside
@@ -843,6 +864,7 @@ EOF
 }
 
 @test "worktree add records what it added when a later parent dir cannot be made" {
+    [ "$(id -u)" -ne 0 ] || skip "root writes any directory"
     mkdir -p "$TEST_DIR/group/deep/lib"
     git -C "$TEST_DIR/group" init --quiet --initial-branch=main
     printf '{"projects": {"deep/lib": "git@github.com:org/lib.git"}}' > "$TEST_DIR/group/.meta.yaml"

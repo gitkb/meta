@@ -34,8 +34,8 @@ loop cargo test
 | Option | Description |
 |--------|-------------|
 | `-c, --config <FILE>` | Custom config file path (default: `.looprc`) |
-| `-i, --include <DIRS>` | Only run in these directories (comma-separated) |
-| `-e, --exclude <DIRS>` | Skip these directories (comma-separated) |
+| `-i, --include <DIR>` | Only run in this directory (repeat for more) |
+| `-e, --exclude <DIR>` | Skip this directory, by name or path end (repeat for more) |
 | `-v, --verbose` | Enable verbose output |
 | `-s, --silent` | Suppress all output except summary |
 | `--add-aliases-to-global-looprc` | Add shell aliases to global config |
@@ -44,13 +44,13 @@ loop cargo test
 
 ```bash
 # Only specific directories
-loop -i api,web git status
+loop -i api -i web git status
 
 # Exclude directories
-loop -e legacy,deprecated npm test
+loop -e legacy -e deprecated npm test
 
 # Combine filters
-loop -i api,web,worker -e api-legacy git pull
+loop -i api -i web -i worker -e web git pull
 ```
 
 ## Configuration
@@ -78,7 +78,7 @@ Loop uses a `.looprc` file (JSON format) for persistent configuration:
 | Field | Type | Description |
 |-------|------|-------------|
 | `directories` | `string[]` | Directories to include |
-| `ignore` | `string[]` | Directories to exclude |
+| `ignore` | `string[]` | Directories to exclude, by name (`node_modules`) or path end (`vendor/old`), whole names only: `.git` doesn't exclude `.github` |
 | `verbose` | `bool` | Enable verbose output |
 | `silent` | `bool` | Suppress output |
 | `add_aliases_to_global_looprc` | `bool` | Enable alias support |

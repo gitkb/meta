@@ -123,9 +123,13 @@ impl GitUrl {
     }
 
     /// The repository's name: the last component of the path, without
-    /// `.git`, as git names the directory it clones into.
+    /// `.git`, as git names the directory it clones into (where a `:` also
+    /// separates components).
     pub fn name(&self) -> Option<&str> {
-        self.components().next()
+        self.repo_path()
+            .rsplit(['/', '\\', ':'])
+            .next()
+            .filter(|name| !name.is_empty())
     }
 
     /// The last two components of the path, `owner/repo`, without `.git`.
@@ -264,5 +268,9 @@ mod tests {
         assert_eq!(parse("api").owner_repo(), None);
         assert_eq!(parse("git@host:repo.git").name(), Some("repo"));
         assert_eq!(parse("/srv/repo/.git").name(), Some("repo"));
+        // git reads a `:` in the path as a separator too
+        assert_eq!(parse("git@host:a:b.git").name(), Some("b"));
+        assert_eq!(parse("./a:b").name(), Some("b"));
+        assert_eq!(parse("git@host:a:b.git").owner_repo(), None);
     }
 }

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 description = "Run commands across multiple directories"
 
 [dependencies]
@@ -11,8 +12,10 @@ anyhow = "1.0"
 clap = { version = "4.3", features = ["derive"] }
 colored = "2.0"
 loop_lib = { path = "../loop_lib" }
-# Any 0.x, as for loop_lib
-meta_core = { path = "../meta_core", version = "<1" }
+meta_core = { path = "../meta_core" }
+
+[dev-dependencies]
+tempfile = "3"
 
 [[bin]]
 name = "loop"

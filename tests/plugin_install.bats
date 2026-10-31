@@ -18,29 +18,16 @@ setup() {
     PLUGINS_DIR="$HOME_DIR/.meta/plugins"
 
     # Isolate plugin discovery so tests don't find real plugins:
-    # - META_DATA_DIR overrides ~/.meta/ (global plugin dir)
-    # - PATH is stripped to exclude dirs containing system-installed meta-* binaries
+    # META_DATA_DIR overrides ~/.meta/ (global plugin dir)
     export ORIGINAL_HOME="$HOME"
-    export ORIGINAL_PATH="$PATH"
     export HOME="$HOME_DIR"
     export META_DATA_DIR="$HOME_DIR/.meta"
-    # Build a minimal PATH that excludes the global meta plugins directory
-    NEW_PATH=""
-    IFS=':' read -ra DIRS <<< "$PATH"
-    for dir in "${DIRS[@]}"; do
-        case "$dir" in
-            */.meta/plugins) ;; # skip meta plugin dirs
-            *) NEW_PATH="${NEW_PATH:+$NEW_PATH:}$dir" ;;
-        esac
-    done
-    export PATH="$NEW_PATH"
 
     cd "$TEST_DIR"
 }
 
 teardown() {
     export HOME="$ORIGINAL_HOME"
-    export PATH="$ORIGINAL_PATH"
     unset META_DATA_DIR
     cd /
     rm -rf "$TEST_DIR"
@@ -50,7 +37,8 @@ teardown() {
 # ============ Plugin listing ============
 
 @test "plugin list shows empty when no plugins installed" {
-    run "$META_BIN" plugin list
+    # nor any on PATH, such as the ones `make install` puts there
+    run env PATH="$HOME_DIR/no-plugins" "$META_BIN" plugin list
     [ "$status" -eq 0 ]
     [[ "$output" =~ "No plugins installed" || "$output" =~ "Installed plugins: 0" ]]
 }

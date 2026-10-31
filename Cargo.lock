@@ -825,6 +825,7 @@ dependencies = [
  "colored",
  "loop_lib",
  "meta_core",
+ "tempfile",
 ]
 
 [[package]]
@@ -881,6 +882,7 @@ name = "meta-mcp"
 version = "0.2.22"
 dependencies = [
  "anyhow",
+ "clap",
  "meta",
  "meta_core",
  "serde",

@@ -38,22 +38,63 @@ pub fn gitfile_target(checkout: &Path) -> anyhow::Result<Option<PathBuf>> {
     Ok(read_gitfile(checkout)?.map(|target| checkout.join(target)))
 }
 
-/// Whether `dir` looks like a bare repository: its own git directory.
-pub fn is_bare(dir: &Path) -> bool {
-    dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir()
+/// Whether `dir` has a git directory's shape, whatever its `HEAD` holds:
+/// a `HEAD` entry, and `objects` and `refs` directories. What guards
+/// deletion asks this, not [`is_git_dir`]: a repository whose `HEAD` was
+/// damaged still holds objects and refs worth keeping.
+pub fn looks_like_git_dir(dir: &Path) -> bool {
+    dir.join("HEAD").symlink_metadata().is_ok()
+        && dir.join("objects").is_dir()
+        && dir.join("refs").is_dir()
+}
+
+/// Whether `dir` is a git directory, as git decides before using one: its
+/// shape ([`looks_like_git_dir`]), `objects` and `refs` it can look into,
+/// and a `HEAD` it can read that names a ref under `refs/` (as a symlink,
+/// or `ref: refs/...`) or holds a commit id. Anything less, and git looks
+/// past it to the repository around.
+pub fn is_git_dir(dir: &Path) -> bool {
+    // `<dir>/.` can be looked up only by someone who may enter `<dir>`
+    let enterable = |name: &str| dir.join(name).join(".").metadata().is_ok();
+    looks_like_git_dir(dir) && enterable("objects") && enterable("refs") && valid_head(dir)
+}
+
+/// Whether `dir/HEAD` names a ref under `refs/` (a symlink, or a file
+/// `ref: refs/...`) or holds a commit id. Only a regular file is read, and
+/// only its start, as git does: a large file or a pipe named `HEAD` in a
+/// plain directory is none.
+fn valid_head(dir: &Path) -> bool {
+    use std::io::Read;
+    let head = dir.join("HEAD");
+    if let Ok(target) = std::fs::read_link(&head) {
+        return target.to_string_lossy().starts_with("refs/");
+    }
+    if !head.metadata().is_ok_and(|meta| meta.is_file()) {
+        return false;
+    }
+    let mut start = Vec::new();
+    std::fs::File::open(&head)
+        .and_then(|file| file.take(256).read_to_end(&mut start))
+        .is_ok_and(|_| {
+            let head = start.trim_ascii_end();
+            head.strip_prefix(b"ref:")
+                .is_some_and(|target| target.trim_ascii_start().starts_with(b"refs/"))
+                || (head.len() >= 40 && head.iter().all(u8::is_ascii_hexdigit))
+        })
 }
 
 /// The git directory the repository at `dir` keeps its objects, refs and
 /// worktrees in: `.git` itself; for a linked worktree, what its admin
 /// directory's `commondir` names; for a `--separate-git-dir` checkout, what
 /// its `.git` file names; a bare repository itself. `None` when there is no
-/// repository at `dir`.
+/// repository at `dir`: a `.git` directory that isn't a git directory (an
+/// empty one, say) is none, as git looks past it to the repository around.
 pub fn common_dir(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
     let dot_git = dir.join(".git");
     let target = match gitfile_target(dir)? {
         Some(target) => target,
-        None if dot_git.is_dir() => return Ok(Some(dot_git)),
-        None => return Ok(is_bare(dir).then(|| dir.to_path_buf())),
+        None if dot_git.is_dir() => return Ok(is_git_dir(&dot_git).then_some(dot_git)),
+        None => return Ok(is_git_dir(dir).then(|| dir.to_path_buf())),
     };
     let commondir = target.join("commondir");
     match std::fs::read_to_string(&commondir) {
@@ -95,7 +136,7 @@ pub fn linked(checkout: &Path) -> anyhow::Result<Linked> {
     })?;
     let common = admin.join(common.trim_end_matches(['\n', '\r']));
     anyhow::ensure!(
-        common.join("HEAD").is_file() && common.join("objects").is_dir(),
+        is_git_dir(&common),
         "{} is not a git directory",
         escape_path(&common)
     );
@@ -167,6 +208,72 @@ mod tests {
         assert_eq!(canonical(common_dir(&wt).unwrap()), git_dir);
         assert_eq!(canonical(common_dir(&repo.join(".git")).unwrap()), git_dir);
         assert_eq!(common_dir(tmp.path()).unwrap(), None);
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir_all(empty.join(".git")).unwrap();
+        assert_eq!(common_dir(&empty).unwrap(), None);
+        // a git directory whose HEAD git can't read is none either
+        let truncated = repo.join(".git/HEAD");
+        let head = std::fs::read_to_string(&truncated).unwrap();
+        std::fs::write(&truncated, "").unwrap();
+        assert_eq!(common_dir(&repo).unwrap(), None);
+        // a detached HEAD holds a commit id
+        std::fs::write(&truncated, format!("{}\n", "0".repeat(40))).unwrap();
+        assert!(common_dir(&repo).unwrap().is_some());
+        std::fs::write(&truncated, head).unwrap();
+        // HEAD as a symlink to a branch that is only in packed-refs
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(&truncated).unwrap();
+            std::os::unix::fs::symlink("refs/heads/packed", &truncated).unwrap();
+            assert!(common_dir(&repo).unwrap().is_some());
+            // a link git doesn't take for a ref
+            std::fs::remove_file(&truncated).unwrap();
+            std::os::unix::fs::symlink("refs", &truncated).unwrap();
+            assert_eq!(common_dir(&repo).unwrap(), None);
+            // nor one git can't read: it would look past it
+            std::fs::remove_file(&truncated).unwrap();
+            std::fs::write(&truncated, "ref: refs/heads/main\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |m| std::fs::Permissions::from_mode(m);
+            std::fs::set_permissions(&truncated, mode(0o000)).unwrap();
+            let found = std::fs::read(&truncated)
+                .is_err()
+                .then(|| common_dir(&repo));
+            std::fs::set_permissions(&truncated, mode(0o644)).unwrap();
+            if let Some(found) = found {
+                assert_eq!(found.unwrap(), None);
+            }
+            // nor objects git can't look into
+            let objects = repo.join(".git/objects");
+            std::fs::set_permissions(&objects, mode(0o600)).unwrap();
+            // (listing needs read permission, entering needs search); the
+            // mode comes back first, so a failure leaves a removable tree
+            let found = objects
+                .join(".")
+                .metadata()
+                .is_err()
+                .then(|| common_dir(&repo));
+            std::fs::set_permissions(&objects, mode(0o755)).unwrap();
+            if let Some(found) = found {
+                assert_eq!(found.unwrap(), None);
+            }
+
+            // a pipe named HEAD beside objects and refs is never opened
+            let plain = tmp.path().join("plain");
+            for dir in ["objects", "refs"] {
+                std::fs::create_dir_all(plain.join(dir)).unwrap();
+            }
+            let fifo = std::process::Command::new("mkfifo")
+                .arg(plain.join("HEAD"))
+                .status();
+            if fifo.is_ok_and(|status| status.success()) {
+                let (send, receive) = std::sync::mpsc::channel();
+                let dir = plain.clone();
+                std::thread::spawn(move || send.send(is_git_dir(&dir)));
+                let answer = receive.recv_timeout(std::time::Duration::from_secs(5));
+                assert_eq!(answer, Ok(false));
+            }
+        }
 
         let linked = linked(&wt).unwrap();
         assert_eq!(linked.common.canonicalize().unwrap(), git_dir);

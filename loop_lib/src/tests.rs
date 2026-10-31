@@ -68,24 +68,56 @@ fn test_expand_directories() {
 
     let directories = vec![temp_dir.path().to_str().unwrap().to_string()];
     let ignore = vec![".git".to_string()];
+    fs::create_dir(temp_dir.path().join(".git")).unwrap();
+    fs::create_dir(temp_dir.path().join(".github")).unwrap();
 
     let expanded = crate::expand_directories(&directories, &ignore).unwrap();
 
-    assert_eq!(expanded.len(), 3); // Including the root directory itself
+    assert_eq!(expanded.len(), 4); // Including the root directory itself, not .git
+    assert!(expanded.contains(
+        &temp_dir
+            .path()
+            .join(".github")
+            .to_str()
+            .unwrap()
+            .to_string()
+    ));
     assert!(expanded.contains(&temp_dir.path().to_str().unwrap().to_string()));
     assert!(expanded.contains(&dir1.to_str().unwrap().to_string()));
     assert!(expanded.contains(&dir2.to_str().unwrap().to_string()));
     assert!(!expanded.contains(&subdir.to_str().unwrap().to_string())); // Ensure subdirectories are not included
+
+    // the root excluded, its children still run
+    let root = temp_dir.path().to_str().unwrap().to_string();
+    let expanded =
+        crate::expand_directories(std::slice::from_ref(&root), std::slice::from_ref(&root))
+            .unwrap();
+    assert!(!expanded.contains(&root));
+    assert!(expanded.contains(&dir1.to_str().unwrap().to_string()));
 }
 
 #[test]
 fn test_should_ignore() {
-    let path = Path::new("/some/path/.git/file");
     let ignore = vec![".git".to_string()];
-    assert!(should_ignore(path, &ignore));
+    assert!(should_ignore(Path::new("/some/path/.git"), &ignore));
+    assert!(!should_ignore(Path::new("/some/path/normal"), &ignore));
 
-    let path = Path::new("/some/path/normal/file");
-    assert!(!should_ignore(path, &ignore));
+    // whole names, not parts of one
+    assert!(!should_ignore(Path::new("/w/.github"), &ignore));
+    let ignore = vec!["a".to_string(), "vendor/old".to_string()];
+    assert!(should_ignore(Path::new("./a"), &ignore));
+    assert!(should_ignore(Path::new("a"), &["./a".to_string()]));
+    // `.` is the directory loop runs in, not every directory
+    let dot = vec![".".to_string()];
+    assert!(should_ignore(Path::new("."), &dot));
+    assert!(!should_ignore(Path::new("./b"), &dot));
+    assert!(!should_ignore(Path::new("b"), &[String::new()]));
+    assert!(!should_ignore(Path::new("/w/abc"), &ignore));
+    assert!(!should_ignore(Path::new("/w/data"), &ignore));
+    assert!(should_ignore(Path::new("/w/vendor/old"), &ignore));
+    assert!(!should_ignore(Path::new("/w/old"), &ignore));
+    // the directories above don't count
+    assert!(!should_ignore(Path::new("/a/ws/b"), &ignore));
 }
 
 #[test]

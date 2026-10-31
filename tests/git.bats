@@ -168,6 +168,39 @@ teardown() {
     [[ "$output" == *"shared"* ]] || [[ "$output" == *"missing"* ]] || [[ "$output" == *"clone"* ]] || [[ "$output" == *"orphan"* ]]
 }
 
+@test "meta git update calls only a repository an unlisted one" {
+    # stray holds an empty .git, other is a repository .meta.yaml doesn't list
+    mkdir -p "$TEST_DIR/stray/.git"
+    git init --quiet "$TEST_DIR/other"
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"other exists locally but is not in .meta.yaml"* ]]
+    [[ "$output" != *"stray"* ]]
+}
+
+@test "meta git update compares no origin for a project that is not cloned" {
+    # the workspace's own origin is not the uncloned project's
+    git -C "$TEST_DIR" remote add origin git@github.com:org/workspace.git
+    rm -rf "$TEST_DIR/shared"
+    mkdir "$TEST_DIR/shared"
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"mismatch"* ]]
+    [[ "$output" != *"remote set-url"* ]]
+}
+
+@test "meta git update compares no origin for a project whose HEAD git can't read" {
+    [ "$(id -u)" -ne 0 ] || skip "root reads any file"
+    git -C "$TEST_DIR" remote add origin git@github.com:org/workspace.git
+    # git looks past a HEAD it can't read, to the workspace around
+    chmod 000 "$TEST_DIR/backend/.git/HEAD"
+    run "$META_BIN" git update
+    chmod 644 "$TEST_DIR/backend/.git/HEAD"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"remote set-url"* ]]
+    [ "$(git -C "$TEST_DIR" remote get-url origin)" = "git@github.com:org/workspace.git" ]
+}
+
 # ============ meta git clone (local) ============
 
 @test "meta git clone from local path works" {
@@ -791,6 +824,7 @@ EOF
 }
 
 @test "meta git update fails on a nested .meta.yaml it cannot read" {
+    [ "$(id -u)" -ne 0 ] || skip "root reads any directory"
     mkdir -p "$TEST_DIR/private"
     printf '{"projects": {}}' > "$TEST_DIR/private/config.json"
     ln -s ../private/config.json "$TEST_DIR/frontend/.meta.yaml"

@@ -37,6 +37,8 @@ Configure in Claude Desktop's `claude_desktop_config.json`:
 
 ## Tool Reference
 
+A `tag` parameter takes one tag or a comma-separated list, and selects the projects that have any of them, as `meta --tag` does.
+
 ### Core Tools
 
 #### meta_list_projects
@@ -216,11 +218,11 @@ Clean build artifacts.
 ### Discovery Tools
 
 #### meta_search_code
-Search for patterns across all repositories.
+Search for patterns across all repositories, those nested in meta projects too, with `git grep`: tracked files, and untracked files that `.gitignore` doesn't ignore; never `.git`. Each project is listed by its path in the workspace, a nested one too (`platform/api`), and is searched once: a project's search leaves out the projects nested in it. A nested `.meta.yaml` that can't be read is its project's error, reported whatever the tag filter; the projects beside it are still searched. When git reports a problem, the project's entry has an `error`, beside any `matches` git still found (an unreadable file, say).
 
 **Parameters:**
-- `pattern` (required): Search pattern (regex)
-- `file_pattern` (optional): Filter by file pattern (e.g., "*.rs")
+- `pattern` (required): Search pattern, an extended regular expression (as `grep -E`)
+- `file_pattern` (optional): Filter by file name pattern, in any directory (e.g., "*.rs")
 - `tag` (optional): Filter by tag
 
 #### meta_get_file_tree
@@ -229,7 +231,9 @@ Get file tree structure for projects.
 **Parameters:**
 - `project` (optional): Filter to specific project
 - `tag` (optional): Filter by tag
-- `depth` (optional): Max depth (default: 3)
+- `depth` (optional): Max depth, a non-negative integer (default: 3)
+
+A symbolic link is listed as `{"type": "symlink", "name": ...}` and not followed.
 
 #### meta_list_plugins
 List installed meta plugins.

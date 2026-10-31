@@ -18,7 +18,7 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Server information
 const SERVER_NAME: &str = "meta-mcp";
-const SERVER_VERSION: &str = "0.1.0";
+const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The longest request line read; a longer one gets an error reply instead of
 /// filling memory.
@@ -340,7 +340,7 @@ impl McpServer {
                     "properties": {
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     }
                 }),
@@ -358,7 +358,7 @@ impl McpServer {
                         },
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     },
                     "required": ["command"]
@@ -401,7 +401,7 @@ impl McpServer {
                         },
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     }
                 }),
@@ -414,7 +414,7 @@ impl McpServer {
                     "properties": {
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         },
                         "rebase": {
                             "type": "boolean",
@@ -431,7 +431,7 @@ impl McpServer {
                     "properties": {
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     }
                 }),
@@ -444,7 +444,7 @@ impl McpServer {
                     "properties": {
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     }
                 }),
@@ -465,7 +465,7 @@ impl McpServer {
                         },
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     }
                 }),
@@ -478,7 +478,7 @@ impl McpServer {
                     "properties": {
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     }
                 }),
@@ -500,7 +500,7 @@ impl McpServer {
                         },
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     }
                 }),
@@ -521,7 +521,7 @@ impl McpServer {
                         },
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     },
                     "required": ["message"]
@@ -543,7 +543,7 @@ impl McpServer {
                         },
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     },
                     "required": ["branch"]
@@ -588,7 +588,7 @@ impl McpServer {
                     "properties": {
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     }
                 }),
@@ -601,7 +601,7 @@ impl McpServer {
                     "properties": {
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         },
                         "project": {
                             "type": "string",
@@ -618,7 +618,7 @@ impl McpServer {
                     "properties": {
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         },
                         "release": {
                             "type": "boolean",
@@ -635,7 +635,7 @@ impl McpServer {
                     "properties": {
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     }
                 }),
@@ -645,13 +645,13 @@ impl McpServer {
             // ================================================================
             Tool {
                 name: "meta_search_code".to_string(),
-                description: "Search for patterns across all repositories using grep".to_string(),
+                description: "Search for patterns across all repositories (nested ones too) with git grep: tracked files, and untracked files .gitignore doesn't ignore".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "pattern": {
                             "type": "string",
-                            "description": "Search pattern (regex supported)"
+                            "description": "Search pattern: an extended regular expression (as grep -E)"
                         },
                         "file_pattern": {
                             "type": "string",
@@ -659,7 +659,7 @@ impl McpServer {
                         },
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     },
                     "required": ["pattern"]
@@ -681,7 +681,7 @@ impl McpServer {
                         },
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag"
+                            "description": "Filter projects by tag (a comma-separated list selects any of them)"
                         }
                     }
                 }),
@@ -741,7 +741,7 @@ impl McpServer {
                     "properties": {
                         "tag": {
                             "type": "string",
-                            "description": "Filter by tag (optional)"
+                            "description": "Filter by tag (optional; a comma-separated list selects any of them)"
                         }
                     }
                 }),
@@ -759,7 +759,7 @@ impl McpServer {
                         },
                         "tag": {
                             "type": "string",
-                            "description": "Filter projects by tag (optional)"
+                            "description": "Filter projects by tag (optional; a comma-separated list selects any of them)"
                         },
                         "atomic": {
                             "type": "boolean",
@@ -854,11 +854,11 @@ impl McpServer {
         let projects = self.load_projects(meta_dir)?;
 
         // Filter by tag if specified
-        let tag_filter = args.get("tag").and_then(|v| v.as_str());
+        let tag_filter = tag_filter(args);
         let filtered: Vec<&ProjectInfo> = if let Some(tag) = tag_filter {
             projects
                 .iter()
-                .filter(|p| p.tags.contains(&tag.to_string()))
+                .filter(|p| has_any_tag(tag, &p.tags))
                 .collect()
         } else {
             projects.iter().collect()
@@ -887,12 +887,9 @@ impl McpServer {
 
         let project_filter = args.get("project").and_then(|v| v.as_str());
 
-        // Run meta git status with --json for structured output
-        let mut cmd = Command::new("meta");
-        cmd.arg("--json").arg("git").arg("status");
-        cmd.current_dir(meta_dir);
-
-        let output = cmd.output().context("Failed to execute meta git status")?;
+        let output = git_status_command(meta_dir, args)
+            .output()
+            .context("Failed to execute meta git status")?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -931,7 +928,7 @@ impl McpServer {
         let mut cmd = Command::new("meta");
         cmd.arg("--json");
 
-        if let Some(tag) = args.get("tag").and_then(|v| v.as_str()) {
+        if let Some(tag) = tag_filter(args) {
             cmd.arg("--tag").arg(tag);
         }
 
@@ -1009,7 +1006,7 @@ impl McpServer {
         let mut cmd = Command::new("meta");
         cmd.arg("--json");
 
-        if let Some(tag) = args.get("tag").and_then(|v| v.as_str()) {
+        if let Some(tag) = tag_filter(args) {
             cmd.arg("--tag").arg(tag);
         }
 
@@ -1046,7 +1043,7 @@ impl McpServer {
         let mut cmd = Command::new("meta");
         cmd.arg("--json");
 
-        if let Some(tag) = args.get("tag").and_then(|v| v.as_str()) {
+        if let Some(tag) = tag_filter(args) {
             cmd.arg("--tag").arg(tag);
         }
 
@@ -1074,7 +1071,7 @@ impl McpServer {
         let mut cmd = Command::new("meta");
         cmd.arg("--json");
 
-        if let Some(tag) = args.get("tag").and_then(|v| v.as_str()) {
+        if let Some(tag) = tag_filter(args) {
             cmd.arg("--tag").arg(tag);
         }
 
@@ -1101,7 +1098,7 @@ impl McpServer {
 
         let projects = self.load_projects(meta_dir)?;
         let project_filter = args.get("project").and_then(|v| v.as_str());
-        let tag_filter = args.get("tag").and_then(|v| v.as_str());
+        let tag_filter = tag_filter(args);
         let staged = args
             .get("staged")
             .and_then(|v| v.as_bool())
@@ -1114,7 +1111,7 @@ impl McpServer {
                     return p.name == project;
                 }
                 if let Some(tag) = tag_filter {
-                    return p.tags.contains(&tag.to_string());
+                    return has_any_tag(tag, &p.tags);
                 }
                 true
             })
@@ -1155,12 +1152,12 @@ impl McpServer {
             .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
 
         let projects = self.load_projects(meta_dir)?;
-        let tag_filter = args.get("tag").and_then(|v| v.as_str());
+        let tag_filter = tag_filter(args);
 
         let filtered: Vec<&ProjectInfo> = if let Some(tag) = tag_filter {
             projects
                 .iter()
-                .filter(|p| p.tags.contains(&tag.to_string()))
+                .filter(|p| has_any_tag(tag, &p.tags))
                 .collect()
         } else {
             projects.iter().collect()
@@ -1211,7 +1208,7 @@ impl McpServer {
         let mut cmd = Command::new("meta");
         cmd.arg("--json");
 
-        if let Some(tag) = args.get("tag").and_then(|v| v.as_str()) {
+        if let Some(tag) = tag_filter(args) {
             cmd.arg("--tag").arg(tag);
         }
 
@@ -1244,7 +1241,7 @@ impl McpServer {
         let mut cmd = Command::new("meta");
         cmd.arg("--json");
 
-        if let Some(tag) = args.get("tag").and_then(|v| v.as_str()) {
+        if let Some(tag) = tag_filter(args) {
             cmd.arg("--tag").arg(tag);
         }
 
@@ -1383,7 +1380,7 @@ impl McpServer {
         let mut cmd = Command::new("meta");
         cmd.arg("--json");
 
-        if let Some(tag) = args.get("tag").and_then(|v| v.as_str()) {
+        if let Some(tag) = tag_filter(args) {
             cmd.arg("--tag").arg(tag);
         }
 
@@ -1419,12 +1416,12 @@ impl McpServer {
             .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
 
         let projects = self.load_projects(meta_dir)?;
-        let tag_filter = args.get("tag").and_then(|v| v.as_str());
+        let tag_filter = tag_filter(args);
 
         let filtered: Vec<&ProjectInfo> = if let Some(tag) = tag_filter {
             projects
                 .iter()
-                .filter(|p| p.tags.contains(&tag.to_string()))
+                .filter(|p| has_any_tag(tag, &p.tags))
                 .collect()
         } else {
             projects.iter().collect()
@@ -1485,7 +1482,7 @@ impl McpServer {
 
         let projects = self.load_projects(meta_dir)?;
         let project_filter = args.get("project").and_then(|v| v.as_str());
-        let tag_filter = args.get("tag").and_then(|v| v.as_str());
+        let tag_filter = tag_filter(args);
 
         let filtered: Vec<&ProjectInfo> = projects
             .iter()
@@ -1494,7 +1491,7 @@ impl McpServer {
                     return p.name == project;
                 }
                 if let Some(tag) = tag_filter {
-                    return p.tags.contains(&tag.to_string());
+                    return has_any_tag(tag, &p.tags);
                 }
                 true
             })
@@ -1512,7 +1509,7 @@ impl McpServer {
                 continue;
             };
 
-            let output = Command::new(cmd_name)
+            let output = meta_core::git::clear_repo_env(&mut Command::new(cmd_name))
                 .args(&cmd_args)
                 .current_dir(&project_path)
                 .output();
@@ -1551,7 +1548,7 @@ impl McpServer {
             .unwrap_or(false);
 
         let projects = self.load_projects(meta_dir)?;
-        let tag_filter = args.get("tag").and_then(|v| v.as_str());
+        let tag_filter = tag_filter(args);
         // Root builds remain included even when a tag filter selects child repos.
         let mut repos = vec![(".".to_string(), meta_dir.clone())];
         repos.extend(
@@ -1567,7 +1564,7 @@ impl McpServer {
             else {
                 continue;
             };
-            match Command::new(program)
+            match meta_core::git::clear_repo_env(&mut Command::new(program))
                 .args(&command_args)
                 .current_dir(&path)
                 .output()
@@ -1602,12 +1599,12 @@ impl McpServer {
             .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
 
         let projects = self.load_projects(meta_dir)?;
-        let tag_filter = args.get("tag").and_then(|v| v.as_str());
+        let tag_filter = tag_filter(args);
 
         let filtered: Vec<&ProjectInfo> = if let Some(tag) = tag_filter {
             projects
                 .iter()
-                .filter(|p| p.tags.contains(&tag.to_string()))
+                .filter(|p| has_any_tag(tag, &p.tags))
                 .collect()
         } else {
             projects.iter().collect()
@@ -1635,7 +1632,7 @@ impl McpServer {
                     continue;
                 };
 
-            let output = Command::new(cmd_name)
+            let output = meta_core::git::clear_repo_env(&mut Command::new(cmd_name))
                 .args(&cmd_args)
                 .current_dir(&project_path)
                 .output();
@@ -1678,49 +1675,136 @@ impl McpServer {
         let file_pattern = args.get("file_pattern").and_then(|v| v.as_str());
 
         let projects = self.load_projects(meta_dir)?;
-        let tag_filter = args.get("tag").and_then(|v| v.as_str());
+        let tag_filter = tag_filter(args);
 
-        let filtered: Vec<&ProjectInfo> = if let Some(tag) = tag_filter {
-            projects
-                .iter()
-                .filter(|p| p.tags.contains(&tag.to_string()))
-                .collect()
-        } else {
-            projects.iter().collect()
-        };
+        // Each project once, the ones nested in a meta project too (as
+        // `meta project list --recursive`), named by its path in the
+        // workspace. A project whose nested config can't be read is an
+        // error of its own.
+        let mut targets = Vec::new();
+        search_targets(meta_dir, "", &projects, &mut targets);
 
         let mut results = Vec::new();
 
-        for project in filtered {
-            let project_path = meta_dir.join(&project.path);
-            if !project_path.exists() {
+        for SearchTarget {
+            path: name,
+            tags,
+            nested,
+        } in targets
+        {
+            let nested = match nested {
+                Ok(nested) => nested,
+                // whatever the tags: the projects it hides may have them
+                Err(error) => {
+                    results.push(serde_json::json!({ "project": name, "error": error }));
+                    continue;
+                }
+            };
+            let project_path = meta_dir.join(&name);
+            if tag_filter.is_some_and(|tag| !has_any_tag(tag, &tags)) || !project_path.exists() {
                 continue;
             }
 
-            let mut cmd = Command::new("grep");
-            cmd.args(["-r", "-n", "-I"]); // recursive, line numbers, skip binary
-
-            if let Some(fp) = file_pattern {
-                cmd.args(["--include", fp]);
-            }
-
-            cmd.arg(pattern);
-            cmd.current_dir(&project_path);
-
-            let output = cmd.output();
-
-            match output {
-                Ok(out) => {
-                    let matches = String::from_utf8_lossy(&out.stdout);
-                    if !matches.is_empty() {
+            // git's search never looks in .git or at what .gitignore leaves
+            // out, and takes the pattern after -e, never as an option. A
+            // project that is no repository of its own is a plain directory.
+            // The user's git config doesn't change the results: no colour or
+            // column, extended regular expressions, file names as they are.
+            let mut cmd = git(&project_path);
+            cmd.args([
+                "-c",
+                "core.quotePath=false",
+                "grep",
+                "--no-color",
+                "--no-column",
+                "--no-recurse-submodules",
+                "-E",
+                "-n",
+                "-I",
+            ]);
+            match meta_core::gitdir::common_dir(&project_path) {
+                Ok(Some(_)) => cmd.arg("--untracked"),
+                // only the directory's own .gitignore files: the workspace
+                // repo around it may ignore the whole project. The ceiling
+                // is a path list, which a separator in the path would split.
+                Ok(None) => {
+                    // git compares the ceiling with the real path it runs in
+                    let real = project_path
+                        .canonicalize()
+                        .unwrap_or_else(|_| project_path.clone());
+                    let ceiling = real.parent().unwrap_or(&real);
+                    if std::env::split_paths(ceiling).count() != 1 {
                         results.push(serde_json::json!({
-                            "project": project.name,
-                            "matches": matches.lines().take(50).collect::<Vec<_>>()
+                            "project": name,
+                            "error": format!(
+                                "Cannot search {}: its path contains the path list separator",
+                                meta_core::display::escape_path(&project_path)
+                            )
                         }));
+                        continue;
                     }
+                    cmd.args(["--no-index", "--exclude-standard"])
+                        .env("GIT_CEILING_DIRECTORIES", ceiling)
                 }
-                Err(_) => continue,
+                Err(e) => {
+                    results.push(serde_json::json!({
+                        "project": name,
+                        "error": format!("{e:#}")
+                    }));
+                    continue;
+                }
+            };
+            cmd.arg("-e").arg(pattern).arg("--");
+            // a file name pattern, in any directory
+            if let Some(fp) = file_pattern {
+                cmd.arg(format!(":(glob)**/{fp}"));
             }
+            // the projects nested in it are searched as their own: by their
+            // path, and where it leads when it is a link inside this project
+            let real = |path: &std::path::Path| path.canonicalize().ok();
+            for path in &nested {
+                cmd.arg(format!(":(exclude,literal){path}"));
+                let resolved = real(&project_path.join(path)).zip(real(&project_path));
+                if let Some(target) = resolved
+                    .as_ref()
+                    .and_then(|(child, here)| child.strip_prefix(here).ok())
+                    .filter(|target| *target != std::path::Path::new(path))
+                {
+                    cmd.arg(format!(":(exclude,literal){}", target.display()));
+                }
+            }
+
+            let out = match cmd.output() {
+                Ok(out) => out,
+                Err(e) => {
+                    results.push(serde_json::json!({
+                        "project": name,
+                        "error": format!("Cannot run git grep: {e}")
+                    }));
+                    continue;
+                }
+            };
+            // Exit 1 is no match. git also says on stderr what it couldn't
+            // read while it goes on, so matches may come with an error.
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let matches: Vec<&str> = stdout.lines().take(50).collect();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let error = match (out.status.code(), stderr.trim()) {
+                (Some(0 | 1), "") => None,
+                (_, "") => Some(format!("git grep failed: {}", out.status)),
+                (_, stderr) => Some(stderr.to_string()),
+            };
+            if matches.is_empty() && error.is_none() {
+                continue;
+            }
+            let mut entry = serde_json::json!({ "project": name });
+            if !matches.is_empty() {
+                entry["matches"] = serde_json::json!(matches);
+            }
+            if let Some(error) = error {
+                entry["error"] = serde_json::json!(error);
+            }
+            results.push(entry);
         }
 
         Ok(serde_json::to_string_pretty(&results)?)
@@ -1732,11 +1816,17 @@ impl McpServer {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
 
-        let depth = args.get("depth").and_then(|v| v.as_i64()).unwrap_or(3) as usize;
+        let depth = match args.get("depth").filter(|depth| !depth.is_null()) {
+            None => 3,
+            Some(depth) => depth
+                .as_u64()
+                .and_then(|depth| usize::try_from(depth).ok())
+                .ok_or_else(|| anyhow::anyhow!("'depth' must be a non-negative integer"))?,
+        };
 
         let projects = self.load_projects(meta_dir)?;
         let project_filter = args.get("project").and_then(|v| v.as_str());
-        let tag_filter = args.get("tag").and_then(|v| v.as_str());
+        let tag_filter = tag_filter(args);
 
         let filtered: Vec<&ProjectInfo> = projects
             .iter()
@@ -1745,7 +1835,7 @@ impl McpServer {
                     return p.name == project;
                 }
                 if let Some(tag) = tag_filter {
-                    return p.tags.contains(&tag.to_string());
+                    return has_any_tag(tag, &p.tags);
                 }
                 true
             })
@@ -1801,7 +1891,16 @@ impl McpServer {
                     continue;
                 }
 
-                if entry_path.is_dir() {
+                // A link is listed, not followed: it may lead back up the tree
+                let Ok(file_type) = entry.file_type() else {
+                    continue;
+                };
+                if file_type.is_symlink() {
+                    children.push(serde_json::json!({
+                        "type": "symlink",
+                        "name": name
+                    }));
+                } else if file_type.is_dir() {
                     children.push(serde_json::json!({
                         "type": "directory",
                         "name": name,
@@ -1931,12 +2030,21 @@ impl McpServer {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
 
-        let tag_filter = args.get("tag").and_then(|v| v.as_str());
+        let tag_filter = tag_filter(args);
 
         let projects = self.load_project_dependencies(meta_dir)?;
         let graph = dependency_graph::DependencyGraph::build(projects)?;
-        let tags: Vec<String> = tag_filter.map(|t| vec![t.to_string()]).unwrap_or_default();
-        let order = graph.execution_order_filtered(&tags)?;
+        let order: Vec<&str> = graph
+            .execution_order()?
+            .into_iter()
+            .filter(|name| {
+                tag_filter.is_none_or(|tags| {
+                    graph
+                        .get_project(name)
+                        .is_some_and(|project| has_any_tag(tags, &project.tags))
+                })
+            })
+            .collect();
 
         Ok(serde_json::to_string_pretty(&serde_json::json!({
             "execution_order": order,
@@ -1958,7 +2066,7 @@ impl McpServer {
             .split_first()
             .ok_or_else(|| anyhow::anyhow!("Missing 'command' argument"))?;
 
-        let tag_filter = args.get("tag").and_then(|v| v.as_str());
+        let tag_filter = tag_filter(args);
         let atomic = args
             .get("atomic")
             .and_then(|v| v.as_bool())
@@ -1970,7 +2078,7 @@ impl McpServer {
         let filtered: Vec<&ProjectInfo> = if let Some(tag) = tag_filter {
             projects
                 .iter()
-                .filter(|p| p.tags.contains(&tag.to_string()))
+                .filter(|p| has_any_tag(tag, &p.tags))
                 .collect()
         } else {
             projects.iter().collect()
@@ -2220,12 +2328,80 @@ fn string_list(args: &serde_json::Value, key: &str) -> Result<Option<Vec<String>
     }
 }
 
+/// `meta --json [--tag <tag>] git status` in `meta_dir`: structured output,
+/// of the projects `tag` selects.
+fn git_status_command(meta_dir: &std::path::Path, args: &serde_json::Value) -> Command {
+    let mut cmd = Command::new("meta");
+    cmd.arg("--json");
+    if let Some(tag) = tag_filter(args) {
+        cmd.arg("--tag").arg(tag);
+    }
+    cmd.args(["git", "status"]).current_dir(meta_dir);
+    cmd
+}
+
+/// A project for `meta_search_code`: its path in the workspace, its tags,
+/// and the paths, from it, of the projects nested in it.
+struct SearchTarget {
+    path: String,
+    tags: Vec<String>,
+    nested: Result<Vec<String>, String>,
+}
+
+/// Every project of `projects` (listed by the config in `dir`) and the ones
+/// nested in them, parents first, with paths under `prefix`. Each nested
+/// config is read on its own, so one that can't be read is only its
+/// project's error. Config checks keep every nested path inside its parent,
+/// so the walk only goes down.
+fn search_targets(
+    dir: &std::path::Path,
+    prefix: &str,
+    projects: &[ProjectInfo],
+    out: &mut Vec<SearchTarget>,
+) {
+    for project in projects {
+        let path = match prefix {
+            "" => project.path.clone(),
+            prefix => format!("{prefix}/{}", project.path),
+        };
+        // one level: this project's own nested config
+        let nested = config::walk_projects(dir, std::slice::from_ref(project), Some(1))
+            .map(|nodes| {
+                nodes
+                    .into_iter()
+                    .flat_map(|node| node.children)
+                    .map(|child| child.info)
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|e| format!("{e:#}"));
+        out.push(SearchTarget {
+            path: path.clone(),
+            tags: project.tags.clone(),
+            nested: nested
+                .as_ref()
+                .map(|nested| nested.iter().map(|child| child.path.clone()).collect())
+                .map_err(Clone::clone),
+        });
+        if let Ok(nested) = nested {
+            search_targets(&dir.join(&project.path), &path, &nested, out);
+        }
+    }
+}
+
 /// Whether `project_tags` holds any of the comma-separated `tags`, as
 /// `meta --tag` selects.
 fn has_any_tag(tags: &str, project_tags: &[String]) -> bool {
     tags.split(',')
         .map(str::trim)
         .any(|tag| !tag.is_empty() && project_tags.iter().any(|t| t == tag))
+}
+
+/// The `tag` argument, unless it names no tag: in every tool, a blank list
+/// is no filter, as no `tag` at all.
+fn tag_filter(args: &serde_json::Value) -> Option<&str> {
+    args.get("tag")
+        .and_then(|v| v.as_str())
+        .filter(|tags| tags.split(',').any(|tag| !tag.trim().is_empty()))
 }
 
 /// npm is a `.cmd` script on Windows, which `Command` doesn't find by its bare name.
@@ -2268,7 +2444,14 @@ fn repo_command(
     }
 }
 
+/// MCP server for meta: serves the Model Context Protocol on stdin and
+/// stdout, for the meta workspace around the current directory.
+#[derive(clap::Parser)]
+#[command(version)]
+struct Cli {}
+
 fn main() -> Result<()> {
+    meta_core::args::parse::<Cli>();
     McpServer::new()?.run()
 }
 
@@ -2330,6 +2513,83 @@ mod tests {
         assert!(has_any_tag("red", &tags));
         assert!(has_any_tag("blue, red", &tags));
         assert!(!has_any_tag("blue", &tags));
+    }
+
+    #[test]
+    fn file_tree_lists_links_without_following_them() {
+        let (server, tmp) = server_with_meta_dir();
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            "projects:\n  a: {tags: [x]}\n  b: {tags: [y]}\n  c: {tags: [z]}\n",
+        )
+        .unwrap();
+        for project in ["a", "b", "c"] {
+            std::fs::create_dir_all(tmp.path().join(project).join("src")).unwrap();
+        }
+        // a link back up the tree, which a walk that follows it never leaves
+        // (Windows makes one only with Developer Mode)
+        let link = tmp.path().join("a/src/up");
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink("..", &link).is_ok();
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir("..", &link).is_ok();
+
+        // any of the tags, as meta --tag
+        let tree = server
+            .tool_get_file_tree(&json!({"tag": "x,y", "depth": 100}))
+            .unwrap();
+        let tree: serde_json::Value = serde_json::from_str(&tree).unwrap();
+        assert_eq!(tree.as_array().unwrap().len(), 2, "{tree}");
+        if linked {
+            assert_eq!(
+                tree[0]["tree"][0]["children"],
+                json!([{"type": "symlink", "name": "up"}]),
+                "{tree}"
+            );
+        }
+
+        // a blank list is no filter, in every tool
+        let tree = server.tool_get_file_tree(&json!({"tag": " , "})).unwrap();
+        let tree: serde_json::Value = serde_json::from_str(&tree).unwrap();
+        assert_eq!(tree.as_array().unwrap().len(), 3, "{tree}");
+
+        // null, as clients send for an option they don't use, is the default
+        assert!(server.tool_get_file_tree(&json!({"depth": null})).is_ok());
+
+        let err = server
+            .tool_get_file_tree(&json!({"depth": -1}))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("'depth' must be a non-negative integer"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn git_status_selects_by_tag() {
+        let cmd = git_status_command(std::path::Path::new("."), &json!({"tag": "a,b"}));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, ["--json", "--tag", "a,b", "git", "status"]);
+        // a blank list is no filter
+        let cmd = git_status_command(std::path::Path::new("."), &json!({"tag": " , "}));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, ["--json", "git", "status"]);
+    }
+
+    #[test]
+    fn execution_order_selects_any_of_the_tags() {
+        let (server, tmp) = server_with_meta_dir();
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            "projects:\n  a: {tags: [x]}\n  b: {tags: [y]}\n  c: {tags: [z]}\n",
+        )
+        .unwrap();
+        let order = server
+            .tool_execution_order(&json!({"tag": "x, y"}))
+            .unwrap();
+        let order: serde_json::Value = serde_json::from_str(&order).unwrap();
+        assert_eq!(order["count"], 2, "{order}");
     }
 
     #[test]

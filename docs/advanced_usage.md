@@ -204,7 +204,7 @@ Execute commands with automatic rollback on failure:
 meta_batch_execute {"command": ["npm", "test"], "atomic": true}
 ```
 
-If any repo fails, all repos are rolled back to pre-execution state.
+If any repo fails, the command stops and each repo it reached is put back on its branch and commit from before; read `rollback.status`, and `rollback.failed` for any repo it couldn't fully put back (see [Agent Workflows](agent_workflows.md)).
 
 ---
 

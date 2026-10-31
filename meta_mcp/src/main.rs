@@ -321,10 +321,12 @@ impl McpServer {
         !calls.is_empty()
     }
 
-    /// Acts on the parameters of `notifications/cancelled`.
+    /// Acts on the parameters of `notifications/cancelled`: an object, as
+    /// MCP has them (serde would also read a list as one); others are ignored.
     fn cancel(&self, params: Option<&serde_json::Value>) {
-        if let Some(Ok(cancelled)) =
-            params.map(|params| serde_json::from_value::<Cancelled>(params.clone()))
+        if let Some(Ok(cancelled)) = params
+            .filter(|params| params.is_object())
+            .map(|params| serde_json::from_value::<Cancelled>(params.clone()))
         {
             self.calls.cancel(&cancelled.request_id.to_string());
         }
@@ -760,11 +762,14 @@ mod tests {
             "name": "meta_batch_execute", "arguments": {"command": ["git", "init", "-q", "ran"]}}});
         let bad_version = json!({"jsonrpc": "1.0", "method": "notifications/cancelled",
             "params": {"requestId": 2}});
+        // params as a list, which MCP doesn't have
+        let listed = json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+            "params": [2]});
         // with an id: a request for a method that doesn't exist
         let with_id = json!({"jsonrpc": "2.0", "id": 7, "method": "notifications/cancelled",
             "params": {"requestId": 2}});
         let mut output = Vec::new();
-        let input = format!("{}\n", json!([with_id, call, bad_version]));
+        let input = format!("{}\n", json!([with_id, listed, call, bad_version]));
         server.serve(input.as_bytes(), &mut output).unwrap();
         let replies: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(replies[0]["error"]["code"], -32601, "{replies}");

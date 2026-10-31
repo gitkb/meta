@@ -1,16 +1,14 @@
 name: Auto Format
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
-permissions:
-  contents: write
+# The job checks out and pushes with PARENT_REPO_PAT, never GITHUB_TOKEN
+permissions: {}
 
 concurrency:
-  group: auto-format-${{ github.head_ref || github.ref_name }}
+  group: auto-format-${{ github.head_ref }}
   cancel-in-progress: true
 
 jobs:
@@ -21,16 +19,25 @@ jobs:
     # - PR from fork (can't push back)
     # - Commit by github-actions[bot] (prevent infinite loop)
     if: |
-      (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'github-actions[bot]'
     steps:
+      # A push with GITHUB_TOKEN would start no CI on the format commit
+      - name: Require PARENT_REPO_PAT
+        env:
+          PAT: ${{ secrets.PARENT_REPO_PAT }}
+        run: |
+          if [ -z "$PAT" ]; then
+            echo "::error::PARENT_REPO_PAT is not available to this run; run cargo fmt --all and push the result yourself"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref || github.ref_name }}
-          # Use PAT to trigger downstream workflows; fallback to GITHUB_TOKEN
-          token: ${{ secrets.PARENT_REPO_PAT || github.token }}
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.PARENT_REPO_PAT }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt
 

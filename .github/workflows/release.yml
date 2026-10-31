@@ -1,14 +1,14 @@
 name: Release
 
+# release-please creates the tag with PARENT_REPO_PAT, so its push starts this
+# workflow, and every job checks out the tag
 on:
   push:
     tags:
       - 'v*'
-  repository_dispatch:
-    types: [release-tagged]
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -47,7 +47,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -64,12 +64,12 @@ jobs:
 
       - name: Build release binaries
         run: |
-          cargo build --release --target ${{ matrix.target }} -p meta
-          cargo build --release --target ${{ matrix.target }} -p meta_git_cli
-          cargo build --release --target ${{ matrix.target }} -p meta_project_cli
-          cargo build --release --target ${{ matrix.target }} -p meta_rust_cli
-          cargo build --release --target ${{ matrix.target }} -p meta-mcp
-          cargo build --release --target ${{ matrix.target }} -p loop_cli
+          cargo build --release --target ${{ matrix.target }} -p meta --locked
+          cargo build --release --target ${{ matrix.target }} -p meta_git_cli --locked
+          cargo build --release --target ${{ matrix.target }} -p meta_project_cli --locked
+          cargo build --release --target ${{ matrix.target }} -p meta_rust_cli --locked
+          cargo build --release --target ${{ matrix.target }} -p meta-mcp --locked
+          cargo build --release --target ${{ matrix.target }} -p loop_cli --locked
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -113,18 +113,11 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # upload the assets to the release
     outputs:
-      tag: ${{ steps.get-tag.outputs.tag }}
+      tag: ${{ github.ref_name }}
     steps:
-      - name: Get tag name
-        id: get-tag
-        run: |
-          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            echo "tag=${{ github.event.client_payload.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          fi
-
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -141,9 +134,9 @@ jobs:
           cat *.sha256 > checksums.txt
 
       - name: Upload to existing release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          tag_name: ${{ steps.get-tag.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
           files: release/*
           fail_on_unmatched_files: true
         env:
@@ -153,6 +146,7 @@ jobs:
     name: Notify Discord
     needs: release
     runs-on: ubuntu-latest
+    permissions: {}
     # A failed Discord post must not block downstream consumers of the release
     # (e.g. crates.io publish or the homebrew tap update).
     continue-on-error: true
@@ -233,7 +227,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       # Publish in dependency order
       # Tier 1: No internal dependencies

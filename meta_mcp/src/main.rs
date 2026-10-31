@@ -958,10 +958,11 @@ impl McpServer {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
 
-        // Find and return the raw config
+        // The config as written, without the credentials in its URLs
         let path = config::find_meta_config_in(meta_dir)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
         let content = std::fs::read_to_string(&path)?;
+        let content = meta_core::git::redact_urls(&content);
         Ok(format!("Config file: {}\n\n{}", path.display(), content))
     }
 
@@ -2659,6 +2660,24 @@ mod tests {
         let result = server.tool_get_config(&serde_json::json!({})).unwrap();
         assert!(result.contains(".meta.yaml"));
         assert!(result.contains("projects: {}"));
+    }
+
+    #[test]
+    fn test_get_config_hides_credentials() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            "projects:\n  a: https://alice:ghp_SECRET@h/a.git\n  b: git@h:b.git\n",
+        )
+        .unwrap();
+        let server = McpServer {
+            meta_dir: Some(tmp.path().to_path_buf()),
+        };
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(
+            result.ends_with("projects:\n  a: https://***@h/a.git\n  b: git@h:b.git\n"),
+            "{result}"
+        );
     }
 
     #[test]

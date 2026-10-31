@@ -99,9 +99,10 @@ impl GitUrl {
         self.0.is_empty()
     }
 
-    /// The URL without the credentials in it (see [`redact_urls`]).
+    /// The URL without the credentials in it (see [`redact_urls`]; its
+    /// authority ends only at `/`, `?` or `#`).
     fn redacted(&self) -> Cow<'_, str> {
-        redact_urls(&self.0)
+        redact(&self.0, |c| matches!(c, '/' | '?' | '#'))
     }
 
     /// Whether printing this URL hides credentials it holds: a command
@@ -267,12 +268,19 @@ impl GitUrl {
     }
 }
 
-/// `text` with the userinfo of every `scheme://userinfo@host` in it
-/// hidden: `https://alice:token@host/repo` becomes `https://***@host/repo`.
-/// An ssh user name alone stays (`ssh://git@host/repo`): it is no secret.
-/// The authority ends at `/`, `?` or `#`, and runs to its last `@`, so in
-/// free text (git's errors, say) more may be hidden, never less.
+/// `text` (git's errors, a config file) with the userinfo of every
+/// `scheme://userinfo@host` in it hidden: `https://alice:token@host/repo`
+/// becomes `https://***@host/repo`. An ssh user name alone stays
+/// (`ssh://git@host/repo`): it is no secret. A URL's authority ends at
+/// `/`, `?`, `#`, whitespace or a quote, and runs to its last `@`.
 pub fn redact_urls(text: &str) -> Cow<'_, str> {
+    redact(text, |c| {
+        matches!(c, '/' | '?' | '#' | '\'' | '"' | '`' | '<' | '>') || c.is_whitespace()
+    })
+}
+
+/// [`redact_urls`], with the authority ending where `ends` says.
+fn redact(text: &str, ends: impl Fn(char) -> bool + Copy) -> Cow<'_, str> {
     let mut shown = String::new();
     let mut copied = 0;
     let mut from = 0;
@@ -288,7 +296,7 @@ pub fn redact_urls(text: &str) -> Cow<'_, str> {
             .count();
         let scheme = before.get(before.len() - scheme_len..).unwrap_or_default();
         let rest = text.get(host_start..).unwrap_or_default();
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        let authority = rest.split(ends).next().unwrap_or_default();
         let Some((userinfo, _)) = authority.rsplit_once('@') else {
             continue;
         };
@@ -506,8 +514,11 @@ mod tests {
             "fatal: unable to access 'https://***@h/r/': x\n\
              and 'git+https://***@h' or ssh://git@h/r"
         );
-        // more hidden in free text, never less
-        assert_eq!(redact_urls("see https://h, or a@b/"), "see https://***@b/");
+        // in text, a URL ends at whitespace or a quote
+        assert_eq!(
+            redact_urls("a: https://h\nb: git@h:r\nc: 'https://t@h'"),
+            "a: https://h\nb: git@h:r\nc: 'https://***@h'"
+        );
         assert_eq!(redact_urls("-+https://a:t@h"), "-+https://***@h");
         assert!(matches!(
             redact_urls("no URL: a@b, ://x@y"),

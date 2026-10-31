@@ -513,7 +513,7 @@ fn source_repo(checkout: &Path) -> Result<PathBuf> {
         .map(Path::to_path_buf)
         .with_context(|| {
             format!(
-                "Cannot derive source repo from gitdir {}",
+                "Cannot derive source repo from gitdir: {}",
                 escape_path(&admin)
             )
         })

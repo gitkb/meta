@@ -135,7 +135,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
             "{} {} ({})",
             style("Failed to clone").red().bold(),
             meta_core::display::escape(&failure.name),
-            meta_core::display::escape(&failure.url)
+            failure.url
         );
         // git's error names paths from the filesystem
         for line in failure.error.lines() {
@@ -198,7 +198,9 @@ fn clone_single_repo(
     if let Some(d) = queue.git_depth() {
         cmd.arg("--depth").arg(d);
     }
-    cmd.arg("--").arg(&task.url).arg(&task.target_path);
+    cmd.arg("--")
+        .arg(task.url.as_git_arg())
+        .arg(&task.target_path);
     if let Some(ssh) = ssh_cmd {
         cmd.env("GIT_SSH_COMMAND", ssh);
     }
@@ -318,7 +320,9 @@ impl StderrTail {
                     .read_until(b'\n', &mut buf)
                     .is_ok_and(|n| n > 0)
                 {
-                    let line = String::from_utf8_lossy(&buf).trim_end().to_string();
+                    // git's own errors may show the URL with its credentials
+                    let line = String::from_utf8_lossy(&buf);
+                    let line = meta_core::git::redact_urls(line.trim_end()).into_owned();
                     buf.clear();
                     on_line(&line);
                     let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());

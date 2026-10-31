@@ -33,7 +33,6 @@ pub fn execute_command(
     cwd: &Path,
 ) -> CommandResult {
     debug!("[meta_git_cli] Plugin invoked with command: '{command}'");
-    debug!("[meta_git_cli] Args: {args:?}");
     debug!(
         "[meta_git_cli] Options: parallel={}, dry_run={}, verbose={}, recursive={}, depth={:?}",
         options.parallel, options.dry_run, options.verbose, options.recursive, options.depth
@@ -236,12 +235,13 @@ fn execute_raw_git_command(
             return CommandResult::Plan(commands, Some(true));
         }
 
-        let url_refs: Vec<&str> = urls.iter().map(|s| s.as_str()).collect();
-
-        let (ssh_env, parallel_ok) = match ssh::establish_ssh_masters(&url_refs) {
+        let (ssh_env, parallel_ok) = match ssh::establish_ssh_masters(&urls) {
             ssh::SshMasters::OurSockets(dir) => (Some(ssh::git_ssh_command(&dir)), true),
             ssh::SshMasters::UserManaged => (None, true),
-            ssh::SshMasters::Failed => (None, false),
+            ssh::SshMasters::Failed => {
+                ssh::warn("SSH multiplexing could not be set up: running one repository at a time");
+                (None, false)
+            }
         };
 
         // Inject GIT_SSH_COMMAND into every planned command's env

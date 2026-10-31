@@ -4,6 +4,7 @@
 //! meta's YAML configuration files.
 
 use crate::display::{escape, escape_path, is_unsafe_char};
+use crate::git::GitUrl;
 use crate::gitdir;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -16,12 +17,12 @@ use std::path::{Path, PathBuf};
 #[serde(untagged)]
 pub enum ProjectEntry {
     /// Simple format: just a git URL string
-    Simple(String),
+    Simple(GitUrl),
     /// Extended format: object with repo, path, tags, and dependency info
     Extended {
         /// Git remote URL (optional for local-only projects).
         #[serde(default)]
-        repo: Option<String>,
+        repo: Option<GitUrl>,
         #[serde(default)]
         path: Option<String>,
         #[serde(default)]
@@ -43,7 +44,7 @@ pub struct ProjectInfo {
     pub path: String,
     /// Git remote URL (optional for local-only projects).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo: Option<String>,
+    pub repo: Option<GitUrl>,
     pub tags: Vec<String>,
     /// What this project provides (e.g., APIs, libraries)
     #[serde(default)]
@@ -585,7 +586,6 @@ fn validate_project(
     ];
     for (what, value) in [("name", &info.name), ("path", &info.path)]
         .into_iter()
-        .chain(info.repo.iter().map(|r| ("repo", r)))
         .chain(
             lists
                 .into_iter()
@@ -612,8 +612,17 @@ fn validate_project(
             info.name
         ));
     }
-    if info.repo.as_deref().is_some_and(|r| r.starts_with('-')) {
-        return Err("repo must not start with '-'".into());
+    if let Some(repo) = &info.repo {
+        if repo.is_empty() {
+            return Err("repo is empty".into());
+        }
+        // printed as a GitUrl prints: escaped, without its credentials
+        if repo.raw().chars().any(is_unsafe_char) {
+            return Err(format!("repo '{repo}' contains control characters"));
+        }
+        if repo.raw().starts_with('-') {
+            return Err("repo must not start with '-'".into());
+        }
     }
     if let Some(tag) = info
         .tags
@@ -1473,10 +1482,7 @@ mod tests {
         assert_eq!(projects.len(), 2);
 
         let vendor = projects.iter().find(|p| p.name == "vendor").unwrap();
-        assert_eq!(
-            vendor.repo.as_ref().unwrap(),
-            "git@github.com:org/vendor.git"
-        );
+        assert_eq!(vendor.repo, Some("git@github.com:org/vendor.git".into()));
     }
 
     #[test]
@@ -1502,10 +1508,7 @@ mod tests {
         assert_eq!(projects.len(), 1);
 
         let vendor = &projects[0];
-        assert_eq!(
-            vendor.repo.as_ref().unwrap(),
-            "git@github.com:org/vendor.git"
-        );
+        assert_eq!(vendor.repo, Some("git@github.com:org/vendor.git".into()));
         assert_eq!(vendor.name, "vendor");
         assert_eq!(vendor.path, "third_party/vendor");
     }
@@ -1537,8 +1540,8 @@ mod tests {
         let vendor_node = &tree[0];
         assert_eq!(vendor_node.info.name, "vendor");
         assert_eq!(
-            vendor_node.info.repo.as_ref().unwrap(),
-            "git@github.com:org/vendor.git"
+            vendor_node.info.repo,
+            Some("git@github.com:org/vendor.git".into())
         );
         assert!(vendor_node.is_meta);
         assert_eq!(vendor_node.children.len(), 1);
@@ -1804,11 +1807,17 @@ mod tests {
                 r#"{"projects": {"a": {"repo": "u", "path": "t\u001b[2J"}}}"#,
                 "control characters",
             ),
+            (
+                r#"{"projects": {"a": "https://ghp_SECRET@h/r\n"}}"#,
+                "repo 'https://***@h/r\\n' contains control characters",
+            ),
         ] {
             let err = parse_err(json);
             assert!(err.contains(what), "{json}: {err}");
-            // The offending value is escaped in the message itself
+            // The offending value is escaped in the message itself, and a
+            // URL's credentials aren't in it
             assert!(!err.contains('\u{1b}'), "{json}: {err}");
+            assert!(!err.contains("ghp_SECRET"), "{json}: {err}");
         }
     }
 

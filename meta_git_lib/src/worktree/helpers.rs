@@ -343,7 +343,7 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
 /// applied (an origin of `gh:repo` may be GitHub's `org/repo`).
 pub fn repo_matches_spec(repo_path: &Path, spec: &str) -> bool {
     meta_core::git::query(repo_path, ["remote", "get-url", "origin"])
-        .and_then(|url| url.parse::<meta_core::git::GitUrl>().ok()?.owner_repo())
+        .and_then(|url| meta_core::git::GitUrl::from(url).owner_repo())
         .is_some_and(|owner_repo| owner_repo.eq_ignore_ascii_case(spec))
 }
 

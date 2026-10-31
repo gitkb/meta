@@ -6,8 +6,8 @@ use meta_cli::dependency_graph::DependencyGraph;
 use meta_cli::worktree;
 use meta_core::config::{self, MetaTreeNode};
 use meta_core::display::{escape, escape_path};
+use meta_core::git::GitUrl;
 use serde::Serialize;
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -34,7 +34,7 @@ pub struct ProjectTreeNode {
     pub path: String,
     /// Git remote URL. Should be present for all normal projects.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo: Option<String>,
+    pub repo: Option<GitUrl>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     pub is_meta: bool,
@@ -46,7 +46,8 @@ pub struct ProjectTreeNode {
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectListOutput {
     pub path: String,
-    pub repo: String,
+    /// The root's remote, `""` when it has none.
+    pub repo: GitUrl,
     pub root: String,
     pub cwd: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -231,7 +232,7 @@ fn missing_projects(
     options: &ExecuteOptions,
     provided_projects: &[String],
     cwd: &Path,
-) -> anyhow::Result<Vec<String>> {
+) -> anyhow::Result<Vec<GitUrl>> {
     if !options.recursive || provided_projects.is_empty() {
         let workspace = config::Workspace::find(cwd, None)?
             .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
@@ -378,9 +379,9 @@ fn to_project_tree_node(node: &MetaTreeNode) -> ProjectTreeNode {
 }
 
 /// A project's remote URL as shown in `meta project list`.
-fn remote_label(repo: Option<&str>) -> Cow<'_, str> {
+fn remote_label(repo: Option<&GitUrl>) -> String {
     repo.filter(|r| !r.is_empty())
-        .map_or(Cow::Borrowed("no remote"), escape)
+        .map_or_else(|| "no remote".to_string(), GitUrl::to_string)
 }
 
 /// Format a project tree with box-drawing characters: each project's name, its
@@ -413,7 +414,7 @@ fn format_project_tree(nodes: &[ProjectTreeNode], output: &mut String, prefix: &
             connector,
             escape(&node.name),
             path_str,
-            remote_label(node.repo.as_deref()),
+            remote_label(node.repo.as_ref()),
             tags_str
         ));
 
@@ -478,7 +479,7 @@ fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result
 // ============================================================================
 
 /// The URLs of the projects of `workspace` that aren't cloned.
-fn find_missing_projects(workspace: &config::Workspace) -> Vec<String> {
+fn find_missing_projects(workspace: &config::Workspace) -> Vec<GitUrl> {
     workspace
         .projects
         .iter()
@@ -487,7 +488,7 @@ fn find_missing_projects(workspace: &config::Workspace) -> Vec<String> {
         .collect()
 }
 
-fn print_missing(urls: &[String]) {
+fn print_missing(urls: &[GitUrl]) {
     if !urls.is_empty() {
         for url in urls {
             meta_git_lib::print_missing_repo(url);
@@ -593,7 +594,7 @@ mod tests {
         let provided = [root.to_string_lossy().into_owned(), "c".to_string()];
         assert_eq!(
             missing_projects(&recursive, &provided, &root).unwrap(),
-            ["git@x:o/alpha.git", "git@x:o/user.git", "git@x:o/zed.git"]
+            ["git@x:o/alpha.git", "git@x:o/user.git", "git@x:o/zed.git"].map(GitUrl::from)
         );
         assert!(error(run("project check", &["x"], &root))
             .unwrap()
@@ -764,7 +765,7 @@ mod tests {
             ProjectTreeNode {
                 name: "api".to_string(),
                 path: "services/api".to_string(),
-                repo: Some("git@github.com:org/api.git".to_string()),
+                repo: Some("git@github.com:org/api.git".into()),
                 tags: vec!["backend".to_string()],
                 is_meta: false,
                 projects: vec![],
@@ -772,7 +773,7 @@ mod tests {
             ProjectTreeNode {
                 name: "frontend".to_string(),
                 path: "frontend".to_string(),
-                repo: Some("git@github.com:org/frontend.git".to_string()),
+                repo: Some("git@github.com:org/frontend.git".into()),
                 tags: vec![],
                 is_meta: false,
                 projects: vec![],
@@ -793,7 +794,7 @@ mod tests {
         let nodes = vec![ProjectTreeNode {
             name: "x\u{1b}]0;PWNED\u{7}".to_string(),
             path: "t\u{1b}[1A".to_string(),
-            repo: Some("u\u{9b}2J".to_string()),
+            repo: Some("u\u{9b}2J".into()),
             tags: vec!["n\nfake".to_string()],
             is_meta: false,
             projects: vec![],

@@ -1609,7 +1609,7 @@ mod tests {
         // Simple format: path defaults to project name
         let repo1 = projects.iter().find(|p| p.name == "repo1").unwrap();
         assert_eq!(repo1.path, "repo1");
-        assert_eq!(repo1.repo.as_ref().unwrap(), "git@github.com:org/repo1.git");
+        assert_eq!(repo1.repo, Some("git@github.com:org/repo1.git".into()));
         assert!(repo1.tags.is_empty());
     }
 
@@ -1638,7 +1638,7 @@ mod tests {
         let api = &projects[0];
         assert_eq!(api.name, "api");
         assert_eq!(api.path, "services/api"); // normalized
-        assert_eq!(api.repo.as_ref().unwrap(), "git@github.com:org/api.git");
+        assert_eq!(api.repo, Some("git@github.com:org/api.git".into()));
         assert_eq!(api.tags, vec!["backend", "rust"]);
     }
 
@@ -1675,10 +1675,7 @@ projects:
 
         let web_app = projects.iter().find(|p| p.name == "web-app").unwrap();
         assert_eq!(web_app.path, "web-app");
-        assert_eq!(
-            web_app.repo.as_ref().unwrap(),
-            "git@github.com:org/web-app.git"
-        );
+        assert_eq!(web_app.repo, Some("git@github.com:org/web-app.git".into()));
 
         let api = projects.iter().find(|p| p.name == "api").unwrap();
         assert_eq!(api.path, "backend/api"); // normalized

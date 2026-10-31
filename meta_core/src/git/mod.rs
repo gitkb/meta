@@ -10,7 +10,7 @@ mod status;
 mod url;
 
 pub use status::{RepoStatus, StatusEntry};
-pub use url::GitUrl;
+pub use url::{redact_urls, GitUrl};
 
 /// The variables that tie git to one repository, which git itself clears
 /// when it runs in another (`git rev-parse --local-env-vars`, less the
@@ -103,8 +103,10 @@ pub fn current_branch(dir: &Path) -> Option<String> {
 /// The URL configured for `origin` in the repository at `dir`, as written:
 /// what `.meta.yaml` lists is compared with this, so `insteadOf` rewrites
 /// don't apply.
-pub fn remote_url(dir: &Path) -> Option<String> {
-    query(dir, ["config", "--get", "remote.origin.url"]).filter(|url| !url.is_empty())
+pub fn remote_url(dir: &Path) -> Option<GitUrl> {
+    query(dir, ["config", "--get", "remote.origin.url"])
+        .filter(|url| !url.is_empty())
+        .map(GitUrl::from)
 }
 
 #[cfg(test)]
@@ -140,7 +142,7 @@ mod tests {
             run(dir.path(), ["remote", "get-url", "origin"]).unwrap(),
             configured
         );
-        assert_eq!(remote_url(dir.path()).as_deref(), Some(configured));
+        assert_eq!(remote_url(dir.path()), Some(configured.into()));
         assert_eq!(remote_url(&dir.path().join("missing")), None);
     }
 

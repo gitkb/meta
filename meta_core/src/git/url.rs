@@ -49,7 +49,8 @@ impl<'a> Parts<'a> {
             // the authority ends where the path, query or fragment starts
             let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
             let (authority, path) = rest.split_at_checked(end).unwrap_or((rest, ""));
-            let path = path.strip_prefix('/').unwrap_or(path);
+            // a query or fragment with no path before it is no path
+            let path = path.strip_prefix('/').unwrap_or_default();
             let (userinfo, host_port) = match authority.rsplit_once('@') {
                 Some((userinfo, host_port)) => (Some(userinfo), host_port),
                 None => (None, authority),
@@ -455,6 +456,7 @@ mod tests {
             parse("persistent-https::https://ghp_SECRET@h/org/api.git").name(),
             Some("api")
         );
+        assert_eq!(parse("https://u:t@host?x=1").name(), None);
         // git allows a helper name to start with a digit
         assert!(matches!(parse("9p::x").parts(), Parts::Helper(_)));
         // not a helper name: what git reads as scp-like or local

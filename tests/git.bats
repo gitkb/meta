@@ -750,7 +750,7 @@ create_meta_bare_repo() {
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"meta_git_add","arguments":{"files":["my file.txt; touch PWNED4"]}}}
 EOF
     [ -z "$(find "$TEST_DIR" -name PWNED4)" ]
-    [[ "$output" == *"'files' must be a list of strings"* ]]
+    [[ "$output" == *"Invalid arguments for meta_git_add: files: invalid type: string"* ]]
     [[ "$output" == *"'files' is empty"* ]]
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" = "my file.txt; touch PWNED4" ]
 }

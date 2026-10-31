@@ -298,10 +298,12 @@ impl GitUrl {
 /// `scheme://userinfo@host` in it hidden: `https://alice:token@host/repo`
 /// becomes `https://***@host/repo`. An ssh user name alone stays
 /// (`ssh://git@host/repo`): it is no secret. A URL's authority ends at
-/// `/`, `?`, `#` or ASCII whitespace (which git's curl refuses in a URL;
-/// quotes and Unicode spaces it sends), and runs to its last `@`. A remote
-/// helper's URL (`foo::https://…`, but not ext::'s command) ends only at
-/// `/`, `?`, `#` or a line break: the helper gets it as typed.
+/// `/`, `?`, `#` or ASCII whitespace for curl's schemes (`http(s)`,
+/// `ftp(s)`: curl refuses whitespace in a URL; quotes and Unicode spaces
+/// it sends), and runs to its last `@`. Any other URL, and a remote
+/// helper's (`foo::https://…`, but not ext::'s command), ends only at `/`,
+/// `?`, `#` or a line break: ssh or the helper gets it as typed. So text
+/// after such a URL, up to an `@` on its line, may be hidden too.
 pub fn redact_urls(text: &str) -> Cow<'_, str> {
     redact(text, ends_in_text)
 }
@@ -416,22 +418,10 @@ fn authorities(text: &str, ends: fn(char) -> bool) -> Vec<(&str, Range<usize>)> 
                 let len = b.bytes().rev().take_while(|&b| is_scheme_byte(b)).count();
                 b.get(b.len() - len..).unwrap_or_default()
             });
-        // a remote helper gets its URL as typed: `foo::…` (but ext::'s
-        // command), or a scheme that is neither git's own nor curl's (which
-        // refuses a space)
+        // only curl refuses a space in a URL; a remote helper (`foo::…`,
+        // but ext::'s command is text) or ssh gets it as typed
         let helper = transport.is_some_and(|t| is_scheme(t) && t != "ext")
-            || !matches!(
-                scheme,
-                "" | "http"
-                    | "https"
-                    | "ftp"
-                    | "ftps"
-                    | "ssh"
-                    | "git+ssh"
-                    | "ssh+git"
-                    | "git"
-                    | "file"
-            );
+            || !matches!(scheme, "" | "http" | "https" | "ftp" | "ftps");
         let rest = text.get(host_start..).unwrap_or_default();
         let len = rest
             .find(|c| ends(c) && !(helper && matches!(c, ' ' | '\t' | '\x0C')))
@@ -701,10 +691,15 @@ mod tests {
             redact_urls("note:: https://h see @bob"),
             "note:: https://h see @bob"
         );
-        // so does git's helper for a scheme of its own, but curl refuses one
+        // so does git's helper for a scheme of its own, or ssh, but curl
+        // refuses one
         assert_eq!(
             redact_urls("git clone foo://a:p w@h/r x@y"),
             "git clone foo://***@h/r x@y"
+        );
+        assert_eq!(
+            redact_urls("git clone ssh://a:p w@h/r x@y"),
+            "git clone ssh://***@h/r x@y"
         );
         assert_eq!(
             redact_urls("see https://h now @bob"),

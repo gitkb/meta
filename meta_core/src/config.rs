@@ -173,18 +173,18 @@ fn config_file(path: PathBuf) -> anyhow::Result<Option<PathBuf>> {
     Ok(Some(path))
 }
 
-/// A config file's text without the credentials in its URLs: as written,
-/// unless a value still holds one that the scan of the text missed (JSON's
-/// `\/` or `\u` escapes); then its values, written out again.
+/// A config file's text without the credentials in its URLs. When a value
+/// holds one, the values are written out again, redacted: the text may
+/// spell a URL so that no scan of it reads it (JSON's `\/` or `\u`
+/// escapes). Otherwise the text as written, with any URL in it (a comment's,
+/// say) redacted.
 pub fn redact_config_text(text: &str) -> Cow<'_, str> {
-    let shown = crate::git::redact_urls(text);
-    let Ok(mut values) = serde_yaml_ng::from_str(&shown) else {
-        return shown;
-    };
-    match redact_strings(&mut values) {
-        true => Cow::Owned(serde_yaml_ng::to_string(&values).unwrap_or_default()),
-        false => shown,
+    if let Ok(mut values) = serde_yaml_ng::from_str(text) {
+        if redact_strings(&mut values) {
+            return Cow::Owned(serde_yaml_ng::to_string(&values).unwrap_or_default());
+        }
     }
+    crate::git::redact_urls(text)
 }
 
 /// Redact each string in `value` as a [`GitUrl`] prints; whether one changed.

@@ -2688,6 +2688,16 @@ mod tests {
         assert!(!result.contains("ghp_SECRET"), "{result}");
         assert!(result.contains("https://***@h/a.git"), "{result}");
         assert!(result.contains("git@h:b.git"), "{result}");
+        // even next to values a scan of the text would run across
+        for config in [
+            r#"{"projects":{"a":"https://h","b":{"repo":"git@h:b.git"},"c":"https:\/\/alice:ghp_SECRET@h\/r.git"}}"#,
+            r#"{"projects":{"a":"https://ONE@h","b":'git@h:b.git',"c":"https:\/\/ghp_SECRET@h\/r"}}"#,
+        ] {
+            std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
+            let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+            assert!(!result.contains("ghp_SECRET"), "{result}");
+            assert!(result.contains("git@h:b.git"), "{result}");
+        }
         // or a YAML escape
         std::fs::write(
             tmp.path().join(".meta.yaml"),

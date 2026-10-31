@@ -814,6 +814,8 @@ mod tests {
         // in a reply or in an error
         for (name, arguments) in [
             ("meta_batch_execute", json!({"command": ["true", secret]})),
+            // a program that can't start
+            ("meta_batch_execute", json!({"command": [secret]})),
             // a helper gets its URL as typed, a space in it too
             (
                 "meta_batch_execute",

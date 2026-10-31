@@ -102,6 +102,7 @@ meta_without_token() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"'https://***@example.invalid/org/x.yaml'"* ]] || false
     meta_without_token --verbose --tag "https://$TOKEN@example.invalid/org/x" exec -- true
+    [[ "$output" == *'Filtering projects by tags: ["https://***@example.invalid/org/x"]'* ]] || false
     # a comma in a password: the value is split there
     meta_without_token --verbose --tag "https://a,$TOKEN@example.invalid/org/x" exec -- true
     meta_without_token --include "https://a,$TOKEN@example.invalid/org/x" exec -- true
@@ -126,7 +127,9 @@ meta_without_token() {
     [[ "$output" == *"ref 'https://***@127.0.0.1:9/r' not found"* ]] || false
     meta_without_token --dry-run git worktree create x main --repo moved --meta "origin=https://$TOKEN@127.0.0.1:9/r" \
         --meta "h=foo::https://alice:p w$TOKEN@127.0.0.1:9/r"
-    [[ "$output" == *"Metadata: origin=https://***@127.0.0.1:9/r"* ]] || false
+    # metadata prints in no fixed order
+    [[ "$output" == *"origin=https://***@127.0.0.1:9/r"* ]] || false
+    [[ "$output" == *"h=foo::https://***@127.0.0.1:9/r"* ]] || false
     # metadata as created and as listed later (meta keeps it as typed)
     meta_without_token --json git worktree create mt --repo moved --meta "src=https://$TOKEN@127.0.0.1:9/r" \
         --meta "h=foo::https://alice:p w$TOKEN@127.0.0.1:9/r"
@@ -135,6 +138,7 @@ meta_without_token() {
     [[ "$output" == *'"src": "https://***@127.0.0.1:9/r"'* ]] || false
     [[ "$output" == *'"h": "foo::https://***@127.0.0.1:9/r"'* ]] || false
     meta_without_token git worktree diff mt --base "https://$TOKEN@127.0.0.1:9/r"
+    [[ "$output" == *"mt vs https://***@127.0.0.1:9/r"* ]] || false
     # a branch typed as a URL, when adding a repo to the set
     meta_without_token --dry-run git worktree add mt --repo "rotated:https://$TOKEN@127.0.0.1:9/b"
     [ "$status" -eq 0 ]

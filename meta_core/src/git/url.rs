@@ -4,6 +4,7 @@ use crate::display::escape;
 use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fmt;
+use std::ops::Range;
 
 /// A remote URL as configured. Everything that prints one (`Display`,
 /// `Debug`, `Serialize`) hides the password or token it may carry
@@ -147,12 +148,31 @@ impl GitUrl {
 
     /// The URL without the credentials in it (see [`redact_url`]).
     fn redacted(&self) -> Cow<'_, str> {
-        // ext::'s address is a command: read it as text. Any other helper
-        // gets its address as typed, so it is one URL
+        redact(&self.0, self.ends())
+    }
+
+    /// Where the URL's authority ends: ext::'s address is a command, read
+    /// as text. Any other helper gets its address as typed, so it is one URL
+    fn ends(&self) -> fn(char) -> bool {
         match is_ext(&self.0) {
-            true => redact_urls(&self.0),
-            false => redact_url(&self.0),
+            true => ends_in_text,
+            false => ends_in_url,
         }
+    }
+
+    /// `text`, which git or a remote helper printed for this URL, without
+    /// this URL's credentials wherever a URL shows them (`://<userinfo>@`):
+    /// a helper may print its address without its `<transport>::`, which
+    /// no scan of the text can read.
+    pub fn hide_in<'a>(&self, text: &'a str) -> Cow<'a, str> {
+        let mut text = Cow::Borrowed(text);
+        for userinfo in hidden(&self.0, self.ends()) {
+            let shown = format!("://{}@", self.0.get(userinfo).unwrap_or_default());
+            if text.contains(&shown) {
+                text = Cow::Owned(text.replace(&shown, "://***@"));
+            }
+        }
+        text
     }
 
     /// Whether printing this URL hides credentials it holds: a command
@@ -283,9 +303,11 @@ impl GitUrl {
 /// helper's URL (`foo::https://…`, but not ext::'s command) ends only at
 /// `/`, `?`, `#` or a line break: the helper gets it as typed.
 pub fn redact_urls(text: &str) -> Cow<'_, str> {
-    redact(text, |c| {
-        matches!(c, '/' | '?' | '#') || c.is_ascii_whitespace()
-    })
+    redact(text, ends_in_text)
+}
+
+fn ends_in_text(c: char) -> bool {
+    matches!(c, '/' | '?' | '#') || c.is_ascii_whitespace()
 }
 
 /// The most bytes git writes for one message, its newline included: git cuts
@@ -294,14 +316,22 @@ pub const GIT_MESSAGE_BYTES: usize = 4096;
 
 /// git's own output without the credentials in it (see [`redact_urls`]). A
 /// line git may have cut ([`GIT_MESSAGE_BYTES`] less its newline, or more)
-/// loses its last word, which may be a URL whose `@` was cut off.
+/// loses its last word, and then a URL whose authority runs to its end:
+/// either may be a URL whose `@` was cut off.
 pub fn redact_git_output(text: &str) -> String {
     text.lines()
         .map(|line| {
             let line = match line.len() >= GIT_MESSAGE_BYTES - 1 {
-                true => line
-                    .rsplit_once(|c: char| c.is_ascii_whitespace())
-                    .map_or("", |(kept, _)| kept),
+                true => {
+                    let line = line
+                        .rsplit_once(|c: char| c.is_ascii_whitespace())
+                        .map_or("", |(kept, _)| kept);
+                    authorities(line, ends_in_text)
+                        .into_iter()
+                        .find(|(_, authority)| authority.end == line.len())
+                        .and_then(|(_, authority)| line.get(..authority.start))
+                        .unwrap_or(line)
+                }
                 false => line,
             };
             redact_urls(line)
@@ -317,13 +347,55 @@ fn is_ext(url: &str) -> bool {
 /// One URL without the credentials in it (see [`redact_urls`]): its
 /// authority ends only at `/`, `?` or `#`.
 pub fn redact_url(url: &str) -> Cow<'_, str> {
-    redact(url, |c| matches!(c, '/' | '?' | '#'))
+    redact(url, ends_in_url)
+}
+
+fn ends_in_url(c: char) -> bool {
+    matches!(c, '/' | '?' | '#')
 }
 
 /// [`redact_urls`], with the authority ending where `ends` says.
-fn redact(text: &str, ends: impl Fn(char) -> bool + Copy) -> Cow<'_, str> {
+fn redact(text: &str, ends: fn(char) -> bool) -> Cow<'_, str> {
     let mut shown = String::new();
     let mut copied = 0;
+    for userinfo in hidden(text, ends) {
+        // a URL inside a userinfo hidden already
+        if userinfo.start < copied {
+            continue;
+        }
+        shown.push_str(text.get(copied..userinfo.start).unwrap_or_default());
+        shown.push_str("***");
+        copied = userinfo.end;
+    }
+    if copied == 0 {
+        return Cow::Borrowed(text);
+    }
+    shown.push_str(text.get(copied..).unwrap_or_default());
+    Cow::Owned(shown)
+}
+
+/// Where in `text` the userinfo [`redact`] hides lies.
+fn hidden(text: &str, ends: fn(char) -> bool) -> Vec<Range<usize>> {
+    authorities(text, ends)
+        .into_iter()
+        .filter_map(|(scheme, authority)| {
+            let (userinfo, _) = text.get(authority.clone())?.rsplit_once('@')?;
+            // nothing to hide: no scheme, no userinfo (`npm://@scope/pkg`),
+            // an ssh user name, or hidden already
+            let plain = scheme.is_empty()
+                || userinfo.is_empty()
+                || userinfo == "***"
+                || (is_ssh_scheme(scheme) && is_plain_user(userinfo));
+            (!plain).then(|| authority.start..authority.start + userinfo.len())
+        })
+        .collect()
+}
+
+/// Each `scheme://` in `text`: its scheme, and where its authority lies,
+/// which ends where `ends` says; a remote helper's URL holds what the
+/// helper takes, a space too (see [`redact_urls`]).
+fn authorities(text: &str, ends: fn(char) -> bool) -> Vec<(&str, Range<usize>)> {
+    let mut found = Vec::new();
     let mut from = 0;
     while let Some(separator) = text.get(from..).and_then(|rest| rest.find("://")) {
         let separator = from + separator;
@@ -336,8 +408,6 @@ fn redact(text: &str, ends: impl Fn(char) -> bool + Copy) -> Cow<'_, str> {
             .take_while(|&b| is_scheme_byte(b))
             .count();
         let scheme = before.get(before.len() - scheme_len..).unwrap_or_default();
-        let rest = text.get(host_start..).unwrap_or_default();
-        // a helper's URL holds what the helper takes: a space too
         let transport = before
             .get(..before.len() - scheme_len)
             .and_then(|b| b.strip_suffix("::"))
@@ -346,32 +416,13 @@ fn redact(text: &str, ends: impl Fn(char) -> bool + Copy) -> Cow<'_, str> {
                 b.get(b.len() - len..).unwrap_or_default()
             });
         let helper = transport.is_some_and(|t| is_scheme(t) && t != "ext");
-        let authority = rest
-            .split(|c| ends(c) && !(helper && matches!(c, ' ' | '\t' | '\x0C')))
-            .next()
-            .unwrap_or_default();
-        let Some((userinfo, _)) = authority.rsplit_once('@') else {
-            continue;
-        };
-        // nothing to hide: no scheme, no userinfo (`npm://@scope/pkg`), an
-        // ssh user name, or hidden already
-        if scheme.is_empty()
-            || userinfo.is_empty()
-            || userinfo == "***"
-            || (is_ssh_scheme(scheme) && is_plain_user(userinfo))
-        {
-            continue;
-        }
-        shown.push_str(text.get(copied..host_start).unwrap_or_default());
-        shown.push_str("***");
-        copied = host_start + userinfo.len();
-        from = copied;
+        let rest = text.get(host_start..).unwrap_or_default();
+        let len = rest
+            .find(|c| ends(c) && !(helper && matches!(c, ' ' | '\t' | '\x0C')))
+            .unwrap_or(rest.len());
+        found.push((scheme, host_start..host_start + len));
     }
-    if copied == 0 {
-        return Cow::Borrowed(text);
-    }
-    shown.push_str(text.get(copied..).unwrap_or_default());
-    Cow::Owned(shown)
+    found
 }
 
 /// A URL scheme or remote helper name, as git reads one: a letter or digit,
@@ -652,6 +703,30 @@ mod tests {
         assert_eq!(
             redact_git_output(&format!("{cut}\nfatal: 'https://a:ghp_SECRET@h/r'")),
             "warning:\nfatal: 'https://***@h/r'"
+        );
+        // a helper's URL, a space in its password, cut before its `@`
+        let cut = format!("e: foo::https://a:ghp_SECRET {}@h/r", "x".repeat(4100));
+        let cut = cut.get(..GIT_MESSAGE_BYTES - 1).unwrap();
+        assert_eq!(redact_git_output(cut), "e: foo::https://");
+    }
+
+    #[test]
+    fn a_known_url_is_hidden_however_it_shows() {
+        let url = parse("foo::https://alice:ghp_SECRET w@h/r");
+        // as the helper prints its address: no scan of the text reads it
+        assert_eq!(
+            url.hide_in("fatal: cannot open https://alice:ghp_SECRET w@h/r"),
+            "fatal: cannot open https://***@h/r"
+        );
+        // a lone user name is no secret to look for in text
+        let text = "data@h: https://bob@h/r";
+        assert!(matches!(
+            parse("https://a@h/r").hide_in(text),
+            Cow::Borrowed(_)
+        ));
+        assert_eq!(
+            parse("https://bob@h/r").hide_in(text),
+            "data@h: https://***@h/r"
         );
     }
 

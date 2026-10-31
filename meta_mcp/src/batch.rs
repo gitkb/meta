@@ -102,7 +102,8 @@ impl McpServer {
                     results.push(serde_json::json!({
                         "project": project.name,
                         "success": false,
-                        "error": format!("Cannot run {program}: {e}")
+                        // the program the client passed, without credentials
+                        "error": format!("Cannot run {}: {e}", meta_core::git::redact_urls(program))
                     }));
                 }
             }

@@ -489,6 +489,15 @@ fn the_looprc_preview_shows_no_credentials() {
         assert!(shown.contains("http://***@h/r"), "{shown}");
         assert!(!shown.contains("ghp_SECRET"), "{shown}");
     }
+    // spelled with JSON escapes, or in a file that isn't JSON
+    for old in [
+        r#"{"aliases": {"a": "git fetch http:\/\/alice:ghp_SECRET@h\/r"}}"#,
+        r#"{"aliases": {"a": "git fetch http://alice:ghp_SECRET\u0040h/r"}}"#,
+        r#"{"aliases": {"a": "git fetch http:\/\/alice:ghp_SECRET@h\/r"#,
+    ] {
+        let shown = preview(old, &new);
+        assert!(!shown.contains("ghp_SECRET"), "{shown}");
+    }
 }
 
 #[test]

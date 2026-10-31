@@ -266,18 +266,53 @@ fn resolve_aliases(argv: &[String], aliases: &HashMap<String, String>) -> Result
 /// The change from `existing` to `new` (a `.looprc`), line by line, without
 /// the credentials in URLs: aliases may hold them.
 fn preview(existing: &str, new: &str) -> String {
-    let shown = |line: &str| meta_core::git::redact_urls(line).into_owned();
+    let new = shown_looprc(new);
     if existing.is_empty() {
-        return format!("{}\n", shown(new).green());
+        return format!("{}\n", new.green());
     }
-    diff::lines(existing, new)
+    diff::lines(&shown_looprc(existing), &new)
         .into_iter()
         .map(|change| match change {
-            diff::Result::Left(l) => format!("{}\n", format!("-{}", shown(l)).red()),
-            diff::Result::Both(l, _) => format!(" {}\n", shown(l)),
-            diff::Result::Right(r) => format!("{}\n", format!("+{}", shown(r)).green()),
+            diff::Result::Left(l) => format!("{}\n", format!("-{l}").red()),
+            diff::Result::Both(l, _) => format!(" {l}\n"),
+            diff::Result::Right(r) => format!("{}\n", format!("+{r}").green()),
         })
         .collect()
+}
+
+/// A `.looprc` as shown: its JSON written out again with the URLs in its
+/// strings redacted, as an escape (`\/`, `\u0040`) may spell a URL no scan
+/// of the text reads. Text that isn't JSON is shown redacted, unless it holds
+/// a `\`.
+fn shown_looprc(text: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(mut value) => {
+            redact_json_strings(&mut value);
+            serde_json::to_string_pretty(&value).unwrap_or_default()
+        }
+        Err(_) if text.contains('\\') => "<not shown: it may hold credentials>".to_string(),
+        Err(_) => meta_core::git::redact_urls(text).into_owned(),
+    }
+}
+
+/// Redact the URLs in every string and key of `value`.
+fn redact_json_strings(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    let redact = |s: &str| meta_core::git::redact_urls(s).into_owned();
+    match value {
+        Value::String(s) => *s = redact(s),
+        Value::Array(items) => items.iter_mut().for_each(redact_json_strings),
+        Value::Object(map) => {
+            *map = std::mem::take(map)
+                .into_iter()
+                .map(|(key, mut value)| {
+                    redact_json_strings(&mut value);
+                    (redact(&key), value)
+                })
+                .collect();
+        }
+        _ => {}
+    }
 }
 
 /// `argv` as one line, quoted so that it reads back as the same words, with

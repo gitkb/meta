@@ -553,11 +553,13 @@ fn shown_commands_hide_credentials() {
         "git commit -m 'Fix https://h.example issue, thanks @alice'"
     );
     // a helper's URL is one URL, a space in its password included
-    let argv = ["git", "remote", "add", "x", "foo::https://a:p w@h/r"].map(String::from);
-    assert_eq!(
-        display_command(&argv),
-        "git remote add x 'foo::https://***@h/r'"
-    );
+    for url in ["foo::https://a:p w@h/r", "foo::https://a:p\nw@h/r"] {
+        let argv = ["git", "remote", "add", "x", url].map(String::from);
+        assert_eq!(
+            display_command(&argv),
+            "git remote add x 'foo::https://***@h/r'"
+        );
+    }
     // git sends a quote in a password
     let argv = ["git", "fetch", "http://a\"b:ghp_SECRET@h/r"].map(String::from);
     assert_eq!(display_command(&argv), "git fetch 'http://***@h/r'");

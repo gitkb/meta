@@ -97,7 +97,9 @@ fn invalid(
     what: impl std::fmt::Display,
     given: Option<&serde_json::Value>,
 ) -> anyhow::Error {
-    let mut given = given.map(ToString::to_string).unwrap_or_default();
+    // without credentials before it is cut, which may cut a URL's `@` off
+    let given = given.map(ToString::to_string).unwrap_or_default();
+    let mut given = meta_core::git::redact_urls(&given).into_owned();
     if given.len() > 200 {
         let end = given.floor_char_boundary(200);
         given.truncate(end);

@@ -30,11 +30,10 @@ pub fn ensure_checkout_config_is_not_bare(repo_path: &Path) -> Result<()> {
             );
         }
     } else if output.status.code() != Some(1) {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(
             "Failed to inspect core.bare for '{}': {}",
             escape_path(repo_path),
-            escape(stderr.trim())
+            meta_core::git::shown_stderr(&output.stderr)
         );
     }
 
@@ -132,7 +131,6 @@ pub fn git_worktree_add(
     };
     let output = git(repo_path).args(&args).output()?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         let from = match &start {
             WorktreeStart::Ref { name, .. } => format!(", ref: {}", escape(name)),
             _ => String::new(),
@@ -141,7 +139,7 @@ pub fn git_worktree_add(
             "git worktree add failed for '{}' (branch: {}{from}): {}",
             escape_path(repo_path),
             escape(branch),
-            escape(stderr.trim())
+            meta_core::git::shown_stderr(&output.stderr)
         );
     }
     Ok(start.new_branch_at())
@@ -158,8 +156,10 @@ pub fn git_worktree_remove(repo_path: &Path, worktree_path: &Path, force: bool) 
     let output = git(repo_path).args(&args).output()?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git worktree remove failed: {}", escape(stderr.trim()));
+        anyhow::bail!(
+            "git worktree remove failed: {}",
+            meta_core::git::shown_stderr(&output.stderr)
+        );
     }
     Ok(())
 }
@@ -259,7 +259,7 @@ pub fn git_rev_parse(repo_path: &Path, rev: &str) -> Result<Option<String>> {
         "git rev-parse {} failed in {}: {}",
         escape(rev),
         escape_path(repo_path),
-        escape(stderr.trim())
+        meta_core::git::shown_stderr(&output.stderr)
     )
 }
 
@@ -285,7 +285,7 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
         _ => anyhow::bail!(
             "Cannot inspect '{}': {}",
             escape(branch),
-            escape(String::from_utf8_lossy(&symbolic.stderr).trim())
+            meta_core::git::shown_stderr(&symbolic.stderr)
         ),
     }
 
@@ -296,7 +296,7 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
         list.status.success(),
         "Cannot list the worktrees of {}: {}",
         escape_path(repo_path),
-        escape(String::from_utf8_lossy(&list.stderr).trim())
+        meta_core::git::shown_stderr(&list.stderr)
     );
     let wanted = format!("branch {full}");
     if String::from_utf8_lossy(&list.stdout)
@@ -313,7 +313,7 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
         output.status.success(),
         "Cannot find the git directory of {}: {}",
         escape_path(repo_path),
-        escape(String::from_utf8_lossy(&output.stderr).trim())
+        meta_core::git::shown_stderr(&output.stderr)
     );
     // Relative output is relative to the repository, where git ran.
     let common =
@@ -385,11 +385,10 @@ pub fn git_delete_branch_at(repo_path: &Path, branch: &str, expected: &str) -> R
         ])
         .output()?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(
             "Branch '{}' no longer points where it was created; kept ({})",
             escape(branch),
-            escape(stderr.trim())
+            meta_core::git::shown_stderr(&output.stderr)
         );
     }
     // Upstream settings of a deleted branch; there may be none.

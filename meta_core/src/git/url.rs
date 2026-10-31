@@ -160,16 +160,26 @@ impl GitUrl {
         }
     }
 
-    /// `text`, which git or a remote helper printed for this URL, without
-    /// this URL's credentials wherever a URL shows them (`://<userinfo>@`):
-    /// a helper may print its address without its `<transport>::`, which
-    /// no scan of the text can read.
+    /// `text`, which git, ssh or a remote helper printed for this URL,
+    /// without this URL's credentials wherever a URL shows them
+    /// (`://<userinfo>@`): a helper may print its address without its
+    /// `<transport>::`, which no scan of the text can read. A password
+    /// (`user:password@`) goes wherever it shows, as written or decoded:
+    /// ssh's refusal names `user:password@host`, which git decodes for it.
     fn hide_in<'a>(&self, text: &'a str) -> Cow<'a, str> {
         let mut text = Cow::Borrowed(text);
         for userinfo in hidden(&self.0, self.ends()) {
-            let shown = format!("://{}@", self.0.get(userinfo).unwrap_or_default());
-            if text.contains(&shown) {
-                text = Cow::Owned(text.replace(&shown, "://***@"));
+            let userinfo = self.0.get(userinfo).unwrap_or_default();
+            for userinfo in [Cow::Borrowed(userinfo), percent_decoded(userinfo)] {
+                // a user name alone is matched only in a URL: it may be part
+                // of other text
+                let (shown, hidden) = match userinfo.contains(':') {
+                    true => (format!("{userinfo}@"), "***@"),
+                    false => (format!("://{userinfo}@"), "://***@"),
+                };
+                if text.contains(&shown) {
+                    text = Cow::Owned(text.replace(&shown, hidden));
+                }
             }
         }
         text
@@ -302,8 +312,8 @@ impl GitUrl {
 /// `ftp(s)`: curl refuses whitespace in a URL; quotes and Unicode spaces
 /// it sends), and runs to its last `@`. Any other URL, and a remote
 /// helper's (`foo::https://…`, but not ext::'s command), ends only at `/`,
-/// `?`, `#` or a line break: ssh or the helper gets it as typed. So text
-/// after such a URL, up to an `@` on its line, may be hidden too.
+/// `?` or `#`: ssh or the helper gets it as typed. So text
+/// after such a URL, up to a later `@`, may be hidden too.
 pub fn redact_urls(text: &str) -> Cow<'_, str> {
     redact(text, ends_in_text)
 }
@@ -345,6 +355,32 @@ pub fn redact_git_output(text: &str, url: Option<&GitUrl>) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// `text` with each `%XX` decoded, as git decodes a URL's userinfo.
+fn percent_decoded(text: &str) -> Cow<'_, str> {
+    if !text.contains('%') {
+        return Cow::Borrowed(text);
+    }
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut rest = text.as_bytes();
+    while let Some((&byte, after)) = rest.split_first() {
+        let hex = after
+            .get(..2)
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match (byte, hex) {
+            (b'%', Some(decoded)) => {
+                bytes.push(decoded);
+                rest = after.get(2..).unwrap_or_default();
+            }
+            _ => {
+                bytes.push(byte);
+                rest = after;
+            }
+        }
+    }
+    Cow::Owned(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn is_ext(url: &str) -> bool {
@@ -424,7 +460,7 @@ fn authorities(text: &str, ends: fn(char) -> bool) -> Vec<(&str, Range<usize>)> 
             || !matches!(scheme, "" | "http" | "https" | "ftp" | "ftps");
         let rest = text.get(host_start..).unwrap_or_default();
         let len = rest
-            .find(|c| ends(c) && !(helper && matches!(c, ' ' | '\t' | '\x0C')))
+            .find(|c| ends(c) && !(helper && c.is_ascii_whitespace()))
             .unwrap_or(rest.len());
         found.push((scheme, host_start..host_start + len));
     }
@@ -683,10 +719,7 @@ mod tests {
             redact_urls("src=foo::https://a:p w@h/r x@y"),
             "src=foo::https://***@h/r x@y"
         );
-        assert_eq!(
-            redact_urls("ext::https://h a@b\nfoo::https://h\nc@d"),
-            "ext::https://h a@b\nfoo::https://h\nc@d"
-        );
+        assert_eq!(redact_urls("ext::https://h a@b"), "ext::https://h a@b");
         assert_eq!(
             redact_urls("note:: https://h see @bob"),
             "note:: https://h see @bob"
@@ -755,6 +788,13 @@ mod tests {
             ),
             "fatal: cannot open https://***@h/r"
         );
+        // ssh's refusal of a password it was given, decoded by git
+        for url in ["ssh://alice:ghp_SECRET@h/r", "ssh://alice%3Aghp_SECRET@h/r"] {
+            assert_eq!(
+                parse(url).hide_in("alice:ghp_SECRET@h: Permission denied (publickey)."),
+                "***@h: Permission denied (publickey)."
+            );
+        }
         // a lone user name is no secret to look for in text
         let text = "data@h: https://bob@h/r";
         assert!(matches!(

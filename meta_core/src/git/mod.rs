@@ -79,12 +79,19 @@ where
             "git {} failed in {}: {}",
             escape(&shown()),
             escape_path(dir),
-            escape(redact_git_output(&String::from_utf8_lossy(&output.stderr), None).trim_ascii())
+            shown_stderr(&output.stderr)
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout)
         .trim_end_matches(['\n', '\r'])
         .to_string())
+}
+
+/// git's `stderr` for an error message: without credentials (see
+/// [`redact_git_output`]; git may have cut a line inside a URL), trimmed and
+/// escaped.
+pub fn shown_stderr(stderr: &[u8]) -> String {
+    escape(redact_git_output(&String::from_utf8_lossy(stderr), None).trim()).into_owned()
 }
 
 /// The output of `git <args>` in `dir` (see [`run`]), or `None` if git fails.

@@ -122,6 +122,9 @@ meta_without_token() {
     [[ "$output" == *"origin 'https://***@127.0.0.1:9/o/r'"* ]] || false
     meta_without_token --dry-run git worktree create x --repo "moved:https://$TOKEN@127.0.0.1:9/b"
     meta_without_token --verbose git worktree create vb --repo moved --branch "https://$TOKEN@127.0.0.1:9/b"
+    # git refuses a branch this long, its message cut before the `@`
+    meta_without_token git worktree create long --repo moved --branch "https://alice:$TOKEN$(printf '%04200d' 0)@h/r"
+    [ "$status" -ne 0 ]
     meta_without_token --dry-run git worktree create x "https://$TOKEN@127.0.0.1:9/r" --repo moved \
         --meta "origin=https://$TOKEN@127.0.0.1:9/r" --meta "https://$TOKEN@127.0.0.1:9/r"
     [[ "$output" == *"ref 'https://***@127.0.0.1:9/r' not found"* ]] || false
@@ -262,6 +265,32 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"fatal: cannot open https://***@127.0.0.1:9/owner/svc.git"* ]] || false
     [[ "$output" != *"SECRET"* && "$output" != *"alice:"* ]] || false
+}
+
+@test "ssh's refusal shows no credentials" {
+    # git hands ssh the user as typed, %3A decoded; OpenSSH's refusal
+    # names it, with no `://` around it
+    cat > "$TEST_DIR/bin/ssh" <<'EOF'
+#!/bin/sh
+for arg; do
+    case $arg in *@*) echo "$arg: Permission denied (publickey)." >&2 ;; esac
+done
+exit 255
+EOF
+    chmod +x "$TEST_DIR/bin/ssh"
+    printf 'projects:\n  s: "ssh://alice%%3A%s@127.0.0.1/owner/s.git"\n' "$TOKEN" > .meta.yaml
+    meta_without_token git update
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"***@127.0.0.1: Permission denied"* ]] || false
+    # the same, when the --from-pr fetch fails
+    git init -q -b main s
+    git -C s commit -q --allow-empty -m init
+    git -C s remote add origin "ssh://alice:$TOKEN@127.0.0.1/owner/s.git"
+    printf '#!/bin/sh\necho feature\n' > "$TEST_DIR/bin/gh"
+    chmod +x "$TEST_DIR/bin/gh"
+    meta_without_token git worktree create pr --repo s --from-pr owner/s#1
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"***@127.0.0.1: Permission denied"* ]] || false
 }
 
 @test "a failed ssh setup says so" {

@@ -816,6 +816,11 @@ mod tests {
             ("meta_batch_execute", json!({"command": ["true", secret]})),
             // a program that can't start
             ("meta_batch_execute", json!({"command": [secret]})),
+            // a value of the wrong type, too long to show whole
+            (
+                "meta_git_checkout",
+                json!({"branch": "b", "create": format!("https://alice:ghp_SECRET{}@h/r", "x".repeat(300))}),
+            ),
             // a helper gets its URL as typed, a space in it too
             (
                 "meta_batch_execute",

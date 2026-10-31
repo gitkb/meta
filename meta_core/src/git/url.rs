@@ -266,10 +266,12 @@ impl GitUrl {
 /// `scheme://userinfo@host` in it hidden: `https://alice:token@host/repo`
 /// becomes `https://***@host/repo`. An ssh user name alone stays
 /// (`ssh://git@host/repo`): it is no secret. A URL's authority ends at
-/// `/`, `?`, `#` or whitespace (which git's curl refuses in a URL; quotes
-/// it sends), and runs to its last `@`.
+/// `/`, `?`, `#` or ASCII whitespace (which git's curl refuses in a URL;
+/// quotes and Unicode spaces it sends), and runs to its last `@`.
 pub fn redact_urls(text: &str) -> Cow<'_, str> {
-    redact(text, |c| matches!(c, '/' | '?' | '#') || c.is_whitespace())
+    redact(text, |c| {
+        matches!(c, '/' | '?' | '#') || c.is_ascii_whitespace()
+    })
 }
 
 /// [`redact_urls`], with the authority ending where `ends` says.
@@ -531,6 +533,11 @@ mod tests {
         assert_eq!(
             redact_urls(r#"git fetch "http://a"b:t@h/r" x"#),
             r#"git fetch "http://***@h/r" x"#
+        );
+        // nor at a Unicode space, which git sends too
+        assert_eq!(
+            redact_urls("http://a\u{a0}b\u{2003}c:t@h/r"),
+            "http://***@h/r"
         );
         assert_eq!(
             redact_urls("x 'https://a'b:t@h/r' y"),

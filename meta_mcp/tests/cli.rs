@@ -687,9 +687,11 @@ fn a_server_whose_output_is_gone_ends() {
     let mut stdin = server.stdin.take().unwrap();
     let call = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "meta_get_config"}});
-    writeln!(stdin, "{call}").unwrap();
+    // again until it ends: a child another test forks may hold the read
+    // end for a moment, and a reply written then goes through
     let mut status = None;
     wait_for("the server to end", || {
+        let _ = writeln!(stdin, "{call}");
         status = server.try_wait().unwrap();
         status.is_some()
     });
@@ -725,9 +727,10 @@ fn a_server_whose_output_is_gone_stops_its_running_tool() {
     writeln!(stdin, "{}", batch(1, script, false)).unwrap();
     let pid = ws.join("pid");
     wait_for("the tool to start", || pid.exists());
-    writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"ping"}}"#).unwrap();
+    // pings until it ends (see `a_server_whose_output_is_gone_ends`)
     let mut status = None;
     wait_for("the server to end", || {
+        let _ = writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"ping"}}"#);
         status = server.try_wait().unwrap();
         status.is_some()
     });
@@ -743,7 +746,9 @@ fn a_server_whose_output_is_gone_stops_its_running_tool() {
 #[cfg(unix)]
 fn a_server_whose_output_is_gone_drops_its_waiting_calls() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
+    // a project for the first call to sleep in
+    std::fs::create_dir(tmp.path().join("a")).unwrap();
+    std::fs::write(tmp.path().join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
     let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), tmp.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -752,11 +757,14 @@ fn a_server_whose_output_is_gone_drops_its_waiting_calls() {
         .unwrap();
     drop(server.stdout.take());
     let mut stdin = server.stdin.take().unwrap();
-    // the second call waits while the first one sleeps
+    // the other calls wait while the first one sleeps; should a reply go
+    // through (see `a_server_whose_output_is_gone_ends`), the next fails
     writeln!(stdin, "{}", batch(1, "sleep 1", false)).unwrap();
-    let call = serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-        "params": {"name": "meta_get_config"}});
-    writeln!(stdin, "{call}").unwrap();
+    for id in 2..5 {
+        let call = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "meta_get_config"}});
+        writeln!(stdin, "{call}").unwrap();
+    }
     let mut status = None;
     wait_for("the server to end", || {
         status = server.try_wait().unwrap();
@@ -766,5 +774,5 @@ fn a_server_whose_output_is_gone_drops_its_waiting_calls() {
     drop(stdin);
     let mut stderr = String::new();
     std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
-    assert!(stderr.contains("request 2 not started"), "{stderr}");
+    assert!(stderr.contains("not started"), "{stderr}");
 }

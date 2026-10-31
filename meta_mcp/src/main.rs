@@ -757,7 +757,7 @@ mod tests {
     fn a_malformed_cancellation_in_a_batch_cancels_nothing() {
         let (server, tmp) = test_support::workspace();
         let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-            "name": "meta_batch_execute", "arguments": {"command": ["touch", "ran"]}}});
+            "name": "meta_batch_execute", "arguments": {"command": ["git", "init", "-q", "ran"]}}});
         let bad_version = json!({"jsonrpc": "1.0", "method": "notifications/cancelled",
             "params": {"requestId": 2}});
         // with an id: a request for a method that doesn't exist

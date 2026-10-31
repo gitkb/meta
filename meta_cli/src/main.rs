@@ -942,7 +942,7 @@ fn handle_command_dispatch(
         let config_name = cli
             .config
             .as_ref()
-            .map(|p| escape_path(p))
+            .map(|p| escape(&meta_core::git::redact_urls(&p.to_string_lossy())).into_owned())
             .unwrap_or_else(|| config::META_CONFIG_NAME.to_string());
         eprintln!("Error: Could not find meta config file '{config_name}'");
         eprintln!("Searched from {} up to root", escape_path(&current_dir));
@@ -967,7 +967,10 @@ fn handle_command_dispatch(
         if cli.verbose {
             println!(
                 "Filtering projects by tags: {:?}",
-                tag_filter.split(',').map(|s| s.trim()).collect::<Vec<_>>()
+                tag_filter
+                    .split(',')
+                    .map(|s| meta_core::git::redact_urls(s.trim()))
+                    .collect::<Vec<_>>()
             );
         }
         meta_projects

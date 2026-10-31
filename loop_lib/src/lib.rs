@@ -558,6 +558,10 @@ pub fn expand_directories(directories: &[String], ignore: &[String]) -> Result<V
 pub fn run(orig_config: &LoopConfig, argv: &[String]) -> Result<()> {
     // Handle special case: add_aliases_to_global_looprc
     if orig_config.add_aliases_to_global_looprc {
+        if orig_config.dry_run {
+            println!("[DRY RUN] Would add your shell's aliases to ~/.looprc");
+            return Ok(());
+        }
         return add_aliases_to_global_looprc();
     }
 

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::*;
 use meta_core::display::{escape, escape_path};
+use meta_core::ExecutionMode;
 use std::collections::{HashMap, HashSet};
 
 use meta_cli::dependency_graph::{DependencyGraph, ProjectDependencies};
@@ -19,6 +20,7 @@ use meta_core::display::shell_quote;
 
 pub(crate) fn handle_create(
     args: CreateArgs,
+    mode: ExecutionMode,
     verbose: bool,
     json: bool,
     global_strict: bool,
@@ -32,7 +34,6 @@ pub(crate) fn handle_create(
     let branch_flag = args.branch.as_deref();
     let repo_specs = &args.repos;
     let use_all = args.all;
-    let dry_run = args.dry_run;
     let ephemeral = args.ephemeral;
     let ttl_seconds = args.ttl;
     // Parse custom metadata, collecting any invalid entries for strict mode
@@ -213,12 +214,60 @@ pub(crate) fn handle_create(
         (alias != ".", place.split('/').count())
     });
 
-    if dry_run {
+    // A preview makes the checks a run makes (all but asking GitHub for a
+    // PR's branch), skips what it skips and fails where it fails
+    if mode.is_preview() {
+        if let Some(spec) = from_pr_spec {
+            let (pr_repo, pr_num) = parse_from_pr(spec)?;
+            let Some((_, _, branch)) = repos_to_create
+                .iter_mut()
+                .find(|(alias, source, _)| alias != "." && repo_matches_spec(source, &pr_repo))
+            else {
+                anyhow::bail!(
+                    "No selected repo has origin '{}', so PR #{pr_num} can't be applied",
+                    escape(&pr_repo)
+                );
+            };
+            *branch = format!("<the head branch of {spec}>");
+        }
+        let mut kept = Vec::new();
+        for repo in repos_to_create {
+            match missing_ref(&repo.1, from_ref)? {
+                Some(r) => super::warn_or_bail(
+                    strict,
+                    format!(
+                        "Skipping '{}': ref '{}' not found",
+                        escape(&repo.0),
+                        escape(r)
+                    ),
+                )?,
+                None => kept.push(repo),
+            }
+        }
+        if kept.is_empty() {
+            match from_ref {
+                Some(r) => anyhow::bail!(
+                    "No selected repo has ref '{}'; no worktree was created",
+                    escape(r)
+                ),
+                None => anyhow::bail!("No repos selected; no worktree was created"),
+            }
+        }
+        // what the run checks before each add; a PR's branch is fetched
+        // first, so its repo gets only the check that doesn't need it
+        let pr_branch = from_pr_spec.map(|spec| format!("<the head branch of {spec}>"));
+        for (_, source, branch) in &kept {
+            if pr_branch.as_ref() == Some(branch) {
+                ensure_checkout_config_is_not_bare(source)?;
+            } else {
+                worktree_start(source, branch, from_ref)?;
+            }
+        }
         let plan = CreateDryRunPlan {
             name,
             meta_dir: &meta_dir,
             wt_dir: &wt_dir,
-            repos_to_create: &repos_to_create,
+            repos_to_create: &kept,
             from_ref,
             from_pr_spec,
             ephemeral,
@@ -587,9 +636,6 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
     }
 
     println!("Planned repo operations:");
-    if plan.repos_to_create.is_empty() {
-        println!("  (none)");
-    }
     for (alias, source, branch) in plan.repos_to_create {
         let dest = if alias == "." {
             plan.wt_dir.to_path_buf()

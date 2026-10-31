@@ -70,6 +70,8 @@ pub struct ListOutput {
 pub struct AddOutput {
     pub name: String,
     pub repos: Vec<CreateRepoEntry>,
+    /// A preview: nothing was added
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,6 +79,8 @@ pub struct DestroyOutput {
     pub name: String,
     pub path: String,
     pub repos_removed: usize,
+    /// A preview: nothing was removed
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Serialize)]

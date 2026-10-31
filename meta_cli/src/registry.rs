@@ -630,9 +630,10 @@ impl PluginInstaller {
         &self.plugins_dir
     }
 
-    /// Get the default plugins directory (~/.meta/plugins/)
+    /// The default plugins directory (~/.meta/plugins/), made only when a
+    /// plugin is installed ([`Self::ensure_plugins_dir`])
     fn default_plugins_dir() -> Result<PathBuf> {
-        meta_core::data_dir::data_subdir(GLOBAL_PLUGINS_DIR)
+        Ok(meta_core::meta_dir()?.join(GLOBAL_PLUGINS_DIR))
     }
 
     /// Ensure the plugins directory exists

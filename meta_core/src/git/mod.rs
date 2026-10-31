@@ -43,10 +43,12 @@ pub fn clear_repo_env(command: &mut Command) -> &mut Command {
     command
 }
 
-/// `git`, to run in `dir`, without [`REPO_ENV_VARS`].
+/// `git`, to run in `dir`, without [`REPO_ENV_VARS`] and without optional
+/// locks, so a read such as `git status` never rewrites the index (meta's
+/// reads change nothing, previews included).
 pub fn git(dir: &Path) -> Command {
     let mut command = Command::new("git");
-    command.current_dir(dir);
+    command.current_dir(dir).env("GIT_OPTIONAL_LOCKS", "0");
     clear_repo_env(&mut command);
     command
 }

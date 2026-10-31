@@ -23,7 +23,7 @@ pub enum WorktreeCommands {
     /// Run a command across worktree repos
     Exec(ExecArgs),
     /// Remove expired/orphaned worktree sets of this workspace
-    Prune(PruneArgs),
+    Prune,
     #[command(external_subcommand)]
     Unknown(Vec<String>),
 }
@@ -49,10 +49,6 @@ pub struct CreateArgs {
     /// a warning; an error with --strict)
     #[arg(long, conflicts_with = "repos")]
     pub all: bool,
-
-    /// Preview planned worktree operations without creating anything
-    #[arg(long)]
-    pub dry_run: bool,
 
     /// Start from a PR's head branch (owner/repo#N)
     #[arg(long, value_name = "OWNER/REPO#N", conflicts_with = "commit_ish")]
@@ -205,13 +201,6 @@ pub struct ExecArgs {
     /// Command and arguments to execute (after --)
     #[arg(last = true, required = true)]
     pub command: Vec<String>,
-}
-
-#[derive(Args)]
-pub struct PruneArgs {
-    /// Preview without removing
-    #[arg(long)]
-    pub dry_run: bool,
 }
 
 /// Parse a human-friendly duration string for clap value_parser.

@@ -4,6 +4,7 @@ use colored::*;
 use loop_lib::run;
 use meta_core::config::{self, find_meta_config, MetaTreeNode, ProjectInfo, Workspace};
 use meta_core::display::{escape, escape_lines, escape_path};
+use meta_core::ExecutionMode;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -97,7 +98,7 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Show what commands would be run without executing them"
+        help = "Show what would change, and change nothing (commands that can't preview refuse it)"
     )]
     dry_run: bool,
 
@@ -127,6 +128,13 @@ struct Cli {
 
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+impl Cli {
+    /// `--dry-run`, resolved once for every command
+    fn mode(&self) -> ExecutionMode {
+        ExecutionMode::from_dry_run(self.dry_run)
+    }
 }
 
 #[derive(Subcommand)]
@@ -567,7 +575,13 @@ fn run_cli() -> Result<()> {
                 print_context_help();
                 return Ok(());
             }
-            meta_cli::context::handle_context(cli.json, args.no_status, args.no_cache, cli.verbose)
+            meta_cli::context::handle_context(
+                cli.json,
+                args.no_status,
+                args.no_cache,
+                cli.mode(),
+                cli.verbose,
+            )
         }
         Some(Commands::Init(args)) => {
             let cmd = match args.command {
@@ -578,11 +592,15 @@ fn run_cli() -> Result<()> {
                     init::InitCommand::Claude { force, update }
                 }
             };
-            init::handle_init_command(cmd, cli.verbose)
+            init::handle_init_command(cmd, cli.mode(), cli.verbose)
         }
-        Some(Commands::Plugin(args)) => {
-            handle_plugin_command(args.command, cli.json, cli.help, &subprocess_plugins)
-        }
+        Some(Commands::Plugin(args)) => handle_plugin_command(
+            args.command,
+            cli.mode(),
+            cli.json,
+            cli.help,
+            &subprocess_plugins,
+        ),
         Some(Commands::Exec(args)) => {
             // Handle help flag for exec command specifically
             if cli.help {
@@ -1084,6 +1102,7 @@ fn format_plugin_location(local: bool) -> &'static str {
 /// Handle plugin management subcommands with typed args.
 fn handle_plugin_command(
     command: Option<PluginCommands>,
+    mode: ExecutionMode,
     json: bool,
     help: bool,
     subprocess_plugins: &SubprocessPluginManager,
@@ -1097,6 +1116,21 @@ fn handle_plugin_command(
             return Ok(());
         }
     };
+
+    // These change installed plugins and have no preview
+    if mode.is_preview() && !help {
+        let changing = match &command {
+            PluginCommands::Install { .. } => Some("install"),
+            PluginCommands::Uninstall { .. } => Some("uninstall"),
+            PluginCommands::Update { check: false, .. } => Some("update"),
+            _ => None,
+        };
+        if let Some(name) = changing {
+            anyhow::bail!(
+                "meta plugin {name} has no preview, so it refuses --dry-run; nothing was changed"
+            );
+        }
+    }
 
     match command {
         PluginCommands::Search { query } => {

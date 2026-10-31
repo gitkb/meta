@@ -366,7 +366,7 @@ impl McpServer {
             },
             Tool {
                 name: "meta_get_config".to_string(),
-                description: "Get the meta repository configuration including all projects, tags, and settings".to_string(),
+                description: "Get the meta repository configuration including all projects, tags, and settings (credentials in URLs hidden)".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -821,12 +821,14 @@ impl McpServer {
             _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
         };
 
+        // A reply may repeat a URL the client passed, or one from a repo or
+        // a command's output: it reaches the client without credentials
         match result {
             Ok(text) => {
                 let call_result = CallToolResult {
                     content: vec![ToolContent {
                         content_type: "text".to_string(),
-                        text,
+                        text: meta_core::git::redact_urls(&text).into_owned(),
                     }],
                     is_error: None,
                 };
@@ -836,7 +838,7 @@ impl McpServer {
                 let call_result = CallToolResult {
                     content: vec![ToolContent {
                         content_type: "text".to_string(),
-                        text: e.to_string(),
+                        text: meta_core::git::redact_urls(&e.to_string()).into_owned(),
                     }],
                     is_error: Some(true),
                 };
@@ -958,11 +960,16 @@ impl McpServer {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
 
-        // Find and return the raw config
+        // The config as written, without the credentials in its URLs
         let path = config::find_meta_config_in(meta_dir)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
         let content = std::fs::read_to_string(&path)?;
-        Ok(format!("Config file: {}\n\n{}", path.display(), content))
+        let shown = config::redact_config_text(&content);
+        let note = match shown == content {
+            true => "",
+            false => " (not the file as written: credentials, if any, hidden)",
+        };
+        Ok(format!("Config file: {}{note}\n\n{shown}", path.display()))
     }
 
     fn tool_get_project_path(&self, args: &serde_json::Value) -> Result<String> {
@@ -2659,6 +2666,140 @@ mod tests {
         let result = server.tool_get_config(&serde_json::json!({})).unwrap();
         assert!(result.contains(".meta.yaml"));
         assert!(result.contains("projects: {}"));
+    }
+
+    #[test]
+    fn test_tool_replies_hide_credentials() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
+        let server = McpServer {
+            meta_dir: Some(tmp.path().to_path_buf()),
+        };
+        let request: JsonRpcRequest = serde_json::from_value(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "meta_execution_order",
+                       "arguments": {"tag": "https://alice:ghp_SECRET@h/r"}}
+        }))
+        .unwrap();
+        let reply = serde_json::to_string(&server.handle_request(&request)).unwrap();
+        assert!(reply.contains("https://***@h/r"), "{reply}");
+        assert!(!reply.contains("ghp_SECRET"), "{reply}");
+    }
+
+    #[test]
+    fn test_tool_errors_hide_credentials() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
+        let server = McpServer {
+            meta_dir: Some(tmp.path().to_path_buf()),
+        };
+        let request: JsonRpcRequest = serde_json::from_value(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "meta_get_project_path",
+                       "arguments": {"project": "https://alice:ghp_SECRET@h/r.git"}}
+        }))
+        .unwrap();
+        let reply = serde_json::to_string(&server.handle_request(&request)).unwrap();
+        assert!(reply.contains("https://***@h/r.git"), "{reply}");
+        assert!(!reply.contains("ghp_SECRET"), "{reply}");
+    }
+
+    #[test]
+    fn test_get_config_hides_credentials() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            "projects:\n  a: https://alice:ghp_SECRET@h/a.git\n  b: git@h:b.git\n",
+        )
+        .unwrap();
+        let server = McpServer {
+            meta_dir: Some(tmp.path().to_path_buf()),
+        };
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(
+            result.ends_with("projects:\n  a: https://***@h/a.git\n  b: git@h:b.git\n"),
+            "{result}"
+        );
+        assert!(
+            result.contains("(not the file as written: credentials, if any, hidden)"),
+            "{result}"
+        );
+        // JSON may spell a URL so no scan of the text reads it
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            r#"{"projects": {"a": "https:\/\/alice:ghp_SECRET@h\/a.git", "b": "git@h:b.git"}}"#,
+        )
+        .unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(!result.contains("ghp_SECRET"), "{result}");
+        assert!(result.contains("https://***@h/a.git"), "{result}");
+        assert!(result.contains("git@h:b.git"), "{result}");
+        // even next to values a scan of the text would run across
+        for config in [
+            r#"{"projects":{"a":"https://h","b":{"repo":"git@h:b.git"},"c":"https:\/\/alice:ghp_SECRET@h\/r.git"}}"#,
+            r#"{"projects":{"a":"https://ONE@h","b":'git@h:b.git',"c":"https:\/\/ghp_SECRET@h\/r"}}"#,
+            r#"{"projects":{"a":{"repo":"https://h","tags":["ops@x"]},"b":"git@h:b.git","c":"https:\/\/alice:ghp_SECRET@h\/c.git"}}"#,
+        ] {
+            std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
+            let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+            assert!(!result.contains("ghp_SECRET"), "{result}");
+            assert!(result.contains("git@h:b.git"), "{result}");
+        }
+        // a config without credentials comes back as written, commands with
+        // a URL and an `@` in them included
+        let config = "# Team workspace\nprojects:\n  a: git@h:a.git\nworktree:\n  hooks:\n    post-create: npm config set registry https://npm.example && git config user.email bot@example\n";
+        std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(result.ends_with(config), "{result}");
+        // a tag may hold one too
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            "projects: {}\nextra: !https://alice:ghp_SECRET@h/r value\n",
+        )
+        .unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(
+            !result.contains("ghp_SECRET") && result.contains("value"),
+            "{result}"
+        );
+        // a key may be a URL too
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            "projects:\n  a:\n    repo: https://t@h/a.git\n    extra:\n      https://alice:ghp_SECRET@h/r.git: true\n",
+        )
+        .unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(!result.contains("ghp_SECRET"), "{result}");
+        // compact JSON a scan would run across comes back whole, as YAML
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            r#"{"projects":{"a":"https://h","b":{"repo":"git@h:b.git"}}}"#,
+        )
+        .unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(
+            result.contains("a: https://h\n") && result.contains("repo: git@h:b.git"),
+            "{result}"
+        );
+        // one meta can't read (a duplicate key) shows nothing an escape
+        // could hide
+        for config in [
+            r#"{"projects":{"a":"https:\/\/alice:ghp_SECRET@h\/a","b":"x","b":"y"}}"#,
+            "projects:\n  a: \"https://alice:ghp_SECRET\\x40h/a\"\n  b: x\n  b: y\n",
+            "projects:\n  a: \"https://alice:ghp_SECRET\\U00000040h/a\"\n  b: x\n  b: y\n",
+        ] {
+            std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
+            let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+            assert!(!result.contains("ghp_SECRET"), "{result}");
+        }
+        // or a YAML escape
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            "projects:\n  a: \"https://alice:ghp_SECRET\\u0040h/a.git\"\n",
+        )
+        .unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(!result.contains("ghp_SECRET"), "{result}");
     }
 
     #[test]

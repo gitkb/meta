@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime};
 use crate::dependency_graph::DependencyGraph;
 use meta_core::config::{self, ProjectInfo};
 use meta_core::display::{escape, escape_path};
-use meta_core::git::RepoStatus;
+use meta_core::git::{GitUrl, RepoStatus};
 
 // ── Cache ───────────────────────────────────────────────
 
@@ -227,7 +227,7 @@ pub struct RepoContext {
     pub path: String,
     /// Git remote URL. Should be present for all normal projects.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo: Option<String>,
+    pub repo: Option<GitUrl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -448,7 +448,7 @@ mod tests {
         RepoContext {
             name: name.to_string(),
             path: name.to_string(),
-            repo: Some(format!("git@github.com:org/{name}.git")),
+            repo: Some(format!("git@github.com:org/{name}.git").into()),
             branch: branch.map(|s| s.to_string()),
             dirty,
             modified_count: modified,

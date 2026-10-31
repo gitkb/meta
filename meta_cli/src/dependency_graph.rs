@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use meta_core::config::ProjectInfo;
+use meta_core::git::GitUrl;
 
 /// Represents a project with dependency information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,7 +27,7 @@ pub struct ProjectDependencies {
     pub path: String,
     /// Git remote URL. Should be present for all normal projects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo: Option<String>,
+    pub repo: Option<GitUrl>,
     pub tags: Vec<String>,
     /// What this project provides (e.g., APIs, libraries)
     pub provides: Vec<String>,
@@ -322,7 +323,7 @@ mod tests {
             ProjectDependencies {
                 name: "shared-utils".to_string(),
                 path: "shared-utils".to_string(),
-                repo: Some("git@github.com:org/shared-utils.git".to_string()),
+                repo: Some("git@github.com:org/shared-utils.git".into()),
                 tags: vec!["lib".to_string()],
                 provides: vec!["utils".to_string()],
                 depends_on: vec![],
@@ -330,7 +331,7 @@ mod tests {
             ProjectDependencies {
                 name: "auth-service".to_string(),
                 path: "auth-service".to_string(),
-                repo: Some("git@github.com:org/auth-service.git".to_string()),
+                repo: Some("git@github.com:org/auth-service.git".into()),
                 tags: vec!["backend".to_string()],
                 provides: vec!["auth-api".to_string()],
                 depends_on: vec!["shared-utils".to_string()],
@@ -338,7 +339,7 @@ mod tests {
             ProjectDependencies {
                 name: "api-service".to_string(),
                 path: "api-service".to_string(),
-                repo: Some("git@github.com:org/api-service.git".to_string()),
+                repo: Some("git@github.com:org/api-service.git".into()),
                 tags: vec!["backend".to_string()],
                 provides: vec!["api-v2".to_string()],
                 depends_on: vec!["auth-service".to_string(), "shared-utils".to_string()],
@@ -346,7 +347,7 @@ mod tests {
             ProjectDependencies {
                 name: "web-app".to_string(),
                 path: "web-app".to_string(),
-                repo: Some("git@github.com:org/web-app.git".to_string()),
+                repo: Some("git@github.com:org/web-app.git".into()),
                 tags: vec!["frontend".to_string()],
                 provides: vec![],
                 depends_on: vec!["api-v2".to_string()], // Depends on provided item

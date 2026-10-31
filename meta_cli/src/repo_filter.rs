@@ -82,7 +82,14 @@ pub fn select(
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let value = meta_core::display::escape(value);
+        // without credentials; clap split the value at commas, which a
+        // password may hold, so a piece may be a URL's tail: `pw@host/x`
+        let value = meta_core::git::redact_urls(value);
+        let value = match value.split_once('@') {
+            Some((head, tail)) if !head.contains('/') => format!("***@{tail}"),
+            _ => value.into_owned(),
+        };
+        let value = meta_core::display::escape(&value);
         if by_name.len() > 1 {
             bail!(
                 "{flag} '{value}' is the .meta.yaml name of the repos at {}; name one by its path, \

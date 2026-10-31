@@ -135,7 +135,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
             "{} {} ({})",
             style("Failed to clone").red().bold(),
             meta_core::display::escape(&failure.name),
-            meta_core::display::escape(&failure.url)
+            failure.url
         );
         // git's error names paths from the filesystem
         for line in failure.error.lines() {
@@ -198,7 +198,9 @@ fn clone_single_repo(
     if let Some(d) = queue.git_depth() {
         cmd.arg("--depth").arg(d);
     }
-    cmd.arg("--").arg(&task.url).arg(&task.target_path);
+    cmd.arg("--")
+        .arg(task.url.as_git_arg())
+        .arg(&task.target_path);
     if let Some(ssh) = ssh_cmd {
         cmd.env("GIT_SSH_COMMAND", ssh);
     }
@@ -297,7 +299,7 @@ struct StderrTail {
 
 impl StderrTail {
     const KEPT_LINES: usize = 20;
-    const LINE_BYTES: u64 = 4096;
+    const LINE_BYTES: u64 = meta_core::git::GIT_MESSAGE_BYTES as u64;
 
     fn spawn(
         stderr: Option<impl std::io::Read + Send + 'static>,
@@ -318,7 +320,15 @@ impl StderrTail {
                     .read_until(b'\n', &mut buf)
                     .is_ok_and(|n| n > 0)
                 {
-                    let line = String::from_utf8_lossy(&buf).trim_end().to_string();
+                    // The rest of a line cut here goes; redact_git_output
+                    // takes the last word of a line this long, cut here or
+                    // by git, which may start a URL
+                    if buf.len() as u64 == Self::LINE_BYTES && !buf.ends_with(b"\n") {
+                        let _ = reader.skip_until(b'\n');
+                    }
+                    let line = String::from_utf8_lossy(&buf);
+                    // ASCII only: a Unicode space may end a cut password
+                    let line = meta_core::git::redact_git_output(line.trim_ascii_end());
                     buf.clear();
                     on_line(&line);
                     let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());
@@ -359,6 +369,44 @@ mod tests {
         assert_eq!(seen.load(Ordering::SeqCst), 100_000);
         assert_eq!(text.lines().count(), StderrTail::KEPT_LINES);
         assert!(text.ends_with("line 99999"));
+    }
+
+    #[test]
+    fn stderr_tail_shows_no_credentials() {
+        // a URL that a cut at LINE_BYTES splits, one git cut itself (its
+        // messages stop at 4096 bytes), each also with a Unicode space in its
+        // password (git sends one), and a whole one
+        let pad = "x ".repeat(2041);
+        let git_cut = format!("warning: {}https://alice:ghp_SECRET", "y ".repeat(2031));
+        assert_eq!(git_cut.len() + 1, StderrTail::LINE_BYTES as usize);
+        let spaced = format!("https://alice:ghp_SECRET\u{a0}{}@h/r", "z".repeat(5000));
+        let git_cut_spaced = format!("warning: {spaced}");
+        let git_cut_spaced = git_cut_spaced
+            .get(..StderrTail::LINE_BYTES as usize - 1)
+            .unwrap();
+        // git's cut right after a Unicode space
+        let at_space = format!(
+            "warning: https://alice:ghp_SECRET{}\u{2003}",
+            "w".repeat(4059)
+        );
+        assert_eq!(at_space.len() + 1, StderrTail::LINE_BYTES as usize);
+        let output = format!(
+            "{pad}https://alice:ghp_SECRET@h/r\n{git_cut}\n{spaced}\n{git_cut_spaced}\n\
+             {at_space}\nfatal: 'https://a:ghp_SECRET@h/r'\n"
+        );
+        let shown = Arc::new(Mutex::new(String::new()));
+        let seen = Arc::clone(&shown);
+        let tail = StderrTail::spawn(Some(std::io::Cursor::new(output)), move |line| {
+            seen.lock().unwrap().push_str(line);
+        });
+        let text = tail.text();
+        assert!(text.ends_with("fatal: 'https://***@h/r'"), "{text}");
+        for printed in [text, shown.lock().unwrap().clone()] {
+            assert!(
+                !printed.contains("ghp_SECRET") && !printed.contains("alice"),
+                "{printed}"
+            );
+        }
     }
 
     #[test]

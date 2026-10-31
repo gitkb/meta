@@ -323,8 +323,23 @@ pub struct PluginDefinition {
 ///
 /// Initializes `env_logger` so plugins can use `log` macros with RUST_LOG.
 pub fn run_plugin(plugin: PluginDefinition) {
-    // Initialize logger for subprocess - inherits RUST_LOG from parent
-    env_logger::init();
+    // Initialize logger for subprocess - inherits RUST_LOG from parent. A
+    // record may carry a URL: it shows escaped, without credentials
+    env_logger::Builder::from_default_env()
+        .format(|buf, record| {
+            use std::io::Write;
+            writeln!(
+                buf,
+                "[{} {} {}] {}",
+                buf.timestamp(),
+                record.level(),
+                record.target(),
+                meta_core::display::escape(&meta_core::git::redact_urls(
+                    &record.args().to_string()
+                ))
+            )
+        })
+        .init();
 
     let args: Vec<String> = std::env::args().collect();
 
@@ -373,12 +388,13 @@ pub fn run_plugin(plugin: PluginDefinition) {
                     }
                 }
                 CommandResult::Error(e) => {
-                    eprintln!("Error: {e}");
+                    // an error may repeat a URL the user typed
+                    eprintln!("Error: {}", meta_core::git::redact_urls(&e));
                     std::process::exit(1);
                 }
                 CommandResult::ShowHelp(maybe_error) => {
                     if let Some(ref err) = maybe_error {
-                        eprintln!("error: {err}");
+                        eprintln!("error: {}", meta_core::git::redact_urls(err));
                         eprintln!();
                         // Print help to stderr when there's an error (so it's visible even if meta captures stdout)
                         eprint!("{}", help_text(&plugin.info));

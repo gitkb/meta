@@ -1,6 +1,7 @@
 use log::{debug, warn};
 use meta_core::config;
 use meta_core::display::escape_path;
+use meta_core::git::GitUrl;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,7 +13,7 @@ pub struct CloneTask {
     /// Display name for progress output
     pub name: String,
     /// Git URL to clone from
-    pub url: String,
+    pub url: GitUrl,
     /// Target path to clone into
     pub target_path: PathBuf,
     /// Depth level (for display purposes)
@@ -25,7 +26,7 @@ pub struct CloneTask {
 #[derive(Debug, Clone)]
 pub struct CloneFailure {
     pub name: String,
-    pub url: String,
+    pub url: GitUrl,
     pub error: String,
 }
 
@@ -219,7 +220,7 @@ impl CloneQueue {
 
     /// Get all URLs from pending tasks (for SSH target discovery).
     /// Does not remove tasks from the queue.
-    pub fn peek_urls(&self) -> Vec<String> {
+    pub fn peek_urls(&self) -> Vec<GitUrl> {
         let pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         pending.iter().map(|t| t.url.clone()).collect()
     }
@@ -252,7 +253,7 @@ mod tests {
     fn make_task(name: &str, path: &Path) -> CloneTask {
         CloneTask {
             name: name.to_string(),
-            url: format!("git@github.com:org/{name}.git"),
+            url: format!("git@github.com:org/{name}.git").into(),
             target_path: path.to_path_buf(),
             depth_level: 0,
             is_meta: false,
@@ -501,7 +502,7 @@ mod tests {
         let queue = CloneQueue::new(None, None);
         let task = CloneTask {
             name: "child".to_string(),
-            url: "git@github.com:org/child.git".to_string(),
+            url: "git@github.com:org/child.git".into(),
             target_path: child_dir,
             depth_level: 0,
             is_meta: true,
@@ -522,7 +523,7 @@ mod tests {
         let queue = CloneQueue::new(None, None);
         let task = CloneTask {
             name: "child".to_string(),
-            url: "git@github.com:org/child.git".to_string(),
+            url: "git@github.com:org/child.git".into(),
             target_path: child_dir,
             depth_level: 0,
             is_meta: false,
@@ -580,7 +581,7 @@ mod tests {
     fn make_task_with_url(name: &str, url: &str, path: &Path) -> CloneTask {
         CloneTask {
             name: name.to_string(),
-            url: url.to_string(),
+            url: url.into(),
             target_path: path.to_path_buf(),
             depth_level: 0,
             is_meta: false,
@@ -613,8 +614,8 @@ mod tests {
 
         let urls = queue.peek_urls();
         assert_eq!(urls.len(), 2);
-        assert!(urls.contains(&"git@github.com:org/r1.git".to_string()));
-        assert!(urls.contains(&"https://github.com/org/r2.git".to_string()));
+        assert!(urls.contains(&"git@github.com:org/r1.git".into()));
+        assert!(urls.contains(&"https://github.com/org/r2.git".into()));
 
         // Verify tasks are still in the queue (not dequeued)
         assert!(queue.take_one().is_some());

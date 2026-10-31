@@ -79,6 +79,18 @@ impl Calls {
     /// Cancels the running call, starts no other, and waits until it has
     /// ended, an atomic batch's rollback included, and its answer is out.
     pub(crate) fn stop_running(&self) {
+        self.cancel_all();
+        while {
+            let state = self.state();
+            state.running.is_some() || state.busy
+        } {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Cancels the running call and starts no other; the ones waiting are
+    /// dropped, each said on stderr.
+    pub(crate) fn cancel_all(&self) {
         let dropped: Vec<String> = {
             let mut state = self.state();
             state.stopping = true;
@@ -94,12 +106,6 @@ impl Calls {
         // said with the state free: stderr may be slow to take it
         for id in dropped {
             not_started(&id);
-        }
-        while {
-            let state = self.state();
-            state.running.is_some() || state.busy
-        } {
-            std::thread::sleep(Duration::from_millis(5));
         }
     }
 
@@ -457,6 +463,15 @@ mod tests {
         calls.queue("2".to_string());
         assert!(calls.state().queued.is_empty());
         assert!(!calls.start("2".to_string()));
+    }
+
+    #[test]
+    fn a_server_that_cancels_all_drops_its_waiting_calls() {
+        let calls = Calls::default();
+        calls.queue("1".to_string());
+        calls.cancel_all();
+        assert!(calls.state().queued.is_empty());
+        assert!(!calls.start("1".to_string()));
     }
 
     #[test]

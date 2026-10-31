@@ -203,16 +203,20 @@ impl McpServer {
         std::thread::scope(|scope| {
             let worker = scope.spawn(|| {
                 for message in queue {
-                    let written = self.calls.answering(|| match self.answer(message) {
-                        Some(answer) => write_answer(&output, &answer),
-                        None => Ok(()),
+                    self.calls.answering(|| {
+                        let Some(answer) = self.answer(message) else {
+                            return;
+                        };
+                        // No more answers can go out, and the reader may wait
+                        // for input that never comes: the server ends here,
+                        // with the answer on stderr (an atomic batch's
+                        // rollback is in it)
+                        if let Err(e) = write_answer(&output, &answer) {
+                            let _ = writeln!(std::io::stderr(), "Error: {e:#}; the reply was:");
+                            let _ = write_answer(&Mutex::new(std::io::stderr()), &answer);
+                            std::process::exit(1);
+                        }
                     });
-                    // No more answers can go out, and the reader may wait for
-                    // input that never comes: the server ends here
-                    if let Err(e) = written {
-                        let _ = writeln!(std::io::stderr(), "Error: {e:#}");
-                        std::process::exit(1);
-                    }
                 }
                 Ok(())
             });
@@ -261,7 +265,9 @@ impl McpServer {
                 }
             };
             if let Some(answer) = answer {
-                write_answer(output, &answer)?;
+                // no one reads what a tool would answer: stop the running
+                // one (a rollback still finishes) and start none
+                write_answer(output, &answer).inspect_err(|_| self.calls.cancel_all())?;
             }
         }
     }

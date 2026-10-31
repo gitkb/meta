@@ -855,7 +855,7 @@ impl McpServer {
             // git's reason: a name it refuses, or a config it can't read
             match String::from_utf8_lossy(&check.stderr).trim() {
                 "" => anyhow::bail!("'{}' is not a valid branch name", escape(&args.branch)),
-                why => anyhow::bail!("{why}"),
+                why => anyhow::bail!("{}", escape(why)),
             }
         }
         let mut git_args = vec!["git", "checkout"];

@@ -2692,6 +2692,7 @@ mod tests {
         for config in [
             r#"{"projects":{"a":"https://h","b":{"repo":"git@h:b.git"},"c":"https:\/\/alice:ghp_SECRET@h\/r.git"}}"#,
             r#"{"projects":{"a":"https://ONE@h","b":'git@h:b.git',"c":"https:\/\/ghp_SECRET@h\/r"}}"#,
+            r#"{"projects":{"a":{"repo":"https://h","tags":["ops@x"]},"b":"git@h:b.git","c":"https:\/\/alice:ghp_SECRET@h\/c.git"}}"#,
         ] {
             std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
             let result = server.tool_get_config(&serde_json::json!({})).unwrap();

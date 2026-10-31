@@ -1466,11 +1466,11 @@ fn unrecognized_command_error(
     command_str: &str,
     plugins: &SubprocessPluginManager,
 ) -> ! {
-    let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
+    // shown as a URL shows: escaped, without credentials
+    let first_cmd = meta_core::git::GitUrl::from(command_args.first().cloned().unwrap_or_default());
     eprintln!(
-        "{}: unrecognized command '{}'",
-        "error".red().bold(),
-        escape(first_cmd)
+        "{}: unrecognized command '{first_cmd}'",
+        "error".red().bold()
     );
     let command_str = escape(command_str);
     eprintln!();

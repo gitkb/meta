@@ -334,8 +334,8 @@ assert 'repos' in payload
 
 @test "a worktree hook doesn't inherit the repository of a git hook running meta" {
     HOOK_LOG="$TEST_DIR/hook-toplevel"
-    HOOK_REPO="$(cd "$(mktemp -d)" && pwd -P)"
-    git -C "$HOOK_REPO" init --quiet
+    HOOK_REPO="$BATS_TEST_TMPDIR/hook-repo"
+    git init --quiet "$HOOK_REPO"
 
     cat > "$TEST_DIR/.meta.yaml" <<EOF
 {
@@ -354,7 +354,8 @@ EOF
         "$META_BIN" git worktree create from-hook --repo backend
     [ "$status" -eq 0 ]
     [ -f "$HOOK_LOG" ]
-    [ "$(cat "$HOOK_LOG")" != "$HOOK_REPO" ]
+    # the hook runs in the workspace, a repository of its own
+    [ "$(cat "$HOOK_LOG")" = "$(cd "$TEST_DIR" && pwd -P)" ]
 }
 
 @test "post-destroy hook receives payload on stdin" {

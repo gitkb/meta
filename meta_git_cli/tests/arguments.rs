@@ -110,8 +110,9 @@ fn clone_depth_comes_from_meta_unless_given() {
 
 #[test]
 fn worktree_list_finds_the_workspace_of_the_requests_directory() {
+    // not canonicalized: git refuses Windows' `\\?\` form
     let tmp = tempfile::tempdir().unwrap();
-    let tmp = tmp.path().canonicalize().unwrap();
+    let tmp = tmp.path();
     let workspace = tmp.join("workspace");
     let repo = workspace.join("a");
     std::fs::create_dir_all(&repo).unwrap();

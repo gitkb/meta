@@ -8,9 +8,9 @@ use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set}
 use meta_git_lib::worktree::types::*;
 use meta_git_lib::worktree::workspace::Workspace;
 
-use super::cli_types::DestroyArgs;
+use super::cli_types::RemoveArgs;
 
-pub(crate) fn handle_remove(args: DestroyArgs, verbose: bool, json: bool) -> Result<()> {
+pub(crate) fn handle_remove(args: RemoveArgs, verbose: bool, json: bool) -> Result<()> {
     let name = &args.name;
     validate_worktree_name(name)?;
     let force = args.force;

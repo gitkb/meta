@@ -7,7 +7,7 @@ use meta_cli::repo_filter;
 use meta_cli::worktree::{discover_worktree_repos, WorktreeRepoInfo};
 use meta_git_lib::worktree::helpers::*;
 
-use super::cli_types::{CreateArgs, DestroyArgs, ExecArgs};
+use super::cli_types::{CreateArgs, ExecArgs, RemoveArgs};
 use crate::git_env;
 
 /// Runs in each of `repos` that `--include`/`--exclude` select (by alias:
@@ -75,11 +75,11 @@ impl EphemeralGuard {
         if self.verbose {
             eprintln!("Removing ephemeral worktree '{}'...", self.name);
         }
-        let destroy_args = DestroyArgs {
+        let remove_args = RemoveArgs {
             name: self.name.clone(),
             force: true,
         };
-        super::remove::handle_remove(destroy_args, self.verbose, self.json)
+        super::remove::handle_remove(remove_args, self.verbose, self.json)
     }
 
     fn finish(mut self) -> Result<()> {
@@ -152,7 +152,6 @@ fn handle_ephemeral_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<()
         repos: args.repos,
         all: args.all,
         dry_run: false,
-        from_ref: args.from_ref,
         from_pr: args.from_pr,
         ephemeral: true,
         ttl: None,

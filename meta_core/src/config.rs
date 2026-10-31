@@ -55,13 +55,6 @@ pub struct ProjectInfo {
     pub meta: bool,
 }
 
-impl ProjectInfo {
-    /// Returns true if this project has no git repo URL (cannot be cloned)
-    pub fn has_no_repo(&self) -> bool {
-        self.repo.is_none()
-    }
-}
-
 /// Default settings that can be configured in .meta.yaml
 #[derive(Debug, Deserialize, Clone)]
 pub struct MetaDefaults {
@@ -84,8 +77,8 @@ impl Default for MetaDefaults {
 #[derive(Debug, Deserialize, Default)]
 pub struct MetaConfig {
     /// Projects in this meta repo. Values can be:
-    /// - A git URL string: `"project": "git@github.com:org/repo.git"`
-    /// - An extended object: `"project": { "repo": "...", "path": "...", "meta": true }`
+    /// - A git URL string: `project: git@github.com:org/repo.git`
+    /// - An extended object: `project: { repo: ..., path: ..., meta: true }`
     #[serde(default, deserialize_with = "unique_projects")]
     pub projects: HashMap<String, ProjectEntry>,
     #[serde(default)]
@@ -1491,31 +1484,6 @@ mod tests {
     }
 
     #[test]
-    fn test_has_no_repo() {
-        let info = ProjectInfo {
-            name: "vendor".to_string(),
-            path: "vendor".to_string(),
-            repo: None,
-            tags: vec![],
-            provides: vec![],
-            depends_on: vec![],
-            meta: false,
-        };
-        assert!(info.has_no_repo());
-
-        let info_with_repo = ProjectInfo {
-            name: "core".to_string(),
-            path: "core".to_string(),
-            repo: Some("git@github.com:org/core.git".to_string()),
-            tags: vec![],
-            provides: vec![],
-            depends_on: vec![],
-            meta: false,
-        };
-        assert!(!info_with_repo.has_no_repo());
-    }
-
-    #[test]
     fn test_walk_meta_tree_nested_meta_with_children() {
         let dir = tempfile::tempdir().unwrap();
         let vendor = dir.path().join("vendor");
@@ -2636,19 +2604,6 @@ mod tests {
             assert!(find_meta_config(dir.path(), None).is_err());
         }
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
-
-    #[test]
-    fn old_config_names_are_not_config() {
-        let dir = tempfile::tempdir().unwrap();
-        for name in [".meta", ".meta.json", ".meta.yml"] {
-            std::fs::write(dir.path().join(name), r#"{"projects": {}}"#).unwrap();
-        }
-        assert!(find_meta_config_in(dir.path()).unwrap().is_none());
-        // Beside them `.meta.yaml` is the config, not one of several
-        let config = dir.path().join(".meta.yaml");
-        std::fs::write(&config, "projects: {}\n").unwrap();
-        assert_eq!(find_meta_config_in(dir.path()).unwrap(), Some(config));
     }
 
     #[test]

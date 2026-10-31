@@ -383,3 +383,12 @@ J
         done
     done
 }
+
+@test "meta project check names the command that clones what is missing" {
+    rmdir "$TEST_DIR/shared"
+    run "$META_BIN" project check
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"git@github.com:org/shared.git"* ]]
+    [[ "$output" == *"Run \`meta git update\` to clone this repository."* ]]
+    [[ "$output" != *"meta project update"* ]]
+}

@@ -38,20 +38,6 @@ pub fn git_env() -> HashMap<String, String> {
     env
 }
 
-/// Build git env with optional SSH config overrides.
-///
-/// Use this when SSH configuration from `.meta.yaml` should be applied.
-#[allow(dead_code)] // Future extension point for SSH config support
-pub fn git_env_with_ssh(ssh_command: Option<&str>) -> HashMap<String, String> {
-    let mut env = git_env();
-
-    if let Some(cmd) = ssh_command {
-        env.insert("GIT_SSH_COMMAND".to_string(), cmd.to_string());
-    }
-
-    env
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,28 +51,6 @@ mod tests {
     #[test]
     fn git_env_includes_terminal_prompt_setting() {
         let env = git_env();
-        assert_eq!(env.get("GIT_TERMINAL_PROMPT"), Some(&"0".to_string()));
-    }
-
-    #[test]
-    fn git_env_with_ssh_includes_ssh_command() {
-        let env = git_env_with_ssh(Some("ssh -o StrictHostKeyChecking=no"));
-        assert_eq!(
-            env.get("GIT_SSH_COMMAND"),
-            Some(&"ssh -o StrictHostKeyChecking=no".to_string())
-        );
-    }
-
-    #[test]
-    fn git_env_with_ssh_none_has_no_ssh_command() {
-        let env = git_env_with_ssh(None);
-        assert!(!env.contains_key("GIT_SSH_COMMAND"));
-    }
-
-    #[test]
-    fn git_env_with_ssh_preserves_base_env() {
-        let env = git_env_with_ssh(Some("ssh"));
-        assert_eq!(env.get("GIT_PAGER"), Some(&"cat".to_string()));
         assert_eq!(env.get("GIT_TERMINAL_PROMPT"), Some(&"0".to_string()));
     }
 }

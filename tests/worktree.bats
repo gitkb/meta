@@ -448,14 +448,6 @@ assert d['totals']['files_changed'] >= 1
     [ ! -d ".worktrees/multi-remove" ]
 }
 
-@test "worktree destroy alias still works" {
-    "$META_BIN" git worktree create alias-test --repo backend --no-deps
-    [ -d ".worktrees/alias-test" ]
-    run "$META_BIN" git worktree destroy alias-test
-    [ "$status" -eq 0 ]
-    [ ! -d ".worktrees/alias-test" ]
-}
-
 # ============ Configuration ============
 
 @test "META_WORKTREES env overrides default location" {

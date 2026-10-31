@@ -721,7 +721,7 @@ fn execute_commands_internal(config: &LoopConfig, commands: &[DirCommand]) -> Re
 
         // Clear spinner lines before showing detailed output
         if let Some(ref mp) = mp {
-            mp.clear().ok();
+            let _ = mp.clear();
         }
 
         // Print captured output after all spinners complete (if not JSON)

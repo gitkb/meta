@@ -398,7 +398,7 @@ fn hook_with_large_stderr_output_does_not_hang_create() {
 }
 
 #[test]
-fn from_ref_that_no_repo_has_creates_nothing() {
+fn a_commit_ish_no_repo_has_creates_nothing() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let ws = workspace(root, &["a"]);
@@ -581,7 +581,7 @@ fn failed_create_rolls_back_what_it_created() {
 }
 
 #[test]
-fn from_ref_create_fails_on_anything_but_a_missing_ref() {
+fn commit_ish_create_fails_on_anything_but_a_missing_ref() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let ws = workspace(root, &["a", "b"]);
@@ -615,7 +615,7 @@ fn from_ref_create_fails_on_anything_but_a_missing_ref() {
 }
 
 #[test]
-fn from_ref_create_fails_when_a_repo_cannot_be_read() {
+fn commit_ish_create_fails_when_a_repo_cannot_be_read() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let ws = workspace(root, &["a", "b"]);

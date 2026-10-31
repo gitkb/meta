@@ -118,12 +118,7 @@ fn eligible(record: &SetRecord, now: i64) -> Option<(String, Option<u64>)> {
     Some(("ttl_expired".to_string(), Some(age)))
 }
 
-pub(crate) fn handle_prune(
-    args: PruneArgs,
-    _verbose: bool,
-    json: bool,
-    strict: bool,
-) -> Result<()> {
+pub(crate) fn handle_prune(args: PruneArgs, json: bool, strict: bool) -> Result<()> {
     let dry_run = args.dry_run;
 
     let meta_dir = require_meta_dir()?;

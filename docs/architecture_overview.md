@@ -75,7 +75,7 @@ The main CLI entry point responsible for:
 
 Key modules:
 - `main.rs` - Entry point, argument parsing
-- `config.rs` - Configuration loading and parsing
+- `meta_core::config` - Configuration loading and parsing
 - `subprocess_plugins.rs` - Plugin discovery and execution
 - `query.rs` - Query DSL implementation
 - `dependency_graph.rs` - Dependency tracking and analysis
@@ -94,7 +94,7 @@ Shared plugin protocol types for meta subprocess plugins:
 - Defines communication protocol between the meta CLI host and subprocess plugins
 - `PluginInfo` - Metadata about a plugin (name, version, commands)
 - `PluginRequest` - Host-to-plugin request format (JSON on stdin)
-- `PluginResponse` - Plugin-to-host response format
+- `PlanResponse` - Plugin-to-host response: the commands to run
 - `PluginHelp` - Structured help information for plugin commands
 
 ### loop_lib
@@ -176,22 +176,24 @@ meta-git --meta-plugin-info
   "name": "git",
   "version": "0.1.0",
   "description": "Git operations for meta repositories",
-  "commands": ["clone", "status", "update", "commit"]
+  "commands": ["git clone", "git status", "git update", "git commit"]
 }
 ```
 
 **Execution Request:**
 ```bash
-echo '{"command":"status","args":[],"projects":[...]}' | meta-git --meta-plugin-exec
+echo '{"command":"git status","args":[],"projects":[...],"cwd":"..."}' | meta-git --meta-plugin-exec
 ```
 
-**Response:**
+**Response** (a plan meta runs through `loop_lib`; a plugin may instead print plain text, which meta shows as is):
 ```json
 {
-  "success": true,
-  "results": [
-    {"project": "api", "success": true, "output": "..."}
-  ]
+  "plan": {
+    "commands": [
+      {"dir": "./api", "argv": ["git", "status"]}
+    ],
+    "parallel": false
+  }
 }
 ```
 
@@ -346,7 +348,7 @@ pub struct ProjectDependencies {
 | Module | Purpose |
 |--------|---------|
 | `meta_cli/src/main.rs` | CLI entry, arg parsing |
-| `meta_cli/src/config.rs` | Config loading |
+| `meta_core/src/config.rs` | Config loading |
 | `meta_cli/src/subprocess_plugins.rs` | Plugin discovery/execution |
 | `meta_cli/src/query.rs` | Query DSL |
 | `meta_cli/src/dependency_graph.rs` | Dependency analysis |

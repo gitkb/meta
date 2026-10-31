@@ -78,6 +78,8 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"Manage git worktrees across repos"* ]]
     [[ "$output" == *"--dry-run"* ]]
+    [[ "$output" == *"<COMMIT-ISH>"* ]]
+    [[ "$output" != *"--from-ref"* ]]
     [[ "$output" != *"Adapted Commands"* ]]
 
     run "$META_BIN" git worktree create --help

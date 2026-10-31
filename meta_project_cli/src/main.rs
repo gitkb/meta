@@ -1,7 +1,7 @@
 //! meta-project subprocess plugin
 
 use indexmap::IndexMap;
-use meta_cli::display::escape_lines;
+use meta_core::display::escape_lines;
 use meta_plugin_protocol::{
     run_plugin, CommandResult, PluginDefinition, PluginHelp, PluginInfo, PluginRequest,
 };
@@ -70,12 +70,9 @@ fn execute_request(request: PluginRequest) -> CommandResult {
     };
 
     let options = meta_project_cli::ExecuteOptions {
-        dry_run: request.options.dry_run,
         json_output: request.options.json_output,
         recursive: request.options.recursive,
         depth: request.options.depth,
-        verbose: request.options.verbose,
-        parallel: request.options.parallel,
         filtered: request.options.include_filters.is_some()
             || request.options.exclude_filters.is_some(),
     };

@@ -13,7 +13,7 @@ meta init claude
 # Refresh skills and rules, keep settings.json
 meta init claude --update
 
-# Rewrite skills and rules meta installed, and merge settings.json
+# Overwrite meta's skill and rule files, and merge settings.json
 meta init claude --force
 ```
 
@@ -31,7 +31,7 @@ Commit `.meta/skills/` and the links so everyone working in the repo gets the sk
 
 **Windows.** Symlinks need Developer Mode or admin rights there. Where a link can't be made, `meta init claude` copies the skill folder from `.meta/skills/` instead and puts a `.meta-skill-copy` marker in it; `meta init claude --update` replaces marked copies with links once links work. A clone made with `core.symlinks=false` (Git for Windows' default) checks each committed link out as a small file holding its target path, which agents can't load: run `meta init claude --update` to replace those files with links or marked copies, and don't commit that change.
 
-**Upgrading.** Older releases wrote flat `.claude/skills/meta-*.md` files (which Claude Code never loaded) and later real `.claude/skills/meta-*/` folders. `meta init claude --update` removes both and links the new layout. It only replaces what meta wrote: in `.claude/skills/`, a skill folder holding just the `SKILL.md` meta shipped (unchanged) and regular flat `meta-*.md` files starting with the heading meta shipped (e.g. `# Meta Git Skill`); anywhere, a marked copy or a Git link placeholder holding exactly meta's link target. Other files, folders and links, including another tool's link with a meta skill's name, are left alone and reported as skipped. A link is never followed or removed: an agent skills folder, rule file or `settings.json` reached through a link is skipped, and a link inside `.meta/skills/` stops the install with an error.
+**What meta replaces.** `meta init claude --update` (or `--force`) overwrites meta's own files: `.meta/skills/<name>/SKILL.md` and its rule files `.claude/rules/meta-workspace-discipline.md` and `meta-destructive-commands.md`. In the agent skills folders (`.claude/skills/`, `.agents/skills/`, ...) it only replaces what meta wrote there: a marked copy, or a Git link placeholder holding exactly meta's link target. Other files, folders and links there, including another tool's link with a meta skill's name, are left alone and reported as skipped. A link is never followed or removed: an agent skills folder, rule file or `settings.json` reached through a link is skipped, and a link inside `.meta/skills/` stops the install with an error.
 
 The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta` binary. This repo's `.meta/skills/` (linked from `.claude/skills/` and `.agents/skills/`) and `claude-plugin/skills/` are copies: edit meta_cli, then run `make skills` and commit the copies in the same PR (`tests/init.bats` fails when they differ). Bump `claude-plugin/.claude-plugin/plugin.json`'s version when the plugin's skills change, so plugin users get the update.
 
@@ -194,4 +194,4 @@ Skills are embedded in the `meta` binary and updated with each release. To get t
 1. Update meta: `brew upgrade meta-cli` or reinstall
 2. Refresh skills: `meta init claude --update`
 
-`--update` overwrites the skill and rule files with the latest versions, turns older layouts into links, and leaves `settings.json` alone; `--force` does the same and also merges meta's hooks into `settings.json`, never replacing it.
+`--update` overwrites the skill and rule files with the latest versions, replaces meta's marked copies and link placeholders with links, and leaves `settings.json` alone; `--force` does the same and also merges meta's hooks into `settings.json`, never replacing it.

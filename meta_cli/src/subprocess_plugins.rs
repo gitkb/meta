@@ -11,10 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-#[allow(unused_imports)]
-pub use meta_plugin_protocol::{
-    ExecutionPlan, PlanResponse as PluginResponse, PlannedCommand, PluginHelp, PluginInfo,
-    PluginRequest, PluginRequestOptions,
+use meta_plugin_protocol::{
+    ExecutionPlan, PlanResponse, PluginInfo, PluginRequest, PluginRequestOptions,
 };
 
 /// Query metadata with one deadline for both process exit and stdout EOF.
@@ -71,13 +69,12 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<Option<PluginInfo>> {
     }
     // A wrapper may already have exited while its descendants hold stdout open.
     // Kill its process group even when the wrapper itself has exited.
+    // The child was started as leader of its own process group.
     #[cfg(unix)]
-    if let Ok(pid) = i32::try_from(child.id()) {
-        // SAFETY: the child was started as leader of its own process group.
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
-        }
-    }
+    let _ = rustix::process::kill_process_group(
+        rustix::process::Pid::from_child(&child),
+        rustix::process::Signal::KILL,
+    );
     // Elsewhere only the plugin itself is killed: a process it started that
     // still holds stdout outlives it, but meta doesn't wait for that reader
     let _ = child.kill();
@@ -406,7 +403,7 @@ impl SubprocessPluginManager {
         // still sends `cmd` strings, and printing them would run nothing
         let is_plan = serde_json::from_str::<serde_json::Value>(&stdout_str)
             .is_ok_and(|value| value.get("plan").is_some());
-        match serde_json::from_str::<PluginResponse>(&stdout_str) {
+        match serde_json::from_str::<PlanResponse>(&stdout_str) {
             Ok(response) => {
                 // Plugin returned an execution plan - execute it via loop_lib
                 self.execute_plan(&response.plan, root_dir, options)
@@ -542,7 +539,6 @@ impl SubprocessPluginManager {
     }
 
     /// Get list of all available commands from all plugins
-    #[allow(dead_code)]
     pub fn available_commands(&self) -> Vec<(&str, &str)> {
         let mut commands = Vec::new();
         for plugin in self.plugins.values() {
@@ -551,25 +547,6 @@ impl SubprocessPluginManager {
             }
         }
         commands
-    }
-
-    /// Get a plugin by name
-    #[allow(dead_code)]
-    pub fn get_plugin(&self, name: &str) -> Option<&SubprocessPlugin> {
-        self.plugins.get(name)
-    }
-
-    /// Get a plugin that handles a specific command (e.g., "git" for "git status")
-    #[allow(dead_code)]
-    pub fn get_plugin_for_command(&self, command: &str) -> Option<&SubprocessPlugin> {
-        let cmd_parts: Vec<&str> = command.split_whitespace().collect();
-        if cmd_parts.is_empty() {
-            return None;
-        }
-
-        // First word is likely the plugin name
-        let plugin_name = cmd_parts[0];
-        self.plugins.get(plugin_name)
     }
 
     /// Get list of all plugins with their descriptions
@@ -784,6 +761,7 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_plugin_protocol::{PlannedCommand, PluginHelp};
 
     #[test]
     fn test_plugin_manager_new() {
@@ -1092,7 +1070,7 @@ mod tests {
         assert!(help.note.is_none());
     }
 
-    // ============ PluginResponse Parsing Tests ============
+    // ============ PlanResponse Parsing Tests ============
 
     #[test]
     fn test_plugin_response_basic() {
@@ -1104,7 +1082,7 @@ mod tests {
                 ]
             }
         }"#;
-        let response: PluginResponse = serde_json::from_str(json).unwrap();
+        let response: PlanResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.plan.commands.len(), 2);
         assert_eq!(response.plan.commands[0].dir, "./repo1");
         assert_eq!(response.plan.commands[0].argv, ["git", "status"]);
@@ -1123,7 +1101,7 @@ mod tests {
                 "parallel": true
             }
         }"#;
-        let response: PluginResponse = serde_json::from_str(json).unwrap();
+        let response: PlanResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.plan.commands.len(), 1);
         assert_eq!(response.plan.parallel, Some(true));
     }
@@ -1138,7 +1116,7 @@ mod tests {
                 "parallel": false
             }
         }"#;
-        let response: PluginResponse = serde_json::from_str(json).unwrap();
+        let response: PlanResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.plan.parallel, Some(false));
     }
 
@@ -1149,7 +1127,7 @@ mod tests {
                 "commands": []
             }
         }"#;
-        let response: PluginResponse = serde_json::from_str(json).unwrap();
+        let response: PlanResponse = serde_json::from_str(json).unwrap();
         assert!(response.plan.commands.is_empty());
     }
 
@@ -1277,7 +1255,7 @@ mod tests {
     fn test_plugin_response_invalid_json() {
         // Invalid JSON should fail to parse
         let json = r#"{"plan": "not an object"}"#;
-        let result: Result<PluginResponse, _> = serde_json::from_str(json);
+        let result: Result<PlanResponse, _> = serde_json::from_str(json);
         assert!(result.is_err());
     }
 
@@ -1285,7 +1263,7 @@ mod tests {
     fn test_plugin_response_missing_plan() {
         // Missing plan field should fail
         let json = r#"{"commands": []}"#;
-        let result: Result<PluginResponse, _> = serde_json::from_str(json);
+        let result: Result<PlanResponse, _> = serde_json::from_str(json);
         assert!(result.is_err());
     }
 
@@ -1369,74 +1347,5 @@ mod tests {
             cmd.argv,
             ["echo", "\"hello world\" && echo 'single quotes'"]
         );
-    }
-
-    // ============ get_plugin_for_command Tests ============
-
-    #[test]
-    fn test_get_plugin_for_command_found() {
-        let mut manager = SubprocessPluginManager::new();
-        manager.plugins.insert(
-            "git".to_string(),
-            SubprocessPlugin {
-                path: std::path::PathBuf::from("/fake/meta-git"),
-                info: PluginInfo {
-                    name: "git".to_string(),
-                    version: "1.0.0".to_string(),
-                    commands: vec!["git status".to_string()],
-                    description: None,
-                    help: None,
-                },
-            },
-        );
-
-        let plugin = manager.get_plugin_for_command("git status");
-        assert!(plugin.is_some());
-        assert_eq!(plugin.unwrap().info.name, "git");
-    }
-
-    #[test]
-    fn test_get_plugin_for_command_not_found() {
-        let manager = SubprocessPluginManager::new();
-        let plugin = manager.get_plugin_for_command("unknown command");
-        assert!(plugin.is_none());
-    }
-
-    #[test]
-    fn test_get_plugin_for_command_empty() {
-        let manager = SubprocessPluginManager::new();
-        let plugin = manager.get_plugin_for_command("");
-        assert!(plugin.is_none());
-    }
-
-    // ============ get_plugin Tests ============
-
-    #[test]
-    fn test_get_plugin_found() {
-        let mut manager = SubprocessPluginManager::new();
-        manager.plugins.insert(
-            "test".to_string(),
-            SubprocessPlugin {
-                path: std::path::PathBuf::from("/fake/meta-test"),
-                info: PluginInfo {
-                    name: "test".to_string(),
-                    version: "2.0.0".to_string(),
-                    commands: vec![],
-                    description: Some("Test plugin".to_string()),
-                    help: None,
-                },
-            },
-        );
-
-        let plugin = manager.get_plugin("test");
-        assert!(plugin.is_some());
-        assert_eq!(plugin.unwrap().info.version, "2.0.0");
-    }
-
-    #[test]
-    fn test_get_plugin_not_found() {
-        let manager = SubprocessPluginManager::new();
-        let plugin = manager.get_plugin("nonexistent");
-        assert!(plugin.is_none());
     }
 }

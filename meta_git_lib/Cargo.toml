@@ -9,9 +9,7 @@ description = "Reusable git operations for meta plugins"
 [dependencies]
 meta_core = { path = "../meta_core" }
 meta_cli = { path = "../meta_cli", package = "meta" }
-loop_lib = { path = "../loop_lib" }
 anyhow = "1"
-indicatif = "0.17"
 console = "0.15"
 dirs = "5.0"
 chrono = { version = "0.4", features = ["serde"] }
@@ -23,3 +21,6 @@ serde_yaml_ng = "0.10"
 [dev-dependencies]
 tempfile = "3.3"
 serial_test = "3.0"
+
+[lints]
+workspace = true

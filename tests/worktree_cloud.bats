@@ -3,7 +3,7 @@
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 # Integration tests for `meta git worktree` cloud/agent extensions (meta-6)
-# Tests: --meta, --ephemeral, --ttl, --from-ref, prune, lifecycle hooks,
+# Tests: --meta, --ephemeral, --ttl, <commit-ish>, prune, lifecycle hooks,
 #         context detection, ephemeral exec, per-worktree records
 
 setup() {
@@ -177,58 +177,6 @@ assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
     [ ! -e .worktrees/ttl-bad ]
 }
 
-# ============ --from-ref ============
-
-@test "worktree create --from-ref creates branch from ref" {
-    # Create a tag in backend repo to use as ref
-    git -C backend tag v1.0.0
-
-    run "$META_BIN" git worktree create from-tag --repo backend --from-ref v1.0.0
-    [ "$status" -eq 0 ]
-    [ -d ".worktrees/from-tag/backend" ]
-
-    # The branch should exist and point to same commit as the tag
-    TAG_SHA=$(git -C backend rev-parse v1.0.0)
-    WT_SHA=$(git -C ".worktrees/from-tag/backend" rev-parse HEAD)
-    [ "$TAG_SHA" = "$WT_SHA" ]
-}
-
-@test "worktree create --from-ref with commit hash" {
-    HASH=$(git -C backend rev-parse HEAD)
-
-    run "$META_BIN" git worktree create from-hash --repo backend --from-ref "$HASH"
-    [ "$status" -eq 0 ]
-    [ -d ".worktrees/from-hash/backend" ]
-
-    WT_SHA=$(git -C ".worktrees/from-hash/backend" rev-parse HEAD)
-    [ "$HASH" = "$WT_SHA" ]
-}
-
-@test "worktree create --from-ref nonexistent ref warns and skips" {
-    run "$META_BIN" git worktree create bad-ref --repo backend --from-ref nonexistent-ref-xyz
-    # Should either fail or warn — the repo should be skipped
-    if [ "$status" -eq 0 ]; then
-        # If it succeeded, the repo should not have been created
-        [ ! -d ".worktrees/bad-ref/backend" ] || [[ "$output" == *"warning"* ]]
-    fi
-}
-
-@test "worktree create --from-ref multi-repo applies to all" {
-    git -C backend tag shared-base
-    git -C frontend tag shared-base
-
-    run "$META_BIN" git worktree create from-ref-multi --repo backend --repo frontend --from-ref shared-base
-    [ "$status" -eq 0 ]
-    [ -d ".worktrees/from-ref-multi/backend" ]
-    [ -d ".worktrees/from-ref-multi/frontend" ]
-}
-
-@test "worktree create --from-ref and --from-pr mutual exclusion" {
-    run "$META_BIN" git worktree create bad-combo --repo backend --from-ref v1.0.0 --from-pr org/repo#123
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"cannot be used with"* ]] || [[ "$output" == *"Cannot specify both"* ]] || [[ "$output" == *"mutually exclusive"* ]]
-}
-
 # ============ Positional <commit-ish> ============
 
 @test "worktree create positional commit-ish creates branch from tag" {
@@ -262,12 +210,6 @@ assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
     [ "$status" -eq 0 ]
     [ -d ".worktrees/pos-multi/backend" ]
     [ -d ".worktrees/pos-multi/frontend" ]
-}
-
-@test "worktree create positional and --from-ref conflict" {
-    run "$META_BIN" git worktree create pos-conflict v1.0.0 --from-ref v1.0.0 --repo backend
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"cannot be used with"* ]] || [[ "$output" == *"Cannot specify both"* ]] || [[ "$output" == *"mutually exclusive"* ]]
 }
 
 @test "worktree create positional and --from-pr conflict" {

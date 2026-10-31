@@ -2,28 +2,23 @@
 //!
 //! Provides project management commands for meta repositories.
 
-use meta_cli::config::{self, MetaTreeNode, ProjectInfo};
-use meta_cli::display::{escape, escape_path};
 use meta_cli::worktree;
+use meta_core::config::{self, MetaTreeNode, ProjectInfo};
+use meta_core::display::{escape, escape_path};
 use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 
-pub use meta_plugin_protocol::{
-    output_execution_plan, CommandResult, ExecutionPlan, PlanResponse, PlannedCommand,
-};
+use meta_plugin_protocol::CommandResult;
 
 /// Options passed to execute_command
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ExecuteOptions {
-    pub dry_run: bool,
     pub json_output: bool,
     pub recursive: bool,
     pub depth: Option<usize>,
-    pub verbose: bool,
-    pub parallel: bool,
     /// `--include` or `--exclude` was given
     pub filtered: bool,
 }
@@ -134,7 +129,7 @@ pub fn execute_command(
     // missing repos in its own .meta.yaml (meta_cli sends the list either way;
     // without --recursive only the root config counts)
     if options.recursive && !provided_projects.is_empty() {
-        return execute_command_recursive(command, options, provided_projects, cwd);
+        return execute_command_recursive(command, provided_projects, cwd);
     }
 
     // The workspace's own config: the nearest one at or above cwd, as meta
@@ -159,7 +154,7 @@ pub fn execute_command(
                 CommandResult::Message("All projects are cloned and present.".to_string())
             } else {
                 // Print missing repos (uses visual formatting)
-                print_missing(&missing, root);
+                print_missing(&missing);
                 CommandResult::Message(format!(
                     "{} project(s) missing. Run 'meta git update' to clone them.",
                     missing.len()
@@ -278,11 +273,10 @@ Examples:
 /// its own .meta.yaml file with additional projects to check/sync.
 fn execute_command_recursive(
     command: &str,
-    _options: &ExecuteOptions,
     provided_projects: &[String],
     cwd: &Path,
 ) -> CommandResult {
-    let mut all_missing: Vec<(String, String)> = Vec::new();
+    let mut all_missing: Vec<String> = Vec::new();
 
     // Check the root meta config first
     // A config that is refused is an error, not "nothing missing"
@@ -295,9 +289,7 @@ fn execute_command_recursive(
             Ok(projects) => projects,
             Err(e) => return CommandResult::Error(format!("{e:#}")),
         };
-        for (name, url) in find_missing_projects(&projects, cwd) {
-            all_missing.push((name, url));
-        }
+        all_missing.extend(find_missing_projects(&projects, cwd));
     }
 
     // Check each provided project directory for its own meta config
@@ -313,11 +305,7 @@ fn execute_command_recursive(
                 Ok(projects) => projects,
                 Err(e) => return CommandResult::Error(format!("{e:#}")),
             };
-            for (name, url) in find_missing_projects(&projects, &project_dir) {
-                // Use the full path relative to cwd
-                let full_path = format!("{project_path}/{name}");
-                all_missing.push((full_path, url));
-            }
+            all_missing.extend(find_missing_projects(&projects, &project_dir));
         }
     }
 
@@ -326,11 +314,7 @@ fn execute_command_recursive(
             if all_missing.is_empty() {
                 CommandResult::Message("All projects are cloned and present.".to_string())
             } else {
-                // Print all missing repos
-                for (name, url) in &all_missing {
-                    meta_git_lib::print_missing_repo(name, url, &cwd.join(name));
-                }
-                println!();
+                print_missing(&all_missing);
                 CommandResult::Message(format!(
                     "{} project(s) missing. Run 'meta git update' to clone them.",
                     all_missing.len()
@@ -704,28 +688,6 @@ fn find_dependents(project_name: &str, all_projects: &[ProjectInfo]) -> Option<V
 // Helper Functions
 // ============================================================================
 
-/// Get help text for the plugin
-pub fn get_help_text() -> &'static str {
-    r#"meta project - Project Inspection Plugin
-
-Commands:
-  meta project list         List all projects defined in .meta.yaml (alias: ls)
-  meta project check        Check if all projects in .meta.yaml are cloned locally
-  meta project dependents   List projects that depend on a given project
-
-Options for list:
-  --json               Output as JSON
-  --recursive, -r      Include nested meta repo children
-  --depth N            Maximum recursion depth (default: unlimited)
-
-Examples:
-  meta project dependents meta_git_lib          # Who depends on meta_git_lib?
-  meta project dependents meta_git_lib --json   # JSON output
-
-To clone missing projects, use: meta git update
-"#
-}
-
 fn parse_meta_projects(meta_path: &Path) -> anyhow::Result<HashMap<String, String>> {
     let (projects, _ignore) = config::parse_meta_config(meta_path)?;
     let mut map = HashMap::new();
@@ -738,21 +700,19 @@ fn parse_meta_projects(meta_path: &Path) -> anyhow::Result<HashMap<String, Strin
     Ok(map)
 }
 
-fn find_missing_projects(
-    projects: &HashMap<String, String>,
-    base_dir: &Path,
-) -> Vec<(String, String)> {
+/// The URLs of the projects not cloned under `base_dir`.
+fn find_missing_projects(projects: &HashMap<String, String>, base_dir: &Path) -> Vec<String> {
     projects
         .iter()
         .filter(|(name, _)| !base_dir.join(name).is_dir())
-        .map(|(name, url)| (name.clone(), url.clone()))
+        .map(|(_, url)| url.clone())
         .collect()
 }
 
-fn print_missing(missing: &[(String, String)], cwd: &Path) {
-    if !missing.is_empty() {
-        for (name, url) in missing {
-            meta_git_lib::print_missing_repo(name, url, &cwd.join(name));
+fn print_missing(urls: &[String]) {
+    if !urls.is_empty() {
+        for url in urls {
+            meta_git_lib::print_missing_repo(url);
         }
         println!();
     }
@@ -761,7 +721,24 @@ fn print_missing(missing: &[(String, String)], cwd: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_plugin_protocol::{ExecutionPlan, PlanResponse, PlannedCommand};
     use tempfile::TempDir;
+
+    /// The text of a `Message` result, or `None` for any other result.
+    fn message(result: CommandResult) -> Option<String> {
+        match result {
+            CommandResult::Message(msg) => Some(msg),
+            _ => None,
+        }
+    }
+
+    /// The text of an `Error` result, or `None` for any other result.
+    fn error(result: CommandResult) -> Option<String> {
+        match result {
+            CommandResult::Error(msg) => Some(msg),
+            _ => None,
+        }
+    }
 
     fn comparable_path(path: &Path) -> String {
         comparable_path_str(&path.to_string_lossy())
@@ -778,10 +755,8 @@ mod tests {
         let options = ExecuteOptions::default();
         let result = execute_command("project check", &[], &options, &[], temp_dir.path());
 
-        match result {
-            CommandResult::Error(msg) => assert!(msg.contains("No .meta.yaml")),
-            _ => panic!("Expected Error result"),
-        }
+        let msg = error(result).unwrap();
+        assert!(msg.contains("No .meta.yaml"), "{msg}");
     }
 
     #[test]
@@ -795,12 +770,8 @@ mod tests {
         let args = ["unknown".to_string()];
         let result = execute_command("project", &args, &options, &[], temp_dir.path());
 
-        match result {
-            CommandResult::ShowHelp(Some(msg)) => {
-                assert!(msg.contains("unrecognized command 'project unknown'"))
-            }
-            _ => panic!("Expected ShowHelp result"),
-        }
+        assert!(matches!(result, CommandResult::ShowHelp(Some(msg))
+            if msg.contains("unrecognized command 'project unknown'")));
     }
 
     #[test]
@@ -813,10 +784,8 @@ mod tests {
         let options = ExecuteOptions::default();
         let result = execute_command("project check", &[], &options, &[], temp_dir.path());
 
-        match result {
-            CommandResult::Message(msg) => assert!(msg.contains("All projects are cloned")),
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        assert!(msg.contains("All projects are cloned"));
     }
 
     #[test]
@@ -834,21 +803,9 @@ mod tests {
         let result = execute_command("project sync", &[], &options, &[], temp_dir.path());
 
         // sync command should now return an error directing users to meta git update
-        match result {
-            CommandResult::ShowHelp(Some(msg)) => {
-                assert!(msg.contains("meta git update"));
-            }
-            _ => panic!("Expected ShowHelp result directing to meta git update"),
-        }
-    }
-
-    #[test]
-    fn test_get_help_text() {
-        let help = get_help_text();
-        assert!(help.contains("project check"));
-        assert!(help.contains("project list"));
-        assert!(help.contains("meta git update")); // Points to the right command
-        assert!(!help.contains("project sync")); // sync is removed
+        assert!(
+            matches!(result, CommandResult::ShowHelp(Some(msg)) if msg.contains("meta git update"))
+        );
     }
 
     #[test]
@@ -889,14 +846,10 @@ mod tests {
         let options = ExecuteOptions::default();
         let result = execute_command("project list", &[], &options, &[], temp_dir.path());
 
-        match result {
-            CommandResult::Message(msg) => {
-                assert!(msg.contains("repo1"));
-                assert!(msg.contains("repo2"));
-                assert!(msg.contains(".")); // root indicator
-            }
-            _ => panic!("Expected Message result, got error"),
-        }
+        let msg = message(result).unwrap();
+        assert!(msg.contains("repo1"));
+        assert!(msg.contains("repo2"));
+        assert!(msg.contains(".")); // root indicator
     }
 
     #[test]
@@ -915,18 +868,14 @@ mod tests {
         };
         let result = execute_command("project list", &[], &options, &[], temp_dir.path());
 
-        match result {
-            CommandResult::Message(msg) => {
-                let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-                assert_eq!(parsed["path"], ".");
-                assert!(parsed["projects"].is_array());
-                let projects = parsed["projects"].as_array().unwrap();
-                assert_eq!(projects.len(), 1);
-                assert_eq!(projects[0]["name"], "repo1");
-                assert_eq!(projects[0]["repo"], "git@github.com:org/repo1.git");
-            }
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        assert_eq!(parsed["path"], ".");
+        assert!(parsed["projects"].is_array());
+        let projects = parsed["projects"].as_array().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0]["name"], "repo1");
+        assert_eq!(projects[0]["repo"], "git@github.com:org/repo1.git");
     }
 
     #[test]
@@ -942,12 +891,8 @@ mod tests {
         let options = ExecuteOptions::default();
         let result = execute_command("project ls", &[], &options, &[], temp_dir.path());
 
-        match result {
-            CommandResult::Message(msg) => {
-                assert!(msg.contains("repo1"));
-            }
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        assert!(msg.contains("repo1"));
     }
 
     #[test]
@@ -977,19 +922,15 @@ mod tests {
         };
         let result = execute_command("project list", &[], &options, &[], temp_dir.path());
 
-        match result {
-            CommandResult::Message(msg) => {
-                let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-                let projects = parsed["projects"].as_array().unwrap();
-                assert_eq!(projects.len(), 1);
-                assert_eq!(projects[0]["name"], "child");
-                assert_eq!(projects[0]["is_meta"], true);
-                let sub_projects = projects[0]["projects"].as_array().unwrap();
-                assert_eq!(sub_projects.len(), 1);
-                assert_eq!(sub_projects[0]["name"], "grandchild");
-            }
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let projects = parsed["projects"].as_array().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0]["name"], "child");
+        assert_eq!(projects[0]["is_meta"], true);
+        let sub_projects = projects[0]["projects"].as_array().unwrap();
+        assert_eq!(sub_projects.len(), 1);
+        assert_eq!(sub_projects[0]["name"], "grandchild");
     }
 
     #[test]
@@ -1073,28 +1014,24 @@ mod tests {
         };
         let result = execute_command("project list", &[], &options, &[], temp_dir.path());
 
-        match result {
-            CommandResult::Message(msg) => {
-                let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-                // cwd field should be present and be an absolute path
-                let cwd = parsed["cwd"]
-                    .as_str()
-                    .expect("cwd field should be a string");
-                assert!(
-                    std::path::Path::new(cwd).is_absolute(),
-                    "cwd should be absolute, got: {cwd}"
-                );
-                // root field should be present and be an absolute path
-                let root = parsed["root"]
-                    .as_str()
-                    .expect("root field should be a string");
-                assert!(
-                    std::path::Path::new(root).is_absolute(),
-                    "root should be absolute, got: {root}"
-                );
-            }
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        // cwd field should be present and be an absolute path
+        let cwd = parsed["cwd"]
+            .as_str()
+            .expect("cwd field should be a string");
+        assert!(
+            std::path::Path::new(cwd).is_absolute(),
+            "cwd should be absolute, got: {cwd}"
+        );
+        // root field should be present and be an absolute path
+        let root = parsed["root"]
+            .as_str()
+            .expect("root field should be a string");
+        assert!(
+            std::path::Path::new(root).is_absolute(),
+            "root should be absolute, got: {root}"
+        );
     }
 
     #[test]
@@ -1144,35 +1081,31 @@ mod tests {
         };
         let result = execute_command("project list", &[], &options, &[], &linked);
 
-        match result {
-            CommandResult::Message(msg) => {
-                let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-                let expected_root = comparable_path(&temp_dir.path().canonicalize().unwrap());
-                let expected_linked = comparable_path(&linked.canonicalize().unwrap());
-                let worktree = parsed["worktree"]
-                    .as_object()
-                    .expect("worktree field should be present");
-                assert_eq!(worktree["linked"], true);
-                assert_eq!(
-                    worktree["physical_root"].as_str().map(comparable_path_str),
-                    Some(expected_linked.clone())
-                );
-                assert_eq!(
-                    worktree["canonical_root"].as_str().map(comparable_path_str),
-                    Some(expected_root.clone())
-                );
-                assert_eq!(worktree["name"].as_str(), Some("feature"));
-                assert_eq!(
-                    parsed["root"].as_str().map(comparable_path_str),
-                    Some(expected_root)
-                );
-                assert_eq!(
-                    parsed["cwd"].as_str().map(comparable_path_str),
-                    Some(expected_linked)
-                );
-            }
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let expected_root = comparable_path(&temp_dir.path().canonicalize().unwrap());
+        let expected_linked = comparable_path(&linked.canonicalize().unwrap());
+        let worktree = parsed["worktree"]
+            .as_object()
+            .expect("worktree field should be present");
+        assert_eq!(worktree["linked"], true);
+        assert_eq!(
+            worktree["physical_root"].as_str().map(comparable_path_str),
+            Some(expected_linked.clone())
+        );
+        assert_eq!(
+            worktree["canonical_root"].as_str().map(comparable_path_str),
+            Some(expected_root.clone())
+        );
+        assert_eq!(worktree["name"].as_str(), Some("feature"));
+        assert_eq!(
+            parsed["root"].as_str().map(comparable_path_str),
+            Some(expected_root)
+        );
+        assert_eq!(
+            parsed["cwd"].as_str().map(comparable_path_str),
+            Some(expected_linked)
+        );
     }
 
     #[test]
@@ -1205,27 +1138,23 @@ mod tests {
         // Run from child (nested) directory
         let result = execute_command("project list", &[], &options, &[], &child);
 
-        match result {
-            CommandResult::Message(msg) => {
-                let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-                let cwd = parsed["cwd"]
-                    .as_str()
-                    .expect("cwd field should be a string");
-                let root = parsed["root"]
-                    .as_str()
-                    .expect("root field should be a string");
-                assert!(
-                    std::path::Path::new(root).is_absolute(),
-                    "root should be absolute, got: {root}"
-                );
-                // root must be the outermost workspace root, which is the parent of child
-                assert_ne!(
-                    root, cwd,
-                    "root should differ from cwd when invoked from a nested meta workspace"
-                );
-            }
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        let cwd = parsed["cwd"]
+            .as_str()
+            .expect("cwd field should be a string");
+        let root = parsed["root"]
+            .as_str()
+            .expect("root field should be a string");
+        assert!(
+            std::path::Path::new(root).is_absolute(),
+            "root should be absolute, got: {root}"
+        );
+        // root must be the outermost workspace root, which is the parent of child
+        assert_ne!(
+            root, cwd,
+            "root should differ from cwd when invoked from a nested meta workspace"
+        );
     }
 
     #[test]
@@ -1259,20 +1188,16 @@ mod tests {
         // Run from child directory
         let result = execute_command("project list", &[], &options, &[], &child);
 
-        match result {
-            CommandResult::Message(msg) => {
-                let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-                // Should show root's projects (child), not child's projects (grandchild) at top level
-                let projects = parsed["projects"].as_array().unwrap();
-                assert_eq!(projects.len(), 1);
-                assert_eq!(projects[0]["name"], "child");
-                // And child should have grandchild as nested
-                let sub_projects = projects[0]["projects"].as_array().unwrap();
-                assert_eq!(sub_projects.len(), 1);
-                assert_eq!(sub_projects[0]["name"], "grandchild");
-            }
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        // Should show root's projects (child), not child's projects (grandchild) at top level
+        let projects = parsed["projects"].as_array().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0]["name"], "child");
+        // And child should have grandchild as nested
+        let sub_projects = projects[0]["projects"].as_array().unwrap();
+        assert_eq!(sub_projects.len(), 1);
+        assert_eq!(sub_projects[0]["name"], "grandchild");
     }
 
     #[test]
@@ -1305,16 +1230,12 @@ mod tests {
         // Run from child directory (non-recursive)
         let result = execute_command("project list", &[], &options, &[], &child);
 
-        match result {
-            CommandResult::Message(msg) => {
-                let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-                // Should show child's projects only (grandchild)
-                let projects = parsed["projects"].as_array().unwrap();
-                assert_eq!(projects.len(), 1);
-                assert_eq!(projects[0]["name"], "grandchild");
-            }
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        // Should show child's projects only (grandchild)
+        let projects = parsed["projects"].as_array().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0]["name"], "grandchild");
     }
 
     // ── find_dependents ────────────────────────────────────────
@@ -1441,12 +1362,8 @@ projects:
             temp_dir.path(),
         );
 
-        match result {
-            CommandResult::Message(msg) => {
-                assert_eq!(msg.trim(), "meta_cli");
-            }
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        assert_eq!(msg.trim(), "meta_cli");
     }
 
     #[test]
@@ -1480,12 +1397,8 @@ projects:
             &sub_dir,
         );
 
-        match result {
-            CommandResult::Message(msg) => {
-                assert_eq!(msg.trim(), "app_b");
-            }
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        assert_eq!(msg.trim(), "app_b");
     }
 
     #[test]
@@ -1520,13 +1433,9 @@ projects:
             temp_dir.path(),
         );
 
-        match result {
-            CommandResult::Message(msg) => {
-                let parsed: Vec<String> = serde_json::from_str(&msg).unwrap();
-                assert_eq!(parsed, vec!["b", "c"]);
-            }
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        let parsed: Vec<String> = serde_json::from_str(&msg).unwrap();
+        assert_eq!(parsed, vec!["b", "c"]);
     }
 
     #[test]
@@ -1557,13 +1466,9 @@ projects:
                 temp_dir.path(),
             );
 
-            match result {
-                CommandResult::Message(msg) => {
-                    let parsed: Vec<String> = serde_json::from_str(&msg).unwrap();
-                    assert_eq!(parsed, vec!["b"]);
-                }
-                _ => panic!("Expected Message result for args: {args:?}"),
-            }
+            let msg = message(result).unwrap();
+            let parsed: Vec<String> = serde_json::from_str(&msg).unwrap();
+            assert_eq!(parsed, vec!["b"], "for args: {args:?}");
         }
     }
 
@@ -1592,10 +1497,8 @@ projects:
             &[],
             temp_dir.path(),
         );
-        match result {
-            CommandResult::Message(msg) => assert_eq!(msg.trim(), "app_b"),
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        assert_eq!(msg.trim(), "app_b");
 
         // --depth=1 lib_a variant
         let result = execute_command(
@@ -1605,10 +1508,8 @@ projects:
             &[],
             temp_dir.path(),
         );
-        match result {
-            CommandResult::Message(msg) => assert_eq!(msg.trim(), "app_b"),
-            _ => panic!("Expected Message result"),
-        }
+        let msg = message(result).unwrap();
+        assert_eq!(msg.trim(), "app_b");
     }
 
     #[test]
@@ -1632,15 +1533,8 @@ projects:
             &[],
             temp_dir.path(),
         );
-        match result {
-            CommandResult::Error(msg) => {
-                assert!(
-                    msg.contains("exactly one"),
-                    "Expected 'exactly one' error, got: {msg}"
-                );
-            }
-            _ => panic!("Expected Error result"),
-        }
+        let msg = error(result).unwrap();
+        assert!(msg.contains("exactly one"), "{msg}");
     }
 
     #[test]
@@ -1664,14 +1558,7 @@ projects:
             &[],
             temp_dir.path(),
         );
-        match result {
-            CommandResult::Error(msg) => {
-                assert!(
-                    msg.contains("Unknown project or alias"),
-                    "Expected unknown project error, got: {msg}"
-                );
-            }
-            _ => panic!("Expected Error result"),
-        }
+        let msg = error(result).unwrap();
+        assert!(msg.contains("Unknown project or alias"), "{msg}");
     }
 }

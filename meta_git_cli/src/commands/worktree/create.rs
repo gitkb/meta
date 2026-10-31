@@ -50,20 +50,8 @@ pub(crate) fn handle_create(
             )?;
         }
     }
-    // Merge positional <commit-ish> with hidden --from-ref (clap prevents both)
-    if args.from_ref.is_some() {
-        log::warn!(
-            "--from-ref is deprecated; use positional: meta worktree create <name> <commit-ish>"
-        );
-    }
-    let from_ref_merged = args.commit_ish.or(args.from_ref);
-    let from_ref = from_ref_merged.as_deref();
+    let from_ref = args.commit_ish.as_deref();
     let from_pr_spec = args.from_pr.as_deref();
-
-    // Belt-and-suspenders: clap enforces conflicts, but guard against programmatic construction
-    if from_ref.is_some() && from_pr_spec.is_some() {
-        anyhow::bail!("Cannot specify both a commit-ish and --from-pr");
-    }
 
     let no_deps = args.no_deps;
     let recursive = args.recursive;
@@ -289,7 +277,7 @@ pub(crate) fn handle_create(
         // git accepts the empty directory claimed above).
         if let Some((_, source, branch)) = repos_to_create.iter().find(|(a, _, _)| a == ".") {
             if let Some(r) = missing_ref(source, from_ref)? {
-                // --from-ref: skip root repo if ref doesn't exist (same as child repos)
+                // skip the root repo if the commit-ish doesn't exist there (as for child repos)
                 super::warn_or_bail(
                     strict,
                     format!("Skipping '.': ref '{}' not found", escape(r)),
@@ -321,7 +309,7 @@ pub(crate) fn handle_create(
                 continue;
             }
             if let Some(r) = missing_ref(source, from_ref)? {
-                // --from-ref: skip repos where ref doesn't exist
+                // skip repos where the commit-ish doesn't exist
                 super::warn_or_bail(
                     strict,
                     format!(
@@ -446,7 +434,7 @@ pub(crate) fn handle_create(
     Ok(())
 }
 
-/// The `--from-ref` a repo doesn't have, if any: such repos are skipped. A
+/// The commit-ish a repo doesn't have, if any: such repos are skipped. A
 /// repo git can't read is an error, not a missing ref.
 fn missing_ref<'a>(repo: &std::path::Path, from_ref: Option<&'a str>) -> Result<Option<&'a str>> {
     match from_ref {

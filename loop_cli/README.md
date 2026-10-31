@@ -44,13 +44,13 @@ loop cargo test
 
 ```bash
 # Only specific directories
-loop -i api,web git status
+loop -i api -i web git status
 
 # Exclude directories
-loop -e legacy,deprecated npm test
+loop -e legacy -e deprecated npm test
 
 # Combine filters
-loop -i api,web,worker -e api-legacy git pull
+loop -i api -i web -i worker -e web git pull
 ```
 
 ## Configuration

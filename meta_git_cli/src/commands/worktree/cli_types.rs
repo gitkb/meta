@@ -45,7 +45,8 @@ pub struct CreateArgs {
     #[arg(long = "repo", value_name = "ALIAS[:BRANCH]")]
     pub repos: Vec<RepoSpec>,
 
-    /// Add all repos from .meta.yaml
+    /// Add all repos from .meta.yaml (one that isn't cloned is skipped with
+    /// a warning; an error with --strict)
     #[arg(long, conflicts_with = "repos")]
     pub all: bool,
 
@@ -69,12 +70,12 @@ pub struct CreateArgs {
     #[arg(long = "meta", value_name = "KEY=VALUE")]
     pub custom_meta: Vec<String>,
 
-    /// Fail if commit-ish doesn't exist in all repos (errors instead of warnings)
+    /// Fail where a repo would be skipped (errors instead of warnings)
     ///
-    /// When starting worktrees from a specific tag/SHA/branch,
-    /// repos that don't have that ref are normally skipped with a warning.
-    /// With --strict, missing refs cause the entire operation to fail instead.
-    /// Useful in CI/automation where you want all-or-nothing behavior.
+    /// Repos are normally skipped with a warning when they don't have the
+    /// commit-ish to start from, or (with --all, or as an intermediate
+    /// parent) aren't cloned. With --strict, the entire operation fails
+    /// instead. Useful in CI/automation where you want all-or-nothing behavior.
     #[arg(long)]
     pub strict: bool,
 

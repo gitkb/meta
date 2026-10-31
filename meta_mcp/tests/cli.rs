@@ -59,6 +59,15 @@ fn answers_help_and_version() {
         format!("meta-mcp {}", env!("CARGO_PKG_VERSION"))
     );
 
+    // an unknown argument is refused without echoing control characters
+    let out = meta_mcp(tmp.path(), &["--bad\x1b]0;x\x07\nFORGED"], "", &[]);
+    assert!(!out.status.success());
+    let shown = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !shown.contains('\x1b') && !shown.contains("\nFORGED"),
+        "{shown}"
+    );
+
     let out = meta_mcp(tmp.path(), &["--help"], "", &[]);
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("Usage: meta-mcp"));
@@ -154,11 +163,18 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
     };
     // the workspace's repository ignores its projects, as workspaces do
     repo(".");
-    write(".gitignore", "/a/\n/broken/\n/m/\n/plain/\n");
+    write(".gitignore", "/a/\n/bad/\n/broken/\n/m/\n/pm/\n/plain/\n");
     write(
         ".meta.yaml",
-        "projects:\n  a: {}\n  broken: {}\n  m: {meta: true}\n  plain: {}\n",
+        "projects:\n  a: {}\n  bad: {meta: true}\n  broken: {}\n  m: {meta: true}\n  \
+         pm: {meta: true, tags: [outer]}\n  plain: {}\n",
     );
+    // a meta project whose config can't be read: its error, the others' matches
+    write("bad/.meta.yaml", "{broken");
+    // a plain meta project, with a repository nested in it
+    write("pm/.meta.yaml", "projects:\n  c: {}\n");
+    repo("pm/c");
+    write("pm/c/z.rs", "--flag\n");
     // a project whose .git can't be read: its error, and the others' matches
     write("broken/.git", "not a gitdir\n");
     repo("a");
@@ -197,6 +213,13 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
         Some(serde_json::json!(["y.rs:1:--flag"]))
     );
     assert_eq!(matches("plain"), Some(serde_json::json!(["x.rs:1:--flag"])));
+    // a nested project's files once, as its own
+    assert_eq!(matches("pm/c"), Some(serde_json::json!(["z.rs:1:--flag"])));
+    assert!(entry("pm").is_none(), "{found:?}");
+    assert!(
+        entry("bad").is_some_and(|entry| entry["error"].as_str().is_some()),
+        "{found:?}"
+    );
     // the broken project's error, in place of matches
     assert!(
         entry("broken").is_some_and(|entry| entry.get("matches").is_none()
@@ -205,7 +228,7 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
                 .is_some_and(|e| e.contains("broken"))),
         "{found:?}"
     );
-    assert_eq!(found.len(), 4, "{found:?}");
+    assert_eq!(found.len(), 6, "{found:?}");
 
     // a file git can't read: the matches it could, and what it couldn't
     #[cfg(unix)]
@@ -252,12 +275,8 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
         serde_json::json!(["src/lib.rs:1:--flag"])
     );
     // a search git refuses is reported, not taken for no match
-    let found = call(
-        ws,
-        "meta_search_code",
-        serde_json::json!({"pattern": "\\("}),
-    );
-    assert_eq!(found.as_array().unwrap().len(), 5, "{found}");
+    let found = call(ws, "meta_search_code", serde_json::json!({"pattern": "("}));
+    assert_eq!(found.as_array().unwrap().len(), 8, "{found}");
     assert!(
         found[0]["error"].as_str().is_some_and(|e| !e.is_empty()),
         "{found}"

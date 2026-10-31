@@ -92,6 +92,10 @@ fn main() -> Result<()> {
         config
             .directories
             .retain(|dir| !should_ignore(std::path::Path::new(dir), &config.ignore));
+        anyhow::ensure!(
+            !config.directories.is_empty(),
+            "No directories left after exclusions"
+        );
     }
 
     run(&config, &cli.command)?;

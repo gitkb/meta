@@ -819,11 +819,12 @@ EOF
     printf '{"projects": {"backend": "git@github.com:org/backend.git", "vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git worktree create nested --no-deps --repo vendor/lib
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Intermediate parent 'vendor' for nested repo 'vendor/lib' is not cloned, skipping"* ]]
+    [[ "$output" == *"Intermediate parent 'vendor' for nested repo 'vendor/lib' is not a git repository, skipping"* ]]
     [ -d "$TEST_DIR/.worktrees/nested/vendor/lib" ]
 
     run "$META_BIN" git worktree create strict --no-deps --strict --repo vendor/lib
     [ "$status" -ne 0 ]
+    [[ "$output" != *"skipping"* ]]
     [ ! -e "$TEST_DIR/.worktrees/strict" ]
 }
 

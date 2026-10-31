@@ -651,7 +651,7 @@ impl McpServer {
                     "properties": {
                         "pattern": {
                             "type": "string",
-                            "description": "Search pattern (regex supported)"
+                            "description": "Search pattern: an extended regular expression (as grep -E)"
                         },
                         "file_pattern": {
                             "type": "string",
@@ -1677,45 +1677,56 @@ impl McpServer {
         let projects = self.load_projects(meta_dir)?;
         let tag_filter = tag_filter(args);
 
-        // Each repository once, the ones nested in a meta project too (as
-        // `meta project list --recursive`): a repository's search leaves
-        // out the repositories inside it. Nested ones go by their path.
-        let mut repos: Vec<(String, std::path::PathBuf, Vec<String>)> = Vec::new();
-        for node in config::walk_projects(meta_dir, &projects, None)? {
-            let mut nested: Vec<_> =
-                config::build_project_map(&node.children, meta_dir, &node.info.path)
-                    .into_iter()
-                    .map(|(place, (path, info))| (place, path, info.tags))
-                    .collect();
-            nested.sort();
-            repos.push((
-                node.info.name,
-                meta_dir.join(&node.info.path),
-                node.info.tags,
-            ));
-            repos.extend(nested);
+        // Each project once, the ones nested in a meta project too (as
+        // `meta project list --recursive`), named by its path in the
+        // workspace. A project whose nested config can't be read is an
+        // error of its own.
+        let mut targets = Vec::new();
+        for project in &projects {
+            match config::walk_projects(meta_dir, std::slice::from_ref(project), None) {
+                Ok(tree) => search_targets(&tree, "", &mut targets),
+                Err(e) => targets.push(SearchTarget {
+                    place: project.path.clone(),
+                    tags: project.tags.clone(),
+                    nested: Err(format!("{e:#}")),
+                }),
+            }
         }
 
         let mut results = Vec::new();
 
-        for (name, project_path, tags) in repos {
+        for SearchTarget {
+            place: name,
+            tags,
+            nested,
+        } in targets
+        {
+            let project_path = meta_dir.join(&name);
             if tag_filter.is_some_and(|tag| !has_any_tag(tag, &tags)) || !project_path.exists() {
                 continue;
             }
+            let nested = match nested {
+                Ok(nested) => nested,
+                Err(error) => {
+                    results.push(serde_json::json!({ "project": name, "error": error }));
+                    continue;
+                }
+            };
 
             // git's search never looks in .git or at what .gitignore leaves
             // out, and takes the pattern after -e, never as an option. A
             // project that is no repository of its own is a plain directory.
-            // The user's git config doesn't change the results: no colour,
-            // basic regular expressions, file names as they are.
+            // The user's git config doesn't change the results: no colour or
+            // column, extended regular expressions, file names as they are.
             let mut cmd = git(&project_path);
             cmd.args([
                 "-c",
                 "core.quotePath=false",
                 "grep",
                 "--no-color",
+                "--no-column",
                 "--no-recurse-submodules",
-                "-G",
+                "-E",
                 "-n",
                 "-I",
             ]);
@@ -1752,6 +1763,12 @@ impl McpServer {
             if let Some(fp) = file_pattern {
                 cmd.arg(format!(":(glob)**/{fp}"));
             }
+            // the projects nested in it are searched as their own
+            cmd.args(
+                nested
+                    .iter()
+                    .map(|path| format!(":(exclude,literal){path}")),
+            );
 
             let out = match cmd.output() {
                 Ok(out) => out,
@@ -2306,8 +2323,6 @@ fn string_list(args: &serde_json::Value, key: &str) -> Result<Option<Vec<String>
     }
 }
 
-/// Whether `project_tags` holds any of the comma-separated `tags`, as
-/// `meta --tag` selects.
 /// `meta --json [--tag <tag>] git status` in `meta_dir`: structured output,
 /// of the projects `tag` selects.
 fn git_status_command(meta_dir: &std::path::Path, args: &serde_json::Value) -> Command {
@@ -2320,6 +2335,38 @@ fn git_status_command(meta_dir: &std::path::Path, args: &serde_json::Value) -> C
     cmd
 }
 
+/// A project for `meta_search_code`: its path in the workspace, its tags,
+/// and the paths, from it, of the projects nested in it (or why its nested
+/// config can't be read).
+struct SearchTarget {
+    place: String,
+    tags: Vec<String>,
+    nested: Result<Vec<String>, String>,
+}
+
+/// Every project of `nodes` and the ones nested in them, parents first,
+/// with paths under `prefix`.
+fn search_targets(nodes: &[config::MetaTreeNode], prefix: &str, out: &mut Vec<SearchTarget>) {
+    for node in nodes {
+        let place = match prefix {
+            "" => node.info.path.clone(),
+            prefix => format!("{prefix}/{}", node.info.path),
+        };
+        out.push(SearchTarget {
+            place: place.clone(),
+            tags: node.info.tags.clone(),
+            nested: Ok(node
+                .children
+                .iter()
+                .map(|child| child.info.path.clone())
+                .collect()),
+        });
+        search_targets(&node.children, &place, out);
+    }
+}
+
+/// Whether `project_tags` holds any of the comma-separated `tags`, as
+/// `meta --tag` selects.
 fn has_any_tag(tags: &str, project_tags: &[String]) -> bool {
     tags.split(',')
         .map(str::trim)

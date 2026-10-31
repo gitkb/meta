@@ -189,10 +189,10 @@ pub(crate) fn handle_create(
                 escape_path(source)
             ),
         };
-        if !use_all {
+        if !use_all || strict {
             anyhow::bail!("{why}");
         }
-        super::warn_or_bail(strict, format!("{why}, skipping"))?;
+        super::warn_or_bail(false, format!("{why}, skipping"))?;
     }
     let mut repos_to_create = cloned;
     // One worktree per place in the set: a repeated --repo, or a repo named
@@ -929,14 +929,19 @@ fn ensure_intermediate_parents(
                 continue;
             };
             if meta_core::gitdir::common_dir(&parent_source)?.is_none() {
-                super::warn_or_bail(
-                    strict,
-                    format!(
-                        "Intermediate parent '{}' for nested repo '{}' is not cloned, skipping",
-                        escape(&parent_alias),
-                        escape(alias)
-                    ),
-                )?;
+                let why = format!(
+                    "Intermediate parent '{}' for nested repo '{}' {}",
+                    escape(&parent_alias),
+                    escape(alias),
+                    match parent_source.exists() {
+                        false => "is not cloned",
+                        true => "is not a git repository",
+                    }
+                );
+                if strict {
+                    anyhow::bail!("{why}");
+                }
+                super::warn_or_bail(false, format!("{why}, skipping"))?;
                 continue;
             }
 

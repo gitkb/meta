@@ -149,6 +149,7 @@ EOF
     run "$META_BIN" git worktree create strict --all --strict
     [ "$status" -ne 0 ]
     [[ "$output" == *"'frontend' is not cloned"* ]]
+    [[ "$output" != *"skipping"* ]]
     [ ! -e ".worktrees/strict" ]
 
     run "$META_BIN" git worktree create one --repo frontend

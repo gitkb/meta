@@ -86,6 +86,14 @@ fn test_expand_directories() {
     assert!(expanded.contains(&dir1.to_str().unwrap().to_string()));
     assert!(expanded.contains(&dir2.to_str().unwrap().to_string()));
     assert!(!expanded.contains(&subdir.to_str().unwrap().to_string())); // Ensure subdirectories are not included
+
+    // the root excluded, its children still run
+    let root = temp_dir.path().to_str().unwrap().to_string();
+    let expanded =
+        crate::expand_directories(std::slice::from_ref(&root), std::slice::from_ref(&root))
+            .unwrap();
+    assert!(!expanded.contains(&root));
+    assert!(expanded.contains(&dir1.to_str().unwrap().to_string()));
 }
 
 #[test]

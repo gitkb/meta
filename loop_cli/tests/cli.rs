@@ -24,4 +24,14 @@ fn an_exclusion_holds_for_directories_named_outright() {
         .filter_map(|line| std::path::Path::new(line.trim()).strip_prefix(&root).ok())
         .collect();
     assert_eq!(ran, [std::path::Path::new("b")], "{shown}");
+
+    // nothing left is said, not run silently
+    let out = Command::new(env!("CARGO_BIN_EXE_loop"))
+        .args(["-i", "a", "-e", "a", "--", "pwd"])
+        .current_dir(tmp.path())
+        .env("HOME", tmp.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("No directories left after exclusions"));
 }

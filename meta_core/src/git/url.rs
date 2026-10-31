@@ -359,10 +359,6 @@ fn redact(text: &str, ends: fn(char) -> bool) -> Cow<'_, str> {
     let mut shown = String::new();
     let mut copied = 0;
     for userinfo in hidden(text, ends) {
-        // a URL inside a userinfo hidden already
-        if userinfo.start < copied {
-            continue;
-        }
         shown.push_str(text.get(copied..userinfo.start).unwrap_or_default());
         shown.push_str("***");
         copied = userinfo.end;

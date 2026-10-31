@@ -79,25 +79,14 @@ where
             "git {} failed in {}: {}",
             escape(&shown()),
             escape_path(dir),
-            escape(&redact_git_output(&hide_args(
-                &args,
+            escape(&redact_git_output(
                 String::from_utf8_lossy(&output.stderr).trim_ascii()
-            )))
+            ))
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout)
         .trim_end_matches(['\n', '\r'])
         .to_string())
-}
-
-/// git's `output` for `args` without the credentials of a URL among them,
-/// wherever git or a remote helper shows it (see [`GitUrl::hide_in`]).
-fn hide_args(args: &[impl AsRef<OsStr>], output: &str) -> String {
-    args.iter().fold(output.to_string(), |output, arg| {
-        GitUrl::from(arg.as_ref().to_string_lossy().as_ref())
-            .hide_in(&output)
-            .into_owned()
-    })
 }
 
 /// The output of `git <args>` in `dir` (see [`run`]), or `None` if git fails.

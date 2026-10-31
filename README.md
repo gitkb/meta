@@ -234,7 +234,7 @@ projects:
 - No two projects share a path, and no project's path lies inside another's. Paths are compared after following existing symlinks, and without regard to case (some filesystems ignore it). Project names may not be equal or nested either, also without regard to case. A repo inside another repo goes in a nested meta config (`meta: true`).
 - No name, path, repo, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline), a bidirectional-text control, or an invisible format character (such as a zero-width space).
 - `repo` does not start with `-`.
-- Only `repo` may hold a URL with credentials (`https://user:token@host/...`): meta prints every other value, so a name, path, tag, `provides` or `depends_on` value holding one is refused (a lone user name counts, as `https://org@host/...` may hold a token in its place).
+- Only `repo` may hold a URL with credentials (`https://user:token@host/...`), and meta prints it with them hidden (`https://***@host/...`). It prints every other value, so a name, path, tag, `provides` or `depends_on` value holding one is refused (a lone user name counts, as `https://org@host/...` may hold a token in its place; an ssh user such as `ssh://git@host/...` doesn't).
 - Tags contain no whitespace and no `,`.
 - `worktrees_dir`, if set, lies inside the workspace (relative, or absolute but inside), not inside a project and not in `.git`. For a directory elsewhere, set `META_WORKTREES`.
 - A key meta doesn't know at the top level, under `defaults` or under `worktree` is an error, so a misspelling isn't ignored. Project entries may carry keys of their own for other tools.

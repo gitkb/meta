@@ -330,9 +330,11 @@ impl StderrTail {
                         let _ = reader.skip_until(b'\n');
                     }
                     let line = String::from_utf8_lossy(&buf);
-                    // ASCII only: a Unicode space may end a cut password
-                    let line = url.hide_in(line.trim_ascii_end());
-                    let line = meta_core::git::redact_git_output(&line);
+                    // ASCII only: a Unicode space may end a cut password. The
+                    // known URL goes after the cut, which needs the line's
+                    // length as read
+                    let line = meta_core::git::redact_git_output(line.trim_ascii_end());
+                    let line = url.hide_in(&line).into_owned();
                     buf.clear();
                     on_line(&line);
                     let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());
@@ -409,9 +411,14 @@ mod tests {
         };
         let helper_cut = pad_cut("warning: foo::https://alice:ghp_SECRET".into());
         let address_cut = pad_cut("warning: https://alice:ghp_SECRET".into());
+        // the whole address first, then cut in a second copy
+        let twice_cut = pad_cut(format!(
+            "fatal: cannot open https://alice:ghp_SECRET w@h/r {} retry https://alice:ghp_SECRET",
+            "u".repeat(3990)
+        ));
         let output = format!(
             "{pad}https://alice:ghp_SECRET@h/r\n{git_cut}\n{spaced}\n{git_cut_spaced}\n\
-             {at_space}\n{helper_cut}\n{address_cut}\nfatal: cannot open https://alice:ghp_SECRET w@h/r\n\
+             {at_space}\n{helper_cut}\n{address_cut}\n{twice_cut}\nfatal: cannot open https://alice:ghp_SECRET w@h/r\n\
              fatal: 'https://a:ghp_SECRET@h/r'\n"
         );
         let shown = Arc::new(Mutex::new(String::new()));

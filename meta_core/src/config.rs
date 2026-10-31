@@ -202,14 +202,13 @@ pub fn redact_config_text(text: &str) -> Cow<'_, str> {
 fn redact_strings(value: &mut serde_yaml_ng::Value) -> bool {
     use serde_yaml_ng::Value;
     match value {
-        Value::String(s) => {
-            let shown = redact_urls(s);
-            let hidden = shown != s.as_str();
-            if hidden {
-                *s = shown.into_owned();
+        Value::String(s) => match redact_urls(s) {
+            Cow::Owned(shown) => {
+                *s = shown;
+                true
             }
-            hidden
-        }
+            Cow::Borrowed(_) => false,
+        },
         Value::Sequence(items) => items
             .iter_mut()
             .fold(false, |hid, v| redact_strings(v) | hid),

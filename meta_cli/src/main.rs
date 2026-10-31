@@ -832,7 +832,9 @@ fn handle_command_dispatch(
                     eprintln!(
                         "{}: no projects match tag filter '{}' in worktree '{}'",
                         "warning".yellow().bold(),
-                        escape(cli.tag.as_deref().unwrap_or("")),
+                        escape(&meta_core::git::redact_urls(
+                            cli.tag.as_deref().unwrap_or("")
+                        )),
                         escape(&task_name)
                     );
                     return Ok(());
@@ -941,12 +943,12 @@ fn handle_command_dispatch(
     let Some(workspace) = Workspace::find(&current_dir, cli.config.as_ref())? else {
         let config_name = cli
             .config
-            .as_ref()
-            .map(|p| escape(&meta_core::git::redact_urls(&p.to_string_lossy())).into_owned())
-            .unwrap_or_else(|| config::META_CONFIG_NAME.to_string());
-        eprintln!("Error: Could not find meta config file '{config_name}'");
-        eprintln!("Searched from {} up to root", escape_path(&current_dir));
-        std::process::exit(1);
+            .as_deref()
+            .map_or_else(|| config::META_CONFIG_NAME.to_string(), escape_path);
+        anyhow::bail!(
+            "Could not find meta config file '{config_name}'\nSearched from {} up to root",
+            escape_path(&current_dir)
+        );
     };
     let meta_dir = workspace.dir.as_path();
     let parallel = parallel_for(Some(&workspace.defaults));

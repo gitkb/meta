@@ -134,6 +134,9 @@ meta_without_token() {
     [[ "$output" == *"(they differ only in their credentials)"* ]] || false
     [[ "$output" != *"ghp_OLD"* ]] || false
     [ "$(git -C lib config remote.origin.url)" = "https://$TOKEN@example.invalid/org/lib.git" ]
+    # a set of one project, where --tag matches nothing
+    git -C lib worktree add -q -b wt2 "$WS/.worktrees/wt2/lib"
+    (cd .worktrees/wt2 && meta_without_token --tag "https://$TOKEN@example.invalid/x" exec -- true)
 
     cd "$TEST_DIR"
     meta_without_token --dry-run git clone "https://$TOKEN@example.invalid/org/meta.git" fresh

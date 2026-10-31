@@ -1163,7 +1163,11 @@ projects:
             "projects:\n  a:\n    repo: git@github.com:org/a.git\n",
         )
         .unwrap();
-        for args in [&["a", "b"][..], &["--depth", "1", "a"], &["a", "--bogus\x1b[2J"]] {
+        for args in [
+            &["a", "b"][..],
+            &["--depth", "1", "a"],
+            &["a", "--bogus\x1b[2J"],
+        ] {
             let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
             let result = execute_command(
                 "project dependents",

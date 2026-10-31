@@ -953,8 +953,8 @@ impl PluginInstaller {
         for plugin_name in installed {
             let plugin_path = self.plugins_dir.join(plugin_name);
             // A plugin answers --meta-plugin-info with its info, in time
-            let answered = crate::subprocess_plugins::probe_plugin_info(&plugin_path)
-                .and_then(|info| {
+            let answered =
+                crate::subprocess_plugins::probe_plugin_info(&plugin_path).and_then(|info| {
                     info.map(|_| ()).ok_or_else(|| {
                         anyhow::anyhow!("Plugin did not answer --meta-plugin-info with its info")
                     })

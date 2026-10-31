@@ -26,7 +26,11 @@ fn repo(dir: &Path, branch: &str) {
             .env("GIT_CONFIG_GLOBAL", dir.join("no-gitconfig"))
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 }
 
@@ -37,7 +41,11 @@ fn a_hooks_repository_variables_do_not_reach_metas_git() {
     let workspace = tmp.join("workspace");
     repo(&workspace, "on-workspace");
     repo(&workspace.join("a"), "on-a");
-    std::fs::write(workspace.join(".meta.yaml"), "projects:\n  a:\n    path: a\n").unwrap();
+    std::fs::write(
+        workspace.join(".meta.yaml"),
+        "projects:\n  a:\n    path: a\n",
+    )
+    .unwrap();
     // The repository whose hook runs meta, as git sets it up for one
     let hook = tmp.join("hook");
     repo(&hook, "on-hook");
@@ -54,7 +62,11 @@ fn a_hooks_repository_variables_do_not_reach_metas_git() {
             .env("META_DATA_DIR", tmp.join("meta-data"))
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         out
     };
 

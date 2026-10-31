@@ -232,6 +232,12 @@ pub(crate) fn handle_create(
             }
         }
         repos_to_create = kept;
+        if let (true, Some(r)) = (repos_to_create.is_empty(), from_ref) {
+            anyhow::bail!(
+                "No selected repo has ref '{}'; no worktree was created",
+                escape(r)
+            );
+        }
     }
 
     // Where each repo's checkout goes in the set

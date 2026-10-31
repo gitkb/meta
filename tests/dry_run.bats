@@ -172,12 +172,7 @@ preview() {
     preview 0 git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
     [[ "$output" == *"Would create worktree set 'eph'"* ]]
     [[ "$output" == *"Then would run \`touch made-by-exec\` in ., backend and remove the set."* ]]
-    # its filters select as in a run, and a name that is none is an error
-    preview 0 git worktree exec eph --ephemeral --repo backend --include backend -- touch made-by-exec
-    [[ "$output" == *"Then would run \`touch made-by-exec\` in backend and remove the set."* ]]
-    preview 1 git worktree exec eph --ephemeral --repo backend --include typo -- touch made-by-exec
-    [[ "$output" == *"typo"* ]]
-    # as in a run, no filter reads no nested config (here a broken one)
+    # no nested config is read (here a broken one)
     printf '{broken' > "$WS/frontend/.meta.yaml"
     preview 0 git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
     rm "$WS/frontend/.meta.yaml"
@@ -186,9 +181,14 @@ preview() {
     preview 0 git worktree exec eph only-in-frontend --ephemeral --all -- touch made-by-exec
     [[ "$output" == *"Skipping 'backend': ref 'only-in-frontend' not found"* ]]
     [[ "$output" == *"Then would run \`touch made-by-exec\` in frontend and remove the set."* ]]
-    # a set started elsewhere names its repos by its own .meta.yaml: refused
-    preview 1 git worktree exec eph main --ephemeral --repo backend --include backend -- touch made-by-exec
-    [[ "$output" == *"can't preview --include/--exclude for a set started at main"* ]]
+    # a ref no repo has fails as in a run
+    preview 1 git worktree exec eph nosuchref --ephemeral --all -- touch made-by-exec
+    [[ "$output" == *"No selected repo has ref 'nosuchref'; no worktree was created"* ]]
+    preview 1 git worktree create new nosuchref --all
+    [[ "$output" == *"No selected repo has ref 'nosuchref'"* ]]
+    # the set's own .meta.yaml, not yet made, names its repos for a filter
+    preview 1 git worktree exec eph --ephemeral --repo backend --include backend -- touch made-by-exec
+    [[ "$output" == *"can't preview --include/--exclude of exec --ephemeral"* ]]
 }
 
 @test "exec previews" {

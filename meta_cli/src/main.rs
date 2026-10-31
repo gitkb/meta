@@ -98,7 +98,7 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Show what commands would be run without executing them"
+        help = "Show what would change, and change nothing (commands that can't preview refuse it)"
     )]
     dry_run: bool,
 

@@ -232,8 +232,8 @@ fn install_claude_integration(force: bool, update: bool, init: &Init) -> Result<
     let current_dir = std::env::current_dir()?;
     let Some(config) = config::find_meta_config(&current_dir, None)? else {
         anyhow::bail!(
-            "No .meta.yaml in {} or any folder above it. `meta init claude` sets up a \
-             meta workspace; run it inside one.",
+            "No .meta.yaml in {} or any folder above it. `meta init claude` sets up \
+             Claude Code in a meta workspace; run it inside one.",
             escape_path(&current_dir)
         );
     };

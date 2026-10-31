@@ -149,18 +149,13 @@ fn handle_ephemeral_exec(
     if cmd_parts.is_empty() {
         anyhow::bail!("No command specified after --");
     }
-    // A run names the set's repos by the .meta.yaml checked out in it; one
-    // started at another commit may name them otherwise than the workspace
-    let filtered = !args.include.is_empty() || !args.exclude.is_empty();
-    if let Some(start) = args
-        .commit_ish
-        .as_deref()
-        .filter(|_| mode.is_preview() && filtered)
-    {
+    // A run names the set's repos by the .meta.yaml checked out in it, which
+    // a preview hasn't made (a start commit or an existing branch may hold
+    // another): it can't tell what a filter selects
+    if mode.is_preview() && (!args.include.is_empty() || !args.exclude.is_empty()) {
         anyhow::bail!(
-            "--dry-run can't preview --include/--exclude for a set started at {}: its own \
-             .meta.yaml names its repos; nothing was changed",
-            escape(start)
+            "--dry-run can't preview --include/--exclude of exec --ephemeral: the set's own \
+             .meta.yaml names its repos; nothing was changed"
         );
     }
 
@@ -185,30 +180,18 @@ fn handle_ephemeral_exec(
     }
     // Ephemeral worktrees use global_strict=false to ensure creation succeeds
     let planned = super::create::handle_create(create_args, mode, verbose, json, false)?;
-    // A preview made no set: the filters select among the planned checkouts,
-    // named as the workspace names them, as a run would among the made ones
+    // A preview made no set: it names the checkouts a run would make
     if mode.is_preview() {
         let cwd = std::env::current_dir()?;
         let configs = Configs::find_optional(&cwd)?;
         let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
         let wt_dir = worktree_set_dir(&worktree_root, &name)?;
-        let dirs: Vec<String> = planned.iter().map(|p| p.display().to_string()).collect();
-        // as in a run, only a filter reads the configs
-        let names = match configs.as_ref().filter(|_| filtered) {
-            Some(configs) => {
-                let here = &configs.here;
-                let tree = meta_core::config::walk_projects(&here.dir, &here.projects, None)?;
-                repo_filter::repo_names(&here.dir, &here.projects, &tree)
-            }
-            None => Vec::new(),
-        };
-        let selected = repo_filter::select(&args.include, &args.exclude, &dirs, &wt_dir, &names)?;
-        let shown: Vec<String> = selected
+        let shown: Vec<String> = planned
             .iter()
-            .map(|dir| match Path::new(dir).strip_prefix(&wt_dir) {
+            .map(|dest| match dest.strip_prefix(&wt_dir) {
                 Ok(place) if place.as_os_str().is_empty() => ".".to_string(),
                 Ok(place) => place.display().to_string(),
-                Err(_) => dir.clone(),
+                Err(_) => dest.display().to_string(),
             })
             .collect();
         println!(

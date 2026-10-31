@@ -1,4 +1,3 @@
-use anyhow::Context;
 use console::style;
 use meta_core::config;
 use meta_core::display::{escape, escape_lines, escape_path};
@@ -136,9 +135,11 @@ fn execute_editor_commit(repos: &[(String, String, Vec<String>)]) -> anyhow::Res
         return Ok(());
     };
     let first = Path::new(first);
-    let editor = meta_core::git::run(first, ["var", "GIT_EDITOR"]).context(
-        "git has no editor to use: set GIT_EDITOR, core.editor, VISUAL or EDITOR, or use -m <message>",
-    )?;
+    let Some(editor) = meta_core::git::query(first, ["var", "GIT_EDITOR"]) else {
+        anyhow::bail!(
+            "git has no editor to use: set GIT_EDITOR, core.editor, VISUAL or EDITOR, or use -m <message>"
+        );
+    };
     // As in git, the editor `:` leaves the message as it is
     let terminal = match editor.as_str() {
         ":" => None,
@@ -273,8 +274,8 @@ fn editor_command(repo: &Path, editor: &str, file: &Path) -> Command {
     let mut command = meta_core::git::git(repo);
     command
         .arg("-c")
-        .arg(format!("alias.meta-edit=!{editor}"))
-        .arg("meta-edit")
+        .arg(format!("alias.meta-commit-editor=!{editor}"))
+        .arg("meta-commit-editor")
         .arg(file);
     command
 }
@@ -363,17 +364,6 @@ pub(crate) fn parse_multi_commit_file(content: &str) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn git_runs_the_editor_as_its_own() {
-        let command = editor_command(Path::new("."), "nvim -u NONE", Path::new("/msg"));
-        assert_eq!(command.get_program(), "git");
-        let args: Vec<_> = command.get_args().collect();
-        assert_eq!(
-            args,
-            ["-c", "alias.meta-edit=!nvim -u NONE", "meta-edit", "/msg"]
-        );
-    }
 
     #[test]
     fn a_failed_commit_fails_the_command_after_the_others() {

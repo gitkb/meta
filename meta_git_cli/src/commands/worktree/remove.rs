@@ -115,7 +115,7 @@ pub(crate) fn handle_remove(
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else if preview {
         println!(
-            "Would remove worktree '{}' at {}:",
+            "[DRY RUN] Would remove worktree '{}' at {}:",
             escape(name),
             escape_path(&wt_dir)
         );

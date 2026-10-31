@@ -517,30 +517,16 @@ fn main() -> std::process::ExitCode {
         }
         Err(e) => {
             // as Rust prints an error returned from main, but escaped: it can
-            // carry paths and names from git and the filesystem
-            eprintln!("Error: {}", escape_lines(&format!("{e:?}")));
+            // carry paths and names from git and the filesystem, and URLs
+            let message = meta_core::git::redact_urls(&format!("{e:?}")).into_owned();
+            eprintln!("Error: {}", escape_lines(&message));
             std::process::ExitCode::FAILURE
         }
     }
 }
 
 fn run_cli() -> Result<()> {
-    // Log records carry names, versions, paths and URLs from config, the
-    // filesystem and plugin registries: escape them like other output
-    env_logger::Builder::from_default_env()
-        .format(|buf, record| {
-            use std::io::Write;
-            writeln!(
-                buf,
-                "[{} {} {}] {}",
-                buf.timestamp(),
-                record.level(),
-                record.target(),
-                // Newlines too: one from data could forge a log line
-                escape(&record.args().to_string())
-            )
-        })
-        .init();
+    meta_plugin_protocol::init_logger();
 
     let mut cli: Cli = meta_core::args::parse();
 
@@ -849,7 +835,9 @@ fn handle_command_dispatch(
                     eprintln!(
                         "{}: no projects match tag filter '{}' in worktree '{}'",
                         "warning".yellow().bold(),
-                        escape(cli.tag.as_deref().unwrap_or("")),
+                        escape(&meta_core::git::redact_urls(
+                            cli.tag.as_deref().unwrap_or("")
+                        )),
                         escape(&task_name)
                     );
                     return Ok(());
@@ -958,12 +946,12 @@ fn handle_command_dispatch(
     let Some(workspace) = Workspace::find(&current_dir, cli.config.as_ref())? else {
         let config_name = cli
             .config
-            .as_ref()
-            .map(|p| escape_path(p))
-            .unwrap_or_else(|| config::META_CONFIG_NAME.to_string());
-        eprintln!("Error: Could not find meta config file '{config_name}'");
-        eprintln!("Searched from {} up to root", escape_path(&current_dir));
-        std::process::exit(1);
+            .as_deref()
+            .map_or_else(|| config::META_CONFIG_NAME.to_string(), escape_path);
+        anyhow::bail!(
+            "Could not find meta config file '{config_name}'\nSearched from {} up to root",
+            escape_path(&current_dir)
+        );
     };
     let meta_dir = workspace.dir.as_path();
     let parallel = parallel_for(Some(&workspace.defaults));
@@ -984,7 +972,11 @@ fn handle_command_dispatch(
         if cli.verbose {
             println!(
                 "Filtering projects by tags: {:?}",
-                tag_filter.split(',').map(|s| s.trim()).collect::<Vec<_>>()
+                // redacted whole: a password may hold a comma
+                meta_core::git::redact_urls(tag_filter)
+                    .split(',')
+                    .map(str::trim)
+                    .collect::<Vec<_>>()
             );
         }
         meta_projects
@@ -1500,11 +1492,11 @@ fn unrecognized_command_error(
     command_str: &str,
     plugins: &SubprocessPluginManager,
 ) -> ! {
-    let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
+    let first_cmd = command_args.first().map_or("", String::as_str);
+    let first_cmd = escape(&meta_core::git::redact_url(first_cmd)).into_owned();
     eprintln!(
-        "{}: unrecognized command '{}'",
-        "error".red().bold(),
-        escape(first_cmd)
+        "{}: unrecognized command '{first_cmd}'",
+        "error".red().bold()
     );
     let command_str = escape(command_str);
     eprintln!();
@@ -1643,7 +1635,7 @@ mod tests {
         // Simple format: path defaults to project name
         let repo1 = projects.iter().find(|p| p.name == "repo1").unwrap();
         assert_eq!(repo1.path, "repo1");
-        assert_eq!(repo1.repo.as_ref().unwrap(), "git@github.com:org/repo1.git");
+        assert_eq!(repo1.repo, Some("git@github.com:org/repo1.git".into()));
         assert!(repo1.tags.is_empty());
     }
 
@@ -1672,7 +1664,7 @@ mod tests {
         let api = &projects[0];
         assert_eq!(api.name, "api");
         assert_eq!(api.path, "services/api"); // normalized
-        assert_eq!(api.repo.as_ref().unwrap(), "git@github.com:org/api.git");
+        assert_eq!(api.repo, Some("git@github.com:org/api.git".into()));
         assert_eq!(api.tags, vec!["backend", "rust"]);
     }
 
@@ -1709,10 +1701,7 @@ projects:
 
         let web_app = projects.iter().find(|p| p.name == "web-app").unwrap();
         assert_eq!(web_app.path, "web-app");
-        assert_eq!(
-            web_app.repo.as_ref().unwrap(),
-            "git@github.com:org/web-app.git"
-        );
+        assert_eq!(web_app.repo, Some("git@github.com:org/web-app.git".into()));
 
         let api = projects.iter().find(|p| p.name == "api").unwrap();
         assert_eq!(api.path, "backend/api"); // normalized

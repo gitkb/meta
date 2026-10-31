@@ -12,6 +12,8 @@ use super::cli_types::DiffArgs;
 pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
     let name = &args.name;
     let base_ref = &args.base;
+    // shown without credentials; git gets it as typed
+    let shown_base = meta_core::git::redact_urls(base_ref).into_owned();
 
     let repos = discover_and_validate_worktree(name)?;
 
@@ -22,7 +24,7 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
                 git_diff_stat(&r.path, base_ref).unwrap_or((0, 0, 0, vec![]));
             DiffRepoEntry {
                 alias: r.alias.clone(),
-                base_ref: base_ref.to_string(),
+                base_ref: shown_base.clone(),
                 files_changed,
                 insertions,
                 deletions,
@@ -47,7 +49,7 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
     if json {
         let output = DiffOutput {
             name: name.to_string(),
-            base: base_ref.to_string(),
+            base: shown_base.clone(),
             repos: diff_entries,
             totals: DiffTotals {
                 repos_changed: total_repos_changed,
@@ -59,7 +61,7 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         // Human mode: always show stat summary
-        println!("{} vs {}:", name.bold(), escape(base_ref));
+        println!("{} vs {}:", name.bold(), escape(&shown_base));
         for d in &diff_entries {
             if d.files_changed > 0 {
                 let insertions = d.insertions;
@@ -84,7 +86,7 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
                 total_repos_changed,
             );
         } else {
-            println!("  No changes vs {}", escape(base_ref));
+            println!("  No changes vs {}", escape(&shown_base));
         }
     }
 

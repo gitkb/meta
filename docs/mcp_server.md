@@ -73,7 +73,7 @@ Runs `meta exec` with the given program and arguments.
 ```
 
 #### meta_get_config
-Get the raw meta configuration file.
+Get the meta configuration file as written, with the credentials in its URLs hidden (`https://***@host/org/repo`). When the file holds credentials, or its text reads as if it might (one-line JSON can), its values are written out again as YAML, redacted, without its comments or formatting. A file meta can't parse is shown with its URLs redacted, or not at all if it holds a `\`.
 
 **Parameters:** None
 

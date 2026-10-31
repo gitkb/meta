@@ -4,9 +4,11 @@
 //! meta's YAML configuration files.
 
 use crate::display::{escape, escape_path, is_unsafe_char};
+use crate::git::{redact_urls, GitUrl};
 use crate::gitdir;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -16,12 +18,12 @@ use std::path::{Path, PathBuf};
 #[serde(untagged)]
 pub enum ProjectEntry {
     /// Simple format: just a git URL string
-    Simple(String),
+    Simple(GitUrl),
     /// Extended format: object with repo, path, tags, and dependency info
     Extended {
         /// Git remote URL (optional for local-only projects).
         #[serde(default)]
-        repo: Option<String>,
+        repo: Option<GitUrl>,
         #[serde(default)]
         path: Option<String>,
         #[serde(default)]
@@ -43,7 +45,7 @@ pub struct ProjectInfo {
     pub path: String,
     /// Git remote URL (optional for local-only projects).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo: Option<String>,
+    pub repo: Option<GitUrl>,
     pub tags: Vec<String>,
     /// What this project provides (e.g., APIs, libraries)
     #[serde(default)]
@@ -169,6 +171,72 @@ fn config_file(path: PathBuf) -> anyhow::Result<Option<PathBuf>> {
     }
     std::fs::File::open(&path).with_context(|| format!("Cannot read {}", escape_path(&path)))?;
     Ok(Some(path))
+}
+
+/// A config file's text without the credentials in its URLs: as written,
+/// unless a value or the text holds one. Then the values are written out
+/// again as YAML, redacted, without the file's comments: the text may spell
+/// a URL so that no scan of it reads it (YAML's and JSON's `\` escapes), and
+/// a scan of compact JSON can run across fields. A file that can't be read
+/// is shown with its URLs redacted, or not at all if it holds a `\`.
+pub fn redact_config_text(text: &str) -> Cow<'_, str> {
+    let Ok(mut values) = serde_yaml_ng::from_str(text) else {
+        return match text.contains('\\') {
+            true => Cow::Borrowed(
+                "<not shown: the config can't be read, and an escaped URL in it may hold credentials>",
+            ),
+            false => redact_urls(text),
+        };
+    };
+    let in_values = redact_strings(&mut values);
+    match in_values || redact_urls(text) != text {
+        true => Cow::Owned(serde_yaml_ng::to_string(&values).unwrap_or_else(|_| {
+            "<not shown: the config could not be written out again>".to_string()
+        })),
+        false => Cow::Borrowed(text),
+    }
+}
+
+/// Redact the URLs in each string in `value` (a value may be a command, not
+/// a URL); whether any changed.
+fn redact_strings(value: &mut serde_yaml_ng::Value) -> bool {
+    use serde_yaml_ng::Value;
+    match value {
+        Value::String(s) => match crate::git::redact_urls(s) {
+            Cow::Owned(shown) => {
+                *s = shown;
+                true
+            }
+            Cow::Borrowed(_) => false,
+        },
+        Value::Sequence(items) => items
+            .iter_mut()
+            .fold(false, |hid, v| redact_strings(v) | hid),
+        // keys too: a key may be a URL
+        Value::Mapping(map) => {
+            let mut hid = false;
+            *map = std::mem::take(map)
+                .into_iter()
+                .map(|(mut key, mut value)| {
+                    hid |= redact_strings(&mut key) | redact_strings(&mut value);
+                    (key, value)
+                })
+                .collect();
+            hid
+        }
+        Value::Tagged(tagged) => {
+            let hid = redact_strings(&mut tagged.value);
+            let tag = tagged.tag.to_string();
+            if redact_urls(&tag) == tag {
+                return hid;
+            }
+            // a tag that holds credentials goes; its value stays
+            let inner = std::mem::take(&mut tagged.value);
+            *value = inner;
+            true
+        }
+        _ => false,
+    }
 }
 
 /// The [`META_CONFIG_NAME`] file directly in `dir`. A candidate that cannot
@@ -438,8 +506,14 @@ impl Workspace {
     ///
     /// Every project is checked by [`validate_project`] and no two projects
     /// may share or nest paths ([`check_no_overlap`]); a bad entry fails the
-    /// load with the file and project named.
+    /// load with the file and project named. The error shows no credentials:
+    /// a URL may sit where a name, a path or a tag goes.
     pub fn load(meta_path: &Path) -> anyhow::Result<Self> {
+        Self::read_unredacted(meta_path)
+            .map_err(|e| anyhow::anyhow!("{}", redact_urls(&format!("{e:#}"))))
+    }
+
+    fn read_unredacted(meta_path: &Path) -> anyhow::Result<Self> {
         let config_str = std::fs::read_to_string(meta_path).with_context(|| {
             format!(
                 "Failed to read meta config file: '{}'",
@@ -585,7 +659,6 @@ fn validate_project(
     ];
     for (what, value) in [("name", &info.name), ("path", &info.path)]
         .into_iter()
-        .chain(info.repo.iter().map(|r| ("repo", r)))
         .chain(
             lists
                 .into_iter()
@@ -601,6 +674,10 @@ fn validate_project(
                 escape(value)
             ));
         }
+        // only repo may hold credentials: every other value is printed
+        if crate::git::redact_urls(value) != value.as_str() {
+            return Err(format!("{what} holds a URL with credentials"));
+        }
     }
     // A name may be a relative path, such as `vendor/lib` for a nested
     // repo, and names a project in commands. So it follows the path rules,
@@ -612,8 +689,17 @@ fn validate_project(
             info.name
         ));
     }
-    if info.repo.as_deref().is_some_and(|r| r.starts_with('-')) {
-        return Err("repo must not start with '-'".into());
+    if let Some(repo) = &info.repo {
+        if repo.raw().is_empty() {
+            return Err("repo is empty".into());
+        }
+        // printed as a GitUrl prints: escaped, without its credentials
+        if repo.raw().chars().any(is_unsafe_char) {
+            return Err(format!("repo '{repo}' contains control characters"));
+        }
+        if repo.raw().starts_with('-') {
+            return Err("repo must not start with '-'".into());
+        }
     }
     if let Some(tag) = info
         .tags
@@ -1473,10 +1559,7 @@ mod tests {
         assert_eq!(projects.len(), 2);
 
         let vendor = projects.iter().find(|p| p.name == "vendor").unwrap();
-        assert_eq!(
-            vendor.repo.as_ref().unwrap(),
-            "git@github.com:org/vendor.git"
-        );
+        assert_eq!(vendor.repo, Some("git@github.com:org/vendor.git".into()));
     }
 
     #[test]
@@ -1502,10 +1585,7 @@ mod tests {
         assert_eq!(projects.len(), 1);
 
         let vendor = &projects[0];
-        assert_eq!(
-            vendor.repo.as_ref().unwrap(),
-            "git@github.com:org/vendor.git"
-        );
+        assert_eq!(vendor.repo, Some("git@github.com:org/vendor.git".into()));
         assert_eq!(vendor.name, "vendor");
         assert_eq!(vendor.path, "third_party/vendor");
     }
@@ -1537,8 +1617,8 @@ mod tests {
         let vendor_node = &tree[0];
         assert_eq!(vendor_node.info.name, "vendor");
         assert_eq!(
-            vendor_node.info.repo.as_ref().unwrap(),
-            "git@github.com:org/vendor.git"
+            vendor_node.info.repo,
+            Some("git@github.com:org/vendor.git".into())
         );
         assert!(vendor_node.is_meta);
         assert_eq!(vendor_node.children.len(), 1);
@@ -1745,6 +1825,29 @@ mod tests {
     }
 
     #[test]
+    fn config_errors_show_no_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".meta.yaml");
+        // the wrong shape, and a URL where a name or a path goes
+        for (config, shown) in [
+            ("projects: https://alice:ghp_SECRET@h/r.git\n", "https://***@h/r.git"),
+            (
+                "projects:\n  \"https://alice:ghp_SECRET@h/r.git\": r\n",
+                "name holds a URL with credentials",
+            ),
+            (
+                "projects:\n  r:\n    repo: git@h:r.git\n    path: https://alice:ghp_SECRET@h/r.git\n",
+                "path holds a URL with credentials",
+            ),
+        ] {
+            std::fs::write(&path, config).unwrap();
+            let err = format!("{:#}", Workspace::load(&path).unwrap_err());
+            assert!(err.contains(shown), "{err}");
+            assert!(!err.contains("ghp_SECRET"), "{err}");
+        }
+    }
+
+    #[test]
     fn test_parse_rejects_paths_outside_the_workspace() {
         for path in [
             "../../dropped",
@@ -1804,11 +1907,21 @@ mod tests {
                 r#"{"projects": {"a": {"repo": "u", "path": "t\u001b[2J"}}}"#,
                 "control characters",
             ),
+            (
+                r#"{"projects": {"a": {"repo": "u", "tags": ["https://ghp_SECRET@h/r"]}}}"#,
+                "tag holds a URL with credentials",
+            ),
+            (
+                r#"{"projects": {"a": "https://ghp_SECRET@h/r\n"}}"#,
+                "repo 'https://***@h/r\\n' contains control characters",
+            ),
         ] {
             let err = parse_err(json);
             assert!(err.contains(what), "{json}: {err}");
-            // The offending value is escaped in the message itself
+            // The offending value is escaped in the message itself, and a
+            // URL's credentials aren't in it
             assert!(!err.contains('\u{1b}'), "{json}: {err}");
+            assert!(!err.contains("ghp_SECRET"), "{json}: {err}");
         }
     }
 

@@ -3,6 +3,7 @@ use crate::ssh;
 use console::style;
 use indicatif::MultiProgress;
 use meta_core::config;
+use meta_core::git::GitUrl;
 use meta_git_lib::clone_queue::CloneQueue;
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use std::sync::Arc;
 #[derive(clap::Parser)]
 pub(crate) struct CloneArgs {
     /// The meta repository to clone
-    url: String,
+    url: GitUrl,
     /// Where to clone it (default: the repository's name)
     dir: Option<String>,
     /// Also clone the repos of the meta repos nested in it
@@ -47,7 +48,7 @@ pub(crate) fn execute_git_clone(
     // The directory git would name: a bundle file's name without
     // `.bundle`, else the repository's name (a `.git` file is a checkout's)
     let clone_dir = args.dir.unwrap_or_else(|| {
-        let source = cwd.join(&url);
+        let source = cwd.join(url.as_git_arg());
         let gitfile = || {
             let mut head = [0; 8];
             std::fs::File::open(&source)
@@ -64,21 +65,22 @@ pub(crate) fn execute_git_clone(
                 let bundle = bundle.rsplit_once(':').map_or(&*bundle, |(_, name)| name);
                 bundle.strip_suffix(".bundle").unwrap_or(bundle).to_string()
             }
-            None => url
-                .parse::<meta_core::git::GitUrl>()
-                .ok()
-                .and_then(|u| u.name().map(str::to_string))
-                .unwrap_or_else(|| "meta".to_string()),
+            None => url.name().unwrap_or("meta").to_string(),
         }
     });
 
-    // The clone, shown as it runs: the URL after `--`, so it can't be read
-    // as an option, and the directory meta reads next named explicitly
+    // The clone, shown as it runs (display_command hides the URL's
+    // credentials): the URL after `--`, so it can't be read as an option,
+    // and the directory meta reads next named explicitly
     let clone_argv: Vec<String> = ["git", "clone"]
         .into_iter()
         .map(str::to_string)
         .chain(git_clone_args)
-        .chain(["--".to_string(), url.clone(), clone_dir.clone()])
+        .chain([
+            "--".to_string(),
+            url.as_git_arg().to_string_lossy().into_owned(),
+            clone_dir.clone(),
+        ])
         .collect();
     let clone_cmd_str = loop_lib::display_command(&clone_argv);
 
@@ -91,15 +93,12 @@ pub(crate) fn execute_git_clone(
     }
 
     // Set up SSH ControlMaster for the meta repo's host before cloning
-    let mut ssh_cmd = match ssh::establish_ssh_masters(&[url.as_str()]) {
+    let mut ssh_cmd = match ssh::establish_ssh_masters(std::slice::from_ref(&url)) {
         ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
         ssh::SshMasters::UserManaged | ssh::SshMasters::Failed => None,
     };
 
-    println!(
-        "Cloning meta repository: {}",
-        meta_core::display::escape(&url)
-    );
+    println!("Cloning meta repository: {url}");
     let mut clone_cmd = meta_core::git::git(cwd);
     clone_cmd.args(clone_argv.iter().skip(1));
     if let Some(ref ssh) = ssh_cmd {
@@ -137,14 +136,13 @@ pub(crate) fn execute_git_clone(
     // Establish SSH masters for any additional hosts in the queue
     let queue_urls = queue.peek_urls();
     if !queue_urls.is_empty() {
-        let url_refs: Vec<&str> = queue_urls.iter().map(|s| s.as_str()).collect();
-        match ssh::establish_ssh_masters(&url_refs) {
+        match ssh::establish_ssh_masters(&queue_urls) {
             ssh::SshMasters::OurSockets(sockets_dir) => {
                 ssh_cmd = Some(ssh::git_ssh_command(&sockets_dir));
             }
             ssh::SshMasters::UserManaged => {} // parallel OK, no override needed
             ssh::SshMasters::Failed if ssh_cmd.is_none() => {
-                log::warn!("SSH multiplexing setup failed, falling back to serial cloning");
+                ssh::warn("SSH multiplexing could not be set up: cloning one repository at a time");
                 parallel = 1;
             }
             ssh::SshMasters::Failed => {} // initial host works

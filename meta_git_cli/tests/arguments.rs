@@ -68,10 +68,26 @@ fn clone_and_commit_refuse_what_they_do_not_take() {
         ("git clone", &["--meta-depth", "x", "u"], "invalid value"),
         ("git clone", &["u", "--branch", "b"], "unexpected argument"),
         ("git commit", &["--amend"], "unexpected argument"),
+        // clap shows the value it rejects, without the URL's token
+        (
+            "git clone",
+            &["--depth", "https://a:ghp_SECRET@h/r", "u"],
+            "invalid value 'https://***@h/r'",
+        ),
+        (
+            "git clone",
+            &["--depth", "https://a'b:ghp_SECRET@h/r", "u"],
+            "invalid value 'https://***@h/r'",
+        ),
     ] {
         let out = meta_git(tmp.path(), command, args, json!({}));
         assert!(!out.status.success(), "{args:?}: {}", text(&out));
         assert!(text(&out).contains(problem), "{args:?}: {}", text(&out));
+        assert!(
+            !text(&out).contains("ghp_SECRET"),
+            "{args:?}: {}",
+            text(&out)
+        );
     }
     // nothing was cloned
     assert!(!tmp.path().join("u").exists());

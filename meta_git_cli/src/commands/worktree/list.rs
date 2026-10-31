@@ -176,7 +176,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
                 Some(record) => (
                     Some(record.ephemeral),
                     record.ttl_remaining(now),
-                    (!record.custom.is_empty()).then_some(record.custom),
+                    (!record.custom.is_empty()).then(|| super::shown_meta(record.custom)),
                 ),
                 None => (None, None, None),
             };

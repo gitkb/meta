@@ -482,6 +482,88 @@ fn test_dry_run_does_not_execute() {
 }
 
 #[test]
+fn the_looprc_preview_shows_no_credentials() {
+    let old = "{\n  \"aliases\": {\n    \"a\": \"git fetch http://alice:ghp_SECRET@h/r\"\n  }\n}";
+    let new = old.replace("\"a\"", "\"b\"");
+    for shown in [preview(old, &new), preview("", &new)] {
+        assert!(shown.contains("http://***@h/r"), "{shown}");
+        assert!(!shown.contains("ghp_SECRET"), "{shown}");
+    }
+    // a change only in a token says so
+    let rotated = old.replace("ghp_SECRET", "ghp_OTHER");
+    let shown = preview(old, &rotated);
+    assert!(shown.contains("only in credentials"), "{shown}");
+    assert!(!shown.contains("ghp_"), "{shown}");
+    // a key, and a file that isn't JSON but holds no escape
+    let shown = preview(r#"{"http://a:ghp_SECRET@h/r": "x"}"#, &new);
+    assert!(!shown.contains("ghp_SECRET"), "{shown}");
+    let shown = preview("not json: http://a:ghp_SECRET@h/r", &new);
+    assert!(
+        shown.contains("http://***@h/r") && !shown.contains("ghp_SECRET"),
+        "{shown}"
+    );
+    // spelled with JSON escapes, or in a file that isn't JSON
+    for old in [
+        r#"{"aliases": {"a": "git fetch http:\/\/alice:ghp_SECRET@h\/r"}}"#,
+        r#"{"aliases": {"a": "git fetch http://alice:ghp_SECRET\u0040h/r"}}"#,
+        r#"{"aliases": {"a": "git fetch http:\/\/alice:ghp_SECRET@h\/r"#,
+        r#"{"aliases": {"a": "git fetch 'foo::https://alice:ghp_SECRET w@h/r'"}}"#,
+    ] {
+        let shown = preview(old, &new);
+        assert!(!shown.contains("ghp_SECRET"), "{shown}");
+    }
+}
+
+#[test]
+fn a_broken_alias_shows_no_credentials() {
+    let aliases = HashMap::from([(
+        "sync".to_string(),
+        "git fetch https://a:ghp_SECRET@h/r \"".to_string(),
+    )]);
+    let err = resolve_aliases(&["sync".to_string()], &aliases).unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("https://***@h/r"), "{message}");
+    assert!(!message.contains("ghp_SECRET"), "{message}");
+}
+
+#[test]
+fn shown_commands_hide_credentials() {
+    let argv = [
+        "git",
+        "remote",
+        "set-url",
+        "origin",
+        "https://a:ghp_SECRET@h/r",
+    ]
+    .map(String::from);
+    assert_eq!(
+        display_command(&argv),
+        "git remote set-url origin 'https://***@h/r'"
+    );
+    // a message keeps what isn't a URL's credentials
+    let argv = [
+        "git",
+        "commit",
+        "-m",
+        "Fix https://h.example issue, thanks @alice",
+    ]
+    .map(String::from);
+    assert_eq!(
+        display_command(&argv),
+        "git commit -m 'Fix https://h.example issue, thanks @alice'"
+    );
+    // a helper's URL is one URL, a space in its password included
+    let argv = ["git", "remote", "add", "x", "foo::https://a:p w@h/r"].map(String::from);
+    assert_eq!(
+        display_command(&argv),
+        "git remote add x 'foo::https://***@h/r'"
+    );
+    // git sends a quote in a password
+    let argv = ["git", "fetch", "http://a\"b:ghp_SECRET@h/r"].map(String::from);
+    assert_eq!(display_command(&argv), "git fetch 'http://***@h/r'");
+}
+
+#[test]
 fn test_dry_run_returns_success() {
     let temp_dir = TempDir::new().unwrap();
 

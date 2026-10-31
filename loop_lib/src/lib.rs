@@ -173,19 +173,8 @@ pub fn add_aliases_to_global_looprc() -> Result<()> {
     println!("Serializing config to string");
     let new_content = serde_json::to_string_pretty(&config)?;
 
-    // Show preview of changes
     println!("\nPreview of changes:");
-    if !existing_content.is_empty() {
-        for diff in diff::lines(&existing_content, &new_content) {
-            match diff {
-                diff::Result::Left(l) => println!("{}", format!("-{l}").red()),
-                diff::Result::Both(l, _) => println!(" {l}"),
-                diff::Result::Right(r) => println!("{}", format!("+{r}").green()),
-            }
-        }
-    } else {
-        println!("{}", new_content.green());
-    }
+    print!("{}", preview(&existing_content, &new_content));
 
     if !prompt_user("Do you want to apply these changes?")? {
         println!("Operation cancelled by user.");
@@ -267,16 +256,79 @@ fn resolve_aliases(argv: &[String], aliases: &HashMap<String, String>) -> Result
             format!(
                 "Alias '{}' is not a command: {}",
                 escape(program),
-                escape(alias)
+                escape(&meta_core::git::redact_urls(alias))
             )
         })?;
     words.extend_from_slice(args);
     Ok(words)
 }
 
-/// `argv` as one line, quoted so that it reads back as the same words.
+/// The change from `existing` to `new` (a `.looprc`), line by line, without
+/// the credentials in URLs: aliases may hold them.
+fn preview(existing: &str, new: &str) -> String {
+    let shown_new = shown_looprc(new);
+    if existing.is_empty() {
+        return format!("{}\n", shown_new.green());
+    }
+    let shown_old = shown_looprc(existing);
+    let mut shown: String = diff::lines(&shown_old, &shown_new)
+        .into_iter()
+        .map(|change| match change {
+            diff::Result::Left(l) => format!("{}\n", format!("-{l}").red()),
+            diff::Result::Both(l, _) => format!(" {l}\n"),
+            diff::Result::Right(r) => format!("{}\n", format!("+{r}").green()),
+        })
+        .collect();
+    let json = |text: &str| serde_json::from_str::<serde_json::Value>(text).ok();
+    if shown_old == shown_new && json(existing) != json(new) {
+        shown.push_str("(the change is only in credentials, which aren't shown)\n");
+    }
+    shown
+}
+
+/// A `.looprc` as shown: its JSON written out again with the URLs in its
+/// strings redacted, as an escape (`\/`, `\u0040`) may spell a URL no scan
+/// of the text reads. Text that isn't JSON is shown redacted, unless it holds
+/// a `\`.
+fn shown_looprc(text: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(mut value) => {
+            redact_json_strings(&mut value);
+            serde_json::to_string_pretty(&value).unwrap_or_default()
+        }
+        Err(_) if text.contains('\\') => "<not shown: it may hold credentials>".to_string(),
+        Err(_) => meta_core::git::redact_urls(text).into_owned(),
+    }
+}
+
+/// Redact the URLs in every string and key of `value`.
+fn redact_json_strings(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    let redact = |s: &str| meta_core::git::redact_urls(s).into_owned();
+    match value {
+        Value::String(s) => *s = redact(s),
+        Value::Array(items) => items.iter_mut().for_each(redact_json_strings),
+        Value::Object(map) => {
+            *map = std::mem::take(map)
+                .into_iter()
+                .map(|(key, mut value)| {
+                    redact_json_strings(&mut value);
+                    (redact(&key), value)
+                })
+                .collect();
+        }
+        _ => {}
+    }
+}
+
+/// `argv` as one line, quoted so that it reads back as the same words, with
+/// the credentials in URLs hidden: it is for showing, never for running.
 pub fn display_command(argv: &[String]) -> String {
-    shlex::try_join(argv.iter().map(String::as_str)).unwrap_or_else(|_| argv.join(" "))
+    let shown: Vec<String> = argv
+        .iter()
+        .map(|arg| meta_core::git::redact_urls(arg).into_owned())
+        .collect();
+    shlex::try_join(shown.iter().map(String::as_str)).unwrap_or_else(|_| shown.join(" "))
 }
 
 /// The process for `argv` in `dir`. The program runs directly: no shell sees

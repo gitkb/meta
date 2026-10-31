@@ -411,7 +411,8 @@ pub fn git_fetch_branch(repo_path: &Path, branch: &str) -> Result<()> {
         anyhow::bail!(
             "Failed to fetch branch '{}': {}",
             escape(branch),
-            escape(stderr.trim())
+            // git's own errors may show the URL with its credentials
+            escape(&meta_core::git::redact_git_output(stderr.trim_ascii()))
         );
     }
     Ok(())
@@ -434,6 +435,24 @@ mod tests {
             !message.contains('\n') && !message.contains('\u{1b}'),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_failed_fetch_shows_no_credentials() {
+        let tmp = init_git_repo();
+        // git refuses this URL before connecting, and quotes it whole
+        git(tmp.path())
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "http://a:ghp_SECRET%0A@127.0.0.1:9/r",
+            ])
+            .status()
+            .unwrap();
+        let message = format!("{:#}", git_fetch_branch(tmp.path(), "b").unwrap_err());
+        assert!(message.contains("http://***@127.0.0.1:9/r"), "{message}");
+        assert!(!message.contains("ghp_SECRET"), "{message}");
     }
 
     /// Create a minimal git repo in a tempdir and return the tempdir handle.

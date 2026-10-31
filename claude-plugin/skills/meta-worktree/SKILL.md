@@ -203,7 +203,8 @@ is how `remove` and `prune` know meta made a set: a set made by hand, or by a
 meta from before records, is refused, and so is a set holding a worktree meta
 has no record of (one added by hand with `git worktree add`); remove those with
 `git worktree remove`.
-`list` scans this project's `.worktrees/` and shows each set's record.
+`list` scans this project's `.worktrees/` and shows each set's record (with
+the credentials in any metadata URL hidden).
 
 ## Strict Mode
 

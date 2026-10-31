@@ -145,7 +145,7 @@ impl McpServer {
         Ok(Reply {
             is_error: if atomic { has_failure } else { all_failed },
             text: serde_json::to_string_pretty(&serde_json::json!({
-                "command": args.command,
+                "command": args.command.iter().map(|word| meta_core::git::redact_urls(word)).collect::<Vec<_>>(),
                 "results": results,
                 "has_failure": has_failure,
                 "rollback": rollback

@@ -47,6 +47,8 @@ pub fn select(
     if include.is_empty() && exclude.is_empty() {
         return Ok(dirs.to_vec());
     }
+    // clap split the values at commas, which a URL's password may hold
+    let typed_url = include.iter().chain(exclude).any(|v| v.contains("://"));
     let repos: Vec<Repo> = dirs
         .iter()
         .map(|dir| Repo {
@@ -82,7 +84,17 @@ pub fn select(
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let value = meta_core::display::escape(value);
+        // without credentials; when a URL was typed, a piece may be its head
+        // (`https://u:pw`) or tail (`pw@host/x`)
+        let value = meta_core::git::redact_urls(value);
+        let value = match (value.split_once("://"), value.split_once('@')) {
+            (Some((scheme, rest)), _) if typed_url && !rest.contains(['/', '?', '#', '@']) => {
+                format!("{scheme}://***")
+            }
+            (_, Some((head, tail))) if typed_url && !head.contains('/') => format!("***@{tail}"),
+            _ => value.into_owned(),
+        };
+        let value = meta_core::display::escape(&value);
         if by_name.len() > 1 {
             bail!(
                 "{flag} '{value}' is the .meta.yaml name of the repos at {}; name one by its path, \

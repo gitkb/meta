@@ -436,3 +436,53 @@ fn search_reports_a_plain_project_it_cannot_fence_off() {
         "{found}"
     );
 }
+
+/// While a tool runs, `ping` and `tools/list` are answered; cancelling it
+/// stops what it started, and it gets no reply.
+#[test]
+#[cfg(unix)]
+fn a_running_call_can_be_cancelled_and_others_are_answered_meanwhile() {
+    use std::io::{BufRead, BufReader};
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    std::fs::create_dir(ws.join("a")).unwrap();
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
+    let mut child = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), ws)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut replies = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut send = |message: serde_json::Value| writeln!(stdin, "{message}").unwrap();
+    let script = "sleep 60 & echo $$ $! > ../pids.tmp && mv ../pids.tmp ../pids; wait";
+    send(
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+        "name": "meta_batch_execute", "arguments": {"command": ["sh", "-c", script]}}}),
+    );
+    let pids = ws.join("pids");
+    while !pids.exists() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let started = std::time::Instant::now();
+    send(serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "ping"}));
+    send(serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "tools/list"}));
+    for id in [3, 4] {
+        let reply: serde_json::Value =
+            serde_json::from_str(&replies.next().unwrap().unwrap()).unwrap();
+        assert_eq!(reply["id"], id, "{reply}");
+    }
+    send(
+        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+        "params": {"requestId": 2, "reason": "test"}}),
+    );
+    drop(send);
+    drop(stdin);
+    assert!(replies.next().is_none(), "the cancelled call was answered");
+    assert!(child.wait().unwrap().success());
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    for pid in std::fs::read_to_string(pids).unwrap().split_whitespace() {
+        let alive = Command::new("kill").args(["-0", pid]).output().unwrap();
+        assert!(!alive.status.success(), "{pid} still runs");
+    }
+}

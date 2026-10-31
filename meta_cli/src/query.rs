@@ -50,49 +50,52 @@ pub struct Query {
 }
 
 impl Query {
-    /// Parse a query string into a Query
+    /// Parses `field:value` conditions joined by `AND` (in any case); a repo
+    /// matches when it meets all of them. Anything else is an error naming
+    /// the token, so a query this language can't express is never answered
+    /// with "no match": there is no `OR` or `NOT`, and a value holds no
+    /// spaces.
     ///
     /// Example: "dirty:true AND tag:backend AND branch:main"
     pub fn parse(query_str: &str) -> Result<Self> {
         let mut conditions = Vec::new();
-
-        // Replace case-insensitive " and " with " AND " for uniformity
-        let normalized = query_str.replace(" and ", " AND ");
-
-        // Split by " AND "
-        let parts: Vec<&str> = normalized
-            .split(" AND ")
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        for part in parts {
-            let part = part.trim();
-            if part.is_empty() {
-                continue;
+        // whether the next token must be a condition
+        let mut want_condition = true;
+        for token in query_str.split_whitespace() {
+            match (token.eq_ignore_ascii_case("AND"), want_condition) {
+                (true, false) => want_condition = true,
+                (false, true) => {
+                    conditions.push(Self::parse_condition(token)?);
+                    want_condition = false;
+                }
+                _ => anyhow::bail!(
+                    "Unexpected '{}' in query '{}': write field:value conditions joined by AND \
+                     (there is no OR or NOT, and a value holds no spaces)",
+                    escape(token),
+                    escape(query_str)
+                ),
             }
-
-            let condition = Self::parse_condition(part)?;
-            conditions.push(condition);
         }
-
         if conditions.is_empty() {
             anyhow::bail!("Empty query");
         }
-
+        if want_condition {
+            anyhow::bail!("Query '{}' ends with AND", escape(query_str));
+        }
         Ok(Query { conditions })
     }
 
     fn parse_condition(s: &str) -> Result<QueryCondition> {
-        let parts: Vec<&str> = s.splitn(2, ':').collect();
-        if parts.len() != 2 {
+        let Some((field, value)) = s.split_once(':') else {
             anyhow::bail!(
-                "Invalid condition format: '{}'. Expected 'field:value'",
+                "Invalid condition format: '{}'. Expected 'field:value' (there is no OR or NOT)",
                 escape(s)
             );
+        };
+        let field = field.to_lowercase();
+        if value.is_empty() {
+            anyhow::bail!("'{}' has no value", escape(s));
         }
-
-        let field = parts[0].trim().to_lowercase();
-        let value = parts[1].trim();
 
         match field.as_str() {
             "dirty" => {
@@ -362,6 +365,26 @@ mod tests {
             query.conditions,
             [QueryCondition::ModifiedIn(Duration::from_secs(86400))]
         );
+    }
+
+    #[test]
+    fn and_joins_in_any_case_and_anything_else_names_its_token() {
+        let query = Query::parse("tag:odd And branch:main and dirty:false").unwrap();
+        assert_eq!(query.conditions.len(), 3);
+        for (query, token) in [
+            ("tag:odd OR tag:even", "'OR'"),
+            ("NOT dirty:true", "'NOT'"),
+            ("dirty:false tag:odd", "'tag:odd'"),
+            ("AND tag:odd", "'AND'"),
+            ("tag:odd AND AND dirty:true", "'AND'"),
+            ("tag:", "'tag:'"),
+            ("branch:", "'branch:'"),
+        ] {
+            let err = Query::parse(query).unwrap_err().to_string();
+            assert!(err.contains(token), "{query}: {err}");
+        }
+        assert!(Query::parse("tag:odd AND").is_err());
+        assert!(Query::parse("  ").is_err());
     }
 
     #[test]

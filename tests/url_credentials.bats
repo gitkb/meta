@@ -47,12 +47,16 @@ EOF
     git init -q -b main "$WS"
     git -C "$WS" remote add origin "https://alice:$TOKEN@example.invalid/org/ws.git"
     git clone -q "$TEST_DIR/remotes/other.git" "$WS/moved"
+    # and one whose origin differs from the configured URL only in its token
+    git clone -q "$TEST_DIR/remotes/other.git" "$WS/rotated"
+    git -C "$WS/rotated" remote set-url origin "https://ghp_OLD@example.invalid/org/rotated.git"
     cat > "$WS/.meta.yaml" <<EOF
 projects:
   svc:
     repo: https://alice:$TOKEN@127.0.0.1:9/org/svc.git
   lib: https://$TOKEN@example.invalid/org/lib.git
   moved: https://$TOKEN@example.invalid/org/elsewhere.git
+  rotated: https://$TOKEN@example.invalid/org/rotated.git
 EOF
     cd "$WS"
 }
@@ -112,6 +116,8 @@ meta_without_token() {
     [[ "$output" == *"Failed to clone svc (https://***@127.0.0.1:9/org/svc.git)"* ]] || false
     [[ "$output" == *"expected: https://***@example.invalid/org/elsewhere.git"* ]] || false
     [[ "$output" == *"remote set-url origin <"*"not shown"* ]] || false
+    [[ "$output" == *"(they differ only in their credentials)"* ]] || false
+    [[ "$output" != *"ghp_OLD"* ]] || false
     [ "$(git -C lib config remote.origin.url)" = "https://$TOKEN@example.invalid/org/lib.git" ]
 
     cd "$TEST_DIR"

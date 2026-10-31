@@ -965,7 +965,7 @@ impl McpServer {
         let shown = config::redact_config_text(&content);
         let note = match shown == content {
             true => "",
-            false => " (credentials hidden: not the file as written)",
+            false => " (not the file as written: credentials, if any, hidden)",
         };
         Ok(format!("Config file: {}{note}\n\n{shown}", path.display()))
     }
@@ -2683,7 +2683,7 @@ mod tests {
             "{result}"
         );
         assert!(
-            result.contains("(credentials hidden: not the file as written)"),
+            result.contains("(not the file as written: credentials, if any, hidden)"),
             "{result}"
         );
         // JSON may spell a URL so no scan of the text reads it

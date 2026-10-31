@@ -669,7 +669,8 @@ fn stopping_the_server_lets_a_rollback_finish() {
     assert!(stderr.contains(r#"\"status\": \"success\""#), "{stderr}");
 }
 
-/// When its output is gone, the server ends, though its input stays open.
+/// When its output is gone, the server ends, though its input stays open,
+/// and the reply it owed goes to stderr.
 #[test]
 #[cfg(unix)]
 fn a_server_whose_output_is_gone_ends() {
@@ -678,7 +679,7 @@ fn a_server_whose_output_is_gone_ends() {
     let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), tmp.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     drop(server.stdout.take());
@@ -692,5 +693,45 @@ fn a_server_whose_output_is_gone_ends() {
         status.is_some()
     });
     assert_eq!(status.unwrap().code(), Some(1), "{status:?}");
+    drop(stdin);
+    // the reply it couldn't send is on record
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
+    assert!(
+        stderr.contains("the reply was:") && stderr.contains(r#""id":1"#),
+        "{stderr}"
+    );
+}
+
+/// When the output is found gone while answering a ping, the running tool is
+/// stopped too, so the server ends though the tool never would.
+#[test]
+#[cfg(unix)]
+fn a_server_whose_output_is_gone_stops_its_running_tool() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    std::fs::create_dir(ws.join("a")).unwrap();
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
+    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), ws)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    drop(server.stdout.take());
+    let mut stdin = server.stdin.take().unwrap();
+    let script = "sleep 60 & echo $! > ../pid.tmp && mv ../pid.tmp ../pid; wait";
+    writeln!(stdin, "{}", batch(1, script, false)).unwrap();
+    let pid = ws.join("pid");
+    wait_for("the tool to start", || pid.exists());
+    writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"ping"}}"#).unwrap();
+    let mut status = None;
+    wait_for("the server to end", || {
+        status = server.try_wait().unwrap();
+        status.is_some()
+    });
+    assert_eq!(status.unwrap().code(), Some(1), "{status:?}");
+    let sleep = std::fs::read_to_string(&pid).unwrap();
+    wait_for("the tool's sleep to end", || gone(sleep.trim()));
     drop(stdin);
 }

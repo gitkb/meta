@@ -198,11 +198,16 @@ mod tests {
         assert!(v6.is_ssh());
         assert_eq!(v6.name(), Some("repo"));
         // brackets in the path are no host
-        let bracketed = parse("git@host:repo[1].git");
-        assert_eq!(
-            (bracketed.host.as_str(), bracketed.name()),
-            ("host", Some("repo[1]"))
-        );
+        for (url, name) in [
+            ("git@host:repo[1].git", "repo[1]"),
+            ("git@host:[repo].git", "[repo]"),
+        ] {
+            let bracketed = parse(url);
+            assert_eq!(
+                (bracketed.host.as_str(), bracketed.name()),
+                ("host", Some(name))
+            );
+        }
         let https = parse("https://user:token@github.com/org/repo");
         assert_eq!(
             (https.host.as_str(), https.user.as_deref()),

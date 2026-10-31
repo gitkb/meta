@@ -61,7 +61,7 @@ where
     let args: Vec<S> = args.into_iter().collect();
     let shown = || {
         args.iter()
-            .map(|a| a.as_ref().to_string_lossy())
+            .map(|a| redact_url(&a.as_ref().to_string_lossy()).into_owned())
             .collect::<Vec<_>>()
             .join(" ")
     };

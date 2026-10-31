@@ -174,28 +174,36 @@ fn config_file(path: PathBuf) -> anyhow::Result<Option<PathBuf>> {
 }
 
 /// A config file's text without the credentials in its URLs. When a value
-/// holds one, the values are written out again, redacted: the text may
-/// spell a URL so that no scan of it reads it (JSON's `\/` or `\u`
-/// escapes). Otherwise the text as written, with any URL in it (a comment's,
-/// say) redacted.
+/// holds one, the values are written out again as YAML, redacted, without
+/// the file's comments: the text may spell a URL so that no scan of it
+/// reads it (JSON's `\/` or `\u` escapes). Otherwise the text as written,
+/// with any URL in it (a comment's, say) redacted. A file that can't be
+/// read and holds such escapes isn't shown.
 pub fn redact_config_text(text: &str) -> Cow<'_, str> {
-    if let Ok(mut values) = serde_yaml_ng::from_str(text) {
-        if redact_strings(&mut values) {
-            return Cow::Owned(serde_yaml_ng::to_string(&values).unwrap_or_default());
-        }
+    let Ok(mut values) = serde_yaml_ng::from_str(text) else {
+        return match text.contains("\\/") || text.contains("\\u") {
+            true => Cow::Borrowed(
+                "<not shown: the config can't be read, and an escaped URL in it may hold credentials>",
+            ),
+            false => crate::git::redact_urls(text),
+        };
+    };
+    match redact_strings(&mut values) {
+        true => Cow::Owned(serde_yaml_ng::to_string(&values).unwrap_or_default()),
+        false => crate::git::redact_urls(text),
     }
-    crate::git::redact_urls(text)
 }
 
-/// Redact each string in `value` as a [`GitUrl`] prints; whether one changed.
+/// Redact the URLs in each string in `value` (a value may be a command, not
+/// a URL); whether any changed.
 fn redact_strings(value: &mut serde_yaml_ng::Value) -> bool {
     use serde_yaml_ng::Value;
     match value {
         Value::String(s) => {
-            let url = GitUrl::from(s.as_str());
-            let hidden = url.hides_credentials();
+            let shown = crate::git::redact_urls(s);
+            let hidden = shown != s.as_str();
             if hidden {
-                *s = url.redacted().into_owned();
+                *s = shown.into_owned();
             }
             hidden
         }

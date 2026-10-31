@@ -148,7 +148,7 @@ impl GitUrl {
 
     /// The URL without the credentials in it (see [`redact_urls`]; its
     /// authority ends only at `/`, `?` or `#`).
-    pub(crate) fn redacted(&self) -> Cow<'_, str> {
+    fn redacted(&self) -> Cow<'_, str> {
         redact(&self.0, |c| matches!(c, '/' | '?' | '#'))
     }
 

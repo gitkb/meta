@@ -2699,6 +2699,20 @@ mod tests {
             assert!(!result.contains("ghp_SECRET"), "{result}");
             assert!(result.contains("git@h:b.git"), "{result}");
         }
+        // a config without credentials comes back as written, commands with
+        // a URL and an `@` in them included
+        let config = "# Team workspace\nprojects:\n  a: git@h:a.git\nworktree:\n  hooks:\n    post-create: npm config set registry https://npm.example && git config user.email bot@example\n";
+        std::fs::write(tmp.path().join(".meta.yaml"), config).unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(result.ends_with(config), "{result}");
+        // one meta can't read shows nothing an escape could hide
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            r#"{"projects":{"a":"https:\/\/alice:ghp_SECRET@h\/a","b":"x","b":"y"}}"#,
+        )
+        .unwrap();
+        let result = server.tool_get_config(&serde_json::json!({})).unwrap();
+        assert!(!result.contains("ghp_SECRET"), "{result}");
         // or a YAML escape
         std::fs::write(
             tmp.path().join(".meta.yaml"),

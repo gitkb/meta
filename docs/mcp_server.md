@@ -67,7 +67,7 @@ Runs `meta exec` with the given program and arguments.
 ```
 
 #### meta_get_config
-Get the meta configuration file as written, with the credentials in its URLs hidden (`https://***@host/org/repo`).
+Get the meta configuration file as written, with the credentials in its URLs hidden (`https://***@host/org/repo`). When a value in it holds credentials, the file's values are written out again as YAML, without its comments or formatting.
 
 **Parameters:** None
 

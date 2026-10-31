@@ -821,6 +821,10 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"Intermediate parent 'vendor' for nested repo 'vendor/lib' is not cloned, skipping"* ]]
     [ -d "$TEST_DIR/.worktrees/nested/vendor/lib" ]
+
+    run "$META_BIN" git worktree create strict --no-deps --strict --repo vendor/lib
+    [ "$status" -ne 0 ]
+    [ ! -e "$TEST_DIR/.worktrees/strict" ]
 }
 
 @test "worktree add rechecks a destination after an earlier add in the same call" {

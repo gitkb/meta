@@ -41,18 +41,21 @@ pub fn gitfile_target(checkout: &Path) -> anyhow::Result<Option<PathBuf>> {
 /// Whether `dir` is a git directory, as git decides before using one:
 /// `objects` and `refs` directories, and a `HEAD` naming a ref under
 /// `refs/` (as a symlink, or `ref: refs/...`) or holding a commit id.
-/// Anything less, and git looks past it to the repository around.
+/// Anything less, and git looks past it to the repository around. A
+/// `HEAD` that can't be read counts: git, not this guess, then says why.
 pub fn is_bare(dir: &Path) -> bool {
     let head = dir.join("HEAD");
     let valid_head = match std::fs::read_link(&head) {
-        Ok(target) => target.starts_with("refs"),
-        Err(_) => {
-            let head = std::fs::read_to_string(&head).unwrap_or_default();
-            let head = head.trim_end();
-            head.strip_prefix("ref:")
-                .is_some_and(|target| target.trim_start().starts_with("refs/"))
-                || (head.len() >= 40 && head.chars().all(|c| c.is_ascii_hexdigit()))
-        }
+        Ok(target) => target.to_string_lossy().starts_with("refs/"),
+        Err(_) => match std::fs::read_to_string(&head) {
+            Ok(head) => {
+                let head = head.trim_end();
+                head.strip_prefix("ref:")
+                    .is_some_and(|target| target.trim_start().starts_with("refs/"))
+                    || (head.len() >= 40 && head.chars().all(|c| c.is_ascii_hexdigit()))
+            }
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        },
     };
     valid_head && dir.join("objects").is_dir() && dir.join("refs").is_dir()
 }
@@ -210,6 +213,20 @@ mod tests {
             std::fs::remove_file(&truncated).unwrap();
             std::os::unix::fs::symlink("refs/heads/packed", &truncated).unwrap();
             assert!(common_dir(&repo).unwrap().is_some());
+            // a link git doesn't take for a ref
+            std::fs::remove_file(&truncated).unwrap();
+            std::os::unix::fs::symlink("refs", &truncated).unwrap();
+            assert_eq!(common_dir(&repo).unwrap(), None);
+            // one that can't be read is git's to judge
+            std::fs::remove_file(&truncated).unwrap();
+            std::fs::write(&truncated, "ref: refs/heads/main\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |m| std::fs::Permissions::from_mode(m);
+            std::fs::set_permissions(&truncated, mode(0o000)).unwrap();
+            if std::fs::read(&truncated).is_err() {
+                assert!(common_dir(&repo).unwrap().is_some());
+            }
+            std::fs::set_permissions(&truncated, mode(0o644)).unwrap();
         }
 
         let linked = linked(&wt).unwrap();

@@ -99,6 +99,11 @@ fn test_should_ignore() {
     let ignore = vec!["a".to_string(), "vendor/old".to_string()];
     assert!(should_ignore(Path::new("./a"), &ignore));
     assert!(should_ignore(Path::new("a"), &["./a".to_string()]));
+    // `.` is the directory loop runs in, not every directory
+    let dot = vec![".".to_string()];
+    assert!(should_ignore(Path::new("."), &dot));
+    assert!(!should_ignore(Path::new("./b"), &dot));
+    assert!(!should_ignore(Path::new("b"), &[String::new()]));
     assert!(!should_ignore(Path::new("/w/abc"), &ignore));
     assert!(!should_ignore(Path::new("/w/data"), &ignore));
     assert!(should_ignore(Path::new("/w/vendor/old"), &ignore));

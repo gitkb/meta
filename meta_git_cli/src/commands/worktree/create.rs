@@ -167,7 +167,7 @@ pub(crate) fn handle_create(
     // For nested aliases like "gitkb/core", ensure intermediate meta: true
     // parents ("gitkb") get worktrees too — the thin spine from root to target.
     let repos_to_create =
-        ensure_intermediate_parents(&configs.here, repos_to_create, name, branch_flag)?;
+        ensure_intermediate_parents(&configs.here, repos_to_create, name, branch_flag, strict)?;
     // A project not cloned yet has no repository to make a worktree of:
     // --all goes on without it, a repo asked for (or needed) is an error
     let mut cloned = Vec::with_capacity(repos_to_create.len());
@@ -879,6 +879,7 @@ fn ensure_intermediate_parents(
     repos: Vec<(String, std::path::PathBuf, String)>,
     worktree_name: &str,
     branch_flag: Option<&str>,
+    strict: bool,
 ) -> Result<Vec<(String, std::path::PathBuf, String)>> {
     let meta_dir = workspace.dir.as_path();
     // Where the selected repos go: a parent is there when a repo is at its
@@ -928,12 +929,14 @@ fn ensure_intermediate_parents(
                 continue;
             };
             if meta_core::gitdir::common_dir(&parent_source)?.is_none() {
-                eprintln!(
-                    "{} Intermediate parent '{}' for nested repo '{}' is not cloned, skipping",
-                    "warning:".yellow().bold(),
-                    escape(&parent_alias),
-                    escape(alias)
-                );
+                super::warn_or_bail(
+                    strict,
+                    format!(
+                        "Intermediate parent '{}' for nested repo '{}' is not cloned, skipping",
+                        escape(&parent_alias),
+                        escape(alias)
+                    ),
+                )?;
                 continue;
             }
 

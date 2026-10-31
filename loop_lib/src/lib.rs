@@ -535,8 +535,11 @@ pub fn expand_directories(directories: &[String], ignore: &[String]) -> Result<V
 
     for dir in directories {
         let dir_path = PathBuf::from(dir);
-        if dir_path.is_dir() && !should_ignore(&dir_path, ignore) {
-            expanded.push(dir_path.to_string_lossy().into_owned());
+        if dir_path.is_dir() {
+            // an excluded directory's children still count
+            if !should_ignore(&dir_path, ignore) {
+                expanded.push(dir_path.to_string_lossy().into_owned());
+            }
 
             for entry in fs::read_dir(&dir_path)? {
                 let entry = entry?;
@@ -884,10 +887,17 @@ pub fn should_ignore(path: &Path, ignore: &[String]) -> bool {
             .collect()
     };
     let path = named(path);
-    ignore.iter().any(|entry| {
-        let entry = named(Path::new(entry));
-        !entry.as_os_str().is_empty() && path.ends_with(entry)
-    })
+    ignore
+        .iter()
+        .filter(|entry| !entry.is_empty())
+        .any(|entry| {
+            let entry = named(Path::new(entry));
+            // `.` names the directory loop runs in
+            match entry.as_os_str().is_empty() {
+                true => path.as_os_str().is_empty(),
+                false => path.ends_with(entry),
+            }
+        })
 }
 
 pub fn parse_config(config_path: &Path) -> Result<LoopConfig> {

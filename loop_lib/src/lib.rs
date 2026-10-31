@@ -320,7 +320,8 @@ fn redact_json_strings(value: &mut serde_json::Value) {
 pub fn display_command(argv: &[String]) -> String {
     let shown: Vec<String> = argv
         .iter()
-        .map(|arg| meta_core::git::redact_url(arg).into_owned())
+        // a word may be a message, not a URL: a URL in it ends at whitespace
+        .map(|arg| meta_core::git::redact_urls(arg).into_owned())
         .collect();
     shlex::try_join(shown.iter().map(String::as_str)).unwrap_or_else(|_| shown.join(" "))
 }

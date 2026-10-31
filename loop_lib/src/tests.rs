@@ -526,6 +526,18 @@ fn shown_commands_hide_credentials() {
         display_command(&argv),
         "git remote set-url origin 'https://***@h/r'"
     );
+    // a message keeps what isn't a URL's credentials
+    let argv = [
+        "git",
+        "commit",
+        "-m",
+        "Fix https://h.example issue, thanks @alice",
+    ]
+    .map(String::from);
+    assert_eq!(
+        display_command(&argv),
+        "git commit -m 'Fix https://h.example issue, thanks @alice'"
+    );
     // git sends a quote in a password
     let argv = ["git", "fetch", "http://a\"b:ghp_SECRET@h/r"].map(String::from);
     assert_eq!(display_command(&argv), "git fetch 'http://***@h/r'");

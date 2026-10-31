@@ -77,6 +77,8 @@ pub struct DestroyOutput {
     pub name: String,
     pub path: String,
     pub repos_removed: usize,
+    /// A preview: nothing was removed
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Serialize)]

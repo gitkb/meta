@@ -1,6 +1,7 @@
 use anyhow::Result;
 use colored::*;
 use meta_core::display::{escape, escape_path};
+use meta_core::ExecutionMode;
 
 use meta_cli::worktree::discover_worktree_repos;
 use meta_git_lib::worktree::git_ops::git_worktree_add;
@@ -10,7 +11,12 @@ use meta_git_lib::worktree::types::*;
 
 use super::cli_types::AddArgs;
 
-pub(crate) fn handle_add(args: AddArgs, verbose: bool, json: bool) -> Result<()> {
+pub(crate) fn handle_add(
+    args: AddArgs,
+    mode: ExecutionMode,
+    verbose: bool,
+    json: bool,
+) -> Result<()> {
     let name = &args.name;
     validate_worktree_name(name)?;
 
@@ -109,6 +115,20 @@ pub(crate) fn handle_add(args: AddArgs, verbose: bool, json: bool) -> Result<()>
             );
         }
         planned.push((spec, source, place));
+    }
+
+    if mode.is_preview() {
+        println!("[DRY RUN] Would add to worktree set '{}':", escape(name));
+        for (spec, source, place) in &planned {
+            println!(
+                "  {}: {} -> {} (branch: {})",
+                escape(&spec.alias),
+                escape_path(source),
+                escape_path(&wt_dir.join(place)),
+                escape(&resolve_branch(name, None, spec.branch.as_deref()))
+            );
+        }
+        return Ok(());
     }
 
     let mut added = Vec::new();

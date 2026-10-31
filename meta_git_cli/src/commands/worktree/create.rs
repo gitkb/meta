@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::*;
 use meta_core::display::{escape, escape_path};
+use meta_core::ExecutionMode;
 use std::collections::{HashMap, HashSet};
 
 use meta_cli::dependency_graph::{DependencyGraph, ProjectDependencies};
@@ -19,6 +20,7 @@ use meta_core::display::shell_quote;
 
 pub(crate) fn handle_create(
     args: CreateArgs,
+    mode: ExecutionMode,
     verbose: bool,
     json: bool,
     global_strict: bool,
@@ -32,7 +34,6 @@ pub(crate) fn handle_create(
     let branch_flag = args.branch.as_deref();
     let repo_specs = &args.repos;
     let use_all = args.all;
-    let dry_run = args.dry_run;
     let ephemeral = args.ephemeral;
     let ttl_seconds = args.ttl;
     // Parse custom metadata, collecting any invalid entries for strict mode
@@ -213,7 +214,7 @@ pub(crate) fn handle_create(
         (alias != ".", place.split('/').count())
     });
 
-    if dry_run {
+    if mode.is_preview() {
         let plan = CreateDryRunPlan {
             name,
             meta_dir: &meta_dir,

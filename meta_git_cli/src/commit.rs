@@ -1,3 +1,4 @@
+use anyhow::Context;
 use console::style;
 use meta_core::config;
 use meta_core::display::{escape, escape_path};
@@ -66,7 +67,12 @@ pub(crate) fn execute_git_commit(
         ));
     }
 
-    if use_editor {
+    if use_editor && options.mode().is_preview() {
+        println!("[DRY RUN] Would open the editor for a message for each of:");
+        for (name, _path, files) in &repos_with_changes {
+            println!("  {} ({} files)", style(escape(name)).cyan(), files.len());
+        }
+    } else if use_editor {
         // Open editor for per-repo messages (interactive, cannot use ExecutionPlan)
         execute_editor_commit(&repos_with_changes)?;
     } else if let Some(msg) = message {
@@ -122,6 +128,25 @@ fn staged_files(path: &std::path::Path) -> Vec<String> {
 fn execute_editor_commit(repos: &[(String, String, Vec<String>)]) -> anyhow::Result<()> {
     use std::io::Write;
 
+    // The editor git would use, from the first repo's config; asked first,
+    // so a missing one or a missing terminal fails before anything is written
+    let first = repos
+        .first()
+        .map_or(Path::new("."), |(_, path, _)| Path::new(path));
+    let editor = meta_core::git::run(first, ["var", "GIT_EDITOR"]).context(
+        "git has no editor to use: set GIT_EDITOR, core.editor, VISUAL or EDITOR, or use -m <message>",
+    )?;
+    // As in git, the editor `:` leaves the message as it is
+    let terminal = match editor.as_str() {
+        ":" => None,
+        _ => Some(Terminal::open().map_err(|why| {
+            anyhow::anyhow!(
+                "The editor '{}' needs the terminal, but {why}. Use -m <message> instead.",
+                escape(&editor)
+            )
+        })?),
+    };
+
     // Create temp file with commit template
     let mut template = String::new();
     template.push_str("# Meta Multi-Commit\n");
@@ -150,16 +175,21 @@ fn execute_editor_commit(repos: &[(String, String, Vec<String>)]) -> anyhow::Res
     // path is still removed on drop
     let temp_file = file.into_temp_path();
 
-    // Get editor from environment
-    let editor = std::env::var("EDITOR")
-        .or_else(|_| std::env::var("VISUAL"))
-        .unwrap_or_else(|_| "vi".to_string());
-
-    // Open editor
-    let status = Command::new(&editor).arg(&temp_file).status()?;
-
-    if !status.success() {
-        anyhow::bail!("Editor exited with non-zero status");
+    if let Some(terminal) = terminal {
+        let status = editor_command(first, &editor)?
+            .current_dir(first)
+            .arg(&temp_file)
+            .stdin(terminal.input)
+            .stdout(terminal.output)
+            .stderr(terminal.errors)
+            .status()
+            .map_err(|e| anyhow::anyhow!("Cannot start the editor '{}': {e}", escape(&editor)))?;
+        if !status.success() {
+            anyhow::bail!(
+                "The editor '{}' failed ({status}); nothing was committed",
+                escape(&editor)
+            );
+        }
     }
 
     // Read and parse the edited file
@@ -172,12 +202,19 @@ fn execute_editor_commit(repos: &[(String, String, Vec<String>)]) -> anyhow::Res
         println!("No commits to make (all messages were empty or deleted).");
         return Ok(());
     }
+    commit_each(repos, &commits)
+}
 
-    // Execute commits
+/// Commit each of `commits` (repo name, message) in its repo of `repos`;
+/// an error if any failed, after trying all.
+fn commit_each(
+    repos: &[(String, String, Vec<String>)],
+    commits: &[(String, String)],
+) -> anyhow::Result<()> {
     let mut succeeded = 0;
     let mut failed = 0;
 
-    for (repo_name, message) in &commits {
+    for (repo_name, message) in commits {
         // Find the path for this repo
         let path = repos
             .iter()
@@ -213,16 +250,73 @@ fn execute_editor_commit(repos: &[(String, String, Vec<String>)]) -> anyhow::Res
 
     println!();
     if failed > 0 {
-        println!(
-            "Committed {} repo(s), {} failed",
-            style(succeeded).green(),
-            style(failed).red()
-        );
-    } else {
-        println!("Committed {} repo(s)", style(succeeded).green());
+        anyhow::bail!("Committed {succeeded} repo(s), {failed} failed");
     }
+    println!("Committed {} repo(s)", style(succeeded).green());
 
     Ok(())
+}
+
+/// `editor` (as `git var GIT_EDITOR` gives it in `repo`) as git runs it:
+/// through git's shell when it holds anything the shell would read
+/// (arguments, quotes, variables), with the file to edit as its last argument.
+fn editor_command(repo: &Path, editor: &str) -> anyhow::Result<Command> {
+    // git's own test (run-command.c, prepare_shell_cmd)
+    if !editor.contains(|c| "|&;<>()$`\\\"' \t\n*?[#~=%".contains(c)) {
+        return Ok(Command::new(editor));
+    }
+    // Git for Windows brings its own sh, which needn't be on PATH
+    let shell = if cfg!(windows) {
+        meta_core::git::run(repo, ["var", "GIT_SHELL_PATH"])?
+    } else {
+        "sh".to_string()
+    };
+    let mut command = Command::new(shell);
+    command
+        .arg("-c")
+        .arg(format!("{editor} \"$@\""))
+        .arg(editor);
+    Ok(command)
+}
+
+/// The terminal meta runs in, for an editor: meta's own standard input is
+/// the plugin request and its output is read by meta, so neither is one.
+struct Terminal {
+    input: std::fs::File,
+    output: std::fs::File,
+    errors: std::fs::File,
+}
+
+impl Terminal {
+    /// The terminal, or why there is none to use: without one (as for an
+    /// agent or a job), or in its background (as under `timeout`), an
+    /// editor would wait for input that never comes.
+    fn open() -> Result<Self, String> {
+        let open = |path: &str| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .map_err(|e| format!("there is none ({e})"))
+        };
+        #[cfg(windows)]
+        let (input, output) = (open("CONIN$")?, open("CONOUT$")?);
+        #[cfg(not(windows))]
+        let (input, output) = {
+            let tty = open("/dev/tty")?;
+            let foreground = rustix::termios::tcgetpgrp(&tty)
+                .map_err(|e| format!("its foreground can't be read ({e})"))?;
+            if foreground != rustix::process::getpgrp() {
+                return Err("meta runs in its background".to_string());
+            }
+            (tty.try_clone().map_err(|e| e.to_string())?, tty)
+        };
+        Ok(Self {
+            errors: output.try_clone().map_err(|e| e.to_string())?,
+            input,
+            output,
+        })
+    }
 }
 
 /// Parse the multi-commit file content
@@ -264,4 +358,38 @@ pub(crate) fn parse_multi_commit_file(content: &str) -> Vec<(String, String)> {
     }
 
     commits
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_editor_with_arguments_runs_through_the_shell_as_in_git() {
+        let plain = editor_command(Path::new("."), "vim").unwrap();
+        assert_eq!(plain.get_program(), "vim");
+        assert_eq!(plain.get_args().count(), 0);
+
+        let shell = editor_command(Path::new("."), "nvim -u NONE").unwrap();
+        let args: Vec<_> = shell.get_args().collect();
+        assert_eq!(args, ["-c", "nvim -u NONE \"$@\"", "nvim -u NONE"]);
+    }
+
+    #[test]
+    fn a_failed_commit_fails_the_command_after_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = |name: &str| {
+            let path = dir.path().join(name);
+            std::fs::create_dir(&path).unwrap();
+            (name.to_string(), path.display().to_string(), vec![])
+        };
+        // neither is a repository, so both commits fail
+        let repos = [repo("a"), repo("b")];
+        let commits = [
+            ("a".to_string(), "one".to_string()),
+            ("b".to_string(), "two".to_string()),
+        ];
+        let err = commit_each(&repos, &commits).unwrap_err();
+        assert_eq!(err.to_string(), "Committed 0 repo(s), 2 failed");
+    }
 }

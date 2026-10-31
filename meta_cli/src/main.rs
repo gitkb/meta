@@ -4,6 +4,7 @@ use colored::*;
 use loop_lib::run;
 use meta_core::config::{self, find_meta_config, MetaTreeNode, ProjectInfo, Workspace};
 use meta_core::display::{escape, escape_lines, escape_path};
+use meta_core::ExecutionMode;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -127,6 +128,13 @@ struct Cli {
 
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+impl Cli {
+    /// `--dry-run`, resolved once for every command
+    fn mode(&self) -> ExecutionMode {
+        ExecutionMode::from_dry_run(self.dry_run)
+    }
 }
 
 #[derive(Subcommand)]
@@ -567,7 +575,13 @@ fn run_cli() -> Result<()> {
                 print_context_help();
                 return Ok(());
             }
-            meta_cli::context::handle_context(cli.json, args.no_status, args.no_cache, cli.verbose)
+            meta_cli::context::handle_context(
+                cli.json,
+                args.no_status,
+                args.no_cache,
+                cli.mode(),
+                cli.verbose,
+            )
         }
         Some(Commands::Init(args)) => {
             let cmd = match args.command {
@@ -578,11 +592,15 @@ fn run_cli() -> Result<()> {
                     init::InitCommand::Claude { force, update }
                 }
             };
-            init::handle_init_command(cmd, cli.verbose)
+            init::handle_init_command(cmd, cli.mode(), cli.verbose)
         }
-        Some(Commands::Plugin(args)) => {
-            handle_plugin_command(args.command, cli.json, cli.help, &subprocess_plugins)
-        }
+        Some(Commands::Plugin(args)) => handle_plugin_command(
+            args.command,
+            cli.mode(),
+            cli.json,
+            cli.help,
+            &subprocess_plugins,
+        ),
         Some(Commands::Exec(args)) => {
             // Handle help flag for exec command specifically
             if cli.help {
@@ -699,7 +717,7 @@ fn handle_command_dispatch(
     // Command args pass through untouched to avoid collisions with
     // identically-named flags (e.g., grep --include, git clone --depth).
     let recursive = cli.recursive;
-    let dry_run = cli.dry_run;
+    let mode = cli.mode();
     let depth = cli.depth;
     // --parallel wins, then --sequential, then the default of the config
     // the command runs from (parallel without one)
@@ -723,7 +741,7 @@ fn handle_command_dispatch(
             json_output: cli.json,
             verbose: cli.verbose,
             parallel: false,
-            dry_run,
+            dry_run: mode.is_preview(),
             silent: cli.silent,
             recursive,
             depth,
@@ -852,7 +870,7 @@ fn handle_command_dispatch(
                     verbose: cli.verbose,
                     silent: cli.silent,
                     parallel,
-                    dry_run,
+                    dry_run: mode.is_preview(),
                     json_output: cli.json,
                     add_aliases_to_global_looprc: false,
                     spawn_stagger_ms: 0,
@@ -866,7 +884,7 @@ fn handle_command_dispatch(
                     json_output: cli.json,
                     verbose: cli.verbose,
                     parallel,
-                    dry_run,
+                    dry_run: mode.is_preview(),
                     silent: cli.silent,
                     recursive,
                     depth,
@@ -923,7 +941,7 @@ fn handle_command_dispatch(
                 verbose: cli.verbose,
                 silent: cli.silent,
                 parallel, // Use the determined parallel mode, not hardcoded false
-                dry_run,
+                dry_run: mode.is_preview(),
                 json_output: cli.json,
                 add_aliases_to_global_looprc: false,
                 spawn_stagger_ms: 0,
@@ -1015,7 +1033,7 @@ fn handle_command_dispatch(
         verbose: cli.verbose,
         silent: cli.silent,
         parallel,
-        dry_run,
+        dry_run: mode.is_preview(),
         json_output: cli.json,
         spawn_stagger_ms: 0,
         env: None,
@@ -1028,7 +1046,7 @@ fn handle_command_dispatch(
         json_output: cli.json,
         verbose: cli.verbose,
         parallel,
-        dry_run,
+        dry_run: mode.is_preview(),
         silent: cli.silent,
         recursive,
         depth,
@@ -1084,6 +1102,7 @@ fn format_plugin_location(local: bool) -> &'static str {
 /// Handle plugin management subcommands with typed args.
 fn handle_plugin_command(
     command: Option<PluginCommands>,
+    mode: ExecutionMode,
     json: bool,
     help: bool,
     subprocess_plugins: &SubprocessPluginManager,
@@ -1097,6 +1116,19 @@ fn handle_plugin_command(
             return Ok(());
         }
     };
+
+    // These change installed plugins and have no preview
+    let changing = match &command {
+        PluginCommands::Install { .. } => Some("install"),
+        PluginCommands::Uninstall { .. } => Some("uninstall"),
+        PluginCommands::Update { check: false, .. } => Some("update"),
+        _ => None,
+    };
+    if let Some(name) = changing.filter(|_| mode.is_preview() && !help) {
+        anyhow::bail!(
+            "meta plugin {name} has no preview, so it refuses --dry-run; nothing was changed"
+        );
+    }
 
     match command {
         PluginCommands::Search { query } => {

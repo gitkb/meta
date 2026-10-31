@@ -33,7 +33,6 @@ pub(crate) fn execute_git_clone(
     options: &PluginRequestOptions,
     cwd: &std::path::Path,
 ) -> anyhow::Result<CommandResult> {
-    let dry_run = options.dry_run;
     // meta's own --recursive and --depth, taken before the plugin ran
     let recursive = args.recursive || options.recursive;
     let depth = args.depth.or(options.depth).map(|d| d.to_string());
@@ -83,7 +82,7 @@ pub(crate) fn execute_git_clone(
         .collect();
     let clone_cmd_str = loop_lib::display_command(&clone_argv);
 
-    if dry_run {
+    if options.mode().is_preview() {
         // Output what we know - just the meta repo clone command
         // (Child repos are in .meta.yaml file which hasn't been cloned yet)
         println!("{} Would clone meta repository:", style("[DRY RUN]").cyan());

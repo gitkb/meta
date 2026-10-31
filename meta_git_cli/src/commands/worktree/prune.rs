@@ -13,7 +13,7 @@ use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set}
 use meta_git_lib::worktree::types::*;
 use meta_git_lib::worktree::workspace::Workspace;
 
-use super::cli_types::PruneArgs;
+use meta_core::ExecutionMode;
 
 /// Helper to create a PruneEntry with consistent structure.
 fn create_prune_entry(
@@ -118,8 +118,8 @@ fn eligible(record: &SetRecord, now: i64) -> Option<(String, Option<u64>)> {
     Some(("ttl_expired".to_string(), Some(age)))
 }
 
-pub(crate) fn handle_prune(args: PruneArgs, json: bool, strict: bool) -> Result<()> {
-    let dry_run = args.dry_run;
+pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Result<()> {
+    let dry_run = mode.is_preview();
 
     // Hooks come from the owner: inside a set being pruned, its own config
     // goes with it

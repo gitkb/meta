@@ -1,6 +1,7 @@
 use anyhow::Result;
 use colored::*;
 use meta_core::display::{escape, escape_path};
+use meta_core::ExecutionMode;
 
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::hooks::fire_post_destroy;
@@ -10,7 +11,12 @@ use meta_git_lib::worktree::workspace::Workspace;
 
 use super::cli_types::RemoveArgs;
 
-pub(crate) fn handle_remove(args: RemoveArgs, verbose: bool, json: bool) -> Result<()> {
+pub(crate) fn handle_remove(
+    args: RemoveArgs,
+    mode: ExecutionMode,
+    verbose: bool,
+    json: bool,
+) -> Result<()> {
     let name = &args.name;
     validate_worktree_name(name)?;
     let force = args.force;
@@ -80,24 +86,41 @@ pub(crate) fn handle_remove(args: RemoveArgs, verbose: bool, json: bool) -> Resu
             );
         }
         eprintln!(
-            "{} discarding work in worktree '{name}':\n  {found}",
-            "warning:".yellow().bold()
+            "{} {} work in worktree '{name}':\n  {found}",
+            "warning:".yellow().bold(),
+            if mode.is_preview() {
+                "would discard"
+            } else {
+                "discarding"
+            }
         );
     }
 
-    // Remove exactly what was checked, nested worktrees first
-    delete_checked_set(&wt_dir, &check, force, verbose)?;
+    if !mode.is_preview() {
+        // Remove exactly what was checked, nested worktrees first
+        delete_checked_set(&wt_dir, &check, force, verbose)?;
 
-    // Fire post-destroy hook
-    fire_post_destroy(name, &wt_dir, force, Some(&configs.owner));
+        // Fire post-destroy hook
+        fire_post_destroy(name, &wt_dir, force, Some(&configs.owner));
+    }
 
     if json {
         let output = DestroyOutput {
             name: name.to_string(),
             path: wt_dir.display().to_string(),
             repos_removed: check.members.len(),
+            dry_run: mode.is_preview(),
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
+    } else if mode.is_preview() {
+        println!(
+            "Would remove worktree '{}' at {}:",
+            escape(name),
+            escape_path(&wt_dir)
+        );
+        for member in &check.members {
+            println!("  {}", escape_path(&member.path));
+        }
     } else {
         println!("{} Removed worktree '{}'", "✓".green(), name.bold());
     }

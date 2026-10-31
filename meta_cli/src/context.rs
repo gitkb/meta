@@ -100,7 +100,13 @@ fn is_cache_valid(cached: &CachedContext, current_root: &PathBuf) -> bool {
 // ── Public API ──────────────────────────────────────────
 
 /// Entry point for `meta context`.
-pub fn handle_context(json: bool, no_status: bool, no_cache: bool, verbose: bool) -> Result<()> {
+pub fn handle_context(
+    json: bool,
+    no_status: bool,
+    no_cache: bool,
+    mode: meta_core::ExecutionMode,
+    verbose: bool,
+) -> Result<()> {
     let cwd = std::env::current_dir().context("Failed to get current directory")?;
 
     let workspace = config::Workspace::find(&cwd, None)?
@@ -183,8 +189,9 @@ pub fn handle_context(json: bool, no_status: bool, no_cache: bool, verbose: bool
         dependencies,
     };
 
-    // Save to cache (only if status was collected and cache wasn't bypassed)
-    if !no_cache && !no_status {
+    // Save to cache (only if status was collected, the cache wasn't
+    // bypassed and this is no preview)
+    if !no_cache && !no_status && !mode.is_preview() {
         let cached = CachedContext {
             context: ctx.clone(),
             timestamp: SystemTime::now(),

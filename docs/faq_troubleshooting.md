@@ -139,9 +139,12 @@ meta exec --parallel -- npm install
 **A:** Use dry-run mode:
 
 ```bash
-meta git pull --dry-run
-meta exec --dry-run -- rm -rf node_modules
+meta --dry-run git pull
+meta --dry-run exec -- rm -rf node_modules
+meta --dry-run git worktree remove my-set --force
 ```
+
+Nothing is changed in preview: commands print what they would do. A command that can't preview (such as `meta plugin install`) refuses `--dry-run` with an error.
 
 ### Q: How do I get JSON output for scripting?
 
@@ -191,7 +194,7 @@ meta git checkout -b feature/new-feature
 meta git commit --edit
 ```
 
-This opens an editor for each dirty repo.
+This opens the editor git uses (`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`) once, with a section for each repo that has staged changes. It needs a terminal: without one (for example in an agent or a CI job) it stops with an error; use `meta git commit -m "message"` there.
 
 ---
 

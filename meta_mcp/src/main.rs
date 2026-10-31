@@ -366,7 +366,7 @@ impl McpServer {
             },
             Tool {
                 name: "meta_get_config".to_string(),
-                description: "Get the meta repository configuration including all projects, tags, and settings".to_string(),
+                description: "Get the meta repository configuration including all projects, tags, and settings (credentials in URLs hidden)".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {}
@@ -962,8 +962,12 @@ impl McpServer {
         let path = config::find_meta_config_in(meta_dir)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
         let content = std::fs::read_to_string(&path)?;
-        let content = config::redact_config_text(&content);
-        Ok(format!("Config file: {}\n\n{}", path.display(), content))
+        let shown = config::redact_config_text(&content);
+        let note = match shown == content {
+            true => "",
+            false => " (credentials hidden: not the file as written)",
+        };
+        Ok(format!("Config file: {}{note}\n\n{shown}", path.display()))
     }
 
     fn tool_get_project_path(&self, args: &serde_json::Value) -> Result<String> {
@@ -2676,6 +2680,10 @@ mod tests {
         let result = server.tool_get_config(&serde_json::json!({})).unwrap();
         assert!(
             result.ends_with("projects:\n  a: https://***@h/a.git\n  b: git@h:b.git\n"),
+            "{result}"
+        );
+        assert!(
+            result.contains("(credentials hidden: not the file as written)"),
             "{result}"
         );
         // JSON may spell a URL so no scan of the text reads it

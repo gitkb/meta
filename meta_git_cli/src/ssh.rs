@@ -267,6 +267,9 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
         eprintln!("  {}", style(escape(&project.name)).bold());
         eprintln!("    actual:   {}", style(actual).red());
         eprintln!("    expected: {}", style(expected).green());
+        if actual.to_string() == expected.to_string() {
+            eprintln!("    (they differ only in their credentials)");
+        }
     }
     eprintln!();
     eprintln!("  Fix manually with:");

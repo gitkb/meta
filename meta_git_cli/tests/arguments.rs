@@ -123,6 +123,10 @@ fn clone_depth_comes_from_meta_unless_given() {
             "{bundle}"
         );
     }
+    // a linked worktree's `.git` file is no bundle: its checkout's name
+    std::fs::create_dir(tmp.path().join("wt")).unwrap();
+    std::fs::write(tmp.path().join("wt/.git"), "gitdir: elsewhere\n").unwrap();
+    assert!(dry_run(&["wt/.git"]).contains("-- wt/.git wt"));
 }
 
 #[test]

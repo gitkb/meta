@@ -46,23 +46,33 @@ pub(crate) fn execute_git_clone(
         .collect();
 
     // The directory git would name: a bundle file's name without
-    // `.bundle`, else the repository's name
-    let source = cwd.join(&url);
-    let clone_dir = match (args.dir, source.file_name().filter(|_| source.is_file())) {
-        (Some(dir), _) => dir,
-        (None, Some(bundle)) => {
-            let bundle = bundle.to_string_lossy();
-            bundle
-                .strip_suffix(".bundle")
-                .unwrap_or(&bundle)
-                .to_string()
+    // `.bundle`, else the repository's name (a `.git` file is a checkout's)
+    let clone_dir = args.dir.unwrap_or_else(|| {
+        let source = cwd.join(&url);
+        let gitfile = || {
+            let mut head = [0; 8];
+            std::fs::File::open(&source)
+                .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut head))
+                .is_ok_and(|()| &head == b"gitdir: ")
+        };
+        match source
+            .file_name()
+            .filter(|_| source.is_file() && !gitfile())
+        {
+            Some(bundle) => {
+                let bundle = bundle.to_string_lossy();
+                bundle
+                    .strip_suffix(".bundle")
+                    .unwrap_or(&bundle)
+                    .to_string()
+            }
+            None => url
+                .parse::<meta_core::git::GitUrl>()
+                .ok()
+                .and_then(|u| u.name().map(str::to_string))
+                .unwrap_or_else(|| "meta".to_string()),
         }
-        (None, None) => url
-            .parse::<meta_core::git::GitUrl>()
-            .ok()
-            .and_then(|u| u.name().map(str::to_string))
-            .unwrap_or_else(|| "meta".to_string()),
-    };
+    });
 
     // The clone, shown as it runs: the URL after `--`, so it can't be read
     // as an option, and the directory meta reads next named explicitly

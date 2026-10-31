@@ -743,6 +743,23 @@ the only commit message
     }
 
     #[test]
+    fn test_get_project_directories_from_inside_a_project() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        std::fs::write(
+            root.join(".meta.yaml"),
+            r#"{"projects": {"a": "u", "b": "u"}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir(root.join("a")).unwrap();
+
+        // every repo the command runs in, not just the one cwd is in
+        let dirs = get_project_directories(&root.join("a")).unwrap();
+        let full = |path: &std::path::Path| path.to_string_lossy().into_owned();
+        assert_eq!(dirs, [full(root), ".".to_string(), full(&root.join("b"))]);
+    }
+
+    #[test]
     fn test_get_project_directories_empty_projects() {
         let temp_dir = TempDir::new().unwrap();
 

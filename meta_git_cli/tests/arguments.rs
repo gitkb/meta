@@ -112,6 +112,8 @@ fn clone_depth_comes_from_meta_unless_given() {
     };
     assert!(dry_run(&["u"]).contains("git clone --depth 3 -- u u"));
     assert!(dry_run(&["--depth", "1", "u", "d"]).contains("git clone --depth 1 -- u d"));
+    // the directory git would name, for an IPv6 host too
+    assert!(dry_run(&["git@[::1]:repo.git"]).contains(":repo.git' repo"));
 }
 
 #[test]

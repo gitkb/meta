@@ -56,8 +56,17 @@ impl FromStr for GitUrl {
             });
         }
         // As git: scp-like when a `:` comes before any `/`, and what is
-        // before it isn't a Windows drive letter
-        match url.split_once(':') {
+        // before it isn't a Windows drive letter. A bracketed host
+        // (`git@[::1]:repo`) keeps its own colons.
+        let host_end = match (url.find('['), url.find(']')) {
+            (Some(open), Some(close)) if open < close => close,
+            _ => 0,
+        };
+        let split = url
+            .get(host_end..)
+            .and_then(|rest| rest.find(':'))
+            .and_then(|at| Some((url.get(..host_end + at)?, url.get(host_end + at + 1..)?)));
+        match split {
             Some((authority, path))
                 if !authority.contains('/') && !(authority.len() == 1 && cfg!(windows)) =>
             {
@@ -180,6 +189,10 @@ mod tests {
         assert_eq!((ssh.port, ssh.path.as_str()), (Some(2222), "org/repo"));
         let v6 = parse("ssh://[::1]/repo");
         assert_eq!((v6.host.as_str(), v6.port), ("[::1]", None));
+        let v6 = parse("git@[::1]:repo.git");
+        assert_eq!((v6.host.as_str(), v6.path.as_str()), ("[::1]", "repo.git"));
+        assert!(v6.is_ssh());
+        assert_eq!(v6.name(), Some("repo"));
         let https = parse("https://user:token@github.com/org/repo");
         assert_eq!(
             (https.host.as_str(), https.user.as_deref()),

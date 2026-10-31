@@ -236,13 +236,13 @@ jobs:
         continue-on-error: true
 
       # Tier 2: Depends on tier 1
-      # meta_plugin_protocol's and loop_lib's meta_core requirement is "<1"
+      # meta_plugin_protocol's, loop_lib's and loop_cli's meta_core requirement is "<1"
       # so the workspace resolves whatever its version; publish them with an
       # ordinary requirement on the meta_core released alongside them.
       # (its own step, so a failed rewrite fails the release)
       - name: Pin the meta_core requirement
         run: |
-          for crate in meta_plugin_protocol loop_lib; do
+          for crate in meta_plugin_protocol loop_lib loop_cli; do
             sed -i 's|meta_core = { path = "../meta_core", version = "<1" }|meta_core = { path = "../meta_core", version = "'"$(cat VERSION)"'" }|' "$crate/Cargo.toml"
             grep -qF "meta_core = { path = \"../meta_core\", version = \"$(cat VERSION)\" }" "$crate/Cargo.toml"
           done
@@ -256,7 +256,7 @@ jobs:
         continue-on-error: true  # May already be published
 
       - name: Publish loop_cli
-        run: cargo publish -p loop_cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p loop_cli --allow-dirty --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
         continue-on-error: true
 
       - name: Publish meta

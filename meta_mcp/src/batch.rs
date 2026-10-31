@@ -8,7 +8,8 @@ use meta_core::git::git;
 use std::process::Command;
 
 /// What a cancel does to a git command of the batch: the pre-check stops,
-/// the rollback finishes.
+/// the rollback finishes, in a process group of its own so that a signal to
+/// the server's group can't cut it short either.
 #[derive(Clone, Copy)]
 enum OnCancel {
     Stop,
@@ -174,7 +175,11 @@ impl McpServer {
             .args(args);
         let output = match on_cancel {
             OnCancel::Stop => self.calls.output(&mut command),
-            OnCancel::Finish => command.output(),
+            OnCancel::Finish => {
+                #[cfg(unix)]
+                std::os::unix::process::CommandExt::process_group(&mut command, 0);
+                command.output()
+            }
         }
         .with_context(|| {
             format!(
@@ -185,11 +190,15 @@ impl McpServer {
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
         } else {
+            // git says why, unless a signal stopped it
+            let why = match String::from_utf8_lossy(&output.stderr).trim() {
+                "" => output.status.to_string(),
+                stderr => stderr.to_string(),
+            };
             Err(anyhow::anyhow!(
-                "git {} failed in {}: {}",
+                "git {} failed in {}: {why}",
                 args.join(" "),
                 meta_core::display::escape_path(path),
-                String::from_utf8_lossy(&output.stderr).trim()
             ))
         }
     }

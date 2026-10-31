@@ -28,6 +28,8 @@ struct State {
     queued: HashMap<String, bool>,
     /// The server is stopping: no call starts.
     stopping: bool,
+    /// A message is being answered, from reading it to writing the reply.
+    busy: bool,
 }
 
 impl Calls {
@@ -68,7 +70,7 @@ impl Calls {
     }
 
     /// Cancels the running call, starts no other, and waits until it has
-    /// ended, an atomic batch's rollback included.
+    /// ended, an atomic batch's rollback included, and its answer is out.
     pub(crate) fn stop_running(&self) {
         {
             let mut state = self.state();
@@ -77,9 +79,26 @@ impl Calls {
                 self.cancelled.store(true, Ordering::SeqCst);
             }
         }
-        while self.state().running.is_some() {
+        while {
+            let state = self.state();
+            state.running.is_some() || state.busy
+        } {
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// Whether the server is stopping.
+    pub(crate) fn stopping(&self) -> bool {
+        self.state().stopping
+    }
+
+    /// Answers a message with `work`, which a stopping server waits for:
+    /// a call that ran to its end gets its reply written.
+    pub(crate) fn answering<T>(&self, work: impl FnOnce() -> T) -> T {
+        self.state().busy = true;
+        let done = work();
+        self.state().busy = false;
+        done
     }
 
     /// Cancels the call `id`: a waiting one never starts, the running one's

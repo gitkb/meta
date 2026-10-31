@@ -567,6 +567,53 @@ mod tests {
     }
 
     #[test]
+    fn arguments_after_the_command_and_each_config_once() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().canonicalize().unwrap();
+        std::fs::write(
+            root.join(".meta.yaml"),
+            "projects:\n  zed: git@x:o/zed.git\n  c:\n    repo: git@x:o/c.git\n    meta: true\n  \
+             user:\n    repo: git@x:o/user.git\n    depends_on: [c]\n  alpha: git@x:o/alpha.git\n",
+        )
+        .unwrap();
+        let nested = root.join("c");
+        std::fs::create_dir_all(nested.join("g")).unwrap();
+        std::fs::write(nested.join(".meta.yaml"), "projects:\n  g: git@x:o/g.git\n").unwrap();
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let run = |command: &str, a: &[&str], cwd: &Path| {
+            execute_command(command, &args(a), &ExecuteOptions::default(), &[], cwd)
+        };
+
+        // meta_cli sends the root among the repos: each config counts once,
+        // and what is missing comes in project order
+        let recursive = ExecuteOptions {
+            recursive: true,
+            ..Default::default()
+        };
+        let provided = [root.to_string_lossy().into_owned(), "c".to_string()];
+        assert_eq!(
+            missing_projects(&recursive, &provided, &root).unwrap(),
+            ["git@x:o/alpha.git", "git@x:o/user.git", "git@x:o/zed.git"]
+        );
+        assert!(error(run("project check", &["x"], &root))
+            .unwrap()
+            .contains("unexpected argument"));
+
+        // list's own -r and --depth
+        let listed = |a: &[&str]| message(run("project list", a, &root)).unwrap();
+        assert!(!listed(&[]).contains(" g "), "{}", listed(&[]));
+        assert!(listed(&["-r"]).contains(" g "), "{}", listed(&["-r"]));
+        assert!(!listed(&["-r", "--depth", "0"]).contains(" g "));
+
+        // dependents' own -r: the root workspace, from inside a nested one
+        assert!(error(run("project dependents", &["c"], &nested)).is_some());
+        assert_eq!(
+            message(run("project dependents", &["c", "-r"], &nested)).unwrap(),
+            "user"
+        );
+    }
+
+    #[test]
     fn test_project_sync_removed() {
         let temp_dir = TempDir::new().unwrap();
 

@@ -992,12 +992,9 @@ fn handle_command_dispatch(
             let depth_str = depth.map_or("unlimited".to_string(), |d| d.to_string());
             println!("Recursive mode enabled, max depth: {depth_str}");
         }
-        // The walk reads the default config file; with --config, start from
-        // the chosen one and walk only the nested meta repos
-        tree = match cli.config {
-            Some(_) => config::walk_projects(meta_dir, meta_projects, depth)?,
-            None => config::walk_meta_tree(meta_dir, depth)?,
-        };
+        // From the config already loaded (the default or --config's), into
+        // the nested meta repos
+        tree = config::walk_projects(meta_dir, meta_projects, depth)?;
         project_paths = vec![meta_dir_str.clone()];
         let flat = flatten_with_tag_filter(&tree, &cli.tag);
         project_paths.extend(

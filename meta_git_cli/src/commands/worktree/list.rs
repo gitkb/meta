@@ -109,8 +109,8 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
             .expect("worktree location has a parent")
             .to_path_buf(),
         _ => {
-            let configs = Configs::find_optional()?;
-            let root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner))?;
+            let configs = Configs::find_optional(&cwd)?;
+            let root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
             if root.is_absolute() {
                 root
             } else {

@@ -27,7 +27,7 @@ pub fn validate_worktree_name(name: &str) -> Result<()> {
 }
 
 /// The configs a worktree command reads, each loaded once: `here`, the
-/// nearest at or above cwd, and `owner`, whose sets and settings
+/// nearest at or above where it runs, and `owner`, whose sets and settings
 /// (`worktrees_dir`, hooks) these are: inside a set, the checkout the set
 /// stands for, which outlives it; else `here`.
 #[derive(Debug, Clone)]
@@ -37,16 +37,15 @@ pub struct Configs {
 }
 
 impl Configs {
-    /// The configs of the workspace at or above cwd; an error outside one.
-    pub fn find() -> Result<Self> {
-        Self::find_optional()?
+    /// The configs of the workspace at or above `start`; an error outside one.
+    pub fn find(start: &Path) -> Result<Self> {
+        Self::find_optional(start)?
             .ok_or_else(|| anyhow::anyhow!("Not inside a meta project (no .meta.yaml found)"))
     }
 
     /// Like [`Configs::find`], `None` outside a workspace.
-    pub fn find_optional() -> Result<Option<Self>> {
-        let cwd = std::env::current_dir()?;
-        Workspace::find(&cwd, None)?.map(Self::of).transpose()
+    pub fn find_optional(start: &Path) -> Result<Option<Self>> {
+        Workspace::find(start, None)?.map(Self::of).transpose()
     }
 
     /// The configs for `here`. A source checkout without a config is still
@@ -73,13 +72,13 @@ impl Configs {
 
 /// Where worktree sets go: `META_WORKTREES`, else the `worktrees_dir` of
 /// `owner`'s config (checked when it was loaded), else its `.worktrees`;
-/// outside a workspace, `.worktrees` in cwd.
-pub fn resolve_worktree_root(owner: Option<&Workspace>) -> Result<PathBuf> {
+/// outside a workspace, `.worktrees` in `cwd`.
+pub fn resolve_worktree_root(owner: Option<&Workspace>, cwd: &Path) -> Result<PathBuf> {
     if let Ok(env_path) = std::env::var("META_WORKTREES") {
         return Ok(PathBuf::from(env_path));
     }
     let Some(owner) = owner else {
-        return Ok(std::env::current_dir()?.join(".worktrees"));
+        return Ok(cwd.join(".worktrees"));
     };
     if let Some(configured) = &owner.worktrees_dir {
         return Ok(owner.dir.join(configured));
@@ -128,8 +127,9 @@ pub fn worktree_set_dir(worktree_root: &Path, name: &str) -> Result<PathBuf> {
 /// The directory of the existing worktree set `name`.
 pub fn resolve_existing_worktree(name: &str) -> Result<PathBuf> {
     validate_worktree_name(name)?;
-    let configs = Configs::find_optional()?;
-    let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner))?;
+    let cwd = std::env::current_dir()?;
+    let configs = Configs::find_optional(&cwd)?;
+    let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
     let wt_dir = worktree_set_dir(&worktree_root, name)?;
     if !wt_dir.exists() {
         anyhow::bail!("Worktree '{}' not found at {}", name, escape_path(&wt_dir));

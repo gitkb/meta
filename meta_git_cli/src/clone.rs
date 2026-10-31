@@ -40,30 +40,28 @@ pub(crate) fn execute_git_clone(
     let meta_depth = args.meta_depth;
     let mut parallel = args.parallel.get();
     let url = args.url;
-    let dir_arg = args.dir;
     let git_clone_args: Vec<String> = depth
         .iter()
         .flat_map(|d| ["--depth".to_string(), d.clone()])
         .collect();
 
     // Derive directory name
-    let clone_dir = dir_arg.clone().unwrap_or_else(|| {
+    let clone_dir = args.dir.unwrap_or_else(|| {
         url.parse::<meta_core::git::GitUrl>()
             .ok()
             .and_then(|u| u.name().map(str::to_string))
             .unwrap_or_else(|| "meta".to_string())
     });
 
-    // Build the git clone command string for display/dry-run
-    let mut clone_cmd_str = "git clone".to_string();
-    for arg in &git_clone_args {
-        clone_cmd_str.push(' ');
-        clone_cmd_str.push_str(arg);
-    }
-    clone_cmd_str.push(' ');
-    clone_cmd_str.push_str(&url);
-    clone_cmd_str.push(' ');
-    clone_cmd_str.push_str(&clone_dir);
+    // The clone, shown as it runs: the URL after `--`, so it can't be read
+    // as an option, and the directory meta reads next named explicitly
+    let clone_argv: Vec<String> = ["git", "clone"]
+        .into_iter()
+        .map(str::to_string)
+        .chain(git_clone_args)
+        .chain(["--".to_string(), url.clone(), clone_dir.clone()])
+        .collect();
+    let clone_cmd_str = loop_lib::display_command(&clone_argv);
 
     if dry_run {
         // Output what we know - just the meta repo clone command
@@ -84,15 +82,7 @@ pub(crate) fn execute_git_clone(
         meta_core::display::escape(&url)
     );
     let mut clone_cmd = meta_core::git::git(cwd);
-    // after `--`, a URL can't be read as an option (`--upload-pack=...`)
-    clone_cmd
-        .arg("clone")
-        .args(&git_clone_args)
-        .arg("--")
-        .arg(&url);
-    if let Some(ref dir) = dir_arg {
-        clone_cmd.arg(dir);
-    }
+    clone_cmd.args(clone_argv.iter().skip(1));
     if let Some(ref ssh) = ssh_cmd {
         clone_cmd.env("GIT_SSH_COMMAND", ssh);
     }

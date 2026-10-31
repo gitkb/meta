@@ -1043,7 +1043,6 @@ impl PluginInstaller {
         Ok(installed)
     }
 
-    /// Validate a plugin by running --meta-plugin-info
     /// Get the download URL for a specific platform
     fn get_platform_url(&self, releases: &PlatformReleases, platform: &str) -> Option<String> {
         match platform {

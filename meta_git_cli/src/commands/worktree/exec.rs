@@ -176,8 +176,9 @@ fn handle_ephemeral_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<()
     };
 
     // Resolve worktree path for exec
-    let configs = Configs::find_optional()?;
-    let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner))?;
+    let cwd = std::env::current_dir()?;
+    let configs = Configs::find_optional(&cwd)?;
+    let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
     let wt_dir = worktree_set_dir(&worktree_root, &name)?;
 
     // Run the command

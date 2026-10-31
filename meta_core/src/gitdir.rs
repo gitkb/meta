@@ -133,6 +133,8 @@ mod tests {
                 "user.name=t",
                 "-c",
                 "user.email=t@example.com",
+                "-c",
+                "commit.gpgsign=false",
                 "commit",
                 "-q",
                 "--allow-empty",

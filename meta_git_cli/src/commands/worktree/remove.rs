@@ -17,8 +17,9 @@ pub(crate) fn handle_remove(args: RemoveArgs, verbose: bool, json: bool) -> Resu
 
     // Hooks come from the owner: inside the set being removed, its own
     // config goes with it
-    let configs = Configs::find()?;
-    let worktree_root = resolve_worktree_root(Some(&configs.owner))?;
+    let cwd = std::env::current_dir()?;
+    let configs = Configs::find(&cwd)?;
+    let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
     let wt_dir = worktree_set_dir(&worktree_root, name)?;
 
     if !wt_dir.exists() {

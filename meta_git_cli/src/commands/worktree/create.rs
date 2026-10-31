@@ -80,14 +80,15 @@ pub(crate) fn handle_create(
         }
     }
 
-    let configs = Configs::find()?;
+    let cwd = std::env::current_dir()?;
+    let configs = Configs::find(&cwd)?;
     // --recursive works from the root of the workspace tree
     let configs = match recursive {
         true => Configs::of(configs.here.root()?)?,
         false => configs,
     };
     let meta_dir = configs.here.dir.clone();
-    let worktree_root = resolve_worktree_root(Some(&configs.owner))?;
+    let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
 
     // Check if worktree already exists
     let wt_dir = worktree_set_dir(&worktree_root, name)?;

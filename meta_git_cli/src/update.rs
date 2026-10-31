@@ -62,12 +62,11 @@ pub(crate) fn execute_git_update(
                 } else {
                     dir.join(name).to_string_lossy().to_string()
                 };
-                let shown = escape(&relative_path);
                 eprintln!(
                     "{} {} exists locally but is not in .meta.yaml. To remove: rm -rf {}",
                     style("⚠").yellow(),
-                    style(&shown).yellow().bold(),
-                    shown
+                    style(escape(&relative_path)).yellow().bold(),
+                    escape(&meta_core::display::shell_quote(&relative_path))
                 );
             }
         }

@@ -123,9 +123,10 @@ pub(crate) fn handle_prune(args: PruneArgs, json: bool, strict: bool) -> Result<
 
     // Hooks come from the owner: inside a set being pruned, its own config
     // goes with it
-    let configs = Configs::find()?;
+    let cwd = std::env::current_dir()?;
+    let configs = Configs::find(&cwd)?;
     let workspace = Workspace::of(&configs.here.dir);
-    let worktree_root = resolve_worktree_root(Some(&configs.owner))?;
+    let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
     if sets.is_empty() && kept.is_empty() {
         if json {

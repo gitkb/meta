@@ -1,5 +1,5 @@
-//! The arguments `meta git clone` and `meta git commit` take, through the
-//! plugin protocol.
+//! What the git plugin takes from a protocol request: the arguments of
+//! `meta git clone` and `meta git commit`, and the request's directory.
 
 use serde_json::{json, Value};
 use std::io::Write;
@@ -7,10 +7,22 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
 fn meta_git(cwd: &Path, command: &str, args: &[&str], options: Value) -> Output {
+    meta_git_from(cwd, cwd, command, args, options)
+}
+
+/// [`meta_git`], with the plugin process started in `process_dir`.
+fn meta_git_from(
+    process_dir: &Path,
+    cwd: &Path,
+    command: &str,
+    args: &[&str],
+    options: Value,
+) -> Output {
     let request = json!({"command": command, "args": args, "cwd": cwd, "options": options});
     let mut child = Command::new(env!("CARGO_BIN_EXE_meta-git"))
         .arg("--meta-plugin-exec")
-        .current_dir(cwd)
+        .current_dir(process_dir)
+        .env_remove("META_WORKTREES")
         .env("HOME", cwd)
         .env("XDG_CONFIG_HOME", cwd.join("xdg"))
         .env("GIT_CONFIG_GLOBAL", cwd.join("no-gitconfig"))
@@ -92,6 +104,57 @@ fn clone_depth_comes_from_meta_unless_given() {
         assert!(out.status.success(), "{}", text(&out));
         text(&out)
     };
-    assert!(dry_run(&["u"]).contains("git clone --depth 3 u u"));
-    assert!(dry_run(&["--depth", "1", "u", "d"]).contains("git clone --depth 1 u d"));
+    assert!(dry_run(&["u"]).contains("git clone --depth 3 -- u u"));
+    assert!(dry_run(&["--depth", "1", "u", "d"]).contains("git clone --depth 1 -- u d"));
+}
+
+#[test]
+fn worktree_list_finds_the_workspace_of_the_requests_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tmp.path().canonicalize().unwrap();
+    let workspace = tmp.join("workspace");
+    let repo = workspace.join("a");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        workspace.join(".meta.yaml"),
+        "projects:\n  a:\n    path: a\n",
+    )
+    .unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_GLOBAL", tmp.join("no-gitconfig"))
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+    };
+    git(&["init", "-q"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "a"]);
+    let set_member = workspace.join(".worktrees/s/a");
+    git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "s",
+        &set_member.to_string_lossy(),
+    ]);
+    let elsewhere = tmp.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+
+    let out = meta_git_from(
+        &elsewhere,
+        &workspace,
+        "git worktree list",
+        &[],
+        json!({"json_output": true}),
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    let listed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(listed["worktrees"][0]["name"], "s", "{listed}");
 }

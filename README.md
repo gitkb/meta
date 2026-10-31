@@ -1,6 +1,6 @@
 # meta
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/gitkb/meta/release.yml?branch=main)](https://github.com/gitkb/meta/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/gitkb/meta/ci.yml?branch=main)](https://github.com/gitkb/meta/actions)
 [![Version](https://img.shields.io/github/v/release/gitkb/meta)](https://github.com/gitkb/meta/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 

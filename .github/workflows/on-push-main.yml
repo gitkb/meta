@@ -5,46 +5,29 @@ on:
     branches:
       - main
 
+# release-please acts with PARENT_REPO_PAT, not GITHUB_TOKEN
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   # Run quality checks first
   quality:
     uses: ./.github/workflows/ci.yml
 
-  # Create release PR or release on merge
+  # Create release PR or release on merge. The tag it creates (with the PAT)
+  # starts release.yml.
   release-please:
     name: Release Please
     needs: quality
     runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Release Please
-        id: release
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
         with:
           token: ${{ secrets.PARENT_REPO_PAT }}
           # Use manifest mode to track version in VERSION file
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-
-  # Trigger release workflow after successful release
-  trigger-release:
-    name: Trigger Release Build
-    needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Repository Dispatch
-        uses: peter-evans/repository-dispatch@v4
-        with:
-          token: ${{ secrets.REPO_WRITE_PACKAGES_PAT }}
-          event-type: release-tagged
-          client-payload: '{"tag": "${{ needs.release-please.outputs.tag_name }}"}'

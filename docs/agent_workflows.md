@@ -229,7 +229,7 @@ Use `meta_execution_order` before building:
 ```
 
 ### 6. Handle Failures Gracefully
-A tool's result has `isError: true` when the tool itself failed, or when every repository it acted in failed. A tool that acts in several repositories reports each one; when only some failed, `isError` is not set, so also check each repository's `success`.
+A tool's result has `isError: true` when the tool itself failed, or when every repository it acted in failed. A tool that acts in several repositories reports each one; when only some failed, `isError` is not set, so also check each repository's entry: `success: false` or an `error` field means that repository failed (`meta_git_diff` and `meta_search_code` entries carry only `error`).
 
 ## Error Recovery
 

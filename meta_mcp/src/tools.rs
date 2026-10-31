@@ -1826,11 +1826,10 @@ mod tests {
         std::fs::write(ws.join(".meta.yaml"), "projects:\n  plain: {}\n").unwrap();
         let server = McpServer::in_dir(Some(ws));
         let diff = call(&server, "meta_git_diff", json!({"project": "plain"})).unwrap();
-        assert!(
-            diff.is_error && diff.text.contains("not a git repository of its own"),
-            "{}",
-            diff.text
-        );
+        // or, under safe.bareRepository=explicit, git's own refusal
+        let refused = diff.text.contains("not a git repository of its own")
+            || diff.text.contains("Project 'plain' at ") && diff.text.contains(": fatal:");
+        assert!(diff.is_error && refused, "{}", diff.text);
 
         // a workspace root that isn't a repository, inside one that is
         let outer = tempfile::tempdir().unwrap();

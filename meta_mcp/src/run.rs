@@ -78,6 +78,8 @@ impl Calls {
 
     /// Cancels the running call, starts no other, and waits until it has
     /// ended, an atomic batch's rollback included, and its answer is out.
+    /// (A signal stops the server only on Unix.)
+    #[cfg(unix)]
     pub(crate) fn stop_running(&self) {
         self.cancel_all();
         while {
@@ -288,6 +290,7 @@ fn stop(child: &mut Child, kill: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::test_support::{gone, wait_for};
 
     /// The name of the program `pid` runs.
@@ -441,6 +444,7 @@ mod tests {
     /// A stopping server waits for the reply being written, and starts no
     /// call waiting or read later.
     #[test]
+    #[cfg(unix)]
     fn stopping_waits_for_the_answer_and_starts_nothing_more() {
         let calls = Calls::default();
         calls.queue("1".to_string());

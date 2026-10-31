@@ -99,6 +99,7 @@ pub(crate) fn json(reply: anyhow::Result<Reply>) -> serde_json::Value {
 }
 
 /// Waits until `done` holds, failing the test after 20 seconds.
+#[cfg(unix)]
 pub(crate) fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while !done() {
@@ -111,6 +112,7 @@ pub(crate) fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
 }
 
 /// Whether the process `pid` is gone: not running, and reaped.
+#[cfg(unix)]
 pub(crate) fn gone(pid: &str) -> bool {
     !Command::new("kill")
         .args(["-0", pid])

@@ -19,6 +19,7 @@ fn isolated(mut command: Command, dir: &Path) -> Command {
 }
 
 /// Waits until `done` holds, failing the test after 20 seconds.
+#[cfg(unix)]
 fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while !done() {
@@ -734,4 +735,36 @@ fn a_server_whose_output_is_gone_stops_its_running_tool() {
     let sleep = std::fs::read_to_string(&pid).unwrap();
     wait_for("the tool's sleep to end", || gone(sleep.trim()));
     drop(stdin);
+}
+
+/// A server that finds its output gone while sending a tool's reply drops
+/// the calls still waiting, each said on stderr.
+#[test]
+#[cfg(unix)]
+fn a_server_whose_output_is_gone_drops_its_waiting_calls() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
+    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), tmp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(server.stdout.take());
+    let mut stdin = server.stdin.take().unwrap();
+    // the second call waits while the first one sleeps
+    writeln!(stdin, "{}", batch(1, "sleep 1", false)).unwrap();
+    let call = serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "meta_get_config"}});
+    writeln!(stdin, "{call}").unwrap();
+    let mut status = None;
+    wait_for("the server to end", || {
+        status = server.try_wait().unwrap();
+        status.is_some()
+    });
+    assert_eq!(status.unwrap().code(), Some(1), "{status:?}");
+    drop(stdin);
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
+    assert!(stderr.contains("request 2 not started"), "{stderr}");
 }

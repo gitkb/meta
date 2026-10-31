@@ -306,9 +306,14 @@ impl McpServer {
             }
         }
         if !calls.is_empty() && messages.len() > 1 {
+            // only a well-formed notification: anything else is refused
+            // when its turn comes
+            let notification = |m: &serde_json::Value| {
+                m.get("jsonrpc") == Some(&serde_json::json!("2.0")) && m.get("id").is_none()
+            };
             for message in messages
                 .iter()
-                .filter(|m| method(m, "notifications/cancelled"))
+                .filter(|m| method(m, "notifications/cancelled") && notification(m))
             {
                 self.cancel(message.get("params"));
             }
@@ -696,6 +701,7 @@ mod tests {
     /// A stopping server waits until the reply to a call that ended is
     /// written, however slowly the client reads it.
     #[test]
+    #[cfg(unix)]
     fn a_stopping_server_writes_the_reply_of_a_call_that_ended() {
         use std::sync::atomic::{AtomicBool, Ordering};
         /// Output whose first write waits until it is let through.
@@ -743,6 +749,22 @@ mod tests {
         });
         let reply: serde_json::Value = serde_json::from_slice(&written.lock().unwrap()).unwrap();
         assert_eq!(reply["id"], 1, "{reply}");
+    }
+
+    #[test]
+    fn a_malformed_cancellation_in_a_batch_cancels_nothing() {
+        let (server, tmp) = test_support::workspace();
+        let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "meta_batch_execute", "arguments": {"command": ["touch", "ran"]}}});
+        let cancel = json!({"jsonrpc": "1.0", "method": "notifications/cancelled",
+            "params": {"requestId": 2}});
+        let mut output = Vec::new();
+        let input = format!("{}\n", json!([call, cancel]));
+        server.serve(input.as_bytes(), &mut output).unwrap();
+        let replies: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(replies[0]["id"], 2, "{replies}");
+        assert_eq!(replies[1]["error"]["code"], -32600, "{replies}");
+        assert!(tmp.path().join("a/ran").exists());
     }
 
     #[test]

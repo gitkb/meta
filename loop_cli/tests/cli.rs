@@ -43,4 +43,5 @@ fn an_exclusion_holds_for_directories_named_outright() {
         .output()
         .unwrap();
     assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("No directories left after exclusions"));
 }

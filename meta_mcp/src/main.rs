@@ -1682,10 +1682,7 @@ impl McpServer {
         // workspace. A project whose nested config can't be read is an
         // error of its own.
         let mut targets = Vec::new();
-        let mut seen = std::collections::HashSet::from([meta_dir
-            .canonicalize()
-            .unwrap_or_else(|_| meta_dir.clone())]);
-        search_targets(meta_dir, "", &projects, &mut seen, &mut targets);
+        search_targets(meta_dir, "", &projects, &mut targets);
 
         let mut results = Vec::new();
 
@@ -2350,12 +2347,12 @@ struct SearchTarget {
 /// Every project of `projects` (listed by the config in `dir`) and the ones
 /// nested in them, parents first, with paths under `prefix`. Each nested
 /// config is read on its own, so one that can't be read is only its
-/// project's error; `seen` stops a link back up the tree.
+/// project's error. Config checks keep every nested path inside its parent,
+/// so the walk only goes down.
 fn search_targets(
     dir: &std::path::Path,
     prefix: &str,
     projects: &[ProjectInfo],
-    seen: &mut std::collections::HashSet<std::path::PathBuf>,
     out: &mut Vec<SearchTarget>,
 ) {
     for project in projects {
@@ -2381,14 +2378,8 @@ fn search_targets(
                 .map(|nested| nested.iter().map(|child| child.path.clone()).collect())
                 .map_err(Clone::clone),
         });
-        let project_dir = dir.join(&project.path);
-        let real = project_dir
-            .canonicalize()
-            .unwrap_or_else(|_| project_dir.clone());
         if let Ok(nested) = nested {
-            if !nested.is_empty() && seen.insert(real) {
-                search_targets(&project_dir, &path, &nested, seen, out);
-            }
+            search_targets(&dir.join(&project.path), &path, &nested, out);
         }
     }
 }

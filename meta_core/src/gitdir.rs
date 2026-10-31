@@ -56,17 +56,31 @@ pub fn looks_like_git_dir(dir: &Path) -> bool {
 pub fn is_git_dir(dir: &Path) -> bool {
     // `<dir>/.` can be looked up only by someone who may enter `<dir>`
     let enterable = |name: &str| dir.join(name).join(".").metadata().is_ok();
+    looks_like_git_dir(dir) && enterable("objects") && enterable("refs") && valid_head(dir)
+}
+
+/// Whether `dir/HEAD` names a ref under `refs/` (a symlink, or a file
+/// `ref: refs/...`) or holds a commit id. Only a regular file is read, and
+/// only its start, as git does: a large file or a pipe named `HEAD` in a
+/// plain directory is none.
+fn valid_head(dir: &Path) -> bool {
+    use std::io::Read;
     let head = dir.join("HEAD");
-    let valid_head = match std::fs::read_link(&head) {
-        Ok(target) => target.to_string_lossy().starts_with("refs/"),
-        Err(_) => std::fs::read(&head).is_ok_and(|head| {
-            let head = head.trim_ascii_end();
+    if let Ok(target) = std::fs::read_link(&head) {
+        return target.to_string_lossy().starts_with("refs/");
+    }
+    if !head.metadata().is_ok_and(|meta| meta.is_file()) {
+        return false;
+    }
+    let mut start = Vec::new();
+    std::fs::File::open(&head)
+        .and_then(|file| file.take(256).read_to_end(&mut start))
+        .is_ok_and(|_| {
+            let head = start.trim_ascii_end();
             head.strip_prefix(b"ref:")
                 .is_some_and(|target| target.trim_ascii_start().starts_with(b"refs/"))
                 || (head.len() >= 40 && head.iter().all(u8::is_ascii_hexdigit))
-        }),
-    };
-    looks_like_git_dir(dir) && enterable("objects") && enterable("refs") && valid_head
+        })
 }
 
 /// The git directory the repository at `dir` keeps its objects, refs and
@@ -229,7 +243,8 @@ mod tests {
             // nor objects git can't look into
             let objects = repo.join(".git/objects");
             std::fs::set_permissions(&objects, mode(0o600)).unwrap();
-            if std::fs::read_dir(&objects).is_err() {
+            // (listing needs read permission, entering needs search)
+            if objects.join(".").metadata().is_err() {
                 assert_eq!(common_dir(&repo).unwrap(), None);
             }
             std::fs::set_permissions(&objects, mode(0o755)).unwrap();

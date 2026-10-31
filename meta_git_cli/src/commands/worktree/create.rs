@@ -214,6 +214,26 @@ pub(crate) fn handle_create(
         (alias != ".", place.split('/').count())
     });
 
+    // A preview skips what the run below skips: a repo without the
+    // commit-ish (the run checks again, after fetching a PR's branch)
+    if mode.is_preview() {
+        let mut kept = Vec::new();
+        for repo in repos_to_create {
+            match missing_ref(&repo.1, from_ref)? {
+                Some(r) => super::warn_or_bail(
+                    strict,
+                    format!(
+                        "Skipping '{}': ref '{}' not found",
+                        escape(&repo.0),
+                        escape(r)
+                    ),
+                )?,
+                None => kept.push(repo),
+            }
+        }
+        repos_to_create = kept;
+    }
+
     // Where each repo's checkout goes in the set
     let dests: Vec<std::path::PathBuf> = repos_to_create
         .iter()

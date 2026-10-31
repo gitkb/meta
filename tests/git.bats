@@ -788,6 +788,11 @@ with_terminal() {
     python3 -c 'import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))' "$@"
 }
 
+# Run a command on a terminal, but in its background (as under `timeout`)
+in_background() {
+    python3 -c 'import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn([sys.executable, "-c", "import os, sys\npid = os.fork()\nif pid == 0:\n    os.setpgid(0, 0)\n    os.execvp(sys.argv[1], sys.argv[1:])\nsys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))", *sys.argv[1:]])))' "$@"
+}
+
 # Run a command with no terminal at all, as an agent or a CI job is
 without_terminal() {
     python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" </dev/null
@@ -846,6 +851,21 @@ without_terminal() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"The editor '$TEST_DIR/editor' needs the terminal"*"Use -m <message> instead."* ]]
     [ ! -e "$LOG" ]
+    [ -n "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" ]
+
+    # on a terminal, but in its background, it would stop on its first read
+    GIT_EDITOR="$TEST_DIR/editor" run in_background "$META_BIN" git commit --edit
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"needs the terminal, but meta runs in its background"* ]]
+    [ ! -e "$LOG" ]
+}
+
+@test "meta git commit --edit names an editor that can't start" {
+    echo change >> "$TEST_DIR/frontend/README.md"
+    git -C "$TEST_DIR/frontend" add README.md
+    GIT_EDITOR="$TEST_DIR/no-such-editor" run with_terminal "$META_BIN" git commit --edit
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no-such-editor"* ]]
     [ -n "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" ]
 }
 

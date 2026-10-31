@@ -833,6 +833,13 @@ fn merge_hooks_into_settings(
         .or_insert_with(|| json!({}))
         .as_object_mut()
         .ok_or_else(|| invalid("hooks", "an object"))?;
+    // Every event meta adds to has the shape Claude Code reads, whether or
+    // not this run adds to it
+    for key in build_meta_hooks(true).keys() {
+        if hooks.get(key).is_some_and(|groups| !groups.is_array()) {
+            return Err(invalid(&format!("hooks.{key}"), "an array"));
+        }
+    }
     for (key, groups) in meta_hooks {
         let arr = hooks
             .entry(&key)

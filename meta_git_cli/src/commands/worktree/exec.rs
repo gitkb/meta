@@ -149,6 +149,20 @@ fn handle_ephemeral_exec(
     if cmd_parts.is_empty() {
         anyhow::bail!("No command specified after --");
     }
+    // A run names the set's repos by the .meta.yaml checked out in it; one
+    // started at another commit may name them otherwise than the workspace
+    let filtered = !args.include.is_empty() || !args.exclude.is_empty();
+    if let Some(start) = args
+        .commit_ish
+        .as_deref()
+        .filter(|_| mode.is_preview() && filtered)
+    {
+        anyhow::bail!(
+            "--dry-run can't preview --include/--exclude for a set started at {}: its own \
+             .meta.yaml names its repos; nothing was changed",
+            escape(start)
+        );
+    }
 
     // Build CreateArgs from the exec args
     let create_args = CreateArgs {
@@ -179,7 +193,8 @@ fn handle_ephemeral_exec(
         let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
         let wt_dir = worktree_set_dir(&worktree_root, &name)?;
         let dirs: Vec<String> = planned.iter().map(|p| p.display().to_string()).collect();
-        let names = match &configs {
+        // as in a run, only a filter reads the configs
+        let names = match configs.as_ref().filter(|_| filtered) {
             Some(configs) => {
                 let here = &configs.here;
                 let tree = meta_core::config::walk_projects(&here.dir, &here.projects, None)?;

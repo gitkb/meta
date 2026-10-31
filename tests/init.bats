@@ -495,6 +495,18 @@ assert_settings_refused_without_changes() {
     [[ "$output" == *"must be an object"* ]]
 }
 
+@test "init refuses a PreToolUse object without agent too" {
+    rm "$STUB_DIR/agent"
+    mkdir -p .claude
+    printf '%s' '{"hooks":{"PreToolUse":{}}}' > .claude/settings.json
+    init_claude() { PATH="$STUB_DIR" "$META_BIN" init claude; }
+    run init_claude
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"key 'hooks.PreToolUse'"* ]]
+    [ ! -e .meta ]
+    [ "$(cat .claude/settings.json)" = '{"hooks":{"PreToolUse":{}}}' ]
+}
+
 @test "init refuses PreToolUse object before writing any files" {
     assert_settings_refused_without_changes '{"hooks":{"PreToolUse":{"matcher":"Bash"}}}' "key 'hooks.PreToolUse'"
     [[ "$output" == *"must be an array"* ]]

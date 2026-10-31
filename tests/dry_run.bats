@@ -16,6 +16,9 @@ setup() {
     fi
     SANDBOX="$BATS_TEST_TMPDIR"
     CALLS="$SANDBOX/calls"
+    # a temporary file a preview made would show in the snapshot too
+    export TMPDIR="$SANDBOX/tmp"
+    mkdir -p "$TMPDIR"
 
     # Programs a preview must never start: each records that it ran
     STUBS="$SANDBOX/stubs"
@@ -61,6 +64,9 @@ EOF
         git clone --quiet "file://$SANDBOX/remotes/$repo.git" "$WS/$repo"
     done
     cd "$WS"
+    # a local plugin, for uninstall to refuse to remove
+    mkdir -p .meta/plugins
+    cp "$TARGET/meta-git" .meta/plugins/meta-git
 
     # A clean set, a set with work only --force discards, staged changes
     meta git worktree create clean --repo backend >/dev/null
@@ -153,7 +159,7 @@ preview() {
     sleep 2
     preview 0 git worktree prune
     [[ "$output" == *"Would prune 1 worktree(s)"* ]]
-    run meta --dry-run --json git worktree prune
+    preview 0 --json git worktree prune
     [[ "$output" == *'"dry_run": true'* ]]
 }
 
@@ -171,6 +177,18 @@ preview() {
     [[ "$output" == *"Then would run \`touch made-by-exec\` in backend and remove the set."* ]]
     preview 1 git worktree exec eph --ephemeral --repo backend --include typo -- touch made-by-exec
     [[ "$output" == *"typo"* ]]
+    # as in a run, no filter reads no nested config (here a broken one)
+    printf '{broken' > "$WS/frontend/.meta.yaml"
+    preview 0 git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
+    rm "$WS/frontend/.meta.yaml"
+    # a repo without the start commit is skipped, as in a run
+    git -C "$WS/frontend" tag only-in-frontend
+    preview 0 git worktree exec eph only-in-frontend --ephemeral --all -- touch made-by-exec
+    [[ "$output" == *"Skipping 'backend': ref 'only-in-frontend' not found"* ]]
+    [[ "$output" == *"Then would run \`touch made-by-exec\` in frontend and remove the set."* ]]
+    # a set started elsewhere names its repos by its own .meta.yaml: refused
+    preview 1 git worktree exec eph main --ephemeral --repo backend --include backend -- touch made-by-exec
+    [[ "$output" == *"can't preview --include/--exclude for a set started at main"* ]]
 }
 
 @test "exec previews" {
@@ -227,6 +245,7 @@ preview() {
 @test "plugin uninstall refuses --dry-run" {
     preview 1 plugin uninstall --local meta-git
     [[ "$output" == *"meta plugin uninstall has no preview"* ]]
+    [ -x .meta/plugins/meta-git ]
 }
 
 @test "plugin update refuses --dry-run" {

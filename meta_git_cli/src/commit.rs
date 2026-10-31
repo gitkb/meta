@@ -1,7 +1,7 @@
 use anyhow::Context;
 use console::style;
 use meta_core::config;
-use meta_core::display::{escape, escape_path};
+use meta_core::display::{escape, escape_lines, escape_path};
 use meta_plugin_protocol::{CommandResult, PlannedCommand, PluginRequestOptions};
 use std::path::Path;
 use std::process::Command;
@@ -181,9 +181,7 @@ fn execute_editor_commit(repos: &[(String, String, Vec<String>)]) -> anyhow::Res
     let temp_file = file.into_temp_path();
 
     if let Some(terminal) = terminal {
-        let status = editor_command(first, &editor)?
-            .current_dir(first)
-            .arg(&temp_file)
+        let status = editor_command(first, &editor, &temp_file)
             .stdin(terminal.input)
             .stdout(terminal.output)
             .stderr(terminal.errors)
@@ -247,7 +245,12 @@ fn commit_each(
                 succeeded += 1;
             }
             _ => {
-                println!("  {} Failed to commit", style("✗").red());
+                // the message is in no file any more: show it, to reuse
+                println!(
+                    "  {} Failed to commit; the message was:\n{}",
+                    style("✗").red(),
+                    escape_lines(message)
+                );
                 failed += 1;
             }
         }
@@ -262,27 +265,18 @@ fn commit_each(
     Ok(())
 }
 
-/// `editor` (as `git var GIT_EDITOR` gives it in `repo`) as git runs it:
-/// through git's shell when it holds anything the shell would read
-/// (arguments, quotes, variables), with the file to edit as its last argument.
-fn editor_command(repo: &Path, editor: &str) -> anyhow::Result<Command> {
-    // git's own test (run-command.c, prepare_shell_cmd)
-    if !editor.contains(|c| "|&;<>()$`\\\"' \t\n*?[#~=%".contains(c)) {
-        return Ok(Command::new(editor));
-    }
-    // Git for Windows brings its own sh, which needn't be on PATH; a git
-    // older than 2.46 can't name it, and then sh must be on PATH
-    let shell = if cfg!(windows) {
-        meta_core::git::query(repo, ["var", "GIT_SHELL_PATH"]).unwrap_or_else(|| "sh".to_string())
-    } else {
-        "sh".to_string()
-    };
-    let mut command = Command::new(shell);
+/// `editor` (as `git var GIT_EDITOR` gives it in `repo`) on `file`, run by
+/// git as a shell alias: through git's shell or directly by git's own rule,
+/// with git's environment (Git for Windows finds the editors it ships, such
+/// as `nano.exe`, only on its own PATH), in the repo's top folder.
+fn editor_command(repo: &Path, editor: &str, file: &Path) -> Command {
+    let mut command = meta_core::git::git(repo);
     command
         .arg("-c")
-        .arg(format!("{editor} \"$@\""))
-        .arg(editor);
-    Ok(command)
+        .arg(format!("alias.meta-edit=!{editor}"))
+        .arg("meta-edit")
+        .arg(file);
+    command
 }
 
 /// The terminal meta runs in, for an editor: meta's own standard input is
@@ -371,14 +365,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_editor_with_arguments_runs_through_the_shell_as_in_git() {
-        let plain = editor_command(Path::new("."), "vim").unwrap();
-        assert_eq!(plain.get_program(), "vim");
-        assert_eq!(plain.get_args().count(), 0);
-
-        let shell = editor_command(Path::new("."), "nvim -u NONE").unwrap();
-        let args: Vec<_> = shell.get_args().collect();
-        assert_eq!(args, ["-c", "nvim -u NONE \"$@\"", "nvim -u NONE"]);
+    fn git_runs_the_editor_as_its_own() {
+        let command = editor_command(Path::new("."), "nvim -u NONE", Path::new("/msg"));
+        assert_eq!(command.get_program(), "git");
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(
+            args,
+            ["-c", "alias.meta-edit=!nvim -u NONE", "meta-edit", "/msg"]
+        );
     }
 
     #[test]
@@ -392,6 +386,9 @@ mod tests {
             meta_core::git::run(&path, ["init", "-q"]).unwrap();
             meta_core::git::run(&path, ["config", "user.name", "Test"]).unwrap();
             meta_core::git::run(&path, ["config", "user.email", "t@example.invalid"]).unwrap();
+            // whatever the developer's global config signs or hooks
+            meta_core::git::run(&path, ["config", "commit.gpgsign", "false"]).unwrap();
+            meta_core::git::run(&path, ["config", "core.hooksPath", "no-hooks"]).unwrap();
             (name.to_string(), path.display().to_string(), vec![])
         };
         let repos = [repo("a"), repo("b")];

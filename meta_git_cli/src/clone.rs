@@ -45,12 +45,18 @@ pub(crate) fn execute_git_clone(
         .flat_map(|d| ["--depth".to_string(), d.clone()])
         .collect();
 
-    // Derive directory name
+    // The directory git would name: the repository's name, without
+    // `.bundle` for a bundle file
     let clone_dir = args.dir.unwrap_or_else(|| {
-        url.parse::<meta_core::git::GitUrl>()
+        let name = url
+            .parse::<meta_core::git::GitUrl>()
             .ok()
             .and_then(|u| u.name().map(str::to_string))
-            .unwrap_or_else(|| "meta".to_string())
+            .unwrap_or_else(|| "meta".to_string());
+        match name.strip_suffix(".bundle") {
+            Some(bundle) if cwd.join(&url).is_file() => bundle.to_string(),
+            _ => name,
+        }
     });
 
     // The clone, shown as it runs: the URL after `--`, so it can't be read

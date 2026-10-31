@@ -117,3 +117,34 @@ fn context_shows_the_branch_of_a_bare_project() {
     let context: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(context["repos"][0]["branch"], "main", "{context}");
 }
+
+#[test]
+fn context_shows_the_branch_of_a_checkout_git_calls_bare() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workspace = tmp.path().canonicalize().unwrap();
+    repo(&workspace.join("checkout"), "on-checkout");
+    run(&workspace.join("checkout"), ["config", "core.bare", "true"]).unwrap();
+    std::fs::write(
+        workspace.join(".meta.yaml"),
+        "projects:\n  checkout:\n    path: checkout\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_meta"))
+        .args(["context", "--json", "--no-cache"])
+        .current_dir(&workspace)
+        .env("HOME", &workspace)
+        .env("XDG_CONFIG_HOME", workspace.join("xdg"))
+        .env("GIT_CONFIG_GLOBAL", workspace.join("no-gitconfig"))
+        .env("META_DATA_DIR", workspace.join("meta-data"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let context: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // its branch, and no word on changes git can't report
+    assert_eq!(context["repos"][0]["branch"], "on-checkout", "{context}");
+    assert!(context["repos"][0].get("dirty").is_none(), "{context}");
+}

@@ -63,12 +63,7 @@ impl RepoStatus {
             // nothing in it is changed; its branch and upstream still count.
             // A checkout whose config says `core.bare` is no bare repository:
             // its work tree may hold changes git can't report.
-            Err(_) if Self::is_bare(dir) => Self::refs(dir).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{} is not a git repository",
-                    crate::display::escape_path(dir)
-                )
-            }),
+            Err(e) if Self::is_bare(dir) => Self::refs(dir).ok_or(e),
             Err(e) => Err(e),
         }
     }
@@ -86,6 +81,8 @@ impl RepoStatus {
     /// of its own.
     pub fn refs(dir: &Path) -> Option<Self> {
         crate::gitdir::common_dir(dir).ok()??;
+        // nor when git can't read it at all (ownership, a broken `.git`)
+        super::query(dir, ["rev-parse", "--git-dir"])?;
         let upstream = super::query(dir, ["rev-parse", "--abbrev-ref", "@{upstream}"]);
         let ahead_behind = upstream
             .as_ref()

@@ -45,19 +45,24 @@ pub(crate) fn execute_git_clone(
         .flat_map(|d| ["--depth".to_string(), d.clone()])
         .collect();
 
-    // The directory git would name: the repository's name, without
-    // `.bundle` for a bundle file
-    let clone_dir = args.dir.unwrap_or_else(|| {
-        let name = url
+    // The directory git would name: a bundle file's name without
+    // `.bundle`, else the repository's name
+    let source = cwd.join(&url);
+    let clone_dir = match (args.dir, source.file_name().filter(|_| source.is_file())) {
+        (Some(dir), _) => dir,
+        (None, Some(bundle)) => {
+            let bundle = bundle.to_string_lossy();
+            bundle
+                .strip_suffix(".bundle")
+                .unwrap_or(&bundle)
+                .to_string()
+        }
+        (None, None) => url
             .parse::<meta_core::git::GitUrl>()
             .ok()
             .and_then(|u| u.name().map(str::to_string))
-            .unwrap_or_else(|| "meta".to_string());
-        match name.strip_suffix(".bundle") {
-            Some(bundle) if cwd.join(&url).is_file() => bundle.to_string(),
-            _ => name,
-        }
-    });
+            .unwrap_or_else(|| "meta".to_string()),
+    };
 
     // The clone, shown as it runs: the URL after `--`, so it can't be read
     // as an option, and the directory meta reads next named explicitly

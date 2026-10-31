@@ -114,9 +114,15 @@ fn clone_depth_comes_from_meta_unless_given() {
     assert!(dry_run(&["--depth", "1", "u", "d"]).contains("git clone --depth 1 -- u d"));
     // the directory git would name, for an IPv6 host too
     assert!(dry_run(&["git@[::1]:repo.git"]).contains(":repo.git' repo"));
-    // a bundle file clones into its name without `.bundle`, as git does
-    std::fs::write(tmp.path().join("ws.bundle"), "").unwrap();
-    assert!(dry_run(&["ws.bundle"]).contains("-- ws.bundle ws"));
+    // a bundle file clones into its name without `.bundle`, as git does,
+    // and keeps a `.git`
+    for (bundle, dir) in [("ws.bundle", "ws"), ("other.git", "other.git")] {
+        std::fs::write(tmp.path().join(bundle), "").unwrap();
+        assert!(
+            dry_run(&[bundle]).contains(&format!("-- {bundle} {dir}")),
+            "{bundle}"
+        );
+    }
 }
 
 #[test]

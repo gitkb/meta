@@ -528,3 +528,45 @@ fn a_command_too_long_to_start_says_why() {
         &text[..text.len().min(300)]
     );
 }
+
+/// A signal that ends the server, sent to its process group, also stops the
+/// running tool's programs, which run in a group of their own.
+#[test]
+#[cfg(unix)]
+fn stopping_the_server_stops_its_running_tool() {
+    use std::os::unix::process::CommandExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    std::fs::create_dir(ws.join("a")).unwrap();
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
+    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), ws);
+    server
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null());
+    let mut server = server.spawn().unwrap();
+    let mut stdin = server.stdin.take().unwrap();
+    let script = "sleep 60 & echo $! > ../pid.tmp && mv ../pid.tmp ../pid; wait";
+    let call = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "meta_batch_execute", "arguments": {"command": ["sh", "-c", script]}}});
+    writeln!(stdin, "{call}").unwrap();
+    let pid = ws.join("pid");
+    wait_for("the tool to start", || pid.exists());
+    let group = format!("-{}", server.id());
+    assert!(Command::new("kill")
+        .args(["-TERM", "--", &group])
+        .status()
+        .unwrap()
+        .success());
+    let status = server.wait().unwrap();
+    assert_eq!(status.code(), Some(128 + 15), "{status:?}");
+    let sleep = std::fs::read_to_string(&pid).unwrap();
+    let gone = || {
+        !Command::new("kill")
+            .args(["-0", sleep.trim()])
+            .status()
+            .unwrap()
+            .success()
+    };
+    wait_for("the tool's sleep to end", gone);
+}

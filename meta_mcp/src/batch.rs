@@ -552,6 +552,20 @@ mod tests {
     }
 
     #[test]
+    fn the_atomic_check_says_why_it_refused() {
+        let (server, tmp) = workspace();
+        // a commit, but an index git can't read
+        std::fs::write(tmp.path().join("a/.git/index"), "garbage").unwrap();
+        let err = batch(&server, json!({"command": "touch ran", "atomic": true})).unwrap_err();
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("a: cannot tell whether it is clean") && err.contains("fatal:"),
+            "{err}"
+        );
+        assert!(!tmp.path().join("a/ran").exists() && !tmp.path().join("b/ran").exists());
+    }
+
+    #[test]
     fn a_batch_fails_when_every_project_failed_or_an_atomic_one_rolled_back() {
         let (server, tmp) = workspace();
         let a = tmp.path().join("a");

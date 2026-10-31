@@ -577,13 +577,17 @@ pub(crate) fn all_failed(mut successes: impl Iterator<Item = bool>) -> bool {
 }
 
 impl McpServer {
+    /// The workspace's root: the server's directory, or the one above it
+    /// that holds a meta config.
+    fn meta_dir(&self) -> Result<&Path> {
+        self.meta_dir
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("No meta repository found"))
+    }
+
     /// The workspace around the server's directory, its config read afresh.
     pub(crate) fn workspace(&self) -> Result<Workspace> {
-        let dir = self
-            .meta_dir
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
-        let config::Workspace { dir, projects, .. } = config::Workspace::in_dir(dir)?
+        let config::Workspace { dir, projects, .. } = config::Workspace::in_dir(self.meta_dir()?)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
         Ok(Workspace { dir, projects })
     }
@@ -594,7 +598,7 @@ impl McpServer {
     fn own_repo_git(&self, target: &Target) -> Result<Command> {
         let out = self
             .calls
-            .output(git(&target.dir).args(["rev-parse", "--show-cdup"]))
+            .output(git(&target.dir).args(["rev-parse", "--is-inside-work-tree", "--show-cdup"]))
             .context("Cannot run git rev-parse")?;
         let at = || {
             format!(
@@ -607,8 +611,9 @@ impl McpServer {
             // git's reason: no repository, or one it won't open
             anyhow::bail!("{}: {}", at(), String::from_utf8_lossy(&out.stderr).trim());
         }
-        // the way up to the repository's top level: none at its top
-        if !out.stdout.iter().all(u8::is_ascii_whitespace) {
+        // in a work tree, with no way up to its top level: "true" and an
+        // empty line (in a bare repository "false"; below the top "../")
+        if out.stdout.trim_ascii() != b"true" {
             anyhow::bail!("{} is not a git repository of its own", at());
         }
         Ok(git(&target.dir))
@@ -702,11 +707,7 @@ impl McpServer {
 
     fn get_config(&self, _args: NoArgs) -> Result<String> {
         // Found, not read as a config: a broken one is shown as it is
-        let dir = self
-            .meta_dir
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
-        let path = config::find_meta_config_in(dir)?
+        let path = config::find_meta_config_in(self.meta_dir()?)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
         let content = std::fs::read_to_string(&path)?;
         Ok(format!("Config file: {}\n\n{}", path.display(), content))
@@ -1805,10 +1806,30 @@ mod tests {
         std::fs::write(tmp.path().join("plain/.git"), "gitdir: /nonexistent\n").unwrap();
         let commits = json!({"commits": [{"project": "plain", "message": "m"}]});
         let reply = call(&server, "meta_git_multi_commit", commits).unwrap();
+        // git's own words, which change between versions
+        assert!(reply.is_error, "{}", reply.text);
+        let result: serde_json::Value = serde_json::from_str(&reply.text).unwrap();
+        let error = result["results"][0]["error"].as_str().unwrap_or_default();
+        let reason = error
+            .strip_prefix("Project 'plain' at ")
+            .unwrap_or_default();
         assert!(
-            reply.is_error && reply.text.contains("fatal: not a git repository"),
+            reason.contains(": fatal:") && !reason.contains("of its own"),
+            "{error}"
+        );
+
+        // a plain folder in a workspace inside a bare repository
+        let bare = tempfile::tempdir().unwrap();
+        git(bare.path(), &["init", "-q", "--bare"]);
+        let ws = bare.path().join("ws");
+        std::fs::create_dir_all(ws.join("plain")).unwrap();
+        std::fs::write(ws.join(".meta.yaml"), "projects:\n  plain: {}\n").unwrap();
+        let server = McpServer::in_dir(Some(ws));
+        let diff = call(&server, "meta_git_diff", json!({"project": "plain"})).unwrap();
+        assert!(
+            diff.is_error && diff.text.contains("not a git repository of its own"),
             "{}",
-            reply.text
+            diff.text
         );
 
         // a workspace root that isn't a repository, inside one that is
@@ -1833,12 +1854,15 @@ mod tests {
     #[test]
     fn a_repository_with_any_name_is_its_own() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut names = vec![std::ffi::OsString::from("ends in a space ")];
+        let mut names = vec![std::ffi::OsString::from("name")];
+        // Windows drops a trailing space from a folder's name
+        #[cfg(unix)]
+        names.push(std::ffi::OsString::from("ends in a space "));
         #[cfg(target_os = "linux")]
-        names.push(
-            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"byte \xff")
-                .to_os_string(),
-        );
+        {
+            use std::os::unix::ffi::OsStrExt;
+            names.push(std::ffi::OsStr::from_bytes(b"byte \xff").to_os_string());
+        }
         for name in names {
             let ws = tmp.path().join(name);
             init_repo(&ws);
@@ -1848,6 +1872,23 @@ mod tests {
             let diff = json(call(&server, "meta_git_diff", json!({"project": "."})));
             assert_eq!(diff.as_array().unwrap().len(), 1, "{ws:?}: {diff}");
         }
+    }
+
+    /// A server keeps to its own workspace: when that one's config is gone,
+    /// it never takes the workspace around it for its own.
+    #[test]
+    fn a_workspace_whose_config_is_gone_is_not_its_parents() {
+        let (_, tmp) = server("projects:\n  child: {meta: true}\n");
+        let child = tmp.path().join("child");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(child.join(".meta.yaml"), "projects: {}\n").unwrap();
+        let server = McpServer::in_dir(Some(child.clone()));
+        assert!(call(&server, "meta_list_projects", json!({})).is_ok());
+        std::fs::remove_file(child.join(".meta.yaml")).unwrap();
+        let err = call(&server, "meta_list_projects", json!({}))
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("No meta config found"), "{err}");
     }
 
     #[test]

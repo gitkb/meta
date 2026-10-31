@@ -9,10 +9,11 @@ use std::process::Command;
 /// config and meta data dir of its own, empty, so the user's settings
 /// (hooks, identity, aliases) can't change a test. Once, before any test
 /// here runs git; every value is the same whichever test sets it first.
+/// The folders stay empty, so every test process shares them.
 fn isolate() {
     static ISOLATED: std::sync::Once = std::sync::Once::new();
     ISOLATED.call_once(|| {
-        let home = std::env::temp_dir().join(format!("meta-mcp-tests-{}", std::process::id()));
+        let home = std::env::temp_dir().join("meta-mcp-tests");
         std::fs::create_dir_all(&home).unwrap();
         for (key, value) in [
             ("HOME", home.clone()),

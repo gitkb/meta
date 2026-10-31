@@ -41,7 +41,7 @@ Each tool takes only the arguments listed for it. A misspelled argument, or a va
 
 A `tag` parameter takes one tag or a comma-separated list, and selects the projects that have any of them, as `meta --tag` does. A blank list is no filter.
 
-A `project` parameter is a project's name in `.meta.yaml`, or `.` for the workspace root. It is never a path, so no tool reaches outside the workspace; a name the config doesn't list is an error. A tool that takes both `project` and `tag` refuses them together.
+A `project` parameter is a project's name in `.meta.yaml`, or `.` for the workspace root. It is never a path, so no tool can be pointed outside the workspace; a name the config doesn't list is an error. `meta_git_multi_commit` and `meta_git_diff` refuse a project folder that is not a git repository of its own (git would use the repository around it); the tools that run `meta` act in it as `meta` does. A tool that takes both `project` and `tag` refuses them together.
 
 Tools that act in several repositories report each one: its directory or name, whether it succeeded, and its output. The result is an error (`isError: true`) only when the tool itself failed or every repository failed; read each repository's `success` for the rest.
 

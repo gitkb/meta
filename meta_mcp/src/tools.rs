@@ -471,7 +471,6 @@ pub(crate) struct BatchArgs {
 /// The workspace a tool acts in: its root, and the projects its config lists.
 pub(crate) struct Workspace {
     pub(crate) dir: PathBuf,
-    config_path: PathBuf,
     pub(crate) projects: Vec<ProjectInfo>,
 }
 
@@ -584,18 +583,32 @@ impl McpServer {
             .meta_dir
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
-        let config::Workspace {
-            dir,
-            config_path,
-            projects,
-            ..
-        } = config::Workspace::find(dir, None)?
+        let config::Workspace { dir, projects, .. } = config::Workspace::find(dir, None)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
-        Ok(Workspace {
-            dir,
-            config_path,
-            projects,
-        })
+        Ok(Workspace { dir, projects })
+    }
+
+    /// git in `target`'s folder, when that is a repository's top level. A
+    /// folder that isn't is an error: git would act on the repository
+    /// around it, which may be the workspace's or one outside it.
+    fn own_repo_git(&self, target: &Target) -> Result<Command> {
+        let out = self
+            .calls
+            .output(git(&target.dir).args(["rev-parse", "--show-toplevel"]))
+            .context("Cannot run git rev-parse")?;
+        let toplevel = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        let real = |path: &Path| path.canonicalize().ok();
+        if !out.status.success()
+            || real(&toplevel).is_none()
+            || real(&toplevel) != real(&target.dir)
+        {
+            anyhow::bail!(
+                "Project '{}' at {} is not a git repository of its own",
+                escape(&target.name),
+                meta_core::display::escape_path(&target.dir)
+            );
+        }
+        Ok(git(&target.dir))
     }
 
     /// `meta` in the workspace root.
@@ -685,7 +698,13 @@ impl McpServer {
     }
 
     fn get_config(&self, _args: NoArgs) -> Result<String> {
-        let path = self.workspace()?.config_path;
+        // Found, not read as a config: a broken one is shown as it is
+        let dir = self
+            .meta_dir
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No meta repository found"))?;
+        let path = config::find_meta_config_in(dir)?
+            .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
         let content = std::fs::read_to_string(&path)?;
         Ok(format!("Config file: {}\n\n{}", path.display(), content))
     }
@@ -735,12 +754,14 @@ impl McpServer {
             if !project.dir.exists() {
                 continue;
             }
-            let mut cmd = git(&project.dir);
-            cmd.arg("diff");
-            if args.staged == Some(true) {
-                cmd.arg("--staged");
-            }
-            match self.calls.output(&mut cmd) {
+            let diff = self.own_repo_git(&project).and_then(|mut cmd| {
+                cmd.arg("diff");
+                if args.staged == Some(true) {
+                    cmd.arg("--staged");
+                }
+                Ok(self.calls.output(&mut cmd)?)
+            });
+            match diff {
                 Ok(out) if out.status.success() => {
                     successes.push(true);
                     let diff = String::from_utf8_lossy(&out.stdout);
@@ -755,7 +776,7 @@ impl McpServer {
                     successes.push(false);
                     let error = match failed {
                         Ok(out) => String::from_utf8_lossy(&out.stderr).trim().to_string(),
-                        Err(e) => format!("Cannot run git diff: {e}"),
+                        Err(e) => format!("{e:#}"),
                     };
                     results.push(serde_json::json!({ "project": project.name, "error": error }));
                 }
@@ -862,16 +883,19 @@ impl McpServer {
                     target.dir.display()
                 ))
             } else {
-                let mut cmd = git(&target.dir);
-                cmd.args(["commit", "-m", &commit.message]);
-                match self.calls.output(&mut cmd) {
+                let commit = self.own_repo_git(&target).and_then(|mut cmd| {
+                    Ok(self
+                        .calls
+                        .output(cmd.args(["commit", "-m", &commit.message]))?)
+                });
+                match commit {
                     Ok(out) if out.status.success() => None,
                     // git says why on stderr, or ("nothing to commit") on stdout
                     Ok(out) => Some(match String::from_utf8_lossy(&out.stderr).trim() {
                         "" => String::from_utf8_lossy(&out.stdout).trim().to_string(),
                         stderr => stderr.to_string(),
                     }),
-                    Err(e) => Some(format!("Cannot run git commit: {e}")),
+                    Err(e) => Some(format!("{e:#}")),
                 }
             };
             results.push(CommitResult {
@@ -1638,6 +1662,14 @@ mod tests {
         };
         assert_eq!(path("a"), Some(tmp.path().join("dir/a")));
         assert_eq!(path("."), Some(tmp.path().to_path_buf()));
+        // by its name, at its own path
+        std::fs::write(tmp.path().join("dir/a/README"), "changed").unwrap();
+        let diff = json(call(&server, "meta_git_diff", json!({"project": "a"})));
+        assert_eq!(diff.as_array().unwrap().len(), 1, "{diff}");
+        assert!(
+            diff[0]["diff"].as_str().unwrap().contains("+changed"),
+            "{diff}"
+        );
         let impact = json(call(
             &server,
             "meta_analyze_impact",
@@ -1735,6 +1767,53 @@ mod tests {
                 .unwrap()
                 .is_error
         );
+    }
+
+    #[test]
+    fn git_acts_only_in_a_project_that_is_its_own_repository() {
+        // a plain folder, in a workspace root that is a repository with
+        // work staged
+        let (server, tmp) = server("projects:\n  plain: {}\n");
+        init_repo(tmp.path());
+        std::fs::create_dir(tmp.path().join("plain")).unwrap();
+        std::fs::write(tmp.path().join("staged"), "root work").unwrap();
+        git(tmp.path(), &["add", "staged"]);
+        let commits = json!({"commits": [{"project": "plain", "message": "m"}]});
+        let reply = call(&server, "meta_git_multi_commit", commits).unwrap();
+        assert!(
+            reply.is_error && reply.text.contains("not a git repository of its own"),
+            "{}",
+            reply.text
+        );
+        let diff = call(
+            &server,
+            "meta_git_diff",
+            json!({"project": "plain", "staged": true}),
+        )
+        .unwrap();
+        assert!(
+            diff.is_error && !diff.text.contains("root work"),
+            "{}",
+            diff.text
+        );
+        assert_eq!(git(tmp.path(), &["log", "--format=%s"]), "init\n");
+
+        // a workspace root that isn't a repository, inside one that is
+        let outer = tempfile::tempdir().unwrap();
+        init_repo(outer.path());
+        std::fs::write(outer.path().join("wip"), "outer work").unwrap();
+        git(outer.path(), &["add", "wip"]);
+        let ws = outer.path().join("ws");
+        std::fs::create_dir(&ws).unwrap();
+        std::fs::write(ws.join(".meta.yaml"), "projects: {}\n").unwrap();
+        let server = McpServer::in_dir(Some(ws));
+        let commits = json!({"commits": [{"project": ".", "message": "m"}]});
+        assert!(
+            call(&server, "meta_git_multi_commit", commits)
+                .unwrap()
+                .is_error
+        );
+        assert_eq!(git(outer.path(), &["log", "--format=%s"]), "init\n");
     }
 
     #[test]
@@ -1885,11 +1964,22 @@ mod tests {
     }
 
     #[test]
-    fn get_config_ignores_meta_directory() {
+    fn get_config_ignores_meta_directory_and_shows_a_broken_config() {
         let (server, tmp) = server("projects: {}\n");
         std::fs::create_dir_all(tmp.path().join(".meta/skills")).unwrap();
         let result = call(&server, "meta_get_config", json!({})).unwrap().text;
         assert!(result.contains(".meta.yaml"));
         assert!(result.contains("projects: {}"));
+        std::fs::write(
+            tmp.path().join(".meta.yaml"),
+            "projects: {}\nunknown_top: 1\n",
+        )
+        .unwrap();
+        let reply = call(&server, "meta_get_config", json!({})).unwrap();
+        assert!(
+            !reply.is_error && reply.text.contains("unknown_top: 1"),
+            "{}",
+            reply.text
+        );
     }
 }

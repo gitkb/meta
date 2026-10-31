@@ -391,12 +391,6 @@ impl McpServer {
             "tools/list" => self.handle_list_tools(),
             "tools/call" => {
                 if !self.calls.start(id.to_string()) {
-                    if self.calls.stopping() {
-                        let _ = writeln!(
-                            std::io::stderr(),
-                            "meta-mcp: request {id} not started: the server is stopping"
-                        );
-                    }
                     return None;
                 }
                 let result = self.handle_call_tool(&request.params);
@@ -684,6 +678,58 @@ mod tests {
         let replies: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(replies, json!([{"jsonrpc": "2.0", "id": 3, "result": {}}]));
         assert!(!tmp.path().join("a/ran").exists());
+    }
+
+    /// A stopping server waits until the reply to a call that ended is
+    /// written, however slowly the client reads it.
+    #[test]
+    fn a_stopping_server_writes_the_reply_of_a_call_that_ended() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        /// Output whose first write waits until it is let through.
+        struct Gate<'a> {
+            writing: &'a AtomicBool,
+            open: &'a AtomicBool,
+            written: &'a Mutex<Vec<u8>>,
+        }
+        impl Write for Gate<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.writing.store(true, Ordering::SeqCst);
+                while !self.open.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                self.written.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let (server, _tmp) = test_support::server("projects: {}\n");
+        let (writing, open) = (AtomicBool::new(false), AtomicBool::new(false));
+        let (stopped, written) = (AtomicBool::new(false), Mutex::new(Vec::new()));
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "meta_get_config"}});
+        let input = format!("{call}\n");
+        std::thread::scope(|scope| {
+            let output = Gate {
+                writing: &writing,
+                open: &open,
+                written: &written,
+            };
+            scope.spawn(|| server.serve(input.as_bytes(), output));
+            test_support::wait_for("the reply to be written", || writing.load(Ordering::SeqCst));
+            scope.spawn(|| {
+                server.calls.stop_running();
+                stopped.store(true, Ordering::SeqCst);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let early = stopped.load(Ordering::SeqCst);
+            // let the reply out before checking, so a failure can't hang
+            open.store(true, Ordering::SeqCst);
+            assert!(!early, "stopped before the reply was out");
+        });
+        let reply: serde_json::Value = serde_json::from_slice(&written.lock().unwrap()).unwrap();
+        assert_eq!(reply["id"], 1, "{reply}");
     }
 
     #[test]

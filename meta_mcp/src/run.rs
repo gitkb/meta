@@ -2,7 +2,7 @@
 //! stopped when the client cancels the call.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -42,7 +42,12 @@ impl Calls {
 
     /// Notes a call read from the client, to be run later.
     pub(crate) fn queue(&self, id: String) {
-        self.state().queued.insert(id, false);
+        let mut state = self.state();
+        if state.stopping {
+            not_started(&id);
+        } else {
+            state.queued.insert(id, false);
+        }
     }
 
     /// Drops the call `id`, read but refused before it could start.
@@ -78,6 +83,11 @@ impl Calls {
             if state.running.is_some() {
                 self.cancelled.store(true, Ordering::SeqCst);
             }
+            for (id, cancelled) in state.queued.drain() {
+                if !cancelled {
+                    not_started(&id);
+                }
+            }
         }
         while {
             let state = self.state();
@@ -85,11 +95,6 @@ impl Calls {
         } {
             std::thread::sleep(Duration::from_millis(5));
         }
-    }
-
-    /// Whether the server is stopping.
-    pub(crate) fn stopping(&self) -> bool {
-        self.state().stopping
     }
 
     /// Answers a message with `work`, which a stopping server waits for:
@@ -213,6 +218,14 @@ impl Calls {
             truncated,
         ))
     }
+}
+
+/// Says on stderr that the call `id` won't run, as the server is stopping.
+fn not_started(id: &str) {
+    let _ = writeln!(
+        std::io::stderr(),
+        "meta-mcp: request {id} not started: the server is stopping"
+    );
 }
 
 /// Up to `max` lines of `pipe`, and whether there were more.
@@ -411,6 +424,32 @@ mod tests {
         // it waited for the zombie, then gave up
         assert!(elapsed >= 2 * GRACE, "{elapsed:?}");
         assert!(elapsed < 2 * GRACE + Duration::from_secs(5), "{elapsed:?}");
+    }
+
+    /// A stopping server waits for the reply being written, and starts no
+    /// call waiting or read later.
+    #[test]
+    fn stopping_waits_for_the_answer_and_starts_nothing_more() {
+        let calls = Calls::default();
+        calls.queue("1".to_string());
+        let (started, written) = (AtomicBool::new(false), AtomicBool::new(false));
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                calls.answering(|| {
+                    started.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(300));
+                    written.store(true, Ordering::SeqCst);
+                })
+            });
+            wait_for("an answer to be under way", || {
+                started.load(Ordering::SeqCst)
+            });
+            calls.stop_running();
+            assert!(written.load(Ordering::SeqCst));
+        });
+        assert!(!calls.start("1".to_string()));
+        calls.queue("2".to_string());
+        assert!(!calls.start("2".to_string()));
     }
 
     #[test]

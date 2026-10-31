@@ -52,15 +52,18 @@ impl RepoStatus {
         match status {
             Ok(output) => Ok(Self::parse(&output)),
             // a bare repository has no work tree for `git status`, so
-            // nothing in it is changed; its branch and upstream still count
-            Err(_)
-                if super::query(dir, ["rev-parse", "--is-bare-repository"]).as_deref()
-                    == Some("true") =>
-            {
-                Ok(Self::bare(dir))
-            }
+            // nothing in it is changed; its branch and upstream still count.
+            // A checkout whose config says `core.bare` is no bare repository:
+            // its work tree may hold changes git can't report.
+            Err(_) if Self::is_bare(dir) => Ok(Self::bare(dir)),
             Err(e) => Err(e),
         }
+    }
+
+    /// Whether `dir` is itself the git directory of a bare repository.
+    fn is_bare(dir: &Path) -> bool {
+        super::query(dir, ["rev-parse", "--is-bare-repository", "--git-dir"]).as_deref()
+            == Some("true\n.")
     }
 
     fn bare(dir: &Path) -> Self {
@@ -316,6 +319,13 @@ mod tests {
         assert!(!status.is_dirty());
         // what isn't a repository is still an error
         assert!(RepoStatus::read(dir.path()).is_err());
+        // and so is a checkout whose config says it is bare: it may hold
+        // changes git can't report
+        let checkout = repo();
+        commit(checkout.path(), "a");
+        std::fs::write(checkout.path().join("dirty"), "").unwrap();
+        run(checkout.path(), ["config", "core.bare", "true"]).unwrap();
+        assert!(RepoStatus::read(checkout.path()).is_err());
     }
 
     #[test]

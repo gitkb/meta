@@ -409,17 +409,14 @@ pub fn git_fetch_branch(repo_path: &Path, branch: &str) -> Result<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // git's own errors may show the URL with its credentials, and a
-        // remote helper origin's address in any form (see GitUrl::hide_in)
-        let mut shown = meta_core::git::redact_git_output(&stderr)
-            .trim_ascii()
-            .to_string();
-        if let Some(origin) = meta_core::git::remote_url(repo_path) {
-            shown = origin.hide_in(&shown).into_owned();
-        }
+        // remote helper origin's address in any form
+        let origin = meta_core::git::remote_url(repo_path);
+        let shown = meta_core::git::redact_git_output(&stderr, origin.as_ref());
+        let shown = shown.trim_ascii();
         anyhow::bail!(
             "Failed to fetch branch '{}': {}",
             escape(branch),
-            escape(&shown)
+            escape(shown)
         );
     }
     Ok(())

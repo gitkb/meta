@@ -860,8 +860,11 @@ impl McpServer {
             .output(git(&workspace.dir).args(["check-ref-format", "--branch", &args.branch]))
             .context("Cannot run git check-ref-format")?;
         if !check.status.success() {
-            // git's reason: a name it refuses, or a config it can't read
-            match String::from_utf8_lossy(&check.stderr).trim() {
+            // git's reason: a name it refuses (cut, if long), or a config
+            // it can't read
+            let why =
+                meta_core::git::redact_git_output(&String::from_utf8_lossy(&check.stderr), None);
+            match why.trim() {
                 "" => anyhow::bail!("'{}' is not a valid branch name", escape(&args.branch)),
                 why => anyhow::bail!("{}", escape(why)),
             }

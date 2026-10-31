@@ -843,6 +843,16 @@ mod tests {
     }
 
     #[test]
+    fn a_cut_refusal_of_a_branch_hides_credentials() {
+        let (server, _tmp) = test_support::workspace();
+        // git cuts its message before the `@`
+        let branch = format!("https://alice:ghp_SECRET{}@h/r", "x".repeat(5000));
+        let reply = call_text(&server, "meta_git_checkout", json!({"branch": branch}));
+        assert!(reply.contains("isError"), "{reply}");
+        assert!(!reply.contains("ghp_SECRET"), "{reply}");
+    }
+
+    #[test]
     fn protocol_errors_hide_credentials() {
         let (server, _tmp) = test_support::server("projects: {}\n");
         let request: JsonRpcRequest = serde_json::from_value(json!({

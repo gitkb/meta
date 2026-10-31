@@ -237,15 +237,16 @@ EOF
 @test "a remote helper's own output shows no credentials" {
     # a helper that prints the address it got, without `foo::` (so a space
     # in the password ends no scan): whole, then in a line meta's read cuts
-    # inside a second copy
+    # inside a second copy, after the password's second space. An `@` in the
+    # password too
     cat > "$TEST_DIR/bin/git-remote-foo" <<'EOF'
 #!/bin/sh
 echo "fatal: cannot open $2" >&2
-printf 'fatal: %s %03990d retry %s\n' "$2" 0 "$2" >&2
+printf 'fatal: %s %03945d retry %s\n' "$2" 0 "$2" >&2
 exit 1
 EOF
     chmod +x "$TEST_DIR/bin/git-remote-foo"
-    url="foo::https://alice:p w$TOKEN@127.0.0.1:9/owner/svc.git"
+    url="foo::https://alice:p@s $TOKEN w vvvvvvvvvvvvvvvvvvvv@127.0.0.1:9/owner/svc.git"
     printf 'projects:\n  svc: "%s"\n' "$url" > .meta.yaml
     meta_without_token git update
     [ "$status" -ne 0 ]

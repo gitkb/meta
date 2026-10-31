@@ -239,7 +239,10 @@ fn install_claude_integration(force: bool, update: bool, init: &Init) -> Result<
     };
     let root = config.parent().unwrap_or(&current_dir);
     if root != current_dir {
-        println!("Installing at the workspace root {}", escape_path(root));
+        println!(
+            "Installing in the workspace at {} (the nearest .meta.yaml)",
+            escape_path(root)
+        );
     }
     install_claude_integration_to(root, force, update, init)
 }

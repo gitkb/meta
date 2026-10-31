@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+load "${BATS_TEST_DIRNAME}/helpers/terminal.bash"
 
 # `--dry-run` changes nothing: for each command on this closed list, the
 # whole sandbox (workspace, every repo's .git and worktree sets, remotes,
@@ -102,13 +103,14 @@ EOF
     done
 }
 
-# Run `meta --dry-run ARGS...`: it exits with $1 and changes nothing
+# Run `meta --dry-run ARGS...` (through $RUNNER, if set): it exits with $1
+# and changes nothing
 preview() {
     local expected="$1"
     shift
     local before
     before="$(snapshot)"
-    run meta --dry-run "$@"
+    run $RUNNER meta --dry-run "$@"
     echo "$output"
     [ "$status" -eq "$expected" ]
     [ ! -e "$CALLS" ]
@@ -135,6 +137,13 @@ preview() {
     [[ "$output" == *"No repos selected; no worktree was created"* ]]
     preview 1 git worktree exec e --ephemeral --all -- true
     [[ "$output" == *"No repos selected; no worktree was created"* ]]
+}
+
+@test "worktree create --from-pr previews the checks a run makes before GitHub" {
+    preview 1 git worktree create p --repo backend --from-pr nonsense
+    [[ "$output" == *"Invalid --from-pr format"* ]]
+    preview 1 git worktree create p --repo backend --from-pr someorg/unrelated#5
+    [[ "$output" == *"No selected repo has origin 'someorg/unrelated'"* ]]
 }
 
 @test "worktree remove previews" {
@@ -235,8 +244,11 @@ preview() {
 }
 
 @test "git commit --edit previews without an editor" {
-    preview 0 git commit --edit
-    [[ "$output" == *"Would open the editor"*"backend"* ]]
+    RUNNER=with_terminal preview 0 git commit --edit
+    [[ "$output" == *"Would open the editor '$STUBS/editor'"*"backend"* ]]
+    # with no terminal it fails as a run does
+    RUNNER=without_terminal preview 1 git commit --edit
+    [[ "$output" == *"needs the terminal"* ]]
 }
 
 @test "context previews without writing its cache" {
@@ -266,4 +278,8 @@ preview() {
 @test "plugin update refuses --dry-run" {
     preview 1 plugin update
     [[ "$output" == *"meta plugin update has no preview"* ]]
+    # checking and listing make no plugins folder
+    [ ! -e "$META_DATA_DIR/plugins" ]
+    preview 0 plugin update --check
+    preview 0 plugin list
 }

@@ -407,13 +407,13 @@ EOF
     [ ! -e .meta ]
 }
 
-@test "init claude from a child repo installs once, at the workspace root" {
+@test "init claude from a child repo installs once, in the workspace" {
     mkdir -p backend/src
     git -C backend init --quiet
     cd backend/src
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Installing at the workspace root $TEST_DIR"* ]]
+    [[ "$output" == *"Installing in the workspace at $TEST_DIR (the nearest .meta.yaml)"* ]]
     [ -f "$TEST_DIR/.claude/settings.json" ]
     [ ! -e "$TEST_DIR/backend/.claude" ]
     [ ! -e "$TEST_DIR/backend/src/.claude" ]

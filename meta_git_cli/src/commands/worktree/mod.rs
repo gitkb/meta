@@ -62,8 +62,12 @@ pub fn execute_worktree_command(
     // Inject --recursive if the protocol option was set but the flag wasn't in the
     // command args (the host strips global flags like --recursive before forwarding).
     // Inject only for subcommands that explicitly support recursive behavior.
+    // The subcommand: the first word that isn't a flag (`--dry-run create`)
     let supports_recursive = matches!(
-        clap_args.first().map(String::as_str),
+        clap_args
+            .iter()
+            .find(|a| !a.starts_with('-'))
+            .map(String::as_str),
         Some("create" | "list" | "status")
     );
     if options.recursive

@@ -214,6 +214,21 @@ pub(crate) fn handle_create(
         (alias != ".", place.split('/').count())
     });
 
+    // A preview makes the checks a run makes before asking GitHub for a
+    // PR's branch
+    if let Some(spec) = from_pr_spec.filter(|_| mode.is_preview()) {
+        let (pr_repo, pr_num) = parse_from_pr(spec)?;
+        let matched = repos_to_create
+            .iter()
+            .any(|(alias, source, _)| alias != "." && repo_matches_spec(source, &pr_repo));
+        if !matched {
+            anyhow::bail!(
+                "No selected repo has origin '{}', so PR #{pr_num} can't be applied",
+                escape(&pr_repo)
+            );
+        }
+    }
+
     // A preview skips what the run below skips: a repo without the
     // commit-ish (the run checks again, after fetching a PR's branch)
     if mode.is_preview() {
@@ -618,9 +633,6 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
     }
 
     println!("Planned repo operations:");
-    if plan.repos_to_create.is_empty() {
-        println!("  (none)");
-    }
     for (alias, source, branch) in plan.repos_to_create {
         let dest = if alias == "." {
             plan.wt_dir.to_path_buf()

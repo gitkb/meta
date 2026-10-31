@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+load "${BATS_TEST_DIRNAME}/helpers/terminal.bash"
 
 # Integration tests for `meta git` commands
 # Tests use local git repos (no network IO required)
@@ -782,22 +783,6 @@ EOF
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only | LC_ALL=C sort | tr '\n' ' ')" = "--help -h " ]
 }
 
-# Run a command on a terminal of its own (a pseudo-terminal it is in the
-# foreground of), as a user at a shell is; the editor needs one
-with_terminal() {
-    python3 -c 'import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(sys.argv[1:])))' "$@"
-}
-
-# Run a command on a terminal, but in its background (as under `timeout`)
-in_background() {
-    python3 -c 'import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn([sys.executable, "-c", "import os, sys\npid = os.fork()\nif pid == 0:\n    os.setpgid(0, 0)\n    os.execvp(sys.argv[1], sys.argv[1:])\nsys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))", *sys.argv[1:]])))' "$@"
-}
-
-# Run a command with no terminal at all, as an agent or a CI job is
-without_terminal() {
-    python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" </dev/null
-}
-
 @test "meta git commit --edit uses a private temp file it removes" {
     export META_DATA_DIR="$TEST_DIR/data"
     mkdir -p "$META_DATA_DIR"
@@ -858,6 +843,22 @@ without_terminal() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"needs the terminal, but meta runs in its background"* ]]
     [ ! -e "$LOG" ]
+}
+
+@test "meta git commit --edit shows the message of a commit that failed" {
+    for repo in frontend backend; do
+        echo change >> "$TEST_DIR/$repo/README.md"
+        git -C "$TEST_DIR/$repo" add README.md
+    done
+    printf '#!/bin/sh\nexit 1\n' > "$TEST_DIR/frontend/.git/hooks/pre-commit"
+    chmod 755 "$TEST_DIR/frontend/.git/hooks/pre-commit"
+    printf '#!/bin/sh\nawk '"'"'/^# Enter commit message/ { print "typed by hand" } { print }'"'"' "$1" > "$1.new" && mv "$1.new" "$1"\n' > "$TEST_DIR/editor"
+    chmod 755 "$TEST_DIR/editor"
+
+    GIT_EDITOR="$TEST_DIR/editor" run with_terminal "$META_BIN" git commit --edit
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Failed to commit; the message was:"*"typed by hand"* ]]
+    [ "$(git -C "$TEST_DIR/backend" log -1 --format=%s)" = "typed by hand" ]
 }
 
 @test "meta git commit --edit names an editor that can't start" {

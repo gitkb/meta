@@ -276,12 +276,8 @@ pub fn resolve_branch(
         .unwrap_or_else(|| task_name.to_string())
 }
 
-/// Parse `--from-pr owner/repo#N` format and resolve the PR's head branch.
-/// Returns (owner/repo, pr_number, head_branch_name).
-pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
-    use std::process::Command;
-
-    // Parse format: owner/repo#N
+/// The repo (`owner/repo`) and number of a `--from-pr` value `owner/repo#N`.
+pub fn parse_from_pr(from_pr: &str) -> Result<(String, u32)> {
     let hash_pos = from_pr.rfind('#').ok_or_else(|| {
         anyhow::anyhow!(
             "Invalid --from-pr format: '{}'. Expected: owner/repo#N",
@@ -300,6 +296,16 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
     let pr_num: u32 = from_pr[hash_pos + 1..]
         .parse()
         .with_context(|| format!("Invalid PR number in '{}'", escape(from_pr)))?;
+    Ok((repo_spec.to_string(), pr_num))
+}
+
+/// Parse `--from-pr owner/repo#N` format and resolve the PR's head branch.
+/// Returns (owner/repo, pr_number, head_branch_name).
+pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
+    use std::process::Command;
+
+    let (repo_spec, pr_num) = parse_from_pr(from_pr)?;
+    let repo_spec = repo_spec.as_str();
 
     // Resolve head branch via gh CLI
     let output = Command::new("gh")

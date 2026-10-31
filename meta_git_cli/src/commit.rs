@@ -67,15 +67,8 @@ pub(crate) fn execute_git_commit(
     }
 
     if use_editor {
-        if options.mode().is_preview() {
-            println!("[DRY RUN] Would open the editor for a message for each of:");
-            for (name, _path, files) in &repos_with_changes {
-                println!("  {} ({} files)", style(escape(name)).cyan(), files.len());
-            }
-        } else {
-            // Open editor for per-repo messages (interactive, cannot use ExecutionPlan)
-            execute_editor_commit(&repos_with_changes)?;
-        }
+        // Open editor for per-repo messages (interactive, cannot use ExecutionPlan)
+        execute_editor_commit(&repos_with_changes, options.mode())?;
     } else if let Some(msg) = message {
         // Apply same message to all repos - use ExecutionPlan for proper dry-run support
         let commands: Vec<PlannedCommand> = repos_with_changes
@@ -126,7 +119,10 @@ fn staged_files(path: &std::path::Path) -> Vec<String> {
 }
 
 /// Execute commit with editor for per-repo messages
-fn execute_editor_commit(repos: &[(String, String, Vec<String>)]) -> anyhow::Result<()> {
+fn execute_editor_commit(
+    repos: &[(String, String, Vec<String>)],
+    mode: meta_core::ExecutionMode,
+) -> anyhow::Result<()> {
     use std::io::Write;
 
     // The editor git would use, from the first repo's config; asked first,
@@ -150,6 +146,17 @@ fn execute_editor_commit(repos: &[(String, String, Vec<String>)]) -> anyhow::Res
             )
         })?),
     };
+    // A preview checks what a run checks, and opens nothing
+    if mode.is_preview() {
+        println!(
+            "[DRY RUN] Would open the editor '{}' for a message for each of:",
+            escape(&editor)
+        );
+        for (name, _path, files) in repos {
+            println!("  {} ({} files)", style(escape(name)).cyan(), files.len());
+        }
+        return Ok(());
+    }
 
     // Create temp file with commit template
     let mut template = String::new();

@@ -373,12 +373,19 @@ mod tests {
     #[test]
     fn stderr_tail_shows_no_credentials() {
         // a URL that a cut at LINE_BYTES splits, one git cut itself (its
-        // messages stop at 4096 bytes), and a whole one
+        // messages stop at 4096 bytes), each also with a Unicode space in its
+        // password (git sends one), and a whole one
         let pad = "x ".repeat(2041);
         let git_cut = format!("warning: {}https://alice:ghp_SECRET", "y ".repeat(2031));
         assert_eq!(git_cut.len() + 1, StderrTail::LINE_BYTES as usize);
+        let spaced = format!("https://alice:ghp_SECRET\u{a0}{}@h/r", "z".repeat(5000));
+        let git_cut_spaced = format!("warning: {spaced}");
+        let git_cut_spaced = git_cut_spaced
+            .get(..StderrTail::LINE_BYTES as usize - 1)
+            .unwrap();
         let output = format!(
-            "{pad}https://alice:ghp_SECRET@h/r\n{git_cut}\nfatal: 'https://a:ghp_SECRET@h/r'\n"
+            "{pad}https://alice:ghp_SECRET@h/r\n{git_cut}\n{spaced}\n{git_cut_spaced}\n\
+             fatal: 'https://a:ghp_SECRET@h/r'\n"
         );
         let shown = Arc::new(Mutex::new(String::new()));
         let seen = Arc::clone(&shown);

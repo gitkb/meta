@@ -504,7 +504,7 @@ mod tests {
             server.calls.cancel("1");
             run.join().unwrap()
         });
-        assert!(!server.calls.finish());
+        assert!(server.calls.finish(|cancelled| cancelled));
         reply
     }
 

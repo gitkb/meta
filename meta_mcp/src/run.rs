@@ -26,6 +26,8 @@ struct State {
     running: Option<String>,
     /// Calls read but not started yet; `true` once cancelled.
     queued: HashMap<String, bool>,
+    /// The server is stopping: no call starts.
+    stopping: bool,
 }
 
 impl Calls {
@@ -49,7 +51,7 @@ impl Calls {
     /// Starts the call `id`, unless it was cancelled while it waited.
     pub(crate) fn start(&self, id: String) -> bool {
         let mut state = self.state();
-        if state.queued.remove(&id) == Some(true) {
+        if state.queued.remove(&id) == Some(true) || state.stopping {
             return false;
         }
         state.running = Some(id);
@@ -57,20 +59,25 @@ impl Calls {
         true
     }
 
-    /// Ends the running call; whether it ran to its end, uncancelled.
-    pub(crate) fn finish(&self) -> bool {
+    /// Ends the running call, once `then` has had whether it was cancelled
+    /// (and done what that asks) while it still counts as running.
+    pub(crate) fn finish<T>(&self, then: impl FnOnce(bool) -> T) -> T {
+        let done = then(self.cancelled.swap(false, Ordering::SeqCst));
         self.state().running = None;
-        !self.cancelled.swap(false, Ordering::SeqCst)
+        done
     }
 
-    /// Cancels whatever call runs, and waits (as long as a cancel takes)
-    /// until it has stopped.
+    /// Cancels the running call, starts no other, and waits until it has
+    /// ended, an atomic batch's rollback included.
     pub(crate) fn stop_running(&self) {
-        let deadline = Instant::now() + 2 * GRACE + Duration::from_secs(1);
-        if self.state().running.is_some() {
-            self.cancelled.store(true, Ordering::SeqCst);
+        {
+            let mut state = self.state();
+            state.stopping = true;
+            if state.running.is_some() {
+                self.cancelled.store(true, Ordering::SeqCst);
+            }
         }
-        while self.state().running.is_some() && Instant::now() < deadline {
+        while self.state().running.is_some() {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -310,7 +317,7 @@ mod tests {
         }
         let err = calls.output(&mut Command::new("true")).unwrap_err();
         assert!(err.to_string().contains("cancelled"), "{err}");
-        assert!(!calls.finish());
+        assert!(calls.finish(|cancelled| cancelled));
         // the next call runs
         assert!(calls.start("2".to_string()));
         assert!(calls
@@ -318,7 +325,7 @@ mod tests {
             .unwrap()
             .status
             .success());
-        assert!(calls.finish());
+        assert!(!calls.finish(|cancelled| cancelled));
     }
 
     /// A process that left the group but holds its pipes doesn't keep a
@@ -396,13 +403,13 @@ mod tests {
         calls.cancel("99");
         assert!(!calls.start("1".to_string()));
         assert!(calls.start("2".to_string()));
-        assert!(calls.finish());
+        assert!(!calls.finish(|cancelled| cancelled));
         // done: a late cancel changes nothing, and a refused call is dropped
         calls.cancel("2");
         calls.queue("4".to_string());
         calls.forget("4");
         assert!(calls.state().queued.is_empty());
         assert!(calls.start("3".to_string()));
-        assert!(calls.finish());
+        assert!(!calls.finish(|cancelled| cancelled));
     }
 }

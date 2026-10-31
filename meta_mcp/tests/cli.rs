@@ -530,7 +530,8 @@ fn a_command_too_long_to_start_says_why() {
 }
 
 /// A signal that ends the server, sent to its process group, also stops the
-/// running tool's programs, which run in a group of their own.
+/// running tool's programs, which run in a group of their own, and a call
+/// waiting behind it never starts.
 #[test]
 #[cfg(unix)]
 fn stopping_the_server_stops_its_running_tool() {
@@ -546,10 +547,13 @@ fn stopping_the_server_stops_its_running_tool() {
         .stdout(Stdio::null());
     let mut server = server.spawn().unwrap();
     let mut stdin = server.stdin.take().unwrap();
-    let script = "sleep 60 & echo $! > ../pid.tmp && mv ../pid.tmp ../pid; wait";
-    let call = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
-        "name": "meta_batch_execute", "arguments": {"command": ["sh", "-c", script]}}});
-    writeln!(stdin, "{call}").unwrap();
+    for (id, file) in [(1, "pid"), (2, "waiting")] {
+        let script =
+            format!("sleep 60 & echo $! > ../{file}.tmp && mv ../{file}.tmp ../{file}; wait");
+        let call = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "meta_batch_execute", "arguments": {"command": ["sh", "-c", script]}}});
+        writeln!(stdin, "{call}").unwrap();
+    }
     let pid = ws.join("pid");
     wait_for("the tool to start", || pid.exists());
     let group = format!("-{}", server.id());
@@ -558,8 +562,12 @@ fn stopping_the_server_stops_its_running_tool() {
         .status()
         .unwrap()
         .success());
-    let status = server.wait().unwrap();
-    assert_eq!(status.code(), Some(128 + 15), "{status:?}");
+    let mut status = None;
+    wait_for("the server to exit", || {
+        status = server.try_wait().unwrap();
+        status.is_some()
+    });
+    assert_eq!(status.unwrap().code(), Some(128 + 15), "{status:?}");
     let sleep = std::fs::read_to_string(&pid).unwrap();
     let gone = || {
         !Command::new("kill")
@@ -569,4 +577,5 @@ fn stopping_the_server_stops_its_running_tool() {
             .success()
     };
     wait_for("the tool's sleep to end", gone);
+    assert!(!ws.join("waiting").exists(), "the waiting call started");
 }

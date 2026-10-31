@@ -168,10 +168,19 @@ impl McpServer {
             let mut signals = signal_hook::iterator::Signals::new([SIGTERM, SIGINT, SIGHUP])?;
             let handle = signals.handle();
             std::thread::scope(|scope| {
+                // the first lets the running call end, rollback included; a
+                // second ends the server at once
                 scope.spawn(move || {
-                    if let Some(signal) = signals.forever().next() {
-                        self.calls.stop_running();
-                        std::process::exit(128 + signal);
+                    let mut stopping = false;
+                    for signal in signals.forever() {
+                        if stopping {
+                            std::process::exit(128 + signal);
+                        }
+                        stopping = true;
+                        scope.spawn(move || {
+                            self.calls.stop_running();
+                            std::process::exit(128 + signal);
+                        });
                     }
                 });
                 let served = self.serve(std::io::stdin().lock(), std::io::stdout());
@@ -384,7 +393,10 @@ impl McpServer {
                     return None;
                 }
                 let result = self.handle_call_tool(&request.params);
-                if !self.calls.finish() {
+                self.calls.finish(|cancelled| {
+                    if !cancelled {
+                        return Some(result);
+                    }
                     // No reply, as MCP asks, but what it did is kept: an
                     // atomic batch's rollback names the stash it made
                     if let Ok(result) = &result {
@@ -393,9 +405,8 @@ impl McpServer {
                             "meta-mcp: request {id} was cancelled; its result: {result}"
                         );
                     }
-                    return None;
-                }
-                result
+                    None
+                })?
             }
             _ => {
                 return Some(self.error_response(

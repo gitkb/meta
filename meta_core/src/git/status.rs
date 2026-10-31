@@ -55,7 +55,7 @@ impl RepoStatus {
             // nothing in it is changed; its branch and upstream still count.
             // A checkout whose config says `core.bare` is no bare repository:
             // its work tree may hold changes git can't report.
-            Err(_) if Self::is_bare(dir) => Ok(Self::bare(dir)),
+            Err(_) if Self::is_bare(dir) => Ok(Self::refs(dir)),
             Err(e) => Err(e),
         }
     }
@@ -66,7 +66,10 @@ impl RepoStatus {
             == Some("true\n.")
     }
 
-    fn bare(dir: &Path) -> Self {
+    /// What git says about the repository at `dir` without its work tree:
+    /// branch, commit and upstream, and no entries. For a bare repository,
+    /// or one whose work tree can't be read (a caller says which).
+    pub fn refs(dir: &Path) -> Self {
         let upstream = super::query(dir, ["rev-parse", "--abbrev-ref", "@{upstream}"]);
         let ahead_behind = upstream
             .as_ref()

@@ -163,23 +163,41 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
     };
     // the workspace's repository ignores its projects, as workspaces do
     repo(".");
-    write(".gitignore", "/a/\n/bad/\n/broken/\n/m/\n/pm/\n/plain/\n");
+    write(
+        ".gitignore",
+        "/a/\n/bad/\n/broken/\n/elsewhere/\n/m/\n/pm/\n/plain/\n",
+    );
+    // a project named like another's path is still told apart by its own
     write(
         ".meta.yaml",
-        "projects:\n  a: {}\n  bad: {meta: true}\n  broken: {}\n  m: {meta: true}\n  \
-         pm: {meta: true, tags: [outer]}\n  plain: {}\n",
+        "projects:\n  a: {}\n  bad: {meta: true}\n  broken: {}\n  suite: {path: m, meta: true}\n  \
+         m/inner: {path: elsewhere}\n  pm: {meta: true, tags: [outer]}\n  plain: {}\n",
     );
+    write("elsewhere/e.rs", "--flag\n");
     // a meta project whose config can't be read: its error, the others' matches
     write("bad/.meta.yaml", "{broken");
+    // and one two levels down: the healthy projects beside it are searched
+    write("pm/deep/.meta.yaml", "{broken");
     // a plain meta project, with a repository nested in it
-    write("pm/.meta.yaml", "projects:\n  c: {}\n");
+    write(
+        "pm/.meta.yaml",
+        "projects:\n  c: {}\n  deep: {meta: true}\n",
+    );
     repo("pm/c");
     write("pm/c/z.rs", "--flag\n");
     // a project whose .git can't be read: its error, and the others' matches
     write("broken/.git", "not a gitdir\n");
     repo("a");
-    // a setting git grep --untracked refuses, unless told not to recurse
-    git(&ws.join("a"), &["config", "submodule.recurse", "true"]);
+    // settings that would change what git grep prints, or refuse it
+    for (key, value) in [
+        ("submodule.recurse", "true"),
+        ("grep.column", "true"),
+        ("color.grep", "always"),
+        ("core.quotePath", "true"),
+    ] {
+        git(&ws.join("a"), &["config", key, value]);
+    }
+    write("a/\u{540d}.rs", "--flag\n");
     write("a/.gitignore", "target/\n");
     write("a/src/lib.rs", "--flag\n");
     write("a/notes.txt", "--flag\n");
@@ -204,7 +222,8 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
         matches("a"),
         Some(serde_json::json!([
             "notes.txt:1:--flag",
-            "src/lib.rs:1:--flag"
+            "src/lib.rs:1:--flag",
+            "\u{540d}.rs:1:--flag"
         ])),
         "{found:?}"
     );
@@ -213,12 +232,33 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
         Some(serde_json::json!(["y.rs:1:--flag"]))
     );
     assert_eq!(matches("plain"), Some(serde_json::json!(["x.rs:1:--flag"])));
+    assert_eq!(
+        matches("elsewhere"),
+        Some(serde_json::json!(["e.rs:1:--flag"]))
+    );
     // a nested project's files once, as its own
     assert_eq!(matches("pm/c"), Some(serde_json::json!(["z.rs:1:--flag"])));
     assert!(entry("pm").is_none(), "{found:?}");
+    for broken in ["bad", "pm/deep"] {
+        assert!(
+            entry(broken).is_some_and(|entry| entry["error"].as_str().is_some()),
+            "{found:?}"
+        );
+    }
+    // a config that can't be read is reported whatever the tags: the
+    // projects it hides may have them
+    let filtered = call(
+        ws,
+        "meta_search_code",
+        serde_json::json!({"pattern": "--flag", "tag": "outer"}),
+    );
     assert!(
-        entry("bad").is_some_and(|entry| entry["error"].as_str().is_some()),
-        "{found:?}"
+        filtered
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["project"] == "pm/deep" && entry["error"].is_string()),
+        "{filtered}"
     );
     // the broken project's error, in place of matches
     assert!(
@@ -228,7 +268,7 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
                 .is_some_and(|e| e.contains("broken"))),
         "{found:?}"
     );
-    assert_eq!(found.len(), 6, "{found:?}");
+    assert_eq!(found.len(), 8, "{found:?}");
 
     // a file git can't read: the matches it could, and what it couldn't
     #[cfg(unix)]
@@ -270,13 +310,22 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
         "meta_search_code",
         serde_json::json!({"pattern": "--flag", "file_pattern": "*.rs"}),
     );
+    let a = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["project"] == "a");
     assert_eq!(
-        found[0]["matches"],
-        serde_json::json!(["src/lib.rs:1:--flag"])
+        a.map(|a| a["matches"].clone()),
+        Some(serde_json::json!([
+            "src/lib.rs:1:--flag",
+            "\u{540d}.rs:1:--flag"
+        ])),
+        "{found}"
     );
     // a search git refuses is reported, not taken for no match
     let found = call(ws, "meta_search_code", serde_json::json!({"pattern": "("}));
-    assert_eq!(found.as_array().unwrap().len(), 8, "{found}");
+    assert_eq!(found.as_array().unwrap().len(), 10, "{found}");
     assert!(
         found[0]["error"].as_str().is_some_and(|e| !e.is_empty()),
         "{found}"
@@ -305,4 +354,37 @@ fn search_reports_a_plain_project_it_cannot_fence_off() {
             .is_some_and(|e| e.contains("path list separator")),
         "{found}"
     );
+}
+
+/// A project nested through a link is searched once, as its own, not also
+/// where the link leads inside its parent.
+#[test]
+#[cfg(unix)]
+fn search_leaves_a_linked_nested_project_to_itself() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    std::fs::create_dir_all(ws.join("pm/real")).unwrap();
+    std::fs::write(ws.join("pm/real/z.rs"), "--flag\n").unwrap();
+    std::os::unix::fs::symlink("real", ws.join("pm/alias")).unwrap();
+    std::fs::write(ws.join("pm/.meta.yaml"), "projects:\n  c: {path: alias}\n").unwrap();
+    std::fs::write(
+        ws.join(".meta.yaml"),
+        "projects:\n  pm: {meta: true, tags: [outer]}\n",
+    )
+    .unwrap();
+    let found = call(
+        ws,
+        "meta_search_code",
+        serde_json::json!({"pattern": "--flag"}),
+    );
+    assert_eq!(
+        found,
+        serde_json::json!([{"project": "pm/alias", "matches": ["z.rs:1:--flag"]}])
+    );
+    let found = call(
+        ws,
+        "meta_search_code",
+        serde_json::json!({"pattern": "--flag", "tag": "outer"}),
+    );
+    assert_eq!(found, serde_json::json!([]));
 }

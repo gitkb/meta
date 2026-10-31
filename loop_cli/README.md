@@ -34,8 +34,8 @@ loop cargo test
 | Option | Description |
 |--------|-------------|
 | `-c, --config <FILE>` | Custom config file path (default: `.looprc`) |
-| `-i, --include <DIRS>` | Only run in these directories (comma-separated) |
-| `-e, --exclude <DIRS>` | Skip these directories (comma-separated) |
+| `-i, --include <DIR>` | Only run in this directory (repeat for more) |
+| `-e, --exclude <DIR>` | Skip this directory, by name or path end (repeat for more) |
 | `-v, --verbose` | Enable verbose output |
 | `-s, --silent` | Suppress all output except summary |
 | `--add-aliases-to-global-looprc` | Add shell aliases to global config |

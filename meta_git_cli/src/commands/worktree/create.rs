@@ -192,7 +192,7 @@ pub(crate) fn handle_create(
         if !use_all || strict {
             anyhow::bail!("{why}");
         }
-        super::warn_or_bail(false, format!("{why}, skipping"))?;
+        super::warn(format!("{why}, skipping"));
     }
     let mut repos_to_create = cloned;
     // One worktree per place in the set: a repeated --repo, or a repo named
@@ -941,7 +941,7 @@ fn ensure_intermediate_parents(
                 if strict {
                     anyhow::bail!("{why}");
                 }
-                super::warn_or_bail(false, format!("{why}, skipping"))?;
+                super::warn(format!("{why}, skipping"));
                 continue;
             }
 

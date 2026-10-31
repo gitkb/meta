@@ -1682,36 +1682,31 @@ impl McpServer {
         // workspace. A project whose nested config can't be read is an
         // error of its own.
         let mut targets = Vec::new();
-        for project in &projects {
-            match config::walk_projects(meta_dir, std::slice::from_ref(project), None) {
-                Ok(tree) => search_targets(&tree, "", &mut targets),
-                Err(e) => targets.push(SearchTarget {
-                    place: project.path.clone(),
-                    tags: project.tags.clone(),
-                    nested: Err(format!("{e:#}")),
-                }),
-            }
-        }
+        let mut seen = std::collections::HashSet::from([meta_dir
+            .canonicalize()
+            .unwrap_or_else(|_| meta_dir.clone())]);
+        search_targets(meta_dir, "", &projects, &mut seen, &mut targets);
 
         let mut results = Vec::new();
 
         for SearchTarget {
-            place: name,
+            path: name,
             tags,
             nested,
         } in targets
         {
-            let project_path = meta_dir.join(&name);
-            if tag_filter.is_some_and(|tag| !has_any_tag(tag, &tags)) || !project_path.exists() {
-                continue;
-            }
             let nested = match nested {
                 Ok(nested) => nested,
+                // whatever the tags: the projects it hides may have them
                 Err(error) => {
                     results.push(serde_json::json!({ "project": name, "error": error }));
                     continue;
                 }
             };
+            let project_path = meta_dir.join(&name);
+            if tag_filter.is_some_and(|tag| !has_any_tag(tag, &tags)) || !project_path.exists() {
+                continue;
+            }
 
             // git's search never looks in .git or at what .gitignore leaves
             // out, and takes the pattern after -e, never as an option. A
@@ -1763,12 +1758,20 @@ impl McpServer {
             if let Some(fp) = file_pattern {
                 cmd.arg(format!(":(glob)**/{fp}"));
             }
-            // the projects nested in it are searched as their own
-            cmd.args(
-                nested
-                    .iter()
-                    .map(|path| format!(":(exclude,literal){path}")),
-            );
+            // the projects nested in it are searched as their own: by their
+            // path, and where it leads when it is a link inside this project
+            let real = |path: &std::path::Path| path.canonicalize().ok();
+            for path in &nested {
+                cmd.arg(format!(":(exclude,literal){path}"));
+                let resolved = real(&project_path.join(path)).zip(real(&project_path));
+                if let Some(target) = resolved
+                    .as_ref()
+                    .and_then(|(child, here)| child.strip_prefix(here).ok())
+                    .filter(|target| *target != std::path::Path::new(path))
+                {
+                    cmd.arg(format!(":(exclude,literal){}", target.display()));
+                }
+            }
 
             let out = match cmd.output() {
                 Ok(out) => out,
@@ -1790,6 +1793,9 @@ impl McpServer {
                 (_, "") => Some(format!("git grep failed: {}", out.status)),
                 (_, stderr) => Some(stderr.to_string()),
             };
+            if matches.is_empty() && error.is_none() {
+                continue;
+            }
             let mut entry = serde_json::json!({ "project": name });
             if !matches.is_empty() {
                 entry["matches"] = serde_json::json!(matches);
@@ -1797,9 +1803,7 @@ impl McpServer {
             if let Some(error) = error {
                 entry["error"] = serde_json::json!(error);
             }
-            if entry.get("matches").is_some() || entry.get("error").is_some() {
-                results.push(entry);
-            }
+            results.push(entry);
         }
 
         Ok(serde_json::to_string_pretty(&results)?)
@@ -2336,32 +2340,56 @@ fn git_status_command(meta_dir: &std::path::Path, args: &serde_json::Value) -> C
 }
 
 /// A project for `meta_search_code`: its path in the workspace, its tags,
-/// and the paths, from it, of the projects nested in it (or why its nested
-/// config can't be read).
+/// and the paths, from it, of the projects nested in it.
 struct SearchTarget {
-    place: String,
+    path: String,
     tags: Vec<String>,
     nested: Result<Vec<String>, String>,
 }
 
-/// Every project of `nodes` and the ones nested in them, parents first,
-/// with paths under `prefix`.
-fn search_targets(nodes: &[config::MetaTreeNode], prefix: &str, out: &mut Vec<SearchTarget>) {
-    for node in nodes {
-        let place = match prefix {
-            "" => node.info.path.clone(),
-            prefix => format!("{prefix}/{}", node.info.path),
+/// Every project of `projects` (listed by the config in `dir`) and the ones
+/// nested in them, parents first, with paths under `prefix`. Each nested
+/// config is read on its own, so one that can't be read is only its
+/// project's error; `seen` stops a link back up the tree.
+fn search_targets(
+    dir: &std::path::Path,
+    prefix: &str,
+    projects: &[ProjectInfo],
+    seen: &mut std::collections::HashSet<std::path::PathBuf>,
+    out: &mut Vec<SearchTarget>,
+) {
+    for project in projects {
+        let path = match prefix {
+            "" => project.path.clone(),
+            prefix => format!("{prefix}/{}", project.path),
         };
+        // one level: this project's own nested config
+        let nested = config::walk_projects(dir, std::slice::from_ref(project), Some(1))
+            .map(|nodes| {
+                nodes
+                    .into_iter()
+                    .flat_map(|node| node.children)
+                    .map(|child| child.info)
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|e| format!("{e:#}"));
         out.push(SearchTarget {
-            place: place.clone(),
-            tags: node.info.tags.clone(),
-            nested: Ok(node
-                .children
-                .iter()
-                .map(|child| child.info.path.clone())
-                .collect()),
+            path: path.clone(),
+            tags: project.tags.clone(),
+            nested: nested
+                .as_ref()
+                .map(|nested| nested.iter().map(|child| child.path.clone()).collect())
+                .map_err(Clone::clone),
         });
-        search_targets(&node.children, &place, out);
+        let project_dir = dir.join(&project.path);
+        let real = project_dir
+            .canonicalize()
+            .unwrap_or_else(|_| project_dir.clone());
+        if let Ok(nested) = nested {
+            if !nested.is_empty() && seen.insert(real) {
+                search_targets(&project_dir, &path, &nested, seen, out);
+            }
+        }
     }
 }
 
@@ -2528,6 +2556,9 @@ mod tests {
         let tree = server.tool_get_file_tree(&json!({"tag": " , "})).unwrap();
         let tree: serde_json::Value = serde_json::from_str(&tree).unwrap();
         assert_eq!(tree.as_array().unwrap().len(), 3, "{tree}");
+
+        // null, as clients send for an option they don't use, is the default
+        assert!(server.tool_get_file_tree(&json!({"depth": null})).is_ok());
 
         let err = server
             .tool_get_file_tree(&json!({"depth": -1}))

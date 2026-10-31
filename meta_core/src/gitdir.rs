@@ -38,12 +38,24 @@ pub fn gitfile_target(checkout: &Path) -> anyhow::Result<Option<PathBuf>> {
     Ok(read_gitfile(checkout)?.map(|target| checkout.join(target)))
 }
 
-/// Whether `dir` is a git directory, as git decides before using one:
-/// `objects` and `refs` directories, and a `HEAD` naming a ref under
-/// `refs/` (as a symlink, or `ref: refs/...`) or holding a commit id.
-/// Anything less, a `HEAD` that can't be read included, and git looks
+/// Whether `dir` has a git directory's shape, whatever its `HEAD` holds:
+/// a `HEAD` entry, and `objects` and `refs` directories. What guards
+/// deletion asks this, not [`is_git_dir`]: a repository whose `HEAD` was
+/// damaged still holds objects and refs worth keeping.
+pub fn looks_like_git_dir(dir: &Path) -> bool {
+    dir.join("HEAD").symlink_metadata().is_ok()
+        && dir.join("objects").is_dir()
+        && dir.join("refs").is_dir()
+}
+
+/// Whether `dir` is a git directory, as git decides before using one: its
+/// shape ([`looks_like_git_dir`]), `objects` and `refs` it can look into,
+/// and a `HEAD` it can read that names a ref under `refs/` (as a symlink,
+/// or `ref: refs/...`) or holds a commit id. Anything less, and git looks
 /// past it to the repository around.
-pub fn is_bare(dir: &Path) -> bool {
+pub fn is_git_dir(dir: &Path) -> bool {
+    // `<dir>/.` can be looked up only by someone who may enter `<dir>`
+    let enterable = |name: &str| dir.join(name).join(".").metadata().is_ok();
     let head = dir.join("HEAD");
     let valid_head = match std::fs::read_link(&head) {
         Ok(target) => target.to_string_lossy().starts_with("refs/"),
@@ -54,17 +66,7 @@ pub fn is_bare(dir: &Path) -> bool {
                 || (head.len() >= 40 && head.iter().all(u8::is_ascii_hexdigit))
         }),
     };
-    valid_head && dir.join("objects").is_dir() && dir.join("refs").is_dir()
-}
-
-/// Whether `dir` has a git directory's shape, whatever its `HEAD` holds:
-/// a `HEAD` entry, and `objects` and `refs` directories. What guards
-/// deletion asks this, not [`is_bare`]: a repository whose `HEAD` was
-/// damaged still holds objects and refs worth keeping.
-pub fn looks_like_git_dir(dir: &Path) -> bool {
-    dir.join("HEAD").symlink_metadata().is_ok()
-        && dir.join("objects").is_dir()
-        && dir.join("refs").is_dir()
+    looks_like_git_dir(dir) && enterable("objects") && enterable("refs") && valid_head
 }
 
 /// The git directory the repository at `dir` keeps its objects, refs and
@@ -77,8 +79,8 @@ pub fn common_dir(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
     let dot_git = dir.join(".git");
     let target = match gitfile_target(dir)? {
         Some(target) => target,
-        None if dot_git.is_dir() => return Ok(is_bare(&dot_git).then_some(dot_git)),
-        None => return Ok(is_bare(dir).then(|| dir.to_path_buf())),
+        None if dot_git.is_dir() => return Ok(is_git_dir(&dot_git).then_some(dot_git)),
+        None => return Ok(is_git_dir(dir).then(|| dir.to_path_buf())),
     };
     let commondir = target.join("commondir");
     match std::fs::read_to_string(&commondir) {
@@ -120,7 +122,7 @@ pub fn linked(checkout: &Path) -> anyhow::Result<Linked> {
     })?;
     let common = admin.join(common.trim_end_matches(['\n', '\r']));
     anyhow::ensure!(
-        is_bare(&common),
+        is_git_dir(&common),
         "{} is not a git directory",
         escape_path(&common)
     );
@@ -224,6 +226,13 @@ mod tests {
                 assert_eq!(common_dir(&repo).unwrap(), None);
             }
             std::fs::set_permissions(&truncated, mode(0o644)).unwrap();
+            // nor objects git can't look into
+            let objects = repo.join(".git/objects");
+            std::fs::set_permissions(&objects, mode(0o600)).unwrap();
+            if std::fs::read_dir(&objects).is_err() {
+                assert_eq!(common_dir(&repo).unwrap(), None);
+            }
+            std::fs::set_permissions(&objects, mode(0o755)).unwrap();
         }
 
         let linked = linked(&wt).unwrap();

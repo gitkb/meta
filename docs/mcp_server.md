@@ -218,7 +218,7 @@ Clean build artifacts.
 ### Discovery Tools
 
 #### meta_search_code
-Search for patterns across all repositories, those nested in meta projects too, with `git grep`: tracked files, and untracked files that `.gitignore` doesn't ignore; never `.git`. Each project is listed by its path in the workspace, a nested one too (`platform/api`), and is searched once: a project's search leaves out the projects nested in it. When git reports a problem, the project's entry has an `error`, beside any `matches` git still found (an unreadable file, say).
+Search for patterns across all repositories, those nested in meta projects too, with `git grep`: tracked files, and untracked files that `.gitignore` doesn't ignore; never `.git`. Each project is listed by its path in the workspace, a nested one too (`platform/api`), and is searched once: a project's search leaves out the projects nested in it. A nested `.meta.yaml` that can't be read is its project's error, reported whatever the tag filter; the projects beside it are still searched. When git reports a problem, the project's entry has an `error`, beside any `matches` git still found (an unreadable file, say).
 
 **Parameters:**
 - `pattern` (required): Search pattern, an extended regular expression (as `grep -E`)

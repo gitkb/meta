@@ -139,15 +139,19 @@ fn handle_worktree_command(
 pub(crate) fn warn_or_bail(strict: bool, message: impl std::fmt::Display) -> anyhow::Result<()> {
     if strict {
         anyhow::bail!("{message} (strict mode)")
-    } else {
-        // the message can carry paths and names from git and the filesystem
-        eprintln!(
-            "{} {}",
-            "warning:".yellow().bold(),
-            escape_lines(&message.to_string())
-        );
-        Ok(())
     }
+    warn(message);
+    Ok(())
+}
+
+/// Print a warning; the message can carry paths and names from git and
+/// the filesystem.
+pub(crate) fn warn(message: impl std::fmt::Display) {
+    eprintln!(
+        "{} {}",
+        "warning:".yellow().bold(),
+        escape_lines(&message.to_string())
+    );
 }
 
 /// Print worktree help text to stdout.

@@ -810,6 +810,19 @@ EOF
     if git -C "$TEST_DIR/unrelated" rev-parse --verify --quiet refs/heads/via-link; then false; fi
 }
 
+@test "create skips an intermediate parent whose .git is no repository" {
+    # vendor is a meta project with an empty .git; lib, nested in it, is cloned
+    mkdir -p "$TEST_DIR/vendor/.git" "$TEST_DIR/vendor/lib"
+    printf '{"projects": {"lib": "git@github.com:org/lib.git"}}' > "$TEST_DIR/vendor/.meta.yaml"
+    git -C "$TEST_DIR/vendor/lib" init --quiet --initial-branch=main
+    git -C "$TEST_DIR/vendor/lib" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    printf '{"projects": {"backend": "git@github.com:org/backend.git", "vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}' > "$TEST_DIR/.meta.yaml"
+    run "$META_BIN" git worktree create nested --no-deps --repo vendor/lib
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Intermediate parent 'vendor' for nested repo 'vendor/lib' is not cloned, skipping"* ]]
+    [ -d "$TEST_DIR/.worktrees/nested/vendor/lib" ]
+}
+
 @test "worktree add rechecks a destination after an earlier add in the same call" {
     OUT="$(cd "$(mktemp -d)" && pwd -P)"
     # group is a nested meta repo with its own core repo inside

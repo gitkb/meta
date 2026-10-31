@@ -57,6 +57,16 @@ pub fn is_bare(dir: &Path) -> bool {
     valid_head && dir.join("objects").is_dir() && dir.join("refs").is_dir()
 }
 
+/// Whether `dir` has a git directory's shape, whatever its `HEAD` holds:
+/// a `HEAD` entry, and `objects` and `refs` directories. What guards
+/// deletion asks this, not [`is_bare`]: a repository whose `HEAD` was
+/// damaged still holds objects and refs worth keeping.
+pub fn looks_like_git_dir(dir: &Path) -> bool {
+    dir.join("HEAD").symlink_metadata().is_ok()
+        && dir.join("objects").is_dir()
+        && dir.join("refs").is_dir()
+}
+
 /// The git directory the repository at `dir` keeps its objects, refs and
 /// worktrees in: `.git` itself; for a linked worktree, what its admin
 /// directory's `commondir` names; for a `--separate-git-dir` checkout, what
@@ -190,6 +200,9 @@ mod tests {
         let head = std::fs::read_to_string(&truncated).unwrap();
         std::fs::write(&truncated, "").unwrap();
         assert_eq!(common_dir(&repo).unwrap(), None);
+        // a detached HEAD holds a commit id
+        std::fs::write(&truncated, format!("{}\n", "0".repeat(40))).unwrap();
+        assert!(common_dir(&repo).unwrap().is_some());
         std::fs::write(&truncated, head).unwrap();
         // HEAD as a symlink to a branch that is only in packed-refs
         #[cfg(unix)]

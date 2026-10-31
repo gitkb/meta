@@ -162,6 +162,8 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
     // a project whose .git can't be read: its error, and the others' matches
     write("broken/.git", "not a gitdir\n");
     repo("a");
+    // a setting git grep --untracked refuses, unless told not to recurse
+    git(&ws.join("a"), &["config", "submodule.recurse", "true"]);
     write("a/.gitignore", "target/\n");
     write("a/src/lib.rs", "--flag\n");
     write("a/notes.txt", "--flag\n");
@@ -174,21 +176,72 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
     // a project that is no repository of its own
     write("plain/x.rs", "--flag\n");
 
-    assert_eq!(
-        call(
-            ws,
-            "meta_search_code",
-            serde_json::json!({"pattern": "--flag"})
-        ),
-        serde_json::json!([
-            {"project": "a", "matches": ["notes.txt:1:--flag", "src/lib.rs:1:--flag"]},
-            {"project": "broken", "error": format!(
-                "Invalid .git file format at {}", ws.join("broken/.git").display()
-            )},
-            {"project": "m/inner", "matches": ["y.rs:1:--flag"]},
-            {"project": "plain", "matches": ["x.rs:1:--flag"]}
-        ])
+    let found = call(
+        ws,
+        "meta_search_code",
+        serde_json::json!({"pattern": "--flag"}),
     );
+    let found = found.as_array().unwrap();
+    let entry = |project: &str| found.iter().find(|entry| entry["project"] == project);
+    let matches = |project: &str| entry(project).map(|entry| entry["matches"].clone());
+    assert_eq!(
+        matches("a"),
+        Some(serde_json::json!([
+            "notes.txt:1:--flag",
+            "src/lib.rs:1:--flag"
+        ])),
+        "{found:?}"
+    );
+    assert_eq!(
+        matches("m/inner"),
+        Some(serde_json::json!(["y.rs:1:--flag"]))
+    );
+    assert_eq!(matches("plain"), Some(serde_json::json!(["x.rs:1:--flag"])));
+    // the broken project's error, in place of matches
+    assert!(
+        entry("broken").is_some_and(|entry| entry.get("matches").is_none()
+            && entry["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("broken"))),
+        "{found:?}"
+    );
+    assert_eq!(found.len(), 4, "{found:?}");
+
+    // a file git can't read: the matches it could, and what it couldn't
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        write("plain/secret.rs", "--flag\n");
+        let secret = ws.join("plain/secret.rs");
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // root reads it anyway
+        if std::fs::read(&secret).is_err() {
+            let found = call(
+                ws,
+                "meta_search_code",
+                serde_json::json!({"pattern": "--flag"}),
+            );
+            let plain = found
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["project"] == "plain")
+                .cloned();
+            let plain = plain.unwrap_or_default();
+            assert_eq!(
+                plain["matches"],
+                serde_json::json!(["x.rs:1:--flag"]),
+                "{found}"
+            );
+            assert!(
+                plain["error"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("secret.rs")),
+                "{found}"
+            );
+        }
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
     let found = call(
         ws,
         "meta_search_code",
@@ -207,6 +260,30 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
     assert_eq!(found.as_array().unwrap().len(), 5, "{found}");
     assert!(
         found[0]["error"].as_str().is_some_and(|e| !e.is_empty()),
+        "{found}"
+    );
+}
+
+/// A plain project's search keeps out of the workspace repo by a ceiling,
+/// which a path with the list separator would split: an error, not a
+/// silent "no match".
+#[test]
+#[cfg(unix)]
+fn search_reports_a_plain_project_it_cannot_fence_off() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("a:b");
+    std::fs::create_dir_all(ws.join("plain")).unwrap();
+    std::fs::write(ws.join("plain/x.rs"), "--flag\n").unwrap();
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  plain: {}\n").unwrap();
+    let found = call(
+        &ws,
+        "meta_search_code",
+        serde_json::json!({"pattern": "--flag"}),
+    );
+    assert!(
+        found[0]["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("path list separator")),
         "{found}"
     );
 }

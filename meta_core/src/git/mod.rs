@@ -95,7 +95,7 @@ where
 }
 
 /// The branch checked out at `dir`: `None` when HEAD is detached or git
-/// fails. Unlike [`RepoStatus::read`], it works in a bare repository.
+/// fails.
 pub fn current_branch(dir: &Path) -> Option<String> {
     query(dir, ["branch", "--show-current"]).filter(|branch| !branch.is_empty())
 }

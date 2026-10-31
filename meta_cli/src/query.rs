@@ -155,8 +155,7 @@ impl RepoState {
         let status = RepoStatus::read(path).ok();
         let branch = match &status {
             Some(status) => status.branch.clone().unwrap_or_else(|| "HEAD".to_string()),
-            // a bare repository has a branch but no status
-            None => meta_core::git::current_branch(path).unwrap_or_else(|| "unknown".to_string()),
+            None => "unknown".to_string(),
         };
         let status = status.unwrap_or_default();
         let (ahead, behind) = status.ahead_behind.unwrap_or_default();
@@ -372,6 +371,31 @@ mod tests {
         // before the first commit, the branch it will be on
         assert_eq!(state.branch, "main");
         assert_eq!(state.last_commit_hash, None);
+    }
+
+    #[test]
+    fn a_bare_repository_has_its_last_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| meta_core::git::run(dir.path(), args).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"]);
+        // the empty tree, which git always has
+        let tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+        let commit = run(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit-tree",
+            tree,
+            "-m",
+            "first",
+        ]);
+        run(&["update-ref", "refs/heads/main", &commit]);
+        let state = RepoState::collect("r", dir.path(), &[]).unwrap();
+        assert_eq!(state.branch, "main");
+        assert_eq!(state.last_commit_hash.as_deref(), Some(commit.as_str()));
+        assert_eq!(state.last_commit_message.as_deref(), Some("first"));
+        assert!(state.last_commit_time.is_some() && !state.is_dirty);
     }
 
     #[test]

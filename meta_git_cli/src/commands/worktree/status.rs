@@ -32,7 +32,11 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
             let status = if args.recursive {
                 observed?
             } else {
-                observed.unwrap_or_default()
+                // what can't be read shows clean, on the branch git names
+                observed.unwrap_or_else(|_| meta_core::git::RepoStatus {
+                    branch: meta_core::git::current_branch(&r.path),
+                    ..Default::default()
+                })
             };
             let (ahead, behind) = status.ahead_behind.unwrap_or_default();
             Ok(StatusRepoEntry {

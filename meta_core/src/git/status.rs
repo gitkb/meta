@@ -38,7 +38,7 @@ impl RepoStatus {
     /// (`status.showUntrackedFiles=no`, `status.aheadBehind=false`) must not
     /// make a checkout look clean.
     pub fn read(dir: &Path) -> anyhow::Result<Self> {
-        Ok(Self::parse(&super::run(
+        let status = super::run(
             dir,
             [
                 "status",
@@ -48,7 +48,42 @@ impl RepoStatus {
                 "--untracked-files=normal",
                 "--ahead-behind",
             ],
-        )?))
+        );
+        match status {
+            Ok(output) => Ok(Self::parse(&output)),
+            // a bare repository has no work tree for `git status`, so
+            // nothing in it is changed; its branch and upstream still count
+            Err(_)
+                if super::query(dir, ["rev-parse", "--is-bare-repository"]).as_deref()
+                    == Some("true") =>
+            {
+                Ok(Self::bare(dir))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn bare(dir: &Path) -> Self {
+        let upstream = super::query(dir, ["rev-parse", "--abbrev-ref", "@{upstream}"]);
+        let ahead_behind = upstream
+            .as_ref()
+            .and_then(|_| {
+                super::query(
+                    dir,
+                    ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+                )
+            })
+            .and_then(|counts| {
+                let (ahead, behind) = counts.split_once('\t')?;
+                Some((ahead.parse().ok()?, behind.parse().ok()?))
+            });
+        Self {
+            branch: super::current_branch(dir),
+            oid: super::query(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]),
+            upstream,
+            ahead_behind,
+            entries: Vec::new(),
+        }
     }
 
     fn parse(output: &str) -> Self {
@@ -240,6 +275,47 @@ mod tests {
         assert_eq!(kinds(&status(dir.path())), (false, true, false, true));
         run(dir.path(), ["add", "a"]).unwrap();
         assert_eq!(kinds(&status(dir.path())), (true, false, false, true));
+    }
+
+    #[test]
+    fn a_bare_repository_has_a_branch_commit_and_upstream() {
+        let upstream = repo();
+        commit(upstream.path(), "a");
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("bare.git");
+        run(
+            dir.path(),
+            [
+                "clone".as_ref(),
+                "-q".as_ref(),
+                "--bare".as_ref(),
+                upstream.path().as_os_str(),
+                bare.as_os_str(),
+            ],
+        )
+        .unwrap();
+        for args in [
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ][..],
+            &["config", "branch.main.remote", "origin"],
+            &["config", "branch.main.merge", "refs/heads/main"],
+        ] {
+            run(&bare, args).unwrap();
+        }
+        commit(upstream.path(), "b");
+        run(&bare, ["fetch", "-q"]).unwrap();
+
+        let status = RepoStatus::read(&bare).unwrap();
+        assert_eq!(status.branch.as_deref(), Some("main"));
+        assert!(status.oid.is_some());
+        assert_eq!(status.upstream.as_deref(), Some("origin/main"));
+        assert_eq!(status.ahead_behind, Some((0, 1)));
+        assert!(!status.is_dirty());
+        // what isn't a repository is still an error
+        assert!(RepoStatus::read(dir.path()).is_err());
     }
 
     #[test]

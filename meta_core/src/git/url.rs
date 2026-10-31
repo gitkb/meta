@@ -92,11 +92,7 @@ impl GitUrl {
     /// A form two URLs of the same repository share: without `.git`, a
     /// trailing `/` or an ssh port, and with ssh's default user `git`.
     pub fn normalized(&self) -> String {
-        let path = self.path.trim_end_matches('/');
-        let path = path
-            .strip_suffix(".git")
-            .unwrap_or(path)
-            .trim_end_matches('/');
+        let path = self.repo_path();
         if self.is_ssh() {
             let user = self.user.as_deref().unwrap_or("git");
             return format!("{user}@{}:{path}", self.host);
@@ -127,13 +123,18 @@ impl GitUrl {
         Some(format!("{owner}/{repo}"))
     }
 
-    /// The path's components, last first, the last without `.git` (a
-    /// trailing `/.git` goes too, as git drops it).
+    /// The path's components, last first.
     fn components(&self) -> impl Iterator<Item = &str> {
+        self.repo_path()
+            .rsplit(['/', '\\'])
+            .take_while(|p| !p.is_empty())
+    }
+
+    /// The path without a trailing `/`, `.git` or `/.git`, as git drops them.
+    fn repo_path(&self) -> &str {
         let path = self.path.trim_end_matches(['/', '\\']);
         let path = path.strip_suffix(".git").unwrap_or(path);
-        let path = path.trim_end_matches(['/', '\\']);
-        path.rsplit(['/', '\\']).take_while(|p| !p.is_empty())
+        path.trim_end_matches(['/', '\\'])
     }
 }
 

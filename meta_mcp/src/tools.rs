@@ -1903,6 +1903,8 @@ mod tests {
             format!("{:#}", reply.err().unwrap())
         };
         assert!(refused("--orphan=evil").contains("is not a valid branch name"));
+        // git repeats the name; a control character in it comes back escaped
+        assert!(!refused("a\nb").contains('\n'));
         // a valid name, but a config git can't read: git's words, not a guess
         std::fs::write(tmp.path().join(".git/config"), "[broken").unwrap();
         let err = refused("feature/demo");

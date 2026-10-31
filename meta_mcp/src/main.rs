@@ -212,6 +212,7 @@ impl McpServer {
                         // with the answer on stderr (an atomic batch's
                         // rollback is in it)
                         if let Err(e) = write_answer(&output, &answer) {
+                            self.calls.cancel_all();
                             let _ = writeln!(std::io::stderr(), "Error: {e:#}; the reply was:");
                             let _ = write_answer(&Mutex::new(std::io::stderr()), &answer);
                             std::process::exit(1);

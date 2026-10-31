@@ -489,6 +489,19 @@ fn the_looprc_preview_shows_no_credentials() {
         assert!(shown.contains("http://***@h/r"), "{shown}");
         assert!(!shown.contains("ghp_SECRET"), "{shown}");
     }
+    // a change only in a token says so
+    let rotated = old.replace("ghp_SECRET", "ghp_OTHER");
+    let shown = preview(old, &rotated);
+    assert!(shown.contains("only in credentials"), "{shown}");
+    assert!(!shown.contains("ghp_"), "{shown}");
+    // a key, and a file that isn't JSON but holds no escape
+    let shown = preview(r#"{"http://a:ghp_SECRET@h/r": "x"}"#, &new);
+    assert!(!shown.contains("ghp_SECRET"), "{shown}");
+    let shown = preview("not json: http://a:ghp_SECRET@h/r", &new);
+    assert!(
+        shown.contains("http://***@h/r") && !shown.contains("ghp_SECRET"),
+        "{shown}"
+    );
     // spelled with JSON escapes, or in a file that isn't JSON
     for old in [
         r#"{"aliases": {"a": "git fetch http:\/\/alice:ghp_SECRET@h\/r"}}"#,

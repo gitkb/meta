@@ -266,18 +266,24 @@ fn resolve_aliases(argv: &[String], aliases: &HashMap<String, String>) -> Result
 /// The change from `existing` to `new` (a `.looprc`), line by line, without
 /// the credentials in URLs: aliases may hold them.
 fn preview(existing: &str, new: &str) -> String {
-    let new = shown_looprc(new);
+    let shown_new = shown_looprc(new);
     if existing.is_empty() {
-        return format!("{}\n", new.green());
+        return format!("{}\n", shown_new.green());
     }
-    diff::lines(&shown_looprc(existing), &new)
+    let shown_old = shown_looprc(existing);
+    let mut shown: String = diff::lines(&shown_old, &shown_new)
         .into_iter()
         .map(|change| match change {
             diff::Result::Left(l) => format!("{}\n", format!("-{l}").red()),
             diff::Result::Both(l, _) => format!(" {l}\n"),
             diff::Result::Right(r) => format!("{}\n", format!("+{r}").green()),
         })
-        .collect()
+        .collect();
+    let json = |text: &str| serde_json::from_str::<serde_json::Value>(text).ok();
+    if shown_old == shown_new && json(existing) != json(new) {
+        shown.push_str("(the change is only in credentials, which aren't shown)\n");
+    }
+    shown
 }
 
 /// A `.looprc` as shown: its JSON written out again with the URLs in its

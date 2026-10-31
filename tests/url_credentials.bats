@@ -93,6 +93,9 @@ meta_without_token() {
     # errors and plans repeating a URL typed where a name or spec goes
     meta_without_token --include "https://$TOKEN@example.invalid/org/x.git" exec -- true
     [ "$status" -ne 0 ]
+    [[ "$output" == *"--include 'https://***@example.invalid/org/x.git'"* ]] || false
+    meta_without_token project "https://$TOKEN@example.invalid/org/x.git"
+    [[ "$output" == *"unrecognized command 'project https://***@example.invalid/org/x.git'"* ]] || false
     meta_without_token git worktree create x --repo moved --from-pr "https://$TOKEN@127.0.0.1:9/o/r/pull/zz"
     [ "$status" -ne 0 ]
     [[ "$output" == *"https://***@127.0.0.1:9/o/r/pull/zz"* ]] || false

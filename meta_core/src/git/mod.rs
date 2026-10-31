@@ -78,7 +78,7 @@ where
             escape(&shown()),
             escape_path(dir),
             escape(&redact_git_output(
-                String::from_utf8_lossy(&output.stderr).trim()
+                String::from_utf8_lossy(&output.stderr).trim_ascii()
             ))
         );
     }

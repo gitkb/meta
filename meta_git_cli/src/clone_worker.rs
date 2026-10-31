@@ -327,7 +327,8 @@ impl StderrTail {
                         let _ = reader.skip_until(b'\n');
                     }
                     let line = String::from_utf8_lossy(&buf);
-                    let line = meta_core::git::redact_git_output(line.trim_end());
+                    // ASCII only: a Unicode space may end a cut password
+                    let line = meta_core::git::redact_git_output(line.trim_ascii_end());
                     buf.clear();
                     on_line(&line);
                     let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());
@@ -383,9 +384,15 @@ mod tests {
         let git_cut_spaced = git_cut_spaced
             .get(..StderrTail::LINE_BYTES as usize - 1)
             .unwrap();
+        // git's cut right after a Unicode space
+        let at_space = format!(
+            "warning: https://alice:ghp_SECRET{}\u{2003}",
+            "w".repeat(4059)
+        );
+        assert_eq!(at_space.len() + 1, StderrTail::LINE_BYTES as usize);
         let output = format!(
             "{pad}https://alice:ghp_SECRET@h/r\n{git_cut}\n{spaced}\n{git_cut_spaced}\n\
-             fatal: 'https://a:ghp_SECRET@h/r'\n"
+             {at_space}\nfatal: 'https://a:ghp_SECRET@h/r'\n"
         );
         let shown = Arc::new(Mutex::new(String::new()));
         let seen = Arc::clone(&shown);

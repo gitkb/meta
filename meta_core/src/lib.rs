@@ -14,6 +14,8 @@ pub mod display;
 pub mod duration;
 pub mod git;
 pub mod gitdir;
+pub mod mode;
+pub use mode::ExecutionMode;
 pub mod store;
 
 /// Default meta data directory name.

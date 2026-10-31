@@ -161,6 +161,7 @@ run it from the primary checkout to be sure it uses the primary repos.
 ```bash
 meta git worktree remove auth-fix          # refuses a set with work it would lose
 meta git worktree remove auth-fix --force  # discards that work
+meta git worktree remove auth-fix --force --dry-run  # what it would delete
 meta git worktree prune --dry-run          # preview
 meta git worktree prune                    # remove expired (TTL) and orphaned sets of this workspace
 ```

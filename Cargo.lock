@@ -923,6 +923,7 @@ dependencies = [
  "meta_git_lib",
  "meta_plugin_protocol",
  "rayon",
+ "rustix",
  "serde",
  "serde_json",
  "shlex",

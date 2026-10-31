@@ -19,6 +19,9 @@ setup() {
     STUB_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     printf '#!/bin/sh\necho "$*" >> "%s/claude-calls"\n' "$STUB_DIR" > "$STUB_DIR/claude"
     chmod +x "$STUB_DIR/claude"
+    # `agent` is installed unless a test removes it
+    printf '#!/bin/sh\nexit 0\n' > "$STUB_DIR/agent"
+    chmod +x "$STUB_DIR/agent"
     PATH="$STUB_DIR:$PATH"
 
     # Create .meta.yaml
@@ -392,15 +395,77 @@ EOF
     [[ "$output" == *"PreCompact"* ]]
 }
 
-# ============ Warning without .meta.yaml ============
+# ============ Where it installs ============
 
-@test "init claude warns when not in meta repo" {
+@test "init claude refuses outside a meta workspace" {
     rm .meta.yaml
 
     run "$META_BIN" init claude
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"No .meta.yaml in $TEST_DIR or any folder above it"* ]]
+    [ ! -e .claude ]
+    [ ! -e .meta ]
+}
+
+@test "init claude from a child repo installs once, in the workspace" {
+    mkdir -p backend/src
+    git -C backend init --quiet
+    cd backend/src
+    run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Warning"* ]]
-    [[ "$output" == *"No .meta.yaml"* ]]
+    [[ "$output" == *"Installing in the workspace at $TEST_DIR (the nearest .meta.yaml)"* ]]
+    [ -f "$TEST_DIR/.claude/settings.json" ]
+    [ ! -e "$TEST_DIR/backend/.claude" ]
+    [ ! -e "$TEST_DIR/backend/src/.claude" ]
+}
+
+# ============ The agent guard hook ============
+
+@test "init claude adds no second agent guard after a hand edit" {
+    "$META_BIN" init claude
+    python3 - <<'PY'
+import json
+p = '.claude/settings.json'
+s = json.load(open(p))
+s['hooks']['PreToolUse'][0]['hooks'].append({'type': 'command', 'command': 'my-own-check'})
+json.dump(s, open(p, 'w'))
+PY
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Already has meta's hooks"* ]]
+    python3 - <<'PY'
+import json
+groups = json.load(open('.claude/settings.json'))['hooks']['PreToolUse']
+assert len(groups) == 1, groups
+commands = [h['command'] for h in groups[0]['hooks']]
+assert commands == ['agent guard', 'my-own-check'], commands
+PY
+}
+
+@test "without agent, init claude skips the guard hook and adds it once agent is there" {
+    # Only the stubs on meta's PATH, so an agent installed on this machine isn't found
+    init_claude() { PATH="$STUB_DIR" "$META_BIN" init claude; }
+    rm "$STUB_DIR/agent"
+    run init_claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Skipped the PreToolUse hook \`agent guard\`"* ]]
+    [[ "$output" == *"run \`meta init claude\` again"* ]]
+    run grep "agent guard" .claude/settings.json
+    [ "$status" -ne 0 ]
+
+    printf '#!/bin/sh\nexit 0\n' > "$STUB_DIR/agent"
+    chmod +x "$STUB_DIR/agent"
+    run init_claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Added PreToolUse hooks to"* ]]
+    [ "$(grep -c "agent guard" .claude/settings.json)" -eq 1 ]
+
+    # A guard already there is never taken out
+    rm "$STUB_DIR/agent"
+    run init_claude
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Skipped the PreToolUse hook"* ]]
+    [ "$(grep -c "agent guard" .claude/settings.json)" -eq 1 ]
 }
 
 assert_settings_refused_without_changes() {
@@ -428,6 +493,18 @@ assert_settings_refused_without_changes() {
 @test "init refuses hooks array before writing any files" {
     assert_settings_refused_without_changes '{"hooks":[{"mine":1}],"theme":"dark"}' "key 'hooks'"
     [[ "$output" == *"must be an object"* ]]
+}
+
+@test "init refuses a PreToolUse object without agent too" {
+    rm "$STUB_DIR/agent"
+    mkdir -p .claude
+    printf '%s' '{"hooks":{"PreToolUse":{}}}' > .claude/settings.json
+    init_claude() { PATH="$STUB_DIR" "$META_BIN" init claude; }
+    run init_claude
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"key 'hooks.PreToolUse'"* ]]
+    [ ! -e .meta ]
+    [ "$(cat .claude/settings.json)" = '{"hooks":{"PreToolUse":{}}}' ]
 }
 
 @test "init refuses PreToolUse object before writing any files" {

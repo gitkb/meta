@@ -6,7 +6,9 @@ use meta_core::git::{git, RepoStatus};
 use std::path::Path;
 use std::process::Stdio;
 
-fn ensure_checkout_config_is_not_bare(repo_path: &Path) -> Result<()> {
+/// An error if the checkout at `repo_path` has `core.bare=true` in its
+/// config: git would make no worktree of it.
+pub fn ensure_checkout_config_is_not_bare(repo_path: &Path) -> Result<()> {
     if !repo_path.join(".git").exists() {
         return Ok(());
     }
@@ -39,18 +41,42 @@ fn ensure_checkout_config_is_not_bare(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn git_worktree_add(
+/// Where `git worktree add` starts a worktree of a repo on a branch.
+pub enum WorktreeStart {
+    /// A new branch at the commit a commit-ish names (the name is passed
+    /// to git, so a remote-tracking ref still sets the upstream)
+    Ref { name: String, commit: String },
+    /// The existing local branch
+    Existing,
+    /// A new branch tracking `origin/<branch>`, at this commit
+    Remote { commit: String },
+    /// A new branch at HEAD's commit
+    Head { commit: String },
+}
+
+impl WorktreeStart {
+    /// The commit a new branch is made at; none for an existing branch.
+    pub fn new_branch_at(self) -> Option<String> {
+        match self {
+            Self::Ref { commit, .. } | Self::Remote { commit } | Self::Head { commit } => {
+                Some(commit)
+            }
+            Self::Existing => None,
+        }
+    }
+}
+
+/// How a worktree of `repo_path` on `branch` would start, from `from_ref`
+/// if given: every check meta makes before running `git worktree add`, so
+/// a preview makes them too.
+pub fn worktree_start(
     repo_path: &Path,
-    worktree_dest: &Path,
     branch: &str,
     from_ref: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<WorktreeStart> {
     ensure_checkout_config_is_not_bare(repo_path)?;
-    let dest_str = worktree_dest.to_string_lossy();
-
-    // If from_ref is specified, create the branch at the commit it names
     if let Some(ref_name) = from_ref {
-        let start =
+        let commit =
             git_rev_parse(repo_path, &format!("{ref_name}^{{commit}}"))?.ok_or_else(|| {
                 anyhow::anyhow!(
                     "Ref '{}' not found in repo '{}'",
@@ -58,75 +84,67 @@ pub fn git_worktree_add(
                     escape_path(repo_path)
                 )
             })?;
-        // Pass the name, not the commit: a remote-tracking ref still sets the
-        // branch's upstream. If it moved meanwhile, the branch isn't at
-        // `start` and a rollback keeps it.
-        let output = git(repo_path)
-            .args(["worktree", "add", "-b", branch, &dest_str, ref_name])
-            .output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!(
-                "git worktree add failed for '{}' (branch: {}, ref: {}): {}",
-                escape_path(repo_path),
-                escape(branch),
-                escape(ref_name),
-                escape(stderr.trim())
-            );
-        }
-        return Ok(Some(start)); // Always creates a new branch from ref
+        return Ok(WorktreeStart::Ref {
+            name: ref_name.to_string(),
+            commit,
+        });
     }
+    if git_rev_parse(repo_path, &format!("refs/heads/{branch}"))?.is_some() {
+        return Ok(WorktreeStart::Existing);
+    }
+    if let Some(commit) = git_rev_parse(repo_path, &format!("refs/remotes/origin/{branch}"))? {
+        return Ok(WorktreeStart::Remote { commit });
+    }
+    let commit = git_rev_parse(repo_path, "HEAD")?.ok_or_else(|| {
+        anyhow::anyhow!("{} has no commit to branch from", escape_path(repo_path))
+    })?;
+    Ok(WorktreeStart::Head { commit })
+}
 
-    let branch_exists = git_rev_parse(repo_path, &format!("refs/heads/{branch}"))?.is_some();
+/// Make a worktree of `repo_path` at `worktree_dest` on `branch` (see
+/// [`worktree_start`]). The commit the branch was created at (`-b` refuses
+/// an existing branch, so success proves this call made it), or None for
+/// an existing branch.
+pub fn git_worktree_add(
+    repo_path: &Path,
+    worktree_dest: &Path,
+    branch: &str,
+    from_ref: Option<&str>,
+) -> Result<Option<String>> {
+    let start = worktree_start(repo_path, branch, from_ref)?;
+    let dest = worktree_dest.to_string_lossy();
     let remote_ref = format!("origin/{branch}");
-    let remote_start = if branch_exists {
-        None
-    } else {
-        git_rev_parse(repo_path, &format!("refs/remotes/{remote_ref}"))?
+    let args: Vec<&str> = match &start {
+        WorktreeStart::Ref { name, .. } => vec!["worktree", "add", "-b", branch, &dest, name],
+        WorktreeStart::Existing => vec!["worktree", "add", &dest, branch],
+        WorktreeStart::Remote { .. } => {
+            vec![
+                "worktree",
+                "add",
+                "--track",
+                "-b",
+                branch,
+                &dest,
+                &remote_ref,
+            ]
+        }
+        WorktreeStart::Head { .. } => vec!["worktree", "add", "-b", branch, &dest],
     };
-
-    let (wt_args, start): (Vec<&str>, Option<String>) = if branch_exists {
-        // Use existing local branch
-        (vec!["worktree", "add", &dest_str, branch], None)
-    } else if let Some(start) = remote_start {
-        // Create local tracking branch from remote
-        let args = vec![
-            "worktree",
-            "add",
-            "--track",
-            "-b",
-            branch,
-            &dest_str,
-            &remote_ref,
-        ];
-        (args, Some(start))
-    } else {
-        // Create new branch from HEAD
-        let start = git_rev_parse(repo_path, "HEAD")?.ok_or_else(|| {
-            anyhow::anyhow!("{} has no commit to branch from", escape_path(repo_path))
-        })?;
-        (
-            vec!["worktree", "add", "-b", branch, &dest_str],
-            Some(start),
-        )
-    };
-
-    let output = git(repo_path).args(&wt_args).output()?;
-
+    let output = git(repo_path).args(&args).output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let from = match &start {
+            WorktreeStart::Ref { name, .. } => format!(", ref: {}", escape(name)),
+            _ => String::new(),
+        };
         anyhow::bail!(
-            "git worktree add failed for '{}' (branch: {}): {}",
+            "git worktree add failed for '{}' (branch: {}{from}): {}",
             escape_path(repo_path),
             escape(branch),
             escape(stderr.trim())
         );
     }
-
-    // The commit the branch was created at (`-b` refuses an existing branch,
-    // so success proves this call made it), or None for an existing branch.
-    Ok(start)
+    Ok(start.new_branch_at())
 }
 
 pub fn git_worktree_remove(repo_path: &Path, worktree_path: &Path, force: bool) -> Result<()> {

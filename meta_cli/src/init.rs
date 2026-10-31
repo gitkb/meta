@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use colored::*;
 use meta_core::config;
 use meta_core::display::escape_path;
+use meta_core::ExecutionMode;
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,13 +103,106 @@ pub enum InitCommand {
 }
 
 /// Handle the `meta init` subcommand with typed args.
-pub fn handle_init_command(command: InitCommand, verbose: bool) -> Result<()> {
+pub fn handle_init_command(command: InitCommand, mode: ExecutionMode, verbose: bool) -> Result<()> {
     match command {
         InitCommand::None => {
             print_init_help();
             Ok(())
         }
-        InitCommand::Claude { force, update } => install_claude_integration(force, update, verbose),
+        InitCommand::Claude { force, update } => {
+            let init = Init {
+                mode,
+                verbose,
+                guard: agent_cli_available(),
+            };
+            install_claude_integration(force, update, &init)
+        }
+    }
+}
+
+/// One run of `meta init claude`. Every change it makes to files goes
+/// through here, so a preview (`--dry-run`) makes none: it says what it
+/// would do instead.
+struct Init {
+    mode: ExecutionMode,
+    verbose: bool,
+    /// `agent` is installed, so the PreToolUse hook `agent guard` can run
+    guard: bool,
+}
+
+impl Init {
+    fn create_dir_all(&self, dir: &Path) -> Result<()> {
+        if self.mode.is_preview() {
+            return Ok(());
+        }
+        fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", escape_path(dir)))
+    }
+
+    fn write_file(&self, path: &Path, content: &str) -> Result<()> {
+        if self.mode.is_preview() {
+            println!("  would write {}", escape_path(path));
+            return Ok(());
+        }
+        write_file(path, content, self.verbose)
+    }
+
+    fn write_settings(&self, path: &Path, content: &str) -> Result<()> {
+        if self.mode.is_preview() {
+            return Ok(());
+        }
+        write_settings_atomic(path, content)
+    }
+
+    fn remove_owned(&self, link: &Path, marker: &str) -> Result<()> {
+        if self.mode.is_preview() {
+            println!("  would replace {}", escape_path(link));
+            return Ok(());
+        }
+        remove_owned(link, marker)
+    }
+
+    /// Link `link` to `target` with `make_link`; where that fails, copy the
+    /// skill at `source` there. Whether it was copied.
+    fn link_skill(
+        &self,
+        target: &Path,
+        link: &Path,
+        source: &Path,
+        marker: &str,
+        make_link: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    ) -> Result<bool> {
+        if self.mode.is_preview() {
+            println!(
+                "  would link {} -> {}",
+                escape_path(link),
+                escape_path(target)
+            );
+            return Ok(false);
+        }
+        match make_link(target, link) {
+            Ok(()) => {
+                if self.verbose {
+                    println!(
+                        "{} {} -> {}",
+                        "Linked".green(),
+                        escape_path(link),
+                        escape_path(target)
+                    );
+                }
+                Ok(false)
+            }
+            // Windows needs Developer Mode or admin rights for symlinks; some
+            // filesystems have none. Copy instead.
+            Err(err) => {
+                copy_skill(source, link, marker)?;
+                println!(
+                    "{} {} (symlink failed: {err})",
+                    "Copied".yellow(),
+                    escape_path(link)
+                );
+                Ok(true)
+            }
+        }
     }
 }
 
@@ -131,10 +225,26 @@ fn print_init_help() {
     println!("    meta init claude --force     Refresh skills/rules and merge settings");
 }
 
-/// Install Claude Code skills and hook configuration
-fn install_claude_integration(force: bool, update: bool, verbose: bool) -> Result<()> {
+/// Install Claude Code skills and hook configuration at the root of the
+/// workspace the current directory is in: the nearest `.meta.yaml` at or
+/// above it.
+fn install_claude_integration(force: bool, update: bool, init: &Init) -> Result<()> {
     let current_dir = std::env::current_dir()?;
-    install_claude_integration_to(&current_dir, force, update, verbose)
+    let Some(config) = config::find_meta_config(&current_dir, None)? else {
+        anyhow::bail!(
+            "No .meta.yaml in {} or any folder above it. `meta init claude` sets up \
+             Claude Code in a meta workspace; run it inside one.",
+            escape_path(&current_dir)
+        );
+    };
+    let root = config.parent().unwrap_or(&current_dir);
+    if root != current_dir {
+        println!(
+            "Installing in the workspace at {} (the nearest .meta.yaml)",
+            escape_path(root)
+        );
+    }
+    install_claude_integration_to(root, force, update, init)
 }
 
 /// Install Claude Code skills and hook configuration into a specific directory
@@ -142,19 +252,14 @@ fn install_claude_integration_to(
     target_dir: &Path,
     force: bool,
     update: bool,
-    verbose: bool,
+    init: &Init,
 ) -> Result<()> {
     let claude_dir = target_dir.join(".claude");
     let rules_dir = claude_dir.join("rules");
-
-    // A config that can't be read is an error, not "no config"
-    if config::find_meta_config_in(target_dir)?.is_none() {
-        println!(
-            "{}",
-            "Warning: No .meta.yaml found in current directory.".yellow()
-        );
-        println!("This integration is designed for meta repositories.");
-        println!();
+    let verbose = init.verbose;
+    let preview = init.mode.is_preview();
+    if preview {
+        println!("[DRY RUN] In {}:", escape_path(target_dir));
     }
 
     // Build and validate settings before writing any skills or rules.
@@ -163,7 +268,7 @@ fn install_claude_integration_to(
     let settings_plan = if update || settings_link.is_some() {
         None
     } else {
-        Some(prepare_settings(&settings_path)?)
+        Some(prepare_settings(&settings_path, init)?)
     };
 
     // --force or --update: overwrite; default: skip existing
@@ -174,7 +279,7 @@ fn install_claude_integration_to(
         SKILLS,
         AGENT_SKILL_DIRS,
         overwrite_content,
-        verbose,
+        init,
     )?;
     let mut installed = skills.written;
     let mut skipped = skills.skipped;
@@ -182,8 +287,7 @@ fn install_claude_integration_to(
     // Like skills, rules are never written through a symlink
     let rules_link = symlink_in(target_dir, Path::new(".claude/rules"));
     if rules_link.is_none() {
-        fs::create_dir_all(&rules_dir)
-            .with_context(|| format!("Failed to create {}", escape_path(&rules_dir)))?;
+        init.create_dir_all(&rules_dir)?;
     }
 
     // Install rule files
@@ -209,7 +313,7 @@ fn install_claude_integration_to(
             continue;
         }
 
-        write_file(&target_path, content, verbose)?;
+        init.write_file(&target_path, content)?;
         installed += 1;
     }
 
@@ -223,7 +327,7 @@ fn install_claude_integration_to(
         );
     } else if let Some(plan) = settings_plan {
         if let Some(content) = plan.content {
-            write_settings_atomic(&settings_path, &content)?;
+            init.write_settings(&settings_path, &content)?;
             installed += 1;
         }
         println!("{} {}", plan.message, escape_path(&settings_path));
@@ -236,6 +340,33 @@ fn install_claude_integration_to(
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
         .map(|settings| installed_hooks(&settings))
         .unwrap_or_default();
+    // Without `agent`, Claude Code would run a hook that doesn't exist; one
+    // already in the settings stays
+    let guard_skipped = !init.guard
+        && !update
+        && settings_link.is_none()
+        && !present_hooks.iter().any(|key| key == "PreToolUse");
+    let guard_note = || {
+        println!(
+            "{} Skipped the PreToolUse hook `agent guard`: the agent CLI is not installed.",
+            "•".yellow()
+        );
+        println!(
+            "  Install it from https://github.com/gitkb/agent, then run `meta init claude` again to add the hook."
+        );
+    };
+
+    if preview {
+        println!();
+        println!(
+            "[DRY RUN] Would install {installed} file(s) and link {} skill folder(s); nothing was written.",
+            skills.placed
+        );
+        if guard_skipped {
+            guard_note();
+        }
+        return Ok(());
+    }
 
     // Print summary
     println!();
@@ -283,17 +414,9 @@ fn install_claude_integration_to(
                 present_hooks.join(", ")
             );
         }
-        println!("  Note:    PreToolUse hooks require the standalone agent CLI (`agent guard`).");
     }
-
-    #[cfg(not(test))]
-    if (installed > 0) && !agent_cli_available() {
-        println!(
-            "{}",
-            "Warning: 'agent' CLI not found. PreToolUse hooks require the standalone agent tool."
-                .yellow()
-        );
-        println!("Install from: https://github.com/gitkb/agent");
+    if guard_skipped {
+        guard_note();
     }
 
     println!();
@@ -349,7 +472,7 @@ fn install_skills(
     skills: &[(&str, &str)],
     agent_dirs: &[AgentDir],
     overwrite: bool,
-    verbose: bool,
+    init: &Init,
 ) -> Result<SkillsReport> {
     install_skills_with(
         root,
@@ -357,7 +480,7 @@ fn install_skills(
         skills,
         agent_dirs,
         overwrite,
-        verbose,
+        init,
         |target, link| symlink_dir(target, link),
     )
 }
@@ -369,9 +492,10 @@ fn install_skills_with(
     skills: &[(&str, &str)],
     agent_dirs: &[AgentDir],
     overwrite: bool,
-    verbose: bool,
+    init: &Init,
     make_link: impl Fn(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<SkillsReport> {
+    let verbose = init.verbose;
     let mut report = SkillsReport::default();
     let tool_dir = PathBuf::from(format!(".{tool}")).join("skills");
     let marker = format!(".{tool}-skill-copy");
@@ -394,10 +518,8 @@ fn install_skills_with(
             report.skipped += 1;
             continue;
         }
-        let skill_dir = root.join(tool_dir.join(name));
-        fs::create_dir_all(&skill_dir)
-            .with_context(|| format!("Failed to create {}", escape_path(&skill_dir)))?;
-        write_file(&path, content, verbose)?;
+        init.create_dir_all(&root.join(tool_dir.join(name)))?;
+        init.write_file(&path, content)?;
         report.written += 1;
     }
 
@@ -417,8 +539,7 @@ fn install_skills_with(
             continue;
         }
         let skills_dir = root.join(agent_dir);
-        fs::create_dir_all(&skills_dir)
-            .with_context(|| format!("Failed to create {}", escape_path(&skills_dir)))?;
+        init.create_dir_all(&skills_dir)?;
         report.agent_dirs.push(agent_dir.display().to_string());
 
         // One `..` per folder in `agent_dir`
@@ -434,7 +555,7 @@ fn install_skills_with(
                     }
                     continue;
                 }
-                SkillEntry::Owned if overwrite => remove_owned(&link, &marker)?,
+                SkillEntry::Owned if overwrite => init.remove_owned(&link, &marker)?,
                 SkillEntry::Owned => {
                     println!("Skipped {} (already exists)", escape_path(&link));
                     report.skipped += 1;
@@ -449,29 +570,9 @@ fn install_skills_with(
                     continue;
                 }
             }
-            match make_link(&target, &link) {
-                Ok(()) => {
-                    if verbose {
-                        println!(
-                            "{} {} -> {}",
-                            "Linked".green(),
-                            escape_path(&link),
-                            escape_path(&target)
-                        );
-                    }
-                }
-                // Windows needs Developer Mode or admin rights for symlinks; some
-                // filesystems have none. Copy instead.
-                Err(err) => {
-                    let source = root.join(tool_dir.join(name)).join("SKILL.md");
-                    copy_skill(&source, &link, &marker)?;
-                    println!(
-                        "{} {} (symlink failed: {err})",
-                        "Copied".yellow(),
-                        escape_path(&link)
-                    );
-                    report.copied += 1;
-                }
+            let source = root.join(tool_dir.join(name)).join("SKILL.md");
+            if init.link_skill(&target, &link, &source, &marker, &make_link)? {
+                report.copied += 1;
             }
             report.placed += 1;
         }
@@ -568,7 +669,7 @@ struct SettingsPlan {
     message: String,
 }
 
-fn prepare_settings(path: &Path) -> Result<SettingsPlan> {
+fn prepare_settings(path: &Path, init: &Init) -> Result<SettingsPlan> {
     let existing = match fs::read_to_string(path) {
         Ok(content) => Some(
             serde_json::from_str::<Value>(&content)
@@ -580,17 +681,19 @@ fn prepare_settings(path: &Path) -> Result<SettingsPlan> {
     let created = existing.is_none();
     let existing = existing.unwrap_or_else(|| json!({}));
     let before = installed_hooks(&existing);
-    let merged = merge_hooks_into_settings(existing, build_meta_hooks(), path)?;
+    let merged = merge_hooks_into_settings(existing, build_meta_hooks(init.guard), path)?;
     let added: Vec<_> = installed_hooks(&merged)
         .into_iter()
         .filter(|key| !before.contains(key))
         .collect();
+    let preview = init.mode.is_preview();
     let message = if created {
-        "Created".to_string()
+        if preview { "Would create" } else { "Created" }.to_string()
     } else if added.is_empty() {
         "Already has meta's hooks (no write):".to_string()
     } else {
-        format!("Added {} hooks to", added.join(", "))
+        let verb = if preview { "Would add" } else { "Added" };
+        format!("{verb} {} hooks to", added.join(", "))
     };
     let content = if created || !added.is_empty() {
         Some(serde_json::to_string_pretty(&merged)?)
@@ -624,23 +727,24 @@ fn write_settings_atomic(path: &Path, content: &str) -> Result<()> {
 }
 
 fn installed_hooks(settings: &Value) -> Vec<String> {
-    build_meta_hooks()
+    build_meta_hooks(true)
         .into_iter()
         .filter_map(|(key, groups)| {
             let existing = settings.get("hooks")?.get(&key)?.as_array()?;
             groups
                 .as_array()?
                 .iter()
-                .all(|group| existing.iter().any(|found| same_group(found, group)))
+                .all(|group| existing.iter().any(|found| runs_group(found, group)))
                 .then_some(key)
         })
         .collect()
 }
 
-/// Whether two hook groups run the same hooks for the same tool calls: the
-/// same matcher and the same hook types, commands and prompts. Other fields,
-/// such as a timeout the user changed, don't make a group another one.
-fn same_group(a: &Value, b: &Value) -> bool {
+/// Whether the hook group `found` already runs every hook of `group` for the
+/// same tool calls: the same matcher, and each of the group's hook types,
+/// commands and prompts among its own. Other fields, such as a timeout the
+/// user changed, and hooks the user added to it don't make it another group.
+fn runs_group(found: &Value, group: &Value) -> bool {
     type Hook<'a> = (Option<&'a Value>, Option<&'a Value>, Option<&'a Value>);
     fn hooks(group: &Value) -> Option<Vec<Hook<'_>>> {
         let hooks = group.get("hooks")?.as_array()?;
@@ -651,11 +755,15 @@ fn same_group(a: &Value, b: &Value) -> bool {
                 .collect(),
         )
     }
-    a.get("matcher") == b.get("matcher") && hooks(a) == hooks(b)
+    let (Some(have), Some(want)) = (hooks(found), hooks(group)) else {
+        return false;
+    };
+    found.get("matcher") == group.get("matcher") && want.iter().all(|hook| have.contains(hook))
 }
 
-/// Build the meta hooks configuration as a JSON object
-fn build_meta_hooks() -> Map<String, Value> {
+/// Build the meta hooks configuration as a JSON object; the PreToolUse
+/// `agent guard` hook only with `guard`
+fn build_meta_hooks(guard: bool) -> Map<String, Value> {
     let mut hooks = Map::new();
 
     // SessionStart: inject workspace context at session start and after compaction
@@ -671,17 +779,19 @@ fn build_meta_hooks() -> Map<String, Value> {
     );
 
     // PreToolUse: block destructive Bash commands
-    hooks.insert(
-        "PreToolUse".to_string(),
-        json!([{
-            "matcher": "Bash",
-            "hooks": [{
-                "type": "command",
-                "command": "agent guard",
-                "timeout": 5
-            }]
-        }]),
-    );
+    if guard {
+        hooks.insert(
+            "PreToolUse".to_string(),
+            json!([{
+                "matcher": "Bash",
+                "hooks": [{
+                    "type": "command",
+                    "command": "agent guard",
+                    "timeout": 5
+                }]
+            }]),
+        );
+    }
 
     // PreCompact: capture workspace state before context compaction
     hooks.insert(
@@ -723,6 +833,13 @@ fn merge_hooks_into_settings(
         .or_insert_with(|| json!({}))
         .as_object_mut()
         .ok_or_else(|| invalid("hooks", "an object"))?;
+    // Every event meta adds to has the shape Claude Code reads, whether or
+    // not this run adds to it
+    for key in build_meta_hooks(true).keys() {
+        if hooks.get(key).is_some_and(|groups| !groups.is_array()) {
+            return Err(invalid(&format!("hooks.{key}"), "an array"));
+        }
+    }
     for (key, groups) in meta_hooks {
         let arr = hooks
             .entry(&key)
@@ -731,7 +848,7 @@ fn merge_hooks_into_settings(
             .ok_or_else(|| invalid(&format!("hooks.{key}"), "an array"))?;
         if let Some(groups) = groups.as_array() {
             for group in groups {
-                if !arr.iter().any(|found| same_group(found, group)) {
+                if !arr.iter().any(|found| runs_group(found, group)) {
                     arr.push(group.clone());
                 }
             }
@@ -740,7 +857,6 @@ fn merge_hooks_into_settings(
     Ok(existing)
 }
 
-#[cfg(not(test))]
 fn agent_cli_available() -> bool {
     use std::process::{Command, Stdio};
 
@@ -772,6 +888,13 @@ fn write_file(path: &Path, content: &str, verbose: bool) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// A real run with `agent` installed
+    const RUN: Init = Init {
+        mode: ExecutionMode::Execute,
+        verbose: false,
+        guard: true,
+    };
 
     #[test]
     fn invalid_settings_leave_every_file_unchanged_even_with_force() {
@@ -808,7 +931,7 @@ mod tests {
             let before = snapshot(dir.path());
             for force in [false, true] {
                 let err =
-                    install_claude_integration_to(dir.path(), force, false, false).unwrap_err();
+                    install_claude_integration_to(dir.path(), force, false, &RUN).unwrap_err();
                 let message = format!("{err:#}");
                 assert!(message.contains(&escape_path(&settings)), "{message}");
                 assert!(message.contains(key), "{message}");
@@ -821,10 +944,10 @@ mod tests {
     fn a_changed_hook_timeout_is_still_metas_hook() {
         let dir = tempdir().unwrap();
         let settings = dir.path().join("settings.json");
-        let mut hooks = build_meta_hooks();
+        let mut hooks = build_meta_hooks(true);
         hooks["SessionStart"][0]["hooks"][0]["timeout"] = json!(30);
         fs::write(&settings, json!({ "hooks": hooks }).to_string()).unwrap();
-        let plan = prepare_settings(&settings).unwrap();
+        let plan = prepare_settings(&settings, &RUN).unwrap();
         assert!(plan.content.is_none(), "{}", plan.message);
     }
 
@@ -836,7 +959,7 @@ mod tests {
         let settings = dir.path().join("settings.json");
         fs::write(&settings, r#"{"theme":"dark"}"#).unwrap();
         fs::set_permissions(&settings, fs::Permissions::from_mode(0o644)).unwrap();
-        let plan = prepare_settings(&settings).unwrap();
+        let plan = prepare_settings(&settings, &RUN).unwrap();
         write_settings_atomic(&settings, &plan.content.unwrap()).unwrap();
         let mode = fs::metadata(&settings).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o644);
@@ -846,10 +969,10 @@ mod tests {
     fn settings_plan_compares_matchers_and_reports_no_write() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        let mut settings = json!({"hooks": build_meta_hooks(), "theme": "dark"});
+        let mut settings = json!({"hooks": build_meta_hooks(true), "theme": "dark"});
         settings["hooks"]["PreToolUse"][0]["matcher"] = json!("Read");
         fs::write(&path, serde_json::to_string(&settings).unwrap()).unwrap();
-        let plan = prepare_settings(&path).unwrap();
+        let plan = prepare_settings(&path, &RUN).unwrap();
         assert_eq!(plan.message, "Added PreToolUse hooks to");
         let content = plan.content.unwrap();
         let merged: Value = serde_json::from_str(&content).unwrap();
@@ -857,7 +980,7 @@ mod tests {
         assert_eq!(merged["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
         assert_eq!(merged["hooks"]["PreToolUse"][1]["matcher"], "Bash");
         write_settings_atomic(&path, &content).unwrap();
-        let plan = prepare_settings(&path).unwrap();
+        let plan = prepare_settings(&path, &RUN).unwrap();
         assert_eq!(plan.message, "Already has meta's hooks (no write):");
         assert!(plan.content.is_none());
         assert_eq!(fs::read_to_string(path).unwrap(), content);
@@ -870,7 +993,7 @@ mod tests {
         // Create a .meta.yaml file so it looks like a meta repo
         fs::write(dir.path().join(".meta.yaml"), "projects: {}\n").unwrap();
 
-        install_claude_integration_to(dir.path(), false, false, false).unwrap();
+        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
 
         let claude_dir = dir.path().join(".claude");
         let rules_dir = claude_dir.join("rules");
@@ -929,7 +1052,7 @@ mod tests {
         let existing_settings = claude_dir.join("settings.json");
         fs::write(&existing_settings, r#"{"custom": true}"#).unwrap();
 
-        install_claude_integration_to(dir.path(), false, false, false).unwrap();
+        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
 
         // Should not overwrite skill or rule
         let skill_content = fs::read_to_string(&existing_skill).unwrap();
@@ -968,7 +1091,7 @@ mod tests {
         let existing_settings = claude_dir.join("settings.json");
         fs::write(&existing_settings, r#"{"custom": true}"#).unwrap();
 
-        install_claude_integration_to(dir.path(), true, false, false).unwrap();
+        install_claude_integration_to(dir.path(), true, false, &RUN).unwrap();
 
         // Should overwrite with embedded content
         let skill_content = fs::read_to_string(&existing_skill).unwrap();
@@ -1012,7 +1135,7 @@ mod tests {
         .unwrap();
 
         // Use --update flag
-        install_claude_integration_to(dir.path(), false, true, false).unwrap();
+        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
 
         // Skills and rules should be updated
         let skill_content = fs::read_to_string(&existing_skill).unwrap();
@@ -1065,7 +1188,7 @@ mod tests {
         let dir = tempdir().unwrap();
         fs::create_dir(dir.path().join(".cursor")).unwrap();
 
-        install_claude_integration_to(dir.path(), false, false, false).unwrap();
+        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
 
         for (name, _) in SKILLS {
             assert_linked(dir.path(), ".cursor/skills", name);
@@ -1081,13 +1204,13 @@ mod tests {
         fs::write(copy.join("SKILL.md"), "old copy").unwrap();
         fs::write(copy.join(".meta-skill-copy"), "").unwrap();
 
-        install_claude_integration_to(dir.path(), false, false, false).unwrap();
+        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
         assert_eq!(
             fs::read_to_string(copy.join("SKILL.md")).unwrap(),
             "old copy"
         );
 
-        install_claude_integration_to(dir.path(), false, true, false).unwrap();
+        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
         assert_linked(dir.path(), ".claude/skills", "meta-git");
     }
 
@@ -1102,7 +1225,7 @@ mod tests {
         fs::write(skills_dir.join("meta-exec"), "mine").unwrap();
 
         for (force, update) in [(false, true), (true, false)] {
-            install_claude_integration_to(dir.path(), force, update, false).unwrap();
+            install_claude_integration_to(dir.path(), force, update, &RUN).unwrap();
             assert_eq!(
                 fs::read_to_string(skills_dir.join("meta-git/SKILL.md")).unwrap(),
                 "mine"
@@ -1135,7 +1258,7 @@ mod tests {
             fs::write(other.join("SKILL.md"), text).unwrap();
 
             for (force, update) in [(false, true), (true, false)] {
-                install_claude_integration_to(dir.path(), force, update, false).unwrap();
+                install_claude_integration_to(dir.path(), force, update, &RUN).unwrap();
                 assert!(!fs::symlink_metadata(&other).unwrap().is_symlink());
                 assert_eq!(fs::read_to_string(other.join("SKILL.md")).unwrap(), text);
             }
@@ -1155,7 +1278,7 @@ mod tests {
             .join(".claude/rules/meta-workspace-discipline.md");
         symlink_dir("../../.other/SKILL.md", &rule).unwrap();
 
-        install_claude_integration_to(dir.path(), false, true, false).unwrap();
+        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
 
         assert_eq!(fs::read_to_string(&other).unwrap(), "other tool");
         assert!(fs::symlink_metadata(&rule).unwrap().is_symlink());
@@ -1181,14 +1304,14 @@ mod tests {
         )
         .unwrap();
         for force in [false, true] {
-            install_claude_integration_to(dir.path(), force, false, false).unwrap();
+            install_claude_integration_to(dir.path(), force, false, &RUN).unwrap();
             assert_eq!(fs::read_to_string(&other).unwrap(), r#"{"other": true}"#);
         }
 
         // A linked .claude folder: nothing is written through it
         let linked = tempdir().unwrap();
         symlink_dir(dir.path().join(".other"), linked.path().join(".claude")).unwrap();
-        install_claude_integration_to(linked.path(), true, false, false).unwrap();
+        install_claude_integration_to(linked.path(), true, false, &RUN).unwrap();
         assert_eq!(fs::read_to_string(&other).unwrap(), r#"{"other": true}"#);
         assert_eq!(fs::read_dir(dir.path().join(".other")).unwrap().count(), 1);
     }
@@ -1203,7 +1326,7 @@ mod tests {
         let other = dir.path().join(".agents/skills/meta-exec");
         fs::write(&other, "../../.other/meta-exec").unwrap();
 
-        install_claude_integration_to(dir.path(), false, true, false).unwrap();
+        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
 
         assert_linked(dir.path(), ".agents/skills", "meta-git");
         assert_eq!(fs::read_to_string(other).unwrap(), "../../.other/meta-exec");
@@ -1223,7 +1346,7 @@ mod tests {
             SKILLS,
             AGENT_SKILL_DIRS,
             false,
-            false,
+            &RUN,
             fail,
         )
         .unwrap();
@@ -1243,12 +1366,12 @@ mod tests {
             SKILLS,
             AGENT_SKILL_DIRS,
             false,
-            false,
+            &RUN,
             fail,
         )
         .unwrap();
         assert_eq!(report.copied, 0);
-        install_claude_integration_to(dir.path(), false, true, false).unwrap();
+        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
         assert_linked(dir.path(), ".claude/skills", "meta-git");
     }
 
@@ -1263,7 +1386,7 @@ mod tests {
         // An agent folder that is a link is skipped
         fs::create_dir(dir.path().join(".agents")).unwrap();
         symlink_dir("../.other/skills", dir.path().join(".agents/skills")).unwrap();
-        install_claude_integration_to(dir.path(), true, false, false).unwrap();
+        install_claude_integration_to(dir.path(), true, false, &RUN).unwrap();
         assert_eq!(
             fs::read_to_string(other.join("meta-git/SKILL.md")).unwrap(),
             "other tool"
@@ -1275,7 +1398,7 @@ mod tests {
         let skill_dir = dir.path().join(".meta/skills/meta-git");
         fs::remove_dir_all(&skill_dir).unwrap();
         symlink_dir("../../.other/skills/meta-git", &skill_dir).unwrap();
-        let err = install_claude_integration_to(dir.path(), false, true, false).unwrap_err();
+        let err = install_claude_integration_to(dir.path(), false, true, &RUN).unwrap_err();
         assert!(err.to_string().contains("symlink"), "{err}");
         assert_eq!(
             fs::read_to_string(other.join("meta-git/SKILL.md")).unwrap(),
@@ -1295,7 +1418,7 @@ mod tests {
         fs::write(other.join("SKILL.md"), "other tool").unwrap();
         symlink_dir("../../.other/skills/meta-git", skills_dir.join("meta-git")).unwrap();
 
-        install_claude_integration_to(dir.path(), true, false, false).unwrap();
+        install_claude_integration_to(dir.path(), true, false, &RUN).unwrap();
 
         assert_eq!(
             fs::read_link(skills_dir.join("meta-git")).unwrap(),
@@ -1324,7 +1447,7 @@ mod tests {
             }
         });
 
-        let meta_hooks = build_meta_hooks();
+        let meta_hooks = build_meta_hooks(true);
         let merged =
             merge_hooks_into_settings(existing, meta_hooks, Path::new("settings.json")).unwrap();
 
@@ -1359,7 +1482,7 @@ mod tests {
             }
         });
 
-        let meta_hooks = build_meta_hooks();
+        let meta_hooks = build_meta_hooks(true);
         let merged =
             merge_hooks_into_settings(existing, meta_hooks, Path::new("settings.json")).unwrap();
 
@@ -1388,7 +1511,7 @@ mod tests {
         .unwrap();
 
         fs::write(dir.path().join(".meta.yaml"), "projects: {}\n").unwrap();
-        install_claude_integration_to(dir.path(), false, false, false).unwrap();
+        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
 
         // settings.local.json should be untouched
         let local_content = fs::read_to_string(&local_settings).unwrap();
@@ -1398,7 +1521,7 @@ mod tests {
 
     #[test]
     fn test_build_meta_hooks_structure() {
-        let hooks = build_meta_hooks();
+        let hooks = build_meta_hooks(true);
 
         // Should have exactly 3 lifecycle hooks
         assert_eq!(hooks.len(), 3);

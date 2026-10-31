@@ -35,6 +35,9 @@ colored = "2"
 indexmap = "2"
 dirs = "5"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process", "termios"] }
+
 [dev-dependencies]
 shlex = "1.3"
 

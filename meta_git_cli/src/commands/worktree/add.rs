@@ -1,16 +1,22 @@
 use anyhow::Result;
 use colored::*;
 use meta_core::display::{escape, escape_path};
+use meta_core::ExecutionMode;
 
 use meta_cli::worktree::discover_worktree_repos;
-use meta_git_lib::worktree::git_ops::git_worktree_add;
+use meta_git_lib::worktree::git_ops::{git_worktree_add, worktree_start};
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::record;
 use meta_git_lib::worktree::types::*;
 
 use super::cli_types::AddArgs;
 
-pub(crate) fn handle_add(args: AddArgs, verbose: bool, json: bool) -> Result<()> {
+pub(crate) fn handle_add(
+    args: AddArgs,
+    mode: ExecutionMode,
+    verbose: bool,
+    json: bool,
+) -> Result<()> {
     let name = &args.name;
     validate_worktree_name(name)?;
 
@@ -111,6 +117,41 @@ pub(crate) fn handle_add(args: AddArgs, verbose: bool, json: bool) -> Result<()>
         planned.push((spec, source, place));
     }
 
+    if mode.is_preview() {
+        let mut repos = Vec::new();
+        for (spec, source, place) in &planned {
+            // what the run checks before adding
+            let branch = resolve_branch(name, None, spec.branch.as_deref());
+            let start = worktree_start(source, &branch, None)?;
+            repos.push(CreateRepoEntry {
+                alias: spec.alias.clone(),
+                path: wt_dir.join(place).display().to_string(),
+                created_branch: start.new_branch_at().is_some(),
+                branch,
+            });
+        }
+        if json {
+            let output = AddOutput {
+                name: name.to_string(),
+                repos,
+                dry_run: true,
+            };
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            println!("[DRY RUN] Would add to worktree set '{}':", escape(name));
+            for r in &repos {
+                println!(
+                    "  {} at {} (branch: {}{})",
+                    escape(&r.alias),
+                    escape(&r.path),
+                    escape(&r.branch),
+                    if r.created_branch { ", new" } else { "" }
+                );
+            }
+        }
+        return Ok(());
+    }
+
     let mut added = Vec::new();
     let mut failed = None;
     for (spec, source, place) in planned {
@@ -182,6 +223,7 @@ pub(crate) fn handle_add(args: AddArgs, verbose: bool, json: bool) -> Result<()>
         let output = AddOutput {
             name: name.to_string(),
             repos: added,
+            dry_run: false,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {

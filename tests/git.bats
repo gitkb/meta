@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+load "${BATS_TEST_DIRNAME}/helpers/terminal.bash"
 
 # Integration tests for `meta git` commands
 # Tests use local git repos (no network IO required)
@@ -793,8 +794,8 @@ EOF
     git -C "$TEST_DIR/frontend" add README.md
 
     # The editor leaves every message empty, so nothing is committed
-    EDITOR="$TEST_DIR/editor" run "$META_BIN" git commit --edit
-    EDITOR="$TEST_DIR/editor" EDITOR_EXIT=1 run "$META_BIN" git commit --edit
+    GIT_EDITOR="$TEST_DIR/editor" run with_terminal "$META_BIN" git commit --edit
+    GIT_EDITOR="$TEST_DIR/editor" EDITOR_EXIT=1 run with_terminal "$META_BIN" git commit --edit
     [ "$status" -ne 0 ]
 
     [ "$(wc -l < "$LOG")" -eq 2 ]
@@ -806,6 +807,67 @@ EOF
         [ ! -e "$path" ]
     done
     [ "$(grep -c -- ' -rw-------$' "$LOG")" -eq 2 ]
+}
+
+@test "meta git commit --edit runs git's editor, arguments included" {
+    echo change >> "$TEST_DIR/frontend/README.md"
+    git -C "$TEST_DIR/frontend" add README.md
+    # an editor taking an argument: it puts the message above each prompt line
+    printf '#!/bin/sh\nawk -v m="$1" '"'"'/^# Enter commit message/ { print m } { print }'"'"' "$2" > "$2.new" && mv "$2.new" "$2"\n' > "$TEST_DIR/msg-editor"
+    chmod 755 "$TEST_DIR/msg-editor"
+    git -C "$TEST_DIR/frontend" config core.editor "'$TEST_DIR/msg-editor' 'from core.editor'"
+
+    # as in git, core.editor comes before VISUAL and EDITOR; the editor runs
+    # in the repo, so a relative data dir must still name the right file
+    unset GIT_EDITOR
+    META_DATA_DIR=rel-data VISUAL=nosuch EDITOR=nosuch run with_terminal "$META_BIN" git commit --edit
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_DIR/frontend" log -1 --format=%s)" = "from core.editor" ]
+}
+
+@test "meta git commit --edit without a terminal fails at once, naming the editor" {
+    echo change >> "$TEST_DIR/frontend/README.md"
+    git -C "$TEST_DIR/frontend" add README.md
+    LOG="$TEST_DIR/editor.log"
+    printf '#!/bin/sh\necho ran >> "%s"\n' "$LOG" > "$TEST_DIR/editor"
+    chmod 755 "$TEST_DIR/editor"
+
+    GIT_EDITOR="$TEST_DIR/editor" run without_terminal "$META_BIN" git commit --edit
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"The editor '$TEST_DIR/editor' needs the terminal"*"Use -m <message> instead."* ]]
+    [ ! -e "$LOG" ]
+    [ -n "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" ]
+
+    # on a terminal, but in its background, it would stop on its first read
+    GIT_EDITOR="$TEST_DIR/editor" run in_background "$META_BIN" git commit --edit
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"needs the terminal, but meta runs in its background"* ]]
+    [ ! -e "$LOG" ]
+}
+
+@test "meta git commit --edit shows the message of a commit that failed" {
+    for repo in frontend backend; do
+        echo change >> "$TEST_DIR/$repo/README.md"
+        git -C "$TEST_DIR/$repo" add README.md
+    done
+    printf '#!/bin/sh\nexit 1\n' > "$TEST_DIR/frontend/.git/hooks/pre-commit"
+    chmod 755 "$TEST_DIR/frontend/.git/hooks/pre-commit"
+    printf '#!/bin/sh\nawk '"'"'/^# Enter commit message/ { print "typed by hand" } { print }'"'"' "$1" > "$1.new" && mv "$1.new" "$1"\n' > "$TEST_DIR/editor"
+    chmod 755 "$TEST_DIR/editor"
+
+    GIT_EDITOR="$TEST_DIR/editor" run with_terminal "$META_BIN" git commit --edit
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Failed to commit; the message was:"*"typed by hand"* ]]
+    [ "$(git -C "$TEST_DIR/backend" log -1 --format=%s)" = "typed by hand" ]
+}
+
+@test "meta git commit --edit names an editor that can't start" {
+    echo change >> "$TEST_DIR/frontend/README.md"
+    git -C "$TEST_DIR/frontend" add README.md
+    GIT_EDITOR="$TEST_DIR/no-such-editor" run with_terminal "$META_BIN" git commit --edit
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"The editor '$TEST_DIR/no-such-editor' failed"* ]]
+    [ -n "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" ]
 }
 
 @test "meta git commit escapes repo paths in its summary" {

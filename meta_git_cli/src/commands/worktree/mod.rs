@@ -14,6 +14,7 @@ use anyhow::Result;
 use clap::Parser;
 use colored::*;
 use meta_core::display::{escape, escape_lines, escape_path};
+use meta_core::ExecutionMode;
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::path::Path;
 
@@ -22,6 +23,9 @@ use cli_types::WorktreeCommands;
 /// Clap parser wrapper for worktree subcommands.
 #[derive(Parser)]
 struct WorktreeParser {
+    /// Show what would be created, run or removed, and change nothing
+    #[arg(long, global = true)]
+    dry_run: bool,
     #[command(subcommand)]
     command: WorktreeCommands,
 }
@@ -58,9 +62,12 @@ pub fn execute_worktree_command(
     // Inject --recursive if the protocol option was set but the flag wasn't in the
     // command args (the host strips global flags like --recursive before forwarding).
     // Inject only for subcommands that explicitly support recursive behavior.
-    let is_create = matches!(clap_args.first().map(String::as_str), Some("create"));
+    // The subcommand: the first word that isn't a flag (`--dry-run create`)
     let supports_recursive = matches!(
-        clap_args.first().map(String::as_str),
+        clap_args
+            .iter()
+            .find(|a| !a.starts_with('-'))
+            .map(String::as_str),
         Some("create" | "list" | "status")
     );
     if options.recursive
@@ -68,9 +75,6 @@ pub fn execute_worktree_command(
         && !clap_args.iter().any(|a| a == "--recursive" || a == "-r")
     {
         clap_args.push("--recursive".to_string());
-    }
-    if options.dry_run && is_create && !clap_args.iter().any(|a| a == "--dry-run") {
-        clap_args.push("--dry-run".to_string());
     }
 
     // No subcommand at all — show help
@@ -91,6 +95,8 @@ pub fn execute_worktree_command(
     match meta_plugin_protocol::parse_args::<WorktreeParser>(name, &clap_args) {
         Ok(parsed) => match handle_worktree_command(
             parsed.command,
+            // meta's --dry-run, or the worktree command's own
+            ExecutionMode::from_dry_run(options.dry_run || parsed.dry_run),
             options.verbose,
             options.json_output,
             options.strict,
@@ -106,20 +112,23 @@ pub fn execute_worktree_command(
 /// Dispatch parsed worktree commands while retaining command-specific policies.
 fn handle_worktree_command(
     command: WorktreeCommands,
+    mode: ExecutionMode,
     verbose: bool,
     json: bool,
     global_strict: bool,
     cwd: &Path,
 ) -> Result<()> {
     match command {
-        WorktreeCommands::Create(args) => create::handle_create(args, verbose, json, global_strict),
-        WorktreeCommands::Add(args) => add::handle_add(args, verbose, json),
-        WorktreeCommands::Remove(args) => remove::handle_remove(args, verbose, json),
+        WorktreeCommands::Create(args) => {
+            create::handle_create(args, mode, verbose, json, global_strict)
+        }
+        WorktreeCommands::Add(args) => add::handle_add(args, mode, verbose, json),
+        WorktreeCommands::Remove(args) => remove::handle_remove(args, mode, verbose, json),
         WorktreeCommands::List(args) => list::handle_list(args, json, cwd),
         WorktreeCommands::Status(args) => status::handle_status(args, json),
         WorktreeCommands::Diff(args) => diff::handle_diff(args, json),
-        WorktreeCommands::Exec(args) => exec::handle_exec(args, verbose, json),
-        WorktreeCommands::Prune(args) => prune::handle_prune(args, json, global_strict),
+        WorktreeCommands::Exec(args) => exec::handle_exec(args, mode, verbose, json),
+        WorktreeCommands::Prune => prune::handle_prune(mode, json, global_strict),
         WorktreeCommands::Unknown(args) => {
             let cmd = escape(args.first().map(|s| s.as_str()).unwrap_or(""));
             // the help, then the error, which meta prints once
@@ -207,6 +216,12 @@ fn write_worktree_help(w: &mut dyn std::io::Write) {
         "  prune    Remove expired/orphaned worktree sets of this workspace"
     );
     let _ = writeln!(w);
+    let _ = writeln!(w, "OPTIONS (every command):");
+    let _ = writeln!(
+        w,
+        "  --dry-run                Show what would be created, run or removed; change nothing"
+    );
+    let _ = writeln!(w);
     let _ = writeln!(w, "CREATE OPTIONS:");
     let _ = writeln!(w, "  --repo <ALIAS[:BRANCH]>  Add specific repo(s)");
     let _ = writeln!(
@@ -222,7 +237,6 @@ fn write_worktree_help(w: &mut dyn std::io::Write) {
         w,
         "  --from-pr <OWNER/REPO#N> Start from a PR's head branch"
     );
-    let _ = writeln!(w, "  --dry-run                Preview planned operations");
     let _ = writeln!(w, "  --ephemeral              Mark for automatic cleanup");
     let _ = writeln!(
         w,
@@ -287,9 +301,6 @@ fn write_worktree_help(w: &mut dyn std::io::Write) {
         "  --base <BRANCH>          Base branch for comparison (default: main)"
     );
     let _ = writeln!(w, "  --stat                   Show diffstat summary only");
-    let _ = writeln!(w);
-    let _ = writeln!(w, "PRUNE OPTIONS:");
-    let _ = writeln!(w, "  --dry-run                Preview without removing");
     let _ = writeln!(w);
     let _ = writeln!(
         w,

@@ -35,8 +35,12 @@ pub fn execute_command(
     debug!("[meta_git_cli] Plugin invoked with command: '{command}'");
     debug!("[meta_git_cli] Args: {args:?}");
     debug!(
-        "[meta_git_cli] Options: parallel={}, dry_run={}, verbose={}, recursive={}, depth={:?}",
-        options.parallel, options.dry_run, options.verbose, options.recursive, options.depth
+        "[meta_git_cli] Options: parallel={}, mode={:?}, verbose={}, recursive={}, depth={:?}",
+        options.parallel,
+        options.mode(),
+        options.verbose,
+        options.recursive,
+        options.depth
     );
     debug!("[meta_git_cli] Projects from meta_cli: {projects:?}");
 
@@ -93,7 +97,7 @@ pub fn execute_command(
 
     finish(match command {
         "git status" => status::execute_git_status(projects, options, cwd),
-        "git update" => update::execute_git_update(projects, options.dry_run, cwd),
+        "git update" => update::execute_git_update(projects, options.mode(), cwd),
         // Fallback: run raw git command across all repos
         _ => return execute_raw_git_command(command, args, projects, options, cwd),
     })
@@ -223,8 +227,9 @@ fn execute_raw_git_command(
         .collect();
 
     // For remote commands running in parallel, establish SSH ControlMaster
-    // connections and inject GIT_SSH_COMMAND into each planned command.
-    if options.parallel && is_remote_command(&argv) {
+    // connections and inject GIT_SSH_COMMAND into each planned command. A
+    // preview connects nowhere.
+    if options.parallel && !options.mode().is_preview() && is_remote_command(&argv) {
         let urls = meta_core::config::Workspace::find(cwd, None)
             .ok()
             .flatten()

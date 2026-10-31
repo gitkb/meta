@@ -1,6 +1,7 @@
 use anyhow::Result;
 use colored::*;
-use meta_core::display::escape_lines;
+use meta_core::display::{escape, escape_lines};
+use meta_core::ExecutionMode;
 use std::path::{Path, PathBuf};
 
 use meta_cli::repo_filter;
@@ -10,17 +11,17 @@ use meta_git_lib::worktree::helpers::*;
 use super::cli_types::{CreateArgs, ExecArgs, RemoveArgs};
 use crate::git_env;
 
-/// Runs in each of `repos` that `--include`/`--exclude` select (by alias:
-/// its path from `wt_dir`), naming them by that path.
+/// Runs in each of `repos` that `args`' `--include`/`--exclude` select (by
+/// alias: its path from `wt_dir`), naming them by that path.
 fn build_loop_config(
     wt_dir: &Path,
     repos: &[WorktreeRepoInfo],
-    include_filters: Vec<String>,
-    exclude_filters: Vec<String>,
-    parallel: bool,
+    args: &ExecArgs,
+    mode: ExecutionMode,
     verbose: bool,
     json: bool,
 ) -> Result<loop_lib::LoopConfig> {
+    let (include_filters, exclude_filters) = (&args.include, &args.exclude);
     let directories: Vec<String> = repos.iter().map(|r| r.path.display().to_string()).collect();
     // A set lays its repos out as the workspace, so the set's config names
     // them, by project name or path; only a filter reads it
@@ -38,8 +39,8 @@ fn build_loop_config(
         }
     };
     let directories = repo_filter::select(
-        &include_filters,
-        &exclude_filters,
+        include_filters,
+        exclude_filters,
         &directories,
         wt_dir,
         &names,
@@ -49,8 +50,8 @@ fn build_loop_config(
         ignore: vec![],
         verbose,
         silent: false,
-        parallel,
-        dry_run: false,
+        parallel: args.parallel,
+        dry_run: mode.is_preview(),
         json_output: json,
         add_aliases_to_global_looprc: false,
         spawn_stagger_ms: 0,
@@ -79,7 +80,8 @@ impl EphemeralGuard {
             name: self.name.clone(),
             force: true,
         };
-        super::remove::handle_remove(remove_args, self.verbose, self.json)
+        // Only a set this run really created has a guard
+        super::remove::handle_remove(remove_args, ExecutionMode::Execute, self.verbose, self.json)
     }
 
     fn finish(mut self) -> Result<()> {
@@ -108,9 +110,14 @@ impl Drop for EphemeralGuard {
     }
 }
 
-pub(crate) fn handle_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<()> {
+pub(crate) fn handle_exec(
+    args: ExecArgs,
+    mode: ExecutionMode,
+    verbose: bool,
+    json: bool,
+) -> Result<()> {
     if args.ephemeral {
-        return handle_ephemeral_exec(args, verbose, json);
+        return handle_ephemeral_exec(args, mode, verbose, json);
     }
 
     let name = &args.name;
@@ -119,9 +126,8 @@ pub(crate) fn handle_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<(
     let config = build_loop_config(
         &resolve_existing_worktree(name)?,
         &repos,
-        args.include,
-        args.exclude,
-        args.parallel,
+        &args,
+        mode,
         verbose,
         json,
     )?;
@@ -130,32 +136,40 @@ pub(crate) fn handle_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<(
     Ok(())
 }
 
-fn handle_ephemeral_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<()> {
+fn handle_ephemeral_exec(
+    args: ExecArgs,
+    mode: ExecutionMode,
+    verbose: bool,
+    json: bool,
+) -> Result<()> {
     let name = args.name.clone();
     validate_worktree_name(&name)?;
 
-    let cmd_parts = args.command;
+    let cmd_parts = &args.command;
     if cmd_parts.is_empty() {
         anyhow::bail!("No command specified after --");
     }
-
-    // Extract filters and parallel flag before moving remaining args into CreateArgs
-    let include_filters = args.include;
-    let exclude_filters = args.exclude;
-    let parallel = args.parallel;
+    // A run names the set's repos by the .meta.yaml checked out in it, which
+    // a preview hasn't made (a start commit or an existing branch may hold
+    // another): it can't tell what a filter selects
+    if mode.is_preview() && (!args.include.is_empty() || !args.exclude.is_empty()) {
+        anyhow::bail!(
+            "--dry-run can't preview --include/--exclude of exec --ephemeral: the set's own \
+             .meta.yaml names its repos; nothing was changed"
+        );
+    }
 
     // Build CreateArgs from the exec args
     let create_args = CreateArgs {
         name: name.clone(),
-        commit_ish: args.commit_ish,
-        branch: args.branch,
-        repos: args.repos,
+        commit_ish: args.commit_ish.clone(),
+        branch: args.branch.clone(),
+        repos: args.repos.clone(),
         all: args.all,
-        dry_run: false,
-        from_pr: args.from_pr,
+        from_pr: args.from_pr.clone(),
         ephemeral: true,
         ttl: None,
-        custom_meta: args.custom_meta,
+        custom_meta: args.custom_meta.clone(),
         strict: false,  // Exec creates ephemeral worktrees, don't fail on skipped repos
         no_deps: false, // Include dependencies by default
         recursive: false, // Ephemeral exec uses current meta level
@@ -165,7 +179,15 @@ fn handle_ephemeral_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<()
         eprintln!("Creating ephemeral worktree '{name}'...");
     }
     // Ephemeral worktrees use global_strict=false to ensure creation succeeds
-    super::create::handle_create(create_args, verbose, json, false)?;
+    super::create::handle_create(create_args, mode, verbose, json, false)?;
+    // A preview made no set
+    if mode.is_preview() {
+        println!(
+            "Then would run `{}` in each repo planned above, and remove the set.",
+            escape(&loop_lib::display_command(cmd_parts))
+        );
+        return Ok(());
+    }
 
     // Guard ensures cleanup even on panic
     let guard = EphemeralGuard {
@@ -184,17 +206,9 @@ fn handle_ephemeral_exec(args: ExecArgs, verbose: bool, json: bool) -> Result<()
     // Run the command
     let repos = discover_worktree_repos(&wt_dir)?;
 
-    let config = build_loop_config(
-        &wt_dir,
-        &repos,
-        include_filters,
-        exclude_filters,
-        parallel,
-        verbose,
-        json,
-    );
+    let config = build_loop_config(&wt_dir, &repos, &args, mode, verbose, json);
 
-    let exec_result = config.and_then(|config| loop_lib::run(&config, &cmd_parts));
+    let exec_result = config.and_then(|config| loop_lib::run(&config, cmd_parts));
 
     // Clean up before propagating the result; a failed cleanup (such as a
     // checkout git cannot delete) fails the command too

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 pub(crate) fn execute_git_update(
     projects: &[String],
-    dry_run: bool,
+    mode: meta_core::ExecutionMode,
     cwd: &std::path::Path,
 ) -> anyhow::Result<CommandResult> {
     // Determine if we're in recursive mode (projects list provided by meta_cli)
@@ -91,7 +91,7 @@ pub(crate) fn execute_git_update(
         return Ok(CommandResult::Message(String::new()));
     }
 
-    if dry_run {
+    if mode.is_preview() {
         println!(
             "{} Would clone {} missing repositories:",
             style("[DRY RUN]").cyan(),

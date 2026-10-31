@@ -102,6 +102,14 @@ pub struct PluginRequestOptions {
     pub strict: bool,
 }
 
+impl PluginRequestOptions {
+    /// `dry_run` as the mode a command runs in: read it here, once, and
+    /// hand the mode to everything that changes something.
+    pub fn mode(&self) -> meta_core::ExecutionMode {
+        meta_core::ExecutionMode::from_dry_run(self.dry_run)
+    }
+}
+
 // ============================================================================
 // Plugin-to-Host Response
 // ============================================================================

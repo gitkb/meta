@@ -245,6 +245,17 @@ within() {
     [ -d "$TEST_DIR/shared/.git" ]
 }
 
+@test "meta git update leaves alone a branch deleted on the remote, after asking the remote" {
+    with_remotes
+    git -C frontend switch --quiet -c merged
+    git -C frontend push --quiet -u origin merged
+    # its pull request merged: the branch is deleted on the remote
+    git -C remotes/frontend.git branch --quiet -D merged
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Not pulled frontend: its upstream branch isn't on the remote"* ]]
+}
+
 @test "meta git update reads a nested .meta.yaml only with -r, after pulling its meta repo" {
     with_remotes
     git clone --quiet --bare "$TEST_DIR/frontend" "$TEST_DIR/remotes/inner.git"

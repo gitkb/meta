@@ -241,11 +241,11 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
 }
 
 /// Whether the remote says it has no branch for the upstream of the branch
-/// checked out at `dir`, which has no commit for it either: asked only
-/// after a pull failed, so a remote that can't be reached stays a failure.
+/// checked out at `dir` (an empty repo's clone, a branch deleted on the
+/// remote): asked after a pull failed, of the remote itself, so a remote
+/// that can't be reached, or a pull git refused, stays a failure.
 fn upstream_is_missing(dir: &Path, ssh_cmd: Option<&str>) -> bool {
     use meta_core::git::lookup;
-    let local = ["rev-parse", "--verify", "--quiet", "@{upstream}"];
     let Ok(Some(branch)) = lookup(dir, ["branch", "--show-current"]) else {
         return false;
     };
@@ -258,9 +258,6 @@ fn upstream_is_missing(dir: &Path, ssh_cmd: Option<&str>) -> bool {
     let (Some(remote), Some(merge)) = (config("remote"), config("merge")) else {
         return false;
     };
-    if !matches!(lookup(dir, local), Ok(None)) {
-        return false;
-    }
     // `--exit-code`: 2 when the remote answered and has no such ref
     let mut ask = meta_core::git::git(dir);
     ask.args(["ls-remote", "--exit-code", "--", &remote, &merge])

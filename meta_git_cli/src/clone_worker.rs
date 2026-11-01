@@ -99,7 +99,10 @@ impl<'a> Worker<'a> {
             }
             // A branch whose upstream isn't on the remote (yet: an empty
             // repo's clone) has nothing to pull from
-            Err(_) if task.work == Work::Pull && upstream_is_missing(&task.target_path) => {
+            Err(_)
+                if task.work == Work::Pull
+                    && upstream_is_missing(&task.target_path, self.ssh_cmd) =>
+            {
                 let why = "its upstream branch isn't on the remote".to_string();
                 pb.finish_with_message(format!(
                     "{}",
@@ -237,11 +240,35 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     )
 }
 
-/// Whether the branch checked out at `dir` has an upstream git has no
-/// commit for, after a pull fetched what there is.
-fn upstream_is_missing(dir: &Path) -> bool {
-    let args = ["rev-parse", "--verify", "--quiet", "@{upstream}"];
-    matches!(meta_core::git::lookup(dir, args), Ok(None))
+/// Whether the remote says it has no branch for the upstream of the branch
+/// checked out at `dir`, which has no commit for it either: asked only
+/// after a pull failed, so a remote that can't be reached stays a failure.
+fn upstream_is_missing(dir: &Path, ssh_cmd: Option<&str>) -> bool {
+    use meta_core::git::lookup;
+    let local = ["rev-parse", "--verify", "--quiet", "@{upstream}"];
+    let Ok(Some(branch)) = lookup(dir, ["branch", "--show-current"]) else {
+        return false;
+    };
+    let config = |key: &str| {
+        let key = format!("branch.{branch}.{key}");
+        lookup(dir, ["config", "--get", key.as_str()])
+            .ok()
+            .flatten()
+    };
+    let (Some(remote), Some(merge)) = (config("remote"), config("merge")) else {
+        return false;
+    };
+    if !matches!(lookup(dir, local), Ok(None)) {
+        return false;
+    }
+    // `--exit-code`: 2 when the remote answered and has no such ref
+    let mut ask = meta_core::git::git(dir);
+    ask.args(["ls-remote", "--exit-code", "--", &remote, &merge])
+        .env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(ssh) = ssh_cmd {
+        ask.env("GIT_SSH_COMMAND", ssh);
+    }
+    matches!(meta_core::children::output(&mut ask), Ok(out) if out.status.code() == Some(2))
 }
 
 /// The git command `task` runs, `url` giving a clone's URL as git gets it

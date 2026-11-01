@@ -335,6 +335,12 @@ within() {
     run "$META_BIN" git update
     [ "$status" -eq 0 ]
     [[ "$output" == *"Not pulled empty: its upstream branch isn't on the remote"* ]]
+    # a remote that can't be reached is a failure, with git's error
+    mv "$TEST_DIR/remotes/empty.git" "$TEST_DIR/remotes/away.git"
+    run "$META_BIN" git update
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not pull empty"* ]]
+    mv "$TEST_DIR/remotes/away.git" "$TEST_DIR/remotes/empty.git"
     # a teammate pushes the first commit
     git clone --quiet "$TEST_DIR/remotes/empty.git" "$TEST_DIR/remotes/mate-empty" 2>/dev/null
     git -C "$TEST_DIR/remotes/mate-empty" -c user.name=Mate -c user.email=mate@test.com \

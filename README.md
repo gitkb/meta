@@ -270,8 +270,8 @@ When `meta: true` is set, commands with `--recursive` will descend into the nest
 # Clone everything, including nested meta repos
 meta git clone https://github.com/org/top-level.git
 
-# Clone what's missing, nested meta repos included
-meta git update
+# Pull what's cloned and clone what's missing, nested meta repos included
+meta git update -r
 
 # List entire tree
 meta project list --recursive
@@ -317,7 +317,7 @@ This enables impact analysis ("what breaks if I change shared-utils?"), topologi
 | Command | Description |
 |---------|-------------|
 | `meta git clone <url>` | Clone meta repo + all child repos |
-| `meta git update` | Clone missing repos (nested meta repos included); `meta git pull` pulls |
+| `meta git update` | Fast-forward each cloned repo (`git pull --ff-only`) and clone each missing one; the workspace repo is pulled first, so projects added upstream are cloned too. A repo that can't fast-forward is named and the command exits 1; one on no branch or without an upstream is named and left alone. `-r` for nested meta repos |
 | `meta git setup-ssh` | Configure SSH multiplexing |
 | `meta git commit --edit` | Per-repo commit messages via editor |
 | `meta git commit -m "msg"` | Same message across all repos |

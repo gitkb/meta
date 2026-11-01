@@ -71,7 +71,7 @@ projects:
 EOF
     meta_without_token --dry-run git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"git clone https://***@example.invalid/org/lib.git"* ]] || false
+    [[ "$output" == *"git clone 'https://***@example.invalid/org/lib.git'"* ]] || false
     meta_without_token project check --json
     [[ "$output" == *'"repo": "https://***@example.invalid/org/lib.git"'* ]] || false
     meta_without_token git update
@@ -175,5 +175,5 @@ projects:
 EOF
     run "$META_BIN" git update
     [[ "$output" == *"SSH master for git@nohost.invalid (port 22) could not be started"* ]] || false
-    [[ "$output" == *"cloning one repository at a time"* ]]
+    [[ "$output" == *"updating one repository at a time"* ]]
 }

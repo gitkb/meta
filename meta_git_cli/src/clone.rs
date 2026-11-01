@@ -5,7 +5,7 @@ use console::style;
 use indicatif::MultiProgress;
 use meta_core::config;
 use meta_core::git::GitUrl;
-use meta_git_lib::clone_queue::CloneQueue;
+use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::sync::Arc;
 
@@ -144,7 +144,8 @@ pub(crate) fn execute_git_clone(
     if let Some(ref ssh) = ssh_cmd {
         clone_cmd.env("GIT_SSH_COMMAND", ssh);
     }
-    let status = clone_cmd.status()?;
+    // a child meta owns: stopping meta stops the clone
+    let status = meta_core::children::status(&mut clone_cmd)?;
     if !status.success() {
         return Ok(CommandResult::Error(
             "Failed to clone meta repository".to_string(),
@@ -158,13 +159,21 @@ pub(crate) fn execute_git_clone(
         ));
     }
 
-    // Create the clone queue with depth settings
-    // For non-recursive mode, set meta_depth to 0 (only first level)
+    // For non-recursive mode, read only the cloned repo's own .meta.yaml
     let effective_meta_depth = if recursive { meta_depth } else { Some(0) };
-    let queue = Arc::new(CloneQueue::new(depth.clone(), effective_meta_depth));
-
-    // Seed the queue with first-level children
-    let initial_count = queue.push_from_meta(&clone_dir_path, 0)?;
+    let queue = CloneQueue::new(depth.clone(), effective_meta_depth, false);
+    let top = MetaRepo {
+        name: clone_dir_path.file_name().map_or_else(
+            || clone_dir.clone(),
+            |name| name.to_string_lossy().into_owned(),
+        ),
+        dir: clone_dir_path
+            .canonicalize()
+            .unwrap_or_else(|_| clone_dir_path.clone()),
+        url: Some(url.clone()),
+    };
+    let tasks = queue.discover(&clone_dir_path, 0, &Arc::from([top]))?;
+    let initial_count = tasks.len();
 
     if initial_count == 0 {
         if let Some(error) = crate::clone_worker::report_failures(&queue) {
@@ -176,7 +185,13 @@ pub(crate) fn execute_git_clone(
     }
 
     // Establish SSH masters for any additional hosts in the queue
-    let queue_urls = queue.peek_urls();
+    let queue_urls: Vec<_> = tasks
+        .iter()
+        .filter_map(|t| match &t.work {
+            Work::Clone(url) => Some(url.clone()),
+            Work::Pull => None,
+        })
+        .collect();
     if !queue_urls.is_empty() {
         match ssh::establish_ssh_masters(&queue_urls) {
             ssh::SshMasters::OurSockets(sockets_dir) => {
@@ -199,8 +214,7 @@ pub(crate) fn execute_git_clone(
 
     let mp = MultiProgress::new();
 
-    // Use the queue-based cloning system
-    clone_with_queue(Arc::clone(&queue), parallel, &mp, ssh_cmd.as_deref())?;
+    clone_with_queue(&queue, tasks, parallel, &mp, ssh_cmd.as_deref())?;
     if let Some(error) = crate::clone_worker::report_failures(&queue) {
         return Ok(CommandResult::Error(error));
     }

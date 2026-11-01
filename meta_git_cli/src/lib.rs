@@ -72,12 +72,17 @@ pub fn execute_command(
             }
         }
         "git update" => {
-            return match meta_plugin_protocol::parse_args::<update::UpdateArgs>(command, args) {
-                Ok(update::UpdateArgs {}) => {
-                    finish(update::execute_git_update(projects, options.mode(), cwd))
+            return match meta_plugin_protocol::parse_args(command, args) {
+                Ok(args) => finish(update::execute_git_update(args, options, cwd)),
+                // meta's own options aren't update's
+                Err(CommandResult::Error(e)) if e.starts_with("unexpected argument") => {
+                    CommandResult::Error(format!(
+                        "{e}\n\nmeta's own options (--dry-run, --depth, ...) go before the \
+                         command, as in `meta --dry-run git update`"
+                    ))
                 }
                 Err(result) => result,
-            }
+            };
         }
         "git commit" => {
             // meta sends a help request without its repos: whatever clap
@@ -812,45 +817,6 @@ the only commit message
         assert_eq!(parsed["plan"]["commands"].as_array().unwrap().len(), 3);
         assert!(!parsed["plan"]["parallel"].as_bool().unwrap());
     }
-
-    #[test]
-    fn test_git_update_plan_for_missing_repos() {
-        // Simulate what execute_git_update would return for missing repos
-        let missing_repos = [
-            ("repo1", "git@github.com:org/repo1.git"),
-            ("repo2", "git@github.com:org/repo2.git"),
-        ];
-
-        let cwd = "/home/user/workspace";
-        let commands: Vec<PlannedCommand> = missing_repos
-            .iter()
-            .map(|(name, url)| PlannedCommand {
-                dir: cwd.to_string(),
-                argv: argv(&format!("git clone {url} {name}")),
-                env: None,
-            })
-            .collect();
-
-        let response = PlanResponse {
-            plan: ExecutionPlan {
-                pre_commands: vec![],
-                commands,
-                post_commands: vec![],
-                parallel: Some(false),
-                max_parallel: None,
-                spawn_stagger_ms: None,
-            },
-        };
-
-        let json = serde_json::to_string(&response).unwrap();
-
-        // Verify clone commands are in the plan
-        assert!(json.contains(r#""git","clone""#));
-        assert!(json.contains("repo1"));
-        assert!(json.contains("repo2"));
-    }
-
-    // ============ Remote Command Detection Tests ============
 
     #[test]
     fn test_is_remote_command_push() {

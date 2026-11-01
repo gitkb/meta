@@ -155,11 +155,164 @@ teardown() {
 
 # ============ meta git update ============
 
-@test "meta git update with all repos present shows up-to-date" {
+# Give the workspace and its repos bare remotes they track, under
+# $TEST_DIR/remotes, with .meta.yaml naming them
+with_remotes() {
+    mkdir -p "$TEST_DIR/remotes"
+    sed -i.bak "s|git@github.com:org/\([a-z]*\)\.git|file://$TEST_DIR/remotes/\1.git|" "$TEST_DIR/.meta.yaml"
+    rm "$TEST_DIR/.meta.yaml.bak"
+    git -C "$TEST_DIR" commit --quiet -am "remotes"
+    local repo name
+    for repo in frontend backend shared .; do
+        name=${repo/#./ws}
+        git clone --quiet --bare "$TEST_DIR/$repo" "$TEST_DIR/remotes/$name.git"
+        git -C "$TEST_DIR/$repo" remote add origin "file://$TEST_DIR/remotes/$name.git"
+        git -C "$TEST_DIR/$repo" fetch --quiet origin
+        git -C "$TEST_DIR/$repo" branch --quiet -u "origin/$(git -C "$TEST_DIR/$repo" branch --show-current)"
+    done
+}
+
+# teammate NAME [FILE CONTENT]: a teammate pushes one commit to NAME's remote
+teammate() {
+    local mate="$TEST_DIR/remotes/mate-$1"
+    [ -d "$mate" ] || git clone --quiet "$TEST_DIR/remotes/$1.git" "$mate"
+    git -C "$mate" pull --quiet --ff-only
+    if [ -n "${2:-}" ]; then
+        printf '%s\n' "$3" > "$mate/$2"
+    else
+        echo "mate $RANDOM" >> "$mate/mate.txt"
+    fi
+    git -C "$mate" add -A
+    git -C "$mate" -c user.name=Mate -c user.email=mate@test.com commit --quiet -m "$1: teammate"
+    git -C "$mate" push --quiet
+}
+
+head_of() { git -C "$1" rev-parse HEAD; }
+
+@test "meta git update fast-forwards each repo, and clones what the pulled .meta.yaml adds" {
+    with_remotes
+    teammate frontend
+    # the teammate adds a project to the workspace's .meta.yaml
+    git clone --quiet --bare "$TEST_DIR/shared" "$TEST_DIR/remotes/extra.git"
+    local added
+    added=$(sed "s|\"shared\": \(.*\)|\"shared\": \1, \"extra\": \"file://$TEST_DIR/remotes/extra.git\"|" .meta.yaml)
+    teammate ws .meta.yaml "$added"
     run "$META_BIN" git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"already"* ]] || [[ "$output" == *"All"* ]] || [[ "$output" == *"up"* ]]
+    [[ "$output" == *"Update completed (4 pulled, 1 cloned)"* ]]
+    [ "$(head_of frontend)" = "$(head_of remotes/frontend.git)" ]
+    [ "$(head_of .)" = "$(head_of remotes/ws.git)" ]
+    [ -d "$TEST_DIR/extra/.git" ]
 }
+
+@test "meta git update names each repo it can't fast-forward, updates the rest, and exits 1" {
+    with_remotes
+    teammate frontend
+    teammate backend
+    teammate ws
+    # backend and the workspace repo have a commit of their own: diverged
+    local repo
+    for repo in backend .; do
+        echo mine >> "$TEST_DIR/$repo/mine.txt"
+        git -C "$TEST_DIR/$repo" add mine.txt
+        git -C "$TEST_DIR/$repo" commit --quiet -m mine
+    done
+    local backend_head
+    backend_head=$(head_of backend)
+    rm -rf "$TEST_DIR/shared"
+    run "$META_BIN" git update
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Could not pull backend"*"fast-forward"* ]]
+    [[ "$output" == *"2 repositories could not be fast-forwarded: "* ]]
+    # nothing merged or rebased
+    [ "$(head_of backend)" = "$backend_head" ]
+    # the workspace's .meta.yaml as it is is still read
+    [ "$(head_of frontend)" = "$(head_of remotes/frontend.git)" ]
+    [ -d "$TEST_DIR/shared/.git" ]
+}
+
+@test "meta git update reads a nested .meta.yaml only with -r, after pulling its meta repo" {
+    with_remotes
+    git clone --quiet --bare "$TEST_DIR/frontend" "$TEST_DIR/remotes/inner.git"
+    teammate shared .meta.yaml "{\"projects\": {\"inner\": \"file://$TEST_DIR/remotes/inner.git\"}}"
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"recursive"* ]]
+    [ -f "$TEST_DIR/shared/.meta.yaml" ]
+    [ ! -e "$TEST_DIR/shared/inner" ]
+    # what the pull of shared brings is read in the same run
+    git -C "$TEST_DIR/shared" reset --quiet --hard HEAD~1
+    run "$META_BIN" git update -r
+    [ "$status" -eq 0 ]
+    [ -d "$TEST_DIR/shared/inner/.git" ]
+    rm -rf "$TEST_DIR/shared/inner"
+    run "$META_BIN" --recursive git update
+    [ "$status" -eq 0 ]
+    [ -d "$TEST_DIR/shared/inner/.git" ]
+}
+
+@test "meta --dry-run git update lists the pulls and clones and changes nothing" {
+    with_remotes
+    teammate frontend
+    rm -rf "$TEST_DIR/shared"
+    local frontend_head
+    frontend_head=$(head_of frontend)
+    run "$META_BIN" --dry-run git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"git -C $TEST_DIR/frontend pull --ff-only --no-rebase"* ]]
+    [[ "$output" == *"git clone file://$TEST_DIR/remotes/shared.git $TEST_DIR/shared"* ]]
+    [ "$(head_of frontend)" = "$frontend_head" ]
+    [ ! -e "$TEST_DIR/shared" ]
+}
+
+@test "meta git update doesn't stall on git's stdout, and git asks for no credentials" {
+    with_remotes
+    rm -rf "$TEST_DIR/shared"
+    # a git that writes more to stdout than a pipe holds, and records whether
+    # it may prompt
+    local real_git
+    real_git="$(git --exec-path)/git"
+    mkdir "$TEST_DIR/bin"
+    printf '#!/bin/sh\ncase " $* " in *" clone "*|*" pull "*)\n  head -c 262144 /dev/zero\n  echo "$GIT_TERMINAL_PROMPT" >> "%s/prompts";;\nesac\nexec "%s" "$@"\n' \
+        "$TEST_DIR" "$real_git" > "$TEST_DIR/bin/git"
+    chmod +x "$TEST_DIR/bin/git"
+    PATH="$TEST_DIR/bin:$PATH" run timeout 60 "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [ -d "$TEST_DIR/shared/.git" ]
+    # the clone and the three pulls
+    [[ "$output" == *"Update completed (3 pulled, 1 cloned)"* ]]
+    [ "$(grep -c '^0$' "$TEST_DIR/prompts")" -eq 4 ]
+}
+
+@test "meta git update in a worktree set refuses instead of updating the workspace" {
+    with_remotes
+    "$META_BIN" git worktree create review --repo frontend --no-deps >/dev/null
+    cd "$TEST_DIR/.worktrees/review/frontend"
+    run "$META_BIN" git update
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not worktree set 'review'"* ]]
+}
+
+@test "meta git clone -r and update -r of meta repos that list each other stop, naming the cycle" {
+    TOP_BARE="$(mktemp -d)/top.git"
+    KID_BARE="$(mktemp -d)/kid.git"
+    create_meta_bare_repo "$KID_BARE" "{\"projects\": {\"top\": {\"repo\": \"file://$TOP_BARE\", \"meta\": true}}}"
+    create_meta_bare_repo "$TOP_BARE" "{\"projects\": {\"kid\": {\"repo\": \"file://$KID_BARE\", \"meta\": true}}}"
+    CYC="$(mktemp -d)/cyc"
+    run timeout 60 "$META_BIN" git clone -r "file://$TOP_BARE" "$CYC"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"meta repos list each other: cyc → kid → top"* ]]
+    [ -d "$CYC/kid/.git" ]
+    [ ! -e "$CYC/kid/top" ]
+    # the clone has no .meta/plugins: this build's plugin, not one installed
+    cd "$CYC"
+    PATH="$(dirname "$META_GIT_BIN"):$PATH" run timeout 60 "$META_BIN" git update -r
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"meta repos list each other: cyc → kid → top"* ]]
+    [ ! -e "$CYC/kid/top" ]
+    rm -rf "$TOP_BARE" "$KID_BARE" "$CYC"
+}
+
 
 @test "meta git update detects missing repos" {
     rm -rf "$TEST_DIR/shared"
@@ -169,14 +322,28 @@ teardown() {
     [[ "$output" == *"shared"* ]] || [[ "$output" == *"missing"* ]] || [[ "$output" == *"clone"* ]] || [[ "$output" == *"orphan"* ]]
 }
 
-@test "meta git update calls only a repository an unlisted one" {
-    # stray holds an empty .git, other is a repository .meta.yaml doesn't list
+@test "meta git update says what an unlisted repository holds, and never how to delete it" {
+    with_remotes
+    # stray holds an empty .git; frontend is renamed web in .meta.yaml, and
+    # holds an unpushed commit, an untracked file and a worktree
     mkdir -p "$TEST_DIR/stray/.git"
-    git init --quiet "$TEST_DIR/other"
+    git -C frontend switch --quiet -c topic
+    echo wip > frontend/wip.md
+    git -C frontend add wip.md
+    git -C frontend commit --quiet -m "unpushed work"
+    echo scratch > frontend/scratch.txt
+    git -C frontend worktree add --quiet "$TEST_DIR/remotes/fe-review"
+    git clone --quiet --bare remotes/frontend.git remotes/web.git
+    sed -i.bak 's|"frontend": "[^"]*"|"web": "file://'"$TEST_DIR"'/remotes/web.git"|' .meta.yaml
+    rm .meta.yaml.bak
+    git commit --quiet -am rename
+    git push --quiet
     run "$META_BIN" git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"other exists locally but is not in .meta.yaml"* ]]
+    [[ "$output" == *"frontend is not in .meta.yaml; it holds "*"untracked: scratch.txt"*"1 commit on no remote: "*"unpushed work"*"1 linked worktree: $TEST_DIR/remotes/fe-review"* ]]
+    [[ "$output" != *"rm -rf"* ]]
     [[ "$output" != *"stray"* ]]
+    [ -d "$TEST_DIR/web/.git" ]
 }
 
 @test "meta git update compares no origin for a project that is not cloned" {
@@ -775,8 +942,10 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
     [ ! -e "$TEST_DIR/shared" ]
+    # frontend and backend have nothing to pull from
     run "$META_BIN" git update
     [ "$status" -eq 0 ]
+    [[ "$output" == *"Not pulled frontend: its branch "*" has no upstream"* ]]
     [ -d "$TEST_DIR/shared/.git" ]
 }
 
@@ -910,7 +1079,7 @@ EOF
     printf '{"projects": {}}' > "$TEST_DIR/private/config.json"
     ln -s ../private/config.json "$TEST_DIR/frontend/.meta.yaml"
     chmod 000 "$TEST_DIR/private"
-    run "$META_BIN" git update
+    run "$META_BIN" git update -r
     chmod 700 "$TEST_DIR/private"
     [ "$status" -ne 0 ]
     [[ "$output" == *"Cannot read"*"frontend/.meta.yaml"* ]]
@@ -933,7 +1102,7 @@ EOF
     cd "$TEST_DIR"
     run "$META_BIN" git clone --recursive "$UP/root.git" "$UP/clone"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Could not read nested .meta.yaml files"* ]]
+    [[ "$output" == *"Cannot read nested .meta.yaml"* ]]
     [[ "$output" == *"leads into .git"* ]]
     # A failed clone is still reported alongside it
     [[ "$output" == *"Failed to clone"*"gone"* ]]
@@ -998,7 +1167,7 @@ YAML
     sed -i.bak "s|git@github.com:org/shared.git|file://$TEST_DIR/shared.git|" "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git update --dry-run
     [ "$status" -ne 0 ]
-    [[ "$output" == *"unexpected argument '--dry-run'"* ]]
+    [[ "$output" == *"unexpected argument '--dry-run'"*"go before the command, as in \`meta --dry-run git update\`"* ]]
     [ ! -e "$TEST_DIR/shared" ]
     run "$META_BIN" git update --help
     [ "$status" -eq 0 ]

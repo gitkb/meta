@@ -398,6 +398,61 @@ fn scan(
     Ok(())
 }
 
+/// What deleting the repository at `repo`, a checkout of its own, would
+/// lose: uncommitted, untracked and hidden files, an operation in progress,
+/// commits on no remote, stashes, and its linked worktrees. Empty when git
+/// shows nothing that isn't on a remote (ignored files aside).
+pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
+    let (mut found, _) = unsaved_work(repo, &[])?;
+    // Commits on no remote include those on no branch either
+    found.retain(|what| !what.ends_with(STRANDED));
+    let unpushed = meta_core::git::run(
+        repo,
+        [
+            "log",
+            "--oneline",
+            "HEAD",
+            "--branches",
+            "--tags",
+            "--not",
+            "--remotes",
+        ],
+    )?;
+    let unpushed: Vec<&str> = unpushed.lines().collect();
+    if !unpushed.is_empty() {
+        found.push(format!(
+            "{} on no remote: {}",
+            plural(unpushed.len(), "commit"),
+            sample(&unpushed, |line| escape(line).into_owned())
+        ));
+    }
+    match meta_core::git::run(repo, ["stash", "list"])?
+        .lines()
+        .count()
+    {
+        0 => {}
+        1 => found.push("1 stash".to_string()),
+        n => found.push(format!("{n} stashes")),
+    }
+    let listed = meta_core::git::run(repo, ["worktree", "list", "--porcelain", "-z"])?;
+    let worktrees: Vec<&str> = listed
+        .split('\0')
+        .filter_map(|field| field.strip_prefix("worktree "))
+        .skip(1)
+        .collect();
+    if !worktrees.is_empty() {
+        found.push(format!(
+            "{}: {}",
+            plural(worktrees.len(), "linked worktree"),
+            sample(&worktrees, |path| escape(path).into_owned())
+        ));
+    }
+    Ok(found)
+}
+
+/// How [`unsaved_work`] ends the line for commits that nothing holds.
+const STRANDED: &str = "not on any branch, tag or remote";
+
 /// Describe the work in one checkout that deleting it would lose, and return
 /// git's complete output alongside for exact comparison.
 fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String)> {
@@ -477,10 +532,7 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
     let commits = String::from_utf8_lossy(&output.stdout).into_owned();
     let stranded = commits.lines().count();
     if stranded > 0 {
-        found.push(format!(
-            "{} not on any branch, tag or remote",
-            plural(stranded, "commit")
-        ));
+        found.push(format!("{} {STRANDED}", plural(stranded, "commit")));
     }
     // Staged content, which the status codes alone don't show.
     let staged = git(repo)

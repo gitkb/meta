@@ -30,7 +30,7 @@ Handles all `meta git *` commands with special cases:
 | Command | Behavior |
 |---------|----------|
 | `meta git clone <url>` | Clone parent, read `.meta.yaml`, clone all children |
-| `meta git update` | Clone missing repos (use `meta git pull` to pull existing ones) |
+| `meta git update` | Fast-forward cloned repos (`git pull --ff-only`) and clone missing ones; `-r` for nested meta repos |
 | `meta git worktree *` | Isolated multi-repo worktree sets (see the `meta-worktree` skill) |
 | `meta git <other>` | Pass through to every repo at this meta level |
 

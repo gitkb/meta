@@ -3,7 +3,7 @@
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 # Integration tests for meta git worktree edge cases (Phase 2 & 3)
-# Tests: strict mode, prune with orphan detection, cache invalidation, ahead/behind
+# Tests: strict mode, prune with orphan detection, ahead/behind
 
 setup() {
     clear_git_local_env
@@ -315,96 +315,6 @@ EOF
 EOF
 }
 
-# ============ Context Cache (Phase 3) ============
-
-@test "context cache persists between calls" {
-    # First call populates cache
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-
-    # Second call should use cache (test by checking it still works)
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "import sys, json; data = json.load(sys.stdin); assert data['repo_count'] == 3"
-}
-
-@test "context cache invalidates after branch checkout" {
-    # Get initial context
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-    FIRST_OUTPUT="$output"
-
-    # Checkout a new branch in backend
-    git -C backend checkout -b cache-test-branch 2>/dev/null
-
-    # Small delay to ensure mtime changes
-    sleep 1
-
-    # Get context again - should show new branch
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-backend = next(r for r in data['repos'] if r['name'] == 'backend')
-assert backend['branch'] == 'cache-test-branch', f'expected cache-test-branch, got {backend[\"branch\"]}'
-"
-
-    # Cleanup
-    git -C backend checkout main 2>/dev/null || git -C backend checkout master 2>/dev/null
-}
-
-@test "context cache invalidates after commit" {
-    # Get initial context
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-
-    # Make a commit in backend
-    echo "cache invalidation test" >> backend/README.md
-    git -C backend add README.md
-    git -C backend commit --quiet -m "cache test"
-
-    # Small delay to ensure mtime changes
-    sleep 1
-
-    # Get context again - cache should be invalidated, data should be fresh
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-    # Just verify it still works (cache was rebuilt)
-    echo "$output" | python3 -c "import sys, json; data = json.load(sys.stdin); assert 'repos' in data"
-}
-
-@test "context cache respects 30s TTL" {
-    # Clear cache by removing it
-    rm -f "$META_DATA/context_cache.json"
-
-    # First call creates cache
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-
-    # Immediate second call should use cache
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-
-    # Note: We can't easily test TTL expiration without waiting 30s,
-    # but we can verify cache file exists
-    [ -f "$META_DATA/context_cache.json" ]
-}
-
-@test "context --verbose shows cache operations" {
-    # Clear cache
-    rm -f "$META_DATA/context_cache.json"
-
-    # Run with verbose flag
-    run "$META_BIN" --verbose context 2>&1
-    [ "$status" -eq 0 ]
-
-    # Should mention cache in output (either hit, miss, or created)
-    # Note: verbose output may go to stderr, captured by 2>&1
-    [[ "$output" == *"cache"* ]] || [[ "$output" == *"Cache"* ]] || true
-    # This is a soft check - verbose logging implementation may vary
-}
-
 # ============ Ahead/Behind Tracking (Phase 3) ============
 
 @test "context shows ahead status after local commits" {
@@ -529,16 +439,6 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
 
     # Cleanup
     "$META_BIN" git worktree remove valid-for-prune
-}
-
-@test "context cache handles corrupted cache file gracefully" {
-    # Create invalid cache file
-    echo "invalid json" > "$META_DATA/context_cache.json"
-
-    # Should still work (rebuild cache)
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "import sys, json; json.load(sys.stdin)"
 }
 
 # ============ Record Failures ============

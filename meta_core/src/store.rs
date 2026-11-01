@@ -1,34 +1,12 @@
-//! Atomic JSON store read/write.
+//! Atomic JSON store writes.
 //!
-//! Provides generic utilities for reading and writing JSON files with
-//! atomic write semantics (write to a temporary file, then rename).
+//! Writes JSON files with atomic semantics (write to a temporary file, then
+//! rename).
 
 use crate::display::escape_path;
 use anyhow::{Context, Result};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::path::Path;
-
-/// Read a JSON file, returning `T::default()` if the file doesn't exist.
-///
-/// Returns an error if the file exists but can't be read or parsed: only a
-/// missing file means an empty store, so a failed read never lets an update
-/// replace every entry.
-pub fn read<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
-    let content = match std::fs::read_to_string(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
-        result => {
-            result.with_context(|| format!("Failed to read store file: {}", escape_path(path)))?
-        }
-    };
-
-    if content.trim().is_empty() {
-        return Ok(T::default());
-    }
-
-    serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse store file: {}", escape_path(path)))
-}
 
 /// Write data to a JSON file atomically.
 ///
@@ -100,17 +78,12 @@ mod tests {
         items: HashMap<String, String>,
     }
 
-    #[test]
-    fn test_read_missing_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("nonexistent.json");
-
-        let store: TestStore = read(&path).unwrap();
-        assert_eq!(store, TestStore::default());
+    fn read<T: serde::de::DeserializeOwned>(path: &Path) -> T {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
     #[test]
-    fn test_write_atomic_and_read() {
+    fn test_write_atomic() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.json");
 
@@ -119,7 +92,7 @@ mod tests {
 
         write_atomic(&path, &store).unwrap();
 
-        let loaded: TestStore = read(&path).unwrap();
+        let loaded: TestStore = read(&path);
         assert_eq!(loaded.items.get("key").unwrap(), "value");
 
         // Ensure tmp file was cleaned up
@@ -165,7 +138,7 @@ mod tests {
             .unwrap()
             .file_type()
             .is_symlink());
-        assert_eq!(read::<TestStore>(&target).unwrap(), store);
+        assert_eq!(read::<TestStore>(&target), store);
 
         // A link to a store not written yet creates it, as `echo > link` would
         let dangling = tmp.path().join("dangling.json");
@@ -175,25 +148,12 @@ mod tests {
             .unwrap()
             .file_type()
             .is_symlink());
-        assert_eq!(
-            read::<TestStore>(&tmp.path().join("new.json")).unwrap(),
-            store
-        );
+        assert_eq!(read::<TestStore>(&tmp.path().join("new.json")), store);
 
         // A link loop fails and is left as it is
         let looped = tmp.path().join("loop.json");
         std::os::unix::fs::symlink("loop.json", &looped).unwrap();
         assert!(write_atomic(&looped, &store).is_err());
         assert_eq!(std::fs::read_link(&looped).unwrap(), Path::new("loop.json"));
-    }
-
-    #[test]
-    fn test_read_empty_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("empty.json");
-        std::fs::write(&path, "").unwrap();
-
-        let store: TestStore = read(&path).unwrap();
-        assert_eq!(store, TestStore::default());
     }
 }

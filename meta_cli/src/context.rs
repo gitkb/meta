@@ -6,97 +6,15 @@
 
 use anyhow::Result;
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::path::Path;
 
 use crate::dependency_graph::DependencyGraph;
 use crate::repo_filter::{Filters, Scope};
 use meta_core::config::{self, ProjectInfo};
 use meta_core::display::{escape, escape_path};
-use meta_core::git::{GitUrl, RepoStatus};
-
-// ── Cache ───────────────────────────────────────────────
-
-const CACHE_TTL_SECONDS: u64 = 30;
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CachedContext {
-    context: WorkspaceContext,
-    timestamp: SystemTime,
-    workspace_root: PathBuf,
-}
-
-fn cache_path() -> anyhow::Result<PathBuf> {
-    meta_core::data_dir::data_file("context_cache")
-}
-
-fn load_cache() -> Option<CachedContext> {
-    // checked like any store: it is rendered into what agents read
-    meta_core::store::read::<Option<CachedContext>>(&cache_path().ok()?)
-        .ok()
-        .flatten()
-}
-
-fn save_cache(cached: &CachedContext, verbose: bool) {
-    let Ok(path) = cache_path() else {
-        return;
-    };
-    match meta_core::store::write_atomic(&path, cached) {
-        Ok(()) if verbose => eprintln!("Saved context cache to {}", escape_path(&path)),
-        Ok(()) => {}
-        Err(e) if verbose => eprintln!("Failed to write context cache: {e:#}"),
-        Err(_) => {}
-    }
-}
-
-fn is_cache_valid(cached: &CachedContext, current_root: &PathBuf) -> bool {
-    // Check workspace root matches
-    if cached.workspace_root != *current_root {
-        return false;
-    }
-
-    // Check TTL
-    let elapsed = match SystemTime::now().duration_since(cached.timestamp) {
-        Ok(e) => e,
-        Err(_) => return false,
-    };
-
-    if elapsed >= Duration::from_secs(CACHE_TTL_SECONDS) {
-        return false;
-    }
-
-    // Check if git state changed in any repo
-    // If .git/HEAD or branch refs were modified after cache timestamp, invalidate
-    for repo in &cached.context.repos {
-        let repo_path = current_root.join(&repo.path);
-        let git_dir = repo_path.join(".git");
-
-        // Check .git/HEAD modification time
-        if let Ok(head_meta) = std::fs::metadata(git_dir.join("HEAD")) {
-            if let Ok(head_mtime) = head_meta.modified() {
-                if head_mtime > cached.timestamp {
-                    return false; // HEAD changed, invalidate
-                }
-            }
-        }
-
-        // Check branch ref file if we know the branch
-        if let Some(ref branch) = repo.branch {
-            let ref_path = git_dir.join("refs").join("heads").join(branch);
-            if let Ok(ref_meta) = std::fs::metadata(&ref_path) {
-                if let Ok(ref_mtime) = ref_meta.modified() {
-                    if ref_mtime > cached.timestamp {
-                        return false; // Branch ref changed, invalidate
-                    }
-                }
-            }
-        }
-    }
-
-    true
-}
+use meta_core::git::{GitUrl, Operation, RepoStatus};
 
 // ── Public API ──────────────────────────────────────────
 
@@ -105,8 +23,6 @@ fn is_cache_valid(cached: &CachedContext, current_root: &PathBuf) -> bool {
 pub fn handle_context(
     json: bool,
     no_status: bool,
-    no_cache: bool,
-    mode: meta_core::ExecutionMode,
     verbose: bool,
     start: &Path,
     filters: &Filters,
@@ -114,28 +30,6 @@ pub fn handle_context(
     let workspace = config::Workspace::find(start, None)?
         .ok_or_else(|| anyhow::anyhow!("Not a meta workspace (no .meta.yaml found)"))?;
     let meta_dir = workspace.dir.clone();
-    // The cache holds the whole workspace, so a selection neither reads nor
-    // writes it
-    let no_cache = no_cache || !filters.is_empty();
-
-    // Try cache if not bypassed
-    if !no_cache && !no_status {
-        if let Some(cached) = load_cache() {
-            if is_cache_valid(&cached, &meta_dir) {
-                if verbose {
-                    eprintln!("Using cached context (age < {CACHE_TTL_SECONDS}s)");
-                }
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&cached.context)?);
-                } else {
-                    print!("{}", format_markdown(&cached.context));
-                }
-                return Ok(());
-            } else if verbose {
-                eprintln!("Cache expired or invalid, regenerating...");
-            }
-        }
-    }
 
     let workspace_name = meta_dir
         .file_name()
@@ -171,12 +65,25 @@ pub fn handle_context(
             .map(|p| {
                 let mut ctx = RepoContext::from_project(p);
                 let repo_path = meta_dir.join(&p.path);
-                match RepoStatus::read(&repo_path) {
-                    Ok(status) => {
-                        ctx.branch = status.branch.clone();
+                let read = |dir| anyhow::Ok((RepoStatus::read(dir)?, Operation::read(dir)?));
+                match read(&repo_path) {
+                    Ok((status, operation)) => {
                         ctx.dirty = Some(status.is_dirty());
                         ctx.modified_count = Some(status.entries.len());
+                        ctx.untracked_count = Some(status.untracked_count());
+                        ctx.detached = Some(status.branch.is_none());
+                        ctx.upstream_gone =
+                            status.upstream.is_some().then(|| status.upstream_gone());
+                        if let Some(op) = operation {
+                            ctx.operation = Some(op.name());
+                            if let Operation::Rebase { branch } = op {
+                                ctx.rebasing = branch;
+                            }
+                        }
                         (ctx.ahead, ctx.behind) = status.ahead_behind.unzip();
+                        ctx.head = status.oid;
+                        ctx.upstream = status.upstream;
+                        ctx.branch = status.branch;
                     }
                     // a work tree git refuses (`core.bare=true`): its refs,
                     // and no word on its changes
@@ -205,17 +112,6 @@ pub fn handle_context(
         dependencies,
     };
 
-    // Save to cache (only if status was collected, the cache wasn't
-    // bypassed and this is no preview)
-    if !no_cache && !no_status && !mode.is_preview() {
-        let cached = CachedContext {
-            context: ctx.clone(),
-            timestamp: SystemTime::now(),
-            workspace_root: meta_dir,
-        };
-        save_cache(&cached, verbose);
-    }
-
     if json {
         println!("{}", serde_json::to_string_pretty(&ctx)?);
     } else {
@@ -227,7 +123,7 @@ pub fn handle_context(
 
 // ── Types ───────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct WorkspaceContext {
     pub name: String,
     pub description: String,
@@ -238,13 +134,13 @@ pub struct WorkspaceContext {
     pub dependencies: Option<HashMap<String, Vec<String>>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct CommandRef {
     pub command: String,
     pub description: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct RepoContext {
     pub name: String,
     pub path: String,
@@ -253,10 +149,34 @@ pub struct RepoContext {
     pub repo: Option<GitUrl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// Whether HEAD names a commit rather than a branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detached: Option<bool>,
+    /// The commit HEAD names; absent before the first commit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    /// A git operation stopped half-way: `rebase`, `am`, `merge`,
+    /// `cherry-pick`, `revert` or `bisect`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<&'static str>,
+    /// The branch a stopped rebase is rebasing (HEAD is detached meanwhile).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rebasing: Option<String>,
+    /// Anything changed or untracked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dirty: Option<bool>,
+    /// The paths changed or untracked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modified_count: Option<usize>,
+    /// Of those, the untracked ones.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub untracked_count: Option<usize>,
+    /// The branch's upstream (`origin/main`); absent without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    /// Whether that upstream branch no longer exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_gone: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ahead: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -272,8 +192,15 @@ impl RepoContext {
             path: p.path.clone(),
             repo: p.repo.clone(),
             branch: None,
+            detached: None,
+            head: None,
+            operation: None,
+            rebasing: None,
             dirty: None,
             modified_count: None,
+            untracked_count: None,
+            upstream: None,
+            upstream_gone: None,
             ahead: None,
             behind: None,
             tags: p.tags.clone(),
@@ -357,7 +284,10 @@ pub fn format_markdown(ctx: &WorkspaceContext) -> String {
     out.push_str("\n\n");
 
     // Repo table
-    let has_status = ctx.repos.iter().any(|r| r.branch.is_some());
+    let has_status = ctx
+        .repos
+        .iter()
+        .any(|r| r.branch.is_some() || r.dirty.is_some());
     let has_tags = ctx.repos.iter().any(|r| !r.tags.is_empty());
 
     if has_status && has_tags {
@@ -368,7 +298,7 @@ pub fn format_markdown(ctx: &WorkspaceContext) -> String {
             out.push_str(&format!(
                 "| {} | {} | {} | {} |\n",
                 md(&r.name),
-                md(r.branch.as_deref().unwrap_or("-")),
+                md(&format_branch(r)),
                 format_status(r),
                 md_list(&r.tags),
             ));
@@ -381,7 +311,7 @@ pub fn format_markdown(ctx: &WorkspaceContext) -> String {
             out.push_str(&format!(
                 "| {} | {} | {} |\n",
                 md(&r.name),
-                md(r.branch.as_deref().unwrap_or("-")),
+                md(&format_branch(r)),
                 format_status(r),
             ));
         }
@@ -424,13 +354,49 @@ pub fn format_markdown(ctx: &WorkspaceContext) -> String {
     out
 }
 
-fn format_status(r: &RepoContext) -> String {
-    let base = match (r.dirty, r.modified_count) {
-        (Some(false), _) => "clean".to_string(),
-        (Some(true), Some(n)) => format!("{n} modified"),
-        (Some(true), None) => "dirty".to_string(),
+/// The branch, the branch a stopped rebase is rebasing, or the commit a
+/// detached HEAD names.
+fn format_branch(r: &RepoContext) -> String {
+    match (&r.branch, &r.rebasing, r.detached, &r.head) {
+        (Some(branch), ..) => branch.clone(),
+        (None, Some(branch), ..) => format!("(rebasing {branch})"),
+        (None, None, Some(true), Some(head)) => {
+            format!("(detached {})", head.get(..7).unwrap_or(head))
+        }
         _ => "-".to_string(),
-    };
+    }
+}
+
+/// What a person must know before acting in the repo: an operation stopped
+/// half-way, its changes, and how it stands against its upstream.
+fn format_status(r: &RepoContext) -> String {
+    let mut parts = Vec::new();
+    if let Some(op) = &r.operation {
+        parts.push(format!("{op} in progress"));
+    }
+    match (r.dirty, r.modified_count, r.untracked_count) {
+        (None, _, _) => parts.push("-".to_string()),
+        (Some(false), _, _) => parts.push("clean".to_string()),
+        (Some(true), Some(all), untracked) => {
+            let untracked = untracked.unwrap_or(0);
+            let modified = all.saturating_sub(untracked);
+            if modified > 0 {
+                parts.push(format!("{modified} modified"));
+            }
+            if untracked > 0 {
+                parts.push(format!("{untracked} untracked"));
+            }
+        }
+        (Some(true), None, _) => parts.push("dirty".to_string()),
+    }
+    if r.detached == Some(false) {
+        if r.upstream.is_none() {
+            parts.push("no upstream".to_string());
+        } else if r.upstream_gone == Some(true) {
+            parts.push("upstream gone".to_string());
+        }
+    }
+    let base = parts.join(", ");
 
     // Add ahead/behind indicator
     match (r.ahead, r.behind) {
@@ -473,8 +439,18 @@ mod tests {
             path: name.to_string(),
             repo: Some(format!("git@github.com:org/{name}.git").into()),
             branch: branch.map(|s| s.to_string()),
+            // a status read: a branch with its upstream there
+            detached: dirty.map(|_| branch.is_none()),
+            head: dirty.map(|_| "0123456789abcdef".to_string()),
+            operation: None,
+            rebasing: None,
             dirty,
             modified_count: modified,
+            untracked_count: modified.map(|_| 0),
+            upstream: branch
+                .filter(|_| dirty.is_some())
+                .map(|b| format!("origin/{b}")),
+            upstream_gone: branch.filter(|_| dirty.is_some()).map(|_| false),
             ahead: None,
             behind: None,
             tags: tags.into_iter().map(|s| s.to_string()).collect(),
@@ -483,8 +459,8 @@ mod tests {
 
     #[test]
     fn markdown_escapes_untrusted_values() {
-        // Values from git, the filesystem or an old context cache can carry
-        // terminal escapes or break the table that agents read.
+        // Values from git or the filesystem can carry terminal escapes or
+        // break the table that agents read.
         let mut ctx = make_ctx(
             vec![make_repo(
                 "z\u{1b}[2J",
@@ -592,6 +568,31 @@ mod tests {
         assert_eq!(format_status(&r), "clean");
     }
 
+    #[test]
+    fn status_tells_untracked_from_modified() {
+        let mut r = make_repo("x", Some("main"), Some(true), Some(3), vec![]);
+        r.untracked_count = Some(1);
+        assert_eq!(format_status(&r), "2 modified, 1 untracked");
+        r.modified_count = Some(1);
+        assert_eq!(format_status(&r), "1 untracked");
+    }
+
+    #[test]
+    fn status_names_a_gone_upstream_before_the_counts() {
+        let mut r = make_repo("x", Some("topic"), Some(false), Some(0), vec![]);
+        r.upstream_gone = Some(true);
+        r.ahead = Some(2);
+        assert_eq!(format_status(&r), "clean, upstream gone (↑2)");
+    }
+
+    #[test]
+    fn an_unread_work_tree_keeps_its_counts() {
+        // a checkout git won't read (`core.bare=true`): its refs only
+        let mut r = make_repo("x", Some("main"), None, None, vec![]);
+        r.ahead = Some(2);
+        assert_eq!(format_status(&r), "- (↑2)");
+    }
+
     // ── format_markdown ─────────────────────────────────
 
     #[test]
@@ -635,6 +636,16 @@ mod tests {
         let md = format_markdown(&ctx);
         assert!(md.contains("| Tags |"));
         assert!(md.contains("| backend |"));
+    }
+
+    #[test]
+    fn markdown_shows_status_when_every_repo_is_detached() {
+        let ctx = make_ctx(
+            vec![make_repo("api", None, Some(false), Some(0), vec![])],
+            None,
+        );
+        let md = format_markdown(&ctx);
+        assert!(md.contains("| api | (detached 0123456) | clean |"), "{md}");
     }
 
     #[test]
@@ -734,180 +745,5 @@ mod tests {
         let json = serde_json::to_string(&ctx).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["dependencies"]["api"][0], "core");
-    }
-
-    // ── is_cache_valid ──────────────────────────────────
-
-    #[test]
-    fn cache_valid_within_ttl_no_git_changes() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let workspace_root = temp_dir.path().to_path_buf();
-
-        // Create a cached context with timestamp 10 seconds ago
-        let timestamp = SystemTime::now() - Duration::from_secs(10);
-        let cached = CachedContext {
-            context: make_ctx(vec![], None),
-            timestamp,
-            workspace_root: workspace_root.clone(),
-        };
-
-        // Should be valid (within 30s TTL, no repos to check)
-        assert!(is_cache_valid(&cached, &workspace_root));
-    }
-
-    #[test]
-    fn cache_invalid_when_ttl_expired() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let workspace_root = temp_dir.path().to_path_buf();
-
-        // Create a cached context with timestamp 31 seconds ago (beyond TTL)
-        let timestamp = SystemTime::now() - Duration::from_secs(31);
-        let cached = CachedContext {
-            context: make_ctx(vec![], None),
-            timestamp,
-            workspace_root: workspace_root.clone(),
-        };
-
-        // Should be invalid (TTL expired)
-        assert!(!is_cache_valid(&cached, &workspace_root));
-    }
-
-    #[test]
-    fn cache_invalid_when_workspace_root_differs() {
-        let temp_dir1 = tempfile::tempdir().unwrap();
-        let temp_dir2 = tempfile::tempdir().unwrap();
-
-        let timestamp = SystemTime::now() - Duration::from_secs(10);
-        let cached = CachedContext {
-            context: make_ctx(vec![], None),
-            timestamp,
-            workspace_root: temp_dir1.path().to_path_buf(),
-        };
-
-        // Different workspace root should invalidate
-        assert!(!is_cache_valid(&cached, &temp_dir2.path().to_path_buf()));
-    }
-
-    #[test]
-    fn cache_invalid_when_git_head_changed() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let workspace_root = temp_dir.path().to_path_buf();
-
-        // Create a repo directory with .git/HEAD
-        let repo_path = workspace_root.join("test_repo");
-        std::fs::create_dir_all(&repo_path).unwrap();
-        let git_dir = repo_path.join(".git");
-        std::fs::create_dir_all(&git_dir).unwrap();
-
-        // Create .git/HEAD with old timestamp
-        let head_file = git_dir.join("HEAD");
-        std::fs::write(&head_file, "ref: refs/heads/main\n").unwrap();
-
-        // Cache timestamp before HEAD file
-        let cache_time = head_file.metadata().unwrap().modified().unwrap() - Duration::from_secs(5);
-
-        let mut repo = make_repo("test_repo", Some("main"), Some(false), Some(0), vec![]);
-        repo.path = "test_repo".to_string();
-
-        let cached = CachedContext {
-            context: make_ctx(vec![repo], None),
-            timestamp: cache_time,
-            workspace_root: workspace_root.clone(),
-        };
-
-        // Should be invalid (HEAD modified after cache timestamp)
-        assert!(!is_cache_valid(&cached, &workspace_root));
-    }
-
-    #[test]
-    fn cache_invalid_when_branch_ref_changed() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let workspace_root = temp_dir.path().to_path_buf();
-
-        // Create a repo directory with .git/refs/heads/main
-        let repo_path = workspace_root.join("test_repo");
-        std::fs::create_dir_all(&repo_path).unwrap();
-        let git_dir = repo_path.join(".git");
-        let refs_dir = git_dir.join("refs").join("heads");
-        std::fs::create_dir_all(&refs_dir).unwrap();
-
-        // Create branch ref with current timestamp
-        let main_ref = refs_dir.join("main");
-        std::fs::write(&main_ref, "abc123def456\n").unwrap();
-
-        // Cache timestamp before ref file
-        let cache_time = main_ref.metadata().unwrap().modified().unwrap() - Duration::from_secs(5);
-
-        let mut repo = make_repo("test_repo", Some("main"), Some(false), Some(0), vec![]);
-        repo.path = "test_repo".to_string();
-
-        let cached = CachedContext {
-            context: make_ctx(vec![repo], None),
-            timestamp: cache_time,
-            workspace_root: workspace_root.clone(),
-        };
-
-        // Should be invalid (branch ref modified after cache timestamp)
-        assert!(!is_cache_valid(&cached, &workspace_root));
-    }
-
-    #[test]
-    fn cache_valid_when_git_files_unchanged() {
-        use std::thread;
-
-        let temp_dir = tempfile::tempdir().unwrap();
-        let workspace_root = temp_dir.path().to_path_buf();
-
-        // Create a repo directory with .git/HEAD and branch ref
-        let repo_path = workspace_root.join("test_repo");
-        std::fs::create_dir_all(&repo_path).unwrap();
-        let git_dir = repo_path.join(".git");
-        let refs_dir = git_dir.join("refs").join("heads");
-        std::fs::create_dir_all(&refs_dir).unwrap();
-
-        // Create files
-        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        std::fs::write(refs_dir.join("main"), "abc123def456\n").unwrap();
-
-        // Small delay to ensure filesystem timestamp resolution
-        thread::sleep(Duration::from_millis(10));
-
-        // Cache timestamp AFTER files were created
-        let cache_time = SystemTime::now();
-
-        let mut repo = make_repo("test_repo", Some("main"), Some(false), Some(0), vec![]);
-        repo.path = "test_repo".to_string();
-
-        let cached = CachedContext {
-            context: make_ctx(vec![repo], None),
-            timestamp: cache_time,
-            workspace_root: workspace_root.clone(),
-        };
-
-        // Should be valid (files haven't changed since cache)
-        assert!(is_cache_valid(&cached, &workspace_root));
-    }
-
-    #[test]
-    fn cache_valid_when_git_dir_missing() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let workspace_root = temp_dir.path().to_path_buf();
-
-        // Create repo path but no .git directory
-        let repo_path = workspace_root.join("test_repo");
-        std::fs::create_dir_all(&repo_path).unwrap();
-
-        let timestamp = SystemTime::now() - Duration::from_secs(10);
-        let mut repo = make_repo("test_repo", Some("main"), Some(false), Some(0), vec![]);
-        repo.path = "test_repo".to_string();
-
-        let cached = CachedContext {
-            context: make_ctx(vec![repo], None),
-            timestamp,
-            workspace_root: workspace_root.clone(),
-        };
-
-        // Should be valid (missing .git is not an invalidation reason)
-        assert!(is_cache_valid(&cached, &workspace_root));
     }
 }

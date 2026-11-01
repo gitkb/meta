@@ -18,6 +18,147 @@ pub struct RepoStatus {
     pub entries: Vec<StatusEntry>,
 }
 
+/// A git operation stopped half-way (on a conflict, or to edit), waiting to
+/// be continued or aborted, as `git status` tells it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Operation {
+    /// `branch`: the branch being rebased; `None` for a detached HEAD.
+    Rebase {
+        branch: Option<String>,
+    },
+    Am,
+    Merge,
+    CherryPick,
+    Revert,
+    Bisect,
+}
+
+impl Operation {
+    /// The command's name, as git spells it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Rebase { .. } => "rebase",
+            Self::Am => "am",
+            Self::Merge => "merge",
+            Self::CherryPick => "cherry-pick",
+            Self::Revert => "revert",
+            Self::Bisect => "bisect",
+        }
+    }
+
+    /// The operation under way in the checkout at `dir`, read the way
+    /// `git status` reads it (one more git process, three in a reftable
+    /// repository, so only callers that show it ask). git names the files
+    /// in the checkout's own git directory (a linked worktree's, never the
+    /// one it shares); the refs git keeps for an operation are read by
+    /// their exact names, never resolved as revisions, which a branch or
+    /// tag of the same name would answer. A rebase comes first: the picks
+    /// and merges it stops on are its own.
+    pub fn read(dir: &Path) -> anyhow::Result<Option<Self>> {
+        // git before 2.45 knows no `--show-ref-format`, echoes it, and has
+        // only the files backend
+        let out = super::run(
+            dir,
+            [
+                "rev-parse",
+                "--show-ref-format",
+                "--git-path",
+                "rebase-merge",
+                "--git-path",
+                "rebase-apply",
+                "--git-path",
+                "sequencer/todo",
+                "--git-path",
+                "BISECT_LOG",
+                "--git-path",
+                "MERGE_HEAD",
+                "--git-path",
+                "CHERRY_PICK_HEAD",
+                "--git-path",
+                "REVERT_HEAD",
+            ],
+        )?;
+        let lines: Vec<&str> = out.lines().collect();
+        let &[format, rebase_merge, rebase_apply, todo, bisect, merge_head, cherry_pick_head, revert_head] =
+            lines.as_slice()
+        else {
+            anyhow::bail!(
+                "git rev-parse --git-path in {} printed '{}'",
+                crate::display::escape_path(dir),
+                crate::display::escape(&out)
+            );
+        };
+        let exists = |path: &Path| path.symlink_metadata().is_ok();
+        for rebase in [rebase_merge, rebase_apply].map(|p| dir.join(p)) {
+            if !exists(&rebase) {
+                continue;
+            }
+            if exists(&rebase.join("applying")) {
+                return Ok(Some(Self::Am));
+            }
+            let branch = std::fs::read_to_string(rebase.join("head-name"))
+                .ok()
+                .and_then(|name| {
+                    name.trim_end()
+                        .strip_prefix("refs/heads/")
+                        .map(str::to_string)
+                });
+            return Ok(Some(Self::Rebase { branch }));
+        }
+        // MERGE_HEAD is a file in every ref store; the others are in a
+        // reftable one when the repository has one
+        let files = matches!(format, "files" | "--show-ref-format");
+        let head = |name: &str, path: &str| {
+            if files || name == "MERGE_HEAD" {
+                Ok(exists(&dir.join(path)))
+            } else {
+                ref_exists(dir, name)
+            }
+        };
+        for (name, path, operation) in [
+            ("MERGE_HEAD", merge_head, Self::Merge),
+            ("CHERRY_PICK_HEAD", cherry_pick_head, Self::CherryPick),
+            ("REVERT_HEAD", revert_head, Self::Revert),
+        ] {
+            if head(name, path)? {
+                return Ok(Some(operation));
+            }
+        }
+        // a cherry-pick or revert of several commits whose stopped one was
+        // committed by hand leaves only its todo list
+        let sequencer = || {
+            let todo = std::fs::read_to_string(dir.join(todo)).ok()?;
+            match todo.split_whitespace().next()? {
+                "pick" | "p" => Some(Self::CherryPick),
+                "revert" => Some(Self::Revert),
+                _ => None,
+            }
+        };
+        Ok(sequencer().or_else(|| exists(&dir.join(bisect)).then_some(Self::Bisect)))
+    }
+}
+
+/// Whether the ref `name` (a full name, such as `CHERRY_PICK_HEAD`) is
+/// there: `git show-ref --exists`, which exits 2 for one that isn't.
+fn ref_exists(dir: &Path, name: &str) -> anyhow::Result<bool> {
+    let output = crate::children::output(super::git(dir).args(["show-ref", "--exists", name]))
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Cannot run git show-ref in {}: {e}",
+                crate::display::escape_path(dir)
+            )
+        })?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(2) => Ok(false),
+        _ => anyhow::bail!(
+            "git show-ref --exists {name} failed in {}: {}",
+            crate::display::escape_path(dir),
+            crate::display::escape(String::from_utf8_lossy(&output.stderr).trim())
+        ),
+    }
+}
+
 /// One path `git status` lists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StatusEntry {
@@ -83,18 +224,25 @@ impl RepoStatus {
         if crate::gitdir::common_dir(dir)?.is_none() {
             return Ok(None);
         }
-        let upstream = super::lookup(
-            dir,
-            [
-                "rev-parse",
-                "--abbrev-ref",
-                "--verify",
-                "--quiet",
-                "@{upstream}",
-            ],
-        )?;
+        let branch = super::current_branch(dir)?;
+        // the upstream as configured, there or gone: `@{upstream}` doesn't
+        // resolve a gone one
+        let upstream = match &branch {
+            Some(branch) => super::lookup(
+                dir,
+                [
+                    "for-each-ref",
+                    "--format=%(upstream:short)",
+                    &format!("refs/heads/{branch}"),
+                ],
+            )?,
+            None => None,
+        };
         let ahead_behind = match upstream {
-            Some(_) => {
+            Some(_)
+                if super::lookup(dir, ["rev-parse", "--verify", "--quiet", "@{upstream}"])?
+                    .is_some() =>
+            {
                 let counts = super::run(
                     dir,
                     ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
@@ -110,10 +258,10 @@ impl RepoStatus {
                     )
                 })?)
             }
-            None => None,
+            _ => None,
         };
         Ok(Some(Self {
-            branch: super::current_branch(dir)?,
+            branch,
             oid: super::lookup(dir, ["rev-parse", "--verify", "--quiet", "HEAD"])?,
             upstream,
             ahead_behind,
@@ -186,6 +334,14 @@ impl RepoStatus {
         !self.entries.is_empty()
     }
 
+    /// Whether the branch's upstream is set but its branch isn't there
+    /// (deleted on the remote and pruned, or never fetched): `git status`
+    /// then has no counts for a branch with commits, and `git status -sb`
+    /// says `[gone]`.
+    pub fn upstream_gone(&self) -> bool {
+        self.upstream.is_some() && self.oid.is_some() && self.ahead_behind.is_none()
+    }
+
     /// The changed tracked paths (for a rename, the new one).
     pub fn changed_paths(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().filter_map(|e| match e {
@@ -230,23 +386,46 @@ mod tests {
     }
 
     fn commit(dir: &Path, file: &str) {
-        std::fs::write(dir.join(file), file).unwrap();
+        commit_text(dir, file, file);
+    }
+
+    fn commit_text(dir: &Path, file: &str, text: &str) {
+        std::fs::write(dir.join(file), text).unwrap();
         run(dir, ["add", file]).unwrap();
-        run(
-            dir,
-            [
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@example.com",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "-qm",
-                file,
-            ],
-        )
-        .unwrap();
+        as_t(dir, &["commit", "-qm", text]).unwrap();
+    }
+
+    /// git, committing as `t`
+    fn as_t(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
+        let id = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+        ];
+        run(dir, id.iter().chain(args))
+    }
+
+    /// `main` and `side` each change `f` from `base`, so bringing one onto
+    /// the other stops on a conflict
+    fn conflicting() -> tempfile::TempDir {
+        let dir = repo();
+        make_conflicting(dir.path());
+        dir
+    }
+
+    fn make_conflicting(dir: &Path) {
+        commit_text(dir, "f", "base");
+        run(dir, ["switch", "-qc", "side"]).unwrap();
+        commit_text(dir, "f", "side");
+        run(dir, ["switch", "-q", "main"]).unwrap();
+        commit_text(dir, "f", "main");
+    }
+
+    fn operation(dir: &Path) -> Option<Operation> {
+        Operation::read(dir).unwrap()
     }
 
     #[test]
@@ -349,6 +528,11 @@ mod tests {
         assert_eq!(status.upstream.as_deref(), Some("origin/main"));
         assert_eq!(status.ahead_behind, Some((0, 1)));
         assert!(!status.is_dirty());
+        // an upstream that isn't there is named, and gone
+        run(&bare, ["config", "branch.main.merge", "refs/heads/gone"]).unwrap();
+        let status = RepoStatus::read(&bare).unwrap();
+        assert_eq!(status.upstream.as_deref(), Some("origin/gone"));
+        assert!(status.upstream_gone());
         // what isn't a repository is still an error, even inside one
         assert!(RepoStatus::read(dir.path()).is_err());
         let inside = upstream.path().join("not-cloned");
@@ -382,5 +566,151 @@ mod tests {
         commit(dir.path(), "a");
         run(dir.path(), ["checkout", "-q", "--detach"]).unwrap();
         assert_eq!(RepoStatus::read(dir.path()).unwrap().branch, None);
+    }
+
+    #[test]
+    fn each_stopped_operation_is_named() {
+        let dir = conflicting();
+        let dir = dir.path();
+        assert_eq!(operation(dir), None);
+        for (args, stopped, abort) in [
+            (&["merge", "side"][..], Operation::Merge, "merge"),
+            (
+                &["cherry-pick", "side"],
+                Operation::CherryPick,
+                "cherry-pick",
+            ),
+            // undoing the commit that made `f`, which `main` changed since
+            (
+                &["revert", "--no-edit", "HEAD~"],
+                Operation::Revert,
+                "revert",
+            ),
+        ] {
+            assert!(as_t(dir, args).is_err(), "{args:?} stopped");
+            assert_eq!(operation(dir), Some(stopped), "{args:?}");
+            as_t(dir, &[abort, "--abort"]).unwrap();
+        }
+
+        let dir = conflicting();
+        let dir = dir.path();
+        run(dir, ["switch", "-q", "side"]).unwrap();
+        assert!(as_t(dir, &["rebase", "main"]).is_err());
+        assert_eq!(RepoStatus::read(dir).unwrap().branch, None);
+        assert_eq!(
+            operation(dir),
+            Some(Operation::Rebase {
+                branch: Some("side".to_string())
+            })
+        );
+        as_t(dir, &["rebase", "--abort"]).unwrap();
+
+        let patch = run(dir, ["format-patch", "-1", "--stdout", "side"]).unwrap();
+        std::fs::write(dir.join("side.patch"), patch + "\n").unwrap();
+        run(dir, ["switch", "-q", "main"]).unwrap();
+        assert!(as_t(dir, &["am", "side.patch"]).is_err());
+        assert_eq!(operation(dir), Some(Operation::Am));
+        as_t(dir, &["am", "--abort"]).unwrap();
+
+        run(dir, ["bisect", "start"]).unwrap();
+        assert_eq!(operation(dir), Some(Operation::Bisect));
+        run(dir, ["bisect", "reset"]).unwrap();
+        assert_eq!(operation(dir), None);
+        // a branch or tag named like git's state is no operation, and
+        // hides none
+        run(dir, ["tag", "MERGE_HEAD", "side"]).unwrap();
+        run(dir, ["branch", "REVERT_HEAD"]).unwrap();
+        assert_eq!(operation(dir), None);
+        assert!(as_t(dir, &["cherry-pick", "side"]).is_err());
+        assert_eq!(operation(dir), Some(Operation::CherryPick));
+        as_t(dir, &["cherry-pick", "--abort"]).unwrap();
+        assert!(as_t(dir, &["merge", "side"]).is_err());
+        assert_eq!(operation(dir), Some(Operation::Merge));
+    }
+
+    #[test]
+    fn a_cherry_pick_sequence_stays_named_after_its_stopped_pick_is_committed() {
+        let dir = conflicting();
+        let dir = dir.path();
+        run(dir, ["switch", "-q", "side"]).unwrap();
+        commit(dir, "g");
+        run(dir, ["switch", "-q", "main"]).unwrap();
+        assert!(as_t(dir, &["cherry-pick", "main..side"]).is_err());
+        std::fs::write(dir.join("f"), "resolved").unwrap();
+        run(dir, ["add", "f"]).unwrap();
+        // committing by hand ends the pick, not the sequence
+        as_t(dir, &["commit", "-qm", "resolved"]).unwrap();
+        assert_eq!(operation(dir), Some(Operation::CherryPick));
+    }
+
+    #[test]
+    fn a_stopped_cherry_pick_is_found_in_a_reftable_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        // git before 2.45 has no reftable: nothing to check there
+        if run(
+            dir.path(),
+            ["init", "-q", "-b", "main", "--ref-format=reftable"],
+        )
+        .is_err()
+        {
+            return;
+        }
+        make_conflicting(dir.path());
+        assert!(as_t(dir.path(), &["cherry-pick", "side"]).is_err());
+        assert!(!dir.path().join(".git/CHERRY_PICK_HEAD").exists());
+        // read by its name, never as a revision a tag also answers
+        run(dir.path(), ["tag", "REVERT_HEAD"]).unwrap();
+        assert_eq!(operation(dir.path()), Some(Operation::CherryPick));
+        as_t(dir.path(), &["cherry-pick", "--abort"]).unwrap();
+        assert_eq!(operation(dir.path()), None);
+    }
+
+    #[test]
+    fn an_operation_belongs_to_the_worktree_it_stopped_in() {
+        let dir = conflicting();
+        let linked = dir.path().join("linked");
+        run(
+            dir.path(),
+            ["worktree", "add", "-q", "-b", "other", "linked"],
+        )
+        .unwrap();
+        assert!(as_t(&linked, &["merge", "side"]).is_err());
+        assert_eq!(operation(&linked), Some(Operation::Merge));
+        assert_eq!(operation(dir.path()), None);
+    }
+
+    #[test]
+    fn an_upstream_is_gone_only_when_its_branch_is() {
+        let upstream = repo();
+        commit(upstream.path(), "a");
+        run(upstream.path(), ["branch", "topic"]).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let clone = dir.path().join("clone");
+        run(
+            dir.path(),
+            [
+                "clone".as_ref(),
+                "-q".as_ref(),
+                upstream.path().as_os_str(),
+                clone.as_os_str(),
+            ],
+        )
+        .unwrap();
+        let read = || RepoStatus::read(&clone).unwrap();
+        assert!(!read().upstream_gone());
+        run(&clone, ["switch", "-q", "topic"]).unwrap();
+        run(upstream.path(), ["branch", "-qD", "topic"]).unwrap();
+        run(&clone, ["fetch", "-q", "--prune"]).unwrap();
+        let status = read();
+        assert_eq!(status.upstream.as_deref(), Some("origin/topic"));
+        assert!(status.upstream_gone());
+        // a branch with no commit yet has no counts either, and its
+        // upstream is there
+        run(&clone, ["switch", "-q", "--orphan", "fresh"]).unwrap();
+        run(&clone, ["config", "branch.fresh.remote", "origin"]).unwrap();
+        run(&clone, ["config", "branch.fresh.merge", "refs/heads/main"]).unwrap();
+        let status = read();
+        assert_eq!(status.upstream.as_deref(), Some("origin/main"));
+        assert!(!status.upstream_gone());
     }
 }

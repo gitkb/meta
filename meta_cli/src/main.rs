@@ -197,10 +197,6 @@ struct ContextArgs {
     #[arg(long)]
     no_status: bool,
 
-    /// Bypass cache and force fresh context generation
-    #[arg(long)]
-    no_cache: bool,
-
     /// Output the context as JSON
     #[arg(long)]
     json: bool,
@@ -445,8 +441,6 @@ fn run_cli() -> Result<()> {
         Some(Commands::Context(args)) => meta_cli::context::handle_context(
             cli.json || args.json,
             args.no_status,
-            args.no_cache,
-            cli.mode(),
             cli.verbose,
             &cli.start_dir()?,
             &cli.filters(),

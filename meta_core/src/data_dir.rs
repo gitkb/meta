@@ -1,8 +1,8 @@
 //! `~/.meta/` directory management.
 //!
-//! Provides functions to locate, create, and manage namespaced data files
-//! within the meta data directory. Any crate/plugin can use this module to
-//! store data at `~/.meta/<namespace>.json` or `~/.meta/<namespace>/`.
+//! Provides functions to locate and create namespaced folders within the
+//! meta data directory. Any crate/plugin can use this module to store data
+//! in `~/.meta/<namespace>/`.
 //!
 //! The directory holds per-user state (stores, plugins), so meta creates
 //! it, and its subdirectories, private to the user (0700 on Unix).
@@ -21,18 +21,6 @@ pub fn ensure_meta_dir() -> Result<PathBuf> {
 fn ensure_meta_dir_at(dir: PathBuf) -> Result<PathBuf> {
     create_private_dir(&dir)?;
     Ok(dir)
-}
-
-/// Get the path for a namespaced data file: `~/.meta/<namespace>.json`.
-///
-/// The file may or may not exist. Use `store::read` to read with a default,
-/// or check existence manually.
-pub fn data_file(namespace: &str) -> Result<PathBuf> {
-    Ok(data_file_at(&crate::meta_dir()?, namespace))
-}
-
-fn data_file_at(dir: &Path, namespace: &str) -> PathBuf {
-    dir.join(format!("{namespace}.json"))
 }
 
 /// Get the path for a namespaced subdirectory: `~/.meta/<namespace>/`.
@@ -60,13 +48,6 @@ pub fn create_private_dir(dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_data_file_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = data_file_at(tmp.path(), "worktree");
-        assert_eq!(path, tmp.path().join("worktree.json"));
-    }
 
     #[test]
     fn test_ensure_meta_dir() {

@@ -79,7 +79,8 @@ exist.
 3. Defaults: the current directory and its child directories, without `.git`
 
 Aliases also come from `~/.looprc`: its `aliases`, then the config file's,
-which win for the same name. Nothing else is read from `~/.looprc`.
+which win for the same name. Only its aliases are used, but the whole file
+must be valid.
 
 ### Fields
 
@@ -174,7 +175,7 @@ Shows additional execution details.
 loop -s npm test
 ```
 
-Only shows final summary.
+Prints nothing; the exit status says whether every command succeeded.
 
 ## Error Handling
 

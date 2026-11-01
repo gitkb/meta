@@ -25,7 +25,7 @@ fn main() {
     );
     adapted.insert(
         "update".to_string(),
-        "Pull existing repos and clone any missing repos".to_string(),
+        "Fast-forward cloned repos (git pull --ff-only) and clone missing ones".to_string(),
     );
     adapted.insert(
         "worktree".to_string(),

@@ -71,7 +71,7 @@ projects:
 EOF
     meta_without_token --dry-run git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"git clone https://***@example.invalid/org/lib.git"* ]] || false
+    [[ "$output" == *"git clone -- 'https://***@example.invalid/org/lib.git'"* ]] || false
     meta_without_token project check --json
     [[ "$output" == *'"repo": "https://***@example.invalid/org/lib.git"'* ]] || false
     meta_without_token git update
@@ -90,14 +90,19 @@ EOF
     meta_without_token project list --json
     [[ "$output" == *'"repo": "https://***@example.invalid/org/svc.git"'* ]] || false
 
-    # a checkout of another repository: the fix can't print the hidden URL
-    git -C svc remote set-url origin "$TEST_DIR/remotes/lib.git"
+    # a checkout from another URL: the fix can't print the hidden URL (the
+    # pull goes to the same local repo)
+    git -C svc remote set-url origin "$TEST_DIR/remotes/other.git"
     meta_without_token git update
+    [ "$status" -eq 0 ]
     [[ "$output" == *"expected: https://***@example.invalid/org/svc.git"* ]] || false
     [[ "$output" == *"remote set-url origin <the repo URL in .meta.yaml>"* ]] || false
     # a rotated token: the same URL printed twice, and why they differ
+    git config --global "url.$TEST_DIR/remotes/other.git.insteadOf" \
+        "https://alice:ghp_OLD@example.invalid/org/svc.git"
     git -C svc remote set-url origin "https://alice:ghp_OLD@example.invalid/org/svc.git"
     meta_without_token git update
+    [ "$status" -eq 0 ]
     [[ "$output" == *"actual:   https://***@example.invalid/org/svc.git"* ]] || false
     [[ "$output" == *"(they differ only in their hidden credentials)"* ]] || false
     [[ "$output" != *ghp_OLD* ]] || false
@@ -119,6 +124,9 @@ EOF
     git -C "$WS" remote add origin "https://alice:$TOKEN@example.invalid/org/ws.git"
     git clone -q "$TEST_DIR/remotes/other.git" lib
     git -C lib remote set-url origin "https://$TOKEN@example.invalid/org/other.git"
+    # which update pulls from, locally
+    git config --global "url.$TEST_DIR/remotes/other.git.insteadOf" \
+        "https://$TOKEN@example.invalid/org/other.git"
     printf 'projects:\n  lib: %s\n' "$TEST_DIR/remotes/lib.git" > .meta.yaml
     meta_without_token project list
     [ "$status" -eq 0 ]
@@ -127,6 +135,7 @@ EOF
     [ "$status" -eq 0 ]
     [ "$(jq -r .repo <<< "$output")" = "https://***@example.invalid/org/ws.git" ]
     meta_without_token git update
+    [ "$status" -eq 0 ]
     [[ "$output" == *"actual:   https://***@example.invalid/org/other.git"* ]] || false
 }
 
@@ -175,5 +184,10 @@ projects:
 EOF
     run "$META_BIN" git update
     [[ "$output" == *"SSH master for git@nohost.invalid (port 22) could not be started"* ]] || false
-    [[ "$output" == *"cloning one repository at a time"* ]]
+    [[ "$output" == *"updating one repository at a time"* ]]
+    # the same for empty folders git clones into
+    mkdir a b
+    run "$META_BIN" git update
+    [[ "$output" == *"SSH master for git@nohost.invalid (port 22) could not be started"* ]] || false
+    [[ "$output" == *"updating one repository at a time"* ]]
 }

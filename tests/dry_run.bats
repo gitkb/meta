@@ -277,7 +277,7 @@ preview() {
 
 @test "git update previews" {
     preview 0 git update
-    [[ "$output" == *"Would clone 1 missing repositories"* ]]
+    [[ "$output" == *"git clone -- git@example.invalid:org/missing.git "* ]]
 }
 
 @test "a remote git command previews without opening ssh connections" {

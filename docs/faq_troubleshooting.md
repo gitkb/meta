@@ -90,7 +90,7 @@ projects:
     tags: [backend]
 ```
 
-Then clone the missing repo:
+Then clone the missing repo (this also fast-forwards the workspace repo and every cloned repo, `git pull --ff-only`):
 
 ```bash
 meta git update

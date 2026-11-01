@@ -43,10 +43,10 @@ meta git clone <url> --depth 1
 
 ```bash
 meta git pull      # Pull every existing repo
-meta git update    # Clone repos listed in .meta.yaml that are missing locally
+meta git update    # Fast-forward cloned repos, clone the missing ones
 ```
 
-`meta git update` only clones missing repos (nested meta repos included); it does not pull existing ones. `meta --recursive git pull` also pulls nested meta repos.
+`meta git update` pulls the workspace repo first, then runs `git pull --ff-only` in each cloned repo and clones each missing one, so projects added upstream are cloned in one run. A repo git can't fast-forward is named and the command exits 1; nothing is merged or rebased. A repo on no branch, or on a branch without an upstream, is named and left alone. `meta git update -r` does the same in nested meta repos, each pulled before its `.meta.yaml` is read.
 
 ## Before Batch Operations (Critical)
 

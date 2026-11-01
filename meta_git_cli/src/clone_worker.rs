@@ -1,144 +1,160 @@
+use anyhow::Context;
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use log::debug;
-use meta_git_lib::clone_queue::{CloneQueue, CloneTask};
+use meta_core::git::GitUrl;
+use meta_git_lib::clone_queue::{CloneQueue, CloneTask, Outcome, Work};
+use std::ffi::OsString;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Clone repositories using a worker pool where each worker continuously pulls from the queue.
+/// Clone or pull `tasks` on a pool of `parallelism` threads, and each task
+/// the `.meta.yaml` of a finished one adds, until none is left.
 ///
 /// If `ssh_cmd` is provided, it's set as `GIT_SSH_COMMAND` on all spawned git subprocesses
 /// to enable SSH multiplexing without requiring `~/.ssh/config` setup.
 pub(crate) fn clone_with_queue(
-    queue: Arc<CloneQueue>,
+    queue: &CloneQueue,
+    tasks: Vec<CloneTask>,
     parallelism: usize,
     mp: &MultiProgress,
     ssh_cmd: Option<&str>,
 ) -> anyhow::Result<()> {
-    use std::sync::Condvar;
-
-    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
-        .unwrap()
-        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
-
-    // Track active workers for termination detection
-    let active_workers = Arc::new(AtomicUsize::new(0));
-    // Condition variable to signal when work might be available or workers finish
-    let work_signal = Arc::new((Mutex::new(false), Condvar::new()));
-
-    let ssh_cmd = Arc::new(ssh_cmd.map(|s| s.to_string()));
-    // Nested .meta.yaml files that failed to parse or validate
-    let nested_errors = Arc::new(Mutex::new(Vec::new()));
-
-    // Spawn worker threads
-    let handles: Vec<_> = (0..parallelism)
-        .map(|_worker_id| {
-            let queue = Arc::clone(&queue);
-            let active = Arc::clone(&active_workers);
-            let signal = Arc::clone(&work_signal);
-            let mp = mp.clone();
-            let style = spinner_style.clone();
-            let ssh_cmd = Arc::clone(&ssh_cmd);
-            let nested_errors = Arc::clone(&nested_errors);
-
-            std::thread::spawn(move || {
-                loop {
-                    // Mark worker as active BEFORE taking a task to prevent
-                    // a race where is_finished() sees pending=empty, active=0
-                    // while a worker is between take_one() and starting work.
-                    active.fetch_add(1, Ordering::SeqCst);
-
-                    // Try to get a task
-                    let task = queue.take_one();
-
-                    match task {
-                        Some(task) => {
-                            // Create progress bar for this task
-                            let (completed, total) = queue.get_counts();
-                            let pb = mp.add(ProgressBar::new_spinner());
-                            pb.set_style(style.clone());
-                            pb.set_prefix(format!("[{}/{}]", completed + 1, total));
-                            pb.set_message(format!("Cloning {}", task.name));
-                            pb.enable_steady_tick(Duration::from_millis(100));
-
-                            // Clone the repo (this may add new tasks to queue)
-                            clone_single_repo(
-                                &task,
-                                &queue,
-                                &pb,
-                                ssh_cmd.as_deref(),
-                                &nested_errors,
-                            );
-
-                            // Mark worker as inactive
-                            active.fetch_sub(1, Ordering::SeqCst);
-
-                            // Signal that we're done (might enable termination check)
-                            let (lock, cvar) = &*signal;
-                            let mut done = lock.lock().unwrap_or_else(|e| e.into_inner());
-                            *done = true;
-                            cvar.notify_all();
-                        }
-                        None => {
-                            // No task available - mark worker as inactive
-                            active.fetch_sub(1, Ordering::SeqCst);
-
-                            // Check if we should terminate
-                            if queue.is_finished(&active) {
-                                break;
-                            }
-
-                            // Wait for signal that work might be available
-                            let (lock, cvar) = &*signal;
-                            let done = lock.lock().unwrap_or_else(|e| e.into_inner());
-                            // Wait with timeout to periodically recheck
-                            let _ = cvar.wait_timeout(done, Duration::from_millis(50));
-                        }
-                    }
-                }
-            })
-        })
-        .collect();
-
-    // Wait for all workers to finish
-    for handle in handles {
-        handle.join().expect("Worker thread panicked");
-    }
-
-    // A nested config that is refused leaves its repos uncloned, so the
-    // command must not report success
-    let errors = nested_errors.lock().unwrap_or_else(|e| e.into_inner());
-    if !errors.is_empty() {
-        // Failed clones are reported too, not hidden behind this error
-        let failed = report_failures(&queue)
-            .map(|summary| format!("\n{summary}"))
-            .unwrap_or_default();
-        anyhow::bail!(
-            "Could not read nested .meta.yaml files:\n{}{failed}",
-            errors.join("\n")
-        );
-    }
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(parallelism)
+        .build()
+        .context("Cannot start the threads that clone")?;
+    let worker = Worker {
+        queue,
+        mp,
+        style: ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
+            .context("Bad progress template")?
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+        ssh_cmd,
+    };
+    pool.scope(|scope| {
+        for task in tasks {
+            worker.spawn(scope, task);
+        }
+    });
     Ok(())
 }
 
-/// Print each failed clone with git's error, and each project left uncloned
-/// because its folder holds something else, to stderr; return the command's
-/// error, or `None` when every project is cloned.
+/// What every task on the pool shares.
+struct Worker<'a> {
+    queue: &'a CloneQueue,
+    mp: &'a MultiProgress,
+    style: ProgressStyle,
+    ssh_cmd: Option<&'a str>,
+}
+
+impl<'a> Worker<'a> {
+    /// Run `task` on the pool, then the tasks it adds.
+    fn spawn<'s>(&'s self, scope: &rayon::Scope<'s>, task: CloneTask)
+    where
+        'a: 's,
+    {
+        scope.spawn(move |scope| {
+            for found in self.run(&task) {
+                self.spawn(scope, found);
+            }
+        });
+    }
+
+    /// Clone or pull one repository; the tasks its `.meta.yaml` adds.
+    fn run(&self, task: &CloneTask) -> Vec<CloneTask> {
+        let (completed, total) = self.queue.get_counts();
+        let pb = self.mp.add(ProgressBar::new_spinner());
+        pb.set_style(self.style.clone());
+        pb.set_prefix(format!("[{}/{}]", completed + 1, total));
+        let (doing, done) = match task.work {
+            Work::Clone(_) => ("Cloning", "Cloned"),
+            Work::Pull => ("Pulling", "Pulled"),
+        };
+        pb.set_message(format!("{doing} {}", task.name));
+        pb.enable_steady_tick(Duration::from_millis(100));
+
+        if let Some(why) = matches!(task.work, Work::Pull)
+            .then(|| nothing_to_pull(&task.target_path))
+            .flatten()
+        {
+            pb.finish_with_message(format!(
+                "{}",
+                style(format!("Not pulled {}: {why}", task.name)).yellow()
+            ));
+            return self.queue.mark_not_pulled(task, why);
+        }
+        match run_git(task, self.queue, &pb, self.ssh_cmd) {
+            Ok(()) => {
+                let found = self.queue.mark_completed(task);
+                let nested = match found.len() {
+                    0 => String::new(),
+                    n => format!(" (+{n} nested)"),
+                };
+                pb.finish_with_message(format!(
+                    "{}",
+                    style(format!("{done} {}{nested}", task.name)).green()
+                ));
+                found
+            }
+            // A branch whose upstream isn't on the remote (yet: an empty
+            // repo's clone) has nothing to pull from
+            Err(_)
+                if task.work == Work::Pull
+                    && upstream_is_missing(&task.target_path, self.ssh_cmd) =>
+            {
+                let why = "its upstream branch isn't on the remote".to_string();
+                pb.finish_with_message(format!(
+                    "{}",
+                    style(format!("Not pulled {}: {why}", task.name)).yellow()
+                ));
+                self.queue.mark_not_pulled(task, why)
+            }
+            Err(error) => {
+                let found = self.queue.mark_failed(task, error);
+                let failed = match task.work {
+                    Work::Clone(_) => "Failed to clone",
+                    Work::Pull => "Could not pull",
+                };
+                pb.finish_with_message(format!(
+                    "{}",
+                    style(format!("{failed} {}", task.name)).red()
+                ));
+                found
+            }
+        }
+    }
+}
+
+/// Print each failed clone or pull with git's error, each project left
+/// uncloned because its folder holds something else, each meta repo that
+/// lists one above it, and each nested `.meta.yaml` that can't be read, to
+/// stderr; return the command's error, or `None` when nothing failed.
 pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
-    let failures = queue.failures();
-    let refused = queue.refused();
-    if failures.is_empty() && refused.is_empty() {
+    let Outcome {
+        cloned,
+        failures,
+        refused,
+        cycles,
+        unreadable,
+        ..
+    } = queue.outcome();
+    if failures.is_empty() && refused.is_empty() && cycles.is_empty() && unreadable.is_empty() {
         return None;
     }
     for failure in &failures {
-        eprintln!(
-            "{} {} ({})",
-            style("Failed to clone").red().bold(),
-            meta_core::display::escape(&failure.name),
-            failure.url
-        );
+        match &failure.work {
+            Work::Clone(url) => eprintln!(
+                "{} {} ({url})",
+                style("Failed to clone").red().bold(),
+                meta_core::display::escape(&failure.name),
+            ),
+            Work::Pull => eprintln!(
+                "{} {}",
+                style("Could not pull").red().bold(),
+                meta_core::display::escape(&failure.name),
+            ),
+        }
         // git's error names paths from the filesystem
         for line in failure.error.lines() {
             eprintln!("    {}", meta_core::display::escape(line));
@@ -152,22 +168,68 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
             meta_core::display::escape(why)
         );
     }
-    let (finished, _) = queue.get_counts();
-    let names = |names: Vec<&str>| names.join(", ");
+    let chain = |names: &Vec<String>| meta_core::display::escape(&names.join(" → ")).into_owned();
+    for names in &cycles {
+        eprintln!(
+            "{} {}: it is a meta repo above it again; the meta repos list each other ({})",
+            style("Left out").red().bold(),
+            meta_core::display::escape(names.last().map_or("", String::as_str)),
+            chain(names)
+        );
+    }
+    for line in &unreadable {
+        eprintln!(
+            "{} {}",
+            style("Cannot read nested .meta.yaml").red().bold(),
+            meta_core::display::escape_lines(line)
+        );
+    }
+    let failed = |clone: bool| -> Vec<&str> {
+        failures
+            .iter()
+            .filter(|f| matches!(f.work, Work::Clone(_)) == clone)
+            .map(|f| f.name.as_str())
+            .collect()
+    };
+    let (clones, pulls) = (failed(true), failed(false));
     Some(
         [
-            (!failures.is_empty()).then(|| {
+            (!clones.is_empty()).then(|| {
                 format!(
-                    "{} of {finished} repositories failed to clone: {}",
-                    failures.len(),
-                    names(failures.iter().map(|f| f.name.as_str()).collect())
+                    "{} of {} repositories failed to clone: {}",
+                    clones.len(),
+                    cloned + clones.len(),
+                    clones.join(", ")
+                )
+            }),
+            (!pulls.is_empty()).then(|| {
+                format!(
+                    "{} could not be pulled (fast-forward only): {}",
+                    plural(pulls.len()),
+                    pulls.join(", ")
                 )
             }),
             (!refused.is_empty()).then(|| {
                 format!(
                     "{} project folder(s) hold something that is not a git repository: {}",
                     refused.len(),
-                    names(refused.iter().map(|(name, _)| name.as_str()).collect())
+                    refused
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }),
+            (!cycles.is_empty()).then(|| {
+                format!(
+                    "meta repos list each other: {}",
+                    cycles.iter().map(chain).collect::<Vec<_>>().join("; ")
+                )
+            }),
+            (!unreadable.is_empty()).then(|| {
+                format!(
+                    "{} nested .meta.yaml file(s) can't be read",
+                    unreadable.len()
                 )
             }),
         ]
@@ -178,116 +240,143 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     )
 }
 
-/// Clone a single repository and handle .meta.yaml discovery
-fn clone_single_repo(
+/// Whether the remote says it has no branch for the upstream of the branch
+/// checked out at `dir` (an empty repo's clone, a branch deleted on the
+/// remote): asked after a pull failed, of the remote itself, so a remote
+/// that can't be reached, or a pull git refused, stays a failure.
+fn upstream_is_missing(dir: &Path, ssh_cmd: Option<&str>) -> bool {
+    use meta_core::git::lookup;
+    let Ok(Some(branch)) = lookup(dir, ["branch", "--show-current"]) else {
+        return false;
+    };
+    let config = |key: &str| {
+        let key = format!("branch.{branch}.{key}");
+        lookup(dir, ["config", "--get", key.as_str()])
+            .ok()
+            .flatten()
+    };
+    let (Some(remote), Some(merge)) = (config("remote"), config("merge")) else {
+        return false;
+    };
+    // `--exit-code`: 2 when the remote answered and has no such ref
+    let mut ask = meta_core::git::git(dir);
+    ask.args(["ls-remote", "--exit-code", "--", &remote, &merge])
+        .env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(ssh) = ssh_cmd {
+        ask.env("GIT_SSH_COMMAND", ssh);
+    }
+    matches!(meta_core::children::output(&mut ask), Ok(out) if out.status.code() == Some(2))
+}
+
+/// The git command `task` runs, `url` giving a clone's URL as git gets it
+/// or as meta shows it.
+pub(crate) fn git_argv(
     task: &CloneTask,
-    queue: &Arc<CloneQueue>,
+    git_depth: Option<&str>,
+    url: impl Fn(&GitUrl) -> OsString,
+) -> Vec<OsString> {
+    let path = task.target_path.clone().into_os_string();
+    match &task.work {
+        Work::Clone(from) => ["git", "clone"]
+            .map(OsString::from)
+            .into_iter()
+            .chain(
+                git_depth
+                    .into_iter()
+                    .flat_map(|d| ["--depth", d].map(OsString::from)),
+            )
+            .chain(["--".into(), url(from), path])
+            .collect(),
+        // --no-rebase: before git 2.34, pull.rebase won over --ff-only
+        Work::Pull => vec![
+            "git".into(),
+            "-C".into(),
+            path,
+            "pull".into(),
+            "--ff-only".into(),
+            "--no-rebase".into(),
+        ],
+    }
+}
+
+/// Why the repository at `dir` has nothing to pull from, if so: it isn't
+/// on a branch, or its branch has no upstream. A question git can't answer
+/// is left to the pull, which reports it.
+pub(crate) fn nothing_to_pull(dir: &Path) -> Option<String> {
+    let head = match meta_core::git::lookup(dir, ["symbolic-ref", "-q", "HEAD"]) {
+        Ok(Some(head)) => head,
+        Ok(None) => return Some("HEAD is not on a branch".to_string()),
+        Err(_) => return None,
+    };
+    // From the config: a branch with no commits yet (an empty repo's
+    // clone) has its upstream there all the same
+    let branch = head.strip_prefix("refs/heads/").unwrap_or(&head);
+    let merge = format!("branch.{branch}.merge");
+    match meta_core::git::lookup(dir, ["config", "--get", merge.as_str()]) {
+        Ok(None) => Some(format!(
+            "its branch {} has no upstream",
+            meta_core::display::escape(branch)
+        )),
+        _ => None,
+    }
+}
+
+fn plural(n: usize) -> String {
+    match n {
+        1 => "1 repository".to_string(),
+        n => format!("{n} repositories"),
+    }
+}
+
+/// Run git's clone or pull for `task`; git's last lines of error output
+/// if it fails.
+fn run_git(
+    task: &CloneTask,
+    queue: &CloneQueue,
     pb: &ProgressBar,
     ssh_cmd: Option<&str>,
-    nested_errors: &Mutex<Vec<String>>,
-) {
-    let record = |e: anyhow::Error| {
-        nested_errors
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(format!("  {}: {e:#}", task.name));
-    };
+) -> Result<(), String> {
     // What appeared in the folder since it was queued makes git refuse it,
     // which is reported like any failed clone: never taken for a clone
-    // Build git clone command
-    let mut cmd = meta_core::git::git(Path::new("."));
-    cmd.arg("clone");
-    if let Some(d) = queue.git_depth() {
-        cmd.arg("--depth").arg(d);
-    }
-    cmd.arg("--")
-        .arg(task.url.as_git_arg())
-        .arg(&task.target_path);
+    let mut cmd = meta_core::git::git(match task.work {
+        Work::Clone(_) => Path::new("."),
+        Work::Pull => &task.target_path,
+    });
+    let argv = git_argv(task, queue.git_depth(), |url| {
+        url.as_git_arg().to_os_string()
+    });
+    cmd.args(argv.iter().skip(1));
     if let Some(ssh) = ssh_cmd {
         cmd.env("GIT_SSH_COMMAND", ssh);
     }
-
-    // Run clone
-    match meta_core::children::spawn(
-        cmd.stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped()),
-    ) {
-        Ok(mut child) => {
-            // Stream stderr for progress updates, and keep its last lines for
-            // the failure report (the progress bar is hidden off a terminal).
-            let pb_clone = pb.clone();
-            let task_name = task.name.clone();
-            let tail = StderrTail::spawn(child.stderr(), move |line| {
-                // git's progress names paths from the filesystem
-                pb_clone.set_message(format!("{task_name}: {}", meta_core::display::escape(line)))
-            });
-
-            let status = child.wait();
-            match status {
-                Ok(status) if status.success() => {
-                    // Check for nested .meta.yaml and report new discoveries
-                    match queue.mark_completed(task) {
-                        Ok(added) if added > 0 => {
-                            let (_, total) = queue.get_counts();
-                            pb.finish_with_message(format!(
-                                "{}",
-                                style(format!("Cloned {} (+{} nested)", task.name, added)).green()
-                            ));
-                            // Update for new total
-                            debug!(
-                                "Discovered {} more repos in {}, total now {}",
-                                added, task.name, total
-                            );
-                        }
-                        Ok(_) => {
-                            pb.finish_with_message(format!(
-                                "{}",
-                                style(format!("Cloned {}", task.name)).green()
-                            ));
-                        }
-                        Err(e) => {
-                            pb.finish_with_message(format!(
-                                "{}",
-                                style(format!(
-                                    "Cloned {} (meta parse error: {})",
-                                    task.name,
-                                    meta_core::display::escape_lines(&format!("{e:#}"))
-                                ))
-                                .yellow()
-                            ));
-                            record(e);
-                        }
-                    }
-                }
-                Ok(status) => {
-                    let stderr_text = tail.text();
-                    let error = if stderr_text.trim().is_empty() {
-                        format!("git clone exited with {status}")
-                    } else {
-                        stderr_text
-                    };
-                    queue.mark_failed(task, error);
-                    pb.finish_with_message(format!(
-                        "{}",
-                        style(format!("Failed to clone {}", task.name)).red()
-                    ));
-                }
-                Err(e) => {
-                    queue.mark_failed(task, format!("Failed to wait for git: {e}"));
-                    pb.finish_with_message(format!(
-                        "{}",
-                        style(format!("Failed to clone {}", task.name)).red()
-                    ));
-                }
-            }
+    // Many run at once under spinners: git fails instead of asking for
+    // credentials. Only stderr is read: git's progress and errors. Unread
+    // stdout would fill its pipe and stall git.
+    cmd.env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    let mut child =
+        meta_core::children::spawn(&mut cmd).map_err(|e| format!("Failed to run git: {e}"))?;
+    // Stream stderr for progress updates, and keep its last lines for
+    // the failure report (the progress bar is hidden off a terminal).
+    let pb = pb.clone();
+    let task_name = task.name.clone();
+    let tail = StderrTail::spawn(child.stderr(), move |line| {
+        // git's progress names paths from the filesystem
+        pb.set_message(format!("{task_name}: {}", meta_core::display::escape(line)))
+    });
+    match child.wait() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => {
+            let stderr_text = tail.text();
+            Err(if stderr_text.trim().is_empty() {
+                format!("git exited with {status}")
+            } else {
+                stderr_text
+            })
         }
-        Err(e) => {
-            queue.mark_failed(task, format!("Failed to run git: {e}"));
-            pb.finish_with_message(format!(
-                "{}",
-                style(format!("Failed to spawn git for {}", task.name)).red()
-            ));
-        }
+        Err(e) => Err(format!("Failed to wait for git: {e}")),
     }
 }
 
@@ -348,6 +437,7 @@ impl StderrTail {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn stderr_tail_drains_everything_and_keeps_only_the_last_lines() {

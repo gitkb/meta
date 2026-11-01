@@ -54,6 +54,12 @@ pub fn is_newer_version(current: &str, new: &str) -> bool {
     new > current
 }
 
+/// The plugin a tar entry installs: its file name, when that is `meta-*`
+fn plugin_entry_name(path: &str) -> Option<String> {
+    let name = Path::new(path).file_name()?.to_str()?;
+    name.starts_with(PLUGIN_PREFIX).then(|| name.to_string())
+}
+
 /// Check if a filename is a plugin binary (has prefix, no excluded extension)
 fn is_plugin_binary(name: &str) -> bool {
     name.starts_with(PLUGIN_PREFIX) && !EXCLUDED_EXTENSIONS.iter().any(|ext| name.ends_with(ext))
@@ -984,41 +990,35 @@ impl PluginInstaller {
 
     /// Extract a tar.gz archive
     fn extract_tar_gz(&self, bytes: &[u8]) -> Result<Vec<String>> {
-        let archive = || tar::Archive::new(flate2::read::GzDecoder::new(bytes));
+        let decoder = flate2::read::GzDecoder::new(bytes);
+        let mut archive = tar::Archive::new(decoder);
 
-        // Check every entry before writing anything: an archive installs
-        // files and directories only, never a link or a device
-        for entry in archive().entries()? {
-            let entry = entry?;
+        // Read every plugin entry before writing any
+        let mut plugins = Vec::new();
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let Some(name) = plugin_entry_name(&entry.path()?.to_string_lossy()) else {
+                continue;
+            };
             let kind = entry.header().entry_type();
+            if kind.is_dir() {
+                continue;
+            }
+            // A plugin is a file, never a link or a device
             anyhow::ensure!(
-                kind.is_file() || kind.is_dir() || kind.is_pax_global_extensions(),
+                kind.is_file(),
                 "Archive entry {} is not a regular file or a directory; nothing was installed",
                 escape(&String::from_utf8_lossy(&entry.path_bytes()))
             );
+            let mut contents = Vec::new();
+            entry.read_to_end(&mut contents)?;
+            plugins.push((name, contents));
         }
 
-        let mut installed = Vec::new();
-        for entry in archive().entries()? {
-            let mut entry = entry?;
-            if !entry.header().entry_type().is_file() {
-                continue;
-            }
-            let file_name = entry
-                .path()?
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|s| s.to_string());
-
-            if let Some(name) = file_name {
-                if name.starts_with(PLUGIN_PREFIX) {
-                    self.write_plugin(&name, &mut entry)?;
-                    installed.push(name);
-                }
-            }
+        for (name, contents) in &plugins {
+            self.write_plugin(name, &mut contents.as_slice())?;
         }
-
-        Ok(installed)
+        Ok(plugins.into_iter().map(|(name, _)| name).collect())
     }
 
     /// Extract a zip archive
@@ -1032,21 +1032,21 @@ impl PluginInstaller {
         for i in 0..archive.len() {
             let file = archive.by_index(i)?;
             let file_name = file.name()?.into_owned();
-            // An archive installs files and directories only, never a link
-            // or a device (a mode without a file type is a file)
-            anyhow::ensure!(
-                matches!(
-                    file.unix_mode().map(|mode| mode & 0o170000),
-                    None | Some(0 | 0o100000 | 0o040000)
-                ),
-                "Archive entry {} is not a regular file or a directory; nothing was installed",
-                escape(&file_name)
-            );
             if file_name.starts_with(PLUGIN_PREFIX) && !file.is_dir() {
                 // Require one filename component on both Unix and Windows.
                 anyhow::ensure!(
                     !file_name.contains(['/', '\\']),
                     "ZIP plugin entry must be a top-level filename: {}",
+                    escape(&file_name)
+                );
+                // A plugin is a file, never a link or a device (a mode
+                // without a file type is a file)
+                anyhow::ensure!(
+                    matches!(
+                        file.unix_mode().map(|mode| mode & 0o170000),
+                        None | Some(0 | 0o100000)
+                    ),
+                    "Archive entry {} is not a regular file or a directory; nothing was installed",
                     escape(&file_name)
                 );
                 entries.push((i, file_name));
@@ -1752,6 +1752,16 @@ mod tests {
             assert_eq!(mode(&victim), 0o644, "{url} {entry}");
             assert_eq!(std::fs::read_to_string(&victim).unwrap(), "victim");
         }
+
+        // A link that installs no plugin is left alone
+        let dir = tempfile::tempdir().unwrap();
+        let installer = PluginInstaller {
+            plugins_dir: dir.path().to_path_buf(),
+            scope: InstallScope::Global,
+        };
+        let bytes = tar_gz(&[good, ("lib/libx.so", Symlink, "libx.so.1")]);
+        let installed = installer.extract_archive("p.tar.gz", &bytes).unwrap();
+        assert_eq!(installed, ["meta-good"]);
     }
 
     #[cfg(unix)]

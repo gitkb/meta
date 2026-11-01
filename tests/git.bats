@@ -759,12 +759,17 @@ EOF
     run "$META_BIN" --include frontend git update
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not take --include/--exclude"* ]]
-    echo '{"projects": {"frontend": {"repo": "git@github.com:org/frontend.git", "tags": ["ui"]}, "backend": {"repo": "git@github.com:org/backend.git", "tags": ["api"]}, "shared": "git@github.com:org/shared.git"}}' > "$TEST_DIR/.meta.yaml"
+    # shared can really be cloned, so "nothing cloned" means something
+    git clone --quiet --bare "$TEST_DIR/shared" "$TEST_DIR/shared.git"
     rm -rf "$TEST_DIR/shared"
+    echo '{"projects": {"frontend": {"repo": "git@github.com:org/frontend.git", "tags": ["ui"]}, "backend": {"repo": "git@github.com:org/backend.git", "tags": ["api"]}, "shared": "file://'"$TEST_DIR"'/shared.git"}}' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" --tag api git update
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
     [ ! -e "$TEST_DIR/shared" ]
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [ -d "$TEST_DIR/shared/.git" ]
 }
 
 @test "arguments after -- that look like meta flags reach git" {
@@ -981,7 +986,9 @@ YAML
     [ "$status" -ne 0 ]
     [[ "$output" == *"unknown option"*"tag"* ]]
 
+    git clone --quiet --bare "$TEST_DIR/shared" "$TEST_DIR/shared.git"
     rm -rf "$TEST_DIR/shared"
+    sed -i.bak "s|git@github.com:org/shared.git|file://$TEST_DIR/shared.git|" "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git update --dry-run
     [ "$status" -ne 0 ]
     [[ "$output" == *"unexpected argument '--dry-run'"* ]]

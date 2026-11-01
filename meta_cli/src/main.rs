@@ -27,16 +27,11 @@ const VERSION: &str = include_str!("../../VERSION");
     version = VERSION.trim(),
     about,
     long_about = None,
-    disable_help_flag = true,
     disable_help_subcommand = true,
     after_help = "meta's options go before the command (meta --dry-run git update); \
                   what follows the command belongs to it."
 )]
 struct Cli {
-    /// Print help, with the commands plugins add
-    #[arg(short = 'h', long = "help")]
-    print_help: bool,
-
     #[arg(long, help = "Add shell aliases to the global .looprc file")]
     add_aliases_to_global_looprc: bool,
 
@@ -180,8 +175,6 @@ enum Commands {
     Exec(ExecArgs),
     /// Print help for meta or for a command (meta help git worktree create)
     Help {
-        #[command(flatten)]
-        _help: HelpFlag,
         /// The command, as you would type it after `meta`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
@@ -194,21 +187,9 @@ enum Commands {
     External(Vec<String>),
 }
 
-/// `-h/--help` for a built-in command and the commands under it: meta's own
-/// `--help` (with plugins) turns clap's off everywhere
-#[derive(Args)]
-struct HelpFlag {
-    /// Print help
-    #[arg(short, long, global = true, action = clap::ArgAction::Help)]
-    help: Option<bool>,
-}
-
 /// Arguments for `meta context`
 #[derive(Args)]
 struct ContextArgs {
-    #[command(flatten)]
-    _help: HelpFlag,
-
     /// Skip git status queries (structure only, faster)
     #[arg(long)]
     no_status: bool,
@@ -225,9 +206,6 @@ struct ContextArgs {
 /// Arguments for `meta exec`
 #[derive(Args)]
 struct ExecArgs {
-    #[command(flatten)]
-    _help: HelpFlag,
-
     /// The program and its arguments (after `--` when the program starts with `-`)
     #[arg(required = true, trailing_var_arg = true)]
     command: Vec<String>,
@@ -237,9 +215,6 @@ struct ExecArgs {
 #[derive(Args)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 struct InitArgs {
-    #[command(flatten)]
-    _help: HelpFlag,
-
     #[command(subcommand)]
     command: InitCommands,
 }
@@ -266,9 +241,6 @@ enum InitCommands {
 #[derive(Args)]
 #[command(subcommand_required = true, arg_required_else_help = true)]
 struct PluginArgs {
-    #[command(flatten)]
-    _help: HelpFlag,
-
     #[command(subcommand)]
     command: PluginCommands,
 }
@@ -423,18 +395,24 @@ fn run_cli() -> Result<()> {
         })
         .init();
 
-    let cli: Cli = meta_core::args::parse();
+    // meta's own --help also lists the commands plugins add, so it is
+    // answered here, before anything else runs; every other result of
+    // parsing is reported as usual
+    let cli: Cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) if is_root_help(&e) => {
+            check_and_warn_orphan();
+            let plugins = SubprocessPluginManager::new(false)?;
+            return subprocess_plugins::print_output(&help_with_plugins(&plugins));
+        }
+        Err(_) => meta_core::args::parse(),
+    };
 
     // Check for orphaned nested meta repo and warn the user
     check_and_warn_orphan();
 
     // Where plugins are; nothing is started until a command needs one
     let subprocess_plugins = SubprocessPluginManager::new(cli.verbose)?;
-
-    // help only prints, whatever else was asked
-    if cli.print_help {
-        return subprocess_plugins::print_output(&help_with_plugins(&subprocess_plugins));
-    }
 
     // `--tag "$UNSET"` is a slip, not "every repo"
     anyhow::ensure!(
@@ -453,7 +431,7 @@ fn run_cli() -> Result<()> {
 
     match &cli.command {
         None => subprocess_plugins::print_output(&help_with_plugins(&subprocess_plugins)),
-        Some(Commands::Help { command, .. }) => help(&cli, command, &subprocess_plugins),
+        Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins),
         // it reads the nearest workspace only, so -r would go unheard
         Some(Commands::Context(_)) if cli.recursive || cli.depth.is_some() => anyhow::bail!(
             "meta context shows the nearest workspace only; it does not take --recursive or --depth"
@@ -469,7 +447,6 @@ fn run_cli() -> Result<()> {
         ),
         Some(Commands::Init(InitArgs {
             command: InitCommands::Claude { force, update },
-            ..
         })) => init::init_claude(*force, *update, cli.mode(), cli.verbose),
         Some(Commands::Plugin(args)) => {
             handle_plugin_command(&args.command, cli.mode(), cli.json, &subprocess_plugins)
@@ -487,6 +464,15 @@ fn run_cli() -> Result<()> {
             plugin_command(&cli, args, &plugin)
         }
     }
+}
+
+/// Whether `error` is clap showing meta's own help (`meta --help`, also
+/// before a command: `meta --help exec`), not a command's
+fn is_root_help(error: &clap::Error) -> bool {
+    let mut root = Cli::command();
+    root.build();
+    error.kind() == clap::error::ErrorKind::DisplayHelp
+        && error.render().to_string() == root.render_help().to_string()
 }
 
 /// `meta help [COMMAND...]`: meta's help, a built-in command's, or the

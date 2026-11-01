@@ -239,3 +239,20 @@ teardown() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"meta plugin has no command 'nosuch'"* ]]
 }
+
+@test "meta --help before a command still prints meta's help" {
+    for words in "exec" "plugin install" "context"; do
+        run "$META_BIN" --help $words
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"Usage: meta [OPTIONS] [COMMAND]"* ]]
+        [[ "$output" != *"required arguments"* ]]
+    done
+}
+
+@test "worktree list help documents the options atc relies on" {
+    run "$META_BIN" git worktree list --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--recursive"* ]]
+    [[ "$output" == *"--metadata-only"* ]]
+    [[ "$output" == *"--json"* ]]
+}

@@ -257,4 +257,7 @@ YAML
     run "$META_BIN" -r context
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not take --recursive"* ]]
+    run "$META_BIN" --depth 1 context
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"or --depth"* ]]
 }

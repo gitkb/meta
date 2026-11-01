@@ -2184,7 +2184,8 @@ set_projects() {
 @test "meta -r project check with a filter reports a selected nested project that is missing" {
     cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/"
     mkdir -p "$TEST_DIR/tools"
-    printf 'projects:\n  cli:\n    repo: git@github.com:org/cli.git\n    tags: [rust]\n' > "$TEST_DIR/tools/.meta.yaml"
+    # cli is tagged and missing; other is missing too, but not selected
+    printf 'projects:\n  cli:\n    repo: git@github.com:org/cli.git\n    tags: [rust]\n  other: git@github.com:org/other.git\n' > "$TEST_DIR/tools/.meta.yaml"
     cat > "$TEST_DIR/.meta.yaml" <<'YAML'
 projects:
   tools:
@@ -2194,6 +2195,7 @@ YAML
     for filter in "-t rust" "-i tools/cli"; do
         run "$META_BIN" -r $filter project check
         [[ "$output" == *"git@github.com:org/cli.git"* ]]
+        [[ "$output" != *"other.git"* ]]
         [[ "$output" == *"1 project(s) missing"* ]]
     done
     mkdir "$TEST_DIR/tools/cli"

@@ -823,7 +823,7 @@ assert len(data['repos']) == 1
     run "$META_BIN" git worktree create --help
     [ "$status" -eq 0 ]
     [[ "$output" == *"--ephemeral"* ]] || [[ "$output" == *"ephemeral"* ]]
-    [[ "$output" == *"--meta"* ]] || [[ "$output" == *"meta"* ]]
+    [[ "$output" == *"--meta <KEY=VALUE>"* ]]
     [[ "$output" == *"--ttl"* ]] || [[ "$output" == *"ttl"* ]]
     run "$META_BIN" git worktree remove --help
     [ "$status" -eq 0 ]

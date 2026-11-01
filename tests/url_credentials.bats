@@ -72,10 +72,14 @@ EOF
     meta_without_token --dry-run git update
     [ "$status" -eq 0 ]
     [[ "$output" == *"git clone https://***@example.invalid/org/lib.git"* ]] || false
+    meta_without_token project check
+    [[ "$output" == *"URL: https://***@example.invalid/org/lib.git"* ]] || false
     meta_without_token git update
     [ "$status" -eq 0 ]
     [ -d lib/.git ]
     [ -d svc/.git ]
+    # insteadOf matches a prefix: the origin shows the URL git got
+    [ "$(git -C lib config remote.origin.url)" = "https://$TOKEN@example.invalid/org/lib.git" ]
     [ "$(git -C svc config remote.origin.url)" = "https://alice:$TOKEN@example.invalid/org/svc.git" ]
     for command in "project list" "project list --json" "--recursive project list --json" \
         "project check" "context --json" "git status" "exec -- true"; do
@@ -91,6 +95,12 @@ EOF
     meta_without_token git update
     [[ "$output" == *"expected: https://***@example.invalid/org/svc.git"* ]] || false
     [[ "$output" == *"remote set-url origin <the repo URL in .meta.yaml>"* ]] || false
+    # a rotated token: the same URL printed twice, and why they differ
+    git -C svc remote set-url origin "https://alice:ghp_OLD@example.invalid/org/svc.git"
+    meta_without_token git update
+    [[ "$output" == *"actual:   https://***@example.invalid/org/svc.git"* ]] || false
+    [[ "$output" == *"(they differ only in their hidden credentials)"* ]] || false
+    [[ "$output" != *ghp_OLD* ]] || false
 
     cd "$TEST_DIR"
     RUST_LOG=debug meta_without_token --dry-run git clone "https://$TOKEN@example.invalid/org/meta.git" fresh
@@ -99,7 +109,8 @@ EOF
     # the meta repo, and the project its own config lists with a token
     RUST_LOG=debug meta_without_token git clone "https://$TOKEN@example.invalid/org/meta.git" fresh
     [ "$status" -eq 0 ]
-    [ -d fresh/lib/.git ]
+    [ "$(git -C fresh config remote.origin.url)" = "https://$TOKEN@example.invalid/org/meta.git" ]
+    [ "$(git -C fresh/lib config remote.origin.url)" = "https://$TOKEN@example.invalid/org/lib.git" ]
 }
 
 @test "a clone's remote with a token prints hidden" {

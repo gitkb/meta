@@ -47,16 +47,21 @@ impl Operation {
     }
 
     /// The operation under way in the checkout at `dir`, read the way
-    /// `git status` reads it (up to four more git processes, so only
-    /// callers that show it ask). git names the files in the checkout's own git directory
-    /// (a linked worktree's, never the one it shares) and resolves the refs
-    /// in whichever store the repository keeps them. A rebase comes first:
-    /// the picks and merges it stops on are its own.
+    /// `git status` reads it (one more git process, three in a reftable
+    /// repository, so only callers that show it ask). git names the files
+    /// in the checkout's own git directory (a linked worktree's, never the
+    /// one it shares); the refs git keeps for an operation are read by
+    /// their exact names, never resolved as revisions, which a branch or
+    /// tag of the same name would answer. A rebase comes first: the picks
+    /// and merges it stops on are its own.
     pub fn read(dir: &Path) -> anyhow::Result<Option<Self>> {
+        // git before 2.45 knows no `--show-ref-format`, echoes it, and has
+        // only the files backend
         let out = super::run(
             dir,
             [
                 "rev-parse",
+                "--show-ref-format",
                 "--git-path",
                 "rebase-merge",
                 "--git-path",
@@ -65,10 +70,18 @@ impl Operation {
                 "sequencer/todo",
                 "--git-path",
                 "BISECT_LOG",
+                "--git-path",
+                "MERGE_HEAD",
+                "--git-path",
+                "CHERRY_PICK_HEAD",
+                "--git-path",
+                "REVERT_HEAD",
             ],
         )?;
         let lines: Vec<&str> = out.lines().collect();
-        let &[rebase_merge, rebase_apply, todo, bisect] = lines.as_slice() else {
+        let &[format, rebase_merge, rebase_apply, todo, bisect, merge_head, cherry_pick_head, revert_head] =
+            lines.as_slice()
+        else {
             anyhow::bail!(
                 "git rev-parse --git-path in {} printed '{}'",
                 crate::display::escape_path(dir),
@@ -102,28 +115,47 @@ impl Operation {
                 _ => None,
             }
         };
-        // git's own state, never a branch or tag called so: those resolve
-        // to their full name
-        for (head, operation) in [
-            ("MERGE_HEAD", Self::Merge),
-            ("CHERRY_PICK_HEAD", Self::CherryPick),
-            ("REVERT_HEAD", Self::Revert),
+        // MERGE_HEAD is a file in every ref store; the others are in a
+        // reftable one when the repository has one
+        let files = matches!(format, "files" | "--show-ref-format");
+        let head = |name: &str, path: &str| {
+            if files || name == "MERGE_HEAD" {
+                Ok(exists(&dir.join(path)))
+            } else {
+                ref_exists(dir, name)
+            }
+        };
+        for (name, path, operation) in [
+            ("MERGE_HEAD", merge_head, Self::Merge),
+            ("CHERRY_PICK_HEAD", cherry_pick_head, Self::CherryPick),
+            ("REVERT_HEAD", revert_head, Self::Revert),
         ] {
-            let name = super::lookup(
-                dir,
-                [
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    "--symbolic-full-name",
-                    head,
-                ],
-            )?;
-            if name.as_deref() == Some(head) {
+            if head(name, path)? {
                 return Ok(Some(operation));
             }
         }
         Ok(sequencer().or_else(|| exists(&dir.join(bisect)).then_some(Self::Bisect)))
+    }
+}
+
+/// Whether the ref `name` (a full name, such as `CHERRY_PICK_HEAD`) is
+/// there: `git show-ref --exists`, which exits 2 for one that isn't.
+fn ref_exists(dir: &Path, name: &str) -> anyhow::Result<bool> {
+    let output = crate::children::output(super::git(dir).args(["show-ref", "--exists", name]))
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Cannot run git show-ref in {}: {e}",
+                crate::display::escape_path(dir)
+            )
+        })?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(2) => Ok(false),
+        _ => anyhow::bail!(
+            "git show-ref --exists {name} failed in {}: {}",
+            crate::display::escape_path(dir),
+            crate::display::escape(String::from_utf8_lossy(&output.stderr).trim())
+        ),
     }
 }
 
@@ -591,6 +623,9 @@ mod tests {
         assert_eq!(operation(dir), None);
         assert!(as_t(dir, &["cherry-pick", "side"]).is_err());
         assert_eq!(operation(dir), Some(Operation::CherryPick));
+        as_t(dir, &["cherry-pick", "--abort"]).unwrap();
+        assert!(as_t(dir, &["merge", "side"]).is_err());
+        assert_eq!(operation(dir), Some(Operation::Merge));
     }
 
     #[test]
@@ -623,7 +658,11 @@ mod tests {
         make_conflicting(dir.path());
         assert!(as_t(dir.path(), &["cherry-pick", "side"]).is_err());
         assert!(!dir.path().join(".git/CHERRY_PICK_HEAD").exists());
+        // read by its name, never as a revision a tag also answers
+        run(dir.path(), ["tag", "REVERT_HEAD"]).unwrap();
         assert_eq!(operation(dir.path()), Some(Operation::CherryPick));
+        as_t(dir.path(), &["cherry-pick", "--abort"]).unwrap();
+        assert_eq!(operation(dir.path()), None);
     }
 
     #[test]

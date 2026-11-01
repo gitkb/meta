@@ -1,4 +1,5 @@
-//! The loop binary: which directories it runs in.
+//! The loop binary: which directories it runs in, its config and its aliases.
+#![cfg(unix)]
 
 use std::fs;
 use std::io::Write;
@@ -6,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 #[test]
-#[cfg(unix)]
 fn an_exclusion_holds_for_directories_named_outright() {
     let tmp = tempfile::tempdir().unwrap();
     for dir in ["a", "b"] {
@@ -106,7 +106,6 @@ impl Sandbox {
 }
 
 #[test]
-#[cfg(unix)]
 fn an_empty_looprc_selects_what_no_looprc_does() {
     let ws = sandbox(&["a", ".git"]);
     let without = ws.ran_in(&[]);
@@ -116,7 +115,6 @@ fn an_empty_looprc_selects_what_no_looprc_does() {
 }
 
 #[test]
-#[cfg(unix)]
 fn a_config_file_loop_cannot_use_is_an_error() {
     let ws = sandbox(&["a"]);
     let out = ws.run(&["-c", "missing.json", "--", "pwd"], "");
@@ -134,7 +132,6 @@ fn a_config_file_loop_cannot_use_is_an_error() {
 }
 
 #[test]
-#[cfg(unix)]
 fn a_setting_in_the_file_holds_when_no_flag_is_given() {
     let ws = sandbox(&["a"]);
     fs::write(ws.ws.join(".looprc"), r#"{"silent": true}"#).unwrap();
@@ -147,7 +144,6 @@ fn a_setting_in_the_file_holds_when_no_flag_is_given() {
 }
 
 #[test]
-#[cfg(unix)]
 fn include_and_exclude_take_comma_lists() {
     let ws = sandbox(&["a", "b", "c"]);
     assert_eq!(
@@ -180,7 +176,6 @@ fn a_directory_name_that_is_not_utf8_is_where_the_command_runs() {
 }
 
 #[test]
-#[cfg(unix)]
 fn local_aliases_win_over_global_ones() {
     let ws = sandbox(&["a"]);
     fs::write(
@@ -209,7 +204,7 @@ fn local_aliases_win_over_global_ones() {
     assert!(said(&["-c", "other.json", "say"]).contains("OTHER"));
 }
 
-/// A shell whose `alias` lists `q` with quotes inside its value, and `old`
+/// A shell whose `alias` lists `q` with quotes inside its value, and `new`
 fn fake_shell(ws: &Sandbox) {
     use std::os::unix::fs::PermissionsExt;
     let shell = ws.home.join("shell");
@@ -222,7 +217,6 @@ fn fake_shell(ws: &Sandbox) {
 }
 
 #[test]
-#[cfg(unix)]
 fn importing_aliases_changes_only_the_aliases() {
     let ws = sandbox(&["a"]);
     fake_shell(&ws);

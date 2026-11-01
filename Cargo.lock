@@ -913,6 +913,7 @@ dependencies = [
  "serde_yaml_ng",
  "shlex",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

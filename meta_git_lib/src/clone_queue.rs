@@ -634,8 +634,9 @@ mod tests {
         assert!(queue.cycles().is_empty());
         let d = nested.remove(0);
         std::fs::create_dir(&d.target_path).unwrap();
+        // single-quoted: a Windows path's backslashes stay as they are
         let back = format!(
-            r#"{{"projects": {{"ws": "file://{}/"}}}}"#,
+            r#"{{"projects": {{"ws": 'file://{}/'}}}}"#,
             remote.to_string_lossy()
         );
         write_meta(&d.target_path, &back);

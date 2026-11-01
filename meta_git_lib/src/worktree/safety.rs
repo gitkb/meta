@@ -437,10 +437,11 @@ pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
         1 => found.push("1 stash".to_string()),
         n => found.push(format!("{n} stashes")),
     }
-    let listed = meta_core::git::run(repo, ["worktree", "list", "--porcelain", "-z"])?;
+    // (`-z` needs git 2.36)
+    let listed = meta_core::git::run(repo, ["worktree", "list", "--porcelain"])?;
     let worktrees: Vec<&str> = listed
-        .split('\0')
-        .filter_map(|field| field.strip_prefix("worktree "))
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
         .skip(1)
         .collect();
     if !worktrees.is_empty() {

@@ -130,8 +130,8 @@ meta --exclude legacy-service exec -- npm install
 **A:** Use parallel execution:
 
 ```bash
-meta git status --parallel
-meta exec --parallel -- npm install
+meta --parallel git status
+meta --parallel exec -- npm install
 ```
 
 ### Q: How do I see what would happen without executing?

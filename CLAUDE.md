@@ -25,7 +25,7 @@ This enables recursive operations:
 ```bash
 meta git update          # Clones nested meta repos automatically
 meta project list -r     # Shows full tree
-meta exec -r cargo test  # Runs across all nested repos
+meta -r exec -- cargo test  # Runs across all nested repos
 ```
 
 **What `meta` does:** Clones the repos a workspace lists, runs commands across them in parallel (`meta exec`), manages git worktrees across the entire workspace (`meta git worktree`), and provides project-level coordination.

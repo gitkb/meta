@@ -89,35 +89,16 @@ const RULES: &[(&str, &str)] = &[
     ("meta-destructive-commands.md", RULE_DESTRUCTIVE_COMMANDS),
 ];
 
-/// Typed init subcommand, mirroring the clap-parsed structure from main.
-pub enum InitCommand {
-    /// No subcommand — show help
-    None,
-    /// Install Claude Code skills, rules, and hooks
-    Claude {
-        /// Refresh skills and rules, merge meta hooks into settings
-        force: bool,
-        /// Update skills and rules only, skip settings (preserves user customizations)
-        update: bool,
-    },
-}
-
-/// Handle the `meta init` subcommand with typed args.
-pub fn handle_init_command(command: InitCommand, mode: ExecutionMode, verbose: bool) -> Result<()> {
-    match command {
-        InitCommand::None => {
-            print_init_help();
-            Ok(())
-        }
-        InitCommand::Claude { force, update } => {
-            let init = Init {
-                mode,
-                verbose,
-                guard: agent_cli_available(),
-            };
-            install_claude_integration(force, update, &init)
-        }
-    }
+/// `meta init claude`: `force` refreshes skills and rules and merges meta's
+/// hooks into the settings; `update` updates skills and rules only, keeping
+/// the settings.
+pub fn init_claude(force: bool, update: bool, mode: ExecutionMode, verbose: bool) -> Result<()> {
+    let init = Init {
+        mode,
+        verbose,
+        guard: agent_cli_available(),
+    };
+    install_claude_integration(force, update, &init)
 }
 
 /// One run of `meta init claude`. Every change it makes to files goes
@@ -204,25 +185,6 @@ impl Init {
             }
         }
     }
-}
-
-fn print_init_help() {
-    println!("meta init - Initialize meta integrations");
-    println!();
-    println!("USAGE:");
-    println!("    meta init <command>");
-    println!();
-    println!("COMMANDS:");
-    println!("    claude    Install Claude Code skills, rules, and hooks for this meta repo");
-    println!();
-    println!("OPTIONS:");
-    println!("    -f, --force     Refresh skills and rules, merge meta hooks into settings");
-    println!("    -u, --update    Update skills and rules only, preserve settings");
-    println!();
-    println!("EXAMPLES:");
-    println!("    meta init claude             Install Claude integration");
-    println!("    meta init claude --update    Update skills/rules, keep settings");
-    println!("    meta init claude --force     Refresh skills/rules and merge settings");
 }
 
 /// Install Claude Code skills and hook configuration at the root of the

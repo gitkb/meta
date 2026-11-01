@@ -181,13 +181,23 @@ teardown() {
     [[ "$output" != *"worker"* ]]
 }
 
-@test "meta --tag with nonexistent tag runs only in root" {
-    run "$META_BIN" --tag nonexistent exec -- pwd
+@test "meta --tag never selects the root, and a tag no project has is an error" {
+    run "$META_BIN" --tag ui exec -- touch tagged
     [ "$status" -eq 0 ]
-    # Only root "." should execute, not any project dirs
-    [[ "$output" != *"api"* ]]
-    [[ "$output" != *"worker"* ]]
-    [[ "$output" != *"frontend"* ]]
+    [ -f "$TEST_DIR/frontend/tagged" ]
+    [ ! -e "$TEST_DIR/tagged" ]
+    # -i . adds the root to what --tag selects
+    run "$META_BIN" --include . --tag ui exec -- touch both
+    [ "$status" -eq 0 ]
+    [ -f "$TEST_DIR/both" ] && [ -f "$TEST_DIR/frontend/both" ]
+    [ ! -e "$TEST_DIR/api/both" ]
+
+    run "$META_BIN" --tag nonexistent exec -- touch typo
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--tag 'nonexistent' is no project's tag"* ]]
+    [[ "$output" == *"the tags are backend, rust, typescript, ui"* ]]
+    [[ "$output" == *".meta.yaml"* ]]
+    [ -z "$(find "$TEST_DIR" -name typo)" ]
 }
 
 @test "meta --tag rust matches multiple projects" {
@@ -802,4 +812,59 @@ SH
     # the plugin's status, not death by SIGPIPE (141) or a panic
     [ "$status" -eq 3 ]
     [[ "$output" != *"panicked"* ]]
+}
+
+# ============ One selection ============
+
+@test "-r --tag selects a nested project by its own tag under an untagged parent" {
+    mkdir -p "$TEST_DIR/tools/cli"
+    printf 'projects:\n  cli:\n    repo: git@github.com:org/cli.git\n    tags: [cli-tools]\n' > "$TEST_DIR/tools/.meta.yaml"
+    cat > "$TEST_DIR/.meta.yaml" <<'YAML'
+projects:
+  api:
+    repo: git@github.com:org/api.git
+    tags: [backend]
+  tools:
+    repo: git@github.com:org/tools.git
+    meta: true
+YAML
+    run "$META_BIN" -r -t cli-tools exec -- touch picked
+    [ "$status" -eq 0 ]
+    [ -f "$TEST_DIR/tools/cli/picked" ]
+    [ -z "$(find "$TEST_DIR" -name picked -not -path '*/tools/cli/*')" ]
+    # without -r, the tag isn't one of the workspace's own projects
+    run "$META_BIN" -t cli-tools exec -- true
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--recursive reads the tags of nested meta repos too"* ]]
+}
+
+@test "a filter error names the .meta.yaml it read" {
+    mkdir -p "$TEST_DIR/infra/tf"
+    printf 'projects:\n  tf: git@github.com:org/tf.git\n' > "$TEST_DIR/infra/.meta.yaml"
+    cd "$TEST_DIR/infra"
+    run "$META_BIN" --include api exec -- true
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--include 'api' names none of the repos"*"$TEST_DIR/infra/.meta.yaml"* ]]
+}
+
+@test "meta's options go before the command; after it they belong to the command" {
+    # misplaced before the program: refused by name, nothing runs
+    run "$META_BIN" exec --dry-run -- touch should-not-exist
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--dry-run is an option of meta itself: it goes before the command"* ]]
+    [ -z "$(find "$TEST_DIR" -name should-not-exist)" ]
+    # after the program: its arguments, in every repo (README's old example)
+    run "$META_BIN" exec echo test --tag backend
+    [ "$status" -eq 0 ]
+    [ "$(grep -c 'test --tag backend' <<<"$output")" -eq 4 ]
+    # a program whose name starts with - still runs after --
+    run "$META_BIN" exec -- -no-such-program
+    [[ "$output" != *"option of meta itself"* ]]
+}
+
+@test "--help with --add-aliases-to-global-looprc only prints help" {
+    run sh -c "printf 'y\ny\ny\n' | '$META_BIN' --add-aliases-to-global-looprc --help"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage: meta"* ]]
+    [ ! -e "$HOME/.looprc" ]
 }

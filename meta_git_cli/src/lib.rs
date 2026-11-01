@@ -8,7 +8,6 @@ mod commit;
 mod git_env;
 mod helpers;
 mod ssh;
-mod status;
 mod update;
 
 mod commands;
@@ -49,20 +48,18 @@ pub fn execute_command(
     // Checked before --help intercept so worktree subcommands can handle their own --help via clap
     if command.starts_with("worktree") || command.starts_with("git worktree") {
         // They find their repos in the set; worktree exec takes its own filters
-        if options.include_filters.is_some() || options.exclude_filters.is_some() {
+        if options.filtered() {
             return CommandResult::Error(format!(
-                "meta {command} does not take --include/--exclude before it; use `meta git worktree exec <name> --include <repo> -- <command>`"
+                "meta {command} does not take --include/--exclude/--tag before it; use `meta git worktree exec <name> --include <repo> -- <command>`"
             ));
         }
         return commands::worktree::execute_worktree_command(command, args, options, cwd);
     }
 
     // These act on repos they find themselves, not on the selected ones
-    if matches!(command, "git update" | "git clone")
-        && (options.include_filters.is_some() || options.exclude_filters.is_some())
-    {
+    if matches!(command, "git update" | "git clone") && options.filtered() {
         return CommandResult::Error(format!(
-            "meta {command} finds its repos itself (in the .meta.yaml files); it does not take --include/--exclude"
+            "meta {command} finds its repos itself (in the .meta.yaml files); it does not take --include/--exclude/--tag"
         ));
     }
 
@@ -71,6 +68,14 @@ pub fn execute_command(
         "git clone" => {
             return match meta_plugin_protocol::parse_args(command, args) {
                 Ok(args) => finish(clone::execute_git_clone(args, options, cwd)),
+                Err(result) => result,
+            }
+        }
+        "git update" => {
+            return match meta_plugin_protocol::parse_args::<update::UpdateArgs>(command, args) {
+                Ok(update::UpdateArgs {}) => {
+                    finish(update::execute_git_update(projects, options.mode(), cwd))
+                }
                 Err(result) => result,
             }
         }
@@ -94,12 +99,8 @@ pub fn execute_command(
         return CommandResult::ShowHelp(None);
     }
 
-    finish(match command {
-        "git status" => status::execute_git_status(projects, options, cwd),
-        "git update" => update::execute_git_update(projects, options.mode(), cwd),
-        // Fallback: run raw git command across all repos
-        _ => return execute_raw_git_command(command, args, projects, options, cwd),
-    })
+    // `git status` and every other git command run as typed in each repo
+    execute_raw_git_command(command, args, projects, options, cwd)
 }
 
 fn finish(result: anyhow::Result<CommandResult>) -> CommandResult {
@@ -128,7 +129,7 @@ fn build_passthrough_git_help(
         return None;
     }
 
-    let adapted_commands = ["clone", "status", "update", "commit", "worktree"];
+    let adapted_commands = ["clone", "update", "commit", "worktree"];
     let git_args: Vec<String> = command_words
         .iter()
         .skip(1)
@@ -172,19 +173,19 @@ fn build_passthrough_git_help(
 Usage: meta [META_OPTIONS] git {subcommand} [GIT_ARGS...]\n\n\
 Runs `{display_command}` in each repo in the current meta workspace.\n\n\
 {scope}\n\n\
-Meta options:\n\
+Meta options (before `git`):\n\
   --dry-run             Show the command that would run in each repo\n\
   --recursive           Include repos from nested meta workspaces\n\
   --depth <N>           Limit recursive traversal depth\n\
-  --include <REPOS>     Only these repos (.meta.yaml name or path from the root)\n\
+  --include <REPOS>     These repos (and those --tag selects; .meta.yaml name or path from the root)\n\
   --exclude <REPOS>     Skip these repos (.meta.yaml name or path from the root)\n\
   --tag <TAGS>          Filter by project tag(s), comma-separated\n\
   --parallel            Run repo commands concurrently\n\
   --sequential          Run repo commands one at a time\n\n\
 Examples:\n\
   meta git {subcommand}\n\
-  meta git {subcommand} --dry-run\n\
-  meta git {subcommand} --recursive --dry-run\n\n\
+  meta --dry-run git {subcommand}\n\
+  meta --recursive --dry-run git {subcommand}\n\n\
 Git help: run `git {subcommand} --help` directly for upstream git options."
     ))
 }

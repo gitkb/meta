@@ -215,7 +215,7 @@ Special case commands (like `meta git clone`) are fully handled by the plugin ra
 ## Command Execution Flow
 
 ```
-User: meta git status --tag backend
+User: meta --tag backend git status
               │
               ▼
     ┌─────────────────────┐
@@ -258,7 +258,7 @@ User: meta git status --tag backend
 For arbitrary commands via `meta exec`:
 
 ```
-User: meta exec --tag frontend -- npm install
+User: meta --tag frontend exec -- npm install
               │
               ▼
     ┌─────────────────────┐

@@ -292,3 +292,37 @@ fn a_broken_looprc_stops_only_what_runs_through_loop() {
         "{stderr}"
     );
 }
+
+/// The selection stays a path: a directory whose name isn't UTF-8 is never
+/// taken for its U+FFFD twin (macOS file systems refuse such names)
+#[cfg(target_os = "linux")]
+#[test]
+fn a_directory_name_that_is_not_utf8_runs_in_that_directory() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let raw = root.join(OsStr::from_bytes(b"ws\xff"));
+    let twin = root.join("ws\u{fffd}");
+    for ws in [&raw, &twin] {
+        fs::create_dir_all(ws.join("a")).unwrap();
+        fs::write(ws.join(".meta.yaml"), "projects:\n  a: git@x:o/a.git\n").unwrap();
+    }
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_meta"))
+        .args(["exec", "--", "touch", "here"])
+        .current_dir(&raw)
+        .env("HOME", &root)
+        .env("XDG_CONFIG_HOME", root.join("xdg"))
+        .env("XDG_DATA_HOME", root.join("xdg/data"))
+        .env("GIT_CONFIG_GLOBAL", root.join("gitconfig"))
+        .env("META_DATA_DIR", root.join("data"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(raw.join("here").is_file() && raw.join("a/here").is_file());
+    assert!(!twin.join("here").exists() && !twin.join("a/here").exists());
+}

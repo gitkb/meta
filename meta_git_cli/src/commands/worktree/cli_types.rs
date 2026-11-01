@@ -24,8 +24,6 @@ pub enum WorktreeCommands {
     Exec(ExecArgs),
     /// Remove expired/orphaned worktree sets of this workspace
     Prune,
-    #[command(external_subcommand)]
-    Unknown(Vec<String>),
 }
 
 #[derive(Args)]

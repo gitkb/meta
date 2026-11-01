@@ -82,7 +82,7 @@ The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta`
 - `--include`, `--exclude`, `--tag` filtering
 - `--dry-run` for previewing operations
 - JSON output mode for scripting
-- Filter precedence (tag → include → exclude)
+- How filters combine (`--include` and `--tag` add repos, `--exclude` removes them)
 
 **When Claude should reference this skill:**
 - When running arbitrary commands across repos

@@ -272,25 +272,6 @@ impl SubprocessPluginManager {
 }
 
 impl SubprocessPlugin {
-    /// Help for `meta <word>`, from the plugin's `--help`, or its info when
-    /// that fails or prints nothing
-    pub fn help(&self) -> String {
-        let output = Command::new(&self.path)
-            .arg("--help")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output();
-        match output {
-            Ok(output)
-                if output.status.success()
-                    && output.stdout.iter().any(|b| !b.is_ascii_whitespace()) =>
-            {
-                String::from_utf8_lossy(&output.stdout).to_string()
-            }
-            _ => meta_plugin_protocol::help_text(&self.info),
-        }
-    }
-
     /// How many leading args name the command: the longest command the
     /// plugin claims that is a whole-word prefix of `args`, else the word
     /// alone. Only claimed words are joined into the request's command; what
@@ -311,14 +292,29 @@ impl SubprocessPlugin {
     }
 
     /// Run `args` (the command as typed after `meta`, starting with this
-    /// plugin's word) through the plugin.
+    /// plugin's word) through the plugin, in `projects` (the selected repos
+    /// of the workspace or set at `root_dir`), from `cwd`.
     pub fn execute(
         &self,
         args: &[String],
-        projects: &[String],
+        projects: &[PathBuf],
         root_dir: Option<&Path>,
+        cwd: &Path,
         options: PluginRequestOptions,
     ) -> Result<()> {
+        // the protocol is JSON: a path that isn't UTF-8 can't be sent
+        let projects = projects
+            .iter()
+            .map(|dir| {
+                dir.to_str().map(str::to_string).with_context(|| {
+                    format!(
+                        "{} is not UTF-8, so plugin {} can't be sent it",
+                        escape_path(dir),
+                        escape(&self.word)
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let (command, remaining_args) = args
             .split_at_checked(self.command_len(args))
             .unwrap_or((args, &[]));
@@ -327,8 +323,8 @@ impl SubprocessPlugin {
         let request = PluginRequest {
             command,
             args: remaining_args.to_vec(),
-            projects: projects.to_vec(),
-            cwd: std::env::current_dir()?,
+            projects,
+            cwd: cwd.to_path_buf(),
             options,
         };
 
@@ -877,6 +873,7 @@ mod tests {
                 depth: Some(3),
                 include_filters: Some(vec!["frontend".to_string()]),
                 exclude_filters: Some(vec!["tests".to_string()]),
+                tag_filters: Some(vec!["rust".to_string()]),
                 strict: false,
             },
         };

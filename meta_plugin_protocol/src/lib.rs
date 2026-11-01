@@ -110,18 +110,32 @@ pub struct PluginRequestOptions {
     #[serde(default)]
     pub depth: Option<usize>,
     /// `--include` as the user typed it. The host has already applied it
-    /// (and `exclude_filters`) to `PluginRequest::projects`; a plugin that acts
-    /// on repos it finds itself must refuse filters it cannot honor.
+    /// (and `exclude_filters` and `tag_filters`) to `PluginRequest::projects`;
+    /// a plugin that acts on repos it finds itself must refuse filters it
+    /// cannot honor.
     #[serde(default)]
     pub include_filters: Option<Vec<String>>,
     #[serde(default)]
     pub exclude_filters: Option<Vec<String>>,
+    /// `--tag`'s tags, applied like `include_filters`. A host older than
+    /// this field never sends it.
+    #[serde(default)]
+    pub tag_filters: Option<Vec<String>>,
     /// Convert warnings to errors for all-or-nothing behavior (CI/automation)
     #[serde(default)]
     pub strict: bool,
 }
 
 impl PluginRequestOptions {
+    /// Whether the user chose repos with `--include`, `--exclude` or
+    /// `--tag`: `PluginRequest::projects` holds only those. A plugin that
+    /// finds its repos itself acts on those alone, or refuses the filters.
+    pub fn filtered(&self) -> bool {
+        self.include_filters.is_some()
+            || self.exclude_filters.is_some()
+            || self.tag_filters.is_some()
+    }
+
     /// `dry_run` as the mode a command runs in: read it here, once, and
     /// hand the mode to everything that changes something.
     pub fn mode(&self) -> meta_core::ExecutionMode {
@@ -320,13 +334,22 @@ pub fn parse_args<P: clap::Parser>(command: &str, args: &[String]) -> Result<P, 
     P::try_parse_from(&argv).map_err(|e| {
         use clap::error::ErrorKind;
         match e.kind() {
-            ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+            ErrorKind::DisplayHelp
+            | ErrorKind::DisplayVersion
+            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
                 CommandResult::Message(e.render().to_string().trim_end().to_string())
             }
             _ => {
                 let message = meta_core::args::escaped_error::<P>(&argv).to_string();
                 let message = message.strip_prefix("error: ").unwrap_or(&message);
-                CommandResult::Error(message.trim_end().to_string())
+                let mut message = message.trim_end().to_string();
+                // a command that isn't one: the ones there are
+                if e.kind() == ErrorKind::InvalidSubcommand {
+                    let help = P::command().bin_name(&argv[0]).render_help().to_string();
+                    let error = message.split("\n\nUsage:").next().unwrap_or_default();
+                    message = format!("{error}\n\n{}", help.trim_end());
+                }
+                CommandResult::Error(message)
             }
         }
     })

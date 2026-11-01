@@ -213,11 +213,11 @@ If any repo fails, the command stops and each repo it reached is put back on its
 ### By Tag
 
 ```bash
-# Single tag (plugin commands work directly)
-meta git pull --tag backend
+# Single tag
+meta --tag backend git pull
 
-# Multiple tags (OR logic) - use exec for non-plugin commands
-meta exec --tag frontend,shared -- npm test
+# Multiple tags (OR logic)
+meta --tag frontend,shared exec -- npm test
 ```
 
 ### By Directory
@@ -235,15 +235,13 @@ A value names a whole repo: its `.meta.yaml` name or its path from the workspace
 ### Combined Filtering
 
 ```bash
-# Tag filter + repo filter
-meta --tag backend --include api git status
-meta --tag backend --include api exec -- cargo test
+# The backend repos and the root repo
+meta --tag backend --include . git status
+# The backend repos except one
+meta --tag backend --exclude legacy exec -- cargo test
 ```
 
-**Filter precedence:**
-1. `--tag` filters by project tags (meta level)
-2. `--include` limits to the named repos
-3. `--exclude` removes the named repos
+**Filters:** `--include` and `--tag` each add repos: the ones `--include` names, and the ones with any of the `--tag` tags (with neither, every repo). `--exclude` then removes the repos it names. The root repo has no tags, so `--tag` alone never selects it; add it with `--include .`. A tag no project has is an error that lists the tags there are. With `--recursive`, a nested project is selected by its own tags, whatever its parent's.
 
 ---
 
@@ -331,8 +329,8 @@ meta --json npm test | jq '.summary.failed'
 By default, commands run sequentially with live output. Use `--parallel` for concurrent execution:
 
 ```bash
-meta git status --parallel
-meta exec --parallel -- cargo test
+meta --parallel git status
+meta --parallel exec -- cargo test
 ```
 
 ### Parallel Mode Behavior

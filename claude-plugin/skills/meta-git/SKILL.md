@@ -46,7 +46,7 @@ meta git pull      # Pull every existing repo
 meta git update    # Clone repos listed in .meta.yaml that are missing locally
 ```
 
-`meta git update` only clones missing repos (nested meta repos included); it does not pull existing ones. `meta git pull --recursive` also pulls nested meta repos.
+`meta git update` only clones missing repos (nested meta repos included); it does not pull existing ones. `meta --recursive git pull` also pulls nested meta repos.
 
 ## Before Batch Operations (Critical)
 
@@ -85,7 +85,7 @@ meta git log --oneline -5
 
 ## Filtering
 
-Target specific repos. With `--tag`, the meta root repo stays included even when it isn't tagged; `--include`/`--exclude` take whole repos (a `.meta.yaml` name or the path from the workspace root, `.` for the root), never part of a path, and can drop the root. A value that names no repo is an error.
+Target specific repos, with meta's options before `git`. `--tag` selects the tagged repos, never the meta root (add it with `--include .`); `--include`/`--exclude` take whole repos (a `.meta.yaml` name or the path from the workspace root, `.` for the root), never part of a path. A value or tag that names nothing is an error.
 
 ```bash
 # By tag
@@ -139,6 +139,6 @@ When the meta MCP server is available, these tools provide structured JSON outpu
 ## Efficiency Tips
 
 - **Targeted commits**: `meta --include repo1,repo2 git commit -m "msg"` commits only in the named repos
-- **Tag-based push**: `meta --tag backend git push` pushes tagged repos (and the root)
+- **Tag-based push**: `meta --tag backend git push` pushes the tagged repos only
 - **Per-repo messages**: Use `meta_git_multi_commit` when changes in different repos need different commit messages
 - **One-call status**: `meta git status` replaces N individual `cd && git status` sequences

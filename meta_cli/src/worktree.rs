@@ -85,6 +85,32 @@ pub fn set_config(
     }
 }
 
+/// Where `dir`, inside a worktree set meta made, is in the workspace the set
+/// was made from (and from a set made inside another set, on to that one's
+/// workspace), by meta's records in the set's checkouts. None outside a set,
+/// and for a set without records (made by hand).
+pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
+    let mut place = dir.to_path_buf();
+    let mut seen = Vec::new();
+    while let Some((_, set_dir)) = detect_worktree_location(&place) {
+        let members: Vec<PathBuf> = discover_worktree_members(&set_dir)?
+            .into_iter()
+            .map(|member| member.path)
+            .collect();
+        let Some(origin) = set_origin(&set_dir, &members)? else {
+            break;
+        };
+        let inside = place.strip_prefix(&set_dir).unwrap_or(Path::new(""));
+        place = origin.join(inside);
+        // records that lead in a circle lead nowhere
+        if seen.contains(&place) {
+            break;
+        }
+        seen.push(place.clone());
+    }
+    Ok((!seen.is_empty()).then_some(place))
+}
+
 /// The workspace meta recorded the set at `set_dir` was made from, by the
 /// members whose record names this set (another set's checkout moved in
 /// doesn't count). Members that name different workspaces are an error.
@@ -113,6 +139,56 @@ fn set_origin(set_dir: &Path, members: &[PathBuf]) -> Result<Option<PathBuf>> {
         }
     }
     Ok(origin)
+}
+
+/// The checkouts among `members` of the set at `set_dir` that `filters`
+/// select (see [`crate::repo_filter::select`]). A set lays its repos out as
+/// the workspace, so a checkout is named and tagged by the project at its
+/// place in the set, nested meta repos included, as the set's `workspace`
+/// and the nested configs tell (see [`set_tree`]); a checkout of no project,
+/// such as the set's root, has neither name nor tags.
+pub fn select_in_set(
+    set_dir: &Path,
+    members: &[PathBuf],
+    workspace: Option<&meta_core::config::Workspace>,
+    filters: &crate::repo_filter::Filters,
+) -> Result<Vec<PathBuf>> {
+    use crate::repo_filter::{Candidate, Scope};
+    if filters.is_empty() {
+        return Ok(members.to_vec());
+    }
+    if workspace.is_none() && !filters.tags.is_empty() {
+        anyhow::bail!(
+            "No meta config found for worktree set {}, so --tag cannot select its repos",
+            escape_path(set_dir)
+        );
+    }
+    let projects = workspace.map_or(&[][..], |w| &w.projects);
+    let tree = set_tree(set_dir, members, projects)?;
+    // Compared as directories: a project at a link in the set is the
+    // checkout where the link leads
+    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let infos: std::collections::HashMap<PathBuf, meta_core::config::ProjectInfo> =
+        meta_core::config::build_project_map(&tree, set_dir, "")
+            .into_iter()
+            .map(|(place, (_, info))| (real(&set_dir.join(place)), info))
+            .collect();
+    let repos = members
+        .iter()
+        .map(|member| match infos.get(&real(member)) {
+            Some(info) => Candidate::project(member.clone(), info),
+            None => Candidate::root(member.clone()),
+        })
+        .collect();
+    Scope {
+        root: set_dir.to_path_buf(),
+        config: workspace.map(|w| w.config_path.clone()),
+        repos,
+        // a tag of a project the set doesn't hold is no typo
+        tags: infos.into_values().flat_map(|info| info.tags).collect(),
+        nested: true,
+    }
+    .select(filters)
 }
 
 /// The meta tree that describes the checkouts of the set at `set_dir`, whose

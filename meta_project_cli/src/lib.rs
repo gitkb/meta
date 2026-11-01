@@ -2,25 +2,59 @@
 //!
 //! Provides project management commands for meta repositories.
 
-use meta_cli::dependency_graph::DependencyGraph;
+use meta_cli::dependency_graph::{DependencyGraph, ProjectDependencies};
 use meta_cli::worktree;
 use meta_core::config::{self, MetaTreeNode};
 use meta_core::display::{escape, escape_path};
 use meta_core::git::GitUrl;
 use serde::Serialize;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use meta_plugin_protocol::{has_help_token, parse_args, CommandResult};
 
 /// Options passed to execute_command
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct ExecuteOptions {
     pub json_output: bool,
     pub recursive: bool,
     pub depth: Option<usize>,
-    /// `--include` or `--exclude` was given
-    pub filtered: bool,
+    /// The project directories meta's `--include`, `--exclude` or `--tag`
+    /// chose, when one was given: the commands act on these only
+    pub selected: Option<Vec<PathBuf>>,
+}
+
+impl ExecuteOptions {
+    /// `selected` from the directories meta sent, when it filtered them
+    pub fn select(filtered: bool, projects: &[String]) -> Option<Vec<PathBuf>> {
+        filtered.then(|| {
+            projects
+                .iter()
+                .map(|dir| comparable(Path::new(dir)))
+                .collect()
+        })
+    }
+
+    /// Whether the command acts on the project at `dir`
+    fn acts_on(&self, dir: &Path) -> bool {
+        self.selected
+            .as_ref()
+            .is_none_or(|selected| selected.contains(&comparable(dir)))
+    }
+}
+
+/// `dir` resolved, so two spellings of one directory compare equal; for a
+/// project not cloned yet, its parent resolved.
+fn comparable(dir: &Path) -> PathBuf {
+    dir.canonicalize().unwrap_or_else(|_| {
+        match (
+            dir.parent().and_then(|p| p.canonicalize().ok()),
+            dir.file_name(),
+        ) {
+            (Some(parent), Some(name)) => parent.join(name),
+            _ => dir.to_path_buf(),
+        }
+    })
 }
 
 // ============================================================================
@@ -142,26 +176,26 @@ pub fn execute_command(
     cwd: &Path,
 ) -> CommandResult {
     match command {
-        "project list" | "project ls" => {
-            // It lists the whole tree, so a filter would be silently ignored
-            if options.filtered {
-                return CommandResult::Error(
-                    "meta project list does not take --include/--exclude".to_string(),
-                );
-            }
-            match parse_args::<ListArgs>(command, args) {
-                Ok(list) => handle_project_list(
-                    cwd,
-                    &ExecuteOptions {
-                        json_output: options.json_output || list.json,
-                        recursive: options.recursive || list.recursive,
-                        depth: list.depth.or(options.depth),
-                        filtered: false,
-                    },
-                ),
-                Err(result) => result,
-            }
+        // These read the workspace tree themselves, with their own
+        // --recursive, so meta's selection isn't theirs to apply
+        "project list" | "project ls" | "project dependents" if options.selected.is_some() => {
+            CommandResult::Error(format!(
+                "meta {command} does not take --include/--exclude/--tag; it reads the .meta.yaml \
+                 tree itself"
+            ))
         }
+        "project list" | "project ls" => match parse_args::<ListArgs>(command, args) {
+            Ok(list) => handle_project_list(
+                cwd,
+                &ExecuteOptions {
+                    json_output: options.json_output || list.json,
+                    recursive: options.recursive || list.recursive,
+                    depth: list.depth.or(options.depth),
+                    selected: None,
+                },
+            ),
+            Err(result) => result,
+        },
         "project dependents" => match parse_args::<DependentsArgs>(command, args) {
             Ok(dependents) => handle_project_dependents(
                 &dependents.project,
@@ -233,6 +267,9 @@ fn missing_projects(
     provided_projects: &[String],
     cwd: &Path,
 ) -> anyhow::Result<Vec<GitUrl>> {
+    if options.selected.is_some() {
+        return missing_selected(options, cwd);
+    }
     if !options.recursive || provided_projects.is_empty() {
         let workspace = config::Workspace::find(cwd, None)?
             .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
@@ -251,6 +288,32 @@ fn missing_projects(
             missing.extend(find_missing_projects(&workspace));
         }
     }
+    Ok(missing)
+}
+
+/// The URLs of the projects meta's filters selected that aren't cloned:
+/// the nearest workspace's, with meta's --recursive its nested ones too,
+/// in project order.
+fn missing_selected(options: &ExecuteOptions, cwd: &Path) -> anyhow::Result<Vec<GitUrl>> {
+    fn walk(nodes: &[MetaTreeNode], dir: &Path, options: &ExecuteOptions, out: &mut Vec<GitUrl>) {
+        for node in nodes {
+            let path = dir.join(&node.info.path);
+            if options.acts_on(&path) && !path.is_dir() {
+                out.extend(node.info.repo.clone());
+            }
+            walk(&node.children, &path, options, out);
+        }
+    }
+    let workspace = config::Workspace::find(cwd, None)?
+        .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
+    let depth = if options.recursive {
+        options.depth
+    } else {
+        Some(0)
+    };
+    let tree = config::walk_projects(&workspace.dir, &workspace.projects, depth)?;
+    let mut missing = Vec::new();
+    walk(&tree, &workspace.dir, options, &mut missing);
     Ok(missing)
 }
 
@@ -458,15 +521,36 @@ fn handle_project_dependents(
     }
 }
 
-/// The projects of the nearest workspace (with meta's --recursive, of the
-/// root workspace) that depend directly on `project_name`.
+/// The projects that depend directly on `project_name`, among those of the
+/// nearest workspace by name; with `recursive`, among every project in the
+/// tree of the root workspace, its own by name and nested ones by their path
+/// from it (two nested repos may share a name).
 fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result<Vec<String>> {
+    fn walk(nodes: Vec<MetaTreeNode>, prefix: &str, out: &mut Vec<ProjectDependencies>) {
+        for node in nodes {
+            let path = format!("{prefix}/{}", node.info.path);
+            let mut project = ProjectDependencies::from(node.info);
+            // `depends_on` names it, so its name stands for it as well
+            project
+                .provides
+                .push(std::mem::replace(&mut project.name, path.clone()));
+            out.push(project);
+            walk(node.children, &path, out);
+        }
+    }
     let mut workspace = config::Workspace::find(cwd, None)?
         .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
+    let mut projects = Vec::new();
     if recursive {
         workspace = workspace.root()?;
+        for node in config::walk_projects(&workspace.dir, &workspace.projects, None)? {
+            walk(node.children, &node.info.path, &mut projects);
+            projects.push(node.info.into());
+        }
+    } else {
+        projects.extend(workspace.projects.into_iter().map(Into::into));
     }
-    let graph = DependencyGraph::build(workspace.projects.into_iter().map(Into::into).collect())?;
+    let graph = DependencyGraph::build(projects)?;
     let dependents = graph
         .dependents_of(project_name)
         .ok_or_else(|| anyhow::anyhow!("Unknown project or alias: {}", escape(project_name)))?;
@@ -611,6 +695,47 @@ mod tests {
             message(run("project dependents", &["c", "-r"], &nested)).unwrap(),
             "user"
         );
+    }
+
+    #[test]
+    fn recursive_dependents_cover_nested_projects_by_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().canonicalize().unwrap();
+        let config = |dir: &Path, yaml: &str| {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join(".meta.yaml"), yaml).unwrap();
+        };
+        config(
+            &root,
+            "projects:\n  utils:\n    repo: git@x:o/utils.git\n    provides: [utils-api]\n  \
+             api:\n    repo: git@x:o/api.git\n    depends_on: [utils-api]\n  \
+             infra:\n    repo: git@x:o/infra.git\n    meta: true\n  \
+             tools:\n    repo: git@x:o/tools.git\n    meta: true\n",
+        );
+        config(
+            &root.join("infra"),
+            "projects:\n  terraform: git@x:o/tf.git\n  \
+             k8s:\n    repo: git@x:o/k8s.git\n    depends_on: [terraform]\n",
+        );
+        config(
+            &root.join("tools"),
+            "projects:\n  cli:\n    repo: git@x:o/cli.git\n    depends_on: [utils-api]\n",
+        );
+        let dependents = |project: &str, cwd: &Path| {
+            let args = [project.to_string(), "-r".to_string()];
+            message(execute_command(
+                "project dependents",
+                &args,
+                &ExecuteOptions::default(),
+                &[],
+                cwd,
+            ))
+            .unwrap()
+        };
+        // nested projects depend on the root's, and on each other, by name
+        assert_eq!(dependents("utils-api", &root), "api\ntools/cli");
+        assert_eq!(dependents("terraform", &root), "infra/k8s");
+        assert_eq!(dependents("terraform", &root.join("infra")), "infra/k8s");
     }
 
     #[test]

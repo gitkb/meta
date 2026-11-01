@@ -2,16 +2,16 @@ use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use colored::*;
 use loop_lib::run;
-use meta_core::config::{self, find_meta_config, MetaTreeNode, ProjectInfo, Workspace};
+use meta_cli::repo_filter::{Filters, Scope};
+use meta_core::config::{self, find_meta_config, Workspace};
 use meta_core::display::{escape, escape_lines, escape_path};
 use meta_core::ExecutionMode;
-use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod init;
 mod registry;
 mod subprocess_plugins;
-use meta_cli::{repo_filter, worktree};
+use meta_cli::worktree;
 use meta_plugin_protocol::PluginRequestOptions;
 use subprocess_plugins::{SubprocessPlugin, SubprocessPluginManager};
 
@@ -19,6 +19,8 @@ use subprocess_plugins::{SubprocessPlugin, SubprocessPluginManager};
 
 const VERSION: &str = include_str!("../../VERSION");
 
+/// meta's options go before the command; every word after the command
+/// belongs to it, so `meta git pull --tag v1` gives `--tag v1` to git.
 #[derive(Parser)]
 #[command(
     author,
@@ -26,27 +28,29 @@ const VERSION: &str = include_str!("../../VERSION");
     about,
     long_about = None,
     disable_help_flag = true,
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    after_help = "meta's options go before the command (meta --dry-run git update); \
+                  what follows the command belongs to it."
 )]
 struct Cli {
-    /// Print help
-    #[arg(short = 'h', long, global = true, action = clap::ArgAction::SetTrue)]
-    help: bool,
+    /// Print help, with the commands plugins add
+    #[arg(short = 'h', long = "help")]
+    print_help: bool,
 
-    #[arg(
-        long,
-        global = true,
-        help = "Add shell aliases to the global .looprc file"
-    )]
+    #[arg(long, help = "Add shell aliases to the global .looprc file")]
     add_aliases_to_global_looprc: bool,
 
-    #[arg(short, long, global = true, value_name = "FILE")]
+    #[arg(
+        short,
+        long,
+        value_name = "FILE",
+        help = "Read FILE instead of .meta.yaml, looked for in the current directory and the ones above it"
+    )]
     config: Option<PathBuf>,
 
     #[arg(
         short,
         long,
-        global = true,
         value_delimiter = ',',
         help = "Skip these repos: each value is a repo's .meta.yaml name or its whole path from the workspace root (. for the root), never part of one"
     )]
@@ -55,41 +59,33 @@ struct Cli {
     #[arg(
         short,
         long,
-        global = true,
         value_delimiter = ',',
-        help = "Only run in these repos: each value is a repo's .meta.yaml name or its whole path from the workspace root (. for the root), never part of one"
+        help = "Run in these repos (and in those --tag selects): each value is a repo's .meta.yaml name or its whole path from the workspace root (. for the root), never part of one"
     )]
     include: Option<Vec<String>>,
 
-    #[arg(long, global = true, help = "Output results in JSON format")]
+    #[arg(long, help = "Output results in JSON format")]
     json: bool,
 
-    #[arg(short, long, global = true, help = "Enable silent mode")]
+    #[arg(short, long, help = "Enable silent mode")]
     silent: bool,
 
-    #[arg(short, long, action, global = true, help = "Enable verbose output")]
+    #[arg(short, long, action, help = "Enable verbose output")]
     verbose: bool,
 
     #[arg(
         long,
         short = 't',
-        global = true,
         value_name = "TAGS",
-        help = "Filter projects by tag(s), comma-separated"
+        help = "Run in the repos with any of these tags, comma-separated (the root has none: add it with -i .)"
     )]
     tag: Option<String>,
 
-    #[arg(
-        long,
-        short = 'r',
-        global = true,
-        help = "Recursively process nested meta repos"
-    )]
+    #[arg(long, short = 'r', help = "Recursively process nested meta repos")]
     recursive: bool,
 
     #[arg(
         long,
-        global = true,
         value_name = "N",
         help = "Maximum depth for recursive processing (default: unlimited)"
     )]
@@ -97,31 +93,24 @@ struct Cli {
 
     #[arg(
         long,
-        global = true,
         help = "Show what would change, and change nothing (commands that can't preview refuse it)"
     )]
     dry_run: bool,
 
-    #[arg(long, global = true, help = "Run commands in parallel")]
+    #[arg(long, help = "Run commands in parallel")]
     parallel: bool,
 
-    #[arg(
-        long,
-        global = true,
-        help = "Run commands sequentially (overrides config default)"
-    )]
+    #[arg(long, help = "Run commands sequentially (overrides config default)")]
     sequential: bool,
 
     #[arg(
         long,
-        global = true,
-        help = "Use primary checkout paths, overriding worktree context detection"
+        help = "Inside a worktree set, act on the workspace it was made from instead"
     )]
     primary: bool,
 
     #[arg(
         long,
-        global = true,
         help = "Convert warnings to errors for all-or-nothing behavior (CI/automation)"
     )]
     strict: bool,
@@ -135,16 +124,68 @@ impl Cli {
     fn mode(&self) -> ExecutionMode {
         ExecutionMode::from_dry_run(self.dry_run)
     }
+
+    /// `--include`, `--exclude` and `--tag`
+    fn filters(&self) -> Filters {
+        Filters::new(
+            self.include.clone(),
+            self.exclude.clone(),
+            self.tag.as_deref(),
+        )
+    }
+
+    /// What a plugin is told of meta's options; `parallel` is resolved
+    /// against the config the command runs from
+    fn request_options(&self, parallel: bool) -> PluginRequestOptions {
+        let tags = self.filters().tags;
+        PluginRequestOptions {
+            json_output: self.json,
+            verbose: self.verbose,
+            parallel,
+            dry_run: self.dry_run,
+            silent: self.silent,
+            recursive: self.recursive,
+            depth: self.depth,
+            include_filters: self.include.clone(),
+            exclude_filters: self.exclude.clone(),
+            tag_filters: (!tags.is_empty()).then_some(tags),
+            strict: self.strict,
+        }
+    }
+
+    /// Where the command runs from: the current directory, or with
+    /// `--primary` inside a worktree set, its place in the workspace the set
+    /// was made from
+    fn start_dir(&self) -> Result<PathBuf> {
+        let cwd = std::env::current_dir()?;
+        if !self.primary {
+            return Ok(cwd);
+        }
+        Ok(worktree::primary_dir(&cwd)?.unwrap_or(cwd))
+    }
 }
 
 #[derive(Subcommand)]
 enum Commands {
     /// Show workspace context summary
     Context(ContextArgs),
-    /// Execute a command across all repos
+    /// Run a command in each selected repo, as typed (no shell, no plugin)
+    #[command(
+        after_help = "No shell parses the command: each argument reaches the program as \
+                            given, so quotes, $(), ;, | and globs stay literal. For a shell, ask \
+                            for one: meta exec -- sh -c 'npm ci && npm test'.\n\n\
+                            Examples:\n  meta exec -- cargo fmt --check\n  \
+                            meta --include api,web exec -- docker-compose up -d"
+    )]
     Exec(ExecArgs),
-    /// Print this message or the help of the given subcommand(s)
-    Help,
+    /// Print help for meta or for a command (meta help git worktree create)
+    Help {
+        #[command(flatten)]
+        _help: HelpFlag,
+        /// The command, as you would type it after `meta`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
     /// Initialize meta integrations
     Init(InitArgs),
     /// Manage plugins
@@ -153,9 +194,21 @@ enum Commands {
     External(Vec<String>),
 }
 
+/// `-h/--help` for a built-in command and the commands under it: meta's own
+/// `--help` (with plugins) turns clap's off everywhere
+#[derive(Args)]
+struct HelpFlag {
+    /// Print help
+    #[arg(short, long, global = true, action = clap::ArgAction::Help)]
+    help: Option<bool>,
+}
+
 /// Arguments for `meta context`
 #[derive(Args)]
 struct ContextArgs {
+    #[command(flatten)]
+    _help: HelpFlag,
+
     /// Skip git status queries (structure only, faster)
     #[arg(long)]
     no_status: bool,
@@ -163,26 +216,41 @@ struct ContextArgs {
     /// Bypass cache and force fresh context generation
     #[arg(long)]
     no_cache: bool,
+
+    /// Output the context as JSON
+    #[arg(long)]
+    json: bool,
 }
 
 /// Arguments for `meta exec`
 #[derive(Args)]
 struct ExecArgs {
-    /// Command and arguments to execute (use -- to separate from meta flags)
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    #[command(flatten)]
+    _help: HelpFlag,
+
+    /// The program and its arguments (after `--` when the program starts with `-`)
+    #[arg(required = true, trailing_var_arg = true)]
     command: Vec<String>,
 }
 
 /// Arguments for `meta init`
 #[derive(Args)]
+#[command(subcommand_required = true, arg_required_else_help = true)]
 struct InitArgs {
+    #[command(flatten)]
+    _help: HelpFlag,
+
     #[command(subcommand)]
-    command: Option<InitCommands>,
+    command: InitCommands,
 }
 
 #[derive(Subcommand)]
 enum InitCommands {
     /// Install Claude Code skills, rules, and hooks for this meta repo
+    #[command(
+        after_help = "Examples:\n  meta init claude\n  meta init claude --update\n  \
+                            meta --dry-run init claude --force"
+    )]
     Claude {
         /// Refresh skills and rules, merge meta hooks into settings
         #[arg(short, long)]
@@ -196,9 +264,13 @@ enum InitCommands {
 
 /// Arguments for `meta plugin`
 #[derive(Args)]
+#[command(subcommand_required = true, arg_required_else_help = true)]
 struct PluginArgs {
+    #[command(flatten)]
+    _help: HelpFlag,
+
     #[command(subcommand)]
-    command: Option<PluginCommands>,
+    command: PluginCommands,
 }
 
 #[derive(Subcommand)]
@@ -206,12 +278,15 @@ enum PluginCommands {
     /// Search for plugins in the registry
     Search {
         /// Search query
-        query: Option<String>,
+        query: String,
+        /// Output the matches as JSON
+        #[arg(long)]
+        json: bool,
     },
-    /// Install a plugin from the registry
+    /// Install a plugin (by registry name, owner/repo[@version] or URL)
     Install {
-        /// Plugin name
-        name: Option<String>,
+        /// Plugin name, owner/repo[@version] or archive URL
+        name: String,
         /// Install plugin locally to project (.meta/plugins/) instead of globally
         #[arg(long)]
         local: bool,
@@ -221,11 +296,14 @@ enum PluginCommands {
         /// List only project-local plugins
         #[arg(long)]
         local: bool,
+        /// Output name, version, description and path of each as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Uninstall a plugin
     Uninstall {
         /// Plugin name
-        name: Option<String>,
+        name: String,
         /// Uninstall from project-local plugins
         #[arg(long)]
         local: bool,
@@ -245,225 +323,33 @@ enum PluginCommands {
 
 // === Help Utilities ===
 
-/// Print help text with integrated plugin commands. Every plugin is started
-/// for its description and version.
-fn print_help_with_plugins(plugins: &SubprocessPluginManager) {
-    let rows = plugins
-        .all()
-        .into_iter()
-        .map(|plugin| {
-            let description = plugin
-                .info
-                .description
-                .unwrap_or_else(|| "No description available".to_string());
-            let source = format!("plugin: {} v{}", plugin.word, plugin.info.version);
-            (plugin.word, description, source)
-        })
-        .collect();
-    let _ = write_help_with_plugin_commands(rows, &mut std::io::stdout());
-}
-
-/// Write help text with plugin commands integrated into the command list.
-/// `plugins` are (word, description, source) rows.
-fn write_help_with_plugin_commands(
-    plugins: Vec<(String, String, String)>,
-    w: &mut dyn Write,
-) -> std::io::Result<()> {
-    let cmd = Cli::command();
-
-    // Header
-    if let Some(about) = cmd.get_about() {
-        writeln!(w, "{}", about)?;
-    }
-    writeln!(w)?;
-
-    // Usage
-    writeln!(w, "Usage: meta [OPTIONS] [COMMAND]")?;
-    writeln!(w)?;
-
-    // Collect all commands: (name, description, plugin_source)
-    let mut commands: Vec<(String, String, Option<String>)> = Vec::new();
-
-    // Built-in commands from clap (skip "help" - we'll add it at the end)
-    for subcommand in cmd.get_subcommands() {
-        let name = subcommand.get_name();
-        if name == "help" {
+/// meta's help, with a line for each plugin's command word (each plugin is
+/// started for its description and version) unless a built-in command has
+/// that name. Plugins name and describe themselves, so their values are
+/// escaped.
+fn help_with_plugins(plugins: &SubprocessPluginManager) -> String {
+    let mut cmd = Cli::command();
+    for plugin in plugins.all() {
+        // shown escaped; a word whose escaped form is taken (by a built-in
+        // or another plugin's) is shown once
+        let shown = escape(&plugin.word).into_owned();
+        if cmd.find_subcommand(&shown).is_some() {
             continue;
         }
-        let about = subcommand
-            .get_about()
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        commands.push((name.to_string(), about, None));
-    }
-
-    // Each plugin serves the word in its file name, unless a built-in
-    // command has that name
-    for (word, description, source) in plugins {
-        if cmd.find_subcommand(&word).is_none() {
-            commands.push((word, description, Some(source)));
-        }
-    }
-
-    // Sort alphabetically
-    commands.sort_by(|a, b| a.0.cmp(&b.0));
-
-    // Add help at the end (standard convention)
-    commands.push((
-        "help".to_string(),
-        "Print this message or the help of the given subcommand(s)".to_string(),
-        None,
-    ));
-
-    // Render commands section; plugins name and describe their own commands,
-    // so each value stays on its line
-    writeln!(w, "Commands:")?;
-    let commands: Vec<_> = commands
-        .iter()
-        .map(|(name, desc, plugin)| (escape(name), escape(desc), plugin.as_deref().map(escape)))
-        .collect();
-    let max_name_len = commands.iter().map(|c| c.0.len()).max().unwrap_or(10);
-    for (name, desc, plugin_opt) in &commands {
-        let suffix = plugin_opt
-            .as_ref()
-            .map(|p| format!(" [{}]", p))
-            .unwrap_or_default();
-        writeln!(
-            w,
-            "  {:<width$}  {}{}",
-            name,
-            desc,
-            suffix,
-            width = max_name_len
-        )?;
-    }
-    writeln!(w)?;
-
-    // Options - extract from clap
-    writeln!(w, "Options:")?;
-    for arg in cmd.get_arguments() {
-        let name = arg.get_id().as_str();
-        // Skip hidden or help/version (clap adds them automatically)
-        if name == "help" || name == "version" {
-            continue;
-        }
-
-        let mut flag_str = String::new();
-        if let Some(short) = arg.get_short() {
-            flag_str.push_str(&format!("-{}", short));
-            if arg.get_long().is_some() {
-                flag_str.push_str(", ");
-            }
-        }
-        if let Some(long) = arg.get_long() {
-            flag_str.push_str(&format!("--{}", long));
-        }
-
-        // Add value name if this arg takes a value (not a flag)
-        // A flag has action SetTrue/SetFalse/Count - check num_args or action
-        let is_flag = matches!(
-            arg.get_action(),
-            clap::ArgAction::SetTrue | clap::ArgAction::SetFalse | clap::ArgAction::Count
+        let description = plugin
+            .info
+            .description
+            .as_deref()
+            .unwrap_or("No description available");
+        let about = format!(
+            "{} [plugin: {} v{}]",
+            escape(description),
+            escape(&plugin.word),
+            escape(&plugin.info.version)
         );
-        if !is_flag {
-            if let Some(value_names) = arg.get_value_names() {
-                if !value_names.is_empty() {
-                    flag_str.push_str(&format!(" <{}>", value_names[0]));
-                }
-            }
-        }
-
-        let help = arg.get_help().map(|s| s.to_string()).unwrap_or_default();
-
-        if !flag_str.is_empty() {
-            writeln!(w, "  {:<38}  {}", flag_str, help)?;
-        }
+        cmd = cmd.subcommand(clap::Command::new(shown).about(about));
     }
-
-    // Standard help/version
-    writeln!(w, "  {:<38}  Print help", "-h, --help")?;
-    writeln!(w, "  {:<38}  Print version", "-V, --version")?;
-
-    Ok(())
-}
-
-/// Print help for `meta context` without generating workspace context.
-fn print_context_help() {
-    println!("meta context - Show workspace context summary");
-    println!();
-    println!("Usage: meta context [OPTIONS]");
-    println!();
-    println!("Options:");
-    println!("      --no-status   Skip git status queries (structure only, faster)");
-    println!("      --no-cache    Bypass cache and force fresh context generation");
-    println!("  -h, --help        Print help");
-    println!();
-    println!("Shows the current meta workspace, repos, branches, status, key commands, and dependencies.");
-}
-
-/// Print help for the built-in plugin management command family.
-fn print_plugin_help() {
-    println!("meta plugin - Manage subprocess plugins");
-    println!();
-    println!("Usage: meta plugin <COMMAND>");
-    println!();
-    println!("Commands:");
-    println!("  search <query>        Search for plugins in the registry");
-    println!("  install <name>        Install a plugin (add --local for project-local)");
-    println!("  list                  List installed plugins (add --local for project-local only)");
-    println!("  uninstall <name>      Uninstall a plugin (add --local for project-local)");
-    println!("  update [name]         Update plugins to latest versions");
-}
-
-/// Print help for `meta plugin search` without requiring a query.
-fn print_plugin_search_help() {
-    println!("meta plugin search - Search for plugins in the registry");
-    println!();
-    println!("Usage: meta plugin search <QUERY>");
-    println!();
-    println!("Arguments:");
-    println!("  <QUERY>   Search query");
-}
-
-/// Print help for `meta plugin install` without requiring a plugin name.
-fn print_plugin_install_help() {
-    println!("meta plugin install - Install a plugin from the registry");
-    println!();
-    println!("Usage: meta plugin install <NAME> [--local]");
-    println!();
-    println!("Options:");
-    println!("      --local   Install to .meta/plugins instead of ~/.meta/plugins");
-}
-
-/// Print help for `meta plugin list` without listing installed plugins.
-fn print_plugin_list_help() {
-    println!("meta plugin list - List installed plugins");
-    println!();
-    println!("Usage: meta plugin list [--local]");
-    println!();
-    println!("Options:");
-    println!("      --local   List only project-local plugins");
-}
-
-/// Print help for `meta plugin uninstall` without requiring a plugin name.
-fn print_plugin_uninstall_help() {
-    println!("meta plugin uninstall - Uninstall a plugin");
-    println!();
-    println!("Usage: meta plugin uninstall <NAME> [--local]");
-    println!();
-    println!("Options:");
-    println!("      --local   Uninstall from .meta/plugins instead of ~/.meta/plugins");
-}
-
-/// Print help for `meta plugin update` without checking the registry.
-fn print_plugin_update_help() {
-    println!("meta plugin update - Update plugins to latest versions");
-    println!();
-    println!("Usage: meta plugin update [NAME] [--local] [--check]");
-    println!();
-    println!("Options:");
-    println!("      --local   Update project-local plugins");
-    println!("      --check   Check for updates without installing");
+    cmd.render_help().to_string()
 }
 
 // === Main Entry Point ===
@@ -537,9 +423,7 @@ fn run_cli() -> Result<()> {
         })
         .init();
 
-    let mut cli: Cli = meta_core::args::parse();
-
-    log::debug!("cli.json = {}", cli.json);
+    let cli: Cli = meta_core::args::parse();
 
     // Check for orphaned nested meta repo and warn the user
     check_and_warn_orphan();
@@ -547,10 +431,9 @@ fn run_cli() -> Result<()> {
     // Where plugins are; nothing is started until a command needs one
     let subprocess_plugins = SubprocessPluginManager::new(cli.verbose)?;
 
-    // Handle --help flag at top level
-    if cli.help && cli.command.is_none() {
-        print_help_with_plugins(&subprocess_plugins);
-        std::process::exit(0);
+    // help only prints, whatever else was asked
+    if cli.print_help {
+        return subprocess_plugins::print_output(&help_with_plugins(&subprocess_plugins));
     }
 
     if cli.add_aliases_to_global_looprc {
@@ -561,128 +444,112 @@ fn run_cli() -> Result<()> {
         return loop_lib::import_aliases(cli.dry_run);
     }
 
-    // Take command out so we can move subcommand args while still borrowing cli
-    let command = cli.command.take();
-    match command {
-        None => {
-            print_help_with_plugins(&subprocess_plugins);
-            std::process::exit(0);
-        }
-        Some(Commands::Help) => {
-            print_help_with_plugins(&subprocess_plugins);
-            std::process::exit(0);
-        }
-        Some(Commands::Context(args)) => {
-            if cli.help {
-                print_context_help();
-                return Ok(());
-            }
-            meta_cli::context::handle_context(
-                cli.json,
-                args.no_status,
-                args.no_cache,
-                cli.mode(),
-                cli.verbose,
-            )
-        }
-        Some(Commands::Init(args)) => {
-            let cmd = match args.command {
-                // `--help` must only print help, never install
-                _ if cli.help => init::InitCommand::None,
-                None => init::InitCommand::None,
-                Some(InitCommands::Claude { force, update }) => {
-                    init::InitCommand::Claude { force, update }
-                }
-            };
-            init::handle_init_command(cmd, cli.mode(), cli.verbose)
-        }
-        Some(Commands::Plugin(args)) => handle_plugin_command(
-            args.command,
-            cli.mode(),
-            cli.json,
-            cli.help,
-            &subprocess_plugins,
+    match &cli.command {
+        None => subprocess_plugins::print_output(&help_with_plugins(&subprocess_plugins)),
+        Some(Commands::Help { command, .. }) => help(&cli, command, &subprocess_plugins),
+        // it reads the nearest workspace only, so -r would go unheard
+        Some(Commands::Context(_)) if cli.recursive || cli.depth.is_some() => anyhow::bail!(
+            "meta context shows the nearest workspace only; it does not take --recursive or --depth"
         ),
-        Some(Commands::Exec(args)) => {
-            // Handle help flag for exec command specifically
-            if cli.help {
-                println!("meta exec - Run any command across all repos");
-                println!();
-                println!("Usage: meta exec [OPTIONS] -- <COMMAND>...");
-                println!();
-                println!("Arguments:");
-                println!("  <COMMAND>...    Command and arguments to run");
-                println!();
-                println!(
-                    "The command runs as typed in each project directory defined in .meta.yaml,"
-                );
-                println!("never through a plugin (use `meta git ...` for the git plugin).");
-                println!("No shell parses it: each argument reaches the program as given, so");
-                println!("quotes, $(), ;, | and globs stay literal. For a shell, ask for one.");
-                println!();
-                println!("--include/--exclude take repos by .meta.yaml name or path from the root");
-                println!("(. for the root), never part of a path.");
-                println!();
-                println!("Examples:");
-                println!("  meta exec -- npm install");
-                println!("  meta exec -- cargo fmt --check");
-                println!("  meta exec -- make clean");
-                println!("  meta --include api,web exec -- docker-compose up -d");
-                println!("  meta exec -- sh -c 'npm ci && npm test'");
-                std::process::exit(0);
-            }
-            handle_command_dispatch(args.command, &cli, None)
+        Some(Commands::Context(args)) => meta_cli::context::handle_context(
+            cli.json || args.json,
+            args.no_status,
+            args.no_cache,
+            cli.mode(),
+            cli.verbose,
+            &cli.start_dir()?,
+            &cli.filters(),
+        ),
+        Some(Commands::Init(InitArgs {
+            command: InitCommands::Claude { force, update },
+            ..
+        })) => init::init_claude(*force, *update, cli.mode(), cli.verbose),
+        Some(Commands::Plugin(args)) => {
+            handle_plugin_command(&args.command, cli.mode(), cli.json, &subprocess_plugins)
         }
+        Some(Commands::Exec(args)) => dispatch(&cli, &args.command, None),
         Some(Commands::External(args)) => {
-            // clap doesn't capture global flags that appear after an external
-            // subcommand name. Extract long-form global flags here so they
-            // work in both positions (before and after the subcommand).
-            let mut args = args;
-            extract_global_flags(&mut args, &mut cli);
-
             // Only the plugin serving this word is started
             let plugin = match args.first() {
                 Some(word) => subprocess_plugins.find(word)?,
                 None => None,
             };
             let Some(plugin) = plugin else {
-                unrecognized_command_error(&args, &loop_lib::display_command(&args));
+                unrecognized_command_error(args);
             };
-
-            // A bare `meta <word>` and `meta <word> --help` print the
-            // plugin's help; nested help requests reach the plugin's command.
-            // A --help after `--` is an argument for the command
-            let wants_help = args
-                .iter()
-                .take_while(|a| *a != "--")
-                .any(|a| a == "--help" || a == "-h");
-            let is_root_help = wants_help
-                && args.len() == 2
-                && matches!(args.get(1).map(String::as_str), Some("--help" | "-h"));
-            if args.len() == 1 || is_root_help {
-                return subprocess_plugins::print_output(&format!("{}\n", plugin.help()));
-            }
-            if wants_help {
-                let options = PluginRequestOptions {
-                    json_output: cli.json,
-                    verbose: cli.verbose,
-                    parallel: cli.parallel,
-                    dry_run: cli.dry_run,
-                    silent: cli.silent,
-                    recursive: cli.recursive,
-                    depth: cli.depth,
-                    include_filters: cli.include.clone(),
-                    exclude_filters: cli.exclude.clone(),
-                    strict: cli.strict,
-                };
-                return plugin.execute(&args, &[], None, options);
-            }
-            handle_command_dispatch(args, &cli, Some(&plugin))
+            plugin_command(&cli, args, &plugin)
         }
     }
 }
 
+/// `meta help [COMMAND...]`: meta's help, a built-in command's, or the
+/// plugin command's, as `meta COMMAND... --help` prints it.
+fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Result<()> {
+    let Some(first) = words.first() else {
+        return subprocess_plugins::print_output(&help_with_plugins(plugins));
+    };
+    let mut cmd = Cli::command();
+    // built, so the subcommands carry their names and meta's help settings
+    cmd.build();
+    if cmd.find_subcommand(first).is_some() {
+        let mut found = &mut cmd;
+        for (i, word) in words.iter().enumerate() {
+            found = match found.find_subcommand_mut(word) {
+                Some(sub) => sub,
+                None => anyhow::bail!(
+                    "meta {} has no command '{}'",
+                    escape(&words[..i].join(" ")),
+                    escape(word)
+                ),
+            };
+        }
+        return subprocess_plugins::print_output(&found.render_help().to_string());
+    }
+    let Some(plugin) = plugins.find(first)? else {
+        unrecognized_command_error(words);
+    };
+    let args: Vec<String> = words
+        .iter()
+        .cloned()
+        .chain(["--help".to_string()])
+        .collect();
+    plugin_command(cli, &args, &plugin)
+}
+
+/// `meta <word> ...`, served by `plugin`: its help, or the command in the
+/// selected repos.
+fn plugin_command(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Result<()> {
+    // A bare `meta <word>` and `meta <word> --help` print the plugin's
+    // help; nested help requests reach the plugin's command, without its
+    // repos. A --help after `--` is an argument for the command.
+    let wants_help = args
+        .iter()
+        .take_while(|a| *a != "--")
+        .any(|a| a == "--help" || a == "-h");
+    let is_root_help = wants_help
+        && args.len() == 2
+        && matches!(args.get(1).map(String::as_str), Some("--help" | "-h"));
+    if args.len() == 1 || is_root_help {
+        let help = meta_plugin_protocol::help_text(&plugin.info);
+        return subprocess_plugins::print_output(&format!("{help}\n"));
+    }
+    if wants_help {
+        let options = cli.request_options(cli.parallel);
+        return plugin.execute(args, &[], None, &cli.start_dir()?, options);
+    }
+    dispatch(cli, args, Some(plugin))
+}
+
 // === Command Dispatch (shared by exec and external) ===
+
+/// The repos a command runs in, chosen once
+struct Target {
+    /// The workspace or worktree set they belong to, shown as `.`
+    root: PathBuf,
+    dirs: Vec<PathBuf>,
+    /// `--parallel` or `--sequential`, else the config's default
+    parallel: bool,
+}
 
 /// Run a command across the selected repos.
 ///
@@ -690,369 +557,142 @@ fn run_cli() -> Result<()> {
 /// a plugin, so a plugin's word (e.g. meta-cargo's `cargo`) cannot shadow a
 /// raw command. Other commands (e.g. `meta git status`) go to the plugin
 /// serving their first word.
-fn handle_command_dispatch(
-    command_args: Vec<String>,
-    cli: &Cli,
-    plugin: Option<&SubprocessPlugin>,
-) -> Result<()> {
-    if command_args.is_empty() {
-        // Show usage error (help is handled at the caller level via cli.help)
-        eprintln!("Usage: meta exec -- <command> [args...]");
-        std::process::exit(1);
+fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin>) -> Result<()> {
+    let start = cli.start_dir()?;
+    // `git clone` makes the workspace, so it needs none
+    let is_git_clone = command_args.first().is_some_and(|s| s == "git")
+        && command_args.get(1).is_some_and(|s| s == "clone");
+    if let Some(plugin) = plugin.filter(|_| is_git_clone) {
+        return plugin.execute(command_args, &[], None, &start, cli.request_options(false));
     }
 
-    // All meta flags come from clap globals (before the command).
-    // Command args pass through untouched to avoid collisions with
-    // identically-named flags (e.g., grep --include, git clone --depth).
-    let recursive = cli.recursive;
-    let dry_run = cli.dry_run;
-    let depth = cli.depth;
+    let target = target(cli, &start)?;
+    if cli.verbose {
+        println!(
+            "Executing command: {}",
+            escape(&loop_lib::display_command(command_args))
+        );
+    }
+    match plugin {
+        None => {
+            let config = loop_lib::LoopConfig {
+                directories: target.dirs,
+                verbose: cli.verbose,
+                silent: cli.silent,
+                parallel: target.parallel,
+                dry_run: cli.dry_run,
+                json_output: cli.json,
+                aliases: loop_lib::aliases()?,
+                root_dir: Some(target.root),
+                ..Default::default()
+            };
+            run(&config, command_args)
+        }
+        Some(plugin) => plugin.execute(
+            command_args,
+            &target.dirs,
+            Some(&target.root),
+            &start,
+            cli.request_options(target.parallel),
+        ),
+    }
+}
+
+/// The repos `cli`'s filters select from `start`: the checkouts of the
+/// worktree set it is in (unless `--primary`), else the repos of the
+/// workspace whose config is nearest at or above it (with `--recursive`, of
+/// the nested meta repos too).
+fn target(cli: &Cli, start: &Path) -> Result<Target> {
+    let filters = cli.filters();
     // --parallel wins, then --sequential, then the default of the config
     // the command runs from (parallel without one)
-    let parallel_for = |defaults: Option<&config::MetaDefaults>| {
-        cli.parallel || !cli.sequential && defaults.is_none_or(|d| d.parallel)
+    let parallel = |workspace: Option<&Workspace>| {
+        cli.parallel || !cli.sequential && workspace.is_none_or(|w| w.defaults.parallel)
     };
 
-    let command_str = loop_lib::display_command(&command_args);
-
-    // Check if this is `git clone` - it doesn't require a .meta.yaml file because
-    // its purpose is to clone the repo that contains the .meta.yaml file
-    let is_git_clone = command_args.first().map(|s| s == "git").unwrap_or(false)
-        && command_args.get(1).map(|s| s == "clone").unwrap_or(false);
-
-    if let Some(plugin) = plugin.filter(|_| is_git_clone) {
-        if cli.include.is_some() || cli.exclude.is_some() {
-            anyhow::bail!("meta git clone clones every repo in the meta repo; it does not take --include/--exclude");
+    // Inside a set, the command runs in the set's checkouts
+    if let Some((name, set_dir)) =
+        worktree::detect_worktree_location(start).filter(|_| !cli.primary)
+    {
+        let members: Vec<_> = worktree::discover_worktree_members(&set_dir)?
+            .into_iter()
+            .map(|member| member.path)
+            .collect();
+        // Inside a set, a command never falls back to the workspace's own
+        // checkouts: they aren't the ones the caller is in. A plain clone
+        // that is merely under a `.worktrees` directory is no set.
+        if members.is_empty() && worktree::holds_meta_checkout(&set_dir) {
+            anyhow::bail!(
+                "No checkouts of worktree set '{}' found in {}. Run from a set meta made, or pass --primary to run in the workspace.",
+                escape(&name),
+                escape_path(&set_dir)
+            );
         }
-        // Handle git clone directly via plugin without requiring .meta.yaml file
-        let subprocess_options = PluginRequestOptions {
-            json_output: cli.json,
-            verbose: cli.verbose,
-            parallel: false,
-            dry_run,
-            silent: cli.silent,
-            recursive,
-            depth,
-            include_filters: None,
-            exclude_filters: None,
-            strict: cli.strict,
-        };
-
-        plugin.execute(&command_args, &[], None, subprocess_options)?;
-        if cli.verbose {
-            println!("{}", "Git clone handled by subprocess plugin.".green());
-        }
-        return Ok(());
-    }
-
-    let current_dir = std::env::current_dir()?;
-
-    // Context detection: if cwd is inside a worktree, auto-scope to its repos
-    if !cli.primary {
-        let context = if let Some((name, root)) = worktree::detect_worktree_location(&current_dir) {
-            let paths: Vec<_> = worktree::discover_worktree_members(&root)?
-                .into_iter()
-                .map(|member| member.path)
-                .collect();
-            // Inside a set, a command never falls back to the workspace's
-            // own checkouts: they aren't the ones the caller is in. A plain
-            // clone that is merely under a `.worktrees` directory is no set.
-            if paths.is_empty() && worktree::holds_meta_checkout(&root) {
-                anyhow::bail!(
-                    "No checkouts of worktree set '{}' found in {}. Run from a set meta made, or pass --primary to run in the workspace.",
-                    escape(&name),
-                    escape_path(&root)
-                );
-            }
-            (!paths.is_empty()).then_some((name, root, paths))
-        } else {
-            None
-        };
-        if let Some((task_name, task_dir, wt_paths)) = context {
+        if !members.is_empty() {
             if cli.verbose {
                 eprintln!(
                     "Detected worktree context: '{}' ({} repos)",
-                    escape(&task_name),
-                    wt_paths.len()
+                    escape(&name),
+                    members.len()
                 );
             }
-
-            if let Some(config_path) =
-                worktree::set_config(&task_dir, &wt_paths, cli.config.as_ref())?
-            {
-                let workspace = Workspace::load(&config_path)?;
-                let parallel = parallel_for(Some(&workspace.defaults));
-                let meta_projects = workspace.projects;
-
-                // A set lays its repos out as the workspace: a checkout's path
-                // in the set is its project's path, nested meta repos included.
-                // Only a filter reads the nested configs; the set's own copies
-                // win over the workspace's (see set_tree).
-                let filtered = cli.tag.is_some() || cli.include.is_some() || cli.exclude.is_some();
-                let tree = if filtered {
-                    worktree::set_tree(&task_dir, &wt_paths, &meta_projects)?
-                } else {
-                    Vec::new()
-                };
-                // Compared as directories: a project at a link in the set is
-                // the checkout where the link leads
-                let real = |path: &std::path::Path| {
-                    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-                };
-                let project_map: std::collections::HashMap<PathBuf, ProjectInfo> =
-                    config::build_project_map(&tree, &task_dir, "")
-                        .into_iter()
-                        .map(|(place, (_, info))| (real(&task_dir.join(place)), info))
-                        .collect();
-
-                // Filter the checkouts by their projects' tags
-                let wt_directories: Vec<String> = wt_paths
-                    .iter()
-                    .filter(|path| {
-                        if let Some(ref tag_filter) = cli.tag {
-                            if let Some(info) = project_map.get(&real(path)) {
-                                matches_tag_filter(&info.tags, tag_filter)
-                            } else {
-                                // As in the workspace, only the root runs without a project
-                                real(path) == real(&task_dir)
-                            }
-                        } else {
-                            true
-                        }
-                    })
-                    .map(|p| p.display().to_string())
-                    .collect();
-
-                // Selected by project name or by its path in the set
-                let wt_directories = select_repos(cli, wt_directories, &task_dir, || {
-                    repo_filter::repo_names(&task_dir, &meta_projects, &tree)
-                })?;
-
-                if wt_directories.is_empty() {
-                    eprintln!(
-                        "{}: no projects match tag filter '{}' in worktree '{}'",
-                        "warning".yellow().bold(),
-                        escape(cli.tag.as_deref().unwrap_or("")),
-                        escape(&task_name)
-                    );
-                    return Ok(());
-                }
-
-                // Check if the config is from the worktree itself or the primary checkout
-                let config_in_worktree = config_path.starts_with(&task_dir);
-                if cli.verbose && !config_in_worktree {
-                    eprintln!(
-                        "Using config from primary checkout: {}",
-                        escape_path(&config_path)
-                    );
-                }
-
-                // Plugin dispatch (full feature parity with normal path)
-                let subprocess_options = PluginRequestOptions {
-                    json_output: cli.json,
-                    verbose: cli.verbose,
-                    parallel,
-                    dry_run,
-                    silent: cli.silent,
-                    recursive,
-                    depth,
-                    include_filters: cli.include.clone(),
-                    exclude_filters: cli.exclude.clone(),
-                    strict: cli.strict,
-                };
-
-                match plugin {
-                    None => {
-                        let config = loop_lib::LoopConfig {
-                            directories: wt_directories.iter().map(PathBuf::from).collect(),
-                            verbose: cli.verbose,
-                            silent: cli.silent,
-                            parallel,
-                            dry_run,
-                            json_output: cli.json,
-                            aliases: loop_lib::aliases()?,
-                            root_dir: Some(task_dir.clone()),
-                            ..Default::default()
-                        };
-                        run(&config, &command_args)?;
-                    }
-                    Some(plugin) => {
-                        plugin.execute(
-                            &command_args,
-                            &wt_directories,
-                            Some(&task_dir),
-                            subprocess_options,
-                        )?;
-                        if cli.verbose {
-                            println!(
-                                "{}",
-                                "Command handled by subprocess plugin (worktree).".green()
-                            );
-                        }
-                    }
-                }
-                return Ok(());
-            }
-
-            // No config found — degraded legacy path with warning
-            if let Some(tag) = &cli.tag {
-                anyhow::bail!(
-                    "No meta config found for worktree '{}', so --tag '{}' cannot select its repos",
-                    escape(&task_name),
-                    escape(tag)
-                );
-            }
+            let workspace = worktree::set_config(&set_dir, &members, cli.config.as_ref())?
+                .map(|config| Workspace::load(&config))
+                .transpose()?;
             if cli.verbose {
-                eprintln!(
-                    "{} No .meta.yaml found for worktree '{}'. Tags, plugins, and dependency features unavailable.",
-                    "warning:".yellow().bold(),
-                    escape(&task_name)
-                );
+                match &workspace {
+                    Some(w) => eprintln!("Using config {}", escape_path(&w.config_path)),
+                    None => eprintln!(
+                        "{} No .meta.yaml found for worktree '{}'. Tags, plugins, and dependency features unavailable.",
+                        "warning:".yellow().bold(),
+                        escape(&name)
+                    ),
+                }
             }
-
-            let directories: Vec<String> =
-                wt_paths.iter().map(|p| p.display().to_string()).collect();
-
-            let directories = select_repos(cli, directories, &task_dir, Vec::new)?;
-            let parallel = parallel_for(None);
-
-            let config = loop_lib::LoopConfig {
-                directories: directories.iter().map(PathBuf::from).collect(),
-                verbose: cli.verbose,
-                silent: cli.silent,
-                parallel, // Use the determined parallel mode, not hardcoded false
-                dry_run,
-                json_output: cli.json,
-                aliases: loop_lib::aliases()?,
-                root_dir: Some(task_dir.clone()),
-                ..Default::default()
-            };
-
-            run(&config, &command_args)?;
-            return Ok(());
+            let dirs = worktree::select_in_set(&set_dir, &members, workspace.as_ref(), &filters)?;
+            return Ok(Target {
+                parallel: parallel(workspace.as_ref()),
+                root: set_dir,
+                dirs,
+            });
         }
     }
 
-    let Some(workspace) = Workspace::find(&current_dir, cli.config.as_ref())? else {
+    let Some(workspace) = Workspace::find(start, cli.config.as_ref())? else {
         let config_name = cli
             .config
             .as_ref()
             .map(|p| escape_path(p))
             .unwrap_or_else(|| config::META_CONFIG_NAME.to_string());
-        eprintln!("Error: Could not find meta config file '{config_name}'");
-        eprintln!("Searched from {} up to root", escape_path(&current_dir));
-        std::process::exit(1);
+        anyhow::bail!(
+            "Could not find meta config file '{config_name}'\nSearched from {} up to root",
+            escape_path(start)
+        );
     };
-    let meta_dir = workspace.dir.as_path();
-    let parallel = parallel_for(Some(&workspace.defaults));
-
     if cli.verbose {
-        println!("{}", "Verbose mode enabled".green());
-        println!(
+        eprintln!(
             "Resolved config file path: {}",
             escape_path(&workspace.config_path)
         );
-        println!("Executing command: {}", escape(&command_str));
     }
-
-    let meta_projects = &workspace.projects;
-
-    // Filter projects by tags if --tag is specified
-    let filtered_projects: Vec<&ProjectInfo> = if let Some(ref tag_filter) = cli.tag {
-        if cli.verbose {
-            println!(
-                "Filtering projects by tags: {:?}",
-                tag_filter.split(',').map(|s| s.trim()).collect::<Vec<_>>()
-            );
-        }
-        meta_projects
-            .iter()
-            .filter(|p| matches_tag_filter(&p.tags, tag_filter))
-            .collect()
+    // From the config already loaded (the default or --config's), into the
+    // nested meta repos
+    let tree = if cli.recursive {
+        config::walk_projects(&workspace.dir, &workspace.projects, cli.depth)?
     } else {
-        meta_projects.iter().collect()
+        Vec::new()
     };
-
-    let meta_dir_str = meta_dir.to_string_lossy().to_string();
-    let mut project_paths = vec![meta_dir_str.clone()];
-    project_paths.extend(
-        filtered_projects
-            .iter()
-            .map(|p| meta_dir.join(&p.path).to_string_lossy().to_string()),
+    let scope = Scope::workspace(
+        &workspace.dir,
+        Some(&workspace.config_path),
+        &workspace.projects,
+        &tree,
     );
-
-    // If recursive mode is enabled, discover nested meta repos
-    let mut tree = vec![];
-    if recursive {
-        if cli.verbose {
-            let depth_str = depth.map_or("unlimited".to_string(), |d| d.to_string());
-            println!("Recursive mode enabled, max depth: {depth_str}");
-        }
-        // From the config already loaded (the default or --config's), into
-        // the nested meta repos
-        tree = config::walk_projects(meta_dir, meta_projects, depth)?;
-        project_paths = vec![meta_dir_str.clone()];
-        let flat = flatten_with_tag_filter(&tree, &cli.tag);
-        project_paths.extend(
-            flat.iter()
-                .map(|p| meta_dir.join(p).to_string_lossy().to_string()),
-        );
-    }
-
-    // Commands and plugins get only the selected repos
-    let project_paths = select_repos(cli, project_paths, meta_dir, || {
-        repo_filter::repo_names(meta_dir, meta_projects, &tree)
-    })?;
-
-    // Plugin dispatch for external subcommands
-    let subprocess_options = PluginRequestOptions {
-        json_output: cli.json,
-        verbose: cli.verbose,
-        parallel,
-        dry_run,
-        silent: cli.silent,
-        recursive,
-        depth,
-        include_filters: cli.include.clone(),
-        exclude_filters: cli.exclude.clone(),
-        strict: cli.strict,
-    };
-
-    match plugin {
-        None => {
-            // User explicitly requested exec, run the command in all repos
-            log::info!("Explicit exec requested, running command via loop");
-            if cli.verbose {
-                println!("{}", "Running command via loop (explicit exec).".green());
-            }
-            let config = loop_lib::LoopConfig {
-                directories: project_paths.iter().map(PathBuf::from).collect(),
-                verbose: cli.verbose,
-                silent: cli.silent,
-                parallel,
-                dry_run,
-                json_output: cli.json,
-                aliases: loop_lib::aliases()?,
-                root_dir: Some(meta_dir.to_path_buf()),
-                ..Default::default()
-            };
-            run(&config, &command_args)?;
-        }
-        Some(plugin) => {
-            plugin.execute(
-                &command_args,
-                &project_paths,
-                Some(meta_dir),
-                subprocess_options,
-            )?;
-            log::info!("Command was handled by subprocess plugin");
-            if cli.verbose {
-                println!("{}", "Command handled by subprocess plugin.".green());
-            }
-        }
-    }
-
-    Ok(())
+    Ok(Target {
+        dirs: scope.select(&filters)?,
+        parallel: parallel(Some(&workspace)),
+        root: workspace.dir,
+    })
 }
 
 // === Plugin Management ===
@@ -1077,25 +717,16 @@ fn format_plugin_location(local: bool) -> &'static str {
 
 /// Handle plugin management subcommands with typed args.
 fn handle_plugin_command(
-    command: Option<PluginCommands>,
+    command: &PluginCommands,
     mode: ExecutionMode,
     json: bool,
-    help: bool,
     subprocess_plugins: &SubprocessPluginManager,
 ) -> Result<()> {
     use registry::{PluginInstaller, RegistryClient, PLUGIN_PREFIX};
 
-    let command = match command {
-        Some(cmd) => cmd,
-        None => {
-            print_plugin_help();
-            return Ok(());
-        }
-    };
-
     // These change installed plugins and have no preview
-    if mode.is_preview() && !help {
-        let changing = match &command {
+    if mode.is_preview() {
+        let changing = match command {
             PluginCommands::Install { .. } => Some("install"),
             PluginCommands::Uninstall { .. } => Some("uninstall"),
             PluginCommands::Update { check: false, .. } => Some("update"),
@@ -1109,21 +740,14 @@ fn handle_plugin_command(
     }
 
     match command {
-        PluginCommands::Search { query } => {
-            if help {
-                print_plugin_search_help();
-                return Ok(());
-            }
-            let Some(query) = query else {
-                anyhow::bail!("Usage: meta plugin search <QUERY>");
-            };
+        PluginCommands::Search { query, json: own } => {
             let client = RegistryClient::new()?;
-            let results = client.search(&query)?;
+            let results = client.search(query)?;
 
-            if json {
+            if json || *own {
                 println!("{}", serde_json::to_string_pretty(&results)?);
             } else if results.is_empty() {
-                println!("No plugins found matching '{}'", escape(&query));
+                println!("No plugins found matching '{}'", escape(query));
             } else {
                 println!("Found {} plugin(s):", results.len());
                 for plugin in results {
@@ -1138,28 +762,21 @@ fn handle_plugin_command(
             }
         }
         PluginCommands::Install { name, local } => {
-            if help {
-                print_plugin_install_help();
-                return Ok(());
-            }
-            let Some(name) = name else {
-                anyhow::bail!("Usage: meta plugin install <NAME> [--local]");
-            };
             use registry::GitHubShorthand;
-            let installer = create_installer(local)?;
-            let location = format_plugin_location(local);
+            let installer = create_installer(*local)?;
+            let location = format_plugin_location(*local);
 
             // Detect input type and route accordingly
             if name.starts_with("http://") || name.starts_with("https://") {
                 // Direct URL install
-                let plugin_name = installer.install_from_url(&name)?;
+                let plugin_name = installer.install_from_url(name)?;
                 if !json {
                     println!(
                         "Successfully installed {} to {location}",
                         escape(&plugin_name)
                     );
                 }
-            } else if let Some(shorthand) = GitHubShorthand::parse(&name) {
+            } else if let Some(shorthand) = GitHubShorthand::parse(name) {
                 // GitHub shorthand install (user/repo[@version])
                 let plugin_name = installer.install_from_github(&shorthand)?;
                 if !json {
@@ -1173,7 +790,7 @@ fn handle_plugin_command(
                 let client = RegistryClient::new()?;
 
                 // Try simple registry format first (M6: plugins/{name} contains GitHub shorthand)
-                match client.resolve_plugin_source(&name) {
+                match client.resolve_plugin_source(name) {
                     Ok(source) => {
                         // Got GitHub shorthand from registry, use GitHub install flow
                         if let Some(shorthand) = GitHubShorthand::parse(&source) {
@@ -1191,7 +808,7 @@ fn handle_plugin_command(
                     }
                     Err(_) => {
                         // Fall back to complex registry format (plugins/{name}/plugin.json)
-                        let metadata = client.fetch_plugin_metadata(&name)?;
+                        let metadata = client.fetch_plugin_metadata(name)?;
                         let installed = installer.install(&metadata)?;
 
                         if !json {
@@ -1206,12 +823,9 @@ fn handle_plugin_command(
                 }
             }
         }
-        PluginCommands::List { local } => {
-            if help {
-                print_plugin_list_help();
-                return Ok(());
-            }
-            if local {
+        PluginCommands::List { local, json: own } => {
+            let json = json || *own;
+            if *local {
                 let installer = PluginInstaller::new_local()?;
                 let plugins = installer.list_plugins_detailed()?;
                 if json {
@@ -1275,44 +889,34 @@ fn handle_plugin_command(
             }
         }
         PluginCommands::Uninstall { name, local } => {
-            if help {
-                print_plugin_uninstall_help();
-                return Ok(());
-            }
-            let Some(name) = name else {
-                anyhow::bail!("Usage: meta plugin uninstall <NAME> [--local]");
-            };
-            let installer = create_installer(local)?;
-            let location = format_plugin_location(local);
-            installer.uninstall(&name)?;
+            let installer = create_installer(*local)?;
+            let location = format_plugin_location(*local);
+            installer.uninstall(name)?;
 
             if !json {
-                println!("Successfully uninstalled {} from {location}", escape(&name));
+                println!("Successfully uninstalled {} from {location}", escape(name));
             }
         }
         PluginCommands::Update { name, local, check } => {
-            if help {
-                print_plugin_update_help();
-                return Ok(());
-            }
+            let (check, local) = (*check, *local);
             let installer = create_installer(local)?;
             let location = format_plugin_location(local);
 
             if let Some(plugin_name) = name {
                 // Update specific plugin
-                match installer.check_update(&plugin_name)? {
+                match installer.check_update(plugin_name)? {
                     Some((current, latest)) => {
                         if check {
                             if !json {
                                 println!(
                                     "Update available for {}: {} → {}",
-                                    escape(&plugin_name),
+                                    escape(plugin_name),
                                     escape(&current),
                                     escape(&latest)
                                 );
                             }
                         } else {
-                            let updated = installer.update_plugin(&plugin_name)?;
+                            let updated = installer.update_plugin(plugin_name)?;
                             if !json {
                                 println!(
                                     "Successfully updated {} from {} to {} in {}",
@@ -1326,7 +930,7 @@ fn handle_plugin_command(
                     }
                     None => {
                         if !json {
-                            println!("{} is already up to date", escape(&plugin_name));
+                            println!("{} is already up to date", escape(plugin_name));
                         }
                     }
                 }
@@ -1404,82 +1008,15 @@ fn handle_plugin_command(
 
 // === Helpers ===
 
-/// Extract meta-only global flags from external subcommand args.
-///
-/// clap's `external_subcommand` captures all tokens after the first unrecognized
-/// subcommand, including global flags like `--json`. This function pulls them
-/// out and applies them to the CLI struct so they work regardless of position.
-///
-/// Only extracts flags that are meta-global and NOT reused by plugin subcommands.
-/// Flags like `--dry-run` and `--parallel` are left in args because plugin
-/// subcommands (e.g. `worktree prune --dry-run`, `worktree exec --parallel`)
-/// define their own versions and need to see them.
-fn extract_global_flags(args: &mut Vec<String>, cli: &mut Cli) {
-    // Everything from `--` on belongs to the command, untouched
-    let rest = args.split_off(args.iter().position(|a| a == "--").unwrap_or(args.len()));
-    args.retain(|arg| {
-        match arg.as_str() {
-            "--json" => {
-                cli.json = true;
-                false
-            }
-            "--verbose" => {
-                cli.verbose = true;
-                false
-            }
-            "--silent" => {
-                cli.silent = true;
-                false
-            }
-            "--primary" => {
-                cli.primary = true;
-                false
-            }
-            "--recursive" => {
-                cli.recursive = true;
-                false
-            }
-            "--strict" => {
-                cli.strict = true;
-                false
-            }
-            _ => true, // keep in args
-        }
-    });
-    args.extend(rest);
-}
-
-/// Check whether a project's tags match a comma-separated tag filter string.
-fn matches_tag_filter(tags: &[String], filter: &str) -> bool {
-    let requested: Vec<&str> = filter.split(',').map(|s| s.trim()).collect();
-    tags.iter().any(|t| requested.contains(&t.as_str()))
-}
-
-/// The repos among `dirs` that `--include`/`--exclude` select (see
-/// [`repo_filter::select`]); `names` lists the `.meta.yaml` names they may use.
-fn select_repos(
-    cli: &Cli,
-    dirs: Vec<String>,
-    root: &std::path::Path,
-    names: impl FnOnce() -> Vec<(String, String)>,
-) -> Result<Vec<String>> {
-    let include = cli.include.clone().unwrap_or_default();
-    let exclude = cli.exclude.clone().unwrap_or_default();
-    if include.is_empty() && exclude.is_empty() {
-        return Ok(dirs);
-    }
-    repo_filter::select(&include, &exclude, &dirs, root, &names())
-}
-
 /// Print unrecognized command error with suggestion and help, then exit.
-fn unrecognized_command_error(command_args: &[String], command_str: &str) -> ! {
+fn unrecognized_command_error(command_args: &[String]) -> ! {
     let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
     eprintln!(
         "{}: unrecognized command '{}'",
         "error".red().bold(),
         escape(first_cmd)
     );
-    let command_str = escape(command_str);
+    let command_str = escape(&loop_lib::display_command(command_args)).into_owned();
     eprintln!();
     eprintln!("To run '{command_str}' across all repos:");
     eprintln!("    meta exec -- {command_str}");
@@ -1488,7 +1025,7 @@ fn unrecognized_command_error(command_args: &[String], command_str: &str) -> ! {
     // starts none
     eprintln!("Plugins add more commands: meta --help lists them.");
     eprintln!();
-    let _ = write_help_with_plugin_commands(Vec::new(), &mut std::io::stderr());
+    eprint!("{}", Cli::command().render_help());
     std::process::exit(1);
 }
 
@@ -1538,38 +1075,6 @@ fn check_and_warn_orphan() {
         eprintln!("      repo: <git-url>");
         eprintln!("      meta: true");
         eprintln!();
-    }
-}
-
-/// Flatten a meta tree into path strings, optionally filtering by tag.
-/// If tag_filter is Some, only includes nodes whose tags match (and recurses into them).
-fn flatten_with_tag_filter(nodes: &[MetaTreeNode], tag_filter: &Option<String>) -> Vec<String> {
-    let mut paths = Vec::new();
-    flatten_filtered_inner(nodes, tag_filter, "", &mut paths);
-    paths
-}
-
-fn flatten_filtered_inner(
-    nodes: &[MetaTreeNode],
-    tag_filter: &Option<String>,
-    prefix: &str,
-    paths: &mut Vec<String>,
-) {
-    for node in nodes {
-        let matches = match tag_filter {
-            Some(ref tag_str) => matches_tag_filter(&node.info.tags, tag_str),
-            None => true,
-        };
-
-        if matches {
-            let full_path = if prefix.is_empty() {
-                node.info.path.clone()
-            } else {
-                format!("{}/{}", prefix, node.info.path)
-            };
-            paths.push(full_path.clone());
-            flatten_filtered_inner(&node.children, tag_filter, &full_path, paths);
-        }
     }
 }
 
@@ -1843,41 +1348,6 @@ projects:
         let paths_1 = config::flatten_meta_tree(&tree_1);
         assert_eq!(paths_1.len(), 2);
         assert!(paths_1.contains(&"level1/level2".to_string()));
-    }
-
-    #[test]
-    fn test_discover_nested_projects_with_tag_filter() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let frontend_dir = dir.path().join("frontend");
-        let backend_dir = dir.path().join("backend");
-        std::fs::create_dir_all(&frontend_dir).unwrap();
-        std::fs::create_dir_all(&backend_dir).unwrap();
-
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{
-                "projects": {
-                    "frontend": {
-                        "repo": "git@github.com:org/frontend.git",
-                        "tags": ["ui"]
-                    },
-                    "backend": {
-                        "repo": "git@github.com:org/backend.git",
-                        "tags": ["api"]
-                    }
-                }
-            }"#,
-        )
-        .unwrap();
-
-        let tree = config::walk_meta_tree(dir.path(), None).unwrap();
-        let result = flatten_with_tag_filter(&tree, &Some("ui".to_string()));
-
-        let has_frontend = result.iter().any(|p| p.contains("frontend"));
-        let has_backend = result.iter().any(|p| p.contains("backend"));
-        assert!(has_frontend, "Frontend should be included (has 'ui' tag)");
-        assert!(!has_backend, "Backend should be excluded (no 'ui' tag)");
     }
 
     #[test]

@@ -224,3 +224,37 @@ assert 'backend' in data['dependencies'], 'backend not in dependencies'
     [ "$status" -ne 0 ]
     [[ "$output" == *"meta"* ]] || [[ "$output" == *"config"* ]] || [[ "$output" == *"workspace"* ]]
 }
+
+@test "context shows only the projects --tag or --include select" {
+    cat > "$TEST_DIR/.meta.yaml" <<'YAML'
+projects:
+  backend:
+    repo: git@github.com:org/backend.git
+    tags: [api]
+  frontend:
+    repo: git@github.com:org/frontend.git
+    tags: [ui]
+YAML
+    # a cached unfiltered context first: a filter must not read it
+    run "$META_BIN" context --json
+    [ "$status" -eq 0 ]
+    run "$META_BIN" -t api context --json
+    [ "$status" -eq 0 ]
+    [ "$(python3 -c 'import json,sys; print(",".join(r["name"] for r in json.load(sys.stdin)["repos"]))' <<<"$output")" = "backend" ]
+    run "$META_BIN" -i frontend context
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"frontend"* ]]
+    [[ "$output" != *"| backend"* ]]
+    # and a filtered one is not cached for the next plain call
+    run "$META_BIN" context --json
+    [ "$(python3 -c 'import json,sys; print(json.load(sys.stdin)["repo_count"])' <<<"$output")" = "2" ]
+    run "$META_BIN" -t nope context
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--tag 'nope' is no project's tag"* ]]
+}
+
+@test "context refuses --recursive instead of ignoring it" {
+    run "$META_BIN" -r context
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --recursive"* ]]
+}

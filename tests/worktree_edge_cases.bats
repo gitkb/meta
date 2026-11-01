@@ -396,7 +396,7 @@ assert backend['branch'] == 'cache-test-branch', f'expected cache-test-branch, g
     rm -f "$META_DATA/context_cache.json"
 
     # Run with verbose flag
-    run "$META_BIN" context --verbose 2>&1
+    run "$META_BIN" --verbose context 2>&1
     [ "$status" -eq 0 ]
 
     # Should mention cache in output (either hit, miss, or created)
@@ -927,7 +927,7 @@ EOF
     # From a subdirectory with no config of its own, the workspace's counts
     mkdir -p "$TEST_DIR/docs"
     (cd "$TEST_DIR/docs" && "$META_BIN" project check)
-    run "$META_BIN" project check --recursive
+    run "$META_BIN" --recursive project check
     [ "$status" -ne 0 ]
     [[ "$output" == *"Cannot read"* ]]
 }
@@ -2179,4 +2179,24 @@ set_projects() {
     run "$META_BIN" exec -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"/s/api"* ]]
+}
+
+@test "meta -r project check with a filter reports a selected nested project that is missing" {
+    cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/"
+    mkdir -p "$TEST_DIR/tools"
+    printf 'projects:\n  cli:\n    repo: git@github.com:org/cli.git\n    tags: [rust]\n' > "$TEST_DIR/tools/.meta.yaml"
+    cat > "$TEST_DIR/.meta.yaml" <<'YAML'
+projects:
+  tools:
+    repo: git@github.com:org/tools.git
+    meta: true
+YAML
+    for filter in "-t rust" "-i tools/cli"; do
+        run "$META_BIN" -r $filter project check
+        [[ "$output" == *"git@github.com:org/cli.git"* ]]
+        [[ "$output" == *"1 project(s) missing"* ]]
+    done
+    mkdir "$TEST_DIR/tools/cli"
+    run "$META_BIN" -r -t rust project check
+    [[ "$output" == *"All projects are cloned"* ]]
 }

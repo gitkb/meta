@@ -125,23 +125,15 @@ echo '<request>' | meta-docker --meta-plugin-exec
 {
   "command": "docker build",
   "args": ["--tag", "latest"],
-  "projects": [
-    {
-      "name": "api",
-      "path": "./api",
-      "tags": ["backend"],
-      "repo": "git@github.com:org/api.git"
-    }
-  ],
-  "filters": {
-    "tags": ["backend"],
-    "include": [],
-    "exclude": []
-  },
+  "projects": ["/ws/api", "/ws/worker"],
+  "cwd": "/ws",
   "options": {
     "parallel": false,
     "dry_run": false,
-    "json_output": false
+    "json_output": false,
+    "include_filters": null,
+    "exclude_filters": null,
+    "tag_filters": ["backend"]
   }
 }
 ```
@@ -157,7 +149,7 @@ echo '<request>' | meta-docker --meta-plugin-exec
   }
 }
 ```
-Each `argv` is a program and its arguments. Meta runs it as given, with no shell, so the plugin needs no quoting; a plugin that needs a shell plans `["sh", "-c", "..."]`. `projects` in the request lists the repos `--include`/`--exclude` selected; a plugin that finds repos itself must refuse those filters rather than ignore them.
+Each `argv` is a program and its arguments. Meta runs it as given, with no shell, so the plugin needs no quoting; a plugin that needs a shell plans `["sh", "-c", "..."]`. `projects` in the request lists the repos `--include`/`--exclude`/`--tag` selected (`meta --tag backend docker build --tag latest` above: meta's `--tag` before the command, the plugin's own after it); `options.include_filters`, `exclude_filters` and `tag_filters` say which of them were given. A plugin that finds repos itself acts on those alone, or refuses the filters rather than ignore them.
 
 ### Error Response
 

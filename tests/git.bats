@@ -937,3 +937,52 @@ EOF
     [[ "$output" != *$'\033[2J'* ]]
     [[ "$output" != *$'\nFORGED'* ]]
 }
+
+# ============ Selection and arguments ============
+
+@test "--tag runs a git command in the tagged repos only, never the root" {
+    cat > "$TEST_DIR/.meta.yaml" <<'YAML'
+projects:
+  frontend:
+    repo: git@github.com:org/frontend.git
+    tags: [ui]
+  backend:
+    repo: git@github.com:org/backend.git
+    tags: [api]
+  shared: git@github.com:org/shared.git
+YAML
+    root_branch="$(git -C "$TEST_DIR" symbolic-ref --short HEAD)"
+    run "$META_BIN" --tag api git checkout -b feature/x
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_DIR/backend" branch --show-current)" = "feature/x" ]
+    [ "$(git -C "$TEST_DIR/frontend" branch --show-current)" != "feature/x" ]
+    [ "$(git -C "$TEST_DIR" symbolic-ref --short HEAD)" = "$root_branch" ]
+    run "$META_BIN" --tag apo git status
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--tag 'apo' is no project's tag"*"the tags are api, ui"* ]]
+}
+
+@test "meta git status passes its arguments to git, and git update refuses ones it doesn't take" {
+    echo change >> "$TEST_DIR/frontend/README.md"
+    # (git colours it: meta's git runs keep colour on)
+    run "$META_BIN" git status --short
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"M"*"README.md"* ]]
+    [[ "$output" != *"Changes not staged"* ]]
+    # meta's flag after the command is git's argument
+    run "$META_BIN" git status --tag backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"unknown option"*"tag"* ]]
+
+    rm -rf "$TEST_DIR/shared"
+    run "$META_BIN" git update --dry-run
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"unexpected argument '--dry-run'"* ]]
+    [ ! -e "$TEST_DIR/shared" ]
+    run "$META_BIN" git update --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage: meta git update"* ]]
+    run "$META_BIN" git status --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"meta git status - Pass-through git command"* ]]
+}

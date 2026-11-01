@@ -15,7 +15,7 @@ Multi-repo workspaces are powerful but require awareness. Meta gives you precisi
 
 ## Precision Operations
 
-Instead of cd-ing into repos one by one, use meta flags to target what you need. Include/exclude take whole repos (a `.meta.yaml` name or the path from the workspace root), never part of a path, and a value that names no repo is an error; `--tag` keeps the meta root even when it isn't tagged:
+Instead of cd-ing into repos one by one, use meta flags to target what you need. Include/exclude take whole repos (a `.meta.yaml` name or the path from the workspace root), never part of a path, and a value that names no repo is an error; `--tag` selects only the tagged repos, never the meta root (`--include .` adds it):
 
 ```bash
 # Target specific repos

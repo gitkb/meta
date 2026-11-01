@@ -540,3 +540,51 @@ esac"#,
         assert!(text.contains("answered"), "{text}");
     }
 }
+
+#[test]
+fn plugin_help_comes_from_its_info_never_from_running_it_with_help() {
+    let f = Fixture::new(true);
+    let log = f.home.join("starts.log");
+    // its own --help would forge a line and clear the screen
+    script(
+        &f.data.join("plugins/meta-odd"),
+        &format!(
+            r#"echo "$1" >> "{}"
+case "$1" in
+--meta-plugin-info) printf '%s\n' '{{"name":"odd","version":"1","commands":["odd x"],"help":{{"usage":"meta odd <x>\u001b[2J","commands":{{"x":"does x"}}}}}}' ;;
+--help) printf 'own\033[2J\nFORGED\n' ;;
+esac"#,
+            log.display()
+        ),
+    );
+    for args in [&["odd"][..], &["odd", "--help"][..], &["help", "odd"][..]] {
+        let out = f.run(args);
+        assert!(out.status.success(), "{args:?}");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("meta odd <x>"), "{args:?}: {text}");
+        assert!(text.contains("does x"), "{args:?}: {text}");
+        assert!(
+            !text.contains('\u{1b}') && !text.contains("FORGED"),
+            "{args:?}: {text}"
+        );
+    }
+    let starts = fs::read_to_string(&log).unwrap();
+    assert!(!starts.lines().any(|line| line == "--help"), "{starts}");
+}
+
+#[test]
+fn plugin_words_that_escape_alike_are_listed_once() {
+    let f = Fixture::new(true);
+    // a word with DEL, and one spelled as DEL's escape
+    plugin(&f.data.join("plugins/meta-odd\u{7f}"), "odd", "1");
+    plugin(&f.data.join("plugins/meta-odd\\u{7f}"), "odd", "1");
+    let out = f.run(&["--help"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(help.matches("odd\\u{7f}").count(), 2, "{help}");
+    assert!(!help.contains('\u{7f}'), "{help}");
+}

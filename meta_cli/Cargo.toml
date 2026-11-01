@@ -15,7 +15,7 @@ description = "Multi-repo management CLI with AI integration"
 meta_core = { path = "../meta_core" }
 meta_plugin_protocol = { path = "../meta_plugin_protocol" }
 anyhow = "1.0"
-clap = { version = "4.3", features = ["derive"] }
+clap = { version = "4.3", features = ["derive", "string"] }
 colored = "2.0"
 loop_lib = { path = "../loop_lib" }
 rayon = "1.5"

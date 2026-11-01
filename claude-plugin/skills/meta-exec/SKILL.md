@@ -68,19 +68,18 @@ meta --include libs/core,. git status   # `.` is the root repo
 # Skip these repos
 meta --exclude legacy-service git push
 
-# Filter by tag (applied before --include/--exclude)
+# The repos with a tag (never the root repo: it has no tags)
 meta --tag backend exec -- make deploy
 
-# Combine: tag filter + directory filter
-meta --tag backend --include api git status
+# The backend repos and the root
+meta --tag backend --include . git status
 ```
 
-**Filter precedence:**
-1. `--tag` filters projects by tag (meta level)
-2. `--include` limits to the named repos
-3. `--exclude` removes the named repos
+**Filters:** `--include` and `--tag` each add repos: the ones `--include` names, and the ones with any of the `--tag` tags (with neither, every repo). `--exclude` then removes the repos it names. The root repo has no tags, so `--tag` alone never selects it; add it with `--include .`. A tag no project has is an error that lists the tags there are.
 
-A value names a whole repo, never part of a path: `api` does not match `api-tests`. A value that names no repo is an error, so a typo never runs a command in the repo you meant to skip. Inside a worktree set the same holds: a repo sits at its project's path, so it is named by its `.meta.yaml` name or that path, from the set's root. A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too). The meta root repo stays included even when it doesn't match a tag.
+A value names a whole repo, never part of a path: `api` does not match `api-tests`. A value that names no repo is an error, so a typo never runs a command in the repo you meant to skip. Inside a worktree set the same holds: a repo sits at its project's path, so it is named by its `.meta.yaml` name or that path, from the set's root. A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too).
+
+Meta's options go before the command (`meta --dry-run exec -- …`); what follows the command word is the command's.
 
 ## Dry Run
 

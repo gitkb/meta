@@ -367,12 +367,16 @@ J
     [[ "$output" == *"unrecognized command"* ]]
 }
 
-@test "project list refuses include and exclude instead of ignoring them" {
+@test "project list refuses include, exclude and tag instead of ignoring them" {
+    printf 'projects:\n  frontend:\n    repo: git@github.com:org/frontend.git\n    tags: [ui]\n' > "$TEST_DIR/.meta.yaml"
+    run "$META_BIN" --tag ui project list --recursive --json
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"meta project list does not take --include/--exclude/--tag"* ]]
     for flag in --include --exclude; do
         for command in list ls; do
             run "$META_BIN" "$flag" frontend project "$command" --recursive --json
             [ "$status" -ne 0 ]
-            [[ "$output" == *"meta project list does not take --include/--exclude"* ]]
+            [[ "$output" == *"meta project $command does not take --include/--exclude/--tag"* ]]
             # after the subcommand too, and in --flag=value form: not one
             # of its arguments
             short="${flag:1:2}"
@@ -392,4 +396,25 @@ J
     [[ "$output" == *"git@github.com:org/shared.git"* ]]
     [[ "$output" == *"Run \`meta git update\` to clone this repository."* ]]
     [[ "$output" != *"meta project update"* ]]
+}
+
+@test "project check checks only the projects a filter selects" {
+    cat > "$TEST_DIR/.meta.yaml" <<'YAML'
+projects:
+  frontend:
+    repo: git@github.com:org/frontend.git
+    tags: [ui]
+  gone:
+    repo: git@github.com:org/gone.git
+    tags: [api]
+YAML
+    mkdir -p "$TEST_DIR/frontend"
+    run "$META_BIN" --tag ui project check
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"All projects are cloned"* ]]
+    run "$META_BIN" --tag api project check
+    [[ "$output" == *"gone.git"* ]]
+    run "$META_BIN" --tag api project dependents frontend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
 }

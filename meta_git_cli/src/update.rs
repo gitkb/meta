@@ -10,6 +10,13 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// `meta git update`
+#[derive(clap::Parser)]
+#[command(
+    about = "Clone the projects in .meta.yaml that aren't cloned yet, and those of the nested meta repos"
+)]
+pub(crate) struct UpdateArgs {}
+
 pub(crate) fn execute_git_update(
     projects: &[String],
     mode: meta_core::ExecutionMode,

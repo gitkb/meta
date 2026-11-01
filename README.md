@@ -63,8 +63,8 @@ Most multi-repo tools solve the *cloning* problem. Meta solves the *working* pro
 3. **Filter by tags:**
 
    ```bash
-   meta git pull --tag backend
-   meta exec npm test --tag frontend,shared
+   meta --tag backend git pull
+   meta --tag frontend,shared exec -- npm test
    ```
 
 4. **Query repo state:**
@@ -93,7 +93,7 @@ Meta is a **command router on top of a loop engine**, built in three layers:
 **3. Plugins** — The specialists. They don't *execute* — they *plan*. A plugin receives a request and returns an execution plan (a list of directory/command pairs). The loop engine does the actual work. This means plugins are pure functions, and execution is always consistent.
 
 ```
-User runs: meta git status --tag backend
+User runs: meta --tag backend git status
     │
     ▼
 Meta CLI: parse args → load .meta.yaml → filter by tags → find plugin
@@ -266,8 +266,8 @@ When `meta: true` is set, commands with `--recursive` will descend into the nest
 # Clone everything, including nested meta repos
 meta git clone https://github.com/org/top-level.git
 
-# Update all repos recursively
-meta git update --recursive
+# Clone what's missing, nested meta repos included
+meta git update
 
 # List entire tree
 meta project list --recursive
@@ -336,8 +336,8 @@ Add `--local` to install, list, uninstall or update the plugins of this meta rep
 ### By Tag
 
 ```bash
-meta git pull --tag backend
-meta exec npm test --tag frontend,shared
+meta --tag backend git pull
+meta --tag frontend,shared exec -- npm test
 ```
 
 ### By Directory
@@ -349,15 +349,24 @@ meta --exclude legacy-app exec -- npm install
 
 A value names a whole repo: its `.meta.yaml` name or its path from the workspace root (`.` for the root repo), never part of a path, so `api` does not select `api-legacy`. A value that names no repo is an error, so a typo never runs a command in a repo you meant to skip. Inside a worktree set the same holds: a repo sits at its project's path, so it is named by its `.meta.yaml` name or that path, from the set's root. A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too).
 
+**Filters:** `--include` and `--tag` each add repos: the ones `--include` names, and the ones with any of the `--tag` tags (with neither, every repo). `--exclude` then removes the repos it names. The root repo has no tags, so `--tag` alone never selects it; add it with `--include .`. A tag no project has is an error that lists the tags there are.
+
+```bash
+meta --tag backend --include . git checkout -b release   # the backend repos and the root
+meta -r --tag cli-tools exec -- cargo build               # nested projects by their own tags
+```
+
 ### Arguments
 
-Meta runs every command as a program with its arguments, never through a shell. Each argument meta receives reaches the program unchanged, so quotes, spaces, `$()`, `;`, globs and `%` stay literal (`meta git log --format='%h %s'` works, and text pasted into a commit message can't run commands). Your own shell still parses the line before meta runs, so `"$(...)"` in double quotes runs there: pass untrusted text in single quotes. When you want a shell, ask for one: `meta exec -- sh -c 'npm ci && npm test'`. `meta git status`, `commit`, `clone`, `update` and `worktree` are meta's own commands with their own options; for git's native behavior, `meta exec -- git ...`. Meta still reads its own `--json`, `--verbose`, `--silent`, `--recursive`, `--strict` and `--primary` after a plugin command (`meta git status --json`); put arguments that look like those after `--` (`meta git add -- --json`).
+Meta runs every command as a program with its arguments, never through a shell. Each argument meta receives reaches the program unchanged, so quotes, spaces, `$()`, `;`, globs and `%` stay literal (`meta git log --format='%h %s'` works, and text pasted into a commit message can't run commands). Your own shell still parses the line before meta runs, so `"$(...)"` in double quotes runs there: pass untrusted text in single quotes. When you want a shell, ask for one: `meta exec -- sh -c 'npm ci && npm test'`. `meta git commit`, `clone`, `update` and `worktree` are meta's own commands with their own options; for git's native behavior, `meta exec -- git ...`. Every other `meta git` command, `status` included, passes its arguments to git.
+
+Meta's own options go before the command: `meta --dry-run git update`, `meta --json git worktree list`. Everything after the command word belongs to the command, so `meta git pull --tag v1` gives `--tag v1` to git, and `meta exec --dry-run -- rm x` is refused with a tip to write `meta --dry-run exec -- rm x`. The commands that print data take their own `--json` too (`meta context --json`, `meta plugin list --json`, `meta git worktree list --json`, `meta project list --json`).
 
 ### Recursive Processing
 
 ```bash
-meta git status --recursive
-meta git pull --recursive --depth 2
+meta --recursive git status
+meta --recursive --depth 2 git pull
 ```
 
 ### Query DSL
@@ -442,7 +451,7 @@ Installs purpose-built skills that teach Claude Code how to work with multi-repo
 Every command supports `--json` for structured, machine-readable output:
 
 ```bash
-meta git status --json
+meta --json git status
 meta query "dirty:true" --json
 ```
 
@@ -495,8 +504,8 @@ Arguments:
 
 Options:
   -c, --config <FILE>       Read this config file instead of finding .meta.yaml
-  -t, --tag <TAGS>          Filter by tag(s), comma-separated
-  -i, --include <REPOS>     Only these repos (.meta.yaml name or path from the root)
+  -t, --tag <TAGS>          The repos with any of these tags, comma-separated (never the root)
+  -i, --include <REPOS>     These repos too (.meta.yaml name or path from the root, . for the root)
   -e, --exclude <REPOS>     Skip these repos (.meta.yaml name or path from the root)
   -r, --recursive           Process nested meta repos
       --depth <N>           Max recursion depth

@@ -64,7 +64,7 @@ teardown() {
 
     run "$META_BIN" plugin search --help
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Usage: meta plugin search <QUERY>"* ]]
+    [[ "$output" == *"Usage: meta plugin search [OPTIONS] <QUERY>"* ]]
     [[ "$output" != *"required arguments were not provided"* ]]
 
     run "$META_BIN" plugin list --help
@@ -78,8 +78,7 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"Manage git worktrees across repos"* ]]
     [[ "$output" == *"--dry-run"* ]]
-    [[ "$output" == *"<COMMIT-ISH>"* ]]
-    [[ "$output" != *"--from-ref"* ]]
+    [[ "$output" == *"--json"* ]]
     [[ "$output" != *"Adapted Commands"* ]]
 
     run "$META_BIN" git worktree create --help
@@ -87,6 +86,8 @@ teardown() {
     [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"create"* ]]
     [[ "$output" == *"--dry-run"* ]]
+    [[ "$output" == *"[COMMIT_ISH]"* ]]
+    [[ "$output" != *"--from-ref"* ]]
 
     run "$META_BIN" git worktree list --help
     [ "$status" -eq 0 ]
@@ -224,4 +225,17 @@ teardown() {
     run "$BATS_TEST_DIRNAME/../target/debug/loop" true $'\xff'
     [ "$status" -ne 0 ]
     [[ "$output" == *"invalid UTF-8"* ]]
+}
+
+@test "meta help <command> prints a built-in's own help" {
+    for words in "exec" "context" "init" "init claude" "plugin" "plugin search" "help"; do
+        run "$META_BIN" help $words
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"Usage: meta $words"* ]]
+        # one help option, under meta's name
+        [ "$(grep -c -- '-h, --help' <<<"$output")" -eq 1 ]
+    done
+    run "$META_BIN" help plugin nosuch
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"meta plugin has no command 'nosuch'"* ]]
 }

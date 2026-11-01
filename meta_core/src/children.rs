@@ -21,6 +21,12 @@
 //! later is killed (one second in a program meta started, so it kills its
 //! own first), and two seconds after that the program ends regardless.
 //!
+//! SIGKILL can't be caught. Sent to the program's process group (as some CI
+//! runners and `timeout -k` do), it ends the program but not the children in
+//! groups of their own, which run on as orphans (a `git clone`, a command of
+//! `meta exec`). A supervisor that kills a whole job (a cgroup, a job
+//! object) stops them too.
+//!
 //! Elsewhere (Windows), children start as they always did; Ctrl-C reaches
 //! every process attached to the console.
 

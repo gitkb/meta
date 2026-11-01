@@ -166,8 +166,11 @@ fn leftover_entry(repo_path: &Path, dest: &Path) -> Result<()> {
                 escape_path(repo_path),
                 escape_path(&dest),
                 escape_path(&admin),
-                meta_core::display::shell_quote(&repo_path.to_string_lossy()),
-                meta_core::display::shell_quote(&dest.to_string_lossy())
+                // quoted for a shell, then escaped for the terminal
+                escape(&meta_core::display::shell_quote(
+                    &repo_path.to_string_lossy()
+                )),
+                escape(&meta_core::display::shell_quote(&dest.to_string_lossy()))
             );
         }
     }
@@ -529,6 +532,29 @@ mod tests {
             !message.contains('\n') && !message.contains('\u{1b}'),
             "{message}"
         );
+    }
+
+    /// The command a leftover git entry's message gives is quoted for a shell
+    /// and escaped for the terminal: a path's control characters print as
+    /// visible escapes.
+    #[test]
+    fn a_leftover_entry_is_reported_with_its_paths_escaped() {
+        let tmp = init_git_repo();
+        make_initial_commit(tmp.path());
+        let set = tmp.path().join("set\u{1b}[2J");
+        std::fs::create_dir(&set).unwrap();
+        let dest = set.join("wt");
+        let added = git(tmp.path())
+            .args(["worktree", "add", "-q", "-b", "b"])
+            .arg(&dest)
+            .status()
+            .unwrap();
+        assert!(added.success());
+        std::fs::remove_dir_all(&dest).unwrap();
+        let err = leftover_entry(tmp.path(), &dest).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("worktree remove"), "{message}");
+        assert!(!message.contains('\u{1b}'), "{message}");
     }
 
     /// Create a minimal git repo in a tempdir and return the tempdir handle.

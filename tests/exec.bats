@@ -376,6 +376,13 @@ SCRIPT
     echo "$output" | jq -e '.results[0] | .exit_code == -1 and (has("signal") | not)'
 }
 
+@test "--add-aliases-to-global-looprc with a command refuses and runs nothing" {
+    run "$META_BIN" --add-aliases-to-global-looprc exec -- touch RAN </dev/null
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"runs no command"* ]]
+    [ ! -e RAN ] && [ ! -e api/RAN ]
+}
+
 @test "loop handles commands with pipes via script" {
     cat > "$TEST_DIR/api/pipe.sh" <<'SCRIPT'
 #!/bin/sh

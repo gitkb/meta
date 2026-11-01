@@ -73,7 +73,11 @@ impl<'a> Index<'a> {
             return Ok(found(".", self.workspace.dir.clone()));
         }
         let Some(tree) = &self.tree else {
-            if let Some(p) = self.workspace.projects.iter().find(|p| p.name == key) {
+            // a top-level project by its name, else by its path: keyed by
+            // its name either way, as its dependencies name it
+            let projects = &self.workspace.projects;
+            let top = projects.iter().find(|p| p.name == key);
+            if let Some(p) = top.or_else(|| projects.iter().find(|p| p.path == key)) {
                 return Ok(found(&p.name, self.workspace.dir.join(&p.path)));
             }
             return match project_at(self.workspace, key)? {
@@ -215,9 +219,11 @@ mod tests {
         let found = Index::new(&ws).find("group/api").unwrap();
         assert_eq!(found.source, tmp.path().join("actual-api"));
         assert_eq!(found.key, "group/api");
-        // and a place, when no project has that name
+        // and a place, when no project has that name, keyed by the name
+        // of the project there
         let found = Index::new(&ws).find("actual-api").unwrap();
         assert_eq!(found.source, tmp.path().join("actual-api"));
+        assert_eq!(found.key, "group/api");
         let found = Index::recursive(&ws).unwrap().find("group/api").unwrap();
         assert_eq!(found.source, tmp.path().join("actual-api"));
         assert_eq!(found.key, "actual-api");

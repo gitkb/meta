@@ -7,15 +7,14 @@ use std::process::{Command, Stdio};
 
 use super::types::{CreateRepoEntry, PruneEntry};
 use meta_core::config::{HookEvent, Workspace};
-use meta_core::display::escape;
 
 /// Run the hook `owner`'s `.meta.yaml` configures for `event`
 /// (`worktree.hooks.<event>`), if any: spawn the command and pipe `payload`
 /// JSON to its stdin.
 /// The hook's stderr goes to meta's stderr, as git does for its hooks; a
 /// pipe that nobody reads would block a verbose hook forever.
-/// A hook that fails, or can't start, is an error naming it; what it
-/// followed is done either way.
+/// A hook that fails, or can't start, is an error naming its event (not its
+/// command, which may hold a secret); what it followed is done either way.
 pub fn fire_worktree_hook(
     event: HookEvent,
     payload: &serde_json::Value,
@@ -27,7 +26,7 @@ pub fn fire_worktree_hook(
     let Some(cmd_str) = owner.worktree.hooks.get(&event) else {
         return Ok(());
     };
-    let hook = format!("The {} hook `{}`", event.name(), escape(cmd_str));
+    let hook = format!("The {} hook", event.name());
 
     // From the directory whose config names the hook: a set removed from
     // inside it takes the caller's directory with it

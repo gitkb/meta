@@ -110,7 +110,9 @@ pub fn set_config(
     if let Some(found) = config::meta_config_at(set_dir, config_name)? {
         return Ok(Some(found));
     }
-    match set_origin(set_dir, members)? {
+    let origin = set_origin(set_dir, members)
+        .map_err(|e| anyhow::anyhow!("{e:#}. Pass --primary to run in the workspace."))?;
+    match origin {
         Some(source) => config::meta_config_at(&source, config_name),
         None => config::find_meta_config(set_dir, config_name),
     }
@@ -129,11 +131,10 @@ pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
             .map(|member| member.path)
             .collect();
         // set_origin's way out of its error is --primary itself
-        let origin = set_origin(&set_dir, &members).map_err(|_| {
+        let origin = set_origin(&set_dir, &members).map_err(|e| {
             anyhow::anyhow!(
-                "--primary can't tell which workspace worktree set {} was made from: its \
-                 checkouts name different workspaces. Run meta from that workspace's \
-                 directory instead.",
+                "--primary can't tell which workspace worktree set {} was made from: {e:#}. \
+                 Run meta from that workspace's directory instead.",
                 escape_path(&set_dir)
             )
         })?;
@@ -170,7 +171,7 @@ fn set_origin(set_dir: &Path, members: &[PathBuf]) -> Result<Option<PathBuf>> {
         match &origin {
             Some(first) if *first != project => anyhow::bail!(
                 "The checkouts of worktree set {} name different workspaces ({} and {}); \
-                 meta can't tell which config describes them. Pass --primary to run in the workspace.",
+                 meta can't tell which config describes them",
                 escape_path(set_dir),
                 escape_path(first),
                 escape_path(&project)
@@ -506,14 +507,10 @@ fn discover_repos_recursive(
                 source_path: source,
             });
         } else {
-            // Not a repo — recurse into intermediate directory
-            if let Err(e) = discover_repos_recursive(root, &sub_path, scanned, repos) {
-                log::debug!(
-                    "Skipping subtree {}: {}",
-                    escape_path(&sub_path),
-                    escape_lines(&format!("{e:#}"))
-                );
-            }
+            // Not a repo — recurse into intermediate directory (an
+            // unreadable one is skipped there; a record that can't be read
+            // is an error)
+            discover_repos_recursive(root, &sub_path, scanned, repos)?;
         }
     }
     Ok(())

@@ -655,7 +655,8 @@ fn a_failing_hook_is_a_warning_naming_it_and_an_error_under_strict() {
     let out = run(&["create", "w", "--repo", "a", "--no-deps"], false);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(
-        stderr(&out).contains("post-create hook `exit 3` exited with code 3"),
+        stderr(&out).contains("The post-create hook exited with code 3")
+            && !stderr(&out).contains("`exit 3`"),
         "{}",
         stderr(&out)
     );

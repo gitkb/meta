@@ -191,11 +191,11 @@ fn handle_ephemeral_exec(
         finished: false,
     };
 
-    // Run the command in the set just made
-    let repos = discover_worktree_repos(&created.dir)?;
-    let config = build_loop_config(&created.dir, &repos, &args, mode, verbose, json);
-
-    let exec_result = config.and_then(|config| loop_lib::run(&config, cmd_parts));
+    // Run the command in the set just made; whatever fails, the cleanup
+    // below runs
+    let exec_result = discover_worktree_repos(&created.dir)
+        .and_then(|repos| build_loop_config(&created.dir, &repos, &args, mode, verbose, json))
+        .and_then(|config| loop_lib::run(&config, cmd_parts));
 
     // Clean up before propagating the result; a failed cleanup (such as a
     // checkout git cannot delete) fails the command too

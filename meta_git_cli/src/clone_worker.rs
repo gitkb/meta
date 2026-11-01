@@ -1,6 +1,7 @@
 use anyhow::Context;
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use meta_core::errln;
 use meta_core::git::GitUrl;
 use meta_git_lib::clone_queue::{CloneQueue, CloneTask, Outcome, Work};
 use std::ffi::OsString;
@@ -144,12 +145,12 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     }
     for failure in &failures {
         match &failure.work {
-            Work::Clone(url) => eprintln!(
+            Work::Clone(url) => errln!(
                 "{} {} ({url})",
                 style("Failed to clone").red().bold(),
                 meta_core::display::escape(&failure.name),
             ),
-            Work::Pull => eprintln!(
+            Work::Pull => errln!(
                 "{} {}",
                 style("Could not pull").red().bold(),
                 meta_core::display::escape(&failure.name),
@@ -157,11 +158,11 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
         }
         // git's error names paths from the filesystem
         for line in failure.error.lines() {
-            eprintln!("    {}", meta_core::display::escape(line));
+            errln!("    {}", meta_core::display::escape(line));
         }
     }
     for (name, why) in &refused {
-        eprintln!(
+        errln!(
             "{} {}: not a git repository ({}); move it away and run 'meta git update' again",
             style("Not cloned").red().bold(),
             meta_core::display::escape(name),
@@ -170,7 +171,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     }
     let chain = |names: &Vec<String>| meta_core::display::escape(&names.join(" → ")).into_owned();
     for names in &cycles {
-        eprintln!(
+        errln!(
             "{} {}: it is a meta repo above it again; the meta repos list each other ({})",
             style("Left out").red().bold(),
             meta_core::display::escape(names.last().map_or("", String::as_str)),
@@ -178,7 +179,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
         );
     }
     for line in &unreadable {
-        eprintln!(
+        errln!(
             "{} {}",
             style("Cannot read nested .meta.yaml").red().bold(),
             meta_core::display::escape_lines(line)

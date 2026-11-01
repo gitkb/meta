@@ -2,6 +2,7 @@ use anyhow::Result;
 use colored::*;
 use meta_core::display::{escape, escape_path};
 use meta_core::ExecutionMode;
+use meta_core::{errln, outln};
 
 use meta_cli::worktree::discover_worktree_repos;
 use meta_core::set_record as record;
@@ -138,17 +139,17 @@ pub(crate) fn handle_add(
                 repos,
                 dry_run: true,
             };
-            println!("{}", serde_json::to_string_pretty(&output)?);
+            outln!("{}", serde_json::to_string_pretty(&output)?)?;
         } else {
-            println!("[DRY RUN] Would add to worktree set '{}':", escape(name));
+            outln!("[DRY RUN] Would add to worktree set '{}':", escape(name))?;
             for r in &repos {
-                println!(
+                outln!(
                     "  {} at {} (branch: {}{})",
                     escape(&r.alias),
                     escape(&r.path),
                     escape(&r.branch),
                     if r.created_branch { ", new" } else { "" }
-                );
+                )?;
             }
         }
         return Ok(());
@@ -185,7 +186,7 @@ pub(crate) fn handle_add(
         }
 
         if verbose {
-            eprintln!(
+            errln!(
                 "Adding worktree for '{}' at {} (branch: {})",
                 escape(&spec.alias),
                 escape_path(&dest),
@@ -227,18 +228,18 @@ pub(crate) fn handle_add(
             repos: added,
             dry_run: false,
         };
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else {
         for r in &added {
             let branch_note = if r.created_branch { " (new)" } else { "" };
-            println!(
+            outln!(
                 "{} Added '{}' to worktree '{}' (branch: {}{})",
                 "✓".green(),
                 escape(&r.alias),
                 name,
                 escape(&r.branch),
                 branch_note
-            );
+            )?;
         }
     }
 

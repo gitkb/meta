@@ -5,6 +5,7 @@ use loop_lib::{
     display_command, expand_directories, import_aliases, parse_config, parse_config_if_present,
     run, should_ignore, with_global_aliases,
 };
+use meta_core::outln;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -45,10 +46,16 @@ struct Cli {
     verbose: bool,
 }
 
-fn main() -> Result<()> {
-    let cli = meta_core::args::parse::<Cli>();
+fn main() -> std::process::ExitCode {
+    meta_core::exit::run(run_loop)
+}
+
+fn run_loop() -> Result<()> {
+    let cli = meta_core::args::parse::<Cli>()?;
     if let Err(e) = meta_core::children::own() {
-        eprintln!("Warning: cannot pass signals on to the programs loop starts: {e}");
+        meta_core::out::warn(format!(
+            "cannot pass signals on to the programs loop starts: {e}"
+        ));
     }
 
     // It writes ~/.looprc alone; the config file here has no say in it
@@ -73,20 +80,20 @@ fn main() -> Result<()> {
     };
 
     if cli.command.is_empty() {
-        Cli::command().print_help()?;
-        std::process::exit(0);
+        outln!("{}", Cli::command().render_help())?;
+        return Ok(());
     }
 
     if cli.verbose {
-        println!("{}", "Verbose mode enabled".green());
-        println!(
+        outln!("{}", "Verbose mode enabled".green())?;
+        outln!(
             "\nResolved config file path: {}",
             meta_core::display::escape_path(&std::env::current_dir()?.join(&config_path))
-        );
-        println!(
+        )?;
+        outln!(
             "Executing command: {}",
             meta_core::display::escape(&display_command(&cli.command))
-        );
+        )?;
     }
 
     // Flags only turn settings on: one the file sets stays when they're absent

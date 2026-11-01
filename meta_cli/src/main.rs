@@ -5,6 +5,7 @@ use meta_cli::repo_filter::{Filters, Scope};
 use meta_core::config::{self, find_meta_config, Workspace};
 use meta_core::display::{escape, escape_lines, escape_path};
 use meta_core::ExecutionMode;
+use meta_core::{errln, outln};
 use std::path::{Path, PathBuf};
 
 mod init;
@@ -325,58 +326,15 @@ fn help_with_plugins(plugins: &SubprocessPluginManager) -> String {
 
 // === Main Entry Point ===
 
-/// Exit status for output cut off by a closed stdout, as a shell reports a
-/// command SIGPIPE stopped (128 + 13): a failure it hid isn't success.
-const CLOSED_STDOUT: u8 = 141;
-
-/// `println!` panics when stdout is a closed pipe (`meta … | head`). End
-/// quietly instead, as a fallible write to stdout does; other panics are
-/// reported as usual.
-fn exit_quietly_on_closed_stdout() {
-    let report = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let payload = info.payload();
-        let message = payload
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| payload.downcast_ref::<&str>().copied())
-            .unwrap_or("");
-        if is_closed_stdout_panic(message) {
-            std::process::exit(CLOSED_STDOUT.into());
-        }
-        report(info)
-    }));
-}
-
-/// Whether `message` is std's panic for printing to a closed stdout: a
-/// broken pipe, which Windows reports as os error 109 or 232.
-fn is_closed_stdout_panic(message: &str) -> bool {
-    message.starts_with("failed printing to stdout")
-        && ["Broken pipe", "(os error 109)", "(os error 232)"]
-            .iter()
-            .any(|closed| message.contains(closed))
-}
-
 fn main() -> std::process::ExitCode {
-    exit_quietly_on_closed_stdout();
-    if let Err(e) = meta_core::children::own() {
-        eprintln!("Warning: cannot pass signals on to the programs meta starts: {e}");
-    }
-    match run_cli() {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(e)
-            if e.downcast_ref::<loop_lib::StdoutError>()
-                .is_some_and(|e| e.0.kind() == std::io::ErrorKind::BrokenPipe) =>
-        {
-            std::process::ExitCode::from(CLOSED_STDOUT)
+    meta_core::exit::run(|| {
+        if let Err(e) = meta_core::children::own() {
+            meta_core::out::warn(format!(
+                "cannot pass signals on to the programs meta starts: {e}"
+            ));
         }
-        Err(e) => {
-            // as Rust prints an error returned from main, but escaped: it can
-            // carry paths and names from git and the filesystem
-            eprintln!("Error: {}", escape_lines(&format!("{e:?}")));
-            std::process::ExitCode::FAILURE
-        }
-    }
+        run_cli()
+    })
 }
 
 fn run_cli() -> Result<()> {
@@ -407,8 +365,9 @@ fn run_cli() -> Result<()> {
             let plugins = SubprocessPluginManager::new(false)?;
             return subprocess_plugins::print_output(&help_with_plugins(&plugins));
         }
-        Err(_) => meta_core::args::parse(),
+        Err(_) => meta_core::args::parse()?,
     };
+    meta_core::out::set_json(cli.json);
 
     // Check for orphaned nested meta repo and warn the user
     check_and_warn_orphan();
@@ -438,13 +397,16 @@ fn run_cli() -> Result<()> {
         Some(Commands::Context(_)) if cli.recursive || cli.depth.is_some() => anyhow::bail!(
             "meta context shows the nearest workspace only; it does not take --recursive or --depth"
         ),
-        Some(Commands::Context(args)) => meta_cli::context::handle_context(
-            cli.json || args.json,
-            args.no_status,
-            cli.verbose,
-            &cli.start_dir()?,
-            &cli.filters(),
-        ),
+        Some(Commands::Context(args)) => {
+            meta_core::out::set_json(cli.json || args.json);
+            meta_cli::context::handle_context(
+                cli.json || args.json,
+                args.no_status,
+                cli.verbose,
+                &cli.start_dir()?,
+                &cli.filters(),
+            )
+        }
         Some(Commands::Init(InitArgs {
             command: InitCommands::Claude { force, update },
         })) => init::init_claude(*force, *update, cli.mode(), cli.verbose),
@@ -459,7 +421,7 @@ fn run_cli() -> Result<()> {
                 None => None,
             };
             let Some(plugin) = plugin else {
-                unrecognized_command_error(args);
+                return Err(unrecognized_command_error(args));
             };
             plugin_command(&cli, args, &plugin)
         }
@@ -500,7 +462,7 @@ fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Resul
         return subprocess_plugins::print_output(&found.render_help().to_string());
     }
     let Some(plugin) = plugins.find(first)? else {
-        unrecognized_command_error(words);
+        return Err(unrecognized_command_error(words));
     };
     // The command's words only: what follows `--` is its arguments, and
     // help never runs the command
@@ -564,10 +526,10 @@ fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin
 
     let target = target(cli, &start)?;
     if cli.verbose {
-        println!(
+        outln!(
             "Executing command: {}",
             escape(&loop_lib::display_command(command_args))
-        );
+        )?;
     }
     match plugin {
         None => {
@@ -639,7 +601,7 @@ fn target(cli: &Cli, start: &Path) -> Result<Target> {
         }
         if !members.is_empty() {
             if cli.verbose {
-                eprintln!(
+                errln!(
                     "Detected worktree context: '{}' ({} repos)",
                     escape(&name),
                     members.len()
@@ -650,8 +612,8 @@ fn target(cli: &Cli, start: &Path) -> Result<Target> {
                 .transpose()?;
             if cli.verbose {
                 match &workspace {
-                    Some(w) => eprintln!("Using config {}", escape_path(&w.config_path)),
-                    None => eprintln!(
+                    Some(w) => errln!("Using config {}", escape_path(&w.config_path)),
+                    None => errln!(
                         "{} No .meta.yaml found for worktree '{}'. Tags, plugins, and dependency features unavailable.",
                         "warning:".yellow().bold(),
                         escape(&name)
@@ -679,7 +641,7 @@ fn target(cli: &Cli, start: &Path) -> Result<Target> {
         );
     };
     if cli.verbose {
-        eprintln!(
+        errln!(
             "Resolved config file path: {}",
             escape_path(&workspace.config_path)
         );
@@ -754,19 +716,19 @@ fn handle_plugin_command(
             let results = client.search(query)?;
 
             if json || *own {
-                println!("{}", serde_json::to_string_pretty(&results)?);
+                outln!("{}", serde_json::to_string_pretty(&results)?)?;
             } else if results.is_empty() {
-                println!("No plugins found matching '{}'", escape(query));
+                outln!("No plugins found matching '{}'", escape(query))?;
             } else {
-                println!("Found {} plugin(s):", results.len());
+                outln!("Found {} plugin(s):", results.len())?;
                 for plugin in results {
-                    println!(
+                    outln!(
                         "  {} v{} - {}",
                         escape(&plugin.name),
                         escape(&plugin.version),
                         escape(&plugin.description)
-                    );
-                    println!("    by {}", escape(&plugin.author));
+                    )?;
+                    outln!("    by {}", escape(&plugin.author))?;
                 }
             }
         }
@@ -780,19 +742,19 @@ fn handle_plugin_command(
                 // Direct URL install
                 let plugin_name = installer.install_from_url(name)?;
                 if !json {
-                    println!(
+                    outln!(
                         "Successfully installed {} to {location}",
                         escape(&plugin_name)
-                    );
+                    )?;
                 }
             } else if let Some(shorthand) = GitHubShorthand::parse(name) {
                 // GitHub shorthand install (user/repo[@version])
                 let plugin_name = installer.install_from_github(&shorthand)?;
                 if !json {
-                    println!(
+                    outln!(
                         "Successfully installed {} to {location}",
                         escape(&plugin_name)
-                    );
+                    )?;
                 }
             } else {
                 // Registry-based install
@@ -805,11 +767,11 @@ fn handle_plugin_command(
                         if let Some(shorthand) = GitHubShorthand::parse(&source) {
                             let plugin_name = installer.install_from_github(&shorthand)?;
                             if !json {
-                                println!(
+                                outln!(
                                     "Successfully installed {} from {} to {location}",
                                     escape(&plugin_name),
                                     escape(&source)
-                                );
+                                )?;
                             }
                         } else {
                             anyhow::bail!("Invalid plugin source in registry: {}", escape(&source));
@@ -821,12 +783,12 @@ fn handle_plugin_command(
                         let installed = installer.install(&metadata)?;
 
                         if !json {
-                            println!(
+                            outln!(
                                 "Successfully installed {} v{} ({}) to {location}",
                                 escape(&metadata.name),
                                 escape(&metadata.version),
                                 escape(&installed.join(", "))
-                            );
+                            )?;
                         }
                     }
                 }
@@ -838,14 +800,14 @@ fn handle_plugin_command(
                 let installer = PluginInstaller::new_local()?;
                 let plugins = installer.list_plugins_detailed()?;
                 if json {
-                    println!("{}", serde_json::to_string_pretty(&plugins)?);
+                    outln!("{}", serde_json::to_string_pretty(&plugins)?)?;
                 } else if plugins.is_empty() {
-                    println!("No project-local plugins installed");
+                    outln!("No project-local plugins installed")?;
                 } else {
-                    println!("Project-local plugins ({}):", plugins.len());
-                    println!();
-                    println!("{:<12} {:<12} PATH", "NAME", "VERSION");
-                    println!("{}", "-".repeat(70));
+                    outln!("Project-local plugins ({}):", plugins.len())?;
+                    outln!()?;
+                    outln!("{:<12} {:<12} PATH", "NAME", "VERSION")?;
+                    outln!("{}", "-".repeat(70))?;
                     for plugin in plugins {
                         let name = plugin
                             .name
@@ -853,12 +815,12 @@ fn handle_plugin_command(
                             .unwrap_or(&plugin.name);
                         let version = plugin.version.as_deref().unwrap_or("-");
                         let path = installer.plugins_dir().join(&plugin.name);
-                        println!(
+                        outln!(
                             "{:<12} {:<12} {}",
                             escape(name),
                             escape(version),
                             escape_path(&path)
-                        );
+                        )?;
                     }
                 }
             } else {
@@ -878,21 +840,21 @@ fn handle_plugin_command(
                             })
                         })
                         .collect();
-                    println!("{}", serde_json::to_string_pretty(&json_plugins)?);
+                    outln!("{}", serde_json::to_string_pretty(&json_plugins)?)?;
                 } else if plugins.is_empty() {
-                    println!("No plugins installed");
+                    outln!("No plugins installed")?;
                 } else {
-                    println!("Installed plugins ({}):", plugins.len());
-                    println!();
-                    println!("{:<12} {:<12} PATH", "NAME", "VERSION");
-                    println!("{}", "-".repeat(70));
+                    outln!("Installed plugins ({}):", plugins.len())?;
+                    outln!()?;
+                    outln!("{:<12} {:<12} PATH", "NAME", "VERSION")?;
+                    outln!("{}", "-".repeat(70))?;
                     for plugin in &plugins {
-                        println!(
+                        outln!(
                             "{:<12} {:<12} {}",
                             escape(&plugin.word),
                             escape(&plugin.info.version),
                             escape_path(&plugin.path)
-                        );
+                        )?;
                     }
                 }
             }
@@ -903,7 +865,7 @@ fn handle_plugin_command(
             installer.uninstall(name)?;
 
             if !json {
-                println!("Successfully uninstalled {} from {location}", escape(name));
+                outln!("Successfully uninstalled {} from {location}", escape(name))?;
             }
         }
         PluginCommands::Update { name, local, check } => {
@@ -917,29 +879,29 @@ fn handle_plugin_command(
                     Some((current, latest)) => {
                         if check {
                             if !json {
-                                println!(
+                                outln!(
                                     "Update available for {}: {} → {}",
                                     escape(plugin_name),
                                     escape(&current),
                                     escape(&latest)
-                                );
+                                )?;
                             }
                         } else {
                             let updated = installer.update_plugin(plugin_name)?;
                             if !json {
-                                println!(
+                                outln!(
                                     "Successfully updated {} from {} to {} in {}",
                                     escape(&updated),
                                     escape(&current),
                                     escape(&latest),
                                     escape(location)
-                                );
+                                )?;
                             }
                         }
                     }
                     None => {
                         if !json {
-                            println!("{} is already up to date", escape(plugin_name));
+                            outln!("{} is already up to date", escape(plugin_name))?;
                         }
                     }
                 }
@@ -951,7 +913,7 @@ fn handle_plugin_command(
                 let mut updated_count = 0;
                 let mut failed = Vec::new();
                 let mut report = |name: &str, e: anyhow::Error| {
-                    eprintln!("{}", escape_lines(&format!("{e:#}")));
+                    errln!("{}", escape_lines(&format!("{e:#}")));
                     failed.push(name.to_string());
                 };
 
@@ -967,18 +929,18 @@ fn handle_plugin_command(
 
                 if updates_available.is_empty() {
                     if !json && failed.is_empty() {
-                        println!("All plugins are up to date");
+                        outln!("All plugins are up to date")?;
                     }
                 } else if check {
                     if !json {
-                        println!("Updates available:");
+                        outln!("Updates available:")?;
                         for (name, current, latest) in &updates_available {
-                            println!(
+                            outln!(
                                 "  {} {} → {}",
                                 escape(name),
                                 escape(current),
                                 escape(latest)
-                            );
+                            )?;
                         }
                     }
                 } else {
@@ -986,12 +948,12 @@ fn handle_plugin_command(
                         match installer.update_plugin(name) {
                             Ok(_) => {
                                 if !json {
-                                    println!(
+                                    outln!(
                                         "Updated {} from {} to {}",
                                         escape(name),
                                         escape(current),
                                         escape(latest)
-                                    );
+                                    )?;
                                 }
                                 updated_count += 1;
                             }
@@ -1002,11 +964,11 @@ fn handle_plugin_command(
                         }
                     }
                     if !json {
-                        println!(
+                        outln!(
                             "\nUpdated {} plugin(s) in {}",
                             updated_count,
                             escape(location)
-                        );
+                        )?;
                     }
                 }
                 if !failed.is_empty() {
@@ -1022,25 +984,21 @@ fn handle_plugin_command(
 
 // === Helpers ===
 
-/// Print unrecognized command error with suggestion and help, then exit.
-fn unrecognized_command_error(command_args: &[String]) -> ! {
+/// The usage error for a command meta doesn't know, with a suggestion and
+/// meta's help.
+fn unrecognized_command_error(command_args: &[String]) -> anyhow::Error {
     let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
-    eprintln!(
-        "{}: unrecognized command '{}'",
-        "error".red().bold(),
-        escape(first_cmd)
-    );
     let command_str = escape(&loop_lib::display_command(command_args)).into_owned();
-    eprintln!();
-    eprintln!("To run '{command_str}' across all repos:");
-    eprintln!("    meta exec -- {command_str}");
-    eprintln!();
     // Listing the plugins' commands would start every plugin; a typo
     // starts none
-    eprintln!("Plugins add more commands: meta --help lists them.");
-    eprintln!();
-    eprint!("{}", Cli::command().render_help());
-    std::process::exit(1);
+    meta_core::exit::Usage(format!(
+        "unrecognized command '{}'\n\n\
+         To run '{command_str}' across all repos:\n    meta exec -- {command_str}\n\n\
+         Plugins add more commands: meta --help lists them.\n\n{}",
+        escape(first_cmd),
+        Cli::command().render_help().to_string().trim_end()
+    ))
+    .into()
 }
 
 /// Check if current directory is in an orphaned nested meta repo and warn the user.
@@ -1074,22 +1032,22 @@ fn check_and_warn_orphan() {
         return;
     }
     if let Some(warning) = config::check_orphan_status(&meta_dir) {
-        eprintln!(
+        errln!(
             "{}: This meta repo is not tracked by its parent.",
             "warning".yellow().bold()
         );
-        eprintln!("  Current: {}", escape_path(&warning.current));
-        eprintln!("  Parent:  {}", escape_path(&warning.parent));
-        eprintln!();
+        errln!("  Current: {}", escape_path(&warning.current));
+        errln!("  Parent:  {}", escape_path(&warning.parent));
+        errln!();
 
-        eprintln!(
+        errln!(
             "  To include it, add to {}:",
             escape_path(&warning.parent_config)
         );
-        eprintln!("    {}:", escape(&warning.suggested_key));
-        eprintln!("      repo: <git-url>");
-        eprintln!("      meta: true");
-        eprintln!();
+        errln!("    {}:", escape(&warning.suggested_key));
+        errln!("      repo: <git-url>");
+        errln!("      meta: true");
+        errln!();
     }
 }
 
@@ -1099,20 +1057,6 @@ fn check_and_warn_orphan() {
 mod tests {
     use super::*;
 
-    #[test]
-    fn closed_stdout_panics_are_recognised_on_every_platform() {
-        for message in [
-            "failed printing to stdout: Broken pipe (os error 32)",
-            "failed printing to stdout: The pipe has been ended. (os error 109)",
-            "failed printing to stdout: The pipe is being closed. (os error 232)",
-        ] {
-            assert!(is_closed_stdout_panic(message), "{message}");
-        }
-        assert!(!is_closed_stdout_panic(
-            "failed printing to stdout: No space left on device (os error 28)"
-        ));
-        assert!(!is_closed_stdout_panic("index out of bounds: Broken pipe"));
-    }
     use std::io::Write;
     use tempfile::NamedTempFile;
 

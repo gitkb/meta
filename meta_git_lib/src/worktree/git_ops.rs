@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use meta_core::display::{escape, escape_path};
+use meta_core::errln;
 use meta_core::git::{lookup, run, RepoStatus};
 use meta_core::gitdir::{common_dir, Checkout};
 use std::ffi::OsStr;
@@ -264,7 +265,7 @@ pub fn remove_worktree_repos(
 
     for m in ordered {
         if verbose {
-            eprintln!("Removing worktree at {}", escape_path(&m.path));
+            errln!("Removing worktree at {}", escape_path(&m.path));
         }
         git_worktree_remove(&m.repo_git_dir, &m.path, force)
             .map_err(|e| e.context(format!("Cannot remove {}", escape_path(&m.path))))?;

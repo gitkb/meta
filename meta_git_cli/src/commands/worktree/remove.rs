@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use colored::*;
 use meta_core::display::{escape, escape_path};
 use meta_core::ExecutionMode;
+use meta_core::{errln, outln};
 
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::hooks::fire_post_destroy;
@@ -152,7 +153,7 @@ pub(crate) fn remove_set(
                  Commit and push it, or use --force to discard it."
             );
         }
-        eprintln!(
+        errln!(
             "{} {} work in worktree '{name}':\n  {found}",
             "warning:".yellow().bold(),
             if preview {
@@ -178,18 +179,18 @@ pub(crate) fn remove_set(
             repos_removed: check.members.len(),
             dry_run: preview,
         };
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else if preview {
-        println!(
+        outln!(
             "[DRY RUN] Would remove worktree '{}' at {}:",
             escape(name),
             escape_path(&wt_dir)
-        );
+        )?;
         for member in &check.members {
-            println!("  {}", escape_path(&member.path));
+            outln!("  {}", escape_path(&member.path))?;
         }
     } else {
-        println!("{} Removed worktree '{}'", "✓".green(), name.bold());
+        outln!("{} Removed worktree '{}'", "✓".green(), name.bold())?;
     }
     if preview {
         return Ok(());

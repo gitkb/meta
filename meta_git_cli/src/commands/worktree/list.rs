@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::Utc;
 use colored::*;
 use meta_core::display::{escape, escape_path};
+use meta_core::{errln, outln};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -210,24 +211,24 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
     worktrees.sort_by(|a, b| a.name.cmp(&b.name));
     warnings.sort_by(|a, b| a.name.cmp(&b.name));
     if json {
-        println!(
+        outln!(
             "{}",
             serde_json::to_string_pretty(&ListOutput {
                 worktrees,
                 warnings
             })?
-        );
+        )?;
         return Ok(());
     }
     if worktrees.is_empty() {
-        println!(
+        outln!(
             "{}",
             if warnings.is_empty() {
                 "No worktrees found."
             } else {
                 "No readable worktree sets found."
             }
-        );
+        )?;
     }
     for entry in worktrees {
         let mut header = escape(&entry.name).bold().to_string();
@@ -246,11 +247,11 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
                 }
             ));
         }
-        println!("{header}");
+        outln!("{header}")?;
         for repo in entry.repos {
             match repo {
                 RepoEntry::Metadata(repo) => {
-                    println!("  {}  {}", escape(&repo.alias), escape_path(&repo.path))
+                    outln!("  {}  {}", escape(&repo.alias), escape_path(&repo.path))?
                 }
                 RepoEntry::Observed(repo) => {
                     let status = match repo.dirty {
@@ -258,19 +259,19 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
                         Some(false) => "clean".green().to_string(),
                         None => "unknown: git can't read it".red().to_string(),
                     };
-                    println!(
+                    outln!(
                         "  {:12} -> {:20} ({})",
                         escape(&repo.alias),
                         escape(repo.branch.as_deref().unwrap_or("-")),
                         status
-                    );
+                    )?;
                 }
             }
         }
-        println!();
+        outln!()?;
     }
     for warning in warnings {
-        eprintln!(
+        errln!(
             "Warning: {}: {}",
             escape(&warning.name),
             escape(&warning.message)

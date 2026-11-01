@@ -14,6 +14,7 @@ use anyhow::Result;
 use clap::Parser;
 use colored::*;
 use meta_core::display::{escape, escape_lines, escape_path};
+use meta_core::errln;
 use meta_core::ExecutionMode;
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::path::Path;
@@ -97,7 +98,7 @@ pub fn execute_worktree_command(
             cwd,
         ) {
             Ok(()) => CommandResult::Message(String::new()),
-            Err(e) => CommandResult::Error(format!("{e:#}")),
+            Err(e) => e.into(),
         },
         Err(result) => result,
     }
@@ -167,7 +168,7 @@ pub(crate) fn not_a_repository(alias: &str, source: &Path) -> Option<String> {
 /// Print a warning; the message can carry paths and names from git and
 /// the filesystem.
 pub(crate) fn warn(message: impl std::fmt::Display) {
-    eprintln!(
+    errln!(
         "{} {}",
         "warning:".yellow().bold(),
         escape_lines(&message.to_string())

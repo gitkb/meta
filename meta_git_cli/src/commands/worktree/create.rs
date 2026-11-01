@@ -3,6 +3,7 @@ use chrono::Utc;
 use colored::*;
 use meta_core::display::{escape, escape_path};
 use meta_core::ExecutionMode;
+use meta_core::{errln, outln};
 use std::collections::HashMap;
 
 use meta_cli::dependency_graph::{DependencyGraph, ProjectDependencies};
@@ -155,7 +156,7 @@ pub(crate) fn handle_create(
             ttl_seconds,
             custom_meta: &custom_meta,
         };
-        print_create_dry_run(&plan);
+        print_create_dry_run(&plan)?;
         return Ok(None);
     }
 
@@ -275,7 +276,7 @@ pub(crate) fn handle_create(
                 dest
             };
             if verbose {
-                eprintln!(
+                errln!(
                     "Creating worktree for '{}' at {} (branch: {})",
                     escape(&repo.project),
                     escape_path(&dest),
@@ -322,31 +323,31 @@ pub(crate) fn handle_create(
         custom: custom_meta,
     };
     if json {
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else {
-        println!(
+        outln!(
             "{} Created worktree '{}' at {}",
             "✓".green(),
             name.bold(),
             escape_path(&wt_dir)
-        );
+        )?;
         for r in &output.repos {
             let branch_note = if r.created_branch { " (new)" } else { "" };
-            println!(
+            outln!(
                 "  {} -> {}{}",
                 escape(&r.alias),
                 escape(&r.branch),
                 branch_note
-            );
+            )?;
         }
         if ephemeral {
-            println!("  {}", "[ephemeral]".dimmed());
+            outln!("  {}", "[ephemeral]".dimmed())?;
         }
         if let Some(ttl) = ttl_seconds {
-            println!(
+            outln!(
                 "  {}",
                 format!("[TTL: {}]", format_duration(ttl as i64)).dimmed()
-            );
+            )?;
         }
     }
 
@@ -468,41 +469,41 @@ struct CreateDryRunPlan<'a> {
     custom_meta: &'a HashMap<String, String>,
 }
 
-fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
-    println!(
+fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
+    outln!(
         "[DRY RUN] Would create worktree set '{}' at {}",
         plan.name,
         escape_path(plan.wt_dir)
-    );
-    println!();
+    )?;
+    outln!()?;
 
     if let Some(from_ref) = plan.from_ref {
-        println!("Start ref: {}", escape(from_ref));
+        outln!("Start ref: {}", escape(from_ref))?;
     }
     if let Some(from_pr_spec) = plan.from_pr_spec {
-        println!(
+        outln!(
             "PR source: would resolve {} and fetch the matching head branch",
             escape(from_pr_spec)
-        );
+        )?;
     }
     if plan.ephemeral {
-        println!("Ephemeral: true");
+        outln!("Ephemeral: true")?;
     }
     if let Some(ttl) = plan.ttl_seconds {
-        println!("TTL: {}", format_duration(ttl as i64));
+        outln!("TTL: {}", format_duration(ttl as i64))?;
     }
     if !plan.custom_meta.is_empty() {
-        println!(
+        outln!(
             "Metadata: {}",
             plan.custom_meta
                 .iter()
                 .map(|(k, v)| format!("{}={}", escape(k), escape(v)))
                 .collect::<Vec<_>>()
                 .join(", ")
-        );
+        )?;
     }
 
-    println!("Planned repo operations:");
+    outln!("Planned repo operations:")?;
     for PlannedRepo {
         project: alias,
         source,
@@ -525,22 +526,23 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
             cmd.push(' ');
             cmd.push_str(&shell_quote(from_ref));
         }
-        println!("  {}:", escape(alias));
-        println!("    source: {}", escape_path(source));
+        outln!("  {}:", escape(alias))?;
+        outln!("    source: {}", escape_path(source))?;
         if place != "."
             && source
                 .symlink_metadata()
                 .is_ok_and(|m| m.file_type().is_symlink())
         {
-            println!("    (a link: if the root checkout holds it, the repo goes where it leads)");
+            outln!("    (a link: if the root checkout holds it, the repo goes where it leads)")?;
         }
-        println!("    dest:   {}", escape_path(&dest));
-        println!("    branch: {}", escape(branch));
-        println!("    bash:   {}", escape(&cmd));
+        outln!("    dest:   {}", escape_path(&dest))?;
+        outln!("    branch: {}", escape(branch))?;
+        outln!("    bash:   {}", escape(&cmd))?;
     }
 
-    println!();
-    println!("No directories, branches, records, hooks, or git excludes were written.");
+    outln!()?;
+    outln!("No directories, branches, records, hooks, or git excludes were written.")?;
+    Ok(())
 }
 
 /// Why a repo is in a set being made. A project that isn't cloned is an
@@ -679,7 +681,7 @@ fn plan_repos(
                 log::debug!("Resolved transitive dependencies for '{key}': {deps:?}");
                 for dep in deps {
                     if verbose {
-                        eprintln!(
+                        errln!(
                             "  Including '{}' (dependency of '{}')",
                             escape(dep),
                             escape(key)

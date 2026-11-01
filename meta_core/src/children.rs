@@ -345,7 +345,7 @@ mod imp {
             for origin in signals.forever() {
                 if stopping {
                     kill_all();
-                    std::process::exit(128 + origin.signal);
+                    crate::exit::now(128 + origin.signal);
                 }
                 stopping = true;
                 std::thread::spawn(move || stop(origin.signal, origin.process.is_some()));
@@ -406,7 +406,7 @@ mod imp {
         drop(children);
         let _ = signal_hook::low_level::emulate_default_handler(signal);
         // SIGHUP, SIGINT and SIGTERM all end a program by default
-        std::process::exit(128 + signal);
+        crate::exit::now(128 + signal);
     }
 
     /// Kill every child and every group this program made.

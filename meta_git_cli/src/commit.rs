@@ -1,6 +1,7 @@
 use console::style;
 use meta_core::config;
 use meta_core::display::{escape, escape_lines, escape_path};
+use meta_core::outln;
 use meta_plugin_protocol::{CommandResult, PlannedCommand, PluginRequestOptions};
 use std::path::Path;
 use std::process::Command;
@@ -101,19 +102,19 @@ pub(crate) fn execute_git_commit(
         return Ok(CommandResult::Plan(commands, Some(options.parallel)));
     } else {
         // No message provided, show what would be committed
-        println!("Repositories with staged changes:");
+        outln!("Repositories with staged changes:")?;
         for (name, _path, files) in &repos_with_changes {
-            println!("  {} ({} files)", style(escape(name)).cyan(), files.len());
+            outln!("  {} ({} files)", style(escape(name)).cyan(), files.len())?;
         }
-        println!();
-        println!(
+        outln!()?;
+        outln!(
             "Use {} to create per-repo commit messages",
             style("--edit").yellow()
-        );
-        println!(
+        )?;
+        outln!(
             "Use {} to apply the same message to all",
             style("-m \"message\"").yellow()
-        );
+        )?;
     }
 
     Ok(CommandResult::Message(String::new()))
@@ -160,12 +161,12 @@ fn execute_editor_commit(
     };
     // A preview checks what a run checks, and opens nothing
     if mode.is_preview() {
-        println!(
+        outln!(
             "[DRY RUN] Would open the editor '{}' for a message for each of:",
             escape(&editor)
-        );
+        )?;
         for (name, _path, files) in repos {
-            println!("  {} ({} files)", style(escape(name)).cyan(), files.len());
+            outln!("  {} ({} files)", style(escape(name)).cyan(), files.len())?;
         }
         return Ok(());
     }
@@ -222,7 +223,7 @@ fn execute_editor_commit(
     drop(temp_file);
 
     if commits.is_empty() {
-        println!("No commits to make (all messages were empty or deleted).");
+        outln!("No commits to make (all messages were empty or deleted).")?;
         return Ok(());
     }
     commit_each(repos, &commits)
@@ -245,11 +246,11 @@ fn commit_each(
             .map(|(_, path, _)| path.as_str())
             .unwrap_or(repo_name);
 
-        println!(
+        outln!(
             "{} Committing {}...",
             style("→").cyan(),
             style(escape(repo_name)).bold()
-        );
+        )?;
 
         let status = meta_core::git::git(Path::new(path))
             .args(["commit", "-m", message])
@@ -257,30 +258,30 @@ fn commit_each(
 
         match status {
             Ok(s) if s.success() => {
-                println!(
+                outln!(
                     "  {} {}",
                     style("✓").green(),
                     escape(message.lines().next().unwrap_or(""))
-                );
+                )?;
                 succeeded += 1;
             }
             _ => {
                 // the message is in no file any more: show it, to reuse
-                println!(
+                outln!(
                     "  {} Failed to commit; the message was:\n{}",
                     style("✗").red(),
                     escape_lines(message)
-                );
+                )?;
                 failed += 1;
             }
         }
     }
 
-    println!();
+    outln!()?;
     if failed > 0 {
         anyhow::bail!("Committed {succeeded} repo(s), {failed} failed");
     }
-    println!("Committed {} repo(s)", style(succeeded).green());
+    outln!("Committed {} repo(s)", style(succeeded).green())?;
 
     Ok(())
 }

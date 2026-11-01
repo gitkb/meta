@@ -6,6 +6,7 @@ use meta_core::config;
 use meta_core::display::{escape, escape_path};
 use meta_core::git::GitUrl;
 use meta_core::gitdir::Checkout;
+use meta_core::{errln, outln};
 use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::collections::VecDeque;
@@ -80,24 +81,24 @@ pub(crate) fn execute_git_update(
     if options.mode().is_preview() {
         // The .meta.yaml files as they are now: nothing is pulled, so what
         // the pulls would add isn't known
-        println!(
+        outln!(
             "{} Would run (from the .meta.yaml files as they are now; the pulls may add projects):",
             style("[DRY RUN]").cyan()
-        );
+        )?;
         let mut tasks = VecDeque::from(tasks);
         while let Some(task) = tasks.pop_front() {
             let argv = crate::clone_worker::git_argv(&task, None, |url| url.to_string().into());
             let argv: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into()).collect();
             let shown = escape(&loop_lib::display_command(&argv)).into_owned();
             match task.work {
-                Work::Clone(_) => println!("  {shown}"),
+                Work::Clone(_) => outln!("  {shown}")?,
                 Work::Pull => match crate::clone_worker::nothing_to_pull(&task.target_path) {
                     Some(why) => {
-                        println!("  ({} not pulled: {why})", escape(&task.name));
+                        outln!("  ({} not pulled: {why})", escape(&task.name))?;
                         tasks.extend(queue.mark_not_pulled(&task, why));
                     }
                     None => {
-                        println!("  {shown}");
+                        outln!("  {shown}")?;
                         tasks.extend(queue.mark_completed(&task));
                     }
                 },
@@ -145,7 +146,7 @@ pub(crate) fn execute_git_update(
     report_unlisted(&queue, cwd);
     let outcome = queue.outcome();
     for (name, why) in &outcome.not_pulled {
-        eprintln!("{} {}: {why}", style("Not pulled").yellow(), escape(name));
+        errln!("{} {}: {why}", style("Not pulled").yellow(), escape(name));
     }
     if let Some(error) = crate::clone_worker::report_failures(&queue) {
         return Ok(CommandResult::Error(error));
@@ -155,7 +156,7 @@ pub(crate) fn execute_git_update(
         0 => String::new(),
         n => format!(", {n} with nothing to pull from"),
     };
-    println!("Update completed ({pulled} pulled, {cloned} cloned{not_pulled})");
+    outln!("Update completed ({pulled} pulled, {cloned} cloned{not_pulled})")?;
     Ok(CommandResult::Message(String::new()))
 }
 
@@ -178,7 +179,7 @@ fn report_unlisted(queue: &CloneQueue, cwd: &Path) {
                 escape(&format!("{e:#}"))
             ),
         };
-        eprintln!(
+        errln!(
             "{} {} is not in .meta.yaml; {holds}",
             style("⚠").yellow(),
             style(shown).yellow().bold(),

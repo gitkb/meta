@@ -7,6 +7,7 @@
 use anyhow::{Context, Result};
 use log::{debug, info};
 use meta_core::display::{escape, escape_path};
+use meta_core::errln;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
@@ -1103,7 +1104,7 @@ impl PluginInstaller {
                             version: match crate::subprocess_plugins::probe_plugin_info(&path) {
                                 Ok(info) => Some(info.version),
                                 Err(e) => {
-                                    eprintln!("Warning: {}", e.into_error());
+                                    errln!("Warning: {}", e.into_error());
                                     None
                                 }
                             },

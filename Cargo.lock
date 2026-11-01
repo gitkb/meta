@@ -908,6 +908,7 @@ version = "0.2.22"
 dependencies = [
  "anyhow",
  "clap",
+ "colored",
  "dirs",
  "rustix",
  "serde",
@@ -994,6 +995,7 @@ name = "meta_rust_cli"
 version = "0.2.22"
 dependencies = [
  "indexmap",
+ "meta_core",
  "meta_plugin_protocol",
  "tempfile",
 ]

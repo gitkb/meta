@@ -22,6 +22,14 @@ fn git(path: &Path, args: &[&str]) {
 }
 
 /// Invoke the public plugin protocol with isolated worktree and data roots.
+/// Whether `stdout` is the JSON error a failed `--json` command prints in
+/// place of its report.
+fn is_error(stdout: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(stdout).is_ok_and(|v| {
+        v["success"] == false && v["error"].is_string() && v.get("worktrees").is_none()
+    })
+}
+
 fn request(root: &Path, command: &str, recursive: bool, explicit: bool) -> std::process::Output {
     let args = if command == "status" {
         vec!["example"]
@@ -188,12 +196,12 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
     let out = request(root, "status", true, false);
     assert!(!out.status.success());
     assert!(
-        out.stdout.is_empty(),
+        is_error(&out.stdout),
         "named status must not emit an incomplete successful inventory"
     );
     let selected = request_args(root, "list", vec!["example"], true, false);
     assert!(!selected.status.success());
-    assert!(selected.stdout.is_empty());
+    assert!(is_error(&selected.stdout));
 }
 
 /// A missing configured root is empty for list and an error for named status.
@@ -207,7 +215,7 @@ fn missing_worktree_root_preserves_list_and_status_contracts() {
         assert_eq!(value, json!({"worktrees": []}));
         let out = request(temp.path(), "status", recursive, false);
         assert!(!out.status.success());
-        assert!(out.stdout.is_empty());
+        assert!(is_error(&out.stdout));
     }
 }
 
@@ -297,7 +305,7 @@ fn membership_only_protocol_runs_without_git_and_rejects_partial_membership() {
     );
     assert!(!out.status.success());
     assert!(
-        out.stdout.is_empty(),
+        is_error(&out.stdout),
         "must not report a partial successful inventory"
     );
     assert!(!bin.join("git.calls").exists());
@@ -438,14 +446,14 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
     }
     let missing = invoke(&source, vec!["missing", "--metadata-only"], true);
     assert!(!missing.status.success());
-    assert!(missing.stdout.is_empty());
+    assert!(is_error(&missing.stdout));
 
     fs::create_dir(set.join("broken")).unwrap();
     fs::write(set.join("broken/.git"), "broken").unwrap();
     let malformed = invoke(&nested, vec!["--metadata-only"], true);
     assert!(!malformed.status.success());
     assert!(
-        malformed.stdout.is_empty(),
+        is_error(&malformed.stdout),
         "inference must not mask invalid membership"
     );
     assert!(!bin.join("git.calls").exists(), "inference launched Git");
@@ -453,5 +461,5 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
     fs::write(set.join(".git"), "broken").unwrap();
     let invalid_root = invoke(&nested, vec!["--metadata-only"], true);
     assert!(!invalid_root.status.success());
-    assert!(invalid_root.stdout.is_empty());
+    assert!(is_error(&invalid_root.stdout));
 }

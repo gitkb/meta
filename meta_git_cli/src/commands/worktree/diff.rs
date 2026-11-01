@@ -1,6 +1,7 @@
 use anyhow::Result;
 use colored::*;
 use meta_core::display::escape;
+use meta_core::outln;
 use rayon::prelude::*;
 
 use meta_git_lib::worktree::git_ops::git_diff_stat;
@@ -71,40 +72,40 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
                 deletions: total_deletions,
             },
         };
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else {
         // Human mode: always show stat summary
-        println!("{} vs {}:", name.bold(), escape(base_ref));
+        outln!("{} vs {}:", name.bold(), escape(base_ref))?;
         for d in &diff_entries {
             if let Some(error) = &d.error {
-                println!("  {:12} error: {}", escape(&d.alias), escape(error));
+                outln!("  {:12} error: {}", escape(&d.alias), escape(error))?;
             } else if let (Some(files), Some(insertions), Some(deletions)) =
                 (d.files_changed, d.insertions, d.deletions)
             {
                 if files == 0 {
                     continue;
                 }
-                println!(
+                outln!(
                     "  {:12} {} {} ({} files)",
                     escape(&d.alias),
                     format!("+{insertions}").green(),
                     format!("-{deletions}").red(),
                     files,
-                );
+                )?;
             }
         }
         if total_repos_changed > 0 {
-            println!("  {}", "─".repeat(40));
-            println!(
+            outln!("  {}", "─".repeat(40))?;
+            outln!(
                 "  {:12} {} {} ({} files, {} repos)",
                 "Total",
                 format!("+{total_insertions}").green(),
                 format!("-{total_deletions}").red(),
                 total_files,
                 total_repos_changed,
-            );
+            )?;
         } else if failed == 0 {
-            println!("  No changes vs {}", escape(base_ref));
+            outln!("  No changes vs {}", escape(base_ref))?;
         }
     }
 

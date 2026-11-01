@@ -443,7 +443,7 @@ SCRIPT
 
 @test "unrecognized top-level command shows help" {
     run "$META_BIN" blablabla
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
     [[ "$output" == *"unrecognized command"* ]]
     [[ "$output" == *"blablabla"* ]]
     [[ "$output" == *"meta exec"* ]]
@@ -460,7 +460,7 @@ SCRIPT
     chmod +x "$TEST_DIR/.meta/plugins/meta-project"
 
     run "$META_BIN" project blablabla
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
     [[ "$output" == *"unrecognized command"* ]]
     [[ "$output" == *"project blablabla"* ]]
     # Should show plugin help with available commands
@@ -745,6 +745,19 @@ EOF
         [[ "$status" -eq 0 || "$status" -eq 141 ]]
         [ ! -s "$TEST_DIR/stderr" ]
     done
+}
+
+@test "loop's output to a closed stdout exits 141 quietly" {
+    LOOP_BIN="$BATS_TEST_DIRNAME/../target/debug/loop"
+    for args in "-i api seq 1 200000" "-v -i api seq 1 200000"; do
+        run bash -c 'set -o pipefail; "$1" $2 2>"$3" | head -c0' _ "$LOOP_BIN" "$args" "$TEST_DIR/stderr"
+        [ "$status" -eq 141 ]
+        [ ! -s "$TEST_DIR/stderr" ]
+    done
+    # its help may fit in the pipe before head closes it
+    run bash -c 'set -o pipefail; "$1" --help 2>"$2" | head -c0' _ "$LOOP_BIN" "$TEST_DIR/stderr"
+    [[ "$status" -eq 0 || "$status" -eq 141 ]]
+    [ ! -s "$TEST_DIR/stderr" ]
 }
 
 @test "a failure cut off by a closed stdout isn't reported as success" {

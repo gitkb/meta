@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use colored::*;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use meta_core::display::{escape, escape_path};
+use meta_core::{errln, out, outln};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use serde::{Deserialize, Serialize};
@@ -161,7 +162,7 @@ pub fn aliases() -> Result<BTreeMap<String, String>> {
 }
 
 fn prompt_user(question: &str) -> Result<bool> {
-    print!("{question} [y/N]: ");
+    out!("{question} [y/N]: ")?;
     io::stdout().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
@@ -205,7 +206,7 @@ fn shell_aliases() -> Result<BTreeMap<String, String>> {
 /// are; a file loop can't read is reported, not replaced.
 pub fn import_aliases(dry_run: bool) -> Result<()> {
     if dry_run {
-        println!("[DRY RUN] Would add your shell's aliases to ~/.looprc");
+        outln!("[DRY RUN] Would add your shell's aliases to ~/.looprc")?;
         return Ok(());
     }
     let path = global_looprc().context("HOME is not set")?;
@@ -240,25 +241,25 @@ pub fn import_aliases(dry_run: bool) -> Result<()> {
     doc.insert("aliases".to_string(), serde_json::to_value(&aliases)?);
     let new_content = serde_json::to_string_pretty(&doc)?;
 
-    println!("\nPreview of changes:");
+    outln!("\nPreview of changes:")?;
     match &existing {
         Some(old) => {
             for diff in diff::lines(old, &new_content) {
                 match diff {
-                    diff::Result::Left(l) => println!("{}", format!("-{l}").red()),
-                    diff::Result::Both(l, _) => println!(" {l}"),
-                    diff::Result::Right(r) => println!("{}", format!("+{r}").green()),
+                    diff::Result::Left(l) => outln!("{}", format!("-{l}").red())?,
+                    diff::Result::Both(l, _) => outln!(" {l}")?,
+                    diff::Result::Right(r) => outln!("{}", format!("+{r}").green())?,
                 }
             }
         }
-        None => println!("{}", new_content.green()),
+        None => outln!("{}", new_content.green())?,
     }
     if !prompt_user("Do you want to apply these changes?")? {
         return Err(cancelled());
     }
 
     meta_core::store::write_atomic(&path, &doc)?;
-    println!("Aliases have been added to {}", escape_path(&path));
+    outln!("Aliases have been added to {}", escape_path(&path))?;
     Ok(())
 }
 
@@ -397,25 +398,6 @@ fn dry_run_line(dir: &Path, command: &str) -> String {
     format!("Would execute in {dir_display}:\n  {}", escape(command))
 }
 
-/// A write to command-output stdout failed. Kept distinct from child stdin errors.
-#[derive(Debug)]
-pub struct StdoutError(pub io::Error);
-
-impl std::fmt::Display for StdoutError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Failed to write command output: {}", self.0)
-    }
-}
-
-impl std::error::Error for StdoutError {}
-
-macro_rules! command_print {
-    ($($arg:tt)*) => { write!(io::stdout().lock(), $($arg)*).map_err(StdoutError)? };
-}
-macro_rules! command_println {
-    ($($arg:tt)*) => { writeln!(io::stdout().lock(), $($arg)*).map_err(StdoutError)? };
-}
-
 fn execute_command_in_directory(
     dir: &Path,
     argv: &[String],
@@ -423,13 +405,13 @@ fn execute_command_in_directory(
     extra_env: Option<&HashMap<String, String>>,
 ) -> Result<CommandResult> {
     if !dir.exists() {
-        command_println!("\nNo directory found for {}", escape_path(dir));
-        command_println!(
+        outln!("\nNo directory found for {}", escape_path(dir))?;
+        outln!(
             "\x1b[31m\n✗ {}: No directory found. Command: {} (Exit code: {})\x1b[0m",
             display_name(dir, config.root_dir.as_deref()),
             escape(&display_command(argv)),
             1
-        );
+        )?;
         return Ok(CommandResult {
             exit_code: Some(1),
             ..failed_result(dir, display_command(argv), String::new())
@@ -440,7 +422,7 @@ fn execute_command_in_directory(
         Ok(argv) => argv,
         Err(e) => {
             if !config.silent {
-                eprintln!("{e:#}");
+                errln!("{e:#}");
             }
             return Ok(failed_result(
                 dir,
@@ -453,7 +435,7 @@ fn execute_command_in_directory(
 
     // Dry run mode: print what would be executed without running it
     if config.dry_run {
-        command_println!("{} {}", "[DRY RUN]".cyan(), dry_run_line(dir, &command));
+        outln!("{} {}", "[DRY RUN]".cyan(), dry_run_line(dir, &command))?;
         return Ok(CommandResult {
             success: true,
             exit_code: Some(0),
@@ -464,12 +446,12 @@ fn execute_command_in_directory(
     }
 
     if config.verbose {
-        command_println!("Executing in directory: {}", escape_path(dir));
+        outln!("Executing in directory: {}", escape_path(dir))?;
     }
 
     if !config.silent {
-        command_println!();
-        io::stdout().flush().map_err(StdoutError)?;
+        outln!()?;
+        meta_core::out::flush()?;
     }
 
     let status = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
@@ -502,7 +484,7 @@ fn execute_command_in_directory(
         }
         Err(e) => {
             if !config.silent {
-                eprintln!("{e:#}");
+                errln!("{e:#}");
             }
             failed_result(dir, command, String::new())
         }
@@ -511,11 +493,11 @@ fn execute_command_in_directory(
     if !config.silent {
         let name = result_name(dir, config.root_dir.as_deref());
         if result.success {
-            command_println!("\x1b[32m\n✓ {name}\x1b[0m");
+            outln!("\x1b[32m\n✓ {name}\x1b[0m")?;
         } else {
-            command_println!("\x1b[31m\n✗ {name}: {}\x1b[0m", result.ending());
+            outln!("\x1b[31m\n✗ {name}: {}\x1b[0m", result.ending())?;
         }
-        io::stdout().flush().map_err(StdoutError)?;
+        meta_core::out::flush()?;
     }
 
     Ok(result)
@@ -784,11 +766,11 @@ fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Co
         .map(|job| match (&job.refused, config.json_output) {
             (Some(why), json) => {
                 if !json && !config.silent {
-                    command_println!(
+                    outln!(
                         "\x1b[31m\n✗ {}: {why} (Exit code: 1)\x1b[0m",
                         display_name(&job.dir, config.root_dir.as_deref()),
                         why = escape(why)
-                    );
+                    )?;
                 }
                 Ok(refused_result(job, why))
             }
@@ -846,39 +828,39 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
                 })
                 .collect(),
         };
-        command_println!("{}", serde_json::to_string_pretty(&output)?);
+        outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else if !config.silent {
         if config.dry_run {
-            command_println!(
+            outln!(
                 "\n{} Would run {} command(s) across {} directories",
                 "[DRY RUN]".cyan(),
                 total.to_string().yellow(),
                 total.to_string().yellow()
-            );
+            )?;
         } else if failed_count == 0 {
-            command_println!("{} commands complete", total.to_string().green());
+            outln!("{} commands complete", total.to_string().green())?;
         } else {
-            command_println!(
+            outln!(
                 "\nSummary: {} {} out of {} commands failed",
                 "✗".red(),
                 failed_count.to_string().red(),
                 total
-            );
+            )?;
             for result in results.iter().filter(|r| !r.success) {
                 // Without a root the basename is ambiguous, so keep the full path
                 let name = match config.root_dir.as_deref() {
                     Some(root) => result_name(&result.directory, Some(root)),
                     None => escape_path(&result.directory),
                 };
-                command_println!(
+                outln!(
                     "\n{} {}: {} ({}) ",
                     "✗".red(),
                     name,
                     escape(&result.command),
                     result.ending()
-                );
+                )?;
             }
-            command_println!();
+            outln!()?;
         }
     }
 
@@ -895,22 +877,22 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
 fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
     let has_output = |r: &CommandResult| !r.stdout.trim().is_empty() || !r.stderr.trim().is_empty();
     if results.iter().any(has_output) {
-        command_println!();
+        outln!()?;
     }
     for result in results.iter().filter(|r| has_output(r)) {
         let dir_name = result_name(&result.directory, config.root_dir.as_deref());
         if result.success {
-            command_println!("{} {}:", "✓".green(), dir_name.green());
+            outln!("{} {}:", "✓".green(), dir_name.green())?;
         } else {
-            command_println!("{} {}:", "✗".red(), dir_name.red());
+            outln!("{} {}:", "✗".red(), dir_name.red())?;
         }
         if !result.stdout.trim().is_empty() {
-            command_print!("{}", result.stdout);
+            out!("{}", result.stdout)?;
         }
         if !result.stderr.trim().is_empty() {
-            command_print!("{}", result.stderr);
+            out!("{}", result.stderr)?;
         }
-        command_println!(); // Blank line after each repo's output
+        outln!()?; // Blank line after each repo's output
     }
     Ok(())
 }

@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::Utc;
 use colored::*;
 use meta_core::display::escape;
+use meta_core::outln;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -410,23 +411,23 @@ fn report(removed: &[PruneEntry], kept: &[PruneEntry], dry_run: bool, json: bool
             kept: kept.to_vec(),
             dry_run,
         };
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        outln!("{}", serde_json::to_string_pretty(&output)?)?;
         return Ok(());
     }
     match (removed.len(), dry_run) {
-        (0, _) => println!("Nothing to prune."),
-        (n, true) => println!("[DRY RUN] Would prune {n} worktree(s):"),
-        (n, false) => println!("{} Pruned {n} worktree(s):", "✓".green()),
+        (0, _) => outln!("Nothing to prune.")?,
+        (n, true) => outln!("[DRY RUN] Would prune {n} worktree(s):")?,
+        (n, false) => outln!("{} Pruned {n} worktree(s):", "✓".green())?,
     }
     for entry in removed {
-        println!(
+        outln!(
             "  {} ({}) — {}",
             escape(&entry.name),
             escape(&entry.reason),
             escape(&entry.path)
-        );
+        )?;
     }
-    print_kept(kept);
+    print_kept(kept)?;
     Ok(())
 }
 
@@ -473,19 +474,20 @@ fn once_each(kept: &mut Vec<PruneEntry>) {
     kept.retain(|e| paths.insert(e.path.clone()));
 }
 
-fn print_kept(kept: &[PruneEntry]) {
+fn print_kept(kept: &[PruneEntry]) -> Result<()> {
     if kept.is_empty() {
-        return;
+        return Ok(());
     }
-    println!("Kept {} worktree(s):", kept.len());
+    outln!("Kept {} worktree(s):", kept.len())?;
     for entry in kept {
-        println!(
+        outln!(
             "  {} ({}) — {}",
             escape(&entry.name),
             escape(&entry.reason),
             escape(&entry.path)
-        );
+        )?;
     }
+    Ok(())
 }
 
 /// Kept worktrees are a warning, and an error in strict mode.

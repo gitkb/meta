@@ -2,6 +2,7 @@ use anyhow::Result;
 use colored::*;
 use meta_core::display::{escape, escape_lines};
 use meta_core::ExecutionMode;
+use meta_core::{errln, outln};
 use std::path::{Path, PathBuf};
 
 use meta_cli::repo_filter;
@@ -65,7 +66,7 @@ struct EphemeralGuard {
 impl EphemeralGuard {
     fn remove(&self) -> Result<()> {
         if self.verbose {
-            eprintln!("Removing ephemeral worktree '{}'...", self.name);
+            errln!("Removing ephemeral worktree '{}'...", self.name);
         }
         let remove_args = RemoveArgs {
             name: self.name.clone(),
@@ -96,13 +97,13 @@ impl Drop for EphemeralGuard {
             return;
         }
         if let Err(e) = self.remove() {
-            eprintln!(
+            errln!(
                 "{} Failed to remove ephemeral worktree '{}': {}",
                 "warning:".yellow().bold(),
                 self.name,
                 escape_lines(&format!("{e:#}"))
             );
-            eprintln!(
+            errln!(
                 "  Run 'meta worktree remove {} --force' or 'meta worktree prune' to clean up.",
                 self.name
             );
@@ -167,7 +168,7 @@ fn handle_ephemeral_exec(
     };
 
     if verbose {
-        eprintln!("Creating ephemeral worktree '{name}'...");
+        errln!("Creating ephemeral worktree '{name}'...");
     }
     // Ephemeral worktrees use global_strict=false to ensure creation succeeds
     // The lease, held for the run: the set lives as long as it does, and once
@@ -175,10 +176,10 @@ fn handle_ephemeral_exec(
     // A preview makes no set
     let Some(created) = super::create::handle_create(create_args, mode, verbose, json, false)?
     else {
-        println!(
+        outln!(
             "Then would run `{}` in each repo planned above, and remove the set.",
             escape(&loop_lib::display_command(cmd_parts))
-        );
+        )?;
         return Ok(());
     };
 
@@ -207,7 +208,7 @@ fn handle_ephemeral_exec(
     }
     match (exec_result, cleanup) {
         (Err(e), Err(cleanup_error)) => {
-            eprintln!(
+            errln!(
                 "{} {}",
                 "warning:".yellow().bold(),
                 escape_lines(&format!("{cleanup_error:#}"))

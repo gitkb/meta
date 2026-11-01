@@ -5,6 +5,7 @@
 //! Claude Code SessionStart hook).
 
 use anyhow::Result;
+use meta_core::{errln, out, outln};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -50,7 +51,7 @@ pub fn handle_context(
         .collect();
 
     if verbose {
-        eprintln!(
+        errln!(
             "Found {} projects in {}",
             projects.len(),
             escape_path(&workspace.config_path)
@@ -113,9 +114,9 @@ pub fn handle_context(
     };
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&ctx)?);
+        outln!("{}", serde_json::to_string_pretty(&ctx)?)?;
     } else {
-        print!("{}", format_markdown(&ctx));
+        out!("{}", format_markdown(&ctx))?;
     }
 
     Ok(())

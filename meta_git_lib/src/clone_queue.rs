@@ -414,8 +414,8 @@ fn resolved(path: &Path) -> PathBuf {
     }
 }
 
-/// Whether `dir` is a folder with nothing in it.
-fn is_empty_dir(dir: &Path) -> bool {
+/// Whether `dir` is a folder with nothing in it (git clones into one).
+pub fn is_empty_dir(dir: &Path) -> bool {
     std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none())
 }
 
@@ -610,6 +610,15 @@ mod tests {
             .unwrap();
         assert_eq!(names(&tasks), ["pages"]);
         assert!(queue.outcome().cycles.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_url_with_a_drive_is_the_local_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        let url = GitUrl::from(format!("file:///{}", path.replace('\\', "/")));
+        assert!(same_repository((&GitUrl::from(path), &url)));
     }
 
     #[cfg(unix)]

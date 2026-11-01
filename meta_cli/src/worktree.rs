@@ -111,7 +111,7 @@ pub fn set_config(
         return Ok(Some(found));
     }
     let origin = set_origin(set_dir, members)
-        .map_err(|e| anyhow::anyhow!("{e:#}. Pass --primary to run in the workspace."))?;
+        .map_err(|e| anyhow::anyhow!("{e:#}. Run meta from the workspace's directory instead."))?;
     match origin {
         Some(source) => config::meta_config_at(&source, config_name),
         None => config::find_meta_config(set_dir, config_name),

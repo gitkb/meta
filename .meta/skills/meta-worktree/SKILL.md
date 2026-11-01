@@ -199,9 +199,10 @@ worktree:
 
 Each hook runs in the directory of the config that names it (the workspace's,
 also when run from inside a set) and gets a JSON description of the action on
-stdin. A hook runs after the command has done its work and reported it; a
-hook that fails is a warning naming it and its exit code, and an error under
-`--strict` (the work stays done). `exec --ephemeral` takes no `--strict`: its
+stdin. A hook runs once the command's work is done (on the terminal its
+output, and a warning about it, show before the command's report). A hook that
+fails is a warning naming it and its exit code, and an error under `--strict`;
+either way the work stays done. `exec --ephemeral` takes no `--strict`: its
 hooks only warn. Any other hook name is a config error.
 
 `create` keeps the worktrees folder out of the workspace repository's
@@ -228,7 +229,9 @@ worktrees not recorded yet included.
 `--strict` on `create` (or global `meta --strict`) turns warnings such as a
 missing commit-ish in one repo, or a repo that isn't cloned, into errors. A create that fails is rolled back:
 the worktrees and branches it made are deleted again. If the rollback itself
-can't delete something, the error says what was left behind.
+can't delete something, the error says what was left behind. A failing hook
+fails the command too, but only after the set was made (or removed): that is
+not rolled back, so remove the set yourself if you don't want it.
 
 ## Command Reference
 
@@ -258,7 +261,7 @@ can't delete something, the error says what was left behind.
 | `--ephemeral` | The next `prune` removes it |
 | `--ttl <duration>` | Make `prune` remove it after this long |
 | `--meta <key=value>` | Record custom metadata |
-| `--strict` | Fail instead of skipping a repo (missing ref, not cloned) |
+| `--strict` | Fail instead of skipping a repo (missing ref, not cloned); a failing hook fails the command, the set made |
 
 ### Exec Options
 

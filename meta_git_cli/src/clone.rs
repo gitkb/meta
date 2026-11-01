@@ -110,8 +110,8 @@ pub(crate) fn execute_git_clone(
             "{} already exists{}",
             meta_core::display::escape_path(&clone_dir_path),
             if workspace {
-                "; to clone the projects its .meta.yaml lists that aren't cloned yet, run \
-                 'meta git update' in it"
+                "; to clone the projects its .meta.yaml lists that aren't cloned yet (and \
+                 fast-forward the others), run 'meta git update' in it"
             } else {
                 " and is not an empty directory; clone somewhere else, or name another \
                  directory"

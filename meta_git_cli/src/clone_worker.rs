@@ -97,6 +97,16 @@ impl<'a> Worker<'a> {
                 ));
                 found
             }
+            // A branch whose upstream isn't on the remote (yet: an empty
+            // repo's clone) has nothing to pull from
+            Err(_) if task.work == Work::Pull && upstream_is_missing(&task.target_path) => {
+                let why = "its upstream branch isn't on the remote".to_string();
+                pb.finish_with_message(format!(
+                    "{}",
+                    style(format!("Not pulled {}: {why}", task.name)).yellow()
+                ));
+                self.queue.mark_not_pulled(task, why)
+            }
             Err(error) => {
                 let found = self.queue.mark_failed(task, error);
                 let failed = match task.work {
@@ -159,7 +169,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     for names in &cycles {
         eprintln!(
             "{} {}: it is a meta repo above it again; the meta repos list each other ({})",
-            style("Not cloned").red().bold(),
+            style("Left out").red().bold(),
             meta_core::display::escape(names.last().map_or("", String::as_str)),
             chain(names)
         );
@@ -225,6 +235,13 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
         .collect::<Vec<_>>()
         .join("; "),
     )
+}
+
+/// Whether the branch checked out at `dir` has an upstream git has no
+/// commit for, after a pull fetched what there is.
+fn upstream_is_missing(dir: &Path) -> bool {
+    let args = ["rev-parse", "--verify", "--quiet", "@{upstream}"];
+    matches!(meta_core::git::lookup(dir, args), Ok(None))
 }
 
 /// The git command `task` runs, `url` giving a clone's URL as git gets it

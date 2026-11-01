@@ -331,6 +331,10 @@ within() {
     run "$META_BIN" git update
     [ "$status" -eq 0 ]
     [ -d "$TEST_DIR/empty/.git" ]
+    # while the remote is still empty, there is nothing to pull from
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Not pulled empty: its upstream branch isn't on the remote"* ]]
     # a teammate pushes the first commit
     git clone --quiet "$TEST_DIR/remotes/empty.git" "$TEST_DIR/remotes/mate-empty" 2>/dev/null
     git -C "$TEST_DIR/remotes/mate-empty" -c user.name=Mate -c user.email=mate@test.com \
@@ -339,6 +343,25 @@ within() {
     run "$META_BIN" git update
     [ "$status" -eq 0 ]
     [ "$(head_of empty)" = "$(head_of remotes/empty.git)" ]
+}
+
+@test "meta git update -r pulls a second checkout of the workspace repo, which is no cycle" {
+    with_remotes
+    git clone --quiet "$TEST_DIR/remotes/ws.git" "$TEST_DIR/pages"
+    git -C "$TEST_DIR/pages" rm --quiet .meta.yaml
+    git -C "$TEST_DIR/pages" -c user.name=Mate -c user.email=mate@test.com commit --quiet -m "pages: no .meta.yaml"
+    git -C "$TEST_DIR/pages" push --quiet origin HEAD:pages
+    rm -rf "$TEST_DIR/pages"
+    git clone --quiet --branch pages "$TEST_DIR/remotes/ws.git" "$TEST_DIR/pages"
+    local added
+    added=$(sed "s|\"shared\": \(.*\)|\"shared\": \1, \"pages\": \"file://$TEST_DIR/remotes/ws.git\"|" .meta.yaml)
+    printf '%s\n' "$added" > .meta.yaml
+    git commit --quiet -am pages
+    git push --quiet
+    run "$META_BIN" git update -r
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"list each other"* ]]
+    [[ "$output" == *"Update completed (5 pulled, 0 cloned)"* ]]
 }
 
 @test "meta git clone -r and update -r of meta repos that list each other stop, naming the cycle" {

@@ -203,33 +203,6 @@ impl CloneQueue {
         for project in &workspace.projects {
             let target_path = base_dir.join(&project.path);
 
-            // A project that is one of the meta repos above it would be
-            // cloned inside itself again and again, if its .meta.yaml is
-            // read. A checkout is the repository its origin names, whatever
-            // .meta.yaml says.
-            let resolved = target_path.canonicalize().ok();
-            let url = match resolved {
-                Some(_) => origin(&target_path).or_else(|| project.repo.clone()),
-                None => project.repo.clone(),
-            };
-            let repeats = above
-                .iter()
-                .position(|meta| {
-                    resolved.as_ref() == Some(&meta.dir)
-                        || meta
-                            .url
-                            .as_ref()
-                            .zip(url.as_ref())
-                            .is_some_and(same_repository)
-                })
-                .filter(|_| self.reads(level + 1));
-            if let Some(first) = repeats {
-                let chain = above.iter().skip(first).map(|m| m.name.clone());
-                let chain = chain.chain([project.name.clone()]).collect();
-                self.record(|o| o.cycles.push(chain));
-                continue;
-            }
-
             let work = match Checkout::of(&target_path) {
                 Checkout::Repo { .. } if self.pull => Work::Pull,
                 // Cloned: still look in it for nested discovery
@@ -237,8 +210,7 @@ impl CloneQueue {
                     if self.claim(&target_path) {
                         self.total_completed.fetch_add(1, Ordering::SeqCst);
                         let this = MetaRepo::at(&project.name, &target_path, project.repo.clone());
-                        let above = below(above, this);
-                        tasks.extend(self.discover(&target_path, level + 1, &above)?);
+                        tasks.extend(self.enter(this, &target_path, level + 1, above)?);
                     }
                     continue;
                 }
@@ -253,6 +225,19 @@ impl CloneQueue {
                     None => continue,
                 },
             };
+            // A declared meta repo that is one above it would be cloned
+            // inside itself again and again: refused before it is cloned.
+            // Any other repeat is caught before its .meta.yaml is read.
+            if let Work::Clone(url) = &work {
+                let candidate = MetaRepo {
+                    name: project.name.clone(),
+                    dir: resolved(&target_path),
+                    url: Some(url.clone()),
+                };
+                if project.meta && self.reads(level + 1) && self.repeats(&candidate, above) {
+                    continue;
+                }
+            }
             if self.claim(&target_path) {
                 debug!("Queued {work:?} for {} at depth {level}", project.name);
                 tasks.push(CloneTask {
@@ -329,13 +314,51 @@ impl CloneQueue {
     fn nested(&self, task: &CloneTask) -> Vec<CloneTask> {
         let this = MetaRepo::at(&task.name, &task.target_path, task.url.clone());
         let found = self
-            .discover(&task.target_path, task.level, &below(&task.above, this))
+            .enter(this, &task.target_path, task.level, &task.above)
             .unwrap_or_else(|e| {
                 self.record(|o| o.unreadable.push(format!("{}: {e:#}", task.name)));
                 Vec::new()
             });
         debug!("{}: {} nested tasks discovered", task.name, found.len());
         found
+    }
+
+    /// The tasks for the projects of the `.meta.yaml` of `this`, the meta
+    /// repo at `dir`, at `level` below `above`; none if `this` has one and
+    /// is one of `above`, which is recorded as a cycle.
+    fn enter(
+        &self,
+        this: MetaRepo,
+        dir: &Path,
+        level: usize,
+        above: &[MetaRepo],
+    ) -> anyhow::Result<Vec<CloneTask>> {
+        if self.reads(level)
+            && config::find_meta_config_in(dir)?.is_some()
+            && self.repeats(&this, above)
+        {
+            return Ok(Vec::new());
+        }
+        self.discover(dir, level, &below(above, this))
+    }
+
+    /// Whether `this` is one of the meta repos `above`, by folder or URL;
+    /// if so, the chain from it is recorded as a cycle.
+    fn repeats(&self, this: &MetaRepo, above: &[MetaRepo]) -> bool {
+        let first = above.iter().position(|meta| {
+            meta.dir == this.dir
+                || meta
+                    .url
+                    .as_ref()
+                    .zip(this.url.as_ref())
+                    .is_some_and(same_repository)
+        });
+        if let Some(first) = first {
+            let chain = above.iter().skip(first).map(|m| m.name.clone());
+            let chain = chain.chain([this.name.clone()]).collect();
+            self.record(|o| o.cycles.push(chain));
+        }
+        first.is_some()
     }
 
     /// Whether a `.meta.yaml` at `level` is read.
@@ -590,7 +613,7 @@ mod tests {
         std::fs::create_dir(&d.target_path).unwrap();
         // single-quoted: a Windows path's backslashes stay as they are
         let back = format!(
-            r#"{{"projects": {{"ws": 'file://{}/'}}}}"#,
+            r#"{{"projects": {{"ws": {{"repo": 'file://{}/', "meta": true}}}}}}"#,
             remote.to_string_lossy()
         );
         write_meta(&d.target_path, &back);

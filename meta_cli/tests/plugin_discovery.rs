@@ -538,14 +538,13 @@ fn a_plugin_that_answers_without_reading_its_request_still_answers() {
 *) echo answered ;;
 esac"#,
     );
-    // the plugin may exit before meta has written its request
-    for _ in 0..20 {
-        let out = f.run(&["quick", "go"]);
-        let text = String::from_utf8_lossy(&out.stdout).to_string()
-            + &String::from_utf8_lossy(&out.stderr);
-        assert!(out.status.success(), "{text}");
-        assert!(text.contains("answered"), "{text}");
-    }
+    // a request bigger than a pipe holds: the plugin always exits before
+    // meta has written it all
+    let out = f.run(&["--strict", "quick", "go", &"r".repeat(100 * 1024)]);
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("answered"), "{text}");
 }
 
 #[test]
@@ -663,6 +662,8 @@ fn plugin_update_names_each_plugin_it_cannot_check_and_fails() {
         assert!(!out.status.success(), "{args:?}: {text}");
         assert!(!text.contains("up to date"), "{args:?}: {text}");
         assert!(!text.contains("deleted"), "{args:?}: {text}");
+        // a source may hold a credential
+        assert!(!text.contains("127.0.0.1"), "{args:?}: {text}");
         for name in ["meta-fromurl", "meta-noversion"] {
             assert!(
                 text.contains(&format!("Cannot check {name} for updates")),

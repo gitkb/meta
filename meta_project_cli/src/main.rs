@@ -67,7 +67,7 @@ fn execute_request(request: PluginRequest) -> CommandResult {
         selected: request
             .options
             .filtered()
-            .then(|| meta_project_cli::ExecuteOptions::selected(&request.projects)),
+            .then(|| meta_project_cli::ExecuteOptions::selection_from(&request.projects)),
     };
 
     meta_project_cli::execute_command(

@@ -328,7 +328,8 @@ pub fn has_help_token(command: &str, args: &[String]) -> bool {
 /// Parse the arguments of `meta <command>` with `P`: its help (or version)
 /// as a message, its error, escaped, as an error.
 pub fn parse_args<P: clap::Parser>(command: &str, args: &[String]) -> Result<P, CommandResult> {
-    let argv: Vec<String> = std::iter::once(format!("meta {command}"))
+    let name = format!("meta {command}");
+    let argv: Vec<String> = std::iter::once(name.clone())
         .chain(args.iter().cloned())
         .collect();
     P::try_parse_from(&argv).map_err(|e| {
@@ -345,7 +346,7 @@ pub fn parse_args<P: clap::Parser>(command: &str, args: &[String]) -> Result<P, 
                 let mut message = message.trim_end().to_string();
                 // a command that isn't one: the ones there are
                 if e.kind() == ErrorKind::InvalidSubcommand {
-                    let help = P::command().bin_name(&argv[0]).render_help().to_string();
+                    let help = P::command().bin_name(&name).render_help().to_string();
                     let error = message.split("\n\nUsage:").next().unwrap_or_default();
                     message = format!("{error}\n\n{}", help.trim_end());
                 }

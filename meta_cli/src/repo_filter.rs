@@ -189,8 +189,8 @@ impl Scope {
             let value = escape(value);
             if by_name.len() > 1 {
                 bail!(
-                    "{flag} '{value}' is the .meta.yaml name of the repos at {}; name one by its path, \
-                     as ./<path>",
+                    "{flag} '{value}' is the .meta.yaml name of the repos at {}{read_from}; name one \
+                     by its path, as ./<path>",
                     listed(&by_name)
                 );
             }
@@ -199,7 +199,7 @@ impl Scope {
             if !by_path.is_empty() && !by_name.is_empty() && ids(&by_path) != ids(&by_name) {
                 bail!(
                     "{flag} '{value}' names the repo at {} by path and the repo at {} by .meta.yaml \
-                     name; name the one you mean by its path, as ./<path>",
+                     name{read_from}; name the one you mean by its path, as ./<path>",
                     listed(&by_path),
                     listed(&by_name)
                 );

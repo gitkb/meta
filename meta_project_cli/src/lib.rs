@@ -26,7 +26,7 @@ pub struct ExecuteOptions {
 
 impl ExecuteOptions {
     /// `selected` from the directories meta sent
-    pub fn selected(projects: &[String]) -> Vec<PathBuf> {
+    pub fn selection_from(projects: &[String]) -> Vec<PathBuf> {
         projects
             .iter()
             .map(|dir| comparable(Path::new(dir)))

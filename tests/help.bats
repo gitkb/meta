@@ -256,3 +256,12 @@ teardown() {
     [[ "$output" == *"--metadata-only"* ]]
     [[ "$output" == *"--json"* ]]
 }
+
+@test "meta --help lists the plugins whatever name meta was started by" {
+    for name in meta.exe m; do
+        run bash -c "exec -a $name '$META_BIN' --help"
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"Usage: meta [OPTIONS] [COMMAND]"* ]]
+        [[ "$output" == *"[plugin: git"* ]]
+    done
+}

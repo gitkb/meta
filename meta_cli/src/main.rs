@@ -23,6 +23,10 @@ const VERSION: &str = include_str!("../../VERSION");
 /// belongs to it, so `meta git pull --tag v1` gives `--tag v1` to git.
 #[derive(Parser)]
 #[command(
+    // named meta however it was started (meta.exe, a link): its help and
+    // errors say `meta`, and meta's own help is told apart by its text
+    name = "meta",
+    bin_name = "meta",
     author,
     version = VERSION.trim(),
     about,
@@ -471,8 +475,9 @@ fn run_cli() -> Result<()> {
 fn is_root_help(error: &clap::Error) -> bool {
     let mut root = Cli::command();
     root.build();
+    let shown = error.render().to_string();
     error.kind() == clap::error::ErrorKind::DisplayHelp
-        && error.render().to_string() == root.render_help().to_string()
+        && (shown == root.render_help().to_string() || shown == root.render_long_help().to_string())
 }
 
 /// `meta help [COMMAND...]`: meta's help, a built-in command's, or the
@@ -522,9 +527,9 @@ fn plugin_command(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Resu
         .iter()
         .take_while(|a| *a != "--")
         .any(|a| a == "--help" || a == "-h");
-    let is_root_help =
+    let namespace_help =
         args.len() == 2 && matches!(args.get(1).map(String::as_str), Some("--help" | "-h"));
-    if args.len() == 1 || is_root_help {
+    if args.len() == 1 || namespace_help {
         let help = meta_plugin_protocol::help_text(&plugin.info);
         return subprocess_plugins::print_output(&format!("{help}\n"));
     }

@@ -639,13 +639,17 @@ fn unusable_files_in_plugin_folders_are_warned_about_but_not_on_path() {
 fn plugin_update_names_each_plugin_it_cannot_check_and_fails() {
     let f = Fixture::new(true);
     // installed from a URL, and from GitHub with no version recorded:
-    // neither can be checked, and checking them needs no network
-    fs::create_dir_all(f.data.join("plugins")).unwrap();
+    // neither can be checked, and checking them needs no network. A plugin
+    // whose file was deleted is no longer installed.
+    for name in ["fromurl", "noversion"] {
+        plugin(&f.data.join(format!("plugins/meta-{name}")), name, "1");
+    }
     fs::write(
         f.data.join("plugins/.manifest.json"),
         r#"{"plugins": {
   "meta-fromurl": {"source": "http://127.0.0.1:9/p.tar.gz", "installed": "2026-01-01T00:00:00Z", "platform": "x"},
-  "meta-noversion": {"source": "someone/meta-noversion", "installed": "2026-01-01T00:00:00Z", "platform": "x"}
+  "meta-noversion": {"source": "someone/meta-noversion", "installed": "2026-01-01T00:00:00Z", "platform": "x"},
+  "meta-deleted": {"source": "http://127.0.0.1:9/d.tar.gz", "installed": "2026-01-01T00:00:00Z", "platform": "x"}
 }}"#,
     )
     .unwrap();
@@ -658,6 +662,7 @@ fn plugin_update_names_each_plugin_it_cannot_check_and_fails() {
             + &String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{args:?}: {text}");
         assert!(!text.contains("up to date"), "{args:?}: {text}");
+        assert!(!text.contains("deleted"), "{args:?}: {text}");
         for name in ["meta-fromurl", "meta-noversion"] {
             assert!(
                 text.contains(&format!("Cannot check {name} for updates")),

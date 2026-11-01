@@ -671,8 +671,11 @@ EOF
     # Stock Ubuntu/Debian/Fedora: user private groups, umask 002, so
     # directories are 0775. meta trusts them like git or cargo would.
     mkdir -p "$TEST_DIR/sub" "$META_DATA/plugins"
-    printf '#!/bin/sh\ntouch "%s/ran-local"\n' "$TEST_DIR" > "$TEST_DIR/.meta/plugins/meta-local"
-    printf '#!/bin/sh\ntouch "%s/ran-global"\n' "$TEST_DIR" > "$META_DATA/plugins/meta-global"
+    # plugins that answer with their info, and say they were started
+    printf '#!/bin/sh\ntouch "%s/ran-local"\necho '"'"'{"name":"local","version":"1","commands":["local"]}'"'"'\n' \
+        "$TEST_DIR" > "$TEST_DIR/.meta/plugins/meta-local"
+    printf '#!/bin/sh\ntouch "%s/ran-global"\necho '"'"'{"name":"global","version":"1","commands":["global"]}'"'"'\n' \
+        "$TEST_DIR" > "$META_DATA/plugins/meta-global"
     chmod 775 "$TEST_DIR" "$TEST_DIR/.meta" "$TEST_DIR/.meta/plugins" "$TEST_DIR/sub" \
         "$TEST_DIR/.meta/plugins/meta-local" \
         "$META_DATA" "$META_DATA/plugins" "$META_DATA/plugins/meta-global"

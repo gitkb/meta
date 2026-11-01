@@ -99,9 +99,19 @@ impl Owned {
     /// [`Child::wait_with_output`] does: neither side can block the other on
     /// a full pipe. A child that ends without reading all its input is no
     /// error; its exit status says how it went. Whatever goes wrong, the
-    /// child is waited for (killed first if its pipes can't be served).
+    /// child is waited for (killed first if its output can't be read).
     pub fn exchange(mut self, input: &[u8]) -> io::Result<Output> {
-        use std::io::Write;
+        use std::io::{Read, Write};
+        use std::thread::{Builder, ScopedJoinHandle};
+        fn read_all(mut pipe: impl Read) -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes).map(|_| bytes)
+        }
+        fn joined<T>(thread: ScopedJoinHandle<'_, io::Result<T>>) -> io::Result<T> {
+            thread
+                .join()
+                .unwrap_or_else(|_| Err(io::Error::other("a pipe's thread panicked")))
+        }
         let stdin = self.child.stdin.take();
         let stdout = self.child.stdout.take();
         let stderr = self.child.stderr.take();
@@ -113,23 +123,24 @@ impl Owned {
                 let _ = child.kill();
                 e
             };
-            let sent = std::thread::Builder::new()
-                .spawn_scoped(scope, move || match stdin {
-                    // dropped once written: the child reads its end
-                    Some(mut pipe) => match pipe.write_all(input) {
+            // dropped once written: the child reads its end
+            let sent = stdin
+                .map(|mut pipe| {
+                    Builder::new().spawn_scoped(scope, move || match pipe.write_all(input) {
                         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
                         sent => sent,
-                    },
-                    None => Ok(()),
+                    })
                 })
+                .transpose()
                 .map_err(&mut kill)?;
-            let stderr = std::thread::Builder::new()
-                .spawn_scoped(scope, move || read_all(stderr))
+            let stderr = stderr
+                .map(|pipe| Builder::new().spawn_scoped(scope, move || read_all(pipe)))
+                .transpose()
                 .map_err(&mut kill)?;
-            let stdout = read_all(stdout).map_err(&mut kill)?;
-            let stderr = joined(stderr).map_err(&mut kill)?;
-            joined(sent)?;
-            Ok((stdout, stderr))
+            let stdout = stdout.map(read_all).transpose().map_err(&mut kill)?;
+            let stderr = stderr.map(joined).transpose().map_err(&mut kill)?;
+            sent.map(joined).transpose()?;
+            Ok((stdout.unwrap_or_default(), stderr.unwrap_or_default()))
         });
         let status = self.wait()?;
         let (stdout, stderr) = served?;
@@ -139,22 +150,6 @@ impl Owned {
             stderr,
         })
     }
-}
-
-/// What a thread of [`Owned::exchange`] ended with.
-fn joined<T>(thread: std::thread::ScopedJoinHandle<'_, io::Result<T>>) -> io::Result<T> {
-    thread
-        .join()
-        .unwrap_or_else(|_| Err(io::Error::other("a pipe's thread panicked")))
-}
-
-/// What `pipe` holds to its end (nothing for no pipe).
-fn read_all(pipe: Option<impl std::io::Read>) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    if let Some(mut pipe) = pipe {
-        pipe.read_to_end(&mut bytes)?;
-    }
-    Ok(bytes)
 }
 
 /// Make this program the owner of its children's signals (see the module

@@ -73,8 +73,8 @@ plugin if that plugin doesn't answer `--meta-plugin-info` with its info within
 there a plugins folder meta can't read, and a plugin that doesn't answer within
 5 seconds, are skipped with a warning naming them. So is a file in
 `.meta/plugins` or `~/.meta/plugins` that can't be started, isn't executable,
-or answers with anything but its info; a `meta-*` program on PATH that does is
-just left out, as it may be any program.
+or answers with anything but its info; a `meta-*` program on PATH that can't
+be started or isn't a plugin is just left out, as it may be any program.
 
 Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore`
 (`*`) so they stay out of git as untracked files.

@@ -232,11 +232,11 @@ impl SubprocessPluginManager {
     pub fn all(&self) -> Vec<SubprocessPlugin> {
         self.files()
             .into_iter()
-            .filter_map(|(word, path, on_path)| match probe_plugin_info(&path) {
+            .filter_map(|(word, (path, on_path))| match probe_plugin_info(&path) {
                 Ok(info) => Some(self.loaded(word, path, info)),
                 Err(NoInfo::NotAPlugin(_)) if on_path => None,
-                Err(NoInfo::NotAPlugin(e) | NoInfo::NoAnswer(e)) => {
-                    eprintln!("Warning: {e}; skipping");
+                Err(e) => {
+                    eprintln!("Warning: {}; skipping", e.into_error());
                     None
                 }
             })
@@ -246,7 +246,7 @@ impl SubprocessPluginManager {
     /// The file serving each word (the first executable one in search
     /// order, even one that turns out not to answer), and whether it is on
     /// PATH, sorted by word
-    fn files(&self) -> Vec<(String, PathBuf, bool)> {
+    fn files(&self) -> std::collections::BTreeMap<String, (PathBuf, bool)> {
         let mut files = std::collections::BTreeMap::new();
         for (dir, on_path) in &self.dirs {
             if self.verbose {
@@ -296,9 +296,6 @@ impl SubprocessPluginManager {
             }
         }
         files
-            .into_iter()
-            .map(|(word, (path, on_path))| (word, path, on_path))
-            .collect()
     }
 
     fn loaded(&self, word: String, path: PathBuf, info: PluginInfo) -> SubprocessPlugin {

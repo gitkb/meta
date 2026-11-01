@@ -1145,16 +1145,18 @@ impl PluginInstaller {
         }
     }
 
-    /// The plugins `meta plugin install` installed here, by command word,
-    /// sorted
+    /// The plugins `meta plugin install` installed here that are still
+    /// here, by command word, sorted
     pub fn installed_words(&self) -> Result<Vec<String>> {
         let mut words: Vec<String> = self
             .load_manifest()?
             .plugins
             .into_keys()
+            .filter(|name| self.plugins_dir.join(name).is_file())
             .map(|name| {
                 name.strip_prefix(PLUGIN_PREFIX)
-                    .map_or(name.clone(), str::to_string)
+                    .unwrap_or(&name)
+                    .to_string()
             })
             .collect();
         words.sort();

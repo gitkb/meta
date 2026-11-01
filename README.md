@@ -226,6 +226,8 @@ projects:
 | `provides` | No | Array of capabilities this project provides |
 | `depends_on` | No | Array of project names or provided capabilities this depends on |
 
+A token in a `repo` URL (`https://user:token@host/org/repo.git`) works, and meta's own messages show it as `***`, but it is stored in plain text in `.meta.yaml` and in the clone's `.git/config`; prefer a git credential helper, such as `gh auth setup-git`.
+
 **Rules for names and values.** meta checks every entry when it reads the config and stops with an error that names the file and the project:
 
 - `path` (the name when it is omitted) is relative and stays inside the directory of the config file: no `..`, no absolute paths, and no symlink that leads outside it or into `.git` or `.worktrees`. `\` reads as `/`, and `./`, `//` and a trailing `/` are dropped.

@@ -7,7 +7,7 @@
 //! `GIT_SSH_COMMAND` this module returns.
 
 use console::style;
-use log::{debug, warn};
+use log::debug;
 use meta_core::config::{ProjectInfo, Workspace};
 use meta_core::display::escape;
 use meta_core::display::shell_quote;
@@ -37,12 +37,12 @@ struct SshTarget {
 
 impl SshTarget {
     /// The target of `url`, if git reaches it over SSH.
-    fn of(url: &str) -> Option<Self> {
-        let url: GitUrl = url.parse().ok()?;
-        url.is_ssh().then(|| SshTarget {
-            user: url.user,
-            host: url.host,
-            port: url.port.unwrap_or(22),
+    fn of(url: &GitUrl) -> Option<Self> {
+        let (user, host, port) = url.ssh()?;
+        Some(SshTarget {
+            user: user.map(str::to_string),
+            host: host.to_string(),
+            port,
         })
     }
 
@@ -87,8 +87,8 @@ impl SshTarget {
 }
 
 /// The distinct SSH remotes of `projects`.
-pub(crate) fn ssh_urls(projects: &[ProjectInfo]) -> Vec<String> {
-    let urls: BTreeSet<&String> = projects
+pub(crate) fn ssh_urls(projects: &[ProjectInfo]) -> Vec<GitUrl> {
+    let urls: BTreeSet<&GitUrl> = projects
         .iter()
         .filter_map(|p| p.repo.as_ref())
         .filter(|repo| SshTarget::of(repo).is_some())
@@ -102,11 +102,11 @@ pub(crate) fn ssh_urls(projects: &[ProjectInfo]) -> Vec<String> {
 /// - `SshMasters::OurSockets(dir)` if we established at least one master
 /// - `SshMasters::UserManaged` if all hosts already have active masters
 /// - `SshMasters::Failed` if sockets dir couldn't be created or all connections failed
-pub fn establish_ssh_masters(urls: &[&str]) -> SshMasters {
+pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
     let mut seen = BTreeSet::new();
     let targets: Vec<SshTarget> = urls
         .iter()
-        .filter_map(|url| SshTarget::of(url))
+        .filter_map(SshTarget::of)
         .filter(|t| seen.insert(t.socket_name()))
         .collect();
 
@@ -116,13 +116,13 @@ pub fn establish_ssh_masters(urls: &[&str]) -> SshMasters {
     }
 
     let Some(home) = dirs::home_dir() else {
-        warn!("Could not determine HOME directory for SSH sockets");
+        warn("could not find the HOME directory for SSH sockets");
         return SshMasters::Failed;
     };
     let sockets_dir = match ensure_ssh_sockets_dir(&home) {
         Ok(dir) => dir,
         Err(e) => {
-            warn!("Failed to create SSH sockets directory: {e}");
+            warn(format!("could not create the SSH sockets directory: {e}"));
             return SshMasters::Failed;
         }
     };
@@ -182,11 +182,11 @@ pub fn establish_ssh_masters(urls: &[&str]) -> SshMasters {
             );
             any_succeeded = true;
         } else {
-            warn!(
+            warn(format!(
                 "SSH master for {} (port {}) could not be started",
-                target.destination(),
+                escape(&target.destination()),
                 target.port
-            );
+            ));
         }
     }
 
@@ -201,6 +201,11 @@ pub fn establish_ssh_masters(urls: &[&str]) -> SshMasters {
     } else {
         SshMasters::Failed
     }
+}
+
+/// Tell the user, on stderr, what meta couldn't set up.
+pub(crate) fn warn(message: impl std::fmt::Display) {
+    eprintln!("{} {message}", style("⚠").yellow().bold());
 }
 
 /// A `GIT_SSH_COMMAND` value that reuses established ControlMaster
@@ -235,12 +240,7 @@ fn ensure_ssh_sockets_dir(home: &Path) -> std::io::Result<PathBuf> {
 /// Warn about checkouts whose `origin` differs from the URL `workspace`
 /// lists for them (non-interactive).
 pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
-    let normalized = |url: &str| {
-        url.parse::<GitUrl>()
-            .map(|u| u.normalized())
-            .unwrap_or_else(|_| url.to_string())
-    };
-    let mismatches: Vec<(&ProjectInfo, &String, String)> = workspace
+    let mismatches: Vec<(&ProjectInfo, &GitUrl, GitUrl)> = workspace
         .projects
         .iter()
         .filter_map(|project| {
@@ -250,7 +250,7 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
             // one of the repository around it
             meta_core::gitdir::common_dir(&dir).ok()??;
             let actual = meta_core::git::remote_url(&dir)?;
-            (normalized(&actual) != normalized(expected)).then_some((project, expected, actual))
+            (!actual.same_repository(expected)).then_some((project, expected, actual))
         })
         .collect();
     if mismatches.is_empty() {
@@ -265,18 +265,27 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
     );
     for (project, expected, actual) in &mismatches {
         eprintln!("  {}", style(escape(&project.name)).bold());
-        eprintln!("    actual:   {}", style(escape(actual)).red());
-        eprintln!("    expected: {}", style(escape(expected)).green());
+        eprintln!("    actual:   {}", style(actual).red());
+        eprintln!("    expected: {}", style(expected).green());
+        if actual.to_string() == expected.to_string() {
+            eprintln!("    (they differ only in their hidden credentials)");
+        }
     }
     eprintln!();
     eprintln!("  Fix manually with:");
     for (project, expected, _) in &mismatches {
+        // printed as a URL prints, escaped; hidden credentials would break
+        // the command, so the reader fills those in
+        let url = if expected.has_credentials() {
+            "<the repo URL in .meta.yaml>".to_string()
+        } else {
+            shell_quote(&expected.to_string())
+        };
         eprintln!(
-            "    git -C {} remote set-url origin {}",
+            "    git -C {} remote set-url origin {url}",
             escape(&shell_quote(
                 &workspace.dir.join(&project.path).to_string_lossy()
-            )),
-            escape(&shell_quote(expected))
+            ))
         );
     }
 }
@@ -295,16 +304,18 @@ mod tests {
 
     #[test]
     fn targets_come_from_ssh_remotes_only() {
-        let t = SshTarget::of("ssh://alice@example.com:2222/repo.git").unwrap();
+        let of = |url: &str| SshTarget::of(&url.into());
+        let t = of("ssh://alice@example.com:2222/repo.git").unwrap();
         assert_eq!(
             (t.destination().as_str(), t.port),
             ("alice@example.com", 2222)
         );
         assert_eq!(t.socket_name(), "alice@example.com-2222");
-        let t = SshTarget::of("example.com:org/repo.git").unwrap();
+        let t = of("example.com:org/repo.git").unwrap();
         assert_eq!((t.destination().as_str(), t.port), ("example.com", 22));
-        assert!(SshTarget::of("https://github.com/org/repo.git").is_none());
-        assert!(SshTarget::of("/srv/repo.git").is_none());
+        assert!(of("https://github.com/org/repo.git").is_none());
+        assert!(of("/srv/repo.git").is_none());
+        assert!(of("ext::ssh -p 2222 host %S repo").is_none());
     }
 
     #[cfg(unix)]

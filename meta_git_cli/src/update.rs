@@ -101,7 +101,7 @@ pub(crate) fn execute_git_update(
         for task in tasks {
             println!(
                 "  git clone {} {}",
-                escape(&task.url),
+                task.url,
                 escape_path(&task.target_path)
             );
         }
@@ -112,12 +112,11 @@ pub(crate) fn execute_git_update(
     let queue_urls = queue.peek_urls();
     let mut parallel = 4_usize;
     let ssh_cmd = if !queue_urls.is_empty() {
-        let url_refs: Vec<&str> = queue_urls.iter().map(|s| s.as_str()).collect();
-        match ssh::establish_ssh_masters(&url_refs) {
+        match ssh::establish_ssh_masters(&queue_urls) {
             ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
             ssh::SshMasters::UserManaged => None, // parallel OK
             ssh::SshMasters::Failed => {
-                log::warn!("SSH multiplexing setup failed, falling back to serial cloning");
+                ssh::warn("SSH multiplexing could not be set up: cloning one repository at a time");
                 parallel = 1;
                 None
             }

@@ -135,7 +135,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
             "{} {} ({})",
             style("Failed to clone").red().bold(),
             meta_core::display::escape(&failure.name),
-            meta_core::display::escape(&failure.url)
+            failure.url
         );
         // git's error names paths from the filesystem
         for line in failure.error.lines() {
@@ -198,7 +198,9 @@ fn clone_single_repo(
     if let Some(d) = queue.git_depth() {
         cmd.arg("--depth").arg(d);
     }
-    cmd.arg("--").arg(&task.url).arg(&task.target_path);
+    cmd.arg("--")
+        .arg(task.url.as_git_arg())
+        .arg(&task.target_path);
     if let Some(ssh) = ssh_cmd {
         cmd.env("GIT_SSH_COMMAND", ssh);
     }

@@ -175,7 +175,8 @@ Shows additional execution details.
 loop -s npm test
 ```
 
-Prints nothing; the exit status says whether every command succeeded.
+Prints no command output and no summary. If a command fails, loop ends
+with `Error: At least one command failed` and a non-zero exit status.
 
 ## Error Handling
 

@@ -203,3 +203,50 @@ while [ ! -e "$ROOT/release" ] && [ -d "$ROOT" ]; do sleep 0.05; done; echo "$PW
     let late = fs::read_to_string(root.join("late")).unwrap();
     assert_eq!(late.lines().count(), 3, "{late}");
 }
+
+/// A command stopped by a signal (SIGSTOP, as a terminal's Ctrl-Z or a
+/// background read does) still counts as running: TERM to meta ends it
+/// within the grace (a stopped process only dies of SIGKILL), and meta ends
+/// by TERM with nothing written afterwards.
+#[test]
+fn terminating_meta_ends_a_stopped_command() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    workspace(&root);
+    let stopped = r#"echo "$$" >> "$ROOT/started"; kill -STOP "$$"; echo "$PWD" >> "$ROOT/late""#;
+    let mut meta = start_meta(
+        &root,
+        &["exec", "--include", "a", "--", "sh", "-c", stopped],
+    );
+    started(&root, 1);
+    let pid = fs::read_to_string(root.join("started")).unwrap();
+    let pid = pid.trim();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let out = Command::new("ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .unwrap();
+        if String::from_utf8_lossy(&out.stdout)
+            .trim_start()
+            .starts_with('T')
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the command didn't stop");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    rustix::process::kill_process(
+        rustix::process::Pid::from_child(&meta),
+        rustix::process::Signal::TERM,
+    )
+    .unwrap();
+    let status = exited(&mut meta, Duration::from_secs(10));
+    assert_eq!(status.signal(), Some(15), "{status:?}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ended(pid) {
+        assert!(Instant::now() < deadline, "the stopped command still runs");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!root.join("late").exists());
+}

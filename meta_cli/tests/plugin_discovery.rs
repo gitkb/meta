@@ -538,14 +538,146 @@ fn a_plugin_that_answers_without_reading_its_request_still_answers() {
 *) echo answered ;;
 esac"#,
     );
-    // the plugin may exit before meta has written its request
-    for _ in 0..20 {
-        let out = f.run(&["quick", "go"]);
+    // a request bigger than a pipe holds: the plugin always exits before
+    // meta has written it all
+    let out = f.run(&["--strict", "quick", "go", &"r".repeat(100 * 1024)]);
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("answered"), "{text}");
+}
+
+#[test]
+fn a_plugin_that_writes_before_reading_a_large_request_gets_all_of_it() {
+    let f = Fixture::new(true);
+    let received = f.home.join("received");
+    // 256 KiB out before reading: more than a pipe holds either way
+    script(
+        &f.data.join("plugins/meta-chatty"),
+        &format!(
+            r#"case "$1" in
+--meta-plugin-info) printf '%s\n' '{{"name":"chatty","version":"1","commands":["chatty"]}}' ;;
+*) head -c 262144 /dev/zero | tr '\0' x; wc -c > "{}" ;;
+esac"#,
+            received.display()
+        ),
+    );
+    let stdout = f.home.join("stdout");
+    let mut meta = f
+        .command(&["chatty", &"r".repeat(100 * 1024)])
+        .stdout(fs::File::create(&stdout).unwrap())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = meta.try_wait().unwrap() {
+            break Some(status);
+        }
+        if started.elapsed() > Duration::from_secs(30) {
+            let _ = meta.kill();
+            let _ = meta.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let status = status.expect("meta and the plugin blocked each other");
+    assert!(status.success());
+    let request: usize = fs::read_to_string(&received)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(request > 100 * 1024, "{request}");
+    assert_eq!(fs::read(&stdout).unwrap(), vec![b'x'; 262144]);
+}
+
+#[test]
+fn unusable_files_in_plugin_folders_are_warned_about_but_not_on_path() {
+    let f = Fixture::new(true);
+    // named apart per folder, as the first file with a name hides the rest
+    let unusable = |dir: &Path, tag: &str| {
+        let bad_json = dir.join(format!("meta-garbled-{tag}"));
+        script(&bad_json, "echo not-json");
+        let cannot_start = dir.join(format!("meta-unstartable-{tag}"));
+        fs::write(&cannot_start, "#!/nonexistent/interpreter\n").unwrap();
+        fs::set_permissions(&cannot_start, fs::Permissions::from_mode(0o755)).unwrap();
+        let not_executable = dir.join(format!("meta-plain-{tag}"));
+        fs::write(&not_executable, "#!/bin/sh\n").unwrap();
+        [bad_json, cannot_start, not_executable]
+    };
+    let warned: Vec<PathBuf> = [
+        (f.cwd.join(".meta/plugins"), "local"),
+        (f.data.join("plugins"), "global"),
+    ]
+    .iter()
+    .flat_map(|(dir, tag)| {
+        fs::create_dir_all(dir).unwrap();
+        unusable(dir, tag)
+    })
+    .collect();
+    // anything may be named meta-* on PATH
+    let silent = unusable(&f.bin, "path");
+    let out = f.run(&["--help"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    for path in &warned {
+        assert!(
+            err.lines()
+                .any(|line| line.starts_with("Warning:") && line.contains(path.to_str().unwrap())),
+            "{}: {err}",
+            path.display()
+        );
+    }
+    for path in &silent {
+        assert!(!err.contains(path.to_str().unwrap()), "{err}");
+    }
+}
+
+#[test]
+fn plugin_update_names_each_plugin_it_cannot_check_and_fails() {
+    let f = Fixture::new(true);
+    // installed from a URL, and from GitHub with no version recorded:
+    // neither can be checked, and checking them needs no network. A plugin
+    // whose file was deleted is no longer installed.
+    for name in ["fromurl", "noversion"] {
+        plugin(&f.data.join(format!("plugins/meta-{name}")), name, "1");
+    }
+    fs::write(
+        f.data.join("plugins/.manifest.json"),
+        r#"{"plugins": {
+  "meta-fromurl": {"source": "http://127.0.0.1:9/p.tar.gz", "installed": "2026-01-01T00:00:00Z", "platform": "x"},
+  "meta-noversion": {"source": "someone/meta-noversion", "installed": "2026-01-01T00:00:00Z", "platform": "x"},
+  "meta-deleted": {"source": "http://127.0.0.1:9/d.tar.gz", "installed": "2026-01-01T00:00:00Z", "platform": "x"}
+}}"#,
+    )
+    .unwrap();
+    for args in [
+        &["plugin", "update"][..],
+        &["plugin", "update", "--check"][..],
+    ] {
+        let out = f.run(args);
         let text = String::from_utf8_lossy(&out.stdout).to_string()
             + &String::from_utf8_lossy(&out.stderr);
-        assert!(out.status.success(), "{text}");
-        assert!(text.contains("answered"), "{text}");
+        assert!(!out.status.success(), "{args:?}: {text}");
+        assert!(!text.contains("up to date"), "{args:?}: {text}");
+        assert!(!text.contains("deleted"), "{args:?}: {text}");
+        // a source may hold a credential
+        assert!(!text.contains("127.0.0.1"), "{args:?}: {text}");
+        for name in ["meta-fromurl", "meta-noversion"] {
+            assert!(
+                text.contains(&format!("Cannot check {name} for updates")),
+                "{args:?}: {text}"
+            );
+        }
     }
+    let out = f.run(&["plugin", "update", "fromurl"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(
+        err.contains("Cannot check meta-fromurl for updates"),
+        "{err}"
+    );
 }
 
 #[test]

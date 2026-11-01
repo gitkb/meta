@@ -15,8 +15,35 @@ use meta_plugin_protocol::{
     ExecutionPlan, PlanResponse, PlannedCommand, PluginInfo, PluginRequest, PluginRequestOptions,
 };
 
+/// Why a file gave no plugin info
+#[derive(Debug)]
+pub(crate) enum NoInfo {
+    /// It couldn't start, failed, or answered with something else: a file
+    /// on PATH named `meta-*` may be any program, so there it is just no
+    /// plugin
+    NotAPlugin(anyhow::Error),
+    /// It didn't answer in time, or couldn't be waited for: reported
+    /// wherever it is, as it costs every command that asks
+    NoAnswer(anyhow::Error),
+}
+
+impl NoInfo {
+    pub(crate) fn into_error(self) -> anyhow::Error {
+        match self {
+            NoInfo::NotAPlugin(e) | NoInfo::NoAnswer(e) => e,
+        }
+    }
+}
+
 /// Query metadata with one deadline for both process exit and stdout EOF.
-pub(crate) fn probe_plugin_info(path: &Path) -> Result<Option<PluginInfo>> {
+pub(crate) fn probe_plugin_info(path: &Path) -> Result<PluginInfo, NoInfo> {
+    let not_a_plugin = |reason: String| {
+        NoInfo::NotAPlugin(anyhow::anyhow!(
+            "Plugin {} did not answer --meta-plugin-info with its info: {}",
+            escape_path(path),
+            escape(&reason)
+        ))
+    };
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut command = Command::new(path);
     command
@@ -29,14 +56,13 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<Option<PluginInfo>> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(_) => return Ok(None),
-    };
+    let mut child = command
+        .spawn()
+        .map_err(|e| not_a_plugin(format!("it could not start ({e})")))?;
     let Some(stdout) = child.stdout.take() else {
         let _ = child.kill();
         let _ = child.wait();
-        return Ok(None);
+        return Err(not_a_plugin("its output could not be read".to_string()));
     };
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -49,19 +75,24 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<Option<PluginInfo>> {
     if let Ok(output) = receiver.recv_timeout(remaining) {
         loop {
             match child.try_wait() {
-                Ok(Some(status)) => {
-                    return Ok(output
-                        .ok()
-                        .filter(|_| status.success())
-                        .and_then(|bytes| serde_json::from_slice(&bytes).ok()))
+                Ok(Some(status)) if !status.success() => {
+                    return Err(not_a_plugin(format!("it ended with {status}")))
+                }
+                Ok(Some(_)) => {
+                    let bytes =
+                        output.map_err(|e| not_a_plugin(format!("reading it failed ({e})")))?;
+                    return serde_json::from_slice(&bytes)
+                        .map_err(|e| not_a_plugin(format!("its answer is not plugin info ({e})")));
                 }
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(1))
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    return Err(e)
-                        .with_context(|| format!("Cannot wait for plugin {}", escape_path(path)))
+                    return Err(NoInfo::NoAnswer(
+                        anyhow::Error::new(e)
+                            .context(format!("Cannot wait for plugin {}", escape_path(path))),
+                    ))
                 }
             }
         }
@@ -78,10 +109,10 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<Option<PluginInfo>> {
     // still holds stdout outlives it, but meta doesn't wait for that reader
     let _ = child.kill();
     let _ = child.wait();
-    anyhow::bail!(
+    Err(NoInfo::NoAnswer(anyhow::anyhow!(
         "Plugin {} did not answer --meta-plugin-info within 5 seconds",
         escape_path(path)
-    )
+    )))
 }
 
 /// Print a plugin's output. A closed stdout (`meta ... | head`) ends meta
@@ -191,25 +222,21 @@ impl SubprocessPluginManager {
         else {
             return Ok(None);
         };
-        let info = probe_plugin_info(&path)?.with_context(|| {
-            format!(
-                "Plugin {} did not answer --meta-plugin-info with its info",
-                escape_path(&path)
-            )
-        })?;
+        let info = probe_plugin_info(&path).map_err(NoInfo::into_error)?;
         Ok(Some(self.loaded(word.to_string(), path, info)))
     }
 
     /// Every plugin, sorted by word. Each one is started to ask for its info;
-    /// one that doesn't answer is warned about and left out.
+    /// one that doesn't give it is warned about and left out, except a
+    /// program on PATH that isn't a plugin.
     pub fn all(&self) -> Vec<SubprocessPlugin> {
         self.files()
             .into_iter()
-            .filter_map(|(word, path)| match probe_plugin_info(&path) {
-                Ok(Some(info)) => Some(self.loaded(word, path, info)),
-                Ok(None) => None,
+            .filter_map(|(word, (path, on_path))| match probe_plugin_info(&path) {
+                Ok(info) => Some(self.loaded(word, path, info)),
+                Err(NoInfo::NotAPlugin(_)) if on_path => None,
                 Err(e) => {
-                    eprintln!("Warning: {e}; skipping");
+                    eprintln!("Warning: {}; skipping", e.into_error());
                     None
                 }
             })
@@ -217,8 +244,9 @@ impl SubprocessPluginManager {
     }
 
     /// The file serving each word (the first executable one in search
-    /// order, even one that turns out not to answer), sorted by word
-    fn files(&self) -> Vec<(String, PathBuf)> {
+    /// order, even one that turns out not to answer), and whether it is on
+    /// PATH, sorted by word
+    fn files(&self) -> std::collections::BTreeMap<String, (PathBuf, bool)> {
         let mut files = std::collections::BTreeMap::new();
         for (dir, on_path) in &self.dirs {
             if self.verbose {
@@ -258,11 +286,16 @@ impl SubprocessPluginManager {
                     continue;
                 };
                 if is_executable(&path) {
-                    files.entry(word.to_string()).or_insert(path);
+                    files.entry(word.to_string()).or_insert((path, *on_path));
+                } else if !on_path && path.is_file() {
+                    eprintln!(
+                        "Warning: Plugin {} is not executable; skipping",
+                        escape_path(&path)
+                    );
                 }
             }
         }
-        files.into_iter().collect()
+        files
     }
 
     fn loaded(&self, word: String, path: PathBuf, info: PluginInfo) -> SubprocessPlugin {
@@ -351,31 +384,17 @@ impl SubprocessPlugin {
             );
         }
 
-        let mut child = meta_core::children::spawn(
+        // A plugin may answer without reading its request; then its output
+        // and exit status decide, not the pipe
+        let output = meta_core::children::spawn(
             Command::new(&self.path)
                 .arg("--meta-plugin-exec")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped()) // Capture stdout to parse response
                 .stderr(Stdio::inherit()), // Let stderr pass through for error messages
         )
+        .and_then(|child| child.exchange(request_json.as_bytes()))
         .with_context(|| format!("Failed to execute plugin {}", escape_path(&self.path)))?;
-
-        // Send request to plugin's stdin. A plugin may answer without
-        // reading it; then its output and exit status decide, not the pipe.
-        if let Some(mut stdin) = child.stdin() {
-            use std::io::Write;
-            match stdin.write_all(request_json.as_bytes()) {
-                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
-                result => result.with_context(|| {
-                    format!(
-                        "Cannot send the request to plugin {}",
-                        escape_path(&self.path)
-                    )
-                })?,
-            }
-        }
-
-        let output = child.wait_with_output()?;
 
         if !output.status.success() {
             // Plugin already printed its error to stderr. What it printed

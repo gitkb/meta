@@ -2457,6 +2457,8 @@ J
 }
 
 @test "a terminal that hangs up ends meta and a command that ignores the hangup" {
+    # elsewhere meta leaves SIGHUP alone (it can't tell whether it was ignored)
+    [ "$(uname -s)" = Linux ] || skip "meta handles a hangup on Linux only"
     "$META_BIN" git worktree create stubborn --repo backend --no-deps
     python3 "$BATS_TEST_DIRNAME/helpers/hangup_stubborn.py" "$META_BIN" "$TEST_DIR"
     [ "$(cat "$TEST_DIR/result")" = "$(printf 'ended\nstubborn ended')" ]

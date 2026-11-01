@@ -91,7 +91,7 @@ must be valid.
 | `verbose` | `bool` | `false` | Enable verbose output |
 | `silent` | `bool` | `false` | Suppress command output |
 | `parallel` | `bool` | `false` | Run in every directory at once, showing each output when all are done |
-| `max_parallel` | `number` | one per CPU core | With `parallel`, at most this many at once (1 or more) |
+| `max_parallel` | `number` | Rayon's default: one thread per logical CPU, or `RAYON_NUM_THREADS` if set | With `parallel`, at most this many at once (1 or more) |
 | `spawn_stagger_ms` | `number` | `0` | With `parallel`, milliseconds between two starts |
 | `dry_run` | `bool` | `false` | Print what would run, run nothing |
 | `json_output` | `bool` | `false` | Print the results as JSON |

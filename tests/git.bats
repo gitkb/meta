@@ -311,6 +311,16 @@ within() {
     [ "$(grep -c '^0$' "$TEST_DIR/prompts")" -eq 4 ]
 }
 
+@test "meta git update opens no ssh to remotes it won't contact" {
+    # cloned repos with no upstream, listed with ssh URLs: nothing to pull
+    printf '#!/bin/sh\ntouch "%s/ssh-ran"\nexit 255\n' "$TEST_DIR" > "$TEST_DIR/ssh"
+    chmod +x "$TEST_DIR/ssh"
+    PATH="$TEST_DIR:$PATH" run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [ ! -e "$TEST_DIR/ssh-ran" ]
+    [[ "$output" != *"SSH"* ]]
+}
+
 @test "meta git update in a worktree set refuses instead of updating the workspace" {
     with_remotes
     "$META_BIN" git worktree create review --repo frontend --no-deps >/dev/null

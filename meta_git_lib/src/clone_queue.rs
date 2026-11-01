@@ -626,13 +626,40 @@ mod tests {
         // a second checkout of the workspace's own repo: its .meta.yaml is
         // never read, so it is cloned like any project
         let dir = tempfile::tempdir().unwrap();
-        write_meta(dir.path(), r#"{"projects": {"pages": "top.git"}}"#);
+        write_meta(
+            dir.path(),
+            r#"{"projects": {"pages": {"repo": "top.git", "meta": true}}}"#,
+        );
         let queue = CloneQueue::new(None, Some(0), true);
         let tasks = queue
             .discover(dir.path(), 0, &top(dir.path(), Some("top.git")))
             .unwrap();
         assert_eq!(names(&tasks), ["pages"]);
         assert!(queue.outcome().cycles.is_empty());
+    }
+
+    #[test]
+    fn an_undeclared_meta_repo_that_repeats_one_above_it_is_cloned_once_and_not_entered() {
+        // ws lists kid, kid lists top (ws's own repo); neither says meta: true
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        write_meta(ws, r#"{"projects": {"kid": "kid.git"}}"#);
+        let queue = CloneQueue::new(None, None, false);
+        let tasks = queue.discover(ws, 0, &top(ws, Some("top.git"))).unwrap();
+        assert_eq!(names(&tasks), ["kid"]);
+        // as the clones leave them
+        std::fs::create_dir(&tasks[0].target_path).unwrap();
+        write_meta(&tasks[0].target_path, r#"{"projects": {"top": "top.git"}}"#);
+        let nested = queue.mark_completed(&tasks[0]);
+        assert_eq!(names(&nested), ["top"]);
+        assert!(queue.outcome().cycles.is_empty());
+        std::fs::create_dir(&nested[0].target_path).unwrap();
+        write_meta(
+            &nested[0].target_path,
+            r#"{"projects": {"kid": "kid.git"}}"#,
+        );
+        assert!(queue.mark_completed(&nested[0]).is_empty());
+        assert_eq!(queue.outcome().cycles, [vec!["ws", "kid", "top"]]);
     }
 
     #[cfg(windows)]

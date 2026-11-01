@@ -403,21 +403,24 @@ fn scan(
 /// commits on no remote, stashes, and its linked worktrees. Empty when git
 /// shows nothing that isn't on a remote (ignored files aside).
 pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
-    let (mut found, _) = unsaved_work(repo, &[])?;
+    let born = meta_core::git::lookup(repo, ["rev-parse", "--verify", "--quiet", "HEAD"])?;
+    let mut found = match born {
+        Some(_) => unsaved_work(repo, &[])?.0,
+        // nothing committed yet: every file in it is the only copy
+        None => {
+            let status = ["status", "--porcelain", "--untracked-files=all"];
+            match meta_core::git::run(repo, status)?.lines().count() {
+                0 => vec!["no commits".to_string()],
+                n => vec![format!("no commits, and {}", plural(n, "file"))],
+            }
+        }
+    };
     // Commits on no remote include those on no branch either
     found.retain(|what| !what.ends_with(STRANDED));
-    let unpushed = meta_core::git::run(
-        repo,
-        [
-            "log",
-            "--oneline",
-            "HEAD",
-            "--branches",
-            "--tags",
-            "--not",
-            "--remotes",
-        ],
-    )?;
+    let mut log = vec!["log", "--oneline", "--branches", "--tags"];
+    log.extend(born.map(|_| "HEAD"));
+    log.extend(["--not", "--remotes"]);
+    let unpushed = meta_core::git::run(repo, log)?;
     let unpushed: Vec<&str> = unpushed.lines().collect();
     if !unpushed.is_empty() {
         found.push(format!(
@@ -701,6 +704,40 @@ mod tests {
             &source,
             &["worktree", "add", "-q", "-b", name, wt.to_str().unwrap()],
         );
+    }
+
+    #[test]
+    fn repo_holds_names_what_only_this_clone_has() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (repo, remote) = (tmp.path().join("repo"), tmp.path().join("remote.git"));
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        assert_eq!(repo_holds(&repo).unwrap(), ["no commits, and 1 file"]);
+
+        git(&repo, &["add", "a.txt"]);
+        git(&repo, &["commit", "-q", "-m", "first"]);
+        git(tmp.path(), &["clone", "-q", "--bare", "repo", "remote.git"]);
+        git(
+            &repo,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        git(&repo, &["fetch", "-q", "origin"]);
+        assert!(repo_holds(&repo).unwrap().is_empty());
+
+        // a commit on a local branch only, a stash and a worktree
+        git(&repo, &["switch", "-q", "-c", "topic"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+        std::fs::write(repo.join("a.txt"), "b").unwrap();
+        git(&repo, &["stash", "-q"]);
+        let wt = tmp.path().join("wt");
+        git(&repo, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+        let held = repo_holds(&repo).unwrap().join("; ");
+        assert!(held.contains("1 commit on no remote: "), "{held}");
+        assert!(held.contains("mine"), "{held}");
+        assert!(held.contains("1 stash"), "{held}");
+        assert!(held.contains("1 linked worktree: "), "{held}");
+        assert!(!held.contains(STRANDED), "{held}");
     }
 
     #[test]

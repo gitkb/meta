@@ -2455,3 +2455,9 @@ J
     [ "$status" -eq 0 ]
     [[ "$output" == *"eph-left (ephemeral, the run that made it"* ]]
 }
+
+@test "a terminal that hangs up ends meta and a command that ignores the hangup" {
+    "$META_BIN" git worktree create stubborn --repo backend --no-deps
+    python3 "$BATS_TEST_DIRNAME/helpers/hangup_stubborn.py" "$META_BIN" "$TEST_DIR"
+    [ "$(cat "$TEST_DIR/result")" = "$(printf 'ended\nstubborn ended')" ]
+}

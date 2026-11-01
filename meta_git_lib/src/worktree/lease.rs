@@ -224,18 +224,35 @@ fn lock(path: &Path) -> Result<Option<File>> {
         };
         // A reader tests the lock by taking it for a moment: try a few times
         // before taking it for held
-        let locked = (0..3).any(|attempt| {
+        let mut locked = false;
+        for attempt in 0..3 {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
-            file.try_lock().is_ok()
-        });
+            if taken(file.try_lock())
+                .with_context(|| format!("Cannot lock {}", escape_path(&lock)))?
+            {
+                locked = true;
+                break;
+            }
+        }
         if !locked {
             return Ok(None);
         }
         if still_at(&file, &lock) {
             return Ok(Some(file));
         }
+    }
+}
+
+/// Whether a try at a lock took it: `false` when another process holds it.
+/// Any other failure (no lock support on the filesystem, say) is an error,
+/// never taken for a free or a held lease.
+fn taken(attempt: Result<(), std::fs::TryLockError>) -> std::io::Result<bool> {
+    match attempt {
+        Ok(()) => Ok(true),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(false),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
     }
 }
 
@@ -322,7 +339,8 @@ pub fn take(lease: &Lease) -> Result<Held> {
 /// The lease at `path`: whether its lock is held, and what it says.
 fn read(path: PathBuf) -> Found {
     let live = match File::open(lock_path(&path)) {
-        Ok(file) => file.try_lock().is_err(),
+        // a lock that can't be tested counts as held
+        Ok(file) => !matches!(taken(file.try_lock()), Ok(true)),
         Err(e) => e.kind() != std::io::ErrorKind::NotFound,
     };
     let lease = read_lease(&path);
@@ -465,5 +483,13 @@ mod tests {
         let found = find(&set).unwrap();
         assert!(!found.live && !found.is_mine());
         assert!(found.lease.is_some());
+    }
+
+    #[test]
+    fn only_a_lock_another_process_holds_reads_as_held() {
+        assert!(taken(Ok(())).unwrap());
+        assert!(!taken(Err(std::fs::TryLockError::WouldBlock)).unwrap());
+        let failed = std::io::Error::other("no locks on this filesystem");
+        assert!(taken(Err(std::fs::TryLockError::Error(failed))).is_err());
     }
 }

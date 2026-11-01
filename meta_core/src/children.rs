@@ -14,10 +14,12 @@
 //! Where the program is the foreground job of a terminal, its children stay
 //! in its process group, as before: they can prompt on the terminal, and the
 //! terminal's Ctrl-C and hangup reach them directly; a signal another process
-//! sends to the program alone is passed on to each of them. Anywhere else
-//! (no terminal, a background job, a supervisor), each child gets a process
-//! group of its own, so the signal reaches everything it starts in turn; as
-//! there's no one to press Ctrl-C twice, what is still running two seconds
+//! sends to the program alone is passed on to each of them, and that signal
+//! or a hangup (no one is left to press Ctrl-C twice) gets the same bound as
+//! below. Anywhere else (no terminal, a background job, a supervisor), each
+//! child gets a process group of its own, so the signal reaches everything
+//! it starts in turn; as there's no one to press Ctrl-C twice, what is still
+//! running two seconds
 //! later is killed (one second in a program meta started, so it kills its
 //! own first), and two seconds after that the program ends regardless.
 //!
@@ -331,7 +333,8 @@ mod imp {
 
     /// Pass `signal` on, wait for every child, then end as `signal` ends a
     /// program. `sent` says another process sent it, rather than the
-    /// terminal, which sends it to the children in this program's group too.
+    /// terminal, whose Ctrl-C reaches the children in this program's group
+    /// too.
     fn stop(signal: i32, sent: bool) {
         let mut children = lock();
         children.stopping = true;
@@ -340,20 +343,23 @@ mod imp {
         // a group that emptied since its last spawn is not signalled: its id
         // may be another's by now
         children.groups.retain(|group| group_alive(*group));
+        // A hangup may have reached only this program (the session leader of
+        // a terminal that went), so it is passed on too
+        let hangup = signal == signal_hook::consts::SIGHUP;
         for (pid, own_group) in &children.running {
-            if !own_group && sent {
+            if !own_group && (sent || hangup) {
                 let _ = rustix::process::kill_process(*pid, sig);
             }
         }
         for group in &children.groups {
             let _ = rustix::process::kill_process_group(*group, sig);
         }
-        // With no terminal, or when another process sent it, what still runs
-        // after the grace is killed, and after as long again this program
-        // ends whatever is left (a dead process no one reaps still counts as
-        // in its group). After the terminal's own Ctrl-C, a second one does
-        // that.
-        let mut deadline = (sent || !shared()).then(|| Instant::now() + grace());
+        // With no terminal, when another process sent it, or on a hangup
+        // (the terminal is gone), what still runs after the grace is killed,
+        // and after as long again this program ends whatever is left (a dead
+        // process no one reaps still counts as in its group). After the
+        // terminal's own Ctrl-C, a second one does that.
+        let mut deadline = (sent || hangup || !shared()).then(|| Instant::now() + grace());
         let mut killed = false;
         loop {
             children.groups.retain(|group| group_alive(*group));

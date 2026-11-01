@@ -47,8 +47,8 @@ impl Operation {
     }
 
     /// The operation under way in the checkout at `dir`, read the way
-    /// `git status` reads it (two more git processes, three while one is
-    /// under way, so only callers that show it ask). git names the files in the checkout's own git directory
+    /// `git status` reads it (up to four more git processes, so only
+    /// callers that show it ask). git names the files in the checkout's own git directory
     /// (a linked worktree's, never the one it shares) and resolves the refs
     /// in whichever store the repository keeps them. A rebase comes first:
     /// the picks and merges it stops on are its own.
@@ -102,32 +102,24 @@ impl Operation {
                 _ => None,
             }
         };
-        // the first of these refs there is: each commit is listed once, by
-        // the first name given that leads to it. A name also leads to a
-        // branch or tag called so; git's own state is the name itself.
-        let heads = super::run(
-            dir,
-            [
-                "log",
-                "--no-walk=unsorted",
-                "--ignore-missing",
-                "--no-show-signature",
-                "--source",
-                "--format=%S",
-                "MERGE_HEAD",
-                "CHERRY_PICK_HEAD",
-                "REVERT_HEAD",
-                "--",
-            ],
-        )?;
-        for head in heads.lines() {
-            let operation = match head {
-                "MERGE_HEAD" => Self::Merge,
-                "CHERRY_PICK_HEAD" => Self::CherryPick,
-                "REVERT_HEAD" => Self::Revert,
-                _ => continue,
-            };
-            if super::run(dir, ["rev-parse", "--symbolic-full-name", head])? == head {
+        // git's own state, never a branch or tag called so: those resolve
+        // to their full name
+        for (head, operation) in [
+            ("MERGE_HEAD", Self::Merge),
+            ("CHERRY_PICK_HEAD", Self::CherryPick),
+            ("REVERT_HEAD", Self::Revert),
+        ] {
+            let name = super::lookup(
+                dir,
+                [
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    "--symbolic-full-name",
+                    head,
+                ],
+            )?;
+            if name.as_deref() == Some(head) {
                 return Ok(Some(operation));
             }
         }
@@ -592,10 +584,13 @@ mod tests {
         assert_eq!(operation(dir), Some(Operation::Bisect));
         run(dir, ["bisect", "reset"]).unwrap();
         assert_eq!(operation(dir), None);
-        // a branch or tag named like git's state is no operation
-        run(dir, ["tag", "MERGE_HEAD"]).unwrap();
+        // a branch or tag named like git's state is no operation, and
+        // hides none
+        run(dir, ["tag", "MERGE_HEAD", "side"]).unwrap();
         run(dir, ["branch", "REVERT_HEAD"]).unwrap();
         assert_eq!(operation(dir), None);
+        assert!(as_t(dir, &["cherry-pick", "side"]).is_err());
+        assert_eq!(operation(dir), Some(Operation::CherryPick));
     }
 
     #[test]

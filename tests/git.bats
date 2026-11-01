@@ -189,6 +189,9 @@ teammate() {
 
 head_of() { git -C "$1" rev-parse HEAD; }
 
+# within SECONDS CMD...: CMD, killed if it runs longer (macOS has no timeout)
+within() { perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$@"; }
+
 @test "meta git update fast-forwards each repo, and clones what the pulled .meta.yaml adds" {
     with_remotes
     teammate frontend
@@ -276,7 +279,7 @@ head_of() { git -C "$1" rev-parse HEAD; }
     printf '#!/bin/sh\ncase " $* " in *" clone "*|*" pull "*)\n  head -c 262144 /dev/zero\n  echo "$GIT_TERMINAL_PROMPT" >> "%s/prompts";;\nesac\nexec "%s" "$@"\n' \
         "$TEST_DIR" "$real_git" > "$TEST_DIR/bin/git"
     chmod +x "$TEST_DIR/bin/git"
-    PATH="$TEST_DIR/bin:$PATH" run timeout 60 "$META_BIN" git update
+    PATH="$TEST_DIR/bin:$PATH" run within 60 "$META_BIN" git update
     [ "$status" -eq 0 ]
     [ -d "$TEST_DIR/shared/.git" ]
     # the clone and the three pulls
@@ -299,14 +302,14 @@ head_of() { git -C "$1" rev-parse HEAD; }
     create_meta_bare_repo "$KID_BARE" "{\"projects\": {\"top\": {\"repo\": \"file://$TOP_BARE\", \"meta\": true}}}"
     create_meta_bare_repo "$TOP_BARE" "{\"projects\": {\"kid\": {\"repo\": \"file://$KID_BARE\", \"meta\": true}}}"
     CYC="$(mktemp -d)/cyc"
-    run timeout 60 "$META_BIN" git clone -r "file://$TOP_BARE" "$CYC"
+    run within 60 "$META_BIN" git clone -r "file://$TOP_BARE" "$CYC"
     [ "$status" -eq 1 ]
     [[ "$output" == *"meta repos list each other: cyc → kid → top"* ]]
     [ -d "$CYC/kid/.git" ]
     [ ! -e "$CYC/kid/top" ]
     # the clone has no .meta/plugins: this build's plugin, not one installed
     cd "$CYC"
-    PATH="$(dirname "$META_GIT_BIN"):$PATH" run timeout 60 "$META_BIN" git update -r
+    PATH="$(dirname "$META_GIT_BIN"):$PATH" run within 60 "$META_BIN" git update -r
     [ "$status" -eq 1 ]
     [[ "$output" == *"meta repos list each other: cyc → kid → top"* ]]
     [ ! -e "$CYC/kid/top" ]

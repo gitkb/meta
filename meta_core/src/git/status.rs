@@ -47,8 +47,8 @@ impl Operation {
     }
 
     /// The operation under way in the checkout at `dir`, read the way
-    /// `git status` reads it (two more git processes, so only callers that
-    /// show it ask). git names the files in the checkout's own git directory
+    /// `git status` reads it (two more git processes, three while one is
+    /// under way, so only callers that show it ask). git names the files in the checkout's own git directory
     /// (a linked worktree's, never the one it shares) and resolves the refs
     /// in whichever store the repository keeps them. A rebase comes first:
     /// the picks and merges it stops on are its own.
@@ -103,8 +103,9 @@ impl Operation {
             }
         };
         // the first of these refs there is: each commit is listed once, by
-        // the first ref given that names it
-        let head = super::run(
+        // the first name given that leads to it. A name also leads to a
+        // branch or tag called so; git's own state is the name itself.
+        let heads = super::run(
             dir,
             [
                 "log",
@@ -119,12 +120,18 @@ impl Operation {
                 "--",
             ],
         )?;
-        Ok(match head.lines().next() {
-            Some("MERGE_HEAD") => Some(Self::Merge),
-            Some("CHERRY_PICK_HEAD") => Some(Self::CherryPick),
-            Some("REVERT_HEAD") => Some(Self::Revert),
-            _ => sequencer().or_else(|| exists(&dir.join(bisect)).then_some(Self::Bisect)),
-        })
+        for head in heads.lines() {
+            let operation = match head {
+                "MERGE_HEAD" => Self::Merge,
+                "CHERRY_PICK_HEAD" => Self::CherryPick,
+                "REVERT_HEAD" => Self::Revert,
+                _ => continue,
+            };
+            if super::run(dir, ["rev-parse", "--symbolic-full-name", head])? == head {
+                return Ok(Some(operation));
+            }
+        }
+        Ok(sequencer().or_else(|| exists(&dir.join(bisect)).then_some(Self::Bisect)))
     }
 }
 
@@ -584,6 +591,10 @@ mod tests {
         run(dir, ["bisect", "start"]).unwrap();
         assert_eq!(operation(dir), Some(Operation::Bisect));
         run(dir, ["bisect", "reset"]).unwrap();
+        assert_eq!(operation(dir), None);
+        // a branch or tag named like git's state is no operation
+        run(dir, ["tag", "MERGE_HEAD"]).unwrap();
+        run(dir, ["branch", "REVERT_HEAD"]).unwrap();
         assert_eq!(operation(dir), None);
     }
 

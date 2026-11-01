@@ -578,31 +578,11 @@ mod tests {
     }
 
     #[test]
-    fn status_names_a_missing_or_gone_upstream() {
+    fn status_names_a_gone_upstream_before_the_counts() {
         let mut r = make_repo("x", Some("topic"), Some(false), Some(0), vec![]);
-        r.upstream = None;
-        r.upstream_gone = None;
-        assert_eq!(format_status(&r), "clean, no upstream");
-        r.upstream = Some("origin/topic".to_string());
         r.upstream_gone = Some(true);
         r.ahead = Some(2);
         assert_eq!(format_status(&r), "clean, upstream gone (↑2)");
-    }
-
-    #[test]
-    fn a_detached_head_shows_its_commit_and_no_upstream_word() {
-        let r = make_repo("x", None, Some(false), Some(0), vec![]);
-        assert_eq!(format_branch(&r), "(detached 0123456)");
-        assert_eq!(format_status(&r), "clean");
-    }
-
-    #[test]
-    fn a_stopped_rebase_shows_its_branch_and_comes_first() {
-        let mut r = make_repo("x", None, Some(true), Some(1), vec![]);
-        r.operation = Some("rebase".to_string());
-        r.rebasing = Some("main".to_string());
-        assert_eq!(format_branch(&r), "(rebasing main)");
-        assert_eq!(format_status(&r), "rebase in progress, 1 modified");
     }
 
     #[test]

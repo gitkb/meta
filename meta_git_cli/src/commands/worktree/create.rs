@@ -103,7 +103,7 @@ pub(crate) fn handle_create(
             "Worktree '{name}' already exists at {}{}. Use 'meta worktree remove {name}' first.",
             escape_path(&wt_dir),
             match lease {
-                Some(found) if found.live => format!(" (being created by {})", found.holder()),
+                Some(found) if found.live => format!(" ({})", found.doing()),
                 Some(found) => format!(" (left half-made by {}, which is gone)", found.holder()),
                 None => String::new(),
             }

@@ -44,9 +44,9 @@ pub(crate) fn handle_remove(
     {
         Some(found) if found.is_mine() => None,
         Some(found) if found.live => anyhow::bail!(
-            "Refusing to remove worktree '{name}': it is being created by {}. Wait for that \
-             to finish, or stop it first.",
-            found.holder()
+            "Refusing to remove worktree '{name}': it is {}. Wait for that to finish, or stop \
+             it first.",
+            found.doing()
         ),
         // another workspace's, made from a repository both share: no
         // authority here

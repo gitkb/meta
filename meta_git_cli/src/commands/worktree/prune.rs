@@ -155,7 +155,8 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
     }
     // a lease left behind by a set that is gone too names nothing
     abandoned.retain(|set, found| {
-        let stale = is_missing(set) && !sets.contains_key(set);
+        let stale =
+            is_missing(set) && set.parent().is_some_and(is_plain_dir) && !sets.contains_key(set);
         if stale && !dry_run {
             let _ = found.delete();
         }
@@ -213,8 +214,12 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
         let name = found.name();
 
         // Check if path exists (orphaned detection). A set with a worktree
-        // still checked out (moved elsewhere) is left alone.
+        // still checked out (moved elsewhere) is left alone, and so is one
+        // whose worktrees folder is gone too (a drive that isn't mounted?)
         if is_missing(set) {
+            if !set.parent().is_some_and(is_plain_dir) {
+                continue;
+            }
             if !records
                 .iter()
                 .all(|(admin, _)| record::checkout_gone(admin))

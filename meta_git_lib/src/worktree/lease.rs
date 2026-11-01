@@ -1,14 +1,17 @@
 //! A lease names a worktree set while meta creates it, and an ephemeral set
 //! for as long as the run it was made for lasts.
 //!
-//! The creator writes the lease before it claims the set's directory, in the
+//! The creator takes the lease before it claims the set's directory, in the
 //! git directory of the first repository the set takes a worktree of
-//! (`<git dir>/meta-worktree-creating/`), and holds an OS lock on it until
-//! it is done; then it deletes the lease. Whoever can take the lock knows the
-//! creator is gone, however it ended (SIGKILL included), whatever its process
-//! id now names, on any machine sharing the files. A lease that is left
-//! behind marks a set that was never finished: its worktrees are meta's
-//! even where meta hadn't recorded them yet, and it may be removed.
+//! (`<git dir>/meta-worktree-creating/`): it locks `<name>.lock` (an OS
+//! lock), then writes `<name>.json` saying which set, and holds the lock
+//! until it is done; then it deletes both. Whoever can take the lock knows
+//! the creator is gone, however it ended (SIGKILL included), whatever its
+//! process id now names, on any machine sharing the files. (The lock is on a
+//! file of its own: Windows enforces locks, so a locked file can't be read.)
+//! A lease left behind marks a set that was never finished: its worktrees
+//! are meta's even where meta hadn't recorded them yet, and it may be
+//! removed.
 //!
 //! Like a record (see [`super::record`]), a lease is only in a repository's
 //! git directory, so only something that can write there can make one.
@@ -41,12 +44,13 @@ pub struct Lease {
 #[derive(Debug)]
 pub struct Held {
     path: PathBuf,
-    _file: File,
+    _lock: File,
 }
 
 impl Drop for Held {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(lock_path(&self.path));
         held().retain(|path| *path != self.path);
     }
 }
@@ -62,7 +66,7 @@ fn held() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
 #[derive(Debug)]
 pub struct Found {
     pub path: PathBuf,
-    /// What it says; `None` if it can't be read (still being written, say).
+    /// What it says; `None` if it can't be read.
     pub lease: Option<Lease>,
     /// Whether its creator holds it still. One whose lock can't be tested
     /// counts as held.
@@ -83,26 +87,52 @@ impl Found {
         }
     }
 
+    /// What its holder is doing with the set, for messages: creating it, or
+    /// running a command in it (an ephemeral set).
+    pub fn doing(&self) -> String {
+        match &self.lease {
+            Some(lease) if lease.ephemeral => {
+                format!("in use by the ephemeral run of {}", self.holder())
+            }
+            _ => format!("being created by {}", self.holder()),
+        }
+    }
+
     /// Delete a lease whose creator is gone. Taking the lock first keeps it
     /// from deleting one a new creator has just taken.
     pub fn delete(&self) -> Result<()> {
-        let file = match File::open(&self.path) {
-            Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => {
-                return Err(e).with_context(|| format!("Cannot open {}", escape_path(&self.path)))
-            }
-        };
-        if file.try_lock().is_err() {
+        let lock = lock(&self.path)?;
+        if lock.try_lock().is_err() {
             anyhow::bail!("{} is in use again", escape_path(&self.path));
         }
-        match std::fs::remove_file(&self.path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                Err(e).with_context(|| format!("Cannot delete {}", escape_path(&self.path)))
-            }
-            _ => Ok(()),
-        }
+        remove(&self.path)?;
+        remove(&lock_path(&self.path))
     }
+}
+
+fn remove(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(e).with_context(|| format!("Cannot delete {}", escape_path(path)))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The lock file of the lease at `path`.
+fn lock_path(path: &Path) -> PathBuf {
+    path.with_extension("lock")
+}
+
+/// The lock file of the lease at `path`, opened (and made if missing).
+fn lock(path: &Path) -> Result<File> {
+    let lock = lock_path(path);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock)
+        .with_context(|| format!("Cannot open {}", escape_path(&lock)))
 }
 
 /// The lease file for `set` in the repository whose git directory is
@@ -135,50 +165,44 @@ pub fn take(git_dir: &Path, lease: &Lease) -> Result<Held> {
     let dir = git_dir.join(LEASE_DIR);
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Cannot create {}", escape_path(&dir)))?;
-    loop {
-        match File::create_new(&path) {
-            Ok(file) => {
-                file.try_lock()
-                    .with_context(|| format!("Cannot lock {}", escape_path(&path)))?;
-                held().push(path.clone());
-                let held = Held { path, _file: file };
-                let json = serde_json::to_string_pretty(lease)?;
-                std::io::Write::write_all(&mut &held._file, json.as_bytes())
-                    .with_context(|| format!("Cannot write {}", escape_path(&held.path)))?;
-                return Ok(held);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let found = read(path.clone());
-                if found.live {
-                    anyhow::bail!(
-                        "Worktree set {} is being created by {}",
-                        escape_path(&lease.set),
-                        found.holder()
-                    );
-                }
-                if lease.set.symlink_metadata().is_ok() {
-                    anyhow::bail!(
-                        "Worktree set {} was left half-made by {}, which is gone; remove it \
-                         with 'meta git worktree remove'",
-                        escape_path(&lease.set),
-                        found.holder()
-                    );
-                }
-                // left by a creator that is gone, of a set that is gone
-                found.delete()?;
-            }
-            Err(e) => {
-                return Err(e).with_context(|| format!("Cannot create {}", escape_path(&path)))
-            }
-        }
+    let lock = lock(&path)?;
+    if lock.try_lock().is_err() {
+        anyhow::bail!(
+            "Worktree set {} is {}",
+            escape_path(&lease.set),
+            read(path).doing()
+        );
     }
+    if path.symlink_metadata().is_ok() {
+        // left by a creator that is gone
+        if lease.set.symlink_metadata().is_ok() {
+            anyhow::bail!(
+                "Worktree set {} was left half-made by {}, which is gone; remove it with \
+                 'meta git worktree remove'",
+                escape_path(&lease.set),
+                read(path).holder()
+            );
+        }
+        remove(&path)?;
+    }
+    // Written whole, then put in place: a reader sees all of it or none
+    let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    let written = serde_json::to_vec_pretty(lease)
+        .map_err(std::io::Error::other)
+        .and_then(|json| std::fs::write(&tmp, json))
+        .and_then(|()| std::fs::rename(&tmp, &path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written.with_context(|| format!("Cannot write {}", escape_path(&path)))?;
+    held().push(path.clone());
+    Ok(Held { path, _lock: lock })
 }
 
-/// The lease at `path`, read after its lock is tested: a creator writes it
-/// only once it holds the lock.
+/// The lease at `path`: whether its lock is held, and what it says.
 fn read(path: PathBuf) -> Found {
-    let live = match File::open(&path) {
-        Ok(file) => !matches!(file.try_lock(), Ok(())),
+    let live = match File::open(lock_path(&path)) {
+        Ok(file) => file.try_lock().is_err(),
         Err(e) => e.kind() != std::io::ErrorKind::NotFound,
     };
     let lease = std::fs::read(&path)

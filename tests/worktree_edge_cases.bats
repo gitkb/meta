@@ -2279,19 +2279,23 @@ wait_for() {
     [ ! -e .worktrees/eph-stopped ]
 }
 
-@test "prune leaves a running ephemeral set alone" {
+@test "prune and remove leave a running ephemeral set alone" {
     "$META_BIN" git worktree exec --ephemeral eph-running --repo backend -- \
         sh -c 'touch "$0/started"; while [ ! -e "$0/release" ] && [ -d "$0" ]; do sleep 0.05; done' "$TEST_DIR" &
     local pid=$!
     wait_for "$TEST_DIR/started"
     run "$META_BIN" git worktree prune
-    local pruned=$status
+    local pruned=$status pruned_output=$output
+    run "$META_BIN" git worktree remove eph-running --force
+    local removed=$status removed_output=$output
     [ -d .worktrees/eph-running/backend ]
     kill -0 "$pid"
     touch "$TEST_DIR/release"
     wait "$pid"
     [ "$pruned" -eq 0 ]
-    [[ "$output" != *"eph-running"* ]]
+    [[ "$pruned_output" != *"eph-running"* ]]
+    [ "$removed" -ne 0 ]
+    [[ "$removed_output" == *"in use by the ephemeral run of pid"* ]]
     [ ! -e .worktrees/eph-running ]
 }
 
@@ -2376,4 +2380,17 @@ J
     run "$META_BIN" git worktree remove bhalf
     [ "$status" -eq 0 ]
     [ ! -e "$META_WORKTREES/bhalf" ]
+}
+
+@test "prune leaves the sets of a worktrees folder that is gone for now" {
+    "$META_BIN" git worktree create away --repo backend --no-deps
+    echo staged > .worktrees/away/backend/new.txt
+    git -C .worktrees/away/backend add new.txt
+    mv .worktrees "$BATS_TEST_TMPDIR/unmounted"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"away"* ]]
+    mv "$BATS_TEST_TMPDIR/unmounted" .worktrees
+    git -C .worktrees/away/backend diff --cached --quiet && false
+    [ "$(git -C backend worktree list | wc -l)" -eq 2 ]
 }

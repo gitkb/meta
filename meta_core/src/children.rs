@@ -26,9 +26,20 @@ use std::io;
 use std::process::{Child, Command, ExitStatus, Output};
 
 /// A child started through [`spawn`]. Wait for it through [`Owned::wait`]
-/// or [`Owned::wait_with_output`].
+/// or [`Owned::wait_with_output`]. One dropped unwaited for is let go: a
+/// stop no longer waits for it (its process group still gets the signal).
 pub struct Owned {
     child: Child,
+    /// Off the list: waited for (its pid may now be another child's)
+    waited: bool,
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        if !self.waited {
+            imp::let_go(&self.child);
+        }
+    }
 }
 
 impl std::ops::Deref for Owned {
@@ -47,7 +58,10 @@ impl std::ops::DerefMut for Owned {
 /// Start `command` as a child this program owns. Fails with
 /// [`io::ErrorKind::Interrupted`] once the program is stopping.
 pub fn spawn(command: &mut Command) -> io::Result<Owned> {
-    imp::spawn(command).map(|child| Owned { child })
+    imp::spawn(command).map(|child| Owned {
+        child,
+        waited: false,
+    })
 }
 
 /// Run `command` to completion, as [`Command::status`] does.
@@ -66,7 +80,10 @@ pub fn output(command: &mut Command) -> io::Result<Output> {
 impl Owned {
     /// Wait for the child to exit.
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
-        imp::exited(&self.child);
+        if !self.waited {
+            imp::exited(&self.child);
+            self.waited = true;
+        }
         self.child.wait()
     }
 
@@ -190,6 +207,13 @@ mod imp {
             children.groups.push(pid);
         }
         Ok(child)
+    }
+
+    /// Take `child` off the list of running children, if it is still there.
+    pub(super) fn let_go(child: &Child) {
+        let pid = Pid::from_child(child);
+        lock().running.retain(|(running, _)| *running != pid);
+        registry().changed.notify_all();
     }
 
     /// Wait until `child` has exited, without reaping it, then take it off
@@ -338,6 +362,8 @@ mod imp {
     }
 
     pub(super) fn exited(_child: &Child) {}
+
+    pub(super) fn let_go(_child: &Child) {}
 
     pub(super) fn own() -> io::Result<()> {
         Ok(())

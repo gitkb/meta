@@ -2281,13 +2281,18 @@ wait_for() {
 
 @test "prune leaves a running ephemeral set alone" {
     "$META_BIN" git worktree exec --ephemeral eph-running --repo backend -- \
-        sh -c 'touch "$0/started"; sleep 3' "$TEST_DIR" &
+        sh -c 'touch "$0/started"; while [ ! -e "$0/release" ] && [ -d "$0" ]; do sleep 0.05; done' "$TEST_DIR" &
     local pid=$!
     wait_for "$TEST_DIR/started"
     run "$META_BIN" git worktree prune
+    local pruned=$status
+    [ -d .worktrees/eph-running/backend ]
+    kill -0 "$pid"
+    touch "$TEST_DIR/release"
     wait "$pid"
-    [ "$status" -eq 0 ]
+    [ "$pruned" -eq 0 ]
     [[ "$output" != *"eph-running"* ]]
+    [ ! -e .worktrees/eph-running ]
 }
 
 @test "a set deleted by hand can be made again after prune" {
@@ -2327,4 +2332,48 @@ J
     run env META_WORKTREES="$TEST_DIR/cache[1]/sets" "$META_BIN" git worktree create pattern --repo backend --no-deps
     [ "$status" -eq 0 ]
     git -C "$TEST_DIR" check-ignore -q 'cache[1]/sets/pattern/backend'
+}
+
+@test "prune keeps git's entry for a deleted worktree with a rebase under way" {
+    "$META_BIN" git worktree create rb --repo backend --no-deps
+    local wt="$TEST_DIR/.worktrees/rb/backend"
+    echo ours > "$wt/README.md"
+    git -C "$wt" commit --quiet -am ours
+    echo theirs > backend/README.md
+    git -C backend commit --quiet -am theirs
+    run git -C "$wt" rebase main
+    [ "$status" -ne 0 ]
+    [ -d "$(git -C "$wt" rev-parse --absolute-git-dir)/rebase-merge" ]
+    rm -rf .worktrees/rb
+
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rebase is under way"* ]]
+    [ "$(git -C backend worktree list | wc -l)" -eq 2 ]
+}
+
+@test "remove leaves another workspace's half-made set, made from a repository both share" {
+    # B: the root checked out again by hand, so A and B share its repository
+    B="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/B"
+    git -C "$TEST_DIR" worktree add --quiet -b bws "$B"
+    mkdir -p "$B/.meta/plugins"
+    cp "$META_GIT_BIN" "$B/.meta/plugins/meta-git"
+    export META_WORKTREES="$BATS_TEST_TMPDIR/shared"
+    slow_checkout_hook 30
+    (cd "$B" && exec "$META_BIN" git worktree create bhalf --repo . --no-deps) &
+    local pid=$!
+    wait_for "$TEST_DIR/hook-started"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    git config --global --unset core.hooksPath
+    [ -d "$META_WORKTREES/bhalf" ]
+
+    run "$META_BIN" git worktree remove bhalf --force
+    [ "$status" -ne 0 ]
+    [ -d "$META_WORKTREES/bhalf" ]
+
+    cd "$B"
+    run "$META_BIN" git worktree remove bhalf
+    [ "$status" -eq 0 ]
+    [ ! -e "$META_WORKTREES/bhalf" ]
 }

@@ -600,6 +600,13 @@ fn operation_in_progress(repo: &Path) -> Result<Option<&'static str>> {
         escape(String::from_utf8_lossy(&output.stderr).trim())
     );
     let git_dir = repo.join(String::from_utf8_lossy(&output.stdout).trim_end_matches(['\n', '\r']));
+    Ok(operation_at(&git_dir))
+}
+
+/// The git operation (rebase, merge, ...) under way in the checkout whose
+/// own git directory is `git_dir`, if any: its saved state (an autostash,
+/// say) is there.
+pub fn operation_at(git_dir: &Path) -> Option<&'static str> {
     let markers = [
         ("rebase-merge", "rebase"),
         ("rebase-apply", "rebase or am"),
@@ -609,10 +616,10 @@ fn operation_in_progress(repo: &Path) -> Result<Option<&'static str>> {
         ("sequencer", "cherry-pick or revert"),
         ("BISECT_START", "bisect"),
     ];
-    Ok(markers
+    markers
         .into_iter()
         .find(|(marker, _)| git_dir.join(marker).symlink_metadata().is_ok())
-        .map(|(_, name)| name))
+        .map(|(_, name)| name)
 }
 
 pub(super) fn relative_label(root: &Path, path: &Path) -> String {

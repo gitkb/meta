@@ -11,7 +11,7 @@ use meta_git_lib::worktree::helpers::{resolve_worktree_root, Configs};
 use meta_git_lib::worktree::hooks::fire_post_prune;
 use meta_git_lib::worktree::lease;
 use meta_git_lib::worktree::record::{self, SetRecord};
-use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
+use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set, operation_at};
 use meta_git_lib::worktree::types::*;
 use meta_git_lib::worktree::workspace::Workspace;
 
@@ -476,9 +476,9 @@ fn forget(set: &Path, sets: &Records) -> Result<Option<String>> {
 /// `admin`, if its checkout is still gone and it still holds the record
 /// prune read: git removes that one registration, and the record with it,
 /// so the name and branch can be used again. Nothing else in the repository
-/// is pruned. Left registered, and why: a locked one (on a drive that
-/// isn't mounted, say), and one whose detached HEAD is a commit no branch or
-/// tag holds.
+/// is pruned. Left registered, and why: one with a git operation under way,
+/// a locked one (on a drive that isn't mounted, say), and one whose
+/// detached HEAD is a commit no branch or tag holds.
 fn drop_registration(admin: &Path, record: &SetRecord) -> Result<Option<String>> {
     if !record::checkout_gone(admin) || record::read(admin)?.as_ref() != Some(record) {
         return Ok(None);
@@ -489,6 +489,13 @@ fn drop_registration(admin: &Path, record: &SetRecord) -> Result<Option<String>>
     ) else {
         anyhow::bail!("Cannot read git's entry {}", escape_path(admin));
     };
+    if let Some(operation) = operation_at(admin) {
+        return Ok(Some(format!(
+            "{}: a {operation} is under way there, and git keeps its state (an autostash, say) \
+             with the entry",
+            escape_path(&checkout)
+        )));
+    }
     if admin.join("locked").symlink_metadata().is_ok() {
         return Ok(Some(format!(
             "git has {} locked (on a drive that isn't mounted?)",

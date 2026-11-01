@@ -48,6 +48,16 @@ pub(crate) fn handle_remove(
              to finish, or stop it first.",
             found.holder()
         ),
+        // another workspace's, made from a repository both share: no
+        // authority here
+        Some(found)
+            if !found
+                .lease
+                .as_ref()
+                .is_some_and(|lease| workspace.made_here(&lease.project)) =>
+        {
+            None
+        }
         found => found,
     };
 

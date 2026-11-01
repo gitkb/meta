@@ -10,9 +10,11 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Started, then two seconds later (unless stopped) appends to `late`.
-const SLOW: &str =
-    r#"(sleep 2; echo "$PWD" >> "$ROOT/late") & echo "$PWD" >> "$ROOT/started"; wait"#;
+/// Starts a waiter of its own, says so with the waiter's pid, then waits for
+/// it. The waiter, once `$ROOT/release` exists, appends to `late` (and ends
+/// when `$ROOT` is gone, as after a failed test).
+const SLOW: &str = r#"(while [ ! -e "$ROOT/release" ] && [ -d "$ROOT" ]; do sleep 0.05; done; echo "$PWD" >> "$ROOT/late") &
+echo "$!" >> "$ROOT/started"; wait"#;
 
 /// A workspace with repos `a` and `b`, and a plugin `meta-slow` on PATH
 /// whose command runs [`SLOW`] once.
@@ -88,17 +90,53 @@ fn started(root: &Path, count: usize) {
     }
 }
 
-/// TERM meta, then check it ended by that signal and nothing it started
-/// writes afterwards.
+/// Whether `pid` has ended (gone, or a zombie no one has reaped yet).
+fn ended(pid: &str) -> bool {
+    let out = Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .unwrap();
+    let stat = String::from_utf8_lossy(&out.stdout);
+    stat.trim().is_empty() || stat.trim_start().starts_with('Z')
+}
+
+/// Wait for `meta` to exit, at most `limit`.
+fn exited(meta: &mut Child, limit: Duration) -> std::process::ExitStatus {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = meta.try_wait().unwrap() {
+            return status;
+        }
+        assert!(Instant::now() < deadline, "meta didn't exit");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// TERM meta, then check it ended by that signal, the waiters its commands
+/// started are gone, and nothing writes once they are released.
 fn terminate(root: &Path, mut meta: Child) {
     rustix::process::kill_process(
         rustix::process::Pid::from_child(&meta),
         rustix::process::Signal::TERM,
     )
     .unwrap();
-    let status = meta.wait().unwrap();
+    let status = exited(&mut meta, Duration::from_secs(10));
     assert_eq!(status.signal(), Some(15), "{status:?}");
-    std::thread::sleep(Duration::from_secs(3));
+    let waiters = fs::read_to_string(root.join("started")).unwrap();
+    for pid in waiters.lines() {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ended(pid) {
+            let late = Instant::now() >= deadline;
+            if late {
+                // let it end before failing
+                fs::write(root.join("release"), "").unwrap();
+            }
+            assert!(!late, "{pid}, started by meta's command, still runs");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    fs::write(root.join("release"), "").unwrap();
+    std::thread::sleep(Duration::from_millis(300));
     assert_eq!(
         fs::read_to_string(root.join("late")).unwrap_or_default(),
         "",
@@ -135,7 +173,8 @@ fn a_hangup_meta_was_started_ignoring_stops_nothing() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     workspace(&root);
-    let quick = r#"echo "$PWD" >> "$ROOT/started"; sleep 1; echo "$PWD" >> "$ROOT/late""#;
+    let quick = r#"echo "$PWD" >> "$ROOT/started"
+while [ ! -e "$ROOT/release" ] && [ -d "$ROOT" ]; do sleep 0.05; done; echo "$PWD" >> "$ROOT/late""#;
     let mut meta = start(
         &root,
         "sh",
@@ -156,7 +195,10 @@ fn a_hangup_meta_was_started_ignoring_stops_nothing() {
         rustix::process::Signal::HUP,
     )
     .unwrap();
-    let status = meta.wait().unwrap();
+    // the hangup has reached meta (or would have) before the commands go on
+    std::thread::sleep(Duration::from_millis(300));
+    fs::write(root.join("release"), "").unwrap();
+    let status = exited(&mut meta, Duration::from_secs(20));
     assert!(status.success(), "{status:?}");
     let late = fs::read_to_string(root.join("late")).unwrap();
     assert_eq!(late.lines().count(), 3, "{late}");

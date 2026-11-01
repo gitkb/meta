@@ -47,7 +47,15 @@ pub struct Held {
 impl Drop for Held {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+        held().retain(|path| *path != self.path);
     }
+}
+
+/// The leases this process holds. A process id doesn't say: another machine,
+/// or another pid namespace, can have the same one.
+fn held() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
+    static HELD: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+    HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// A lease found on disk.
@@ -64,9 +72,7 @@ pub struct Found {
 impl Found {
     /// Whether this process holds it.
     pub fn is_mine(&self) -> bool {
-        self.lease
-            .as_ref()
-            .is_some_and(|lease| lease.pid == std::process::id())
+        held().contains(&self.path)
     }
 
     /// Who holds it, for messages.
@@ -134,6 +140,7 @@ pub fn take(git_dir: &Path, lease: &Lease) -> Result<Held> {
             Ok(file) => {
                 file.try_lock()
                     .with_context(|| format!("Cannot lock {}", escape_path(&path)))?;
+                held().push(path.clone());
                 let held = Held { path, _file: file };
                 let json = serde_json::to_string_pretty(lease)?;
                 std::io::Write::write_all(&mut &held._file, json.as_bytes())
@@ -245,7 +252,8 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, serde_json::to_string(&lease(&set)).unwrap()).unwrap();
         let found = find(std::slice::from_ref(&git_dir), &set).unwrap();
-        assert!(!found.live);
+        // it names this process, which doesn't hold it: a pid says nothing
+        assert!(!found.live && !found.is_mine());
         let refused = take(&git_dir, &lease(&set)).unwrap_err().to_string();
         assert!(refused.contains("left half-made"), "{refused}");
         // once the set is gone, a new creator takes it over

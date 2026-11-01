@@ -20,12 +20,12 @@ setup() {
     esac
     ASSET="meta-${os}-${arch}.tar.gz"
 
-    for binary in meta meta-git meta-project meta-rust meta-mcp loop; do
+    for binary in meta meta-git meta-project meta-cargo meta-mcp loop; do
         printf '#!/bin/sh\necho %s 1.0.0\n' "$binary" > "$TEST_DIR/archive/$binary"
         printf 'fake %s\n' "$binary" > "$TEST_DIR/archive/$binary.exe"
     done
     tar -czf "$RELEASES/latest/download/$ASSET" -C "$TEST_DIR/archive" \
-        meta meta-git meta-project meta-rust meta-mcp loop
+        meta meta-git meta-project meta-cargo meta-mcp loop
     (cd "$RELEASES/latest/download" && sha256 "$ASSET" > "$ASSET.sha256")
 
     # Windows checksums are certutil output, CRLF line endings included

@@ -208,7 +208,7 @@ This opens the editor git uses (`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`)
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
 3. Executables named `meta-*` on PATH.
 
-The first plugin found with a given name wins. A plugins folder meta can't read, and a plugin that doesn't answer `--meta-plugin-info` within 5 seconds, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
+A plugin named `meta-<word>` serves `meta <word> ...`, and the first file found with that name wins. For a command meta starts only that file; if it doesn't answer `--meta-plugin-info` within 5 seconds, the command fails naming it. `meta --help` and `meta plugin list` start every plugin; there a plugins folder meta can't read, and a plugin that doesn't answer, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
 
 ```bash
 # Example: install by hand for every workspace

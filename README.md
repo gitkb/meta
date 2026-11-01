@@ -165,7 +165,7 @@ git clone https://github.com/gitkb/meta && cd meta
 make install
 ```
 
-This installs `meta`, the `meta-git`, `meta-project` and `meta-rust`
+This installs `meta`, the `meta-git`, `meta-project` and `meta-cargo`
 plugins, `meta-mcp` and `loop` into `~/.cargo/bin` (the crates in the
 Makefile's `BIN_CRATES`, the binaries a release ships), replacing any
 copies already there. To update, `git pull` and run `make install` again.
@@ -380,7 +380,7 @@ Plugins are standalone executables that extend meta. They're discovered automati
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
 3. Executables named `meta-*` on PATH.
 
-The first plugin found with a given name wins. A plugins folder meta can't read, and a plugin that doesn't answer `--meta-plugin-info` within 5 seconds, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
+A plugin named `meta-<word>` serves `meta <word> ...`, and the first file found with that name wins. For a command meta starts only that file; if it doesn't answer `--meta-plugin-info` within 5 seconds, the command fails naming it. `meta --help` and `meta plugin list` start every plugin; there a plugins folder meta can't read, and a plugin that doesn't answer, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
 
 ### Built-in Plugins
 
@@ -388,7 +388,7 @@ The first plugin found with a given name wins. A plugins folder meta can't read,
 |--------|-------------|
 | `git` | Clone, status, update, commit, SSH multiplexing |
 | `project` | Project health checks and sync |
-| `rust` | `meta cargo <cargo args>`: any cargo command in each repo that has a `Cargo.toml` |
+| `cargo` | `meta cargo <cargo args>`: any cargo command in each repo that has a `Cargo.toml` |
 
 ### Writing Plugins
 

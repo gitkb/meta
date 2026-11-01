@@ -1,4 +1,4 @@
-//! meta-rust library
+//! meta-cargo library
 //!
 //! Runs any cargo command across the Rust repos of a meta workspace.
 
@@ -35,7 +35,7 @@ pub fn execute_command(
     if !options.silent && !other_dirs.is_empty() {
         // meta_cli sends only the selected repos, so name them from the cwd
         let names: Vec<String> = other_dirs.iter().map(|dir| display(dir, cwd)).collect();
-        eprintln!("meta-rust: skipping {} (no Cargo.toml)", names.join(", "));
+        eprintln!("meta-cargo: skipping {} (no Cargo.toml)", names.join(", "));
     }
 
     if rust_dirs.is_empty() {

@@ -113,7 +113,7 @@ install_meta() {
 
     # Install binaries
     info "Installing to ${INSTALL_DIR}..."
-    local expected_binaries=("meta" "meta-git" "meta-project" "meta-rust" "meta-mcp" "loop")
+    local expected_binaries=("meta" "meta-git" "meta-project" "meta-cargo" "meta-mcp" "loop")
     for binary_name in "${expected_binaries[@]}"; do
         local binary="$tmp_dir/$binary_name"
         if [ -f "$binary" ]; then

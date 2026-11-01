@@ -9,10 +9,12 @@ Meta uses a plugin system to intercept commands and provide enhanced behavior.
 
 ## How Plugins Work
 
-When you run `meta <command>`, meta checks if a plugin handles that command pattern:
+A plugin is an executable named `meta-<word>`, and it serves `meta <word>`.
+When you run `meta <word> ...`, meta looks for a file with that name and
+starts only it:
 
-1. **Plugin matches** → Plugin executes with special logic
-2. **No plugin** → Shows help (use `meta exec` for arbitrary commands)
+1. **`meta-<word>` found** → that plugin executes with special logic
+2. **None** → unrecognized command (use `meta exec` for arbitrary commands)
 
 Example:
 - `meta git status` → git plugin runs `git status` in every repo at this meta level (`--recursive` for nested ones)
@@ -42,7 +44,7 @@ meta project check     # Verify all repos exist
 meta project dependents <name>  # Projects that depend on one
 ```
 
-### Rust Plugin (`meta-rust`)
+### Cargo Plugin (`meta-cargo`)
 
 Runs any cargo command in each selected repo that has a `Cargo.toml`, skipping the rest (listed on stderr). `meta exec -- cargo ...` runs cargo in every repo instead.
 
@@ -64,9 +66,11 @@ Plugins are discovered from:
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install` installs
 3. Executables named `meta-*` in PATH
 
-The first plugin found with a given name wins. A plugins folder meta can't read,
-and a plugin that doesn't answer `--meta-plugin-info` within 5 seconds, are
-skipped with a warning naming them.
+The first file found with a given name wins. `meta <word>` fails naming its
+plugin if that plugin doesn't answer `--meta-plugin-info` within 5 seconds.
+`meta --help` and `meta plugin list` start every plugin; there a plugins folder
+meta can't read, and a plugin that doesn't answer, are skipped with a warning
+naming them.
 
 Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore`
 (`*`) so they stay out of git as untracked files.
@@ -98,7 +102,7 @@ meta plugin list --local
 ```
 meta git status
   │
-  ├─ Is there a 'git' plugin? Yes (meta-git)
+  ├─ Is there a file named meta-git? Yes
   │
   ├─ Plugin receives: command="git status", projects=[list]
   │

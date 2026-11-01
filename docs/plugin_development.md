@@ -74,14 +74,13 @@ Meta discovers plugins from these locations (in order):
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
 3. Executables named `meta-*` on PATH.
 
-The first plugin found with a given name wins. A plugins folder meta can't read, and a plugin that doesn't answer `--meta-plugin-info` within 5 seconds, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
+The first file found with a given name wins. For `meta <word> ...`, meta starts only the file `meta-<word>`; if it doesn't answer `--meta-plugin-info` within 5 seconds, the command fails naming it. `meta --help` and `meta plugin list` start every plugin; there a plugins folder meta can't read, and a plugin that doesn't answer, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
 
 ### Naming Convention
 
-Plugins must follow the naming pattern:
-- `meta-<name>` (e.g., `meta-docker`, `meta-npm`)
+A plugin is an executable named `meta-<word>` (on Windows, `meta-<word>.exe`; `.cmd` and `.bat` files aren't plugins), and it serves `meta <word> ...`: `meta-docker` serves `meta docker build`. The file name decides this, not the `name` or `commands` the plugin reports, so a plugin serving two top-level words ships two files.
 
-The commands a plugin handles are the ones its `--meta-plugin-info` lists, not its name: `meta-docker` listing `docker` handles `meta docker <subcommand>`, and `meta --help` shows the listed commands.
+The `commands` a plugin lists start with its word (`docker build`, `docker push`). For `meta docker build --tag x`, the longest listed command that matches the typed words whole is the request's `command` (`docker build`) and the rest are its `args` (`["--tag", "x"]`); with none matching, `command` is `docker` and every later word is an arg. A bare `meta docker` prints the plugin's help. A word meta has as a built-in command (`exec`, `plugin`, ...) never reaches a plugin.
 
 ## Plugin Protocol
 

@@ -28,7 +28,7 @@ meta/
 ├── meta_git_cli/          # Git plugin (binary: meta-git)
 ├── meta_git_lib/          # Git library utilities
 ├── meta_project_cli/      # Project management plugin (binary: meta-project)
-├── meta_rust_cli/         # Rust/Cargo plugin (binary: meta-rust)
+├── meta_rust_cli/         # Rust/Cargo plugin (binary: meta-cargo)
 ├── meta_mcp/              # MCP server for AI integration (binary: meta-mcp)
 ├── loop_cli/              # Standalone loop CLI (binary: loop)
 └── loop_lib/              # Core loop engine library
@@ -159,7 +159,7 @@ Plugins are discovered from:
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
 3. Executables named `meta-*` on PATH.
 
-The first plugin found with a given name wins. A plugins folder meta can't read, and a plugin that doesn't answer `--meta-plugin-info` within 5 seconds, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
+A plugin named `meta-<word>` serves `meta <word> ...`, and the first file found with that name wins. For a command meta starts only that file; if it doesn't answer `--meta-plugin-info` within 5 seconds, the command fails naming it. `meta --help` and `meta plugin list` start every plugin; there a plugins folder meta can't read, and a plugin that doesn't answer, are skipped with a warning naming them. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
 
 ### Protocol
 

@@ -8,7 +8,7 @@ publish = false
 description = "Rust plugin for meta CLI to run any cargo command across Rust repos"
 
 [[bin]]
-name = "meta-rust"
+name = "meta-cargo"
 path = "src/main.rs"
 
 [lib]

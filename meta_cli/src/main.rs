@@ -13,7 +13,7 @@ mod registry;
 mod subprocess_plugins;
 use meta_cli::{repo_filter, worktree};
 use meta_plugin_protocol::PluginRequestOptions;
-use subprocess_plugins::SubprocessPluginManager;
+use subprocess_plugins::{SubprocessPlugin, SubprocessPluginManager};
 
 // === CLI Structs ===
 
@@ -245,20 +245,28 @@ enum PluginCommands {
 
 // === Help Utilities ===
 
-/// Print help text with integrated plugin commands to stdout or stderr.
-/// Use `to_stderr: true` for error cases where help is shown due to an invalid command.
-fn print_help_with_plugins(plugins: &SubprocessPluginManager, to_stderr: bool) {
-    let mut output: Box<dyn Write> = if to_stderr {
-        Box::new(std::io::stderr())
-    } else {
-        Box::new(std::io::stdout())
-    };
-    let _ = write_help_with_plugin_commands(plugins, &mut output);
+/// Print help text with integrated plugin commands. Every plugin is started
+/// for its description and version.
+fn print_help_with_plugins(plugins: &SubprocessPluginManager) {
+    let rows = plugins
+        .all()
+        .into_iter()
+        .map(|plugin| {
+            let description = plugin
+                .info
+                .description
+                .unwrap_or_else(|| "No description available".to_string());
+            let source = format!("plugin: {} v{}", plugin.word, plugin.info.version);
+            (plugin.word, description, source)
+        })
+        .collect();
+    let _ = write_help_with_plugin_commands(rows, &mut std::io::stdout());
 }
 
 /// Write help text with plugin commands integrated into the command list.
+/// `plugins` are (word, description, source) rows.
 fn write_help_with_plugin_commands(
-    plugins: &SubprocessPluginManager,
+    plugins: Vec<(String, String, String)>,
     w: &mut dyn Write,
 ) -> std::io::Result<()> {
     let cmd = Cli::command();
@@ -289,25 +297,12 @@ fn write_help_with_plugin_commands(
         commands.push((name.to_string(), about, None));
     }
 
-    // Promoted plugin commands (top-level commands from plugins)
-    for (name, desc, plugin) in plugins.get_promoted_commands() {
-        commands.push((name, desc, Some(plugin)));
-    }
-
-    // Plugin namespaces must be claimed commands, not merely plugin names.
-    // These are invoked as `meta <plugin> <subcommand>`
-    // Mark them with plugin name and version suffix
-    for (name, version, description) in plugins.list_plugins() {
-        if !plugins.available_commands().iter().any(|(command, owner)| {
-            *owner == name && command.split_whitespace().next() == Some(name)
-        }) {
-            continue;
+    // Each plugin serves the word in its file name, unless a built-in
+    // command has that name
+    for (word, description, source) in plugins {
+        if cmd.find_subcommand(&word).is_none() {
+            commands.push((word, description, Some(source)));
         }
-        commands.push((
-            name.to_string(),
-            description.to_string(),
-            Some(format!("plugin: {name} v{version}")),
-        ));
     }
 
     // Sort alphabetically
@@ -549,13 +544,12 @@ fn run_cli() -> Result<()> {
     // Check for orphaned nested meta repo and warn the user
     check_and_warn_orphan();
 
-    // Discover plugins early to handle --help requests and plugin listing
-    let mut subprocess_plugins = SubprocessPluginManager::new();
-    subprocess_plugins.discover_plugins(cli.verbose)?;
+    // Where plugins are; nothing is started until a command needs one
+    let subprocess_plugins = SubprocessPluginManager::new(cli.verbose)?;
 
     // Handle --help flag at top level
     if cli.help && cli.command.is_none() {
-        print_help_with_plugins(&subprocess_plugins, false);
+        print_help_with_plugins(&subprocess_plugins);
         std::process::exit(0);
     }
 
@@ -563,11 +557,11 @@ fn run_cli() -> Result<()> {
     let command = cli.command.take();
     match command {
         None => {
-            print_help_with_plugins(&subprocess_plugins, false);
+            print_help_with_plugins(&subprocess_plugins);
             std::process::exit(0);
         }
         Some(Commands::Help) => {
-            print_help_with_plugins(&subprocess_plugins, false);
+            print_help_with_plugins(&subprocess_plugins);
             std::process::exit(0);
         }
         Some(Commands::Context(args)) => {
@@ -629,7 +623,7 @@ fn run_cli() -> Result<()> {
                 println!("  meta exec -- sh -c 'npm ci && npm test'");
                 std::process::exit(0);
             }
-            handle_command_dispatch(args.command, &cli, &subprocess_plugins, true)
+            handle_command_dispatch(args.command, &cli, None)
         }
         Some(Commands::External(args)) => {
             // clap doesn't capture global flags that appear after an external
@@ -638,52 +632,44 @@ fn run_cli() -> Result<()> {
             let mut args = args;
             extract_global_flags(&mut args, &mut cli);
 
-            // Keep root plugin help fast and plugin-aware, but let nested help
-            // requests reach the matched plugin command implementation.
-            if let Some(first) = args.first() {
-                // A --help after `--` is an argument for the command
-                let wants_help = args
-                    .iter()
-                    .take_while(|a| *a != "--")
-                    .any(|a| a == "--help" || a == "-h");
-                let is_bare = args.len() == 1;
-                let is_root_help = wants_help
-                    && args.len() == 2
-                    && matches!(args.get(1).map(String::as_str), Some("--help" | "-h"));
+            // Only the plugin serving this word is started
+            let plugin = match args.first() {
+                Some(word) => subprocess_plugins.find(word)?,
+                None => None,
+            };
+            let Some(plugin) = plugin else {
+                unrecognized_command_error(&args, &loop_lib::display_command(&args));
+            };
 
-                let promoted_commands: Vec<String> = subprocess_plugins
-                    .get_promoted_commands()
-                    .iter()
-                    .map(|(name, _, _)| name.clone())
-                    .collect();
-                let is_promoted = promoted_commands.contains(&first.to_string());
-
-                if is_root_help || (is_bare && !is_promoted) {
-                    if let Some(help_text) = subprocess_plugins.get_plugin_help(first) {
-                        subprocess_plugins::print_output(&format!("{help_text}\n"))?;
-                        return Ok(());
-                    }
-                }
-
-                if wants_help {
-                    let options = PluginRequestOptions {
-                        json_output: cli.json,
-                        verbose: cli.verbose,
-                        parallel: cli.parallel,
-                        dry_run: cli.dry_run,
-                        silent: cli.silent,
-                        recursive: cli.recursive,
-                        depth: cli.depth,
-                        include_filters: cli.include.clone(),
-                        exclude_filters: cli.exclude.clone(),
-                        strict: cli.strict,
-                    };
-                    if subprocess_plugins.execute(&args, &[], None, options)? {
-                        return Ok(());
-                    }
-                }
+            // A bare `meta <word>` and `meta <word> --help` print the
+            // plugin's help; nested help requests reach the plugin's command.
+            // A --help after `--` is an argument for the command
+            let wants_help = args
+                .iter()
+                .take_while(|a| *a != "--")
+                .any(|a| a == "--help" || a == "-h");
+            let is_root_help = wants_help
+                && args.len() == 2
+                && matches!(args.get(1).map(String::as_str), Some("--help" | "-h"));
+            if args.len() == 1 || is_root_help {
+                return subprocess_plugins::print_output(&format!("{}\n", plugin.help()));
             }
-            handle_command_dispatch(args, &cli, &subprocess_plugins, false)
+            if wants_help {
+                let options = PluginRequestOptions {
+                    json_output: cli.json,
+                    verbose: cli.verbose,
+                    parallel: cli.parallel,
+                    dry_run: cli.dry_run,
+                    silent: cli.silent,
+                    recursive: cli.recursive,
+                    depth: cli.depth,
+                    include_filters: cli.include.clone(),
+                    exclude_filters: cli.exclude.clone(),
+                    strict: cli.strict,
+                };
+                return plugin.execute(&args, &[], None, options);
+            }
+            handle_command_dispatch(args, &cli, Some(&plugin))
         }
     }
 }
@@ -692,24 +678,18 @@ fn run_cli() -> Result<()> {
 
 /// Run a command across the selected repos.
 ///
-/// `meta exec` (is_explicit_exec=true) runs the command as typed and never
-/// offers it to plugins, so a plugin's claimed command (e.g. meta-rust's
-/// `cargo`) cannot shadow a raw one. External subcommands
-/// (is_explicit_exec=false, e.g. `meta git status`) go to the plugin that owns
-/// them, or fail as unrecognized.
+/// `meta exec` (no plugin) runs the command as typed and never offers it to
+/// a plugin, so a plugin's word (e.g. meta-cargo's `cargo`) cannot shadow a
+/// raw command. Other commands (e.g. `meta git status`) go to the plugin
+/// serving their first word.
 fn handle_command_dispatch(
     command_args: Vec<String>,
     cli: &Cli,
-    plugins: &SubprocessPluginManager,
-    is_explicit_exec: bool,
+    plugin: Option<&SubprocessPlugin>,
 ) -> Result<()> {
     if command_args.is_empty() {
-        if is_explicit_exec {
-            // Show usage error (help is handled at the caller level via cli.help)
-            eprintln!("Usage: meta exec -- <command> [args...]");
-        } else {
-            print_help_with_plugins(plugins, true);
-        }
+        // Show usage error (help is handled at the caller level via cli.help)
+        eprintln!("Usage: meta exec -- <command> [args...]");
         std::process::exit(1);
     }
 
@@ -732,7 +712,7 @@ fn handle_command_dispatch(
     let is_git_clone = command_args.first().map(|s| s == "git").unwrap_or(false)
         && command_args.get(1).map(|s| s == "clone").unwrap_or(false);
 
-    if is_git_clone && !is_explicit_exec {
+    if let Some(plugin) = plugin.filter(|_| is_git_clone) {
         if cli.include.is_some() || cli.exclude.is_some() {
             anyhow::bail!("meta git clone clones every repo in the meta repo; it does not take --include/--exclude");
         }
@@ -750,16 +730,11 @@ fn handle_command_dispatch(
             strict: cli.strict,
         };
 
-        if plugins.execute(&command_args, &[], None, subprocess_options)? {
-            if cli.verbose {
-                println!("{}", "Git clone handled by subprocess plugin.".green());
-            }
-            return Ok(());
-        } else {
-            eprintln!("Error: No plugin available to handle 'git clone'");
-            eprintln!("Make sure meta-git plugin is installed.");
-            std::process::exit(1);
+        plugin.execute(&command_args, &[], None, subprocess_options)?;
+        if cli.verbose {
+            println!("{}", "Git clone handled by subprocess plugin.".green());
         }
+        return Ok(());
     }
 
     let current_dir = std::env::current_dir()?;
@@ -893,22 +868,22 @@ fn handle_command_dispatch(
                     strict: cli.strict,
                 };
 
-                if is_explicit_exec {
-                    run(&config, &command_args)?;
-                } else if plugins.execute(
-                    &command_args,
-                    &wt_directories,
-                    Some(&task_dir),
-                    subprocess_options,
-                )? {
-                    if cli.verbose {
-                        println!(
-                            "{}",
-                            "Command handled by subprocess plugin (worktree).".green()
-                        );
+                match plugin {
+                    None => run(&config, &command_args)?,
+                    Some(plugin) => {
+                        plugin.execute(
+                            &command_args,
+                            &wt_directories,
+                            Some(&task_dir),
+                            subprocess_options,
+                        )?;
+                        if cli.verbose {
+                            println!(
+                                "{}",
+                                "Command handled by subprocess plugin (worktree).".green()
+                            );
+                        }
                     }
-                } else {
-                    unrecognized_command_error(&command_args, &command_str, plugins);
                 }
                 return Ok(());
             }
@@ -1055,25 +1030,27 @@ fn handle_command_dispatch(
         strict: cli.strict,
     };
 
-    if is_explicit_exec {
-        // User explicitly requested exec, run the command in all repos
-        log::info!("Explicit exec requested, running command via loop");
-        if cli.verbose {
-            println!("{}", "Running command via loop (explicit exec).".green());
+    match plugin {
+        None => {
+            // User explicitly requested exec, run the command in all repos
+            log::info!("Explicit exec requested, running command via loop");
+            if cli.verbose {
+                println!("{}", "Running command via loop (explicit exec).".green());
+            }
+            run(&config, &command_args)?;
         }
-        run(&config, &command_args)?;
-    } else if plugins.execute(
-        &command_args,
-        &project_paths,
-        Some(meta_dir),
-        subprocess_options,
-    )? {
-        log::info!("Command was handled by subprocess plugin");
-        if cli.verbose {
-            println!("{}", "Command handled by subprocess plugin.".green());
+        Some(plugin) => {
+            plugin.execute(
+                &command_args,
+                &project_paths,
+                Some(meta_dir),
+                subprocess_options,
+            )?;
+            log::info!("Command was handled by subprocess plugin");
+            if cli.verbose {
+                println!("{}", "Command handled by subprocess plugin.".green());
+            }
         }
-    } else {
-        unrecognized_command_error(&command_args, &command_str, plugins);
     }
 
     Ok(())
@@ -1264,17 +1241,18 @@ fn handle_plugin_command(
                 }
             } else {
                 // Use discovered plugins from subprocess plugin manager
-                let plugins = subprocess_plugins.list_plugins_with_paths();
+                let plugins = subprocess_plugins.all();
 
                 if json {
                     let json_plugins: Vec<_> = plugins
                         .iter()
-                        .map(|(name, version, desc, path)| {
+                        .map(|plugin| {
                             serde_json::json!({
-                                "name": name,
-                                "version": version,
-                                "description": desc,
-                                "path": path.display().to_string()
+                                "name": plugin.word,
+                                "version": plugin.info.version,
+                                "description": plugin.info.description.as_deref()
+                                    .unwrap_or("No description available"),
+                                "path": plugin.path.display().to_string()
                             })
                         })
                         .collect();
@@ -1286,12 +1264,12 @@ fn handle_plugin_command(
                     println!();
                     println!("{:<12} {:<12} PATH", "NAME", "VERSION");
                     println!("{}", "-".repeat(70));
-                    for (name, version, _, path) in &plugins {
+                    for plugin in &plugins {
                         println!(
                             "{:<12} {:<12} {}",
-                            escape(name),
-                            escape(version),
-                            escape_path(path)
+                            escape(&plugin.word),
+                            escape(&plugin.info.version),
+                            escape_path(&plugin.path)
                         );
                     }
                 }
@@ -1495,11 +1473,7 @@ fn select_repos(
 }
 
 /// Print unrecognized command error with suggestion and help, then exit.
-fn unrecognized_command_error(
-    command_args: &[String],
-    command_str: &str,
-    plugins: &SubprocessPluginManager,
-) -> ! {
+fn unrecognized_command_error(command_args: &[String], command_str: &str) -> ! {
     let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
     eprintln!(
         "{}: unrecognized command '{}'",
@@ -1511,7 +1485,11 @@ fn unrecognized_command_error(
     eprintln!("To run '{command_str}' across all repos:");
     eprintln!("    meta exec -- {command_str}");
     eprintln!();
-    print_help_with_plugins(plugins, true);
+    // Listing the plugins' commands would start every plugin; a typo
+    // starts none
+    eprintln!("Plugins add more commands: meta --help lists them.");
+    eprintln!();
+    let _ = write_help_with_plugin_commands(Vec::new(), &mut std::io::stderr());
     std::process::exit(1);
 }
 

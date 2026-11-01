@@ -19,7 +19,7 @@ build-plugins:
 	mkdir -p .meta/plugins
 	cp target/release/meta-git .meta/plugins/meta-git
 	cp target/release/meta-project .meta/plugins/meta-project
-	cp target/release/meta-rust .meta/plugins/meta-rust
+	cp target/release/meta-cargo .meta/plugins/meta-cargo
 
 # Copy the agent skills from meta_cli (their source) into this repo's
 # .meta/skills/ (linked from .claude/skills/ and .agents/skills/) and the
@@ -53,7 +53,7 @@ install-plugins: build-plugins
 	mkdir -p ~/.meta/plugins
 	cp target/release/meta-git ~/.meta/plugins/meta-git
 	cp target/release/meta-project ~/.meta/plugins/meta-project
-	cp target/release/meta-rust ~/.meta/plugins/meta-rust
+	cp target/release/meta-cargo ~/.meta/plugins/meta-cargo
 
 # Install everything globally (meta binary + plugins to both cargo bin and ~/.meta/plugins/)
 install-all: install install-plugins
@@ -130,7 +130,7 @@ integration-test:
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) META_CLI_PATH=target/debug/meta CARGO_BIN_EXE_meta=target/debug/meta cargo nextest run --workspace
 
 uninstall: $(BIN_CRATES:%=uninstall-%)
-	rm -f ~/.meta/plugins/meta-git ~/.meta/plugins/meta-project ~/.meta/plugins/meta-rust
+	rm -f ~/.meta/plugins/meta-git ~/.meta/plugins/meta-project ~/.meta/plugins/meta-cargo
 
 # By package name (from the crate's [package] section), so it still matches
 # after a version bump since the install

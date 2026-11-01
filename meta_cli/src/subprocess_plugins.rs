@@ -5,7 +5,6 @@
 
 use anyhow::{Context, Result};
 use meta_core::display::{escape, escape_path};
-use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -60,9 +59,8 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<Option<PluginInfo>> {
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    return Err(e).with_context(|| {
-                        format!("Cannot wait for plugin {}; skipping", escape_path(path))
-                    })
+                    return Err(e)
+                        .with_context(|| format!("Cannot wait for plugin {}", escape_path(path)))
                 }
             }
         }
@@ -80,7 +78,7 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<Option<PluginInfo>> {
     let _ = child.kill();
     let _ = child.wait();
     anyhow::bail!(
-        "Plugin {} did not answer --meta-plugin-info within 5 seconds; skipping",
+        "Plugin {} did not answer --meta-plugin-info within 5 seconds",
         escape_path(path)
     )
 }
@@ -96,43 +94,39 @@ pub(crate) fn print_output(text: &str) -> Result<()> {
     Ok(())
 }
 
-/// A discovered subprocess plugin
+/// A plugin: the file `meta-<word>` that serves `meta <word>`, and what it
+/// answered to `--meta-plugin-info`
 #[derive(Debug, Clone)]
 pub struct SubprocessPlugin {
+    pub word: String,
     pub path: PathBuf,
     pub info: PluginInfo,
 }
 
-/// Manager for subprocess-based plugins
+/// Where plugins are found. A plugin serves the command word in its file
+/// name, so finding the one for a command runs nothing else.
+///
+/// Search order (first file with the name wins):
+/// 1. `.meta/plugins/` of each of the workspace's meta directories, from
+///    the nearest one up (`meta_core::config::workspace_meta_dirs`)
+/// 2. `meta_core::meta_dir()/plugins/` (global installed)
+/// 3. PATH (bundled/system plugins)
 pub struct SubprocessPluginManager {
-    plugins: HashMap<String, SubprocessPlugin>,
+    /// Plugin directories in search order, and whether one is a PATH
+    /// entry (those may hold anything, so reading one fails quietly)
+    dirs: Vec<(PathBuf, bool)>,
     verbose: bool,
 }
 
-impl Default for SubprocessPluginManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SubprocessPluginManager {
-    pub fn new() -> Self {
-        Self {
-            plugins: HashMap::new(),
-            verbose: false,
-        }
-    }
-
-    /// Discover and load all subprocess plugins
-    ///
-    /// Discovery order (first match wins):
-    /// 1. `.meta/plugins/` of each of the workspace's meta directories, from
-    ///    the nearest one up (`meta_core::config::workspace_meta_dirs`)
-    /// 2. `meta_core::meta_dir()/plugins/` (global installed)
-    /// 3. PATH (bundled/system plugins)
-    pub fn discover_plugins(&mut self, verbose: bool) -> Result<()> {
-        self.verbose = verbose;
+    pub fn new(verbose: bool) -> Result<Self> {
+        let mut dirs = Vec::new();
         let mut visited = std::collections::HashSet::new();
+        let mut add = |dir: PathBuf, on_path: bool| {
+            if visited.insert(resolved(&dir)) {
+                dirs.push((dir, on_path));
+            }
+        };
 
         // Project plugins: those of each meta directory from the nearest one
         // up to its workspace's root, nearest first, independently of --config
@@ -148,190 +142,179 @@ impl SubprocessPluginManager {
         });
         if let Some(nearest) = nearest {
             for dir in meta_core::config::workspace_meta_dirs(&nearest) {
-                let plugin_dir = dir.join(".meta/plugins");
-                if visited.insert(resolved(&plugin_dir)) {
-                    self.scan_directory(&plugin_dir)?;
-                }
+                add(dir.join(".meta/plugins"), false);
             }
         }
 
-        // Search in ~/.meta/plugins/ (global installed). No home just means
-        // no global plugins.
+        // ~/.meta/plugins/ (global installed). No home just means no global
+        // plugins.
         if let Ok(meta_dir) = meta_core::meta_dir() {
-            let global_plugins = meta_dir.join("plugins");
-            if visited.insert(resolved(&global_plugins)) {
-                self.scan_directory(&global_plugins)?;
-            }
+            add(meta_dir.join("plugins"), false);
         }
 
-        // Search in PATH for meta-* executables (bundled/system)
-        if let Ok(path_var) = std::env::var("PATH") {
-            for path_dir in std::env::split_paths(&path_var) {
-                if path_dir.exists() && visited.insert(resolved(&path_dir)) {
-                    self.scan_path_directory(&path_dir)?;
+        // meta-* executables on PATH (bundled/system)
+        if let Some(path_var) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path_var) {
+                if dir.exists() {
+                    add(dir, true);
                 }
             }
         }
 
-        Ok(())
+        Ok(Self { dirs, verbose })
     }
 
-    /// Scan a `.meta/plugins` directory for plugin executables
-    fn scan_directory(&mut self, dir: &Path) -> Result<()> {
-        if self.verbose {
-            println!("Scanning for subprocess plugins in: {}", escape_path(dir));
+    /// The plugin serving `meta <word>`: the first executable file named
+    /// `meta-<word>` in search order. Only that file is started, to ask for
+    /// its info; one that doesn't answer is an error naming it.
+    pub fn find(&self, word: &str) -> Result<Option<SubprocessPlugin>> {
+        let file_name = format!("meta-{word}{}", std::env::consts::EXE_SUFFIX);
+        // A word that isn't one file name names no plugin
+        if Path::new(&file_name).file_name() != Some(file_name.as_ref()) {
+            return Ok(None);
         }
-
-        let entries = match std::fs::read_dir(dir) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => {
-                eprintln!(
-                    "Warning: Cannot read plugins directory {}: {}; skipping",
-                    escape_path(dir),
-                    escape(&e.to_string())
-                );
-                return Ok(());
-            }
+        let Some(path) = self
+            .dirs
+            .iter()
+            .map(|(dir, _)| dir.join(&file_name))
+            .find(|path| is_executable(path))
+        else {
+            return Ok(None);
         };
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
+        let info = probe_plugin_info(&path)?.with_context(|| {
+            format!(
+                "Plugin {} did not answer --meta-plugin-info with its info",
+                escape_path(&path)
+            )
+        })?;
+        Ok(Some(self.loaded(word.to_string(), path, info)))
+    }
+
+    /// Every plugin, sorted by word. Each one is started to ask for its info;
+    /// one that doesn't answer is warned about and left out.
+    pub fn all(&self) -> Vec<SubprocessPlugin> {
+        self.files()
+            .into_iter()
+            .filter_map(|(word, path)| match probe_plugin_info(&path) {
+                Ok(Some(info)) => Some(self.loaded(word, path, info)),
+                Ok(None) => None,
+                Err(e) => {
+                    eprintln!("Warning: {e}; skipping");
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// The file serving each word (the first executable one in search
+    /// order, even one that turns out not to answer), sorted by word
+    fn files(&self) -> Vec<(String, PathBuf)> {
+        let mut files = std::collections::BTreeMap::new();
+        for (dir, on_path) in &self.dirs {
+            if self.verbose {
+                println!("Scanning for subprocess plugins in: {}", escape_path(dir));
+            }
+            let entries = match std::fs::read_dir(dir) {
+                Ok(entries) => entries,
+                Err(e) if *on_path || e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => {
                     eprintln!(
-                        "Warning: Cannot read plugins directory {}: {}; skipping entry",
+                        "Warning: Cannot read plugins directory {}: {}; skipping",
                         escape_path(dir),
                         escape(&e.to_string())
                     );
                     continue;
                 }
             };
-            let path = entry.path();
-
-            // Look for executables named meta-*
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with("meta-")
-                    && !name.ends_with(".dylib")
-                    && !name.ends_with(".so")
-                    && !name.ends_with(".dll")
-                    && is_executable(&path)
-                {
-                    self.try_load_plugin(&path)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Scan a PATH directory for meta-* executables
-    fn scan_path_directory(&mut self, dir: &Path) -> Result<()> {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with("meta-") && is_executable(&path) {
-                        self.try_load_plugin(&path)?;
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(_) if *on_path => continue,
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Cannot read plugins directory {}: {}; skipping entry",
+                            escape_path(dir),
+                            escape(&e.to_string())
+                        );
+                        continue;
                     }
+                };
+                let path = entry.path();
+                let Some(word) = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(plugin_word)
+                else {
+                    continue;
+                };
+                if is_executable(&path) {
+                    files.entry(word.to_string()).or_insert(path);
                 }
             }
         }
-        Ok(())
+        files.into_iter().collect()
     }
 
-    /// Try to load a plugin by querying its info
-    fn try_load_plugin(&mut self, path: &Path) -> Result<()> {
-        if !is_executable(path) {
-            return Ok(());
-        }
-
-        let info = match probe_plugin_info(path) {
-            Ok(Some(info)) => info,
-            Ok(None) => return Ok(()),
-            Err(e) => {
-                eprintln!("Warning: {e}");
-                return Ok(());
-            }
-        };
+    fn loaded(&self, word: String, path: PathBuf, info: PluginInfo) -> SubprocessPlugin {
         if self.verbose {
             println!(
                 "  Found plugin: {} v{} ({})",
-                escape(&info.name),
+                escape(&word),
                 escape(&info.version),
-                escape_path(path)
+                escape_path(&path)
             );
         }
-        // Don't override if already loaded (first one wins).
-        self.plugins
-            .entry(info.name.clone())
-            .or_insert_with(|| SubprocessPlugin {
-                path: path.to_path_buf(),
-                info,
-            });
-        Ok(())
+        SubprocessPlugin { word, path, info }
+    }
+}
+
+impl SubprocessPlugin {
+    /// Help for `meta <word>`, from the plugin's `--help` or else its info
+    pub fn help(&self) -> String {
+        let output = Command::new(&self.path)
+            .arg("--help")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+        match output {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).to_string()
+            }
+            _ => meta_plugin_protocol::help_text(&self.info),
+        }
     }
 
-    /// Find the plugin that owns a command, and how many leading args name it.
-    ///
-    /// `args` is the command as typed after `meta` (e.g. `["git", "status"]`).
-    /// The plugin whose claimed command is the longest whole-word prefix of
-    /// `args` gets it. Otherwise a plugin claiming commands under the first
-    /// word owns that namespace and gets that word as its command, with the
-    /// rest as args, and handles subcommands it does not implement itself
-    /// (e.g. meta-git runs raw git). Only claimed words are joined into the
-    /// request's command; what the user typed stays separate args.
-    fn route(&self, args: &[String]) -> Option<(&SubprocessPlugin, usize)> {
-        let first = args.first()?;
-        let claims = || {
-            self.plugins.values().flat_map(|plugin| {
-                plugin
-                    .info
-                    .commands
-                    .iter()
-                    .map(move |cmd| (plugin, cmd.split_whitespace().collect::<Vec<_>>()))
-            })
-        };
-        claims()
-            .filter(|(_, words)| {
+    /// How many leading args name the command: the longest command the
+    /// plugin claims that is a whole-word prefix of `args`, else the word
+    /// alone. Only claimed words are joined into the request's command; what
+    /// the user typed stays separate args.
+    fn command_len(&self, args: &[String]) -> usize {
+        self.info
+            .commands
+            .iter()
+            .map(|cmd| cmd.split_whitespace().collect::<Vec<_>>())
+            .filter(|words| {
                 !words.is_empty()
                     && words.len() <= args.len()
                     && words.iter().zip(args).all(|(word, arg)| word == arg)
             })
-            .map(|(plugin, words)| (plugin, words.len()))
-            .max_by_key(|(_, len)| *len)
-            .or_else(|| {
-                claims()
-                    .find(|(_, words)| words.first() == Some(&first.as_str()))
-                    .map(|(plugin, _)| (plugin, 1))
-            })
+            .map(|words| words.len())
+            .max()
+            .unwrap_or(1)
     }
 
-    /// Execute a command via the plugin that owns it; false if none does.
+    /// Run `args` (the command as typed after `meta`, starting with this
+    /// plugin's word) through the plugin.
     pub fn execute(
         &self,
         args: &[String],
         projects: &[String],
         root_dir: Option<&Path>,
         options: PluginRequestOptions,
-    ) -> Result<bool> {
-        match self.route(args) {
-            Some((plugin, len)) => {
-                self.execute_plugin(plugin, args, len, projects, root_dir, &options)
-            }
-            None => Ok(false),
-        }
-    }
-
-    /// Execute a specific plugin with the first `command_len` args as its command
-    fn execute_plugin(
-        &self,
-        plugin: &SubprocessPlugin,
-        args: &[String],
-        command_len: usize,
-        projects: &[String],
-        root_dir: Option<&Path>,
-        options: &PluginRequestOptions,
-    ) -> Result<bool> {
-        let (command, remaining_args) = args.split_at_checked(command_len).unwrap_or((args, &[]));
+    ) -> Result<()> {
+        let (command, remaining_args) = args
+            .split_at_checked(self.command_len(args))
+            .unwrap_or((args, &[]));
         let command = command.join(" ");
 
         let request = PluginRequest {
@@ -339,32 +322,32 @@ impl SubprocessPluginManager {
             args: remaining_args.to_vec(),
             projects: projects.to_vec(),
             cwd: std::env::current_dir()?,
-            options: options.clone(),
+            options,
         };
 
         // the protocol is JSON: a path that isn't UTF-8 can't be sent
         let request_json = serde_json::to_string(&request).with_context(|| {
             format!(
                 "Cannot send the request to plugin {} (is a path not UTF-8?)",
-                escape(&plugin.info.name)
+                escape_path(&self.path)
             )
         })?;
 
-        if self.verbose {
+        if request.options.verbose {
             println!(
                 "Executing plugin {} for command '{}'",
-                escape(&plugin.info.name),
+                escape(&self.word),
                 escape(&request.command)
             );
         }
 
-        let mut child = Command::new(&plugin.path)
+        let mut child = Command::new(&self.path)
             .arg("--meta-plugin-exec")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped()) // Capture stdout to parse response
             .stderr(Stdio::inherit()) // Let stderr pass through for error messages
             .spawn()
-            .with_context(|| format!("Failed to execute plugin {}", escape_path(&plugin.path)))?;
+            .with_context(|| format!("Failed to execute plugin {}", escape_path(&self.path)))?;
 
         // Send request to plugin's stdin. A plugin may answer without
         // reading it; then its output and exit status decide, not the pipe.
@@ -375,7 +358,7 @@ impl SubprocessPluginManager {
                 result => result.with_context(|| {
                     format!(
                         "Cannot send the request to plugin {}",
-                        escape_path(&plugin.path)
+                        escape_path(&self.path)
                     )
                 })?,
             }
@@ -396,13 +379,12 @@ impl SubprocessPluginManager {
 
         // If stdout is empty, plugin handled execution silently
         if stdout_str.trim().is_empty() {
-            return Ok(true);
+            return Ok(());
         }
 
         // If stdout doesn't look like JSON, print it (legacy plugin output)
         if !stdout_str.trim().starts_with('{') {
-            print_output(&stdout_str)?;
-            return Ok(true);
+            return print_output(&stdout_str);
         }
 
         // A plan meta cannot read must not pass for success: an older plugin
@@ -410,261 +392,145 @@ impl SubprocessPluginManager {
         let is_plan = serde_json::from_str::<serde_json::Value>(&stdout_str)
             .is_ok_and(|value| value.get("plan").is_some());
         match serde_json::from_str::<PlanResponse>(&stdout_str) {
-            Ok(response) => {
-                // Plugin returned an execution plan - execute it via loop_lib
-                self.execute_plan(&response.plan, root_dir, options)
-            }
+            // Plugin returned an execution plan - execute it via loop_lib
+            Ok(response) => execute_plan(&response.plan, root_dir, &request.options),
             Err(e) if is_plan => anyhow::bail!(
                 "plugin {} sent an execution plan this meta cannot read ({e}); \
                  upgrade the plugin to match this meta",
-                escape_path(&plugin.path)
+                escape_path(&self.path)
             ),
-            Err(_) => {
-                // Not a plan - print output as-is
-                print_output(&stdout_str)?;
-                Ok(true)
-            }
+            // Not a plan - print output as-is
+            Err(_) => print_output(&stdout_str),
         }
     }
+}
 
-    /// Execute an execution plan via loop_lib
-    fn execute_plan(
-        &self,
-        plan: &ExecutionPlan,
-        root_dir: Option<&Path>,
-        options: &PluginRequestOptions,
-    ) -> Result<bool> {
-        use loop_lib::{run_commands, DirCommand, LoopConfig};
+/// Execute an execution plan via loop_lib
+fn execute_plan(
+    plan: &ExecutionPlan,
+    root_dir: Option<&Path>,
+    options: &PluginRequestOptions,
+) -> Result<()> {
+    use loop_lib::{run_commands, DirCommand, LoopConfig};
 
-        // Phase 1: Run pre_commands sequentially (setup tasks like SSH ControlMaster)
-        if !plan.pre_commands.is_empty() {
-            if !options.silent {
-                use colored::Colorize;
-                eprintln!("{} Preparing connections...", "⟳".cyan());
-            }
+    // Phase 1: Run pre_commands sequentially (setup tasks like SSH ControlMaster)
+    if !plan.pre_commands.is_empty() {
+        if !options.silent {
+            use colored::Colorize;
+            eprintln!("{} Preparing connections...", "⟳".cyan());
+        }
 
-            let pre_config = LoopConfig {
-                directories: vec![],
-                ignore: vec![],
-                verbose: options.verbose,
-                silent: true, // Pre-commands run silently unless verbose
-                add_aliases_to_global_looprc: false,
-                parallel: false, // Sequential execution
-                dry_run: false,  // Pre-commands always run (setup is required)
-                json_output: false,
-                spawn_stagger_ms: 0,
-                env: None,
-                max_parallel: None, // Pre-commands are sequential
-                root_dir: None,     // Pre-commands don't need "." display
+        let pre_config = LoopConfig {
+            directories: vec![],
+            ignore: vec![],
+            verbose: options.verbose,
+            silent: true, // Pre-commands run silently unless verbose
+            add_aliases_to_global_looprc: false,
+            parallel: false, // Sequential execution
+            dry_run: false,  // Pre-commands always run (setup is required)
+            json_output: false,
+            spawn_stagger_ms: 0,
+            env: None,
+            max_parallel: None, // Pre-commands are sequential
+            root_dir: None,     // Pre-commands don't need "." display
+        };
+
+        for pre_cmd in &plan.pre_commands {
+            let cmd = DirCommand {
+                dir: pre_cmd.dir.clone(),
+                argv: pre_cmd.argv.clone(),
+                env: pre_cmd.env.clone(),
             };
-
-            for pre_cmd in &plan.pre_commands {
-                let cmd = DirCommand {
-                    dir: pre_cmd.dir.clone(),
-                    argv: pre_cmd.argv.clone(),
-                    env: pre_cmd.env.clone(),
-                };
-                // Ignore failures for pre_commands (e.g., SSH socket already exists)
-                // The main commands will fail if setup was actually needed
-                if let Err(e) = run_commands(&pre_config, &[cmd]) {
-                    if options.verbose {
-                        eprintln!("Pre-command failed (continuing): {e}");
-                    }
+            // Ignore failures for pre_commands (e.g., SSH socket already exists)
+            // The main commands will fail if setup was actually needed
+            if let Err(e) = run_commands(&pre_config, &[cmd]) {
+                if options.verbose {
+                    eprintln!("Pre-command failed (continuing): {e}");
                 }
             }
         }
-
-        // Phase 2: Run main commands (may be parallel)
-        if !plan.commands.is_empty() {
-            let commands: Vec<DirCommand> = plan
-                .commands
-                .iter()
-                .map(|c| DirCommand {
-                    dir: c.dir.clone(),
-                    argv: c.argv.clone(),
-                    env: c.env.clone(),
-                })
-                .collect();
-
-            // Repos are named by their path from the root (shown as "."). Without
-            // projects from meta_cli the plugin lists the root first.
-            let root_dir = root_dir
-                .map(Path::to_path_buf)
-                .or_else(|| commands.first().map(|c| PathBuf::from(&c.dir)));
-
-            let config = LoopConfig {
-                directories: vec![],
-                ignore: vec![],
-                verbose: options.verbose,
-                silent: options.silent,
-                add_aliases_to_global_looprc: false,
-                parallel: plan.parallel.unwrap_or(options.parallel),
-                dry_run: options.dry_run,
-                json_output: options.json_output,
-                spawn_stagger_ms: plan.spawn_stagger_ms.unwrap_or(0),
-                env: None,
-                max_parallel: plan.max_parallel,
-                root_dir,
-            };
-
-            run_commands(&config, &commands)?;
-        }
-
-        // Phase 3: Run post_commands sequentially (cleanup tasks)
-        if !plan.post_commands.is_empty() {
-            let post_config = LoopConfig {
-                directories: vec![],
-                ignore: vec![],
-                verbose: options.verbose,
-                silent: true,
-                add_aliases_to_global_looprc: false,
-                parallel: false,
-                dry_run: false,
-                json_output: false,
-                spawn_stagger_ms: 0,
-                env: None,
-                max_parallel: None, // Post-commands are sequential
-                root_dir: None,     // Post-commands don't need "." display
-            };
-
-            for post_cmd in &plan.post_commands {
-                let cmd = DirCommand {
-                    dir: post_cmd.dir.clone(),
-                    argv: post_cmd.argv.clone(),
-                    env: post_cmd.env.clone(),
-                };
-                if let Err(e) = run_commands(&post_config, &[cmd]) {
-                    if options.verbose {
-                        eprintln!("Post-command failed: {e}");
-                    }
-                }
-            }
-        }
-
-        Ok(true)
     }
 
-    /// Get list of all available commands from all plugins
-    pub fn available_commands(&self) -> Vec<(&str, &str)> {
-        let mut commands = Vec::new();
-        for plugin in self.plugins.values() {
-            for cmd in &plugin.info.commands {
-                commands.push((cmd.as_str(), plugin.info.name.as_str()));
-            }
-        }
-        commands
-    }
-
-    /// Get list of all plugins with their descriptions
-    pub fn list_plugins(&self) -> Vec<(&str, &str, &str)> {
-        let mut plugins: Vec<_> = self
-            .plugins
-            .values()
-            .map(|p| {
-                (
-                    p.info.name.as_str(),
-                    p.info.version.as_str(),
-                    p.info
-                        .description
-                        .as_deref()
-                        .unwrap_or("No description available"),
-                )
+    // Phase 2: Run main commands (may be parallel)
+    if !plan.commands.is_empty() {
+        let commands: Vec<DirCommand> = plan
+            .commands
+            .iter()
+            .map(|c| DirCommand {
+                dir: c.dir.clone(),
+                argv: c.argv.clone(),
+                env: c.env.clone(),
             })
             .collect();
-        plugins.sort_by(|a, b| a.0.cmp(b.0));
-        plugins
+
+        // Repos are named by their path from the root (shown as "."). Without
+        // projects from meta_cli the plugin lists the root first.
+        let root_dir = root_dir
+            .map(Path::to_path_buf)
+            .or_else(|| commands.first().map(|c| PathBuf::from(&c.dir)));
+
+        let config = LoopConfig {
+            directories: vec![],
+            ignore: vec![],
+            verbose: options.verbose,
+            silent: options.silent,
+            add_aliases_to_global_looprc: false,
+            parallel: plan.parallel.unwrap_or(options.parallel),
+            dry_run: options.dry_run,
+            json_output: options.json_output,
+            spawn_stagger_ms: plan.spawn_stagger_ms.unwrap_or(0),
+            env: None,
+            max_parallel: plan.max_parallel,
+            root_dir,
+        };
+
+        run_commands(&config, &commands)?;
     }
 
-    /// Get detailed list of plugins including path
-    pub fn list_plugins_with_paths(&self) -> Vec<(&str, &str, &str, &std::path::Path)> {
-        let mut plugins: Vec<_> = self
-            .plugins
-            .values()
-            .map(|p| {
-                (
-                    p.info.name.as_str(),
-                    p.info.version.as_str(),
-                    p.info
-                        .description
-                        .as_deref()
-                        .unwrap_or("No description available"),
-                    p.path.as_path(),
-                )
-            })
-            .collect();
-        plugins.sort_by(|a, b| a.0.cmp(b.0));
-        plugins
-    }
+    // Phase 3: Run post_commands sequentially (cleanup tasks)
+    if !plan.post_commands.is_empty() {
+        let post_config = LoopConfig {
+            directories: vec![],
+            ignore: vec![],
+            verbose: options.verbose,
+            silent: true,
+            add_aliases_to_global_looprc: false,
+            parallel: false,
+            dry_run: false,
+            json_output: false,
+            spawn_stagger_ms: 0,
+            env: None,
+            max_parallel: None, // Post-commands are sequential
+            root_dir: None,     // Post-commands don't need "." display
+        };
 
-    /// Returns all top-level (promoted) commands from plugins.
-    ///
-    /// A "promoted" command is one that doesn't start with the plugin's name,
-    /// making it available directly at the top level (e.g., `meta worktree`
-    /// instead of only `meta git worktree`).
-    ///
-    /// Returns Vec<(command_name, description, plugin_name)>
-    pub fn get_promoted_commands(&self) -> Vec<(String, String, String)> {
-        let mut promoted = Vec::new();
-
-        for plugin in self.plugins.values() {
-            let plugin_name = &plugin.info.name;
-            let descriptions = plugin
-                .info
-                .help
-                .as_ref()
-                .map(|h| &h.commands)
-                .cloned()
-                .unwrap_or_default();
-
-            for cmd in &plugin.info.commands {
-                let first_word = cmd.split_whitespace().next().unwrap_or("");
-                // Promoted if first word is NOT the plugin name AND is a root command (no spaces)
-                if first_word != plugin_name && !cmd.contains(' ') {
-                    let desc = descriptions
-                        .get(cmd)
-                        .cloned()
-                        .unwrap_or_else(|| format!("Provided by {} plugin", plugin_name));
-                    promoted.push((cmd.clone(), desc, plugin_name.clone()));
+        for post_cmd in &plan.post_commands {
+            let cmd = DirCommand {
+                dir: post_cmd.dir.clone(),
+                argv: post_cmd.argv.clone(),
+                env: post_cmd.env.clone(),
+            };
+            if let Err(e) = run_commands(&post_config, &[cmd]) {
+                if options.verbose {
+                    eprintln!("Post-command failed: {e}");
                 }
             }
         }
-
-        promoted.sort_by(|a, b| a.0.cmp(&b.0));
-        promoted
     }
 
-    /// Get help text for a specific plugin or command.
-    ///
-    /// First tries to find a plugin by name (e.g., "git" for `meta git --help`).
-    /// If not found, searches for a plugin that handles this command
-    /// (e.g., "worktree" is handled by the "git" plugin).
-    pub fn get_plugin_help(&self, plugin_or_cmd: &str) -> Option<String> {
-        // First, try direct plugin name lookup
-        let plugin = self.plugins.get(plugin_or_cmd).or_else(|| {
-            // If not found by name, find which plugin handles this command
-            self.plugins.values().find(|p| {
-                p.info.commands.iter().any(|cmd| {
-                    cmd == plugin_or_cmd || cmd.starts_with(&format!("{plugin_or_cmd} "))
-                })
-            })
-        })?;
+    Ok(())
+}
 
-        // Try to get help by executing plugin with --help
-        let output = Command::new(&plugin.path)
-            .arg("--help")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output();
-
-        if let Ok(output) = output {
-            if output.status.success() {
-                return Some(String::from_utf8_lossy(&output.stdout).to_string());
-            }
-        }
-
-        // Fall back to generating help from plugin info
-        Some(meta_plugin_protocol::help_text(&plugin.info))
-    }
+/// The command word a plugin file serves: `meta-<word>` without the
+/// platform's executable suffix. Libraries next to plugins serve none.
+fn plugin_word(file_name: &str) -> Option<&str> {
+    let word = file_name
+        .strip_prefix("meta-")?
+        .strip_suffix(std::env::consts::EXE_SUFFIX)?;
+    let library = [".dylib", ".so", ".dll"]
+        .iter()
+        .any(|ext| word.ends_with(ext));
+    (!word.is_empty() && !library).then_some(word)
 }
 
 /// `dir` with its links resolved, so one directory reached by two paths
@@ -694,12 +560,6 @@ fn is_executable(path: &Path) -> bool {
 mod tests {
     use super::*;
     use meta_plugin_protocol::{PlannedCommand, PluginHelp};
-
-    #[test]
-    fn test_plugin_manager_new() {
-        let manager = SubprocessPluginManager::new();
-        assert!(manager.plugins.is_empty());
-    }
 
     #[test]
     fn test_plugin_info_serialization() {
@@ -756,126 +616,66 @@ mod tests {
         assert!(options.exclude_filters.is_none());
     }
 
-    fn routed(manager: &SubprocessPluginManager, args: &[&str]) -> Option<(String, usize)> {
-        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        manager
-            .route(&args)
-            .map(|(plugin, len)| (plugin.info.name.clone(), len))
-    }
-
-    #[test]
-    fn test_route_matches_whole_words() {
-        let mut manager = SubprocessPluginManager::new();
-        for (name, commands) in [
-            ("rust", vec!["cargo build", "cargo test"]),
-            (
-                "git",
-                vec!["git status", "git worktree", "git worktree create"],
-            ),
-        ] {
-            manager.plugins.insert(
-                name.to_string(),
-                SubprocessPlugin {
-                    path: std::path::PathBuf::from(format!("/fake/path/meta-{name}")),
-                    info: PluginInfo {
-                        name: name.to_string(),
-                        version: "1.0.0".to_string(),
-                        commands: commands.into_iter().map(String::from).collect(),
-                        description: None,
-                        help: None,
-                    },
-                },
-            );
-        }
-
-        // The longest claimed command wins; the rest are the plugin's args
-        assert_eq!(
-            routed(&manager, &["git", "worktree", "create", "x"]),
-            Some(("git".to_string(), 3))
-        );
-        assert_eq!(
-            routed(&manager, &["cargo", "build", "--release"]),
-            Some(("rust".to_string(), 2))
-        );
-        // Unclaimed subcommands go to the namespace owner as its first word,
-        // the rest staying args; words match whole, so "buildx" is not "build"
-        assert_eq!(
-            routed(&manager, &["cargo", "--version"]),
-            Some(("rust".to_string(), 1))
-        );
-        assert_eq!(
-            routed(&manager, &["cargo", "buildx", "x"]),
-            Some(("rust".to_string(), 1))
-        );
-        assert_eq!(routed(&manager, &["gitx", "status"]), None);
-        assert_eq!(routed(&manager, &["npm", "install"]), None);
-        assert_eq!(routed(&manager, &[]), None);
-    }
-
-    #[test]
-    fn test_available_commands() {
-        let mut manager = SubprocessPluginManager::new();
-
-        let plugin = SubprocessPlugin {
-            path: std::path::PathBuf::from("/fake/path/meta-git"),
+    fn plugin(word: &str, commands: &[&str]) -> SubprocessPlugin {
+        SubprocessPlugin {
+            word: word.to_string(),
+            path: PathBuf::from(format!("/fake/path/meta-{word}")),
             info: PluginInfo {
-                name: "git".to_string(),
+                name: word.to_string(),
                 version: "1.0.0".to_string(),
-                commands: vec!["git status".to_string(), "git pull".to_string()],
+                commands: commands.iter().map(|c| c.to_string()).collect(),
                 description: None,
                 help: None,
             },
-        };
-        manager.plugins.insert("git".to_string(), plugin);
+        }
+    }
 
-        let commands = manager.available_commands();
-        assert_eq!(commands.len(), 2);
-        assert!(commands.iter().any(|(cmd, _)| *cmd == "git status"));
-        assert!(commands.iter().any(|(cmd, _)| *cmd == "git pull"));
+    fn command_len(plugin: &SubprocessPlugin, args: &[&str]) -> usize {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        plugin.command_len(&args)
+    }
+
+    #[test]
+    fn the_longest_claimed_command_matching_whole_words_is_the_command() {
+        let git = plugin(
+            "git",
+            &["git status", "git worktree", "git worktree create"],
+        );
+        let cargo = plugin("cargo", &["cargo", "cargo build"]);
+
+        // The longest claimed command wins; the rest are the plugin's args
+        assert_eq!(command_len(&git, &["git", "worktree", "create", "x"]), 3);
+        assert_eq!(command_len(&cargo, &["cargo", "build", "--release"]), 2);
+        // Otherwise the word alone is the command, the rest staying args;
+        // words match whole, so "buildx" is not "build"
+        assert_eq!(command_len(&cargo, &["cargo", "--version"]), 1);
+        assert_eq!(command_len(&cargo, &["cargo", "buildx", "x"]), 1);
+        assert_eq!(command_len(&git, &["git", "log"]), 1);
+        // A claim under another word never shapes this plugin's command
+        let other = plugin("other", &["git status"]);
+        assert_eq!(command_len(&other, &["other", "status"]), 1);
+    }
+
+    #[test]
+    fn a_plugin_file_serves_the_word_in_its_name() {
+        let exe = std::env::consts::EXE_SUFFIX;
+        assert_eq!(plugin_word(&format!("meta-git{exe}")), Some("git"));
+        assert_eq!(plugin_word(&format!("meta-my-tool{exe}")), Some("my-tool"));
+        for name in [
+            "meta-",
+            "git",
+            "meta-lib.so",
+            "meta-lib.dylib",
+            "meta-lib.dll",
+        ] {
+            assert_eq!(plugin_word(&format!("{name}{exe}")), None, "{name}");
+        }
     }
 
     #[test]
     fn test_is_executable_nonexistent() {
         let path = std::path::Path::new("/nonexistent/path/to/binary");
         assert!(!is_executable(path));
-    }
-
-    #[test]
-    fn test_list_plugins_sorted() {
-        let mut manager = SubprocessPluginManager::new();
-
-        // Add plugins in non-alphabetical order
-        manager.plugins.insert(
-            "zebra".to_string(),
-            SubprocessPlugin {
-                path: std::path::PathBuf::from("/fake/meta-zebra"),
-                info: PluginInfo {
-                    name: "zebra".to_string(),
-                    version: "1.0.0".to_string(),
-                    commands: vec![],
-                    description: Some("Z plugin".to_string()),
-                    help: None,
-                },
-            },
-        );
-        manager.plugins.insert(
-            "alpha".to_string(),
-            SubprocessPlugin {
-                path: std::path::PathBuf::from("/fake/meta-alpha"),
-                info: PluginInfo {
-                    name: "alpha".to_string(),
-                    version: "2.0.0".to_string(),
-                    commands: vec![],
-                    description: Some("A plugin".to_string()),
-                    help: None,
-                },
-            },
-        );
-
-        let plugins = manager.list_plugins();
-        assert_eq!(plugins.len(), 2);
-        assert_eq!(plugins[0].0, "alpha"); // Should be sorted alphabetically
-        assert_eq!(plugins[1].0, "zebra");
     }
 
     #[test]

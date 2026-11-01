@@ -553,6 +553,14 @@ fn run_cli() -> Result<()> {
         std::process::exit(0);
     }
 
+    if cli.add_aliases_to_global_looprc {
+        anyhow::ensure!(
+            cli.command.is_none(),
+            "--add-aliases-to-global-looprc imports your shell's aliases and runs no command"
+        );
+        return loop_lib::import_aliases(cli.dry_run);
+    }
+
     // Take command out so we can move subcommand args while still borrowing cli
     let command = cli.command.take();
     match command {
@@ -839,21 +847,6 @@ fn handle_command_dispatch(
                     );
                 }
 
-                let config = loop_lib::LoopConfig {
-                    directories: wt_directories.clone(),
-                    ignore: vec![],
-                    verbose: cli.verbose,
-                    silent: cli.silent,
-                    parallel,
-                    dry_run,
-                    json_output: cli.json,
-                    add_aliases_to_global_looprc: false,
-                    spawn_stagger_ms: 0,
-                    env: None,
-                    max_parallel: None,
-                    root_dir: Some(task_dir.clone()),
-                };
-
                 // Plugin dispatch (full feature parity with normal path)
                 let subprocess_options = PluginRequestOptions {
                     json_output: cli.json,
@@ -869,7 +862,20 @@ fn handle_command_dispatch(
                 };
 
                 match plugin {
-                    None => run(&config, &command_args)?,
+                    None => {
+                        let config = loop_lib::LoopConfig {
+                            directories: wt_directories.iter().map(PathBuf::from).collect(),
+                            verbose: cli.verbose,
+                            silent: cli.silent,
+                            parallel,
+                            dry_run,
+                            json_output: cli.json,
+                            aliases: loop_lib::aliases()?,
+                            root_dir: Some(task_dir.clone()),
+                            ..Default::default()
+                        };
+                        run(&config, &command_args)?;
+                    }
                     Some(plugin) => {
                         plugin.execute(
                             &command_args,
@@ -911,18 +917,15 @@ fn handle_command_dispatch(
             let parallel = parallel_for(None);
 
             let config = loop_lib::LoopConfig {
-                directories,
-                ignore: vec![],
+                directories: directories.iter().map(PathBuf::from).collect(),
                 verbose: cli.verbose,
                 silent: cli.silent,
                 parallel, // Use the determined parallel mode, not hardcoded false
                 dry_run,
                 json_output: cli.json,
-                add_aliases_to_global_looprc: false,
-                spawn_stagger_ms: 0,
-                env: None,
-                max_parallel: None,
+                aliases: loop_lib::aliases()?,
                 root_dir: Some(task_dir.clone()),
+                ..Default::default()
             };
 
             run(&config, &command_args)?;
@@ -1001,21 +1004,6 @@ fn handle_command_dispatch(
         repo_filter::repo_names(meta_dir, meta_projects, &tree)
     })?;
 
-    let config = loop_lib::LoopConfig {
-        add_aliases_to_global_looprc: cli.add_aliases_to_global_looprc,
-        directories: project_paths.clone(),
-        ignore: vec![],
-        verbose: cli.verbose,
-        silent: cli.silent,
-        parallel,
-        dry_run,
-        json_output: cli.json,
-        spawn_stagger_ms: 0,
-        env: None,
-        max_parallel: None,
-        root_dir: Some(meta_dir.to_path_buf()),
-    };
-
     // Plugin dispatch for external subcommands
     let subprocess_options = PluginRequestOptions {
         json_output: cli.json,
@@ -1037,6 +1025,17 @@ fn handle_command_dispatch(
             if cli.verbose {
                 println!("{}", "Running command via loop (explicit exec).".green());
             }
+            let config = loop_lib::LoopConfig {
+                directories: project_paths.iter().map(PathBuf::from).collect(),
+                verbose: cli.verbose,
+                silent: cli.silent,
+                parallel,
+                dry_run,
+                json_output: cli.json,
+                aliases: loop_lib::aliases()?,
+                root_dir: Some(meta_dir.to_path_buf()),
+                ..Default::default()
+            };
             run(&config, &command_args)?;
         }
         Some(plugin) => {

@@ -33,18 +33,20 @@ loop cargo test
 
 | Option | Description |
 |--------|-------------|
-| `-c, --config <FILE>` | Custom config file path (default: `.looprc`) |
-| `-i, --include <DIR>` | Only run in this directory (repeat for more) |
-| `-e, --exclude <DIR>` | Skip this directory, by name or path end (repeat for more) |
+| `-c, --config <FILE>` | Config file (default: `.looprc`, if there is one); the file must exist |
+| `-i, --include <DIR>` | Only run in these directories (comma list, or repeat) |
+| `-e, --exclude <DIR>` | Skip these directories, by name or path end (comma list, or repeat) |
 | `-v, --verbose` | Enable verbose output |
-| `-s, --silent` | Suppress all output except summary |
-| `--add-aliases-to-global-looprc` | Add shell aliases to global config |
+| `-s, --silent` | Suppress command output |
+| `--add-aliases-to-global-looprc` | Import your shell's aliases into `~/.looprc` (runs no command) |
+
+A flag only turns a setting on: `"silent": true` in the file stays without `-s`.
 
 ### Filtering Directories
 
 ```bash
 # Only specific directories
-loop -i api -i web git status
+loop -i api,web git status
 
 # Exclude directories
 loop -e legacy -e deprecated npm test
@@ -61,27 +63,41 @@ Loop uses a `.looprc` file (JSON format) for persistent configuration:
 {
   "directories": ["api", "web", "worker"],
   "ignore": ["node_modules", "target", ".git"],
-  "verbose": false,
-  "silent": false
+  "parallel": true,
+  "aliases": {"gs": "git status"}
 }
 ```
 
-### Configuration Priority
+Every key is optional; one left out takes its default (`{}` is the same as no
+file). A key loop doesn't know is an error, as is a `-c` file that doesn't
+exist.
 
-1. Command-line arguments (highest priority)
-2. Local `.looprc` in current directory
-3. Global `~/.looprc`
-4. Defaults (all child directories)
+### Where settings come from
+
+1. Command-line flags, when given
+2. The config file: `-c FILE`, else `./.looprc`
+3. Defaults: the current directory and its child directories, without `.git`
+
+Aliases also come from `~/.looprc`: its `aliases`, then the config file's,
+which win for the same name. Only its aliases are used, but the whole file
+must be valid.
 
 ### Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `directories` | `string[]` | Directories to include |
-| `ignore` | `string[]` | Directories to exclude, by name (`node_modules`) or path end (`vendor/old`), whole names only: `.git` doesn't exclude `.github` |
-| `verbose` | `bool` | Enable verbose output |
-| `silent` | `bool` | Suppress output |
-| `add_aliases_to_global_looprc` | `bool` | Enable alias support |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `directories` | `string[]` | `[]`: `.` and its child directories | Directories to run in |
+| `ignore` | `string[]` | `[".git"]` | Directories to exclude, by name (`node_modules`) or path end (`vendor/old`), whole names only: `.git` doesn't exclude `.github`. Setting it replaces the default |
+| `verbose` | `bool` | `false` | Enable verbose output |
+| `silent` | `bool` | `false` | Suppress command output |
+| `parallel` | `bool` | `false` | Run in every directory at once, showing each output when all are done |
+| `max_parallel` | `number` | Rayon's default: one thread per logical CPU, or `RAYON_NUM_THREADS` if set | With `parallel`, at most this many at once (1 or more) |
+| `spawn_stagger_ms` | `number` | `0` | With `parallel`, milliseconds between two starts |
+| `dry_run` | `bool` | `false` | Print what would run, run nothing |
+| `json_output` | `bool` | `false` | Print the results as JSON |
+| `env` | `object` | none | Environment variables for every command |
+| `aliases` | `object` | `{}` | Programs that stand for a command: `{"gs": "git status"}` runs `gs -s` as `git status -s` |
+| `root_dir` | `string` | none | Show this directory as `.` and others by their path from it |
 
 ## How It Works
 
@@ -159,7 +175,11 @@ Shows additional execution details.
 loop -s npm test
 ```
 
-Only shows final summary.
+Prints no command output and no summary. A directory that doesn't exist is
+still reported when commands run one at a time; with `"parallel": true` only
+the final error shows. With `"json_output": true` the JSON (each command's output
+and the summary) is still printed. If a command fails, loop ends with
+`Error: At least one command failed` and a non-zero exit status.
 
 ## Error Handling
 
@@ -197,11 +217,15 @@ Use `loop` for simple multi-directory execution. Use `meta` for full multi-repos
 
 ### Shell Aliases
 
-Add aliases to your global config:
+Import your interactive shell's aliases into `~/.looprc`:
 
 ```bash
 loop --add-aliases-to-global-looprc
 ```
+
+It shows the change and asks before writing. Only `aliases` changes (the
+shell's are added to those already there); the file's other keys stay. A
+`~/.looprc` loop can't read is reported, not replaced.
 
 loop runs commands without a shell, so an alias value is split into words
 (POSIX quoting, nothing expanded or run) that replace the program. An alias

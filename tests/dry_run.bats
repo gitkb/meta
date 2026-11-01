@@ -265,8 +265,8 @@ preview() {
     [[ "$output" == *"[DRY RUN]"*"touch made-by-exec"* ]]
 }
 
-@test "exec --add-aliases-to-global-looprc previews" {
-    preview 0 --add-aliases-to-global-looprc exec -- true
+@test "--add-aliases-to-global-looprc previews" {
+    preview 0 --add-aliases-to-global-looprc
     [[ "$output" == *"Would add your shell's aliases"* ]]
 }
 

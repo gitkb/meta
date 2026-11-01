@@ -15,19 +15,20 @@ This guide covers advanced features of the **loop** system, including parallel e
 
 ## Parallel Execution Strategies
 
-The loop system can execute commands in parallel across many directories. You can control concurrency and error handling via CLI flags or `.looprc`:
+loop runs in one directory at a time. With `"parallel": true` in `.looprc` it runs in all at once, `max_parallel` caps how many, and `spawn_stagger_ms` spaces out the starts. A failure in one directory never stops the others; loop exits non-zero if any failed.
 
 ```json
 {
   "directories": ["pkg1", "pkg2"],
-  "concurrency": 4,
-  "fail_fast": true
+  "parallel": true,
+  "max_parallel": 4
 }
 ```
 
+Every key is listed in [loop_cli/README.md](../loop_cli/README.md#fields).
+
 ## Advanced Configuration
 
-- **Directory Globs**: Use wildcards in `.looprc` to target groups of directories.
 - **Ignore**: Exclude directories with the `ignore` field (or `--exclude`): each entry is a directory's name (`node_modules`) or the end of its path (`vendor/old`), matched by whole names, so `.git` doesn't exclude `.github`. It applies to directories listed in `directories` or given with `--include` too.
 - **Verbose Output**: Enable detailed logs with `--verbose` or `"verbose": true` in config.
 

@@ -243,3 +243,52 @@ esac
     assert!(stderr.contains("upgrade the plugin"), "{stderr}");
     assert!(stderr.contains(&plugin.display().to_string()), "{stderr}");
 }
+
+#[test]
+fn a_plan_with_max_parallel_zero_is_refused_before_any_of_it_runs() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    workspace(&root);
+    let plugin = root.join("bin").join("meta-zero");
+    fs::write(
+        &plugin,
+        r#"#!/bin/sh
+case "$1" in
+  --meta-plugin-info) echo '{"name":"zero","version":"1.0.0","commands":["zero"]}' ;;
+  --meta-plugin-exec) cat >/dev/null; echo '{"plan":{"pre_commands":[{"dir":".","argv":["touch","setup-ran"]}],"commands":[{"dir":".","argv":["touch","ran"]}],"max_parallel":0}}' ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&plugin, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = run_meta(&root, &["zero", "run"]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "max_parallel 0 ran unlimited");
+    assert!(stderr.contains("max_parallel"), "{stderr}");
+    assert!(!root.join("setup-ran").exists() && !root.join("ran").exists());
+}
+
+#[test]
+fn a_broken_looprc_stops_only_what_runs_through_loop() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    workspace(&root);
+    // HOME is root too: ~/.looprc and ./.looprc are this file
+    fs::write(root.join(".looprc"), r#"{"bogus": 1}"#).unwrap();
+
+    // the plugin answers without a plan: loop never runs
+    meta(&root, &["touchy", "ran"]);
+    assert!(fs::read_to_string(root.join("plugin.log"))
+        .unwrap()
+        .contains("touchy"));
+
+    let output = run_meta(&root, &["exec", "--", "true"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains(".looprc") && stderr.contains("bogus"),
+        "{stderr}"
+    );
+}

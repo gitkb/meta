@@ -831,6 +831,7 @@ dependencies = [
  "colored",
  "loop_lib",
  "meta_core",
+ "serde_json",
  "tempfile",
 ]
 

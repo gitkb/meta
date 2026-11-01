@@ -46,18 +46,15 @@ fn build_loop_config(
         &names,
     )?;
     Ok(loop_lib::LoopConfig {
-        directories,
-        ignore: vec![],
+        directories: directories.iter().map(PathBuf::from).collect(),
         verbose,
-        silent: false,
         parallel: args.parallel,
         dry_run: mode.is_preview(),
         json_output: json,
-        add_aliases_to_global_looprc: false,
-        spawn_stagger_ms: 0,
         env: Some(git_env::git_env()),
-        max_parallel: None,
+        aliases: loop_lib::aliases()?,
         root_dir: Some(wt_dir.to_path_buf()),
+        ..Default::default()
     })
 }
 

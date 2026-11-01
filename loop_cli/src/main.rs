@@ -1,11 +1,14 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use colored::*;
-use loop_lib::{display_command, expand_directories, parse_config, run, should_ignore, LoopConfig};
+use loop_lib::{
+    display_command, expand_directories, import_aliases, parse_config, parse_config_if_present,
+    run, should_ignore, with_global_aliases,
+};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(name = "loop", author, version, about, long_about = None)]
 struct Cli {
     #[arg(
         long,
@@ -22,6 +25,7 @@ struct Cli {
     #[arg(
         short,
         long,
+        value_delimiter = ',',
         help = "Specify directories to exclude (adds to config file exclusions)"
     )]
     exclude: Option<Vec<String>>,
@@ -29,11 +33,12 @@ struct Cli {
     #[arg(
         short,
         long,
+        value_delimiter = ',',
         help = "Specify directories to include (overrides config file)"
     )]
-    include: Option<Vec<String>>,
+    include: Option<Vec<PathBuf>>,
 
-    #[arg(short, long, help = "Enable silent mode (suppress all output)")]
+    #[arg(short, long, help = "Suppress command output")]
     silent: bool,
 
     #[arg(short, long, help = "Enable verbose output")]
@@ -43,21 +48,37 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = meta_core::args::parse::<Cli>();
 
-    let config_path = cli.config.unwrap_or_else(|| PathBuf::from(".looprc"));
+    // It writes ~/.looprc alone; the config file here has no say in it
+    if cli.add_aliases_to_global_looprc {
+        anyhow::ensure!(
+            cli.command.is_empty(),
+            "--add-aliases-to-global-looprc imports your shell's aliases and runs no command"
+        );
+        return import_aliases(false);
+    }
+
+    // A file named with -c must exist; ./.looprc may not
+    let (config_path, mut config) = match cli.config {
+        Some(path) => {
+            let config = parse_config(&path)?;
+            (path, config)
+        }
+        None => {
+            let path = PathBuf::from(".looprc");
+            (path.clone(), parse_config_if_present(&path)?)
+        }
+    };
 
     if cli.command.is_empty() {
         Cli::command().print_help()?;
         std::process::exit(0);
     }
 
-    // Parse the .looprc file
-    let absolute_path = std::env::current_dir()?.join(&config_path);
-
     if cli.verbose {
         println!("{}", "Verbose mode enabled".green());
         println!(
             "\nResolved config file path: {}",
-            meta_core::display::escape_path(&absolute_path)
+            meta_core::display::escape_path(&std::env::current_dir()?.join(&config_path))
         );
         println!(
             "Executing command: {}",
@@ -65,33 +86,25 @@ fn main() -> Result<()> {
         );
     }
 
-    let mut config = if config_path.exists() {
-        parse_config(&config_path)?
-    } else {
-        LoopConfig::default()
-    };
-
-    // Update config with CLI options
+    // Flags only turn settings on: one the file sets stays when they're absent
     if let Some(include) = cli.include {
         config.directories = include;
     }
     if let Some(exclude) = cli.exclude {
         config.ignore.extend(exclude);
     }
-
-    config.verbose = cli.verbose;
-    config.silent = cli.silent;
-    config.add_aliases_to_global_looprc = cli.add_aliases_to_global_looprc;
+    config.verbose |= cli.verbose;
+    config.silent |= cli.silent;
+    config.aliases = with_global_aliases(config.aliases)?;
 
     // If no directories specified, use current and all child directories;
     // exclusions hold for directories named outright too
     if config.directories.is_empty() {
-        let dirs = expand_directories(&[".".to_string()], &config.ignore)?;
-        config.directories = dirs;
+        config.directories = expand_directories(&[PathBuf::from(".")], &config.ignore)?;
     } else {
         config
             .directories
-            .retain(|dir| !should_ignore(std::path::Path::new(dir), &config.ignore));
+            .retain(|dir| !should_ignore(dir, &config.ignore));
     }
     anyhow::ensure!(
         !config.directories.is_empty(),

@@ -91,14 +91,17 @@ pub(crate) fn execute_git_clone(
             meta_core::display::escape_path(&clone_dir_path)
         )
     };
-    let occupied = match clone_dir_path.symlink_metadata() {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        // a link to a directory, as git sees it, is that directory
-        Ok(_) if clone_dir_path.is_dir() => std::fs::read_dir(&clone_dir_path)
+    // (a link is what it leads to, as git sees it; one that leads nowhere
+    // is there all the same)
+    let occupied = match std::fs::metadata(&clone_dir_path) {
+        Ok(meta) if meta.is_dir() => std::fs::read_dir(&clone_dir_path)
             .with_context(inspect)?
             .next()
             .is_some(),
         Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            clone_dir_path.symlink_metadata().is_ok()
+        }
         Err(e) => return Err(e).with_context(inspect),
     };
     if occupied {

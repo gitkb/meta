@@ -741,10 +741,18 @@ fn with_recursive_all_every_place_is_a_place_whatever_it_names() {
     fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
     let out = worktree(root, &ws, &["create", "x", "--all", "-r"]);
     assert!(out.status.success(), "{}", stderr(&out));
+    // each place holds the checkout of its own repository
     for place in ["bar", "baz"] {
+        let origin = Command::new("git")
+            .arg("-C")
+            .arg(ws.join(".worktrees/x").join(place))
+            .args(["remote", "get-url", "origin"])
+            .output()
+            .unwrap();
+        let origin = String::from_utf8_lossy(&origin.stdout);
         assert!(
-            ws.join(".worktrees/x").join(place).join("README").exists(),
-            "{place}"
+            origin.trim().ends_with(&format!("{place}.git")),
+            "{place}: {origin}"
         );
     }
 }

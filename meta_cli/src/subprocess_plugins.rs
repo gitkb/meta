@@ -169,8 +169,10 @@ impl SubprocessPluginManager {
     /// its info; one that doesn't answer is an error naming it.
     pub fn find(&self, word: &str) -> Result<Option<SubprocessPlugin>> {
         let file_name = format!("meta-{word}{}", std::env::consts::EXE_SUFFIX);
-        // A word that isn't one file name names no plugin
-        if Path::new(&file_name).file_name() != Some(file_name.as_ref()) {
+        // The same rule as listing; a word that isn't one file name names no plugin
+        if plugin_word(&file_name) != Some(word)
+            || Path::new(&file_name).file_name() != Some(file_name.as_ref())
+        {
             return Ok(None);
         }
         let Some(path) = self

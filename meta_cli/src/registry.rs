@@ -55,8 +55,8 @@ pub fn is_newer_version(current: &str, new: &str) -> bool {
 }
 
 /// The plugin a tar entry installs: its file name, when that is `meta-*`
-fn plugin_entry_name(path: &str) -> Option<String> {
-    let name = Path::new(path).file_name()?.to_str()?;
+fn plugin_entry_name(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
     name.starts_with(PLUGIN_PREFIX).then(|| name.to_string())
 }
 
@@ -990,35 +990,34 @@ impl PluginInstaller {
 
     /// Extract a tar.gz archive
     fn extract_tar_gz(&self, bytes: &[u8]) -> Result<Vec<String>> {
-        let decoder = flate2::read::GzDecoder::new(bytes);
-        let mut archive = tar::Archive::new(decoder);
+        let archive = || tar::Archive::new(flate2::read::GzDecoder::new(bytes));
 
-        // Read every plugin entry before writing any
-        let mut plugins = Vec::new();
-        for entry in archive.entries()? {
-            let mut entry = entry?;
-            let Some(name) = plugin_entry_name(&entry.path()?.to_string_lossy()) else {
-                continue;
-            };
+        // Check every plugin entry before writing any: a plugin is a file,
+        // never a link or a device
+        for entry in archive().entries()? {
+            let entry = entry?;
             let kind = entry.header().entry_type();
-            if kind.is_dir() {
+            if plugin_entry_name(&entry.path()?).is_some() && !kind.is_dir() {
+                anyhow::ensure!(
+                    kind.is_file(),
+                    "Archive entry {} is not a regular file or a directory; nothing was installed",
+                    escape(&String::from_utf8_lossy(&entry.path_bytes()))
+                );
+            }
+        }
+
+        let mut installed = Vec::new();
+        for entry in archive().entries()? {
+            let mut entry = entry?;
+            if !entry.header().entry_type().is_file() {
                 continue;
             }
-            // A plugin is a file, never a link or a device
-            anyhow::ensure!(
-                kind.is_file(),
-                "Archive entry {} is not a regular file or a directory; nothing was installed",
-                escape(&String::from_utf8_lossy(&entry.path_bytes()))
-            );
-            let mut contents = Vec::new();
-            entry.read_to_end(&mut contents)?;
-            plugins.push((name, contents));
+            if let Some(name) = plugin_entry_name(&entry.path()?) {
+                self.write_plugin(&name, &mut entry)?;
+                installed.push(name);
+            }
         }
-
-        for (name, contents) in &plugins {
-            self.write_plugin(name, &mut contents.as_slice())?;
-        }
-        Ok(plugins.into_iter().map(|(name, _)| name).collect())
+        Ok(installed)
     }
 
     /// Extract a zip archive

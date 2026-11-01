@@ -141,7 +141,7 @@ EOF
     git -C backend switch --quiet -c feature/login
     run "$META_BIN" git worktree create login --repo backend --no-deps --branch feature/login
     [ "$status" -ne 0 ]
-    [[ "$output" == *$'\nfatal: '*"already used by worktree"* ]]
+    [[ "$output" == *$'\n  fatal: '*"already used by worktree"* ]]
     [[ "$output" != *'\nfatal'* ]]
 }
 
@@ -162,7 +162,7 @@ EOF
 }
 
 @test "worktree prune names a set whose created_at it can't read, and fails on it with --strict" {
-    run "$META_BIN" git worktree create aged --repo backend --ttl 1h
+    run "$META_BIN" git worktree create aged --repo backend --no-deps --ttl 1h
     [ "$status" -eq 0 ]
     record="$(git -C .worktrees/aged/backend rev-parse --git-dir)/meta-worktree.json"
     [ -f "$record" ]

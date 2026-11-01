@@ -469,6 +469,7 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
     let root_repo = match config::find_meta_config(&start_dir, None) {
         Ok(found) => found
             .and_then(|config| config.parent().map(Path::to_path_buf))
+            .filter(|dir| matches!(meta_core::gitdir::common_dir(dir), Ok(Some(_))))
             .and_then(|dir| meta_core::git::remote_url(&dir).ok().flatten()),
         Err(e) => return CommandResult::Error(format!("{e:#}")),
     };

@@ -162,19 +162,11 @@ pub fn current_branch(dir: &Path) -> anyhow::Result<Option<String>> {
 
 /// The URL configured for `origin` in the repository at `dir`, as written:
 /// what `.meta.yaml` lists is compared with this, so `insteadOf` rewrites
-/// don't apply. `None` without one.
+/// don't apply. Every config git reads there counts (the repository's,
+/// its worktree's, included files). `None` without one; ask only about a
+/// folder that is a repository (see [`crate::gitdir::common_dir`]).
 pub fn remote_url(dir: &Path) -> anyhow::Result<Option<GitUrl>> {
-    Ok(lookup(
-        dir,
-        [
-            "config",
-            "--local",
-            "--includes",
-            "--get",
-            "remote.origin.url",
-        ],
-    )?
-    .map(GitUrl::from))
+    Ok(lookup(dir, ["config", "--get", "remote.origin.url"])?.map(GitUrl::from))
 }
 
 #[cfg(test)]
@@ -278,11 +270,20 @@ mod tests {
         run(dir.path(), ["config", "include.path", "remote.conf"]).unwrap();
         assert_eq!(remote_url(dir.path()).unwrap(), Some(configured.into()));
         run(dir.path(), ["config", "--unset", "include.path"]).unwrap();
+        // and so does a worktree's own config
+        run(dir.path(), ["config", "extensions.worktreeConfig", "true"]).unwrap();
+        run(
+            dir.path(),
+            ["config", "--worktree", "remote.origin.url", configured],
+        )
+        .unwrap();
+        assert_eq!(remote_url(dir.path()).unwrap(), Some(configured.into()));
+        run(
+            dir.path(),
+            ["config", "--worktree", "--unset", "remote.origin.url"],
+        )
+        .unwrap();
         assert_eq!(remote_url(dir.path()).unwrap(), None);
-        // a folder that is no repository is git failing, not "no remote"
-        let plain = dir.path().join("plain");
-        std::fs::create_dir(&plain).unwrap();
-        assert!(remote_url(&plain).is_err());
     }
 
     #[test]

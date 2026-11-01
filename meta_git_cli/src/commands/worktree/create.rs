@@ -11,10 +11,10 @@ use meta_core::duration::format_duration;
 use meta_git_lib::worktree::git_ops::*;
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::hooks::fire_post_create;
+use meta_git_lib::worktree::lease;
 use meta_git_lib::worktree::record::{self, SetRecord};
 use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
 use meta_git_lib::worktree::types::{CreateOutput, CreateRepoEntry};
-use meta_git_lib::worktree::{lease, workspace};
 
 use super::cli_types::CreateArgs;
 use meta_core::display::shell_quote;
@@ -95,12 +95,7 @@ pub(crate) fn handle_create(
     // Check if worktree already exists
     let wt_dir = worktree_root.join(name);
     if wt_dir.exists() {
-        let lease = wt_dir.canonicalize().ok().and_then(|set| {
-            lease::find(
-                &lease::home(&workspace::Workspace::of(&configs.here)).ok()?,
-                &set,
-            )
-        });
+        let lease = wt_dir.canonicalize().ok().and_then(|set| lease::find(&set));
         anyhow::bail!(
             "Worktree '{name}' already exists at {}{}. Use 'meta worktree remove {name}' first.",
             escape_path(&wt_dir),
@@ -323,11 +318,11 @@ pub(crate) fn handle_create(
                 .join(name),
             _ => anyhow::bail!("Cannot resolve {}", escape_path(&wt_dir)),
         };
-        let workspace = workspace::Workspace::of(&configs.here);
-        lease::take(
-            &lease::home(&workspace)?,
-            &lease::Lease::new(set, configs.owner.dir.clone(), ephemeral),
-        )?
+        lease::take(&lease::Lease::new(
+            set,
+            configs.owner.dir.clone(),
+            ephemeral,
+        ))?
     };
 
     // Claim the set directory atomically: if another create claimed it first,

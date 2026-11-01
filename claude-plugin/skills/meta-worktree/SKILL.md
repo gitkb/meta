@@ -211,8 +211,8 @@ flag and custom metadata. Git deletes the record with the worktree. The record
 is how `remove` and `prune` know meta made a set: a set made by hand, or by a
 meta from before records, is refused, and so is a set holding a worktree meta
 has no record of (one added by hand with `git worktree add`); remove those with
-`git worktree remove`. While `create` (or `exec --ephemeral`) runs, a lease in
-`<repo>/.git/meta-worktree-creating/` names its set: `remove` refuses a set
+`git worktree remove`. While `create` (or `exec --ephemeral`) runs, a lease beside the set,
+`<worktrees dir>/.<set>.meta-lease` (and its `.lock`), names it: `remove` refuses a set
 that is being created, and takes back one whose creator stopped part way,
 worktrees not recorded yet included.
 `list` scans this project's `.worktrees/` and shows each set's record.

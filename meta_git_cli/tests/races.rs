@@ -194,6 +194,19 @@ fn a_late_create_leaves_a_half_set_removable() {
 /// by hand. prune must leave the running set alone.
 #[test]
 fn prune_leaves_an_ephemeral_run_that_started_after_it_looked() {
+    prune_held_while_an_ephemeral_run_starts(|_| {});
+}
+
+/// The same, with a repository that sorts first added while prune waits.
+#[test]
+fn prune_leaves_an_ephemeral_run_started_after_a_repository_was_added_during_it() {
+    prune_held_while_an_ephemeral_run_starts(add_a_first_repository);
+}
+
+/// prune reads the leases, then (held on a record read through a FIFO)
+/// `meanwhile` runs and an ephemeral run makes a set at a path whose old
+/// ephemeral set was deleted by hand. prune must leave the running set alone.
+fn prune_held_while_an_ephemeral_run_starts(meanwhile: impl FnOnce(&Sandbox)) {
     let temp = tempfile::tempdir().unwrap();
     let sb = Sandbox::new(&temp.path().canonicalize().unwrap());
     assert!(sb
@@ -236,6 +249,7 @@ fn prune_leaves_an_ephemeral_run_that_started_after_it_looked() {
     drop(first);
     let second = writer(record.clone());
 
+    meanwhile(&sb);
     sb.holding(&sb.root, "command", "");
     let run = sb.start(&[
         "exec",
@@ -304,4 +318,56 @@ fn prune_leaves_an_ephemeral_run_after_a_repository_is_added() {
     sb.release("command");
     let run = run.wait_with_output().unwrap();
     assert!(run.status.success(), "{}", text(&run));
+}
+
+/// A repository `aaa` (sorting before the others), listed in the workspace.
+fn add_a_first_repository(sb: &Sandbox) {
+    let first = sb.ws.join("aaa");
+    fs::create_dir_all(&first).unwrap();
+    git(&first, &["init", "-q", "-b", "main"]);
+    git(&first, &["commit", "-q", "--allow-empty", "-m", "initial"]);
+    fs::write(
+        sb.ws.join(".meta.yaml"),
+        "projects:\n  aaa:\n    path: aaa\n  backend:\n    path: backend\n  frontend:\n    path: frontend\n",
+    )
+    .unwrap();
+}
+
+/// An ephemeral run is stopped, its set deleted by hand, a repository
+/// added, and an ordinary set made again at that path: the lease the stopped
+/// run left must not make prune remove the new set.
+#[test]
+fn a_lease_left_by_a_stopped_run_does_not_expire_a_set_made_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let sb = Sandbox::new(&temp.path().canonicalize().unwrap());
+    sb.holding(&sb.root, "command", "");
+    let mut run = sb.start(&[
+        "exec",
+        "--ephemeral",
+        "same",
+        "--repo",
+        "frontend",
+        "--",
+        sb.root.join("command").to_str().unwrap(),
+    ]);
+    sb.wait_for("command-started");
+    rustix::process::kill_process(
+        rustix::process::Pid::from_child(&run),
+        rustix::process::Signal::KILL,
+    )
+    .unwrap();
+    run.wait().unwrap();
+    sb.release("command");
+    fs::remove_dir_all(sb.ws.join(".worktrees/same")).unwrap();
+    add_a_first_repository(&sb);
+    let made = sb.run(&["create", "same", "--repo", "backend", "--no-deps"]);
+    assert!(made.status.success(), "{}", text(&made));
+
+    let pruned = sb.run(&["prune"]);
+    assert!(pruned.status.success(), "{}", text(&pruned));
+    assert!(
+        sb.ws.join(".worktrees/same/backend").exists(),
+        "{}",
+        text(&pruned)
+    );
 }

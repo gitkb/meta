@@ -139,11 +139,19 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
     // finishing it is pruned, recorded or not.
     let mut held = BTreeSet::new();
     let mut abandoned = BTreeMap::new();
-    // a workspace with no repository has no sets, and no leases
-    let home = lease::home(&workspace).ok();
-    // leases a creator kept where the workspace's lease home was then, too
-    let leases = workspace.repos.iter().flat_map(|repo| lease::all(repo));
-    for found in leases {
+    // Leases sit beside their sets: in the worktrees folder, and beside each
+    // set a record names
+    let folders: BTreeSet<PathBuf> = std::iter::once(
+        worktree_root
+            .canonicalize()
+            .unwrap_or_else(|_| worktree_root.clone()),
+    )
+    .chain(
+        sets.keys()
+            .filter_map(|set| set.parent().map(Path::to_path_buf)),
+    )
+    .collect();
+    for found in folders.iter().flat_map(|folder| lease::all(folder)) {
         match &found.lease {
             Some(lease) if !workspace.made_here(&lease.project) => {}
             Some(lease) if found.live => {
@@ -362,10 +370,7 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
                 // ephemeral run uses it; an abandoned set whose lease is
                 // another's now was made again since.
                 None => {
-                    let held = home
-                        .as_deref()
-                        .ok_or_else(|| anyhow::anyhow!("no repository keeps its lease"))
-                        .and_then(|home| lease::hold(home, &workspace.repos, wt_path));
+                    let held = lease::hold(wt_path);
                     let token = |lease: Option<&lease::Lease>| lease.map(|l| l.token.clone());
                     let why = match &held {
                         Err(e) => Some(format!("{e:#}")),

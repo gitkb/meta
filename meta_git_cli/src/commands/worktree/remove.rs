@@ -43,11 +43,7 @@ pub(crate) fn handle_remove(
     let set = wt_dir
         .canonicalize()
         .with_context(|| format!("Cannot resolve {}", escape_path(&wt_dir)))?;
-    let home = lease::home(&workspace)?;
-    // where the home was when its creator took it, too (see `lease::hold`)
-    let found = std::iter::once(&home)
-        .chain(&workspace.repos)
-        .find_map(|repo| lease::find(repo, &set));
+    let found = lease::find(&set);
     let mine = found.as_ref().is_some_and(|found| found.is_mine());
     let held = match () {
         _ if mine => None,
@@ -59,7 +55,7 @@ pub(crate) fn handle_remove(
             ),
             _ => None,
         },
-        _ => Some(lease::hold(&home, &workspace.repos, &set).map_err(|e| {
+        _ => Some(lease::hold(&set).map_err(|e| {
             anyhow::anyhow!(
                 "Refusing to remove worktree '{name}': {e:#}. Wait for that to finish, or stop \
                  it first."

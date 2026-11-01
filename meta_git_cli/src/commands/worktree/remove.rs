@@ -64,9 +64,7 @@ pub(crate) fn handle_remove(
     let check = check_worktree_removal(&wt_dir)?;
     // In an abandoned set, worktrees not recorded yet are the creator's: meta's
     let blockers: Vec<&str> = check
-        .blockers
-        .iter()
-        .filter(|b| abandoned.is_none() || !check.missing_records.contains(b))
+        .blockers_but(abandoned.is_some())
         .map(String::as_str)
         .collect();
     // Only this workspace's sets: a shared worktree directory may hold

@@ -2394,3 +2394,25 @@ J
     git -C .worktrees/away/backend diff --cached --quiet && false
     [ "$(git -C backend worktree list | wc -l)" -eq 2 ]
 }
+
+@test "TERM ends meta and a command under the plugin that ignores it" {
+    "$META_BIN" git worktree create stubborn --repo backend --no-deps
+    "$META_BIN" git worktree exec stubborn --repo backend -- sh -c \
+        'trap "" TERM; echo $$ > "$0/stubborn"; while [ -d "$0" ]; do sleep 0.05; done' "$TEST_DIR" &
+    local pid=$!
+    wait_for "$TEST_DIR/stubborn"
+    kill -TERM "$pid"
+    # meta kills what is left 2 s after the signal and ends 2 s after that
+    local ended=
+    for _ in $(seq 100); do kill -0 "$pid" 2>/dev/null || { ended=1; break; }; sleep 0.1; done
+    [ -n "$ended" ]
+    wait "$pid" || true
+    local stubborn
+    stubborn="$(cat "$TEST_DIR/stubborn")"
+    for _ in $(seq 50); do
+        state="$(ps -o stat= -p "$stubborn" || true)"
+        [ -z "$state" ] || [[ "$state" == Z* ]] && break
+        sleep 0.1
+    done
+    [ -z "$state" ] || [[ "$state" == Z* ]]
+}

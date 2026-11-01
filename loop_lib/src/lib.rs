@@ -577,8 +577,7 @@ fn execute_command_in_directory_capturing(
         }
     }
 
-    // stdin from nothing, as `Command::output` gives
-    let output = meta_core::children::output(cmd_builder.stdin(Stdio::null()));
+    let output = meta_core::children::output(&mut cmd_builder);
 
     match output {
         Ok(output) => {

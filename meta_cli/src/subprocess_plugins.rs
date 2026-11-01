@@ -355,7 +355,7 @@ impl SubprocessPlugin {
 
         // Send request to plugin's stdin. A plugin may answer without
         // reading it; then its output and exit status decide, not the pipe.
-        if let Some(mut stdin) = child.stdin.take() {
+        if let Some(mut stdin) = child.stdin() {
             use std::io::Write;
             match stdin.write_all(request_json.as_bytes()) {
                 Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}

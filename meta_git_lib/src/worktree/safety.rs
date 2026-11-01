@@ -56,6 +56,14 @@ impl RemovalCheck {
         self.blockers.is_empty() && self.unsaved.is_empty()
     }
 
+    /// The blockers, but for worktrees without a record when `unrecorded`
+    /// are the set creator's (a set its creator left half-made).
+    pub fn blockers_but(&self, unrecorded: bool) -> impl Iterator<Item = &String> {
+        self.blockers
+            .iter()
+            .filter(move |b| !unrecorded || !self.missing_records.contains(b))
+    }
+
     /// Meta's record of creating the set, if a worktree in it has one. A
     /// record naming another set is a blocker, so without blockers every
     /// record found names this set.

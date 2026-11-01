@@ -1368,7 +1368,7 @@ fn prune_finds_sets_of_a_separate_git_dir_repository() {
 }
 
 #[test]
-fn prune_leaves_a_moved_set_and_stale_records_alone() {
+fn prune_leaves_a_moved_set_alone_and_drops_a_deleted_worktree() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let ws = workspace(root, &["a", "b"]);

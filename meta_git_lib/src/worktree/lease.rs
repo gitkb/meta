@@ -101,10 +101,9 @@ impl Found {
     /// Delete a lease whose creator is gone. Taking the lock first keeps it
     /// from deleting one a new creator has just taken.
     pub fn delete(&self) -> Result<()> {
-        let lock = lock(&self.path)?;
-        if lock.try_lock().is_err() {
+        let Some(_lock) = lock(&self.path)? else {
             anyhow::bail!("{} is in use again", escape_path(&self.path));
-        }
+        };
         remove(&self.path)?;
         remove(&lock_path(&self.path))
     }
@@ -124,15 +123,43 @@ fn lock_path(path: &Path) -> PathBuf {
     path.with_extension("lock")
 }
 
-/// The lock file of the lease at `path`, opened (and made if missing).
-fn lock(path: &Path) -> Result<File> {
+/// The lock of the lease at `path`, taken (its file made if missing), or
+/// `None` if another process holds it. A lock taken on a file that was
+/// deleted meanwhile (its holder let go) is let go, and taken again on the
+/// file now there.
+fn lock(path: &Path) -> Result<Option<File>> {
     let lock = lock_path(path);
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock)
-        .with_context(|| format!("Cannot open {}", escape_path(&lock)))
+    loop {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock)
+            .with_context(|| format!("Cannot open {}", escape_path(&lock)))?;
+        if file.try_lock().is_err() {
+            return Ok(None);
+        }
+        if still_at(&file, &lock) {
+            return Ok(Some(file));
+        }
+    }
+}
+
+/// Whether `file` is still the file at `path`.
+#[cfg(unix)]
+fn still_at(file: &File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (file.metadata(), path.symlink_metadata()) {
+        (Ok(open), Ok(there)) => (open.dev(), open.ino()) == (there.dev(), there.ino()),
+        _ => false,
+    }
+}
+
+/// Whether `file` is still the file at `path`. Windows doesn't delete a file
+/// that is open (meta opens it to lock it) until the last handle closes.
+#[cfg(not(unix))]
+fn still_at(_file: &File, path: &Path) -> bool {
+    path.symlink_metadata().is_ok()
 }
 
 /// The lease file for `set` in the repository whose git directory is
@@ -165,14 +192,13 @@ pub fn take(git_dir: &Path, lease: &Lease) -> Result<Held> {
     let dir = git_dir.join(LEASE_DIR);
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Cannot create {}", escape_path(&dir)))?;
-    let lock = lock(&path)?;
-    if lock.try_lock().is_err() {
+    let Some(lock) = lock(&path)? else {
         anyhow::bail!(
             "Worktree set {} is {}",
             escape_path(&lease.set),
             read(path).doing()
         );
-    }
+    };
     if path.symlink_metadata().is_ok() {
         // left by a creator that is gone
         if lease.set.symlink_metadata().is_ok() {

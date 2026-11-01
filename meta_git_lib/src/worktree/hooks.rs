@@ -40,7 +40,7 @@ pub fn fire_worktree_hook(hook_name: &str, payload: &serde_json::Value, owner: O
     )
     .and_then(|mut child| {
         // Write payload then drop stdin to signal EOF before waiting
-        if let Some(mut stdin) = child.stdin.take() {
+        if let Some(mut stdin) = child.stdin() {
             use std::io::Write;
             let _ = stdin.write_all(payload_json.as_bytes());
         }

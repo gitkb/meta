@@ -3,7 +3,8 @@
 //!
 //! On Unix, [`own`] makes the calling program the one owner of SIGINT,
 //! SIGTERM and SIGHUP (those not already ignored when it started, as under
-//! `nohup`). Children started through [`spawn`] are registered. When one of
+//! `nohup`; where that can't be told without unsafe code, everywhere but
+//! Linux, SIGHUP is left as it was). Children started through [`spawn`] are registered. When one of
 //! those signals arrives, no new child starts, the signal is passed on to the
 //! children, and once they are gone the program ends the way the signal ends
 //! it, so a shell running it sees it was interrupted. Threads waiting on a
@@ -17,7 +18,8 @@
 //! (no terminal, a background job, a supervisor), each child gets a process
 //! group of its own, so the signal reaches everything it starts in turn; as
 //! there's no one to press Ctrl-C twice, what is still running two seconds
-//! later is killed.
+//! later is killed (one second in a program meta started, so it kills its
+//! own first), and two seconds after that the program ends regardless.
 //!
 //! Elsewhere (Windows), children start as they always did; Ctrl-C reaches
 //! every process attached to the console.
@@ -42,19 +44,6 @@ impl Drop for Owned {
     }
 }
 
-impl std::ops::Deref for Owned {
-    type Target = Child;
-    fn deref(&self) -> &Child {
-        &self.child
-    }
-}
-
-impl std::ops::DerefMut for Owned {
-    fn deref_mut(&mut self) -> &mut Child {
-        &mut self.child
-    }
-}
-
 /// Start `command` as a child this program owns. Fails with
 /// [`io::ErrorKind::Interrupted`] once the program is stopping.
 pub fn spawn(command: &mut Command) -> io::Result<Owned> {
@@ -70,14 +59,27 @@ pub fn status(command: &mut Command) -> io::Result<ExitStatus> {
 }
 
 /// Run `command` to completion capturing its output, as [`Command::output`]
-/// does (stdin from nothing unless set).
+/// does, with stdin from nothing.
 pub fn output(command: &mut Command) -> io::Result<Output> {
     use std::process::Stdio;
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     spawn(command)?.wait_with_output()
 }
 
 impl Owned {
+    /// The child's stdin, if piped and not taken yet.
+    pub fn stdin(&mut self) -> Option<std::process::ChildStdin> {
+        self.child.stdin.take()
+    }
+
+    /// The child's stderr, if piped and not taken yet.
+    pub fn stderr(&mut self) -> Option<std::process::ChildStderr> {
+        self.child.stderr.take()
+    }
+
     /// Wait for the child to exit.
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         if !self.waited {
@@ -132,8 +134,25 @@ mod imp {
     use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
     use std::time::{Duration, Instant};
 
-    /// How long children with no terminal get to stop before they're killed.
+    /// How long children with no terminal get to stop before they're killed,
+    /// in meta itself. A program meta started (a plugin) gives its own
+    /// children half as long, so it has killed them before meta kills it.
     const GRACE: Duration = Duration::from_secs(2);
+
+    /// How deep this program is among owners: 0 for meta, 1 for a program
+    /// it started, and so on.
+    const DEPTH: &str = "META_OWNER_DEPTH";
+
+    fn depth() -> u32 {
+        std::env::var(DEPTH)
+            .ok()
+            .and_then(|d| d.parse().ok())
+            .unwrap_or(0)
+    }
+
+    fn grace() -> Duration {
+        GRACE / 2u32.saturating_pow(depth().min(3))
+    }
 
     #[derive(Default)]
     struct Children {
@@ -141,8 +160,8 @@ mod imp {
         running: Vec<(Pid, bool)>,
         /// The process groups this program made that may still have members.
         groups: Vec<Pid>,
-        /// The signal that stops this program, once one came.
-        stopping: Option<i32>,
+        /// A signal came: this program is stopping.
+        stopping: bool,
     }
 
     struct Registry {
@@ -190,7 +209,7 @@ mod imp {
     pub(super) fn spawn(command: &mut Command) -> io::Result<Child> {
         let own_group = !shared();
         let mut children = lock();
-        if children.stopping.is_some() {
+        if children.stopping {
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
                 "stopping: nothing new starts",
@@ -199,6 +218,7 @@ mod imp {
         if own_group {
             command.process_group(0);
         }
+        command.env(DEPTH, (depth() + 1).to_string());
         let child = command.spawn()?;
         let pid = Pid::from_child(&child);
         children.running.push((pid, own_group));
@@ -218,7 +238,8 @@ mod imp {
 
     /// Wait until `child` has exited, without reaping it, then take it off
     /// the list: the owner never signals a reaped pid, which may be reused.
-    /// When the program is stopping, this never returns.
+    /// When the program is stopping, this reaps it (so its process group can
+    /// empty) and never returns.
     pub(super) fn exited(child: &Child) {
         use rustix::process::{waitid, WaitId, WaitIdOptions};
         let pid = Pid::from_child(child);
@@ -231,44 +252,41 @@ mod imp {
         let mut children = lock();
         children.running.retain(|(running, _)| *running != pid);
         registry().changed.notify_all();
-        if children.stopping.is_some() {
+        if children.stopping {
             drop(children);
+            let _ = rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::empty());
             loop {
                 std::thread::park();
             }
         }
     }
 
-    /// The signals among `signals` that this program started out ignoring.
-    /// Only Linux says so without unsafe code (`/proc`); elsewhere none.
-    fn ignored(signals: &[i32]) -> Vec<i32> {
-        let mask = std::fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|status| {
-                status
-                    .lines()
-                    .find_map(|line| line.strip_prefix("SigIgn:"))
-                    .and_then(|hex| u64::from_str_radix(hex.trim(), 16).ok())
-            })
-            .unwrap_or(0);
-        signals
-            .iter()
-            .copied()
-            .filter(|signal| {
-                u32::try_from(signal - 1)
-                    .ok()
-                    .and_then(|bit| mask.checked_shr(bit))
-                    .is_some_and(|m| m & 1 == 1)
-            })
-            .collect()
+    /// The signals this program started out ignoring, as a mask (bit
+    /// `n - 1` for signal `n`), if it can tell: only Linux says so without
+    /// unsafe code (`/proc`).
+    fn ignored() -> Option<u64> {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        let hex = status
+            .lines()
+            .find_map(|line| line.strip_prefix("SigIgn:"))?;
+        u64::from_str_radix(hex.trim(), 16).ok()
     }
 
     pub(super) fn own() -> io::Result<()> {
         use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
         use signal_hook::iterator::exfiltrator::WithOrigin;
-        let all = [SIGINT, SIGTERM, SIGHUP];
-        let ignored = ignored(&all);
-        let listened: Vec<i32> = all.into_iter().filter(|s| !ignored.contains(s)).collect();
+        let listened: Vec<i32> = match ignored() {
+            Some(mask) => [SIGINT, SIGTERM, SIGHUP]
+                .into_iter()
+                .filter(|s| {
+                    mask.checked_shr(s.unsigned_abs() - 1)
+                        .is_some_and(|m| m & 1 == 0)
+                })
+                .collect(),
+            // Unknown whether it started ignoring SIGHUP (`nohup`): leave it
+            // as it was. A terminal's hangup reaches the children anyway.
+            None => vec![SIGINT, SIGTERM],
+        };
         // decided once: a job moved between foreground and background
         // keeps its children's groups
         shared();
@@ -292,7 +310,7 @@ mod imp {
     /// terminal, which sends it to the children in this program's group too.
     fn stop(signal: i32, sent: bool) {
         let mut children = lock();
-        children.stopping = Some(signal);
+        children.stopping = true;
         // the three signals `own` listens for all have names
         let sig = Signal::from_named_raw(signal).unwrap_or(Signal::TERM);
         for (pid, own_group) in &children.running {
@@ -303,28 +321,26 @@ mod imp {
         for group in &children.groups {
             let _ = rustix::process::kill_process_group(*group, sig);
         }
-        let deadline = Instant::now() + GRACE;
+        // With no terminal, what still runs after the grace is killed, and
+        // after as long again this program ends whatever is left (a dead
+        // process no one reaps still counts as in its group). In a terminal,
+        // a second Ctrl-C does that.
+        let mut deadline = (!shared()).then(|| Instant::now() + grace());
         let mut killed = false;
         loop {
             children.groups.retain(|group| group_alive(*group));
-            let groups_left = !children.groups.is_empty();
-            if children.running.is_empty() && !groups_left {
+            if children.running.is_empty() && children.groups.is_empty() {
                 break;
             }
-            let now = Instant::now();
-            if groups_left && now >= deadline {
+            if deadline.is_some_and(|at| Instant::now() >= at) {
                 if killed {
-                    // twice the grace: a dead process no one reaps still
-                    // counts as in its group
-                    if now >= deadline + GRACE && children.running.is_empty() {
-                        break;
-                    }
-                } else {
-                    for group in &children.groups {
-                        let _ = rustix::process::kill_process_group(*group, Signal::KILL);
-                    }
-                    killed = true;
+                    break;
                 }
+                for group in &children.groups {
+                    let _ = rustix::process::kill_process_group(*group, Signal::KILL);
+                }
+                killed = true;
+                deadline = Some(Instant::now() + grace());
             }
             children = registry()
                 .changed

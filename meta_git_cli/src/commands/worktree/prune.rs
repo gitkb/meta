@@ -243,7 +243,7 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
                     create_prune_entry(
                         name.clone(),
                         checkout.display().to_string(),
-                        "orphaned (missing directory)",
+                        "a worktree of it whose folder was deleted",
                         None,
                     ),
                     Some(record.clone()),
@@ -303,9 +303,7 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
         let is_abandoned = record.is_none();
         let checked = check_worktree_removal(wt_path).map(|check| {
             let problems: Vec<String> = check
-                .blockers
-                .iter()
-                .filter(|b| !is_abandoned || !check.missing_records.contains(b))
+                .blockers_but(is_abandoned)
                 .chain(&check.unsaved)
                 .cloned()
                 .collect();

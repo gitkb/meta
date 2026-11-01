@@ -189,8 +189,19 @@ teammate() {
 
 head_of() { git -C "$1" rev-parse HEAD; }
 
-# within SECONDS CMD...: CMD, killed if it runs longer (macOS has no timeout)
-within() { perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$@"; }
+# within SECONDS CMD...: CMD, stopped with TERM if it runs longer, then
+# KILL 5 s later; exits as CMD did (macOS has no timeout)
+within() {
+    perl -e '
+        my $limit = shift;
+        defined(my $pid = fork) or die "fork: $!";
+        if (!$pid) { exec @ARGV or die "exec: $!" }
+        $SIG{ALRM} = sub { kill "TERM", $pid; sleep 5; kill "KILL", $pid };
+        alarm $limit;
+        waitpid $pid, 0;
+        exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
+    ' "$@"
+}
 
 @test "meta git update fast-forwards each repo, and clones what the pulled .meta.yaml adds" {
     with_remotes

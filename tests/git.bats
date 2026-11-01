@@ -371,8 +371,8 @@ within() {
 
 @test "meta git update detects missing repos" {
     rm -rf "$TEST_DIR/shared"
-    # a host that doesn't exist: the clone fails without the network
-    sed -i.bak 's|git@github.com:org/shared.git|git@example.invalid:org/shared.git|' "$TEST_DIR/.meta.yaml"
+    # a remote that doesn't exist: the clone fails without the network
+    sed -i.bak "s|git@github.com:org/shared.git|file://$TEST_DIR/nowhere.git|" "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git update
     # It should detect that shared is missing and try to clone it
     # (will fail since the URL is fake, but should detect the missing repo)

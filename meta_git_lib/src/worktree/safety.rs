@@ -738,7 +738,7 @@ mod tests {
         assert!(repo_holds(&repo).unwrap().is_empty());
 
         // a commit on a local branch only, a stash and a worktree
-        git(&repo, &["switch", "-q", "-c", "topic"]);
+        git(&repo, &["switch", "-q", "-c", "holds-topic"]);
         git(&repo, &["commit", "-q", "--allow-empty", "-m", "mine"]);
         std::fs::write(repo.join("a.txt"), "b").unwrap();
         git(&repo, &["stash", "-q"]);

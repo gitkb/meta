@@ -388,7 +388,14 @@ fn origin(dir: &Path) -> Option<GitUrl> {
 fn same_repository((a, b): (&GitUrl, &GitUrl)) -> bool {
     let local = |url: &GitUrl| {
         let text = url.as_git_arg().to_str()?;
-        let path = Path::new(text.strip_prefix("file://").unwrap_or(text));
+        let text = text.strip_prefix("file://").unwrap_or(text);
+        // file:///C:/x names C:/x on Windows
+        #[cfg(windows)]
+        let text = match text.strip_prefix('/') {
+            Some(rest) if rest.get(1..2) == Some(":") => rest,
+            _ => text,
+        };
+        let path = Path::new(text);
         path.is_absolute()
             .then(|| path.canonicalize().ok())
             .flatten()

@@ -460,8 +460,8 @@ echo '{"command":"docker build","args":[],"projects":[{"name":"test","path":"./t
 # Place plugin in discovery path
 cp meta-docker "${META_DATA_DIR:-$HOME/.meta}/plugins/"
 
-# Test via meta
-meta docker build --dry-run
+# Test via meta (meta's options go before the command; after it they are the plugin's)
+meta --dry-run docker build
 ```
 
 ### Automated Tests

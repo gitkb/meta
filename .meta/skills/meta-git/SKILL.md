@@ -56,7 +56,7 @@ Before making sweeping changes, commit or stash uncommitted work in every repo:
 # See which repos have uncommitted changes
 meta git status
 
-# Commit them at this meta level (add --recursive for nested ones); `meta git commit` commits only staged changes
+# Commit them at this meta level (`meta --recursive git …` for nested ones); `meta git commit` commits only staged changes
 meta git add -A
 meta git commit -m "wip: before refactor"
 

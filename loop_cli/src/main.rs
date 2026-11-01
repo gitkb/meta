@@ -48,6 +48,15 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = meta_core::args::parse::<Cli>();
 
+    // It writes ~/.looprc alone; the config file here has no say in it
+    if cli.add_aliases_to_global_looprc {
+        anyhow::ensure!(
+            cli.command.is_empty(),
+            "--add-aliases-to-global-looprc imports your shell's aliases and runs no command"
+        );
+        return import_aliases(false);
+    }
+
     // A file named with -c must exist; ./.looprc may not
     let (config_path, mut config) = match cli.config {
         Some(path) => {
@@ -60,13 +69,6 @@ fn main() -> Result<()> {
         }
     };
 
-    if cli.add_aliases_to_global_looprc {
-        anyhow::ensure!(
-            cli.command.is_empty(),
-            "--add-aliases-to-global-looprc imports your shell's aliases and runs no command"
-        );
-        return import_aliases(config.dry_run);
-    }
     if cli.command.is_empty() {
         Cli::command().print_help()?;
         std::process::exit(0);

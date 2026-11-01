@@ -208,6 +208,8 @@ pub fn import_aliases(dry_run: bool) -> Result<()> {
     };
     let (mut doc, mut aliases) = match &existing {
         Some(text) => {
+            // Read twice: as a .looprc, so a broken one is reported, and as
+            // plain JSON, so its other keys are written back as they are
             let aliases = parse_looprc(&path, text)?.aliases;
             let doc: serde_json::Map<String, serde_json::Value> = serde_json::from_str(text)
                 .with_context(|| format!("Failed to parse {}", escape_path(&path)))?;
@@ -355,7 +357,7 @@ fn build_command(
 fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
     CommandResult {
         success: false,
-        exit_code: None,
+        exit_code: Some(-1),
         signal: None,
         directory: dir.to_path_buf(),
         command,

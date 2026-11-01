@@ -371,6 +371,9 @@ SCRIPT
     # one that exits has its code and no signal
     run sh -c '"$1" --json --include api exec -- sh -c "exit 3" 2>/dev/null' _ "$META_BIN"
     echo "$output" | jq -e '.results[0] | .exit_code == 3 and (has("signal") | not)'
+    # one that never started keeps -1
+    run sh -c '"$1" --json --include api exec -- meta-no-such-program 2>/dev/null' _ "$META_BIN"
+    echo "$output" | jq -e '.results[0] | .exit_code == -1 and (has("signal") | not)'
 }
 
 @test "loop handles commands with pipes via script" {

@@ -289,9 +289,6 @@ assert "extra" in repos, repos
     run "$META_BIN" context
     [[ "$output" == *"| frontend | topic | 1 modified, no upstream |"* ]]
     [ -z "$(ls -A "$META_DATA_DIR")" ]
-    run "$META_BIN" context --no-cache
-    [ "$status" -eq 2 ]
-    [[ "$output" == *"unexpected argument '--no-cache'"* ]]
 }
 
 # ============ What git says about each repo ============

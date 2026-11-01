@@ -75,7 +75,7 @@ pub fn handle_context(
                         ctx.upstream_gone =
                             status.upstream.is_some().then(|| status.upstream_gone());
                         if let Some(op) = operation {
-                            ctx.operation = Some(op.name().to_string());
+                            ctx.operation = Some(op.name());
                             if let Operation::Rebase { branch } = op {
                                 ctx.rebasing = branch;
                             }
@@ -158,7 +158,7 @@ pub struct RepoContext {
     /// A git operation stopped half-way: `rebase`, `am`, `merge`,
     /// `cherry-pick`, `revert` or `bisect`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub operation: Option<String>,
+    pub operation: Option<&'static str>,
     /// The branch a stopped rebase is rebasing (HEAD is detached meanwhile).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rebasing: Option<String>,
@@ -375,7 +375,7 @@ fn format_status(r: &RepoContext) -> String {
         parts.push(format!("{op} in progress"));
     }
     match (r.dirty, r.modified_count, r.untracked_count) {
-        (None, _, _) => return "-".to_string(),
+        (None, _, _) => parts.push("-".to_string()),
         (Some(false), _, _) => parts.push("clean".to_string()),
         (Some(true), Some(all), untracked) => {
             let untracked = untracked.unwrap_or(0);
@@ -586,11 +586,11 @@ mod tests {
     }
 
     #[test]
-    fn an_unread_status_is_a_bare_dash() {
-        let mut r = make_repo("x", None, None, None, vec![]);
-        r.detached = Some(false);
-        assert_eq!(format_status(&r), "-");
-        assert_eq!(format_branch(&r), "-");
+    fn an_unread_work_tree_keeps_its_counts() {
+        // a checkout git won't read (`core.bare=true`): its refs only
+        let mut r = make_repo("x", Some("main"), None, None, vec![]);
+        r.ahead = Some(2);
+        assert_eq!(format_status(&r), "- (↑2)");
     }
 
     // ── format_markdown ─────────────────────────────────

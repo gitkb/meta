@@ -105,16 +105,6 @@ impl Operation {
                 });
             return Ok(Some(Self::Rebase { branch }));
         }
-        // a cherry-pick or revert of several commits whose stopped one was
-        // committed by hand leaves only its todo list
-        let sequencer = || {
-            let todo = std::fs::read_to_string(dir.join(todo)).ok()?;
-            match todo.split_whitespace().next()? {
-                "pick" | "p" => Some(Self::CherryPick),
-                "revert" => Some(Self::Revert),
-                _ => None,
-            }
-        };
         // MERGE_HEAD is a file in every ref store; the others are in a
         // reftable one when the repository has one
         let files = matches!(format, "files" | "--show-ref-format");
@@ -134,6 +124,16 @@ impl Operation {
                 return Ok(Some(operation));
             }
         }
+        // a cherry-pick or revert of several commits whose stopped one was
+        // committed by hand leaves only its todo list
+        let sequencer = || {
+            let todo = std::fs::read_to_string(dir.join(todo)).ok()?;
+            match todo.split_whitespace().next()? {
+                "pick" | "p" => Some(Self::CherryPick),
+                "revert" => Some(Self::Revert),
+                _ => None,
+            }
+        };
         Ok(sequencer().or_else(|| exists(&dir.join(bisect)).then_some(Self::Bisect)))
     }
 }

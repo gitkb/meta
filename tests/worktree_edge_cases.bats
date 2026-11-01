@@ -2027,8 +2027,13 @@ set_projects() {
     [ "$status" -ne 0 ]
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/.deps/child/ran" ]
-    # --primary runs in the workspace, as the error says
+    # nor --primary, which can't tell where the set was made from: it names
+    # the record; from the workspace, meta runs there
     run "$META_BIN" --primary exec -- pwd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"meta-worktree.json"* ]]
+    cd "$TEST_DIR"
+    run "$META_BIN" exec -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"$TEST_DIR"* ]]
 }

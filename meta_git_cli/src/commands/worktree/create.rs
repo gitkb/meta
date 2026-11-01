@@ -562,40 +562,46 @@ enum Why {
 struct Plan<'a> {
     meta_dir: &'a std::path::Path,
     repos: Vec<(PlannedRepo, Why)>,
-    /// The branch each place was asked for on (`None`: the default).
-    asked: HashMap<String, Option<String>>,
+    /// The branch of each place a --repo asked for.
+    asked: HashMap<String, String>,
 }
 
 impl Plan<'_> {
-    fn add(
-        &mut self,
-        found: Found,
-        branch: String,
-        why: Why,
-        asked: Option<Option<&str>>,
-    ) -> Result<()> {
+    fn add(&mut self, found: Found, branch: String, why: Why, asked: bool) -> Result<()> {
         let place = place_in_set(self.meta_dir, &found.key, &found.source);
-        let repo = PlannedRepo {
-            project: found.key,
-            source: found.source,
-            place: place.clone(),
-            branch,
-        };
         let known = self.repos.iter_mut().find(|(r, _)| r.place == place);
-        match (known, self.asked.get(&place), asked) {
-            (Some(_), Some(first), Some(second)) if first.as_deref() != second => anyhow::bail!(
+        match (known, self.asked.get(&place)) {
+            (Some(_), Some(first)) if asked && *first != branch => anyhow::bail!(
                 "Repo '{}' is given twice, on branches '{}' and '{}'",
                 escape(&place),
-                escape(first.as_deref().unwrap_or("(default)")),
-                escape(second.unwrap_or("(default)"))
+                escape(first),
+                escape(&branch)
             ),
             // what was asked for wins over what is only needed there
-            (Some(known), None, Some(_)) => *known = (repo, why),
-            (Some(_), _, _) => {}
-            (None, _, _) => self.repos.push((repo, why)),
+            (Some(known), None) if asked => {
+                *known = (
+                    PlannedRepo {
+                        project: found.key,
+                        source: found.source,
+                        place: place.clone(),
+                        branch: branch.clone(),
+                    },
+                    why,
+                )
+            }
+            (Some(_), _) => {}
+            (None, _) => self.repos.push((
+                PlannedRepo {
+                    project: found.key,
+                    source: found.source,
+                    place: place.clone(),
+                    branch: branch.clone(),
+                },
+                why,
+            )),
         }
-        if let Some(asked) = asked {
-            self.asked.insert(place, asked.map(str::to_string));
+        if asked {
+            self.asked.insert(place, branch);
         }
         Ok(())
     }
@@ -623,20 +629,26 @@ fn plan_repos(
         // the root, when something is there for git (one git can't use is
         // skipped with the rest, saying why), and every project: by name,
         // or with --recursive, every place of the tree
+        // (exec --ephemeral --all may give a repo its branch: --repo name:branch)
+        let mut all = |found: Found| {
+            let spec = args.repos.iter().find(|r| r.alias == found.key);
+            let asked = spec.and_then(|r| r.branch.as_deref());
+            plan.add(found, branch(asked), Why::All, spec.is_some())
+        };
         if !matches!(meta_core::gitdir::common_dir(meta_dir), Ok(None)) {
-            plan.add(index.find(".")?, branch(None), Why::All, None)?;
+            all(index.find(".")?)?;
         }
         match index.tree() {
             Some(tree) => {
                 let mut places: Vec<&String> = tree.keys().collect();
                 places.sort();
                 for place in places {
-                    plan.add(index.place(place)?, branch(None), Why::All, None)?;
+                    all(index.place(place)?)?;
                 }
             }
             None => {
                 for project in &workspace.projects {
-                    plan.add(index.find(&project.name)?, branch(None), Why::All, None)?;
+                    all(index.find(&project.name)?)?;
                 }
             }
         }
@@ -645,14 +657,13 @@ fn plan_repos(
         for spec in &args.repos {
             let found = index.find(&spec.alias)?;
             asked_keys.push(found.key.clone());
-            let asked = Some(spec.branch.as_deref());
-            plan.add(found, branch(spec.branch.as_deref()), Why::Asked, asked)?;
+            plan.add(found, branch(spec.branch.as_deref()), Why::Asked, true)?;
         }
         if !args.no_deps {
             // The root holds what the workspace's repos share (its Cargo
             // workspace, .claude/, build scripts)
             if meta_core::gitdir::common_dir(meta_dir)?.is_some() {
-                plan.add(index.find(".")?, branch(None), Why::Needed, None)?;
+                plan.add(index.find(".")?, branch(None), Why::Needed, false)?;
             }
             let graph = match index.tree() {
                 Some(tree) => nested_dep_graph(tree)?,
@@ -680,7 +691,7 @@ fn plan_repos(
                         Some(_) => index.place(dep)?,
                         None => index.find(dep)?,
                     };
-                    plan.add(found, branch(None), Why::Needed, None)?;
+                    plan.add(found, branch(None), Why::Needed, false)?;
                 }
             }
         }
@@ -727,7 +738,7 @@ fn plan_repos(
                 key: parent,
                 source,
             };
-            plan.add(found, branch(None), Why::Parent(project.clone()), None)?;
+            plan.add(found, branch(None), Why::Parent(project.clone()), false)?;
         }
     }
 

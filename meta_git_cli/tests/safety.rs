@@ -750,6 +750,72 @@ fn with_recursive_all_every_place_is_a_place_whatever_it_names() {
 }
 
 #[test]
+fn one_repo_named_twice_is_refused_only_on_two_branches() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["a"]);
+    let url = root.join("up/a.git");
+    let config = json!({"projects": {"p": {"repo": url, "path": "a"}}});
+    fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
+    // by name, on the set's branch, and by path, on that branch by name
+    let out = worktree(
+        root,
+        &ws,
+        &[
+            "create",
+            "same",
+            "--repo",
+            "p",
+            "--repo",
+            "a:same",
+            "--no-deps",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = worktree(
+        root,
+        &ws,
+        &[
+            "create",
+            "two",
+            "--repo",
+            "p",
+            "--repo",
+            "a:other",
+            "--no-deps",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("given twice"), "{}", stderr(&out));
+}
+
+#[test]
+fn an_ephemeral_exec_of_all_keeps_a_branch_given_for_one_repo() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["a", "b"]);
+    let out = meta_git(
+        root,
+        &ws,
+        "git worktree exec",
+        &[
+            "run",
+            "--ephemeral",
+            "--all",
+            "--repo",
+            "a:asked",
+            "--",
+            "true",
+        ],
+        json!({"dry_run": true}),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let plan = String::from_utf8_lossy(&out.stdout);
+    assert!(plan.contains("branch: asked"), "{plan}");
+    assert!(plan.contains("branch: run"), "{plan}");
+}
+
+#[test]
 fn a_root_git_cannot_use_is_no_reason_to_fail_a_create_without_it() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

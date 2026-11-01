@@ -5,7 +5,7 @@ use indicatif::MultiProgress;
 use meta_core::config;
 use meta_core::display::{escape, escape_path};
 use meta_core::gitdir::Checkout;
-use meta_git_lib::clone_queue::{CloneQueue, CloneTask, MetaRepo, Work};
+use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::collections::VecDeque;
 use std::path::Path;
@@ -70,11 +70,7 @@ pub(crate) fn execute_git_update(
             vec![queue.root(&name, root, url, Work::Pull)]
         }
         _ => {
-            let top = MetaRepo {
-                name,
-                dir: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
-                url: None,
-            };
+            let top = MetaRepo::at(&name, root, None);
             queue.discover_in(&workspace, 0, &Arc::from([top]))?
         }
     };
@@ -88,7 +84,9 @@ pub(crate) fn execute_git_update(
         );
         let mut tasks = VecDeque::from(tasks);
         while let Some(task) = tasks.pop_front() {
-            let shown = escape(&loop_lib::display_command(&argv(&task))).into_owned();
+            let argv = crate::clone_worker::git_argv(&task, None, |url| url.to_string().into());
+            let argv: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into()).collect();
+            let shown = escape(&loop_lib::display_command(&argv)).into_owned();
             match task.work {
                 Work::Clone(_) => println!("  {shown}"),
                 Work::Pull => match crate::clone_worker::nothing_to_pull(&task.target_path) {
@@ -130,15 +128,15 @@ pub(crate) fn execute_git_update(
     let mp = MultiProgress::new();
     clone_with_queue(&queue, tasks, parallel, &mp, ssh_cmd.as_deref())?;
     report_unlisted(&queue, cwd);
-    let not_pulled = queue.not_pulled();
-    for (name, why) in &not_pulled {
+    let outcome = queue.outcome();
+    for (name, why) in &outcome.not_pulled {
         eprintln!("{} {}: {why}", style("Not pulled").yellow(), escape(name));
     }
     if let Some(error) = crate::clone_worker::report_failures(&queue) {
         return Ok(CommandResult::Error(error));
     }
-    let (pulled, cloned) = queue.done();
-    let not_pulled = match not_pulled.len() {
+    let (pulled, cloned) = (outcome.pulled, outcome.cloned);
+    let not_pulled = match outcome.not_pulled.len() {
         0 => String::new(),
         n => format!(", {n} with nothing to pull from"),
     };
@@ -146,21 +144,10 @@ pub(crate) fn execute_git_update(
     Ok(CommandResult::Message(String::new()))
 }
 
-/// The git command a task runs, as shown.
-fn argv(task: &CloneTask) -> Vec<String> {
-    let path = task.target_path.to_string_lossy().into_owned();
-    match &task.work {
-        Work::Pull => ["git", "-C", &path, "pull", "--ff-only", "--no-rebase"]
-            .map(String::from)
-            .into(),
-        Work::Clone(url) => ["git".into(), "clone".into(), url.to_string(), path].into(),
-    }
-}
-
 /// Name each repository in a meta repo's folder that its `.meta.yaml`
 /// doesn't list, with what deleting it would lose.
 fn report_unlisted(queue: &CloneQueue, cwd: &Path) {
-    for path in queue.unlisted() {
+    for path in queue.outcome().unlisted {
         let shown = escape_path(path.strip_prefix(cwd).unwrap_or(&path));
         let holds = match meta_git_lib::worktree::safety::repo_holds(&path) {
             Ok(held) if held.is_empty() => "it has no uncommitted or untracked files, stashes, \

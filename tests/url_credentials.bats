@@ -71,7 +71,7 @@ projects:
 EOF
     meta_without_token --dry-run git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"git clone 'https://***@example.invalid/org/lib.git'"* ]] || false
+    [[ "$output" == *"git clone -- 'https://***@example.invalid/org/lib.git'"* ]] || false
     meta_without_token project check --json
     [[ "$output" == *'"repo": "https://***@example.invalid/org/lib.git"'* ]] || false
     meta_without_token git update

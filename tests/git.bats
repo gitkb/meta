@@ -263,7 +263,7 @@ within() { perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$@"; }
     run "$META_BIN" --dry-run git update
     [ "$status" -eq 0 ]
     [[ "$output" == *"git -C $TEST_DIR/frontend pull --ff-only --no-rebase"* ]]
-    [[ "$output" == *"git clone file://$TEST_DIR/remotes/shared.git $TEST_DIR/shared"* ]]
+    [[ "$output" == *"git clone -- file://$TEST_DIR/remotes/shared.git $TEST_DIR/shared"* ]]
     [ "$(head_of frontend)" = "$frontend_head" ]
     [ ! -e "$TEST_DIR/shared" ]
 }

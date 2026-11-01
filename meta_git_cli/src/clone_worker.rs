@@ -1,7 +1,9 @@
 use anyhow::Context;
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use meta_git_lib::clone_queue::{CloneQueue, CloneTask, Work};
+use meta_core::git::GitUrl;
+use meta_git_lib::clone_queue::{CloneQueue, CloneTask, Outcome, Work};
+use std::ffi::OsString;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -116,10 +118,13 @@ impl<'a> Worker<'a> {
 /// lists one above it, and each nested `.meta.yaml` that can't be read, to
 /// stderr; return the command's error, or `None` when nothing failed.
 pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
-    let failures = queue.failures();
-    let refused = queue.refused();
-    let cycles = queue.cycles();
-    let unreadable = queue.unreadable();
+    let Outcome {
+        failures,
+        refused,
+        cycles,
+        unreadable,
+        ..
+    } = queue.outcome();
     if failures.is_empty() && refused.is_empty() && cycles.is_empty() && unreadable.is_empty() {
         return None;
     }
@@ -131,7 +136,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
                 meta_core::display::escape(&failure.name),
             ),
             Work::Pull => eprintln!(
-                "{} {} (git pull --ff-only)",
+                "{} {}",
                 style("Could not pull").red().bold(),
                 meta_core::display::escape(&failure.name),
             ),
@@ -166,7 +171,6 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
         );
     }
     let (finished, _) = queue.get_counts();
-    let names = |names: Vec<&str>| names.join(", ");
     let failed = |clone: bool| -> Vec<&str> {
         failures
             .iter()
@@ -181,21 +185,25 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
                 format!(
                     "{} of {finished} repositories failed to clone: {}",
                     clones.len(),
-                    names(clones.clone())
+                    clones.join(", ")
                 )
             }),
             (!pulls.is_empty()).then(|| {
                 format!(
                     "{} could not be fast-forwarded: {}",
                     plural(pulls.len()),
-                    names(pulls.clone())
+                    pulls.join(", ")
                 )
             }),
             (!refused.is_empty()).then(|| {
                 format!(
                     "{} project folder(s) hold something that is not a git repository: {}",
                     refused.len(),
-                    names(refused.iter().map(|(name, _)| name.as_str()).collect())
+                    refused
+                        .iter()
+                        .map(|(name, _)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             }),
             (!cycles.is_empty()).then(|| {
@@ -216,6 +224,37 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
         .collect::<Vec<_>>()
         .join("; "),
     )
+}
+
+/// The git command `task` runs, `url` giving a clone's URL as git gets it
+/// or as meta shows it.
+pub(crate) fn git_argv(
+    task: &CloneTask,
+    git_depth: Option<&str>,
+    url: impl Fn(&GitUrl) -> OsString,
+) -> Vec<OsString> {
+    let path = task.target_path.clone().into_os_string();
+    match &task.work {
+        Work::Clone(from) => ["git", "clone"]
+            .map(OsString::from)
+            .into_iter()
+            .chain(
+                git_depth
+                    .into_iter()
+                    .flat_map(|d| ["--depth", d].map(OsString::from)),
+            )
+            .chain(["--".into(), url(from), path])
+            .collect(),
+        // --no-rebase: before git 2.34, pull.rebase won over --ff-only
+        Work::Pull => vec![
+            "git".into(),
+            "-C".into(),
+            path,
+            "pull".into(),
+            "--ff-only".into(),
+            "--no-rebase".into(),
+        ],
+    }
 }
 
 /// Why the repository at `dir` has nothing to pull from, if so: it isn't
@@ -257,23 +296,14 @@ fn run_git(
 ) -> Result<(), String> {
     // What appeared in the folder since it was queued makes git refuse it,
     // which is reported like any failed clone: never taken for a clone
-    let mut cmd = match &task.work {
-        Work::Clone(url) => {
-            let mut cmd = meta_core::git::git(Path::new("."));
-            cmd.arg("clone");
-            if let Some(d) = queue.git_depth() {
-                cmd.arg("--depth").arg(d);
-            }
-            cmd.arg("--").arg(url.as_git_arg()).arg(&task.target_path);
-            cmd
-        }
-        Work::Pull => {
-            let mut cmd = meta_core::git::git(&task.target_path);
-            // --no-rebase: before git 2.34, pull.rebase won over --ff-only
-            cmd.args(["pull", "--ff-only", "--no-rebase"]);
-            cmd
-        }
-    };
+    let mut cmd = meta_core::git::git(match task.work {
+        Work::Clone(_) => Path::new("."),
+        Work::Pull => &task.target_path,
+    });
+    let argv = git_argv(task, queue.git_depth(), |url| {
+        url.as_git_arg().to_os_string()
+    });
+    cmd.args(argv.iter().skip(1));
     if let Some(ssh) = ssh_cmd {
         cmd.env("GIT_SSH_COMMAND", ssh);
     }

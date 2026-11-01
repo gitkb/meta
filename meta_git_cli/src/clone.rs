@@ -162,20 +162,11 @@ pub(crate) fn execute_git_clone(
     // For non-recursive mode, read only the cloned repo's own .meta.yaml
     let effective_meta_depth = if recursive { meta_depth } else { Some(0) };
     let queue = CloneQueue::new(depth.clone(), effective_meta_depth, false);
-    let top = MetaRepo {
-        name: clone_dir_path.file_name().map_or_else(
-            || clone_dir.clone(),
-            |name| name.to_string_lossy().into_owned(),
-        ),
-        dir: clone_dir_path
-            .canonicalize()
-            .unwrap_or_else(|_| clone_dir_path.clone()),
-        // as git recorded it: a relative URL resolved
-        url: meta_core::git::remote_url(&clone_dir_path)
-            .ok()
-            .flatten()
-            .or_else(|| Some(url.clone())),
-    };
+    let name = clone_dir_path
+        .file_name()
+        .map_or_else(|| clone_dir.clone(), |n| n.to_string_lossy().into_owned());
+    // (its origin as git recorded it: a relative URL resolved)
+    let top = MetaRepo::at(&name, &clone_dir_path, Some(url.clone()));
     let tasks = queue.discover(&clone_dir_path, 0, &Arc::from([top]))?;
     let initial_count = tasks.len();
 

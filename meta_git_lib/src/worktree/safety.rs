@@ -713,6 +713,17 @@ mod tests {
         let (repo, remote) = (tmp.path().join("repo"), tmp.path().join("remote.git"));
         std::fs::create_dir(&repo).unwrap();
         git(&repo, &["init", "-q"]);
+        // what it checks doesn't hang on the user's git config: no global
+        // ignores, signing or hooks
+        let none = tmp.path().join("none");
+        std::fs::create_dir(&none).unwrap();
+        for (key, value) in [
+            ("core.excludesFile", none.join("ignore")),
+            ("core.hooksPath", none.clone()),
+            ("commit.gpgSign", "false".into()),
+        ] {
+            git(&repo, &["config", key, value.to_str().unwrap()]);
+        }
         std::fs::write(repo.join("a.txt"), "a").unwrap();
         assert_eq!(repo_holds(&repo).unwrap(), ["no commits, and 1 file"]);
 

@@ -818,6 +818,8 @@ the only commit message
         assert!(!parsed["plan"]["parallel"].as_bool().unwrap());
     }
 
+    // ============ Remote Command Detection Tests ============
+
     #[test]
     fn test_is_remote_command_push() {
         assert!(super::is_remote_command(&argv("git push")));

@@ -16,6 +16,10 @@ for _ in $(seq 100); do
     kill -0 "$pid" 2>/dev/null || { echo ended >> "$dir/result"; break; }
     sleep 0.1
 done
+if ! grep -q ended "$dir/result" 2>/dev/null; then
+    # meta didn't end: stop it, so the test fails rather than hangs
+    kill -KILL "$pid"
+fi
 wait "$pid"
 stubborn=$(cat "$dir/stubborn")
 for _ in $(seq 50); do

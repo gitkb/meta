@@ -95,10 +95,12 @@ pub(crate) fn handle_create(
     // Check if worktree already exists
     let wt_dir = worktree_root.join(name);
     if wt_dir.exists() {
-        let lease = wt_dir
-            .canonicalize()
-            .ok()
-            .and_then(|set| lease::find(&workspace::Workspace::of(&configs.here).repos, &set));
+        let lease = wt_dir.canonicalize().ok().and_then(|set| {
+            lease::find(
+                &lease::home(&workspace::Workspace::of(&configs.here)).ok()?,
+                &set,
+            )
+        });
         anyhow::bail!(
             "Worktree '{name}' already exists at {}{}. Use 'meta worktree remove {name}' first.",
             escape_path(&wt_dir),
@@ -321,28 +323,10 @@ pub(crate) fn handle_create(
                 .join(name),
             _ => anyhow::bail!("Cannot resolve {}", escape_path(&wt_dir)),
         };
-        let Some((_, first, _)) = repos_to_create.first() else {
-            anyhow::bail!("No repos selected; no worktree was created");
-        };
-        let git_dir = meta_core::gitdir::common_dir(first)?
-            .ok_or_else(|| anyhow::anyhow!("{} is not a git repository", escape_path(first)))?;
-        // A lease for this path left in another repository (by a create of
-        // other repos, whose set was then deleted by hand) would name the
-        // set this call makes: retire it first
-        if let Some(found) = lease::find(&workspace::Workspace::of(&configs.here).repos, &set) {
-            if found.live {
-                anyhow::bail!("Worktree set {} is {}", escape_path(&set), found.doing());
-            }
-            found.delete()?;
-        }
+        let workspace = workspace::Workspace::of(&configs.here);
         lease::take(
-            &git_dir,
-            &lease::Lease {
-                set,
-                project: configs.owner.dir.clone(),
-                pid: std::process::id(),
-                ephemeral,
-            },
+            &lease::home(&workspace)?,
+            &lease::Lease::new(set, configs.owner.dir.clone(), ephemeral),
         )?
     };
 

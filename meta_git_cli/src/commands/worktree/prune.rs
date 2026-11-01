@@ -139,7 +139,9 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
     // finishing it is pruned, recorded or not.
     let mut held = BTreeSet::new();
     let mut abandoned = BTreeMap::new();
-    for found in lease::all(&workspace.repos) {
+    // a workspace with no repository has no sets, and no leases
+    let home = lease::home(&workspace).ok();
+    for found in home.as_deref().map(lease::all).unwrap_or_default() {
         match &found.lease {
             Some(lease) if !workspace.made_here(&lease.project) => {}
             Some(lease) if found.live => {
@@ -353,26 +355,37 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
         let removal = match &check {
             // Checked again: a directory above may have become a link since
             Some(check) => match path_moved(wt_path) {
-                // An abandoned set's lease, claimed and held through the
-                // deletion: a create of the same set since then retired it
-                None => match abandoned
-                    .get(wt_path)
-                    .map(|found| found.claim())
-                    .transpose()
-                {
-                    Ok(Some(None)) => {
-                        kept.push(create_prune_entry(
-                            prune_entry.name,
-                            prune_entry.path,
-                            format!("{}, but it was made again since", prune_entry.reason),
-                            prune_entry.age_seconds,
-                        ));
-                        continue;
+                // The set's lease, held through the deletion so no create of
+                // it starts meanwhile. Refused if one is creating it or an
+                // ephemeral run uses it; an abandoned set whose lease is
+                // another's now was made again since.
+                None => {
+                    let held = home
+                        .as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("no repository keeps its lease"))
+                        .and_then(|home| lease::hold(home, wt_path));
+                    let token = |lease: Option<&lease::Lease>| lease.map(|l| l.token.clone());
+                    let why = match &held {
+                        Err(e) => Some(format!("{e:#}")),
+                        Ok((left, _)) => abandoned
+                            .get(wt_path)
+                            .filter(|found| token(found.lease.as_ref()) != token(left.as_ref()))
+                            .map(|_| "it was made again since".to_string()),
+                    };
+                    match (why, held) {
+                        (None, Ok((_, claim))) => delete_checked_set(wt_path, check, false, false)
+                            .and_then(|()| claim.delete()),
+                        (why, _) => {
+                            kept.push(create_prune_entry(
+                                prune_entry.name,
+                                prune_entry.path,
+                                format!("{}, but {}", prune_entry.reason, why.unwrap_or_default()),
+                                prune_entry.age_seconds,
+                            ));
+                            continue;
+                        }
                     }
-                    Ok(claim) => delete_checked_set(wt_path, check, false, false)
-                        .and_then(|()| claim.flatten().map_or(Ok(()), |claim| claim.delete())),
-                    Err(e) => Err(e),
-                },
+                }
                 Some(why) => {
                     kept.push(create_prune_entry(
                         prune_entry.name,
@@ -449,8 +462,9 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
 
 /// Delete the records of a set whose directory is gone, each only if its
 /// worktree is still gone and it is still the record prune read. Git's own
-/// entries for its worktrees stay (a moved worktree can still be repaired);
-/// `create` and `add` take back one at the path they use.
+/// entries for its worktrees stay: one can hold work its folder didn't, and
+/// a moved worktree can still be repaired (`create` and `add` at that path
+/// say how to drop one).
 fn forget(set: &Path, sets: &Records) -> Result<()> {
     for (admin, record) in sets.get(set).into_iter().flatten() {
         if record::checkout_gone(admin) && record::read(admin)?.as_ref() == Some(record) {

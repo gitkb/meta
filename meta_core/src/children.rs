@@ -86,7 +86,9 @@ impl Owned {
             imp::exited(&self.child);
             self.waited = true;
         }
-        self.child.wait()
+        let status = self.child.wait();
+        imp::reaped();
+        status
     }
 
     /// Read the child's piped stdout and stderr to their end, then wait for
@@ -202,7 +204,8 @@ mod imp {
     fn group_alive(group: Pid) -> bool {
         // A group's id can't be another's while any of it lives. Accepted, as
         // in meta-mcp: once it is empty its id could be reused before the
-        // next check, which needs pid wraparound within milliseconds.
+        // next check (groups are checked whenever a child is started or
+        // reaped), which needs pid wraparound in between.
         rustix::process::test_kill_process_group(group).is_ok()
     }
 
@@ -227,6 +230,12 @@ mod imp {
             children.groups.push(pid);
         }
         Ok(child)
+    }
+
+    /// Forget the process groups that have emptied: once one has, its id
+    /// may become another's.
+    pub(super) fn reaped() {
+        lock().groups.retain(|group| group_alive(*group));
     }
 
     /// Take `child` off the list of running children, if it is still there.
@@ -392,6 +401,8 @@ mod imp {
     }
 
     pub(super) fn exited(_child: &Child) {}
+
+    pub(super) fn reaped() {}
 
     pub(super) fn let_go(_child: &Child) {}
 

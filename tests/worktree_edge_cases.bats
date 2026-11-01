@@ -2407,7 +2407,7 @@ J
     [ "$(cat "$TEST_DIR/result")" = "$(printf 'ended\nstubborn ended')" ]
 }
 
-@test "a lease left in another repository doesn't make prune remove a set made again at its path" {
+@test "a lease left by a stopped create whose set was then deleted doesn't make prune remove a set made again at its path" {
     slow_checkout_hook
     "$META_BIN" git worktree create same --repo backend --no-deps &
     local pid=$!

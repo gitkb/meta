@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::*;
 use meta_core::display::{escape, escape_path};
 use meta_core::ExecutionMode;
@@ -34,42 +34,47 @@ pub(crate) fn handle_remove(
     }
 
     let workspace = Workspace::of(&configs.here);
-    // A set being made is its creator's; one whose creator is gone without
-    // finishing it is meta's to remove, recorded or not. (A run removing
-    // the ephemeral set it made holds that set's lease itself.)
-    let abandoned = match wt_dir
+    // A set being made is its creator's, and one in use by its ephemeral
+    // run is the run's (a run removing its own set holds its lease itself).
+    // Otherwise the set's lease is held until the set is deleted, so no
+    // create of it starts meanwhile; one its creator left marks a set it
+    // never finished, which is meta's to remove, recorded or not. A preview
+    // only looks.
+    let set = wt_dir
         .canonicalize()
-        .ok()
-        .and_then(|set| lease::find(&workspace.repos, &set))
-    {
-        Some(found) if found.is_mine() => None,
-        Some(found) if found.live => anyhow::bail!(
-            "Refusing to remove worktree '{name}': it is {}. Wait for that to finish, or stop \
-             it first.",
-            found.doing()
-        ),
-        // another workspace's, made from a repository both share: no
-        // authority here
-        Some(found)
-            if !found
-                .lease
-                .as_ref()
-                .is_some_and(|lease| workspace.made_here(&lease.project)) =>
-        {
-            None
-        }
-        // held until the set is deleted: no new create of it can start, and
-        // a lease that changed since names another set
-        Some(found) => found.claim()?,
-        None => None,
+        .with_context(|| format!("Cannot resolve {}", escape_path(&wt_dir)))?;
+    let home = lease::home(&workspace)?;
+    let found = lease::find(&home, &set);
+    let mine = found.as_ref().is_some_and(|found| found.is_mine());
+    let held = match () {
+        _ if mine => None,
+        _ if mode.is_preview() => match &found {
+            Some(found) if found.live => anyhow::bail!(
+                "Refusing to remove worktree '{name}': it is {}. Wait for that to finish, or \
+                 stop it first.",
+                found.doing()
+            ),
+            _ => None,
+        },
+        _ => Some(lease::hold(&home, &set).map_err(|e| {
+            anyhow::anyhow!(
+                "Refusing to remove worktree '{name}': {e:#}. Wait for that to finish, or stop \
+                 it first."
+            )
+        })?),
     };
+    let left = match (&held, &found) {
+        (Some((left, _)), _) => left.clone(),
+        (None, Some(found)) if !mine => found.lease.clone(),
+        _ => None,
+    };
+    // another workspace's lease, made from a repository both share, is no
+    // authority here
+    let abandoned = left.is_some_and(|lease| workspace.made_here(&lease.project));
 
     let check = check_worktree_removal(&wt_dir)?;
     // In an abandoned set, worktrees not recorded yet are the creator's: meta's
-    let blockers: Vec<&str> = check
-        .blockers_but(abandoned.is_some())
-        .map(String::as_str)
-        .collect();
+    let blockers: Vec<&str> = check.blockers_but(abandoned).map(String::as_str).collect();
     // Only this workspace's sets: a shared worktree directory may hold
     // another workspace's. No flag overrides this.
     let foreign = workspace.foreign_members(&wt_dir, &check);
@@ -100,7 +105,7 @@ pub(crate) fn handle_remove(
         );
     }
     // Only delete what meta created: it records each worktree it makes.
-    if check.record().is_none() && abandoned.is_none() {
+    if check.record().is_none() && !abandoned {
         anyhow::bail!(
             "Refusing to remove {}: meta has no record of creating a worktree set there.\n{}",
             escape_path(&wt_dir),
@@ -146,7 +151,7 @@ pub(crate) fn handle_remove(
     if !preview {
         // Remove exactly what was checked, nested worktrees first
         delete_checked_set(&wt_dir, &check, force, verbose)?;
-        if let Some(claim) = abandoned {
+        if let Some((_, claim)) = held {
             claim.delete()?;
         }
 

@@ -1,17 +1,19 @@
 //! A lease names a worktree set while meta creates it, and an ephemeral set
 //! for as long as the run it was made for lasts.
 //!
-//! The creator takes the lease before it claims the set's directory, in the
-//! git directory of the first repository the set takes a worktree of
-//! (`<git dir>/meta-worktree-creating/`): it locks `<name>.lock` (an OS
-//! lock), then writes `<name>.json` saying which set, and holds the lock
-//! until it is done; then it deletes both. Whoever can take the lock knows
-//! the creator is gone, however it ended (SIGKILL included), whatever its
-//! process id now names, on any machine sharing the files. (The lock is on a
-//! file of its own: Windows enforces locks, so a locked file can't be read.)
-//! A lease left behind marks a set that was never finished: its worktrees
-//! are meta's even where meta hadn't recorded them yet, and it may be
-//! removed.
+//! Every set's lease lives in one place per workspace, the git directory of
+//! its root repository (see [`home`]), in
+//! `meta-worktree-creating/`: `<name>.lock`, which an OS lock is taken on,
+//! and `<name>.json`, written once the lock is held, saying which set. The
+//! creator takes it before it claims the set's directory and holds it until
+//! it is done; then it deletes both. `remove` and `prune` hold the same lock
+//! while they delete a set ([`hold`]), so no create of it starts meanwhile.
+//! Whoever can take the lock knows the creator is gone, however it ended
+//! (SIGKILL included), whatever its process id now names, on any machine
+//! sharing the files. (The lock is on a file of its own: Windows enforces
+//! locks, so a locked file can't be read.) A lease left behind marks a set
+//! that was never finished: its worktrees are meta's even where meta hadn't
+//! recorded them yet, and it may be removed.
 //!
 //! Like a record (see [`super::record`]), a lease is only in a repository's
 //! git directory, so only something that can write there can make one.
@@ -37,6 +39,42 @@ pub struct Lease {
     /// The set is ephemeral: its creator holds the lease for the whole run.
     #[serde(default)]
     pub ephemeral: bool,
+    /// This lease and no other (two creators can have one process id, in
+    /// separate pid namespaces).
+    #[serde(default)]
+    pub token: String,
+}
+
+impl Lease {
+    /// A lease for this process creating `set` from `project`.
+    pub fn new(set: PathBuf, project: PathBuf, ephemeral: bool) -> Lease {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        Lease {
+            set,
+            project,
+            pid: std::process::id(),
+            ephemeral,
+            token: format!("{}-{nanos}", std::process::id()),
+        }
+    }
+}
+
+/// Where the workspace keeps its leases: the git directory of its root, or
+/// where the root isn't a repository, the first of its repositories' (by
+/// path, so every meta command picks the same).
+pub fn home(workspace: &super::workspace::Workspace) -> Result<PathBuf> {
+    if let Some(root) = meta_core::gitdir::common_dir(&workspace.root)? {
+        return Ok(root);
+    }
+    workspace
+        .repos
+        .iter()
+        .min()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("The workspace has no git repository to keep its leases in"))
 }
 
 /// A lease this process holds. Dropping it deletes the lease, then lets go
@@ -87,52 +125,35 @@ impl Found {
         }
     }
 
-    /// What its holder is doing with the set, for messages: creating it, or
-    /// running a command in it (an ephemeral set).
+    /// What its holder is doing with the set, for messages.
     pub fn doing(&self) -> String {
         match &self.lease {
             Some(lease) if lease.ephemeral => {
                 format!("in use by the ephemeral run of {}", self.holder())
             }
-            _ => format!("being created by {}", self.holder()),
+            Some(_) => format!("being created by {}", self.holder()),
+            None => "in use by another meta".to_string(),
         }
-    }
-
-    /// Claim a lease whose creator is gone: take its lock, so no new creator
-    /// can take it meanwhile, and check that it still says what it said when
-    /// found. `None` if it is gone or changed (a new create of the same set
-    /// retired it): what it named isn't the set it was any more.
-    pub fn claim(&self) -> Result<Option<Claim>> {
-        let Some(lock) = lock(&self.path)? else {
-            anyhow::bail!("{} is in use again", escape_path(&self.path));
-        };
-        let now: Option<Lease> = std::fs::read(&self.path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-        if now.is_none() || now != self.lease {
-            if self.path.symlink_metadata().is_err() {
-                // the lock file this made, of a lease that is gone
-                let _ = std::fs::remove_file(lock_path(&self.path));
-            }
-            return Ok(None);
-        }
-        Ok(Some(Claim {
-            path: self.path.clone(),
-            _lock: lock,
-        }))
     }
 
     /// Delete a lease whose creator is gone, if it is still the one found.
     pub fn delete(&self) -> Result<()> {
-        match self.claim()? {
-            Some(claim) => claim.delete(),
-            None => Ok(()),
+        let Some(lock) = lock(&self.path)? else {
+            anyhow::bail!("{} is in use again", escape_path(&self.path));
+        };
+        let claim = Claim {
+            path: self.path.clone(),
+            _lock: lock,
+        };
+        match read_lease(&self.path) == self.lease {
+            true => claim.delete(),
+            false => Ok(()),
         }
     }
 }
 
-/// A lease left behind, claimed (see [`Found::claim`]): its lock is held
-/// until it is deleted or dropped.
+/// A set's lease, held by a command deleting the set (see [`hold`]): no
+/// create of the set can start until it is dropped or deleted.
 #[derive(Debug)]
 pub struct Claim {
     path: PathBuf,
@@ -140,11 +161,37 @@ pub struct Claim {
 }
 
 impl Claim {
-    /// Delete the lease.
+    /// Delete the lease, if one was left.
     pub fn delete(self) -> Result<()> {
-        remove(&self.path)?;
-        remove(&lock_path(&self.path))
+        remove(&self.path)
     }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(lock_path(&self.path));
+    }
+}
+
+/// Hold the lease of the set at `set` (resolved) while it is deleted. Fails
+/// if its creator or ephemeral run still holds it. The lease its creator
+/// left, if one was (the set is half-made, or its ephemeral run ended).
+pub fn hold(home: &Path, set: &Path) -> Result<(Option<Lease>, Claim)> {
+    let path = path_for(home, set);
+    let dir = home.join(LEASE_DIR);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Cannot create {}", escape_path(&dir)))?;
+    let Some(lock) = lock(&path)? else {
+        anyhow::bail!("it is {}", read(path).doing());
+    };
+    let left = read_lease(&path);
+    Ok((left, Claim { path, _lock: lock }))
+}
+
+fn read_lease(path: &Path) -> Option<Lease> {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
 }
 
 fn remove(path: &Path) -> Result<()> {
@@ -160,7 +207,6 @@ fn remove(path: &Path) -> Result<()> {
 fn lock_path(path: &Path) -> PathBuf {
     path.with_extension("lock")
 }
-
 /// The lock of the lease at `path`, taken (its file made if missing), or
 /// `None` if another process holds it. A lock taken on a file that was
 /// deleted meanwhile (its holder let go) is let go, and taken again on the
@@ -280,17 +326,14 @@ fn read(path: PathBuf) -> Found {
         Ok(file) => file.try_lock().is_err(),
         Err(e) => e.kind() != std::io::ErrorKind::NotFound,
     };
-    let lease = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let lease = read_lease(&path);
     Found { path, lease, live }
 }
 
-/// Every lease in the repositories whose git directories are `git_dirs`.
-pub fn all(git_dirs: &[PathBuf]) -> Vec<Found> {
-    git_dirs
-        .iter()
-        .filter_map(|git_dir| std::fs::read_dir(git_dir.join(LEASE_DIR)).ok())
+/// Every lease kept in `home`.
+pub fn all(home: &Path) -> Vec<Found> {
+    std::fs::read_dir(home.join(LEASE_DIR))
+        .into_iter()
         .flatten()
         .flatten()
         .map(|entry| entry.path())
@@ -299,14 +342,13 @@ pub fn all(git_dirs: &[PathBuf]) -> Vec<Found> {
         .collect()
 }
 
-/// The lease naming the set at `set` (resolved), if any of `git_dirs` holds
-/// one. A lease that can't be read whose file is named for this set counts.
-pub fn find(git_dirs: &[PathBuf], set: &Path) -> Option<Found> {
-    git_dirs
-        .iter()
-        .map(|git_dir| path_for(git_dir, set))
-        .find(|path| path.symlink_metadata().is_ok())
-        .map(read)
+/// The lease of the set at `set` (resolved) kept in `home`, if there is one.
+/// One that can't be read whose file is named for this set counts.
+pub fn find(home: &Path, set: &Path) -> Option<Found> {
+    let path = path_for(home, set);
+    path.symlink_metadata()
+        .is_ok()
+        .then(|| read(path))
         .filter(|found| found.lease.as_ref().is_none_or(|lease| lease.set == set))
 }
 
@@ -315,87 +357,90 @@ mod tests {
     use super::*;
 
     fn lease(set: &Path) -> Lease {
-        Lease {
-            set: set.to_path_buf(),
-            project: PathBuf::from("/p"),
-            pid: std::process::id(),
-            ephemeral: false,
-        }
+        Lease::new(set.to_path_buf(), PathBuf::from("/p"), false)
+    }
+
+    /// What a creator killed outright leaves: the JSON, no lock held.
+    fn left_behind(home: &Path, lease: &Lease) -> PathBuf {
+        let path = path_for(home, &lease.set);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_string(lease).unwrap()).unwrap();
+        path
     }
 
     #[test]
     fn a_held_lease_is_live_until_dropped_then_gone() {
         let temp = tempfile::tempdir().unwrap();
-        let git_dir = temp.path().join("git");
+        let home = temp.path().join("git");
         let set = temp.path().join("wt/a");
-        let held = take(&git_dir, &lease(&set)).unwrap();
-        let found = find(std::slice::from_ref(&git_dir), &set).unwrap();
+        let mine = lease(&set);
+        let held = take(&home, &mine).unwrap();
+        let found = find(&home, &set).unwrap();
         assert!(found.live && found.is_mine());
-        assert_eq!(found.lease, Some(lease(&set)));
-        // another creator is refused while it is held
-        let refused = take(&git_dir, &lease(&set)).unwrap_err().to_string();
+        assert_eq!(found.lease, Some(mine));
+        // another creator, or a command deleting the set, is refused
+        let refused = take(&home, &lease(&set)).unwrap_err().to_string();
         assert!(refused.contains("is being created by pid"), "{refused}");
+        let refused = hold(&home, &set).unwrap_err().to_string();
+        assert!(refused.contains("being created by pid"), "{refused}");
         drop(held);
-        assert!(find(std::slice::from_ref(&git_dir), &set).is_none());
-        assert!(all(std::slice::from_ref(&git_dir)).is_empty());
+        assert!(find(&home, &set).is_none());
+        assert!(all(&home).is_empty());
     }
 
     #[test]
     fn a_lease_left_behind_is_dead_and_blocks_its_set_only_while_the_set_exists() {
         let temp = tempfile::tempdir().unwrap();
-        let git_dir = temp.path().join("git");
+        let home = temp.path().join("git");
         let set = temp.path().join("wt/a");
         std::fs::create_dir_all(&set).unwrap();
-        // what a creator killed outright leaves: the file, no lock
-        let path = path_for(&git_dir, &set);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, serde_json::to_string(&lease(&set)).unwrap()).unwrap();
-        let found = find(std::slice::from_ref(&git_dir), &set).unwrap();
+        left_behind(&home, &lease(&set));
+        let found = find(&home, &set).unwrap();
         // it names this process, which doesn't hold it: a pid says nothing
         assert!(!found.live && !found.is_mine());
-        let refused = take(&git_dir, &lease(&set)).unwrap_err().to_string();
+        let refused = take(&home, &lease(&set)).unwrap_err().to_string();
         assert!(refused.contains("left half-made"), "{refused}");
         // once the set is gone, a new creator takes it over
         std::fs::remove_dir(&set).unwrap();
-        let held = take(&git_dir, &lease(&set)).unwrap();
-        assert!(find(std::slice::from_ref(&git_dir), &set).unwrap().live);
+        let held = take(&home, &lease(&set)).unwrap();
+        assert!(find(&home, &set).unwrap().live);
         drop(held);
     }
 
     #[test]
-    fn deleting_a_dead_lease_leaves_a_live_one() {
+    fn holding_a_set_for_deletion_keeps_creators_out_and_says_what_was_left() {
         let temp = tempfile::tempdir().unwrap();
-        let git_dir = temp.path().join("git");
+        let home = temp.path().join("git");
         let set = temp.path().join("wt/a");
-        let held = take(&git_dir, &lease(&set)).unwrap();
-        let found = find(std::slice::from_ref(&git_dir), &set).unwrap();
-        assert!(found.delete().is_err());
-        assert!(found.path.exists());
-        drop(held);
-    }
-
-    #[test]
-    fn a_lease_made_again_since_it_was_found_is_not_claimed() {
-        let temp = tempfile::tempdir().unwrap();
-        let git_dir = temp.path().join("git");
-        let set = temp.path().join("wt/a");
-        let path = path_for(&git_dir, &set);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, serde_json::to_string(&lease(&set)).unwrap()).unwrap();
-        let found = find(std::slice::from_ref(&git_dir), &set).unwrap();
-        // another create of the set retired it and left its own
-        let other = Lease {
-            pid: 1,
-            ..lease(&set)
-        };
-        std::fs::write(&path, serde_json::to_string(&other).unwrap()).unwrap();
-        assert!(found.claim().unwrap().is_none());
-        assert!(path.exists());
-        // the one found, unchanged, is claimed and held
-        let found = find(std::slice::from_ref(&git_dir), &set).unwrap();
-        let claim = found.claim().unwrap().unwrap();
-        assert!(take(&git_dir, &lease(&set)).is_err());
+        // no lease: only the lock is held
+        let (left, claim) = hold(&home, &set).unwrap();
+        assert!(left.is_none());
+        let refused = take(&home, &lease(&set)).unwrap_err().to_string();
+        assert!(refused.contains("in use by another meta"), "{refused}");
+        drop(claim);
+        assert!(all(&home).is_empty());
+        // a lease left behind is handed over, and deleted with the set
+        let old = lease(&set);
+        let path = left_behind(&home, &old);
+        let (left, claim) = hold(&home, &set).unwrap();
+        assert_eq!(left, Some(old));
         claim.delete().unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_lease_made_again_since_it_was_found_is_not_deleted() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("git");
+        let set = temp.path().join("wt/a");
+        let path = left_behind(&home, &lease(&set));
+        let found = find(&home, &set).unwrap();
+        // another create of the set (same pid, another namespace) left its own
+        left_behind(&home, &lease(&set));
+        found.delete().unwrap();
+        assert!(path.exists());
+        let found = find(&home, &set).unwrap();
+        found.delete().unwrap();
         assert!(!path.exists());
     }
 }

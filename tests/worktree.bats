@@ -137,6 +137,14 @@ EOF
     [ -d ".worktrees/full-task/frontend" ]
 }
 
+@test "git's error over several lines keeps its line breaks" {
+    git -C backend switch --quiet -c feature/login
+    run "$META_BIN" git worktree create login --repo backend --no-deps --branch feature/login
+    [ "$status" -ne 0 ]
+    [[ "$output" == *$'\nfatal: '*"already used by worktree"* ]]
+    [[ "$output" != *'\nfatal'* ]]
+}
+
 @test "worktree create warns about a depends_on that names no project, and fails on it with --strict" {
     cat > .meta.yaml <<'EOF'
 projects:

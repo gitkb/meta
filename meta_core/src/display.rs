@@ -62,13 +62,33 @@ pub fn escape(s: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-/// [`escape`] for multi-line text such as an error message: newlines stay,
-/// every other unsafe character is escaped.
+/// [`escape`] for multi-line text such as an error message or git's
+/// stderr: line breaks and tabs stay, every other unsafe character is
+/// escaped.
 pub fn escape_lines(s: &str) -> Cow<'_, str> {
-    if !s.chars().any(|c| c != '\n' && is_unsafe_char(c)) {
+    let kept = |c: char| matches!(c, '\n' | '\t');
+    if !s.chars().any(|c| !kept(c) && is_unsafe_char(c)) {
         return Cow::Borrowed(s);
     }
-    Cow::Owned(s.split('\n').map(escape).collect::<Vec<_>>().join("\n"))
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            c if kept(c) => out.push(c),
+            c => out.push_str(&escape(c.encode_utf8(&mut [0; 4]))),
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Another program's output (git's stderr), escaped to follow `<message>:`:
+/// one line after a space; several each on a line of their own, indented
+/// under the message, so none can pass for a line of meta's own.
+pub fn program_output(s: &str) -> String {
+    let text = escape_lines(s.trim());
+    if !text.contains('\n') {
+        return format!(" {text}");
+    }
+    text.lines().map(|line| format!("\n  {line}")).collect()
 }
 
 /// [`escape`] for a path, which may also hold bytes that are not UTF-8.
@@ -126,8 +146,17 @@ mod tests {
     }
 
     #[test]
-    fn escape_lines_keeps_newlines_only() {
-        assert!(matches!(escape_lines("a\nb"), Cow::Borrowed(_)));
-        assert_eq!(escape_lines("a\u{1b}[2J\nb\r"), "a\\u{1b}[2J\nb\\r");
+    fn program_output_follows_the_message_and_indents_its_lines() {
+        assert_eq!(program_output("fatal: no\n"), " fatal: no");
+        assert_eq!(
+            program_output("Preparing\nfatal: '\u{1b}x\nFORGED' used\n"),
+            "\n  Preparing\n  fatal: '\\u{1b}x\n  FORGED' used"
+        );
+    }
+
+    #[test]
+    fn escape_lines_keeps_line_breaks_and_tabs_only() {
+        assert!(matches!(escape_lines("a\nb\tc"), Cow::Borrowed(_)));
+        assert_eq!(escape_lines("a\u{1b}[2J\nb\r\tc"), "a\\u{1b}[2J\nb\\r\tc");
     }
 }

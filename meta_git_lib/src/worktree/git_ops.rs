@@ -521,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_fetch_is_reported_on_one_line() {
+    fn a_failed_fetch_keeps_each_line_under_the_message() {
         let tmp = init_git_repo();
         git(tmp.path())
             .args(["remote", "add", "origin", "/nonexistent/r\u{1b}[2J\nFORGED"])
@@ -530,7 +530,7 @@ mod tests {
         let err = git_fetch_branch(tmp.path(), "b\u{1b}[2J\nFORGED").unwrap_err();
         let message = format!("{err:#}");
         assert!(
-            !message.contains('\n') && !message.contains('\u{1b}'),
+            !message.contains('\u{1b}') && !message.lines().any(|l| l.starts_with("FORGED")),
             "{message}"
         );
     }

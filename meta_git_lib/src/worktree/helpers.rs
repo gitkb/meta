@@ -1,7 +1,7 @@
 //! Utility functions for worktree management.
 
 use anyhow::{Context, Result};
-use meta_core::display::{escape, escape_path};
+use meta_core::display::{escape, escape_path, program_output};
 use std::path::{Path, PathBuf};
 
 use meta_core::config::Workspace;
@@ -226,10 +226,10 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(
-            "Failed to resolve PR #{} in {}: {}",
+            "Failed to resolve PR #{} in {}:{}",
             pr_num,
             escape(repo_spec),
-            escape(stderr.trim())
+            program_output(&stderr)
         );
     }
 

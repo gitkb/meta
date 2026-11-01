@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use colored::*;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use meta_core::display::{escape, escape_path};
+use meta_core::display::{escape, escape_path, program_output};
 use meta_core::{errln, out, outln};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
@@ -178,9 +178,9 @@ fn shell_aliases() -> Result<BTreeMap<String, String>> {
         .with_context(|| format!("Failed to run {}", escape(&shell)))?;
     anyhow::ensure!(
         output.status.success(),
-        "`{} -i -c alias` failed: {}",
+        "`{} -i -c alias` failed:{}",
         escape(&shell),
-        escape(String::from_utf8_lossy(&output.stderr).trim())
+        program_output(&String::from_utf8_lossy(&output.stderr))
     );
     String::from_utf8_lossy(&output.stdout)
         .lines()

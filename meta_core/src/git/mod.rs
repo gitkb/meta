@@ -1,7 +1,7 @@
 //! Running git. Every git process meta starts comes from [`git`], so none
 //! inherits the variables that tie git to one repository.
 
-use crate::display::{escape, escape_path};
+use crate::display::{escape, escape_path, program_output};
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 #[cfg(windows)]
@@ -143,10 +143,10 @@ where
     }
     if !output.status.success() {
         anyhow::bail!(
-            "git {} failed in {}: {}",
+            "git {} failed in {}:{}",
             escape(&shown()),
             escape_path(dir),
-            escape(String::from_utf8_lossy(&output.stderr).trim())
+            program_output(&String::from_utf8_lossy(&output.stderr))
         );
     }
     Ok(Some(

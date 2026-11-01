@@ -4,7 +4,7 @@
 //! inspected, nested ones included, and so is anything outside a repository.
 
 use anyhow::{Context, Result};
-use meta_core::display::{escape, escape_path};
+use meta_core::display::{escape, escape_path, program_output};
 use std::path::{Path, PathBuf};
 
 use super::git_ops::remove_worktree_repos;
@@ -469,8 +469,8 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
         .context("cannot run git status")?;
     anyhow::ensure!(
         output.status.success(),
-        "git status failed: {}",
-        escape(String::from_utf8_lossy(&output.stderr).trim())
+        "git status failed:{}",
+        program_output(&String::from_utf8_lossy(&output.stderr))
     );
     // Exact, for the re-check: raw bytes, not a lossy decoding.
     let text = format!("{:?}", output.stdout);
@@ -533,8 +533,8 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
         .context("cannot run git rev-list")?;
     anyhow::ensure!(
         output.status.success(),
-        "git rev-list failed: {}",
-        escape(String::from_utf8_lossy(&output.stderr).trim())
+        "git rev-list failed:{}",
+        program_output(&String::from_utf8_lossy(&output.stderr))
     );
     let commits = String::from_utf8_lossy(&output.stdout).into_owned();
     let stranded = commits.lines().count();
@@ -548,8 +548,8 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
         .context("cannot run git diff --cached")?;
     anyhow::ensure!(
         staged.status.success(),
-        "git diff --cached failed: {}",
-        escape(String::from_utf8_lossy(&staged.stderr).trim())
+        "git diff --cached failed:{}",
+        program_output(&String::from_utf8_lossy(&staged.stderr))
     );
     let staged = String::from_utf8_lossy(&staged.stdout).into_owned();
     let files: Vec<String> = modified
@@ -579,8 +579,8 @@ fn hidden_files(repo: &Path) -> Result<Vec<(String, PathBuf)>> {
         .context("cannot run git ls-files")?;
     anyhow::ensure!(
         output.status.success(),
-        "git ls-files failed: {}",
-        escape(String::from_utf8_lossy(&output.stderr).trim())
+        "git ls-files failed:{}",
+        program_output(&String::from_utf8_lossy(&output.stderr))
     );
     // Entries are "<tag> <path>"; a lowercase tag means assume-unchanged,
     // "S" skip-worktree.
@@ -627,8 +627,8 @@ fn operation_in_progress(repo: &Path) -> Result<Option<&'static str>> {
         .context("cannot run git rev-parse")?;
     anyhow::ensure!(
         output.status.success(),
-        "git rev-parse --git-dir failed: {}",
-        escape(String::from_utf8_lossy(&output.stderr).trim())
+        "git rev-parse --git-dir failed:{}",
+        program_output(&String::from_utf8_lossy(&output.stderr))
     );
     let git_dir = repo.join(String::from_utf8_lossy(&output.stdout).trim_end_matches(['\n', '\r']));
     let markers = [

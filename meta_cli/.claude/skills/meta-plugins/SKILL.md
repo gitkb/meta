@@ -67,7 +67,8 @@ Plugins are discovered from:
 3. Executables named `meta-*` in PATH
 
 The first file found with a given name wins. `meta <word>` fails naming its
-plugin if that plugin doesn't answer `--meta-plugin-info` within 5 seconds.
+plugin if that plugin doesn't answer `--meta-plugin-info` with its info within
+5 seconds.
 `meta`, `meta help`, `meta --help` and `meta plugin list` start every plugin;
 there a plugins folder meta can't read, and a plugin that doesn't answer within
 5 seconds, are skipped with a warning naming them; one that answers with

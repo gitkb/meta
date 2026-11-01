@@ -670,7 +670,8 @@ mod tests {
         let bin = temp.path().join("bin");
         std::fs::create_dir_all(bin.join("meta-d")).unwrap();
         let evil = temp.path().join("evil");
-        std::fs::write(&evil, "#!/bin/sh\ntouch ran\n").unwrap();
+        let ran = temp.path().join("ran");
+        std::fs::write(&evil, format!("#!/bin/sh\ntouch '{}'\n", ran.display())).unwrap();
         std::fs::set_permissions(&evil, std::fs::Permissions::from_mode(0o755)).unwrap();
         let manager = SubprocessPluginManager {
             dirs: vec![(bin, true)],
@@ -681,7 +682,7 @@ mod tests {
         for word in ["d/../../evil", "d/../evil", absolute, "d/", "d/.", ""] {
             assert!(manager.find(word).unwrap().is_none(), "{word}");
         }
-        assert!(!temp.path().join("ran").exists());
+        assert!(!ran.exists());
     }
 
     #[test]

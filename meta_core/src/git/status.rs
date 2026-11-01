@@ -542,7 +542,7 @@ mod tests {
         ] {
             assert!(as_t(dir, args).is_err(), "{args:?} stopped");
             assert_eq!(operation(dir), Some(stopped), "{args:?}");
-            run(dir, [abort, "--abort"]).unwrap();
+            as_t(dir, &[abort, "--abort"]).unwrap();
         }
 
         let dir = conflicting();
@@ -556,14 +556,14 @@ mod tests {
                 branch: Some("side".to_string())
             })
         );
-        run(dir, ["rebase", "--abort"]).unwrap();
+        as_t(dir, &["rebase", "--abort"]).unwrap();
 
         let patch = run(dir, ["format-patch", "-1", "--stdout", "side"]).unwrap();
         std::fs::write(dir.join("side.patch"), patch + "\n").unwrap();
         run(dir, ["switch", "-q", "main"]).unwrap();
         assert!(as_t(dir, &["am", "side.patch"]).is_err());
         assert_eq!(operation(dir), Some(Operation::Am));
-        run(dir, ["am", "--abort"]).unwrap();
+        as_t(dir, &["am", "--abort"]).unwrap();
 
         run(dir, ["bisect", "start"]).unwrap();
         assert_eq!(operation(dir), Some(Operation::Bisect));

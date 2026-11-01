@@ -76,7 +76,7 @@ Work within the worktree:
 
 Run tests before committing:
 ```bash
-meta exec --parallel -- cargo test
+meta --parallel exec -- cargo test
 ```
 
 Or target specific repos:

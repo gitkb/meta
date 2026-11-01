@@ -4,14 +4,15 @@
 //! tags, dependencies. Designed for both humans and LLM agents (injected via
 //! Claude Code SessionStart hook).
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::dependency_graph::DependencyGraph;
+use crate::repo_filter::{Filters, Scope};
 use meta_core::config::{self, ProjectInfo};
 use meta_core::display::{escape, escape_path};
 use meta_core::git::{GitUrl, RepoStatus};
@@ -99,19 +100,23 @@ fn is_cache_valid(cached: &CachedContext, current_root: &PathBuf) -> bool {
 
 // ── Public API ──────────────────────────────────────────
 
-/// Entry point for `meta context`.
+/// Entry point for `meta context`: the workspace of the nearest config at or
+/// above `start`, with the projects `filters` select.
 pub fn handle_context(
     json: bool,
     no_status: bool,
     no_cache: bool,
     mode: meta_core::ExecutionMode,
     verbose: bool,
+    start: &Path,
+    filters: &Filters,
 ) -> Result<()> {
-    let cwd = std::env::current_dir().context("Failed to get current directory")?;
-
-    let workspace = config::Workspace::find(&cwd, None)?
+    let workspace = config::Workspace::find(start, None)?
         .ok_or_else(|| anyhow::anyhow!("Not a meta workspace (no .meta.yaml found)"))?;
     let meta_dir = workspace.dir.clone();
+    // The cache holds the whole workspace, so a selection neither reads nor
+    // writes it
+    let no_cache = no_cache || !filters.is_empty();
 
     // Try cache if not bypassed
     if !no_cache && !no_status {
@@ -137,7 +142,18 @@ pub fn handle_context(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let projects = workspace.projects;
+    let selected = Scope::workspace(
+        &meta_dir,
+        Some(&workspace.config_path),
+        &workspace.projects,
+        &[],
+    )
+    .select(filters)?;
+    let projects: Vec<ProjectInfo> = workspace
+        .projects
+        .into_iter()
+        .filter(|p| selected.contains(&meta_dir.join(&p.path)))
+        .collect();
 
     if verbose {
         eprintln!(

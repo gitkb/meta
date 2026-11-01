@@ -63,8 +63,11 @@ fn execute_request(request: PluginRequest) -> CommandResult {
         json_output: request.options.json_output,
         recursive: request.options.recursive,
         depth: request.options.depth,
-        filtered: request.options.include_filters.is_some()
-            || request.options.exclude_filters.is_some(),
+        // meta sent only the repos its filters chose
+        selected: request
+            .options
+            .filtered()
+            .then(|| meta_project_cli::ExecuteOptions::selection_from(&request.projects)),
     };
 
     meta_project_cli::execute_command(

@@ -21,32 +21,25 @@ fn build_loop_config(
     verbose: bool,
     json: bool,
 ) -> Result<loop_lib::LoopConfig> {
-    let (include_filters, exclude_filters) = (&args.include, &args.exclude);
-    let directories: Vec<String> = repos.iter().map(|r| r.path.display().to_string()).collect();
+    let filters =
+        repo_filter::Filters::new(Some(args.include.clone()), Some(args.exclude.clone()), None);
+    let paths: Vec<PathBuf> = repos.iter().map(|r| r.path.clone()).collect();
     // A set lays its repos out as the workspace, so the set's config names
     // them, by project name or path; only a filter reads it
-    let names = if include_filters.is_empty() && exclude_filters.is_empty() {
-        Vec::new()
+    let workspace = if filters.is_empty() {
+        None
     } else {
-        let paths: Vec<PathBuf> = repos.iter().map(|r| r.path.clone()).collect();
-        match meta_cli::worktree::set_config(wt_dir, &paths, None)? {
-            Some(config) => {
-                let projects = meta_core::config::Workspace::load(&config)?.projects;
-                let tree = meta_cli::worktree::set_tree(wt_dir, &paths, &projects)?;
-                repo_filter::repo_names(wt_dir, &projects, &tree)
-            }
-            None => Vec::new(),
-        }
+        meta_cli::worktree::set_config(wt_dir, &paths, None)?
+            .map(|config| meta_core::config::Workspace::load(&config))
+            .transpose()?
     };
-    let directories = repo_filter::select(
-        include_filters,
-        exclude_filters,
-        &directories,
-        wt_dir,
-        &names,
-    )?;
     Ok(loop_lib::LoopConfig {
-        directories: directories.iter().map(PathBuf::from).collect(),
+        directories: meta_cli::worktree::select_in_set(
+            wt_dir,
+            &paths,
+            workspace.as_ref(),
+            &filters,
+        )?,
         verbose,
         parallel: args.parallel,
         dry_run: mode.is_preview(),

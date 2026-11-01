@@ -85,6 +85,41 @@ pub fn set_config(
     }
 }
 
+/// Where `dir`, inside a worktree set meta made, is in the workspace the set
+/// was made from (and from a set made inside another set, on to that one's
+/// workspace), by meta's records in the set's checkouts. None outside a set,
+/// and for a set without records (made by hand).
+pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
+    let mut place = dir.to_path_buf();
+    let mut seen = Vec::new();
+    while let Some((_, set_dir)) = detect_worktree_location(&place) {
+        let members: Vec<PathBuf> = discover_worktree_members(&set_dir)?
+            .into_iter()
+            .map(|member| member.path)
+            .collect();
+        // set_origin's way out of its error is --primary itself
+        let origin = set_origin(&set_dir, &members).map_err(|_| {
+            anyhow::anyhow!(
+                "--primary can't tell which workspace worktree set {} was made from: its \
+                 checkouts name different workspaces. Run meta from that workspace's \
+                 directory instead.",
+                escape_path(&set_dir)
+            )
+        })?;
+        let Some(origin) = origin else {
+            break;
+        };
+        let inside = place.strip_prefix(&set_dir).unwrap_or(Path::new(""));
+        place = origin.join(inside);
+        // records that lead in a circle lead nowhere
+        if seen.contains(&place) {
+            break;
+        }
+        seen.push(place.clone());
+    }
+    Ok((!seen.is_empty()).then_some(place))
+}
+
 /// The workspace meta recorded the set at `set_dir` was made from, by the
 /// members whose record names this set (another set's checkout moved in
 /// doesn't count). Members that name different workspaces are an error.
@@ -115,13 +150,63 @@ fn set_origin(set_dir: &Path, members: &[PathBuf]) -> Result<Option<PathBuf>> {
     Ok(origin)
 }
 
+/// The checkouts among `members` of the set at `set_dir` that `filters`
+/// select (see [`crate::repo_filter::Scope::select`]). A set lays its repos out as
+/// the workspace, so a checkout is named and tagged by the project at its
+/// place in the set, nested meta repos included, as the set's `workspace`
+/// and the nested configs tell (see [`set_tree`]); a checkout of no project,
+/// such as the set's root, has neither name nor tags.
+pub fn select_in_set(
+    set_dir: &Path,
+    members: &[PathBuf],
+    workspace: Option<&meta_core::config::Workspace>,
+    filters: &crate::repo_filter::Filters,
+) -> Result<Vec<PathBuf>> {
+    use crate::repo_filter::{Candidate, Scope};
+    if filters.is_empty() {
+        return Ok(members.to_vec());
+    }
+    if workspace.is_none() && !filters.tags.is_empty() {
+        anyhow::bail!(
+            "No meta config found for worktree set {}, so --tag cannot select its repos",
+            escape_path(set_dir)
+        );
+    }
+    let projects = workspace.map_or(&[][..], |w| &w.projects);
+    let tree = set_tree(set_dir, members, projects)?;
+    // Compared as directories: a project at a link in the set is the
+    // checkout where the link leads
+    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let infos: std::collections::HashMap<PathBuf, meta_core::config::ProjectInfo> =
+        meta_core::config::build_project_map(&tree, set_dir, "")
+            .into_iter()
+            .map(|(place, (_, info))| (real(&set_dir.join(place)), info))
+            .collect();
+    let repos = members
+        .iter()
+        .map(|member| match infos.get(&real(member)) {
+            Some(info) => Candidate::project(member.clone(), info),
+            None => Candidate::root(member.clone()),
+        })
+        .collect();
+    Scope {
+        root: set_dir.to_path_buf(),
+        config: workspace.map(|w| w.config_path.clone()),
+        repos,
+        // a tag of a project the set doesn't hold is no typo
+        tags: infos.into_values().flat_map(|info| info.tags).collect(),
+        nested: true,
+    }
+    .select(filters)
+}
+
 /// The meta tree that describes the checkouts of the set at `set_dir`, whose
 /// config lists `projects`: the nested configs of the workspace the set was
 /// made from, for nested meta repos the set doesn't hold (one skipped, say),
 /// then the set's own, so a map built from it in order lets the set's win.
 /// The workspace's part is best effort: what neither tells about stays
 /// unselected.
-pub fn set_tree(
+fn set_tree(
     set_dir: &Path,
     members: &[PathBuf],
     projects: &[meta_core::config::ProjectInfo],

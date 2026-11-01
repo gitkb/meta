@@ -20,12 +20,16 @@ use std::path::Path;
 
 use cli_types::WorktreeCommands;
 
-/// Clap parser wrapper for worktree subcommands.
+/// Manage git worktrees across repos
 #[derive(Parser)]
+#[command(arg_required_else_help = true)]
 struct WorktreeParser {
     /// Show what would be created, run or removed, and change nothing
     #[arg(long, global = true)]
     dry_run: bool,
+    /// Output results in JSON format
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     command: WorktreeCommands,
 }
@@ -77,16 +81,6 @@ pub fn execute_worktree_command(
         clap_args.push("--recursive".to_string());
     }
 
-    // No subcommand at all — show help
-    if clap_args.is_empty() {
-        print_worktree_help();
-        return CommandResult::Message(String::new());
-    }
-    if clap_args.len() == 1 && matches!(clap_args[0].as_str(), "--help" | "-h") {
-        print_worktree_help();
-        return CommandResult::Message(String::new());
-    }
-
     let name = if command.starts_with("git ") {
         "git worktree"
     } else {
@@ -98,7 +92,7 @@ pub fn execute_worktree_command(
             // meta's --dry-run, or the worktree command's own
             ExecutionMode::from_dry_run(options.dry_run || parsed.dry_run),
             options.verbose,
-            options.json_output,
+            options.json_output || parsed.json,
             options.strict,
             cwd,
         ) {
@@ -129,12 +123,6 @@ fn handle_worktree_command(
         WorktreeCommands::Diff(args) => diff::handle_diff(args, json),
         WorktreeCommands::Exec(args) => exec::handle_exec(args, mode, verbose, json),
         WorktreeCommands::Prune => prune::handle_prune(mode, json, global_strict),
-        WorktreeCommands::Unknown(args) => {
-            let cmd = escape(args.first().map(|s| s.as_str()).unwrap_or(""));
-            // the help, then the error, which meta prints once
-            eprint_worktree_help();
-            anyhow::bail!("unrecognized worktree subcommand '{cmd}'");
-        }
     }
 }
 
@@ -184,167 +172,9 @@ pub(crate) fn warn(message: impl std::fmt::Display) {
     );
 }
 
-/// Print worktree help text to stdout.
-pub fn print_worktree_help() {
-    write_worktree_help(&mut std::io::stdout());
-}
-
-/// Print worktree help text to stderr (for error cases in plugin context).
-pub fn eprint_worktree_help() {
-    write_worktree_help(&mut std::io::stderr());
-}
-
-/// Write top-level help including recursive inventory usage.
-fn write_worktree_help(w: &mut dyn std::io::Write) {
-    let _ = writeln!(w, "Manage git worktrees across repos");
-    let _ = writeln!(w);
-    let _ = writeln!(w, "USAGE: meta git worktree <COMMAND> [OPTIONS]");
-    let _ = writeln!(w);
-    let _ = writeln!(w, "COMMANDS:");
-    let _ = writeln!(w, "  create   Create a new worktree set");
-    let _ = writeln!(w, "  add      Add a repo to an existing worktree set");
-    let _ = writeln!(w, "  remove   Remove a worktree set");
-    let _ = writeln!(
-        w,
-        "  list     List worktree sets (current set when inside one)"
-    );
-    let _ = writeln!(w, "  status   Show detailed status of a worktree set");
-    let _ = writeln!(w, "  diff     Show cross-repo diff vs base branch");
-    let _ = writeln!(w, "  exec     Run a command across worktree repos");
-    let _ = writeln!(
-        w,
-        "  prune    Remove expired/orphaned worktree sets of this workspace"
-    );
-    let _ = writeln!(w);
-    let _ = writeln!(w, "OPTIONS (every command):");
-    let _ = writeln!(
-        w,
-        "  --dry-run                Show what would be created, run or removed; change nothing"
-    );
-    let _ = writeln!(w);
-    let _ = writeln!(w, "CREATE OPTIONS:");
-    let _ = writeln!(w, "  --repo <ALIAS[:BRANCH]>  Add specific repo(s)");
-    let _ = writeln!(
-        w,
-        "  --all                    Add all repos from .meta.yaml (uncloned ones skipped)"
-    );
-    let _ = writeln!(w, "  --branch <NAME>          Override default branch name");
-    let _ = writeln!(
-        w,
-        "  <COMMIT-ISH>             Start from a tag, SHA or branch (after the name)"
-    );
-    let _ = writeln!(
-        w,
-        "  --from-pr <OWNER/REPO#N> Start from a PR's head branch"
-    );
-    let _ = writeln!(w, "  --ephemeral              Mark for automatic cleanup");
-    let _ = writeln!(
-        w,
-        "  --ttl <DURATION>         Time-to-live (30s, 5m, 1h, 2d, 1w)"
-    );
-    let _ = writeln!(w, "  --meta <KEY=VALUE>       Record custom metadata");
-    let _ = writeln!(
-        w,
-        "  --no-deps                Only the named repos (and the repos they are nested in)"
-    );
-    let _ = writeln!(
-        w,
-        "  --strict                 Fail where a repo would be skipped"
-    );
-    let _ = writeln!(
-        w,
-        "  -r, --recursive          Resolve dependencies across nested meta repos"
-    );
-    let _ = writeln!(w);
-    let _ = writeln!(w, "ADD OPTIONS:");
-    let _ = writeln!(w, "  --repo <ALIAS[:BRANCH]>  Repo(s) to add");
-    let _ = writeln!(w);
-    let _ = writeln!(w, "LIST / STATUS OPTIONS:");
-    let _ = writeln!(
-        w,
-        "  -r, --recursive          Include repositories nested beneath worktree repos"
-    );
-    let _ = writeln!(w);
-    let _ = writeln!(w, "LIST OPTIONS:");
-    let _ = writeln!(
-        w,
-        "LIST [NAME] defaults to the enclosing set, or all sets outside a worktree."
-    );
-    let _ = writeln!(
-        w,
-        "  --metadata-only          List membership paths without Git-state probes"
-    );
-    let _ = writeln!(w);
-    let _ = writeln!(w, "REMOVE OPTIONS:");
-    let _ = writeln!(
-        w,
-        "  --force                  Remove even with uncommitted changes"
-    );
-    let _ = writeln!(w);
-    let _ = writeln!(w, "EXEC OPTIONS:");
-    let _ = writeln!(w, "  --include <REPOS>        Only run in specified repos");
-    let _ = writeln!(w, "  --exclude <REPOS>        Skip specified repos");
-    let _ = writeln!(w, "  --parallel               Run commands concurrently");
-    let _ = writeln!(w, "  --ephemeral              Atomic create+exec+remove");
-    let _ = writeln!(
-        w,
-        "  --repo, --all, --branch, <COMMIT-ISH>, --from-pr, --meta"
-    );
-    let _ = writeln!(
-        w,
-        "                           As for create, with --ephemeral"
-    );
-    let _ = writeln!(w);
-    let _ = writeln!(w, "DIFF OPTIONS:");
-    let _ = writeln!(
-        w,
-        "  --base <BRANCH>          Base branch for comparison (default: main)"
-    );
-    let _ = writeln!(w, "  --stat                   Show diffstat summary only");
-    let _ = writeln!(w);
-    let _ = writeln!(
-        w,
-        "Use 'meta git worktree <command> --help' for more details."
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The overview names every option of each command in that command's
-    /// own section, so it can't fall behind what clap accepts.
-    #[test]
-    fn help_lists_every_option_under_its_command() {
-        let mut help = Vec::new();
-        write_worktree_help(&mut help);
-        let help = String::from_utf8(help).unwrap();
-        let parser = <WorktreeParser as clap::CommandFactory>::command();
-        for command in parser.get_subcommands() {
-            let name = command.get_name().to_uppercase();
-            // the sections whose heading names this command
-            let section: String = help
-                .split("\n\n")
-                .filter(|block| {
-                    block.lines().next().is_some_and(|heading| {
-                        heading.ends_with("OPTIONS:")
-                            && heading.split([' ', '/']).any(|word| word == name)
-                    })
-                })
-                .collect();
-            for arg in command.get_arguments() {
-                let id = arg.get_id().as_str();
-                if matches!(id, "name" | "command" | "help") {
-                    continue;
-                }
-                let shown = match arg.get_long() {
-                    Some(long) => format!("--{long}"),
-                    None => format!("<{}>", id.to_uppercase().replace('_', "-")),
-                };
-                assert!(section.contains(&shown), "{name} OPTIONS lacks {shown}");
-            }
-        }
-    }
 
     // ── warn_or_bail tests ─────────────────────────────────
 

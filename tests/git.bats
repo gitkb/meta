@@ -755,10 +755,21 @@ EOF
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" = "my file.txt; touch PWNED4" ]
 }
 
-@test "meta git update refuses --include instead of cloning every missing repo" {
+@test "meta git update refuses --include and --tag instead of cloning every missing repo" {
     run "$META_BIN" --include frontend git update
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not take --include/--exclude"* ]]
+    # shared can really be cloned, so "nothing cloned" means something
+    git clone --quiet --bare "$TEST_DIR/shared" "$TEST_DIR/shared.git"
+    rm -rf "$TEST_DIR/shared"
+    echo '{"projects": {"frontend": {"repo": "git@github.com:org/frontend.git", "tags": ["ui"]}, "backend": {"repo": "git@github.com:org/backend.git", "tags": ["api"]}, "shared": "file://'"$TEST_DIR"'/shared.git"}}' > "$TEST_DIR/.meta.yaml"
+    run "$META_BIN" --tag api git update
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
+    [ ! -e "$TEST_DIR/shared" ]
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [ -d "$TEST_DIR/shared/.git" ]
 }
 
 @test "arguments after -- that look like meta flags reach git" {
@@ -936,4 +947,78 @@ EOF
     [[ "$output" == *"Cloning meta repository: "'q\u{1b}[2J\nFORGED'* ]]
     [[ "$output" != *$'\033[2J'* ]]
     [[ "$output" != *$'\nFORGED'* ]]
+}
+
+# ============ Selection and arguments ============
+
+@test "--tag runs a git command in the tagged repos only, never the root" {
+    cat > "$TEST_DIR/.meta.yaml" <<'YAML'
+projects:
+  frontend:
+    repo: git@github.com:org/frontend.git
+    tags: [ui]
+  backend:
+    repo: git@github.com:org/backend.git
+    tags: [api]
+  shared: git@github.com:org/shared.git
+YAML
+    root_branch="$(git -C "$TEST_DIR" symbolic-ref --short HEAD)"
+    run "$META_BIN" --tag api git checkout -b feature/x
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_DIR/backend" branch --show-current)" = "feature/x" ]
+    [ "$(git -C "$TEST_DIR/frontend" branch --show-current)" != "feature/x" ]
+    [ "$(git -C "$TEST_DIR" symbolic-ref --short HEAD)" = "$root_branch" ]
+    run "$META_BIN" --tag apo git status
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--tag 'apo' is no project's tag"*"the tags are api, ui"* ]]
+}
+
+@test "meta git status passes its arguments to git, and git update refuses ones it doesn't take" {
+    echo change >> "$TEST_DIR/frontend/README.md"
+    # git colours it: meta's git runs keep colour on
+    run "$META_BIN" git status --short
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"M"*"README.md"* ]]
+    [[ "$output" == *$'\033['* ]]
+    [[ "$output" != *"Changes not staged"* ]]
+    # meta's flag after the command is git's argument
+    run "$META_BIN" git status --tag backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"unknown option"*"tag"* ]]
+
+    git clone --quiet --bare "$TEST_DIR/shared" "$TEST_DIR/shared.git"
+    rm -rf "$TEST_DIR/shared"
+    sed -i.bak "s|git@github.com:org/shared.git|file://$TEST_DIR/shared.git|" "$TEST_DIR/.meta.yaml"
+    run "$META_BIN" git update --dry-run
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"unexpected argument '--dry-run'"* ]]
+    [ ! -e "$TEST_DIR/shared" ]
+    run "$META_BIN" git update --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage: meta git update"* ]]
+    run "$META_BIN" git status --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"meta git status - Pass-through git command"* ]]
+}
+
+@test "meta help never runs the command, even with -- in the words" {
+    echo junk > "$TEST_DIR/frontend/junk"
+    run "$META_BIN" help git clean -f -- .
+    [ "$status" -eq 0 ]
+    [ -f "$TEST_DIR/frontend/junk" ]
+    [[ "$output" == *"Pass-through git command"* ]]
+    # and a plugin command's own help, by its words
+    run "$META_BIN" help git worktree create
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage: meta git worktree create"* ]]
+    [[ "$output" == *"--repo"* ]]
+}
+
+@test "a --tag with no tag in it is an error, not every repo" {
+    for tag in "" "," " "; do
+        run "$META_BIN" --tag "$tag" exec -- touch blank-tag
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"names no tag"* ]]
+    done
+    [ -z "$(find "$TEST_DIR" -name blank-tag)" ]
 }

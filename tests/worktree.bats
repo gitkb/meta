@@ -594,7 +594,7 @@ assert d['totals']['files_changed'] >= 1
     [ "$status" -eq 1 ]
     [[ "$output" != *$'\033'* ]]
     [[ "$output" != *$'\nFORGED'* ]]
-    [[ "$output" == *"unrecognized worktree subcommand 'bad"* ]]
+    [[ "$output" == *"unrecognized subcommand 'bad"* ]]
 }
 
 @test "an invalid option value is escaped on one line" {
@@ -678,9 +678,9 @@ assert d['totals']['files_changed'] >= 1
     run "$META_BIN" git worktree blablabla
     [ "$status" -eq 1 ]
     # the error, once
-    [ "$(grep -c "unrecognized worktree subcommand 'blablabla'" <<<"$output")" -eq 1 ]
+    [ "$(grep -c "unrecognized subcommand 'blablabla'" <<<"$output")" -eq 1 ]
     # Must show ACTUAL help content (not just a reference to --help)
-    [[ "$output" == *"USAGE"* ]]
+    [[ "$output" == *"Usage"* ]]
     [[ "$output" == *"create"* ]]
     [[ "$output" == *"remove"* ]]
     [[ "$output" == *"list"* ]]
@@ -891,16 +891,24 @@ EOF
     "$META_BIN" git worktree create global-filter --repo backend --repo frontend
     run "$META_BIN" --exclude frontend git worktree exec global-filter -- touch ran
     [ "$status" -ne 0 ]
-    [[ "$output" == *"does not take --include/--exclude before it"* ]]
+    [[ "$output" == *"does not take --include/--exclude/--tag before it"* ]]
+    # --tag too, though the tag is real
+    echo '{"projects": {"backend": {"repo": "git@github.com:org/backend.git", "tags": ["api"]}, "frontend": "git@github.com:org/frontend.git"}}' > .meta.yaml
+    run "$META_BIN" --tag api git worktree exec global-filter -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --include/--exclude/--tag before it"* ]]
     [ -z "$(find .worktrees/global-filter -name ran)" ]
 }
 
-@test "inside a worktree set, a filter typo is an error even when --tag selects nothing" {
+@test "inside a worktree set, a filter typo is an error" {
     "$META_BIN" git worktree create tagged --repo backend --repo frontend
     cd .worktrees/tagged
-    run "$META_BIN" --tag nonexistent --exclude typo exec -- pwd
+    run "$META_BIN" --exclude typo exec -- pwd
     [ "$status" -ne 0 ]
     [[ "$output" == *"--exclude 'typo' names none of the repos"* ]]
+    run "$META_BIN" --tag nonexistent exec -- pwd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--tag 'nonexistent' is no project's tag"* ]]
 }
 
 @test "in a set made elsewhere without its root, --tag uses the workspace's config" {
@@ -937,4 +945,38 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"rel-root/backend"* ]]
     [[ "$output" != *"rel-root/frontend"* ]]
+}
+
+@test "--primary inside a set acts on the workspace the set was made from" {
+    # the set holds the root, so it has a copy of .meta.yaml of its own
+    "$META_BIN" git worktree create fix --repo backend
+    [ -f .worktrees/fix/.meta.yaml ]
+    cd .worktrees/fix/backend
+    run "$META_BIN" -i frontend exec -- pwd
+    [ "$status" -ne 0 ]
+    run "$META_BIN" --primary -i frontend exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/frontend"* ]]
+    [[ "$output" != *".worktrees"* ]]
+    run "$META_BIN" --primary context --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"\"name\": \"$(basename "$TEST_DIR")\""* ]]
+    [[ "$output" == *"\"frontend\""* ]]
+}
+
+@test "--primary in a set whose records name two workspaces says so, without pointing back at --primary" {
+    "$META_BIN" git worktree create mixed --repo backend --repo frontend --no-deps
+    record="$(git -C .worktrees/mixed/frontend rev-parse --absolute-git-dir)/meta-worktree.json"
+    python3 - "$record" "$(mktemp -d)" <<'PY'
+import json, sys
+path, other = sys.argv[1], sys.argv[2]
+record = json.load(open(path)); record["project"] = other
+json.dump(record, open(path, "w"))
+PY
+    cd .worktrees/mixed/backend
+    run "$META_BIN" --primary exec -- pwd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--primary can't tell which workspace worktree set"* ]]
+    [[ "$output" == *"Run meta from that workspace's directory"* ]]
+    [[ "$output" != *"Pass --primary"* ]]
 }

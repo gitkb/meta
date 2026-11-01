@@ -381,12 +381,16 @@ mod tests {
     /// the other stops on a conflict
     fn conflicting() -> tempfile::TempDir {
         let dir = repo();
-        commit_text(dir.path(), "f", "base");
-        run(dir.path(), ["switch", "-qc", "side"]).unwrap();
-        commit_text(dir.path(), "f", "side");
-        run(dir.path(), ["switch", "-q", "main"]).unwrap();
-        commit_text(dir.path(), "f", "main");
+        make_conflicting(dir.path());
         dir
+    }
+
+    fn make_conflicting(dir: &Path) {
+        commit_text(dir, "f", "base");
+        run(dir, ["switch", "-qc", "side"]).unwrap();
+        commit_text(dir, "f", "side");
+        run(dir, ["switch", "-q", "main"]).unwrap();
+        commit_text(dir, "f", "main");
     }
 
     fn operation(dir: &Path) -> Option<Operation> {
@@ -610,11 +614,7 @@ mod tests {
         {
             return;
         }
-        commit_text(dir.path(), "f", "base");
-        run(dir.path(), ["switch", "-qc", "side"]).unwrap();
-        commit_text(dir.path(), "f", "side");
-        run(dir.path(), ["switch", "-q", "main"]).unwrap();
-        commit_text(dir.path(), "f", "main");
+        make_conflicting(dir.path());
         assert!(as_t(dir.path(), &["cherry-pick", "side"]).is_err());
         assert!(!dir.path().join(".git/CHERRY_PICK_HEAD").exists());
         assert_eq!(operation(dir.path()), Some(Operation::CherryPick));

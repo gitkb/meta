@@ -390,10 +390,10 @@ fn format_status(r: &RepoContext) -> String {
         (Some(true), None, _) => parts.push("dirty".to_string()),
     }
     if r.detached == Some(false) {
-        match r.upstream_gone {
-            None => parts.push("no upstream".to_string()),
-            Some(true) => parts.push("upstream gone".to_string()),
-            Some(false) => {}
+        if r.upstream.is_none() {
+            parts.push("no upstream".to_string());
+        } else if r.upstream_gone == Some(true) {
+            parts.push("upstream gone".to_string());
         }
     }
     let base = parts.join(", ");

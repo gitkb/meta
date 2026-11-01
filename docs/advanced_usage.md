@@ -385,8 +385,9 @@ Plugins receive requests via stdin and respond via stdout:
 {
   "command": "status",
   "args": [],
-  "projects": [{"name": "api", "path": "./api", "tags": ["backend"]}],
-  "filters": {"tags": ["backend"]}
+  "projects": ["/ws/api"],
+  "cwd": "/ws",
+  "options": {"tag_filters": ["backend"], "include_filters": null, "exclude_filters": null}
 }
 ```
 

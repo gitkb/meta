@@ -827,5 +827,6 @@ assert len(data['repos']) == 1
     [[ "$output" == *"--ttl"* ]] || [[ "$output" == *"ttl"* ]]
     run "$META_BIN" git worktree remove --help
     [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage: meta git worktree remove"* ]]
     [[ "$output" == *"--force"* ]]
 }

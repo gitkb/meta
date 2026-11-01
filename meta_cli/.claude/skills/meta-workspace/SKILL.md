@@ -61,7 +61,7 @@ meta git status
 When projects have tags, filter operations:
 
 ```bash
-# Frontend repos (the meta root stays included)
+# Frontend repos (not the root: it has no tags; add it with --include .)
 meta --tag frontend git status
 
 # Multiple tags (comma-separated)

@@ -15,7 +15,7 @@ pub struct Filters {
 
 impl Filters {
     /// The filters as typed: `tag` is a comma list, and a blank entry in it
-    /// is no tag.
+    /// is no tag (the command line refuses a `--tag` of blanks alone).
     pub fn new(
         include: Option<Vec<String>>,
         exclude: Option<Vec<String>>,
@@ -453,8 +453,9 @@ mod tests {
         );
         assert_eq!(pick(&["web"], &[], "jobs").unwrap(), ["worker", "web"]);
         assert_eq!(pick(&[], &["api"], "backend").unwrap(), ["worker"]);
-        // A blank tag list is no filter
-        assert_eq!(pick(&[], &[], " , ").unwrap().len(), 4);
+        // A blank entry in the list is no tag (meta refuses a list of
+        // blanks alone before it selects)
+        assert_eq!(pick(&[], &[], "jobs, ,").unwrap(), ["worker"]);
 
         let config = root.join(".meta.yaml");
         let err = picked(

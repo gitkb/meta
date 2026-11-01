@@ -97,7 +97,16 @@ pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
             .into_iter()
             .map(|member| member.path)
             .collect();
-        let Some(origin) = set_origin(&set_dir, &members)? else {
+        // set_origin's way out of its error is --primary itself
+        let origin = set_origin(&set_dir, &members).map_err(|_| {
+            anyhow::anyhow!(
+                "--primary can't tell which workspace worktree set {} was made from: its \
+                 checkouts name different workspaces. Run meta from that workspace's \
+                 directory instead.",
+                escape_path(&set_dir)
+            )
+        })?;
+        let Some(origin) = origin else {
             break;
         };
         let inside = place.strip_prefix(&set_dir).unwrap_or(Path::new(""));
@@ -197,7 +206,7 @@ pub fn select_in_set(
 /// then the set's own, so a map built from it in order lets the set's win.
 /// The workspace's part is best effort: what neither tells about stays
 /// unselected.
-pub fn set_tree(
+fn set_tree(
     set_dir: &Path,
     members: &[PathBuf],
     projects: &[meta_core::config::ProjectInfo],

@@ -25,14 +25,12 @@ pub struct ExecuteOptions {
 }
 
 impl ExecuteOptions {
-    /// `selected` from the directories meta sent, when it filtered them
-    pub fn select(filtered: bool, projects: &[String]) -> Option<Vec<PathBuf>> {
-        filtered.then(|| {
-            projects
-                .iter()
-                .map(|dir| comparable(Path::new(dir)))
-                .collect()
-        })
+    /// `selected` from the directories meta sent
+    pub fn selected(projects: &[String]) -> Vec<PathBuf> {
+        projects
+            .iter()
+            .map(|dir| comparable(Path::new(dir)))
+            .collect()
     }
 
     /// Whether the command acts on the project at `dir`

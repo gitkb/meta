@@ -45,6 +45,9 @@ pub fn parse<P: clap::Parser>() -> P {
 /// subcommand in place of clap's, which would pass it to the command.
 fn with_option_tip<P: clap::Parser>(mut error: clap::Error) -> clap::Error {
     use clap::error::{ContextKind, ContextValue, ErrorKind};
+    if error.kind() != ErrorKind::UnknownArgument {
+        return error;
+    }
     let Some(ContextValue::String(arg)) = error.get(ContextKind::InvalidArg) else {
         return error;
     };
@@ -56,7 +59,7 @@ fn with_option_tip<P: clap::Parser>(mut error: clap::Error) -> clap::Error {
             || a.get_short()
                 .is_some_and(|short| option == format!("-{short}"))
     });
-    let Some(own) = own.filter(|_| error.kind() == ErrorKind::UnknownArgument) else {
+    let Some(own) = own else {
         return error;
     };
     let value = match own.get_value_names() {

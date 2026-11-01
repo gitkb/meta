@@ -179,7 +179,7 @@ Meta options (before `git`):\n\
   --depth <N>           Limit recursive traversal depth\n\
   --include <REPOS>     These repos (and those --tag selects; .meta.yaml name or path from the root)\n\
   --exclude <REPOS>     Skip these repos (.meta.yaml name or path from the root)\n\
-  --tag <TAGS>          Filter by project tag(s), comma-separated\n\
+  --tag <TAGS>          The repos with any of these tags, comma-separated (never the root)\n\
   --parallel            Run repo commands concurrently\n\
   --sequential          Run repo commands one at a time\n\n\
 Examples:\n\

@@ -266,6 +266,8 @@ fn local_install_gitignores_untracked_plugin_files() {
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // macOS hands out the listener's non-blocking mode
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(2)))
                         .unwrap();

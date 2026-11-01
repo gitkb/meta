@@ -4,6 +4,7 @@ use console::style;
 use indicatif::MultiProgress;
 use meta_core::config;
 use meta_core::display::{escape, escape_path};
+use meta_core::git::GitUrl;
 use meta_core::gitdir::Checkout;
 use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
@@ -108,11 +109,22 @@ pub(crate) fn execute_git_update(
         return Ok(CommandResult::Message(String::new()));
     }
 
-    // Establish SSH multiplexing before parallel clones and pulls
-    let urls: Vec<_> = tasks
-        .iter()
-        .filter_map(|t| t.url.clone())
-        .chain(workspace.projects.iter().filter_map(|p| p.repo.clone()))
+    // Establish SSH multiplexing before parallel clones and pulls, for the
+    // remotes this run contacts: a checkout's own origin (what it pulls
+    // from, if it has something to pull from), the listed URL of a missing
+    // project
+    let contacted = |dir: &Path, listed: Option<&GitUrl>| match Checkout::of(dir) {
+        Checkout::Repo { .. } if crate::clone_worker::nothing_to_pull(dir).is_none() => {
+            meta_core::git::remote_url(dir).ok().flatten()
+        }
+        Checkout::Repo { .. } => None,
+        Checkout::Missing => listed.cloned(),
+        Checkout::NotARepo(_) => None,
+    };
+    let projects = workspace.projects.iter();
+    let urls: Vec<_> = std::iter::once(contacted(root, None))
+        .chain(projects.map(|p| contacted(&root.join(&p.path), p.repo.as_ref())))
+        .flatten()
         .collect();
     let mut parallel = 4_usize;
     let ssh_cmd = match ssh::establish_ssh_masters(&urls) {

@@ -744,9 +744,12 @@ mod tests {
         git(&repo, &["stash", "-q"]);
         let wt = tmp.path().join("wt");
         git(&repo, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+        // and one on no branch at all, counted once
+        git(&repo, &["switch", "-q", "--detach"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "loose"]);
         let held = repo_holds(&repo).unwrap().join("; ");
-        assert!(held.contains("1 commit on no remote: "), "{held}");
-        assert!(held.contains("mine"), "{held}");
+        assert!(held.contains("2 commits on no remote: "), "{held}");
+        assert!(held.contains("mine") && held.contains("loose"), "{held}");
         assert!(held.contains("1 stash"), "{held}");
         assert!(held.contains("1 linked worktree: "), "{held}");
         assert!(!held.contains(STRANDED), "{held}");

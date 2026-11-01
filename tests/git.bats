@@ -269,11 +269,13 @@ within() {
     with_remotes
     teammate frontend
     rm -rf "$TEST_DIR/shared"
+    git -C "$TEST_DIR/backend" switch --quiet --detach
     local frontend_head
     frontend_head=$(head_of frontend)
     run "$META_BIN" --dry-run git update
     [ "$status" -eq 0 ]
     [[ "$output" == *"git -C $TEST_DIR/frontend pull --ff-only --no-rebase"* ]]
+    [[ "$output" == *"(backend not pulled: HEAD is not on a branch)"* ]]
     [[ "$output" == *"git clone -- file://$TEST_DIR/remotes/shared.git $TEST_DIR/shared"* ]]
     [ "$(head_of frontend)" = "$frontend_head" ]
     [ ! -e "$TEST_DIR/shared" ]
@@ -356,12 +358,21 @@ within() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"meta repos list each other: cyc → kid → top"* ]]
     [ ! -e "$CYC/kid/top" ]
+    # cloned by a relative URL, the top repo is the one git recorded
+    rm -rf "$CYC"
+    cd "$(dirname "$TOP_BARE")"
+    PATH="$(dirname "$META_GIT_BIN"):$PATH" run within 60 "$META_BIN" git clone -r top.git "$CYC"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"meta repos list each other: cyc → kid → top"* ]]
+    [ ! -e "$CYC/kid/top" ]
     rm -rf "$TOP_BARE" "$KID_BARE" "$CYC"
 }
 
 
 @test "meta git update detects missing repos" {
     rm -rf "$TEST_DIR/shared"
+    # a host that doesn't exist: the clone fails without the network
+    sed -i.bak 's|git@github.com:org/shared.git|git@example.invalid:org/shared.git|' "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git update
     # It should detect that shared is missing and try to clone it
     # (will fail since the URL is fake, but should detect the missing repo)

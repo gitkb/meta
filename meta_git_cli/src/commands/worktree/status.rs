@@ -126,7 +126,7 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
 /// worktree records.
 fn missing_members(wt_dir: &std::path::Path, members: &[WorktreeMemberInfo]) -> Vec<String> {
     use meta_core::gitdir::Checkout;
-    use meta_git_lib::worktree::record;
+    use meta_core::set_record as record;
     let Some(made) = record::find(wt_dir, members.iter().map(|m| &m.path)) else {
         return Vec::new();
     };

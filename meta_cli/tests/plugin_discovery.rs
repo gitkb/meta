@@ -147,11 +147,18 @@ fn a_worktree_set_checkout_reads_its_own_and_its_origins_plugins() {
     let f = Fixture::new(true);
     // A set's root checkout, laid out as git and meta leave it
     let set = f.cwd.join(".worktrees/s1");
+    for dir in ["objects", "refs"] {
+        fs::create_dir_all(f.cwd.join(".git").join(dir)).unwrap();
+    }
+    fs::write(f.cwd.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     let admin = f.cwd.join(".git/worktrees/s1");
     fs::create_dir_all(&admin).unwrap();
     fs::write(admin.join("commondir"), "../..\n").unwrap();
+    fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    let back = set.join(".git").display().to_string();
+    fs::write(admin.join("gitdir"), format!("{back}\n")).unwrap();
     let record = format!(
-        "{{\"project\": {:?}, \"set\": {:?}}}",
+        "{{\"project\": {:?}, \"set\": {:?}, \"created_at\": \"2025-01-01T00:00:00Z\"}}",
         f.cwd.display().to_string(),
         set.display().to_string()
     );

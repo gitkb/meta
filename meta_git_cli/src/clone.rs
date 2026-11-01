@@ -1,5 +1,6 @@
 use crate::clone_worker::clone_with_queue;
 use crate::ssh;
+use anyhow::Context;
 use console::style;
 use indicatif::MultiProgress;
 use meta_core::config;
@@ -81,6 +82,39 @@ pub(crate) fn execute_git_clone(
             .collect()
     };
 
+    // git refuses a destination that exists and isn't an empty directory;
+    // said here, before anything runs, with what to do instead
+    let clone_dir_path = cwd.join(&clone_dir);
+    let inspect = || {
+        format!(
+            "Cannot inspect {}",
+            meta_core::display::escape_path(&clone_dir_path)
+        )
+    };
+    let occupied = match clone_dir_path.symlink_metadata() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Ok(meta) if meta.is_dir() => std::fs::read_dir(&clone_dir_path)
+            .with_context(inspect)?
+            .next()
+            .is_some(),
+        Ok(_) => true,
+        Err(e) => return Err(e).with_context(inspect),
+    };
+    if occupied {
+        let workspace = matches!(config::find_meta_config_in(&clone_dir_path), Ok(Some(_)));
+        return Ok(CommandResult::Error(format!(
+            "{} already exists{}",
+            meta_core::display::escape_path(&clone_dir_path),
+            if workspace {
+                "; to clone the projects its .meta.yaml lists that aren't cloned yet, run \
+                 'meta git update' in it"
+            } else {
+                " and is not an empty directory; clone somewhere else, or name another \
+                 directory"
+            }
+        )));
+    }
+
     if options.mode().is_preview() {
         // Output what we know - just the meta repo clone command
         // (Child repos are in .meta.yaml file which hasn't been cloned yet)
@@ -114,7 +148,6 @@ pub(crate) fn execute_git_clone(
     }
 
     // Parse meta config inside cloned repo
-    let clone_dir_path = cwd.join(&clone_dir);
     if config::find_meta_config_in(&clone_dir_path)?.is_none() {
         return Ok(CommandResult::Message(
             "No .meta.yaml found in cloned repository".to_string(),

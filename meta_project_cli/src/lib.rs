@@ -499,25 +499,28 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
             .unwrap_or(root_dir)
             .to_string_lossy()
             .to_string();
-        let linked_worktree =
-            worktree::detect_worktree_context(&abs_cwd).map(|(name, task_dir, _repos)| {
-                let canonical_root = worktree::discover_worktree_repos(&task_dir)
-                    .ok()
-                    .and_then(|repos| {
-                        repos
-                            .into_iter()
-                            .find(|repo| repo.alias == ".")
-                            .map(|repo| repo.source_path)
-                    })
-                    .unwrap_or_else(|| Path::new(&abs_root).to_path_buf());
+        let context = match worktree::detect_worktree_context(&abs_cwd) {
+            Ok(context) => context,
+            Err(e) => return CommandResult::Error(format!("{e:#}")),
+        };
+        let linked_worktree = context.map(|(name, task_dir, _repos)| {
+            let canonical_root = worktree::discover_worktree_repos(&task_dir)
+                .ok()
+                .and_then(|repos| {
+                    repos
+                        .into_iter()
+                        .find(|repo| repo.alias == ".")
+                        .map(|repo| repo.source_path)
+                })
+                .unwrap_or_else(|| Path::new(&abs_root).to_path_buf());
 
-                ProjectListWorktree {
-                    linked: true,
-                    physical_root: task_dir.to_string_lossy().to_string(),
-                    canonical_root: canonical_root.to_string_lossy().to_string(),
-                    name,
-                }
-            });
+            ProjectListWorktree {
+                linked: true,
+                physical_root: task_dir.to_string_lossy().to_string(),
+                canonical_root: canonical_root.to_string_lossy().to_string(),
+                name,
+            }
+        });
         let abs_root = linked_worktree
             .as_ref()
             .map(|wt| wt.canonical_root.clone())

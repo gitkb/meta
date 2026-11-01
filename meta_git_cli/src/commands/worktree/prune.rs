@@ -6,11 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use meta_cli::worktree::discover_worktree_members;
+use meta_core::set_record::{self as record, SetRecord};
 use meta_git_lib::worktree::helpers::{resolve_worktree_root, Configs};
 use meta_git_lib::worktree::hooks::fire_post_prune;
 use meta_git_lib::worktree::lease;
-use meta_git_lib::worktree::record::{self, SetRecord};
 use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
+use meta_git_lib::worktree::ttl;
 use meta_git_lib::worktree::types::*;
 use meta_git_lib::worktree::workspace::Workspace;
 
@@ -113,7 +114,7 @@ fn set_of_admin(admin: &Path, worktree_root: &Path) -> Option<PathBuf> {
 /// leaves it.)
 fn eligible(record: &SetRecord, now: i64) -> Option<(String, Option<u64>)> {
     // Check TTL expiration
-    let remaining = record.ttl_remaining(now).filter(|r| *r <= 0)?;
+    let remaining = ttl::remaining(record, now).filter(|r| *r <= 0)?;
     // Total age = configured TTL + seconds past expiry
     let age = record
         .ttl_seconds
@@ -129,7 +130,7 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
     // goes with it
     let cwd = std::env::current_dir()?;
     let configs = Configs::find(&cwd)?;
-    let workspace = Workspace::of(&configs.here);
+    let workspace = Workspace::of(&configs.here)?;
     let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
     // A set whose lease is held is being created, or is an ephemeral set
@@ -171,24 +172,8 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
         }
         !stale
     });
-    if sets.is_empty() && kept.is_empty() && abandoned.is_empty() {
-        if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&PruneOutput {
-                    removed: vec![],
-                    kept: vec![],
-                    dry_run,
-                })?
-            );
-        } else {
-            println!("No worktree sets of this workspace were found. Nothing to prune.");
-        }
-        return Ok(());
-    }
-
     let now = Utc::now().timestamp();
-    let mut to_remove: Vec<(PruneEntry, Option<SetRecord>)> = Vec::new();
+    let mut to_remove: Vec<(Candidate, Option<SetRecord>)> = Vec::new();
     for (set, found) in &abandoned {
         if is_missing(set) {
             continue;
@@ -197,25 +182,17 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        to_remove.push((
-            create_prune_entry(
-                name,
-                set.display().to_string(),
-                match found.lease.as_ref().is_some_and(|l| l.ephemeral) {
-                    true => format!("ephemeral, the run that made it ({}) ended", found.holder()),
-                    false => format!("abandoned while {} was creating it", found.holder()),
-                },
-                None,
-            ),
-            None,
-        ));
+        let reason = match found.lease.as_ref().is_some_and(|l| l.ephemeral) {
+            true => format!("ephemeral, the run that made it ({}) ended", found.holder()),
+            false => format!("abandoned while {} was creating it", found.holder()),
+        };
+        to_remove.push((Candidate::new(set, name, reason, None), None));
     }
 
     for (set, records) in &sets {
         if held.contains(set) || (abandoned.contains_key(set) && !is_missing(set)) {
             continue;
         }
-        let path_key = set.display().to_string();
         let Some((_, found)) = records.first() else {
             continue;
         };
@@ -234,10 +211,8 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
             {
                 continue;
             }
-            to_remove.push((
-                create_prune_entry(name, path_key, "orphaned (missing directory)", None),
-                Some(found.clone()),
-            ));
+            let orphan = Candidate::new(set, name, "orphaned (missing directory)", None);
+            to_remove.push((orphan, Some(found.clone())));
             continue;
         }
 
@@ -261,29 +236,21 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
         };
 
         if let Some((reason, age)) = eligible(&record, now) {
-            to_remove.push((
-                create_prune_entry(name, path_key, reason, age),
-                Some(record),
-            ));
+            to_remove.push((Candidate::new(set, name, reason, age), Some(record)));
         }
     }
 
     // Prune never discards work: a candidate whose directory holds anything
     // that deleting it would lose is kept, with the reason.
     let mut candidates = Vec::new();
-    for (entry, record) in to_remove {
-        let wt_path = Path::new(&entry.path);
+    for (candidate, record) in to_remove {
+        let wt_path = candidate.set.as_path();
         if is_missing(wt_path) {
-            candidates.push((entry, None));
+            candidates.push((candidate, None));
             continue;
         }
         if let Some(why) = path_moved(wt_path) {
-            kept.push(create_prune_entry(
-                entry.name,
-                entry.path,
-                format!("{}, but {why}", entry.reason),
-                entry.age_seconds,
-            ));
+            kept.push(candidate.kept(why));
             continue;
         }
         // A set holding another set is blocked by the check, and one holding
@@ -303,7 +270,7 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
             Ok((_, problems, check))
                 if problems.is_empty() && (is_abandoned || check.record() == record.as_ref()) =>
             {
-                candidates.push((entry, Some(check)));
+                candidates.push((candidate, Some(check)));
                 continue;
             }
             Ok((_, problems, check)) if problems.is_empty() && check.record().is_some() => {
@@ -315,51 +282,20 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
             Ok((_, problems, _)) => problems.join("; "),
             Err(e) => format!("cannot inspect it: {e:#}"),
         };
-        kept.push(create_prune_entry(
-            entry.name,
-            entry.path,
-            format!("{}, but {problems}", entry.reason),
-            entry.age_seconds,
-        ));
+        kept.push(candidate.kept(problems));
     }
 
-    once_each(&mut kept);
-    if dry_run || candidates.is_empty() {
-        let would_remove: Vec<PruneEntry> = candidates.into_iter().map(|(e, _)| e).collect();
-        if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&PruneOutput {
-                    removed: would_remove,
-                    kept: kept.clone(),
-                    dry_run,
-                })?
-            );
-        } else {
-            if would_remove.is_empty() {
-                println!("Nothing to prune.");
-            } else {
-                println!("[DRY RUN] Would prune {} worktree(s):", would_remove.len());
-                for entry in &would_remove {
-                    println!(
-                        "  {} ({}) — {}",
-                        escape(&entry.name),
-                        escape(&entry.reason),
-                        escape(&entry.path)
-                    );
-                }
-            }
-            print_kept(&kept);
-        }
-        warn_kept(&kept, strict)?;
-        return Ok(());
-    }
-
-    // Actually remove: each checked set, or the records of a missing one.
+    // Remove each checked set, or the records of a missing one; a preview
+    // only says which
+    let attempted = !dry_run && !candidates.is_empty();
     let mut removed = Vec::new();
     let mut failed = Vec::new();
-    for (prune_entry, check) in candidates {
-        let wt_path = Path::new(&prune_entry.path);
+    for (candidate, check) in candidates {
+        if dry_run {
+            removed.push(candidate.entry());
+            continue;
+        }
+        let wt_path = candidate.set.as_path();
         let removal = match &check {
             // Checked again: a directory above may have become a link since
             Some(check) => match path_moved(wt_path) {
@@ -381,35 +317,20 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
                         (None, Ok((_, claim))) => delete_checked_set(wt_path, check, false, false)
                             .and_then(|()| claim.delete()),
                         (why, _) => {
-                            kept.push(create_prune_entry(
-                                prune_entry.name,
-                                prune_entry.path,
-                                format!("{}, but {}", prune_entry.reason, why.unwrap_or_default()),
-                                prune_entry.age_seconds,
-                            ));
+                            kept.push(candidate.kept(why.unwrap_or_default()));
                             continue;
                         }
                     }
                 }
                 Some(why) => {
-                    kept.push(create_prune_entry(
-                        prune_entry.name,
-                        prune_entry.path,
-                        format!("{}, but {why}", prune_entry.reason),
-                        prune_entry.age_seconds,
-                    ));
+                    kept.push(candidate.kept(why));
                     continue;
                 }
             },
             // A missing directory only loses its records. One that has
             // reappeared since was never checked: keep it, nothing failed.
             None if !is_missing(wt_path) => {
-                kept.push(create_prune_entry(
-                    prune_entry.name,
-                    prune_entry.path,
-                    format!("{}, but it reappeared", prune_entry.reason),
-                    prune_entry.age_seconds,
-                ));
+                kept.push(candidate.kept("it reappeared"));
                 continue;
             }
             // its lease, if one was left, goes with it
@@ -420,49 +341,88 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
             }),
         };
         match removal {
-            Ok(()) => removed.push(prune_entry),
+            Ok(()) => removed.push(candidate.entry()),
             Err(e) => {
-                failed.push(prune_entry.name.clone());
-                kept.push(create_prune_entry(
-                    prune_entry.name,
-                    prune_entry.path,
-                    format!("{}, but removing it failed: {e:#}", prune_entry.reason),
-                    prune_entry.age_seconds,
-                ));
+                failed.push(candidate.name.clone());
+                kept.push(candidate.kept(format!("removing it failed: {e:#}")));
             }
         }
     }
 
-    // Fire post-prune hook
-    fire_post_prune(&removed, Some(&configs.owner));
     once_each(&mut kept);
-
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&PruneOutput {
-                removed,
-                kept: kept.clone(),
-                dry_run: false,
-            })?
-        );
-    } else {
-        println!("{} Pruned {} worktree(s):", "✓".green(), removed.len());
-        for entry in &removed {
-            println!(
-                "  {} ({}) — {}",
-                escape(&entry.name),
-                escape(&entry.reason),
-                escape(&entry.path)
-            );
-        }
-        print_kept(&kept);
+    report(&removed, &kept, dry_run, json)?;
+    // What was done is reported first: a failing hook doesn't undo it
+    if attempted {
+        fire_post_prune(&removed, Some(&configs.owner))
+            .or_else(|e| super::warn_or_bail(strict, format!("{e:#}")))?;
     }
-
     if !failed.is_empty() {
         anyhow::bail!("Failed to prune: {}", escape(&failed.join(", ")));
     }
     warn_kept(&kept, strict)
+}
+
+/// A set prune may remove: where it is, and why.
+struct Candidate {
+    name: String,
+    set: PathBuf,
+    reason: String,
+    age: Option<u64>,
+}
+
+impl Candidate {
+    fn new(set: &Path, name: String, reason: impl Into<String>, age: Option<u64>) -> Self {
+        Candidate {
+            name,
+            set: set.to_path_buf(),
+            reason: reason.into(),
+            age,
+        }
+    }
+
+    /// How the report shows it.
+    fn entry(&self) -> PruneEntry {
+        create_prune_entry(
+            self.name.clone(),
+            self.set.display().to_string(),
+            self.reason.clone(),
+            self.age,
+        )
+    }
+
+    /// How the report shows it kept, and why.
+    fn kept(self, why: impl std::fmt::Display) -> PruneEntry {
+        let reason = format!("{}, but {why}", self.reason);
+        create_prune_entry(self.name, self.set.display().to_string(), reason, self.age)
+    }
+}
+
+/// Print what prune removed (or, previewing, would remove) and what it kept.
+fn report(removed: &[PruneEntry], kept: &[PruneEntry], dry_run: bool, json: bool) -> Result<()> {
+    if json {
+        let output = PruneOutput {
+            removed: removed.to_vec(),
+            kept: kept.to_vec(),
+            dry_run,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+    match (removed.len(), dry_run) {
+        (0, _) => println!("Nothing to prune."),
+        (n, true) => println!("[DRY RUN] Would prune {n} worktree(s):"),
+        (n, false) => println!("{} Pruned {n} worktree(s):", "✓".green()),
+    }
+    for entry in removed {
+        println!(
+            "  {} ({}) — {}",
+            escape(&entry.name),
+            escape(&entry.reason),
+            escape(&entry.path)
+        );
+    }
+    print_kept(kept);
+    Ok(())
 }
 
 /// Delete the records of a set whose directory is gone, each only if its

@@ -16,6 +16,7 @@ pub mod duration;
 pub mod git;
 pub mod gitdir;
 pub mod mode;
+pub mod set_record;
 pub use mode::ExecutionMode;
 pub mod store;
 

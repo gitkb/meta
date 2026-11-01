@@ -154,10 +154,10 @@ fn leftover_entry(repo_path: &Path, dest: &Path) -> Result<()> {
     };
     for entry in entries {
         let admin = entry?.path();
-        let Some(checkout) = super::record::checkout(&admin) else {
+        let Some(checkout) = meta_core::set_record::checkout(&admin) else {
             continue;
         };
-        if resolved(&checkout) == dest && super::record::checkout_gone(&admin) {
+        if resolved(&checkout) == dest && meta_core::set_record::checkout_gone(&admin) {
             anyhow::bail!(
                 "{} still has git's entry for a worktree at {}, whose folder is gone. git may \
                  hold work there that the folder didn't: staged changes, a rebase or merge \

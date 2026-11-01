@@ -8,9 +8,9 @@ use meta_core::display::{escape, escape_path};
 use std::path::{Path, PathBuf};
 
 use super::git_ops::remove_worktree_repos;
-use super::record::{self, SetRecord};
 use meta_core::git::git;
 use meta_core::gitdir;
+use meta_core::set_record::{self as record, SetRecord};
 
 /// A linked worktree checkout inside a set, the git directory of the
 /// repository it belongs to (where `git worktree remove` runs), and meta's
@@ -283,7 +283,7 @@ fn add_member(
     path: &Path,
     (admin, repo_git_dir): (PathBuf, PathBuf),
 ) {
-    let record = match trusted_record(&admin, &repo_git_dir) {
+    let record = match record::trusted(&admin, &repo_git_dir) {
         Ok(record) => record,
         Err(e) => {
             let why = format!(
@@ -326,42 +326,6 @@ fn add_member(
         repo_git_dir,
         record,
     });
-}
-
-/// Meta's record of the linked worktree checked out at `checkout`, with its
-/// admin directory: `None` if it isn't a linked worktree or has no record,
-/// an error if it has a record that can't be trusted.
-pub fn member_record(checkout: &Path) -> Result<Option<(PathBuf, SetRecord)>> {
-    let Ok(gitdir::Linked {
-        admin,
-        common: repo_git_dir,
-    }) = gitdir::linked(checkout)
-    else {
-        return Ok(None);
-    };
-    Ok(trusted_record(&admin, &repo_git_dir)?.map(|record| (admin, record)))
-}
-
-/// The record in `admin`, the admin directory of a worktree of the
-/// repository whose git directory is `repo_git_dir`. Git keeps every
-/// worktree's admin directory in its repository's `worktrees` directory; a
-/// record anywhere else is no proof of anything, and an error.
-fn trusted_record(admin: &Path, repo_git_dir: &Path) -> Result<Option<SetRecord>> {
-    let Some(record) = record::read(admin)? else {
-        return Ok(None);
-    };
-    let registered = || -> Option<bool> {
-        Some(
-            admin.canonicalize().ok()?.parent()?
-                == repo_git_dir.join("worktrees").canonicalize().ok()?,
-        )
-    };
-    anyhow::ensure!(
-        registered() == Some(true),
-        "its git metadata {} is not where git keeps a worktree's",
-        escape_path(admin)
-    );
-    Ok(Some(record))
 }
 
 enum GitEntry {
@@ -812,7 +776,7 @@ mod tests {
             "{check:?}"
         );
         // nor does `add` find it to copy into the worktrees it adds
-        assert!(member_record(&fake.join("real")).is_err());
+        assert!(record::member(&fake.join("real")).is_err());
         assert_eq!(record::find(&fake, [fake.join("real")]), None);
     }
 

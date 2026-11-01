@@ -51,7 +51,7 @@ impl Configs {
     /// The configs for `here`. A source checkout without a config is still
     /// the owner, with no settings of its own.
     pub fn of(here: Workspace) -> Result<Self> {
-        let Some(source) = meta_core::config::set_source(&here.dir).filter(|s| s.is_dir()) else {
+        let Some(source) = meta_core::config::set_source(&here.dir)?.filter(|s| s.is_dir()) else {
             return Ok(Self {
                 owner: here.clone(),
                 here,
@@ -103,18 +103,17 @@ pub fn resolve_existing_worktree(name: &str) -> Result<PathBuf> {
     Ok(wt_dir)
 }
 
-/// Resolve, validate existence, and discover repos in a named worktree.
-/// Returns a non-empty repo list, or errors if worktree doesn't exist
-/// or contains no repos.
+/// The directory of the named worktree set and its repos: an error if it
+/// doesn't exist or holds none.
 pub fn discover_and_validate_worktree(
     name: &str,
-) -> Result<Vec<meta_cli::worktree::WorktreeRepoInfo>> {
+) -> Result<(PathBuf, Vec<meta_cli::worktree::WorktreeRepoInfo>)> {
     let wt_dir = resolve_existing_worktree(name)?;
     let repos = meta_cli::worktree::discover_worktree_repos(&wt_dir)?;
     if repos.is_empty() {
         anyhow::bail!("No repos found in worktree '{}'", escape(name));
     }
-    Ok(repos)
+    Ok((wt_dir, repos))
 }
 
 /// The projects of `workspace`, with its root repo first as "." when
@@ -140,18 +139,6 @@ pub fn projects_with_root(workspace: &Workspace, include_root: bool) -> Vec<Proj
     root.into_iter()
         .chain(workspace.projects.iter().cloned())
         .collect()
-}
-
-/// Look up a project by alias, returning an error with valid aliases on miss.
-pub fn lookup_project<'a>(projects: &'a [ProjectInfo], alias: &str) -> Result<&'a ProjectInfo> {
-    projects.iter().find(|p| p.name == alias).ok_or_else(|| {
-        let valid: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
-        anyhow::anyhow!(
-            "Unknown repo alias: '{}'. Valid aliases: {}",
-            escape(alias),
-            escape(&valid.join(", "))
-        )
-    })
 }
 
 /// Where the repo at `source`, found from `meta_dir` under `alias`, goes in
@@ -201,42 +188,6 @@ pub fn dest_in_set(wt_dir: &Path, place: &str) -> Result<PathBuf, String> {
     } else {
         resolved
     })
-}
-
-/// Look up a project by alias, supporting nested paths like "vendor/tree-sitter-markdown".
-///
-/// For simple aliases (no `/`), uses flat lookup from the current .meta.yaml.
-/// For nested paths, walks the meta tree recursively to find the project.
-///
-/// Returns the resolved path and project info.
-pub fn lookup_nested_project(workspace: &Workspace, alias: &str) -> Result<(PathBuf, ProjectInfo)> {
-    let meta_dir = workspace.dir.as_path();
-    // If alias contains '/', use recursive lookup
-    if alias.contains('/') {
-        let tree = meta_core::config::walk_projects(meta_dir, &workspace.projects, None)?;
-
-        // Build a map of full path -> ProjectInfo
-        let project_map = meta_core::config::build_project_map(&tree, meta_dir, "");
-
-        project_map.get(alias).cloned().ok_or_else(|| {
-            // Use keys from the map we already built (avoids re-walking the tree)
-            let mut valid_paths: Vec<_> = project_map.keys().collect();
-            valid_paths.sort();
-            anyhow::anyhow!(
-                "Unknown nested repo: '{}'. Valid nested paths: {}",
-                escape(alias),
-                valid_paths
-                    .into_iter()
-                    .map(|path| escape(path))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })
-    } else {
-        // Existing flat lookup for simple aliases
-        let project = lookup_project(&workspace.projects, alias)?;
-        Ok((meta_dir.join(&project.path), project.clone()))
-    }
 }
 
 pub fn resolve_branch(
@@ -329,58 +280,76 @@ pub fn repo_matches_spec(repo_path: &Path, spec: &str) -> bool {
         .is_some_and(|owner_repo| owner_repo.eq_ignore_ascii_case(spec))
 }
 
-/// Add the worktrees folder `worktrees` (its path from `meta_dir`) to
-/// `meta_dir`'s `.gitignore`. A `link` (to a folder elsewhere) is ignored by
-/// its name: git sees a link as a file, which `name/` doesn't match.
-pub fn ensure_worktrees_in_gitignore(
-    meta_dir: &Path,
-    worktrees: &str,
-    link: bool,
-    quiet: bool,
-) -> Result<()> {
-    let gitignore_path = meta_dir.join(".gitignore");
-    // the path as a literal pattern: git reads `*?[\` as globs, and a leading
-    // `#` or `!` as a comment or a negation
-    let mut literal = String::new();
-    for c in worktrees.chars() {
+/// Keep the worktrees folder `worktree_root` out of the git status of
+/// `owner`, the checkout whose sets it holds, when it is inside it: as
+/// written (a `.worktrees` link to another disk is still in it), or as the
+/// two resolve (an absolute `worktrees_dir` spelled another way). It goes in
+/// the repository's `info/exclude`, which is local and untracked, so nothing
+/// the workspace commits changes. A folder outside `owner`, or an `owner`
+/// that isn't a repository of its own, needs nothing.
+pub fn exclude_worktrees(owner: &Path, worktree_root: &Path) -> Result<()> {
+    let Some(git_dir) = meta_core::gitdir::common_dir(owner)? else {
+        return Ok(());
+    };
+    let plain = |rel: &Path| {
+        rel.components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+    };
+    let real = |path: &Path| path.canonicalize().ok();
+    let inside = worktree_root
+        .strip_prefix(owner)
+        .ok()
+        .filter(|rel| plain(rel))
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            let (root, owner) = (real(worktree_root)?, real(owner)?);
+            Some(root.strip_prefix(owner).ok()?.to_path_buf()).filter(|rel| plain(rel))
+        });
+    let Some(rel) = inside
+        .as_deref()
+        .and_then(Path::to_str)
+        .filter(|r| !r.is_empty())
+    else {
+        return Ok(());
+    };
+    // the path as a literal pattern from the top of the repository, for a
+    // folder or a link alike: git reads `*?[\` as globs, and drops a
+    // trailing space
+    let mut pattern = String::from("/");
+    for c in rel.replace('\\', "/").chars() {
         if matches!(c, '*' | '?' | '[' | '\\') {
-            literal.push('\\');
+            pattern.push('\\');
         }
-        literal.push(c);
+        pattern.push(c);
     }
-    if literal.starts_with(['#', '!']) {
-        literal.insert(0, '\\');
+    if pattern.ends_with(' ') {
+        pattern.insert(pattern.len() - 1, '\\');
     }
-    // and a trailing space, which git drops
-    if literal.ends_with(' ') {
-        literal.insert(literal.len() - 1, '\\');
+    let exclude = git_dir.join("info/exclude");
+    let shown = || escape_path(&exclude);
+    let content = match std::fs::read_to_string(&exclude) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("Cannot read {}", shown())),
+    };
+    if content.lines().any(|line| line == pattern) {
+        return Ok(());
     }
-    let pattern = if link { literal } else { format!("{literal}/") };
-
-    if gitignore_path.exists() {
-        let content = std::fs::read_to_string(&gitignore_path)?;
-        if content
-            .lines()
-            .any(|line| line.trim() == pattern.trim_end_matches('/') || line.trim() == pattern)
-        {
-            return Ok(()); // already present
-        }
-        // Append
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&gitignore_path)?;
-        writeln!(file, "{pattern}")?;
+    let separator = if content.is_empty() || content.ends_with('\n') {
+        ""
     } else {
-        std::fs::write(&gitignore_path, format!("{pattern}\n"))?;
+        "\n"
+    };
+    if let Some(info) = exclude.parent() {
+        std::fs::create_dir_all(info).with_context(|| format!("Cannot create {}", shown()))?;
     }
-    if !quiet {
-        log::info!(
-            "Added '{}' to .gitignore",
-            meta_core::display::escape(&pattern)
-        );
-    }
-    Ok(())
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&exclude)
+        .and_then(|mut file| writeln!(file, "{separator}{pattern}"))
+        .with_context(|| format!("Cannot write {}", shown()))
 }
 
 #[cfg(test)]
@@ -435,10 +404,6 @@ mod tests {
         assert!(err.to_string().contains("only ASCII alphanumeric"));
     }
 
-    fn workspace(dir: &Path) -> Workspace {
-        Workspace::in_dir(dir).unwrap().unwrap()
-    }
-
     /// A user-given name in an error is shown escaped, so the error stays
     /// one line with no control characters.
     fn assert_escaped(err: anyhow::Error) {
@@ -466,29 +431,6 @@ mod tests {
             "bad\x1b[2J",
         ] {
             assert_escaped(validate_worktree_name(name).unwrap_err());
-        }
-
-        let projects = [meta_core::config::ProjectInfo {
-            name: "odd\x1b[2J".to_string(),
-            path: "odd".to_string(),
-            repo: None,
-            tags: vec![],
-            provides: vec![],
-            depends_on: vec![],
-            meta: false,
-        }];
-        let err = lookup_project(&projects, "a\nFORGED").unwrap_err();
-        assert!(err.to_string().contains("'a\\nFORGED'"), "{err}");
-        assert_escaped(err);
-
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            r#"{"projects": {"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
-        for alias in ["a\nFORGED", "vendor/\nFORGED", "vendor/\x1b[2J"] {
-            assert_escaped(lookup_nested_project(&workspace(tmp.path()), alias).unwrap_err());
         }
     }
 
@@ -535,211 +477,65 @@ mod tests {
         assert_eq!(resolve_branch("my-task", None, None), "my-task");
     }
 
-    // ── ensure_worktrees_in_gitignore ───────────────────────
+    // ── exclude_worktrees ───────────────────────────────────
 
-    #[test]
-    fn gitignore_creates_file_if_absent() {
-        let tmp = tempfile::tempdir().unwrap();
-        ensure_worktrees_in_gitignore(tmp.path(), ".worktrees", false, true).unwrap();
-        let content = std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
-        assert!(content.contains(".worktrees/"));
+    fn exclude_of(repo: &Path) -> String {
+        std::fs::read_to_string(repo.join(".git/info/exclude")).unwrap_or_default()
     }
 
     #[test]
-    fn gitignore_appends_if_not_present() {
+    fn worktrees_go_to_info_exclude_not_gitignore() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join(".gitignore"), "node_modules/\n").unwrap();
-        ensure_worktrees_in_gitignore(tmp.path(), ".worktrees", false, true).unwrap();
-        let content = std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
-        assert!(content.contains("node_modules/"));
-        assert!(content.contains(".worktrees/"));
+        meta_core::git::run(tmp.path(), ["init", "-q"]).unwrap();
+        std::fs::create_dir(tmp.path().join(".worktrees")).unwrap();
+        std::fs::write(tmp.path().join(".worktrees/f"), "").unwrap();
+        exclude_worktrees(tmp.path(), &tmp.path().join(".worktrees")).unwrap();
+        exclude_worktrees(tmp.path(), &tmp.path().join(".worktrees")).unwrap();
+        assert_eq!(exclude_of(tmp.path()).matches("/.worktrees").count(), 1);
+        assert!(!tmp.path().join(".gitignore").exists());
+        let status = meta_core::git::run(tmp.path(), ["status", "--porcelain"]).unwrap();
+        assert_eq!(status, "");
     }
 
     #[test]
-    fn gitignore_skips_if_already_present() {
+    fn a_gitignore_is_left_as_it_is() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join(".gitignore"), ".worktrees/\n").unwrap();
-        ensure_worktrees_in_gitignore(tmp.path(), ".worktrees", false, true).unwrap();
-        let content = std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
-        // Should appear exactly once
-        assert_eq!(content.matches(".worktrees/").count(), 1);
+        meta_core::git::run(tmp.path(), ["init", "-q"]).unwrap();
+        std::fs::write(tmp.path().join(".gitignore"), "node_modules/").unwrap();
+        // an exclude file without a last newline keeps its last line
+        std::fs::write(tmp.path().join(".git/info/exclude"), "*.log").unwrap();
+        std::fs::create_dir(tmp.path().join(".worktrees")).unwrap();
+        exclude_worktrees(tmp.path(), &tmp.path().join(".worktrees")).unwrap();
+        assert_eq!(exclude_of(tmp.path()), "*.log\n/.worktrees\n");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap(),
+            "node_modules/"
+        );
     }
 
-    // ── lookup_nested_project ───────────────────────────────
-
+    #[cfg(unix)]
     #[test]
-    fn lookup_nested_simple_alias_works() {
+    fn a_worktrees_link_is_excluded_by_its_name() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            r#"{"projects": {"backend": "git@github.com:org/backend.git"}}"#,
-        )
-        .unwrap();
-        std::fs::create_dir(tmp.path().join("backend")).unwrap();
-
-        let (path, info) = lookup_nested_project(&workspace(tmp.path()), "backend").unwrap();
-        assert_eq!(info.name, "backend");
-        assert_eq!(path, tmp.path().join("backend"));
-    }
-
-    #[test]
-    fn lookup_nested_nested_path_works() {
-        let tmp = tempfile::tempdir().unwrap();
-        let vendor = tmp.path().join("vendor");
-        let nested = vendor.join("nested-lib");
-        std::fs::create_dir_all(&nested).unwrap();
-
-        // Root .meta.yaml - vendor is a nested meta repo (has repo URL + meta: true)
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            r#"{"projects": {"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
-
-        // Nested .meta.yaml inside vendor (simulates what exists after cloning vendor)
-        std::fs::write(
-            vendor.join(".meta.yaml"),
-            r#"{"projects": {"nested-lib": "git@github.com:org/nested-lib.git"}}"#,
-        )
-        .unwrap();
-
-        let (path, info) =
-            lookup_nested_project(&workspace(tmp.path()), "vendor/nested-lib").unwrap();
-        assert_eq!(info.name, "nested-lib");
-        assert_eq!(path, tmp.path().join("vendor/nested-lib"));
+        let repo = tmp.path().join("ws");
+        std::fs::create_dir_all(tmp.path().join("elsewhere")).unwrap();
+        meta_core::git::run(tmp.path(), ["init", "-q", "ws"]).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("elsewhere"), repo.join(".worktrees")).unwrap();
+        exclude_worktrees(&repo, &repo.join(".worktrees")).unwrap();
+        assert!(exclude_of(&repo).lines().any(|l| l == "/.worktrees"));
+        let status = meta_core::git::run(&repo, ["status", "--porcelain"]).unwrap();
+        assert_eq!(status, "");
     }
 
     #[test]
-    fn lookup_nested_invalid_nested_path_fails() {
+    fn worktrees_outside_or_without_a_repository_need_nothing() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(tmp.path().join("vendor")).unwrap();
-
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            r#"{"projects": {"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
-
-        let result = lookup_nested_project(&workspace(tmp.path()), "vendor/nonexistent");
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Unknown nested repo"));
-        assert!(err.contains("vendor/nonexistent"));
-    }
-
-    #[test]
-    fn lookup_nested_unknown_simple_alias_fails() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            r#"{"projects": {"backend": "git@github.com:org/backend.git"}}"#,
-        )
-        .unwrap();
-
-        let result = lookup_nested_project(&workspace(tmp.path()), "nonexistent");
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Unknown repo alias"));
-    }
-
-    // ── build_project_map (via meta_core::config) ──────────────
-
-    #[test]
-    fn build_project_map_handles_nested_structure() {
-        let tmp = tempfile::tempdir().unwrap();
-        let vendor = tmp.path().join("vendor");
-        let nested = vendor.join("lib");
-        std::fs::create_dir_all(&nested).unwrap();
-
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            r#"{"projects": {"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            vendor.join(".meta.yaml"),
-            r#"{"projects": {"lib": "git@github.com:org/lib.git"}}"#,
-        )
-        .unwrap();
-
-        let tree = meta_core::config::walk_meta_tree(tmp.path(), None).unwrap();
-        let map = meta_core::config::build_project_map(&tree, tmp.path(), "");
-
-        // Should contain both vendor and vendor/lib
-        assert!(map.contains_key("vendor"));
-        assert!(map.contains_key("vendor/lib"));
-
-        let (vendor_path, vendor_info) = map.get("vendor").unwrap();
-        assert_eq!(vendor_info.name, "vendor");
-        assert_eq!(*vendor_path, tmp.path().join("vendor"));
-
-        let (lib_path, lib_info) = map.get("vendor/lib").unwrap();
-        assert_eq!(lib_info.name, "lib");
-        assert_eq!(*lib_path, tmp.path().join("vendor/lib"));
-    }
-
-    #[test]
-    fn lookup_nested_with_custom_path_in_nested_repo() {
-        let tmp = tempfile::tempdir().unwrap();
-        let vendor = tmp.path().join("vendor");
-        let custom_path = vendor.join("packages/mylib");
-        std::fs::create_dir_all(&custom_path).unwrap();
-
-        // Root .meta.yaml - vendor is a nested meta repo
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            r#"{"projects": {"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
-
-        // Nested .meta.yaml with custom path
-        std::fs::write(
-            vendor.join(".meta.yaml"),
-            r#"{"projects": {"mylib": {"repo": "git@github.com:org/mylib.git", "path": "packages/mylib"}}}"#,
-        )
-        .unwrap();
-
-        // Lookup by the full path (vendor/packages/mylib)
-        let (path, info) =
-            lookup_nested_project(&workspace(tmp.path()), "vendor/packages/mylib").unwrap();
-        assert_eq!(info.name, "mylib");
-        assert_eq!(path, tmp.path().join("vendor/packages/mylib"));
-    }
-
-    #[test]
-    fn lookup_nested_with_deeply_nested_meta_repos() {
-        // Test 3 levels: root -> vendor -> sub-vendor -> deep-lib
-        let tmp = tempfile::tempdir().unwrap();
-        let vendor = tmp.path().join("vendor");
-        let sub_vendor = vendor.join("sub-vendor");
-        let deep_lib = sub_vendor.join("deep-lib");
-        std::fs::create_dir_all(&deep_lib).unwrap();
-
-        // Root tracks vendor
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            r#"{"projects": {"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
-
-        // Vendor tracks sub-vendor
-        std::fs::write(
-            vendor.join(".meta.yaml"),
-            r#"{"projects": {"sub-vendor": {"repo": "git@github.com:org/sub-vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
-
-        // Sub-vendor tracks deep-lib
-        std::fs::write(
-            sub_vendor.join(".meta.yaml"),
-            r#"{"projects": {"deep-lib": "git@github.com:org/deep-lib.git"}}"#,
-        )
-        .unwrap();
-
-        // Lookup the deeply nested project
-        let (path, info) =
-            lookup_nested_project(&workspace(tmp.path()), "vendor/sub-vendor/deep-lib").unwrap();
-        assert_eq!(info.name, "deep-lib");
-        assert_eq!(path, tmp.path().join("vendor/sub-vendor/deep-lib"));
+        let ws = tmp.path().join("ws");
+        std::fs::create_dir(&ws).unwrap();
+        exclude_worktrees(&ws, &ws.join(".worktrees")).unwrap();
+        assert!(!ws.join(".git").exists());
+        meta_core::git::run(&ws, ["init", "-q"]).unwrap();
+        exclude_worktrees(&ws, &tmp.path().join("sets")).unwrap();
+        assert!(!exclude_of(&ws).contains("sets"));
     }
 }

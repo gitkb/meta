@@ -17,23 +17,39 @@ pub(crate) fn handle_remove(
     mode: ExecutionMode,
     verbose: bool,
     json: bool,
+    strict: bool,
 ) -> Result<()> {
-    let name = &args.name;
-    validate_worktree_name(name)?;
-    let force = args.force;
-
+    validate_worktree_name(&args.name)?;
     // Hooks come from the owner: inside the set being removed, its own
     // config goes with it
     let cwd = std::env::current_dir()?;
     let configs = Configs::find(&cwd)?;
-    let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
-    let wt_dir = worktree_root.join(name);
-
+    let wt_dir = resolve_worktree_root(Some(&configs.owner), &cwd)?.join(&args.name);
     if !wt_dir.exists() {
-        anyhow::bail!("Worktree '{}' not found at {}", name, escape_path(&wt_dir));
+        anyhow::bail!(
+            "Worktree '{}' not found at {}",
+            args.name,
+            escape_path(&wt_dir)
+        );
     }
+    remove_set(&args, &wt_dir, &configs, mode, verbose, json, strict)
+}
 
-    let workspace = Workspace::of(&configs.here);
+/// Remove the set named `args.name` at `wt_dir`, after checking it.
+pub(crate) fn remove_set(
+    args: &RemoveArgs,
+    wt_dir: &std::path::Path,
+    configs: &Configs,
+    mode: ExecutionMode,
+    verbose: bool,
+    json: bool,
+    strict: bool,
+) -> Result<()> {
+    let name = &args.name;
+    let force = args.force;
+    let wt_dir = wt_dir.to_path_buf();
+
+    let workspace = Workspace::of(&configs.here)?;
     // A set being made is its creator's, and one in use by its ephemeral
     // run is the run's (a run removing its own set holds its lease itself).
     // Otherwise the set's lease is held until the set is deleted, so no
@@ -153,9 +169,6 @@ pub(crate) fn handle_remove(
         if let Some((_, claim)) = held {
             claim.delete()?;
         }
-
-        // Fire post-destroy hook
-        fire_post_destroy(name, &wt_dir, force, Some(&configs.owner));
     }
 
     if json {
@@ -178,5 +191,10 @@ pub(crate) fn handle_remove(
     } else {
         println!("{} Removed worktree '{}'", "✓".green(), name.bold());
     }
-    Ok(())
+    if preview {
+        return Ok(());
+    }
+    // What was done is reported first: a failing hook doesn't undo it
+    fire_post_destroy(name, &wt_dir, force, Some(&configs.owner))
+        .or_else(|e| super::warn_or_bail(strict, format!("{e:#}")))
 }

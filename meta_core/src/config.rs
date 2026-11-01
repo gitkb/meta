@@ -95,23 +95,43 @@ impl Default for MetaDefaults {
 #[derive(Debug, Deserialize, Clone, Default)]
 #[serde(deny_unknown_fields)]
 pub struct WorktreeConfig {
-    /// Shell commands run at worktree events (`post-create`, ...), by event.
+    /// Shell commands run at worktree events, by event.
     #[serde(default, deserialize_with = "commands")]
-    pub hooks: BTreeMap<String, String>,
+    pub hooks: BTreeMap<HookEvent, String>,
+}
+
+/// The worktree events a hook can run at; any other name is an error.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum HookEvent {
+    PostCreate,
+    PostDestroy,
+    PostPrune,
+}
+
+impl HookEvent {
+    /// Its name in the config.
+    pub fn name(self) -> &'static str {
+        match self {
+            HookEvent::PostCreate => "post-create",
+            HookEvent::PostDestroy => "post-destroy",
+            HookEvent::PostPrune => "post-prune",
+        }
+    }
 }
 
 /// A map of commands, each a YAML string: YAML would read `false` or `123`
 /// as the command "false" or "123".
 fn commands<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<BTreeMap<String, String>, D::Error> {
-    BTreeMap::<String, serde_yaml_ng::Value>::deserialize(deserializer)?
+) -> Result<BTreeMap<HookEvent, String>, D::Error> {
+    BTreeMap::<HookEvent, serde_yaml_ng::Value>::deserialize(deserializer)?
         .into_iter()
-        .map(|(name, value)| match value {
-            serde_yaml_ng::Value::String(command) => Ok((name, command)),
+        .map(|(event, value)| match value {
+            serde_yaml_ng::Value::String(command) => Ok((event, command)),
             _ => Err(serde::de::Error::custom(format!(
                 "hook '{}' must be a command string",
-                escape(&name)
+                event.name()
             ))),
         })
         .collect()
@@ -234,18 +254,23 @@ pub fn meta_config_at(
 /// its own. In a worktree set meta made, the set's own meta directories come
 /// first, then those of the checkout it stands for ([`set_source`]) and its
 /// workspace.
-pub fn workspace_meta_dirs(meta_dir: &Path) -> Vec<PathBuf> {
+pub fn workspace_meta_dirs(meta_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut dirs = listed_chain(meta_dir);
     // A checkout in a set meta made goes on with the checkout it stands for
-    let source = dirs.iter().find_map(|dir| {
-        set_source(dir).filter(|source| matches!(find_meta_config_in(source), Ok(Some(_))))
-    });
+    let mut source = None;
+    for dir in &dirs {
+        source =
+            set_source(dir)?.filter(|source| matches!(find_meta_config_in(source), Ok(Some(_))));
+        if source.is_some() {
+            break;
+        }
+    }
     for dir in source.as_deref().map(listed_chain).unwrap_or_default() {
         if !dirs.contains(&dir) {
             dirs.push(dir);
         }
     }
-    dirs
+    Ok(dirs)
 }
 
 /// `meta_dir`, then each meta directory above it whose own project list
@@ -265,10 +290,10 @@ fn listed_chain(meta_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// The root of the workspace `meta_dir` belongs to (see [`workspace_meta_dirs`]).
-pub fn workspace_root(meta_dir: &Path) -> PathBuf {
-    workspace_meta_dirs(meta_dir)
+pub fn workspace_root(meta_dir: &Path) -> anyhow::Result<PathBuf> {
+    Ok(workspace_meta_dirs(meta_dir)?
         .pop()
-        .unwrap_or_else(|| meta_dir.to_path_buf())
+        .unwrap_or_else(|| meta_dir.to_path_buf()))
 }
 
 /// Whether the project list in `config` names the directory `dir`.
@@ -286,66 +311,47 @@ fn lists(config: &Path, dir: &Path) -> bool {
     })
 }
 
-/// The file in a linked worktree's git admin directory
-/// (`<repo>/.git/worktrees/<id>/`) where meta records the worktree set it
-/// made the worktree for.
-pub const WORKTREE_RECORD_FILE: &str = "meta-worktree.json";
-
 /// The checkout that `dir`, a checkout in a worktree set meta made, stands
 /// for: the `project` the set was made from, joined with `dir`'s place in
 /// the set (meta lays a set out as the workspace). The project comes from
 /// meta's record in the checkout's git admin directory
-/// (`<repo>/.git/worktrees/<id>/`, which its `.git` file names). A set made
-/// from inside another set leads on to that set's source. A worktree made by
-/// hand has no record and stands for itself, as a second workspace can.
-/// Git's shared repository doesn't say which checkout made a set, so only
-/// the record is used.
-pub fn set_source(dir: &Path) -> Option<PathBuf> {
-    let mut source = recorded_source(dir)?;
+/// ([`crate::set_record`]). A set made from inside another set leads on to
+/// that set's source. A worktree made by hand has no record and stands for
+/// itself, as a second workspace can. Git's shared repository doesn't say
+/// which checkout made a set, so only the record is used: one that can't be
+/// read is an error naming it, never taken for no record.
+pub fn set_source(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let Some(mut source) = recorded_source(dir)? else {
+        return Ok(None);
+    };
     let mut seen = vec![dir.to_path_buf()];
-    while let Some(next) = recorded_source(&source) {
+    while let Some(next) = recorded_source(&source)? {
         if seen.contains(&next) {
             break;
         }
         seen.push(std::mem::replace(&mut source, next));
     }
-    Some(source)
-}
-
-/// The meta directory meta's record says the set holding the checkout at
-/// `dir` was made from.
-pub fn recorded_project(dir: &Path) -> Option<PathBuf> {
-    let record = worktree_record(dir)?;
-    Some(PathBuf::from(record.get("project")?.as_str()?))
-}
-
-/// The set meta's record says the checkout at `dir` was made for, resolved.
-pub fn recorded_set(dir: &Path) -> Option<PathBuf> {
-    let record = worktree_record(dir)?;
-    Path::new(record.get("set")?.as_str()?).canonicalize().ok()
-}
-
-/// Meta's record of the linked worktree at `dir`, from git's admin directory
-/// for it (which its `.git` file names).
-fn worktree_record(dir: &Path) -> Option<serde_json::Value> {
-    let record = std::fs::read_to_string(record_path(dir)?).ok()?;
-    serde_json::from_str(&record).ok()
-}
-
-/// Where meta's record of the linked worktree at `dir` goes: in git's admin
-/// directory for it, which its `.git` file names.
-fn record_path(dir: &Path) -> Option<PathBuf> {
-    Some(
-        gitdir::gitfile_target(dir)
-            .ok()??
-            .join(WORKTREE_RECORD_FILE),
-    )
+    Ok(Some(source))
 }
 
 /// One step of [`set_source`].
-fn recorded_source(dir: &Path) -> Option<PathBuf> {
-    let project = recorded_project(dir)?;
-    let set = recorded_set(dir)?;
+fn recorded_source(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let Some((_, record)) = crate::set_record::member(dir).with_context(|| {
+        format!(
+            "Cannot read meta's record of the worktree {}",
+            escape_path(dir)
+        )
+    })?
+    else {
+        return Ok(None);
+    };
+    Ok(source_of(dir, record.project, &record.set))
+}
+
+/// Where the checkout at `dir`, in the set at `set` made from `project`,
+/// stands in that workspace (see [`recorded_source`]).
+fn source_of(dir: &Path, project: PathBuf, set: &Path) -> Option<PathBuf> {
+    let set = set.canonicalize().ok()?;
     let place = dir.canonicalize().ok()?;
     let place = place.strip_prefix(set).ok()?;
     // meta puts each repo of a set where it is in the workspace
@@ -1506,7 +1512,11 @@ mod tests {
         );
         let hooks = load("worktree:\n  hooks:\n    post-create: make\n").unwrap();
         assert_eq!(
-            hooks.worktree.hooks.get("post-create").map(String::as_str),
+            hooks
+                .worktree
+                .hooks
+                .get(&HookEvent::PostCreate)
+                .map(String::as_str),
             Some("make")
         );
         // a misspelled key is an error, at any level meta owns
@@ -1522,6 +1532,13 @@ mod tests {
         ] {
             assert!(load(typo).is_err(), "{typo}");
         }
+        // a hook name meta doesn't run at is an error naming it
+        let err = load("worktree:\n  hooks:\n    post-cretae: make\n").unwrap_err();
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("post-cretae") && err.contains(".meta.yaml"),
+            "{err}"
+        );
         // keys other tools put on a project are theirs
         assert!(load("projects:\n  a:\n    repo: x\n    branch: main\n").is_ok());
     }
@@ -2463,6 +2480,19 @@ mod tests {
         std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
     }
 
+    /// Git's admin directory `admin` for a linked worktree checked out at
+    /// `checkout`, with the files git keeps there, and the `.git` file
+    /// that names it.
+    fn link(admin: &Path, checkout: &Path) {
+        std::fs::create_dir_all(admin).unwrap();
+        std::fs::create_dir_all(checkout).unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let back = checkout.join(".git").display().to_string();
+        std::fs::write(admin.join("gitdir"), format!("{back}\n")).unwrap();
+        std::fs::write(checkout.join(".git"), gitfile(admin)).unwrap();
+    }
+
     #[test]
     fn the_root_climbs_only_through_parents_that_list_the_child() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2470,17 +2500,17 @@ mod tests {
         meta_yaml(&top, r#""inner": {"repo": "x", "meta": true}"#);
         meta_yaml(&top.join("inner"), r#""deep": {"repo": "x", "meta": true}"#);
         meta_yaml(&top.join("inner/deep"), "");
-        assert_eq!(workspace_root(&top.join("inner/deep")), top);
-        assert_eq!(workspace_root(&top.join("inner")), top);
+        assert_eq!(workspace_root(&top.join("inner/deep")).unwrap(), top);
+        assert_eq!(workspace_root(&top.join("inner")).unwrap(), top);
 
         // A workspace inside another that doesn't list it is its own
         let unlisted = top.join("inner/elsewhere");
         meta_yaml(&unlisted, "");
-        assert_eq!(workspace_root(&unlisted), unlisted);
+        assert_eq!(workspace_root(&unlisted).unwrap(), unlisted);
         // and so is one under a directory without a config
         let below = top.join("plain/sub");
         meta_yaml(&below, "");
-        assert_eq!(workspace_root(&below), below);
+        assert_eq!(workspace_root(&below).unwrap(), below);
     }
 
     #[test]
@@ -2488,20 +2518,26 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let top = tmp.path().canonicalize().unwrap();
         meta_yaml(&top, r#""a": "x""#);
+        git_dir(&top);
         // A worktree set's root checkout, as git lays it out
         let admin = top.join(".git/worktrees/s1");
-        std::fs::create_dir_all(&admin).unwrap();
-        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
-        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
         let set = top.join(".worktrees/s1");
         meta_yaml(&set, r#""a": "x""#);
-        std::fs::write(set.join(".git"), gitfile(&admin)).unwrap();
+        link(&admin, &set);
         // Made by hand: a workspace of its own
-        assert_eq!(workspace_meta_dirs(&set), vec![set.clone()]);
+        assert_eq!(workspace_meta_dirs(&set).unwrap(), vec![set.clone()]);
         // Made by meta
-        let record = serde_json::json!({ "project": top, "set": set });
-        std::fs::write(admin.join(WORKTREE_RECORD_FILE), record.to_string()).unwrap();
-        assert_eq!(workspace_meta_dirs(&set), vec![set.clone(), top.clone()]);
+        let record =
+            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" });
+        std::fs::write(
+            admin.join(crate::set_record::RECORD_FILE),
+            record.to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            workspace_meta_dirs(&set).unwrap(),
+            vec![set.clone(), top.clone()]
+        );
     }
 
     #[test]
@@ -2515,19 +2551,18 @@ mod tests {
         let set = top.join(".worktrees/ctx");
         meta_yaml(&set, listing_child);
         meta_yaml(&set.join("child"), "");
-        let record = serde_json::json!({ "project": top, "set": set }).to_string();
+        let record =
+            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
+                .to_string();
         for (checkout, repo) in [(&set, top.clone()), (&set.join("child"), top.join("child"))] {
             git_dir(&repo);
             let admin = repo.join(".git/worktrees/ctx");
-            std::fs::create_dir_all(&admin).unwrap();
-            std::fs::write(admin.join("commondir"), "../..\n").unwrap();
-            std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-            std::fs::write(admin.join(WORKTREE_RECORD_FILE), &record).unwrap();
-            std::fs::write(checkout.join(".git"), gitfile(&admin)).unwrap();
+            link(&admin, checkout);
+            std::fs::write(admin.join(crate::set_record::RECORD_FILE), &record).unwrap();
         }
         // The set's own meta dirs, then the checkout it stands for and up
         assert_eq!(
-            workspace_meta_dirs(&set.join("child")),
+            workspace_meta_dirs(&set.join("child")).unwrap(),
             vec![
                 set.join("child"),
                 set.clone(),
@@ -2552,13 +2587,12 @@ mod tests {
         std::fs::create_dir_all(&member).unwrap();
         git_dir(&top.join("beta"));
         let admin = top.join("beta/.git/worktrees/s");
-        std::fs::create_dir_all(&admin).unwrap();
-        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
-        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        let record = serde_json::json!({ "project": top, "set": set }).to_string();
-        std::fs::write(admin.join(WORKTREE_RECORD_FILE), record).unwrap();
-        std::fs::write(member.join(".git"), gitfile(&admin)).unwrap();
-        assert_eq!(set_source(&member), Some(top.join("beta")));
+        link(&admin, &member);
+        let record =
+            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
+                .to_string();
+        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
+        assert_eq!(set_source(&member).unwrap(), Some(top.join("beta")));
     }
 
     #[test]
@@ -2577,19 +2611,18 @@ mod tests {
         git_dir(&top.join("alternate"));
         git_dir(&top.join("real"));
         let admin = top.join("real/.git/worktrees/s");
-        std::fs::create_dir_all(&admin).unwrap();
-        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
-        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        let record = serde_json::json!({ "project": top, "set": set }).to_string();
-        std::fs::write(admin.join(WORKTREE_RECORD_FILE), record).unwrap();
-        std::fs::write(member.join(".git"), gitfile(&admin)).unwrap();
-        assert_eq!(set_source(&member), Some(top.join("real")));
+        link(&admin, &member);
+        let record =
+            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
+                .to_string();
+        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
+        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
 
         // so does a place that holds no repository, or nothing, in the workspace
         std::fs::remove_dir_all(top.join("alternate/.git")).unwrap();
-        assert_eq!(set_source(&member), Some(top.join("real")));
+        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
         std::fs::remove_dir_all(top.join("alternate")).unwrap();
-        assert_eq!(set_source(&member), Some(top.join("real")));
+        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
 
         // a broken config of another nested repo doesn't hide it
         meta_yaml(
@@ -2598,11 +2631,11 @@ mod tests {
         );
         std::fs::create_dir_all(top.join("other")).unwrap();
         std::fs::write(top.join("other/.meta.yaml"), "{broken").unwrap();
-        assert_eq!(set_source(&member), Some(top.join("real")));
+        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
 
         // a repository that is no project of the workspace stands for nothing
         meta_yaml(&top, r#""alt": {"repo": "x", "path": "alternate"}"#);
-        assert_eq!(set_source(&member), None);
+        assert_eq!(set_source(&member).unwrap(), None);
     }
 
     #[test]
@@ -2616,20 +2649,18 @@ mod tests {
         git_dir(&top.join("real"));
         let linked = |checkout: &Path, id: &str| {
             let admin = top.join("real/.git/worktrees").join(id);
-            std::fs::create_dir_all(&admin).unwrap();
-            std::fs::write(admin.join("commondir"), "../..\n").unwrap();
-            std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-            std::fs::create_dir_all(checkout).unwrap();
-            std::fs::write(checkout.join(".git"), gitfile(&admin)).unwrap();
+            link(&admin, checkout);
             admin
         };
         linked(&top.join("alternate"), "alternate");
         let set = top.join(".worktrees/s");
         let member = set.join("alternate");
         let admin = linked(&member, "s");
-        let record = serde_json::json!({ "project": top, "set": set }).to_string();
-        std::fs::write(admin.join(WORKTREE_RECORD_FILE), record).unwrap();
-        assert_eq!(set_source(&member), Some(top.join("real")));
+        let record =
+            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
+                .to_string();
+        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
+        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
     }
 
     #[test]
@@ -2639,16 +2670,18 @@ mod tests {
         let (top, git) = (base.join("ws"), base.join("git"));
         meta_yaml(&top, "");
         std::fs::write(top.join(".git"), gitfile(&git)).unwrap();
+        for dir in ["objects", "refs"] {
+            std::fs::create_dir_all(git.join(dir)).unwrap();
+        }
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
         let set = top.join(".worktrees/s");
-        std::fs::create_dir_all(&set).unwrap();
         let admin = git.join("worktrees/s");
-        std::fs::create_dir_all(&admin).unwrap();
-        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
-        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        let record = serde_json::json!({ "project": top, "set": set }).to_string();
-        std::fs::write(admin.join(WORKTREE_RECORD_FILE), record).unwrap();
-        std::fs::write(set.join(".git"), gitfile(&admin)).unwrap();
-        assert_eq!(set_source(&set), Some(top));
+        link(&admin, &set);
+        let record =
+            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
+                .to_string();
+        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
+        assert_eq!(set_source(&set).unwrap(), Some(top));
     }
 
     #[test]
@@ -2663,7 +2696,7 @@ mod tests {
         std::fs::create_dir_all(top.join("other")).unwrap();
         std::fs::write(top.join("other/.meta.yaml"), "{not json").unwrap();
         assert_eq!(
-            workspace_meta_dirs(&top.join("inner")),
+            workspace_meta_dirs(&top.join("inner")).unwrap(),
             vec![top.join("inner"), top.clone()]
         );
     }

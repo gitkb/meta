@@ -502,12 +502,12 @@ assert d['totals']['files_changed'] >= 1
     rm -rf "$CUSTOM_DIR"
 }
 
-@test "worktree create auto-adds to gitignore" {
-    # Remove .worktrees from .gitignore if present
-    sed -i '' '/.worktrees/d' .gitignore 2>/dev/null || true
-    rm -f .gitignore
+@test "worktree create keeps its sets out of git status without touching .gitignore" {
     "$META_BIN" git worktree create gitignore-test --repo backend
-    grep -q ".worktrees" .gitignore
+    [ ! -e .gitignore ]
+    grep -qx "/.worktrees" .git/info/exclude
+    run git status --porcelain
+    [[ "$output" != *".worktrees"* ]]
 }
 
 # ============ Edge Cases ============
@@ -697,7 +697,6 @@ assert d['totals']['files_changed'] >= 1
     [ -d ".worktrees/dot-remove/frontend" ]
 
     # Remove — children must be removed before "." (root)
-    # --force needed: the meta repo worktree is dirty (.worktrees/ + .gitignore changes)
     run "$META_BIN" git worktree remove dot-remove --force
     [ "$status" -eq 0 ]
     [ ! -d ".worktrees/dot-remove" ]
@@ -829,7 +828,7 @@ EOF
     # Try to create worktree with non-existent nested path
     run "$META_BIN" git worktree create bad-nested --repo vendor/nonexistent
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Unknown nested repo"* ]]
+    [[ "$output" == *"Unknown repo"* ]]
 }
 
 @test "worktree create with mixed repos: root, regular, and nested" {

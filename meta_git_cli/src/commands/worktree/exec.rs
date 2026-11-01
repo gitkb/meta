@@ -51,11 +51,12 @@ fn build_loop_config(
     })
 }
 
-/// RAII guard that removes an ephemeral worktree.
-/// `finish` removes it and reports failure; drop is the fallback that still
-/// cleans up after an early return or a panic.
+/// RAII guard that removes an ephemeral worktree, at the directory it was
+/// made in. `finish` removes it and reports failure; drop is the fallback
+/// that still cleans up after an early return or a panic.
 struct EphemeralGuard {
     name: String,
+    dir: PathBuf,
     verbose: bool,
     json: bool,
     finished: bool,
@@ -70,8 +71,17 @@ impl EphemeralGuard {
             name: self.name.clone(),
             force: true,
         };
-        // Only a set this run really created has a guard
-        super::remove::handle_remove(remove_args, ExecutionMode::Execute, self.verbose, self.json)
+        // Only a set this run really created has a guard; its hooks warn
+        let configs = Configs::find(&std::env::current_dir()?)?;
+        super::remove::remove_set(
+            &remove_args,
+            &self.dir,
+            &configs,
+            ExecutionMode::Execute,
+            self.verbose,
+            self.json,
+            false,
+        )
     }
 
     fn finish(mut self) -> Result<()> {
@@ -110,17 +120,8 @@ pub(crate) fn handle_exec(
         return handle_ephemeral_exec(args, mode, verbose, json);
     }
 
-    let name = &args.name;
-    let repos = discover_and_validate_worktree(name)?;
-
-    let config = build_loop_config(
-        &resolve_existing_worktree(name)?,
-        &repos,
-        &args,
-        mode,
-        verbose,
-        json,
-    )?;
+    let (wt_dir, repos) = discover_and_validate_worktree(&args.name)?;
+    let config = build_loop_config(&wt_dir, &repos, &args, mode, verbose, json)?;
 
     loop_lib::run(&config, &args.command)?;
     Ok(())
@@ -171,34 +172,28 @@ fn handle_ephemeral_exec(
     // Ephemeral worktrees use global_strict=false to ensure creation succeeds
     // The lease, held for the run: the set lives as long as it does, and once
     // this process is gone, however it ends, prune removes the set
-    let lease = super::create::handle_create(create_args, mode, verbose, json, false)?;
-    // A preview made no set
-    if mode.is_preview() {
+    // A preview makes no set
+    let Some(created) = super::create::handle_create(create_args, mode, verbose, json, false)?
+    else {
         println!(
             "Then would run `{}` in each repo planned above, and remove the set.",
             escape(&loop_lib::display_command(cmd_parts))
         );
         return Ok(());
-    }
+    };
 
     // Guard ensures cleanup even on panic
     let guard = EphemeralGuard {
         name: name.clone(),
+        dir: created.dir.clone(),
         verbose,
         json,
         finished: false,
     };
 
-    // Resolve worktree path for exec
-    let cwd = std::env::current_dir()?;
-    let configs = Configs::find_optional(&cwd)?;
-    let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
-    let wt_dir = worktree_root.join(&name);
-
-    // Run the command
-    let repos = discover_worktree_repos(&wt_dir)?;
-
-    let config = build_loop_config(&wt_dir, &repos, &args, mode, verbose, json);
+    // Run the command in the set just made
+    let repos = discover_worktree_repos(&created.dir)?;
+    let config = build_loop_config(&created.dir, &repos, &args, mode, verbose, json);
 
     let exec_result = config.and_then(|config| loop_lib::run(&config, cmd_parts));
 
@@ -206,9 +201,9 @@ fn handle_ephemeral_exec(
     // checkout git cannot delete) fails the command too
     let cleanup = guard.finish();
     // a set this run couldn't remove is the next prune's: its lease stays
-    match (&cleanup, lease) {
-        (Err(_), Some(lease)) => lease.leave(),
-        (_, lease) => drop(lease),
+    match &cleanup {
+        Err(_) => created.lease.leave(),
+        Ok(()) => drop(created.lease),
     }
     match (exec_result, cleanup) {
         (Err(e), Err(cleanup_error)) => {

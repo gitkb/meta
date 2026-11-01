@@ -78,6 +78,37 @@ fn clone_and_commit_refuse_what_they_do_not_take() {
 }
 
 #[test]
+fn clone_into_an_existing_folder_says_so_before_git_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join("ws")).unwrap();
+    std::fs::write(tmp.path().join("ws/.meta.yaml"), "projects: {}\n").unwrap();
+    std::fs::create_dir(tmp.path().join("other")).unwrap();
+    std::fs::write(tmp.path().join("other/notes"), "").unwrap();
+    std::fs::create_dir(tmp.path().join("empty")).unwrap();
+    for (dir, said) in [
+        ("ws", "meta git update"),
+        ("other", "not an empty directory"),
+    ] {
+        for options in [json!({}), json!({"dry_run": true})] {
+            let out = meta_git(tmp.path(), "git clone", &["file:///gone.git", dir], options);
+            assert!(!out.status.success(), "{}", text(&out));
+            assert!(text(&out).contains(said), "{}", text(&out));
+            // before git, and before saying it clones
+            assert!(!text(&out).contains("Cloning"), "{}", text(&out));
+            assert!(!text(&out).contains("fatal"), "{}", text(&out));
+        }
+    }
+    // git takes an empty directory
+    let out = meta_git(
+        tmp.path(),
+        "git clone",
+        &["file:///gone.git", "empty"],
+        json!({}),
+    );
+    assert!(text(&out).contains("fatal"), "{}", text(&out));
+}
+
+#[test]
 fn clone_and_commit_have_their_own_help() {
     let tmp = tempfile::tempdir().unwrap();
     // meta sends a help request without its repos, so `-m --help` is help
@@ -122,8 +153,9 @@ fn clone_depth_comes_from_meta_unless_given() {
         assert!(dry_run(&["h:ws.bundle"]).contains("-- h:ws.bundle ws\n"));
     }
     // a bundle file clones into its name without `.bundle`, as git does,
-    // and keeps a `.git`
-    for (bundle, dir) in [("ws.bundle", "ws"), ("other.git", "other.git")] {
+    // and keeps a `.git` (from another folder: git won't clone onto it)
+    std::fs::create_dir(tmp.path().join("src")).unwrap();
+    for (bundle, dir) in [("src/ws.bundle", "ws"), ("src/other.git", "other.git")] {
         std::fs::write(tmp.path().join(bundle), "").unwrap();
         assert!(
             dry_run(&[bundle]).contains(&format!("-- {bundle} {dir}")),
@@ -131,9 +163,9 @@ fn clone_depth_comes_from_meta_unless_given() {
         );
     }
     // a linked worktree's `.git` file is no bundle: its checkout's name
-    std::fs::create_dir(tmp.path().join("wt")).unwrap();
-    std::fs::write(tmp.path().join("wt/.git"), "gitdir: elsewhere\n").unwrap();
-    assert!(dry_run(&["wt/.git"]).contains("-- wt/.git wt"));
+    std::fs::create_dir(tmp.path().join("src/wt")).unwrap();
+    std::fs::write(tmp.path().join("src/wt/.git"), "gitdir: elsewhere\n").unwrap();
+    assert!(dry_run(&["src/wt/.git"]).contains("-- src/wt/.git wt"));
 }
 
 #[test]

@@ -29,21 +29,26 @@ pub struct WorktreeRepoInfo {
 ///
 /// Walks the path components looking for a `.worktrees` segment followed by a task name.
 /// Works whether cwd is the task dir itself, a repo within it, or deeper inside a repo.
-pub fn detect_worktree_context(cwd: &Path) -> Option<(String, PathBuf, Vec<PathBuf>)> {
-    let (task_name, task_dir) = detect_worktree_location(cwd)?;
-    let repos = discover_worktree_members(&task_dir).ok()?;
+pub fn detect_worktree_context(cwd: &Path) -> Result<Option<(String, PathBuf, Vec<PathBuf>)>> {
+    let Some((task_name, task_dir)) = detect_worktree_location(cwd)? else {
+        return Ok(None);
+    };
+    let Ok(repos) = discover_worktree_members(&task_dir) else {
+        return Ok(None);
+    };
     if repos.is_empty() {
-        return None;
+        return Ok(None);
     }
     let paths = repos.into_iter().map(|r| r.path).collect();
-    Some((task_name, task_dir, paths))
+    Ok(Some((task_name, task_dir, paths)))
 }
 
 /// Locate the enclosing `.worktrees/<name>` set, or the set meta's record
 /// names for the checkout around `cwd`, without scanning its contents.
 /// This is a location hint, not validation. Callers must validate membership and
 /// report errors rather than silently falling back to a different set on failure.
-pub fn detect_worktree_location(cwd: &Path) -> Option<(String, PathBuf)> {
+/// A record that can't be read is an error.
+pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>> {
     use std::path::Component;
 
     let components: Vec<_> = cwd.components().collect();
@@ -54,13 +59,16 @@ pub fn detect_worktree_location(cwd: &Path) -> Option<(String, PathBuf)> {
             if name.to_str() == Some(".worktrees") {
                 // Next component after .worktrees is the task name
                 let task_name = match components.get(i + 1) {
-                    Some(Component::Normal(n)) => n.to_str()?.to_string(),
-                    _ => return None, // .worktrees/ with nothing after it
+                    Some(Component::Normal(n)) => match n.to_str() {
+                        Some(n) => n.to_string(),
+                        None => return Ok(None),
+                    },
+                    _ => return Ok(None), // .worktrees/ with nothing after it
                 };
 
                 // Reconstruct the task directory: everything up to and including .worktrees/<task>
                 let task_dir: PathBuf = components[..=i + 1].iter().collect();
-                return Some((task_name, task_dir));
+                return Ok(Some((task_name, task_dir)));
             }
         }
     }
@@ -68,14 +76,26 @@ pub fn detect_worktree_location(cwd: &Path) -> Option<(String, PathBuf)> {
     // A set elsewhere (`worktrees_dir` outside, or `.worktrees` a link, so
     // the real path has no such part): the set meta recorded for the
     // checkout around `cwd`
-    let real = cwd.canonicalize().ok()?;
-    real.ancestors()
-        .filter(|dir| dir.join(".git").is_file())
-        .find_map(|checkout| {
-            let set = meta_core::config::recorded_set(checkout)?;
-            let name = set.file_name()?.to_str()?.to_string();
-            real.starts_with(&set).then_some((name, set))
-        })
+    let Ok(real) = cwd.canonicalize() else {
+        return Ok(None);
+    };
+    for checkout in real.ancestors().filter(|dir| dir.join(".git").is_file()) {
+        let Some(set) = recorded_set(checkout)? else {
+            continue;
+        };
+        if let Some(name) = set.file_name().and_then(|n| n.to_str()) {
+            if real.starts_with(&set) {
+                return Ok(Some((name.to_string(), set)));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The set, resolved, that meta's record says the checkout at `dir` was
+/// made for; `None` without a record, or when the set is gone.
+fn recorded_set(dir: &Path) -> Result<Option<PathBuf>> {
+    Ok(meta_core::set_record::member(dir)?.and_then(|(_, record)| record.set.canonicalize().ok()))
 }
 
 /// The config that names the members of the set at `set_dir`: the set's own
@@ -103,7 +123,7 @@ pub fn set_config(
 pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
     let mut place = dir.to_path_buf();
     let mut seen = Vec::new();
-    while let Some((_, set_dir)) = detect_worktree_location(&place) {
+    while let Some((_, set_dir)) = detect_worktree_location(&place)? {
         let members: Vec<PathBuf> = discover_worktree_members(&set_dir)?
             .into_iter()
             .map(|member| member.path)
@@ -135,18 +155,18 @@ pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
 /// members whose record names this set (another set's checkout moved in
 /// doesn't count). Members that name different workspaces are an error.
 fn set_origin(set_dir: &Path, members: &[PathBuf]) -> Result<Option<PathBuf>> {
-    use meta_core::config;
     let set = set_dir
         .canonicalize()
         .unwrap_or_else(|_| set_dir.to_path_buf());
     let mut origin: Option<PathBuf> = None;
     for member in members {
-        if config::recorded_set(member).as_ref() != Some(&set) {
-            continue;
-        }
-        let Some(project) = config::recorded_project(member) else {
+        let Some((_, record)) = meta_core::set_record::member(member)? else {
             continue;
         };
+        if record.set.canonicalize().ok().as_ref() != Some(&set) {
+            continue;
+        }
+        let project = record.project;
         match &origin {
             Some(first) if *first != project => anyhow::bail!(
                 "The checkouts of worktree set {} name different workspaces ({} and {}); \
@@ -318,12 +338,20 @@ pub fn holds_meta_checkout(dir: &Path) -> bool {
             // a checkout of a set kept inside `dir` by a workspace inside
             // `dir` (one there with sets of its own, wherever its
             // worktrees_dir puts them) is no sign that `dir` is a set
+            // (a record that can't be read says nothing, and is checked below)
             Ok(_)
-                if meta_core::config::recorded_set(entry.path())
-                    .is_some_and(|set| set.starts_with(&canonical_dir) && set != canonical_dir)
-                    && meta_core::config::recorded_project(entry.path())
-                        .and_then(|project| project.canonicalize().ok())
-                        .is_some_and(|project| project.starts_with(&canonical_dir)) => {}
+                if meta_core::set_record::member(entry.path())
+                    .ok()
+                    .flatten()
+                    .is_some_and(|(_, record)| {
+                        let inside = |path: &Path| {
+                            path.canonicalize()
+                                .is_ok_and(|path| path.starts_with(&canonical_dir))
+                        };
+                        inside(&record.set)
+                            && record.set.canonicalize().ok() != Some(canonical_dir.clone())
+                            && inside(&record.project)
+                    }) => {}
             // even one meta can no longer read: it was meta's. A checkout
             // whose git directory can't be found (moved, with relative paths)
             // may be meta's too: it is not taken for a plain clone
@@ -336,7 +364,7 @@ pub fn holds_meta_checkout(dir: &Path) -> bool {
                         !admin.is_dir()
                             || !matches!(
                                 admin
-                                    .join(meta_core::config::WORKTREE_RECORD_FILE)
+                                    .join(meta_core::set_record::RECORD_FILE)
                                     .symlink_metadata(),
                                 Err(e) if e.kind() == std::io::ErrorKind::NotFound
                             )
@@ -452,7 +480,7 @@ fn discover_repos_recursive(
             .map(|m| m.is_file())
             .unwrap_or(false)
         {
-            if !scanned.member(root, &sub_path) {
+            if !scanned.member(root, &sub_path)? {
                 continue;
             }
             // This is a worktree repo — use relative path from root as alias
@@ -539,13 +567,13 @@ impl ScannedDirs {
     }
 
     /// Whether the checkout at `dir`, inside the set at `root`, is a member.
-    fn member(&self, root: &Path, dir: &Path) -> bool {
+    fn member(&self, root: &Path, dir: &Path) -> Result<bool> {
         let hidden = dir.strip_prefix(root).is_ok_and(|place| {
             place
                 .components()
                 .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
         });
-        !hidden || meta_core::config::recorded_set(dir).as_ref() == Some(&self.set)
+        Ok(!hidden || recorded_set(dir)?.as_ref() == Some(&self.set))
     }
 }
 
@@ -582,7 +610,7 @@ pub fn discover_worktree_members_recursive(task_dir: &Path) -> Result<Vec<Worktr
                     .with_context(|| format!("Cannot inspect {}", escape_path(&git_file)))
             }
         };
-        if !metadata.is_file() || !scanned.member(task_dir, path) {
+        if !metadata.is_file() || !scanned.member(task_dir, path)? {
             continue;
         }
         gitdir::linked(path)?;
@@ -747,8 +775,9 @@ mod recursive_tests {
         for alias in [".", "parent", "parent/nested"] {
             member(&root, alias);
         }
-        let (name, observed_root, paths) =
-            detect_worktree_context(&root.join("parent/nested")).unwrap();
+        let (name, observed_root, paths) = detect_worktree_context(&root.join("parent/nested"))
+            .unwrap()
+            .unwrap();
         assert_eq!(name, "example");
         assert_eq!(observed_root, root);
         assert_eq!(paths, vec![root.clone(), root.join("parent")]);
@@ -796,8 +825,9 @@ mod recursive_tests {
         let gitfile = std::fs::read_to_string(root.join(".deps/child/.git")).unwrap();
         let admin = Path::new(gitfile.trim().strip_prefix("gitdir: ").unwrap());
         std::fs::write(
-            admin.join(meta_core::config::WORKTREE_RECORD_FILE),
-            serde_json::json!({ "project": "/p", "set": root }).to_string(),
+            admin.join(meta_core::set_record::RECORD_FILE),
+            serde_json::json!({ "project": "/p", "set": root, "created_at": "2025-01-01T00:00:00Z" })
+                .to_string(),
         )
         .unwrap();
         member(&root, ".claude/worktrees/agent");

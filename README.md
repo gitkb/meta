@@ -239,7 +239,7 @@ A token in a `repo` URL (`https://user:token@host/org/repo.git`) works, and meta
 - Tags contain no whitespace and no `,`.
 - `worktrees_dir`, if set, may be anywhere (relative, `..`, absolute, or `.worktrees` a symlink to another disk), but not the config's directory itself, not inside a project and not in `.git`. `META_WORKTREES` overrides it.
 - A key meta doesn't know at the top level, under `defaults` or under `worktree` is an error, so a misspelling isn't ignored. Project entries may carry keys of their own for other tools.
-- Each `worktree.hooks` value is a command string (`false` or `123` is refused, not run).
+- `worktree.hooks` names only `post-create`, `post-destroy` and `post-prune`, and each value is a command string (`false` or `123` is refused, not run).
 
 The same rules apply to every meta config that a recursive command reads, including one inside a cloned project: a refused nested config stops the command rather than silently leaving out that part of the tree.
 

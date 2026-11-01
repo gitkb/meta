@@ -4,9 +4,10 @@ use meta_core::display::{escape, escape_path};
 use meta_core::ExecutionMode;
 
 use meta_cli::worktree::discover_worktree_repos;
+use meta_core::set_record as record;
 use meta_git_lib::worktree::git_ops::{git_worktree_add, worktree_start};
 use meta_git_lib::worktree::helpers::*;
-use meta_git_lib::worktree::record;
+use meta_git_lib::worktree::plan::Index;
 use meta_git_lib::worktree::types::*;
 
 use super::cli_types::AddArgs;
@@ -53,10 +54,11 @@ pub(crate) fn handle_add(
 
     // Check every repo before adding any: one refused after others were
     // added would leave a set the caller didn't ask for
+    let index = Index::new(&configs.here);
     let mut planned: Vec<(&RepoSpec, std::path::PathBuf, String)> = Vec::new();
     for spec in repo_specs {
-        // Use recursive lookup for nested paths (containing '/')
-        let (source, _project) = lookup_nested_project(&configs.here, &spec.alias)?;
+        // by name, else by place, as in create
+        let source = index.find(&spec.alias)?.source;
         // as in create: no worktree of a project not cloned, nor of the
         // repository around a directory that is none
         if let Some(why) = super::not_a_repository(&spec.alias, &source) {

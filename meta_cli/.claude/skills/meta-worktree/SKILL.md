@@ -199,8 +199,14 @@ worktree:
 
 Each hook runs in the directory of the config that names it (the workspace's,
 also when run from inside a set) and gets a JSON description of the action on
-stdin. Hook failures don't
-block the operation; they are logged as warnings, shown only with `RUST_LOG=warn`.
+stdin. A hook runs after the command has done its work and reported it; a
+hook that fails is a warning naming it and its exit code, and an error under
+`--strict` (the work stays done). `exec --ephemeral` takes no `--strict`: its
+hooks only warn. Any other hook name is a config error.
+
+`create` keeps the worktrees folder out of the workspace repository's
+`git status` by listing it in that repository's `.git/info/exclude`, which is
+local and never committed; `.gitignore` is left as it is.
 
 ## Where Meta Keeps Its Records
 
@@ -242,7 +248,7 @@ can't delete something, the error says what was left behind.
 | Option | Description |
 |--------|-------------|
 | `[<commit-ish>]` | Start from a tag, SHA or branch (positional) |
-| `--repo <alias>[:<branch>]` | Add specific repo(s) |
+| `--repo <alias>[:<branch>]` | Add specific repo(s): a project's `.meta.yaml` name, else its path from the workspace (a nested one too) |
 | `--all` | Add all repos at this meta level (one not cloned is skipped with a warning) |
 | `--no-deps` | Skip automatic root and dependency selection (a repo nested inside another project's path still gets that parent project) |
 | `-r, --recursive` | Resolve across nested meta repos (root-relative aliases) |

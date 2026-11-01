@@ -13,7 +13,7 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
     let name = &args.name;
     let base_ref = &args.base;
 
-    let repos = discover_and_validate_worktree(name)?;
+    let (_, repos) = discover_and_validate_worktree(name)?;
 
     let diff_entries: Vec<DiffRepoEntry> = repos
         .par_iter()

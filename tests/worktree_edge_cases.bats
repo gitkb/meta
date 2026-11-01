@@ -544,15 +544,15 @@ assert any(r['name'] == 'json-prune' for r in data['removed'])
 # ============ Record Failures ============
 
 @test "a create that fails after adding worktrees rolls them back" {
-    # .gitignore can't be updated, which fails the create after the adds
-    mkdir "$TEST_DIR/.gitignore"
+    # info/exclude can't be updated, which fails the create after the adds
+    rm -f "$TEST_DIR/.git/info/exclude" && mkdir "$TEST_DIR/.git/info/exclude"
     run "$META_BIN" git worktree create store-fail --repo backend --no-deps
     [ "$status" -ne 0 ]
     # Nothing is left: no directory, and no worktree registered in git
     [ ! -e "$TEST_DIR/.worktrees/store-fail" ]
     [ "$(git -C "$TEST_DIR/backend" worktree list | wc -l)" -eq 1 ]
 
-    rmdir "$TEST_DIR/.gitignore"
+    rmdir "$TEST_DIR/.git/info/exclude"
     run "$META_BIN" git worktree create store-fail --repo backend --no-deps
     [ "$status" -eq 0 ]
 }
@@ -766,9 +766,9 @@ J
 
 @test "a create that failed after its adds can be retried with a commit-ish" {
     git -C backend branch base-ref
-    mkdir "$TEST_DIR/.gitignore"
+    rm -f "$TEST_DIR/.git/info/exclude" && mkdir "$TEST_DIR/.git/info/exclude"
     run "$META_BIN" git worktree create fr base-ref --repo backend
-    rmdir "$TEST_DIR/.gitignore"
+    rmdir "$TEST_DIR/.git/info/exclude"
     [ "$status" -ne 0 ]
     # The branch it made is gone with the worktree, so -b works again
     run "$META_BIN" git worktree create fr base-ref --repo backend

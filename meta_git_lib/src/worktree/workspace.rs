@@ -30,8 +30,8 @@ impl Workspace {
     /// The workspace `here` belongs to (see
     /// [`meta_core::config::workspace_root`]); `here`'s config, already
     /// loaded, when it is the root.
-    pub fn of(here: &meta_core::config::Workspace) -> Workspace {
-        let root = meta_core::config::workspace_root(&here.dir);
+    pub fn of(here: &meta_core::config::Workspace) -> anyhow::Result<Workspace> {
+        let root = meta_core::config::workspace_root(&here.dir)?;
         let mut paths = vec![root.clone()];
         let mut unreadable = Vec::new();
         let tree = match root == here.dir {
@@ -58,13 +58,13 @@ impl Workspace {
             .iter()
             .filter_map(|git_dir| git_dir.canonicalize().ok())
             .collect();
-        Workspace {
+        Ok(Workspace {
             canonical_root: root.canonicalize().unwrap_or_else(|_| root.clone()),
             root,
             repos,
             unreadable,
             git_dirs,
-        }
+        })
     }
 
     /// Whether `git_dir` is the git directory of one of this workspace's
@@ -79,9 +79,12 @@ impl Workspace {
     /// workspace. Two workspaces can share a repository (one checked out
     /// with `git worktree add` from the other), so the repository alone
     /// doesn't say whose a set is. A project that is gone (or moved) leaves
-    /// its sets of unknown ownership: not this workspace's.
+    /// its sets of unknown ownership: not this workspace's, and so does
+    /// one whose workspace can't be told.
     pub fn made_here(&self, project: &Path) -> bool {
-        let root = meta_core::config::workspace_root(project);
+        let Ok(root) = meta_core::config::workspace_root(project) else {
+            return false;
+        };
         project.exists() && root.canonicalize().unwrap_or(root) == self.canonical_root
     }
 

@@ -821,6 +821,26 @@ fn an_ephemeral_exec_of_all_keeps_a_branch_given_for_one_repo() {
     let plan = String::from_utf8_lossy(&out.stdout);
     assert!(plan.contains("branch: asked"), "{plan}");
     assert!(plan.contains("branch: run"), "{plan}");
+    // and one repo on two branches is refused, as without --all
+    let out = meta_git(
+        root,
+        &ws,
+        "git worktree exec",
+        &[
+            "run",
+            "--ephemeral",
+            "--all",
+            "--repo",
+            "a:x",
+            "--repo",
+            "a:y",
+            "--",
+            "true",
+        ],
+        json!({"dry_run": true}),
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("given twice"), "{}", stderr(&out));
 }
 
 #[test]

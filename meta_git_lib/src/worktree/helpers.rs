@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use meta_core::display::{escape, escape_path};
 use std::path::{Path, PathBuf};
 
-use meta_core::config::{ProjectInfo, Workspace};
+use meta_core::config::Workspace;
 
 pub fn validate_worktree_name(name: &str) -> Result<()> {
     if name.is_empty() {
@@ -114,31 +114,6 @@ pub fn discover_and_validate_worktree(
         anyhow::bail!("No repos found in worktree '{}'", escape(name));
     }
     Ok((wt_dir, repos))
-}
-
-/// The projects of `workspace`, with its root repo first as "." when
-/// `include_root` is set and the workspace directory is itself a git
-/// repository.
-///
-/// The root repo is an implicit dependency of child repos because it contains:
-/// - Workspace configuration (Cargo.toml)
-/// - Shared config files (.claude/, etc.)
-/// - Build scripts and other shared resources
-pub fn projects_with_root(workspace: &Workspace, include_root: bool) -> Vec<ProjectInfo> {
-    // a repository, as git sees one (an empty .git is none)
-    let has_repo = !matches!(meta_core::gitdir::common_dir(&workspace.dir), Ok(None));
-    let root = (include_root && has_repo).then(|| ProjectInfo {
-        name: ".".to_string(),
-        path: ".".to_string(),
-        repo: None,
-        tags: vec![],
-        provides: vec![],
-        depends_on: vec![],
-        meta: false,
-    });
-    root.into_iter()
-        .chain(workspace.projects.iter().cloned())
-        .collect()
 }
 
 /// Where the repo at `source`, found from `meta_dir` under `alias`, goes in

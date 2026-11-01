@@ -95,16 +95,14 @@ impl<'a> Index<'a> {
             return Ok(found(key, source.clone()));
         }
         let suffix = format!("/{key}");
-        let mut ends: Vec<&String> = tree
-            .keys()
-            .filter(|place| place.ends_with(&suffix))
+        let mut ends: Vec<(&String, &PathBuf)> = tree
+            .iter()
+            .filter(|(place, _)| place.ends_with(&suffix))
+            .map(|(place, (source, _))| (place, source))
             .collect();
         ends.sort();
         match ends.as_slice() {
-            [only] => match tree.get(*only) {
-                Some((source, _)) => Ok(found(only, source.clone())),
-                None => Err(self.unknown(key)),
-            },
+            [(place, source)] => Ok(found(place, source.to_path_buf())),
             [] => Err(self.unknown(key)),
             _ => anyhow::bail!(
                 "Repo '{}' is ambiguous: it ends {}. Use the whole path.",
@@ -112,7 +110,7 @@ impl<'a> Index<'a> {
                 escape(
                     &ends
                         .iter()
-                        .map(|s| s.as_str())
+                        .map(|(place, _)| place.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -149,20 +147,15 @@ impl<'a> Index<'a> {
             .iter()
             .map(|p| p.name.clone())
             .collect();
+        let walked;
         let tree = match &self.tree {
-            Some(tree) => Some(tree.keys().cloned().collect::<Vec<_>>()),
-            None => meta_core::config::walk_projects(
-                &self.workspace.dir,
-                &self.workspace.projects,
-                None,
-            )
-            .ok()
-            .map(|nodes| {
-                meta_core::config::build_project_map(&nodes, &self.workspace.dir, "")
-                    .into_keys()
-                    .collect()
-            }),
+            Some(tree) => Some(tree),
+            None => {
+                walked = Index::recursive(self.workspace).ok();
+                walked.as_ref().and_then(|index| index.tree.as_ref())
+            }
         };
+        let tree = tree.map(|tree| tree.keys().cloned().collect::<Vec<_>>());
         valid.extend(tree.into_iter().flatten());
         valid.sort();
         valid.dedup();

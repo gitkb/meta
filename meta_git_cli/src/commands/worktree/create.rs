@@ -549,8 +549,8 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
 /// with `--strict`).
 #[derive(Debug, Clone, PartialEq)]
 enum Why {
-    Asked,
-    Needed,
+    /// Asked for, or needed by what was.
+    Wanted,
     All,
     /// On the way to the nested repo named.
     Parent(String),
@@ -569,39 +569,27 @@ struct Plan<'a> {
 impl Plan<'_> {
     fn add(&mut self, found: Found, branch: String, why: Why, asked: bool) -> Result<()> {
         let place = place_in_set(self.meta_dir, &found.key, &found.source);
+        let repo = PlannedRepo {
+            project: found.key,
+            source: found.source,
+            place: place.clone(),
+            branch,
+        };
         let known = self.repos.iter_mut().find(|(r, _)| r.place == place);
         match (known, self.asked.get(&place)) {
-            (Some(_), Some(first)) if asked && *first != branch => anyhow::bail!(
+            (Some(_), Some(first)) if asked && *first != repo.branch => anyhow::bail!(
                 "Repo '{}' is given twice, on branches '{}' and '{}'",
                 escape(&place),
                 escape(first),
-                escape(&branch)
+                escape(&repo.branch)
             ),
             // what was asked for wins over what is only needed there
-            (Some(known), None) if asked => {
-                *known = (
-                    PlannedRepo {
-                        project: found.key,
-                        source: found.source,
-                        place: place.clone(),
-                        branch: branch.clone(),
-                    },
-                    why,
-                )
-            }
+            (Some(known), None) if asked => *known = (repo.clone(), why),
             (Some(_), _) => {}
-            (None, _) => self.repos.push((
-                PlannedRepo {
-                    project: found.key,
-                    source: found.source,
-                    place: place.clone(),
-                    branch: branch.clone(),
-                },
-                why,
-            )),
+            (None, _) => self.repos.push((repo.clone(), why)),
         }
         if asked {
-            self.asked.insert(place, branch);
+            self.asked.insert(place, repo.branch);
         }
         Ok(())
     }
@@ -630,10 +618,21 @@ fn plan_repos(
         // skipped with the rest, saying why), and every project: by name,
         // or with --recursive, every place of the tree
         // (exec --ephemeral --all may give a repo its branch: --repo name:branch)
+        // (each such --repo is asked for, so two branches for one repo are refused)
         let mut all = |found: Found| {
-            let spec = args.repos.iter().find(|r| r.alias == found.key);
-            let asked = spec.and_then(|r| r.branch.as_deref());
-            plan.add(found, branch(asked), Why::All, spec.is_some())
+            let specs: Vec<_> = args.repos.iter().filter(|r| r.alias == found.key).collect();
+            if specs.is_empty() {
+                return plan.add(found, branch(None), Why::All, false);
+            }
+            for spec in specs {
+                plan.add(
+                    found.clone(),
+                    branch(spec.branch.as_deref()),
+                    Why::All,
+                    true,
+                )?;
+            }
+            Ok(())
         };
         if !matches!(meta_core::gitdir::common_dir(meta_dir), Ok(None)) {
             all(index.find(".")?)?;
@@ -657,13 +656,13 @@ fn plan_repos(
         for spec in &args.repos {
             let found = index.find(&spec.alias)?;
             asked_keys.push(found.key.clone());
-            plan.add(found, branch(spec.branch.as_deref()), Why::Asked, true)?;
+            plan.add(found, branch(spec.branch.as_deref()), Why::Wanted, true)?;
         }
         if !args.no_deps {
             // The root holds what the workspace's repos share (its Cargo
             // workspace, .claude/, build scripts)
             if meta_core::gitdir::common_dir(meta_dir)?.is_some() {
-                plan.add(index.find(".")?, branch(None), Why::Needed, false)?;
+                plan.add(index.find(".")?, branch(None), Why::Wanted, false)?;
             }
             let graph = match index.tree() {
                 Some(tree) => nested_dep_graph(tree)?,
@@ -691,7 +690,7 @@ fn plan_repos(
                         Some(_) => index.place(dep)?,
                         None => index.find(dep)?,
                     };
-                    plan.add(found, branch(None), Why::Needed, false)?;
+                    plan.add(found, branch(None), Why::Wanted, false)?;
                 }
             }
         }

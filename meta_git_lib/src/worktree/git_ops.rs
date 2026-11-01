@@ -536,7 +536,8 @@ mod tests {
 
     /// The command a leftover git entry's message gives is quoted for a shell
     /// and escaped for the terminal: a path's control characters print as
-    /// visible escapes.
+    /// visible escapes. (Windows allows no control characters in file names.)
+    #[cfg(unix)]
     #[test]
     fn a_leftover_entry_is_reported_with_its_paths_escaped() {
         let tmp = init_git_repo();

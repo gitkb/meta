@@ -859,7 +859,9 @@ YAML
     [ "$(grep -c 'test --tag backend' <<<"$output")" -eq 4 ]
     # a program whose name starts with - still runs after --
     run "$META_BIN" exec -- -no-such-program
+    [ "$status" -eq 1 ]
     [[ "$output" != *"option of meta itself"* ]]
+    [[ "$output" == *"-no-such-program"*"exit code"* ]]
 }
 
 @test "--help with --add-aliases-to-global-looprc only prints help" {

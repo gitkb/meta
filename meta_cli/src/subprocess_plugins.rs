@@ -886,6 +886,7 @@ mod tests {
         assert!(json.contains("\"silent\":true"));
         assert!(json.contains("\"include_filters\""));
         assert!(json.contains("\"exclude_filters\""));
+        assert!(json.contains(r#""tag_filters":["rust"]"#));
     }
 
     // ============ Edge Cases and Error Handling ============

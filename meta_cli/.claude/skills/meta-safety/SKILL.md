@@ -45,7 +45,7 @@ When modifying a repo that other repos depend on:
 # Commit only in repos repo1 and repo2 (.meta.yaml name or path from the root)
 meta --include repo1,repo2 git commit -m "feat: update shared API"
 
-# Push tagged repos (and the root)
+# Push the tagged repos (not the root; add it with --include .)
 meta --tag backend git push
 
 # Per-repo commit messages (when changes differ)

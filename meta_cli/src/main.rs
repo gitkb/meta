@@ -431,6 +431,13 @@ fn run_cli() -> Result<()> {
     // Where plugins are; nothing is started until a command needs one
     let subprocess_plugins = SubprocessPluginManager::new(cli.verbose)?;
 
+    // `--tag "$UNSET"` is a slip, not "every repo"
+    anyhow::ensure!(
+        cli.tag.is_none() || !cli.filters().tags.is_empty(),
+        "--tag '{}' names no tag",
+        escape(cli.tag.as_deref().unwrap_or_default())
+    );
+
     // help only prints, whatever else was asked
     if cli.print_help {
         return subprocess_plugins::print_output(&help_with_plugins(&subprocess_plugins));
@@ -508,8 +515,11 @@ fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Resul
     let Some(plugin) = plugins.find(first)? else {
         unrecognized_command_error(words);
     };
+    // The command's words only: what follows `--` is its arguments, and
+    // help never runs the command
     let args: Vec<String> = words
         .iter()
+        .take_while(|word| *word != "--")
         .cloned()
         .chain(["--help".to_string()])
         .collect();

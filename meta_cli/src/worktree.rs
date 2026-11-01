@@ -142,7 +142,7 @@ fn set_origin(set_dir: &Path, members: &[PathBuf]) -> Result<Option<PathBuf>> {
 }
 
 /// The checkouts among `members` of the set at `set_dir` that `filters`
-/// select (see [`crate::repo_filter::select`]). A set lays its repos out as
+/// select (see [`crate::repo_filter::Scope::select`]). A set lays its repos out as
 /// the workspace, so a checkout is named and tagged by the project at its
 /// place in the set, nested meta repos included, as the set's `workspace`
 /// and the nested configs tell (see [`set_tree`]); a checkout of no project,

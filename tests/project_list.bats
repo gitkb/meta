@@ -413,6 +413,7 @@ YAML
     [ "$status" -eq 0 ]
     [[ "$output" == *"All projects are cloned"* ]]
     run "$META_BIN" --tag api project check
+    [ "$status" -eq 0 ]
     [[ "$output" == *"gone.git"* ]]
     run "$META_BIN" --tag api project dependents frontend
     [ "$status" -ne 0 ]

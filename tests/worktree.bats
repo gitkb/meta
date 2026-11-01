@@ -892,6 +892,11 @@ EOF
     run "$META_BIN" --exclude frontend git worktree exec global-filter -- touch ran
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not take --include/--exclude/--tag before it"* ]]
+    # --tag too, though the tag is real
+    echo '{"projects": {"backend": {"repo": "git@github.com:org/backend.git", "tags": ["api"]}, "frontend": "git@github.com:org/frontend.git"}}' > .meta.yaml
+    run "$META_BIN" --tag api git worktree exec global-filter -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --include/--exclude/--tag before it"* ]]
     [ -z "$(find .worktrees/global-filter -name ran)" ]
 }
 

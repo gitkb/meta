@@ -135,9 +135,9 @@ meta --silent exec -- npm install
 |--------|-------------|
 | `--parallel` | Run commands concurrently (the default) |
 | `--sequential` | Run one repo at a time |
-| `--include <repos>` | Only these repos (`.meta.yaml` name or path from the root) |
+| `--include <repos>` | These repos, and those `--tag` selects (`.meta.yaml` name or path from the root, `.` for the root) |
 | `--exclude <repos>` | Skip these repos (`.meta.yaml` name or path from the root) |
-| `--tag <tags>` | Filter by project tag(s) |
+| `--tag <tags>` | The repos with any of these tags (comma-separated; never the root) |
 | `--dry-run` | Preview without executing |
 | `--json` | Structured JSON output |
 | `--silent` | Suppress output |
@@ -158,7 +158,7 @@ meta exec -- cargo test
 
 ### Update Dependencies Selectively
 ```bash
-# Repos tagged frontend (plus the root)
+# Repos tagged frontend (not the root: it has no tags)
 meta --tag frontend exec -- npm update
 
 # Exclude slow repos (meta options go before `exec`)
@@ -196,8 +196,7 @@ When your cwd is inside a `.worktrees/<name>/` directory, `meta exec` automatica
 cd .worktrees/auth-fix/backend
 meta exec -- cargo test    # runs in auth-fix's repos
 
-# --primary skips worktree detection; config is still found from the cwd,
-# so run it from the primary checkout to target the primary repos
+# --primary acts on the workspace the set was made from, from right here
 meta --primary exec -- cargo test
 ```
 

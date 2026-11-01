@@ -153,8 +153,9 @@ created with `--recursive` inside another repo of the set (e.g.
 `open-source/sdk/core` inside `open-source`) are skipped. `list --recursive`
 shows them; run the tool itself (`cargo`, `git`) in their directory, not `meta exec`, which still scopes to the set's top-level repos there. The root repo is part of a set
 by default, so the set has its own `.meta.yaml` config; otherwise meta walks up to
-the primary checkout's config. `meta --primary <command>` bypasses detection;
-run it from the primary checkout to be sure it uses the primary repos.
+the primary checkout's config. `meta --primary <command>` bypasses detection and acts on the
+workspace the set was made from (found through meta's records in the set's
+checkouts), from wherever you are in the set.
 
 ## Cleanup
 

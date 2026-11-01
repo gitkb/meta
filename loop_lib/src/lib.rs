@@ -863,9 +863,13 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
     }
 
     // In a dry run only commands that cannot run (a missing directory, a
-    // broken alias) fail
+    // broken alias) fail. The summary or the JSON said which; silenced,
+    // the error says it.
     if failed_count > 0 {
-        return Err(anyhow::anyhow!("At least one command failed"));
+        if config.silent && !config.json_output {
+            anyhow::bail!("At least one command failed");
+        }
+        return Err(meta_core::exit::ExitWith(1).into());
     }
 
     Ok(())

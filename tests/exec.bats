@@ -320,6 +320,15 @@ teardown() {
     [[ "$output" == *"./api:"*"answer=y"*"./worker:"*"answer=n"* ]]
 }
 
+@test "a failed command's summary is the whole report, and meta exits 1" {
+    for mode in --parallel --sequential; do
+        run "$META_BIN" "$mode" --include api exec -- sh -c 'exit 3'
+        [ "$status" -eq 1 ]
+        [[ "$output" == *"1 out of 1 commands failed"* ]]
+        [[ "$output" != *"Error:"* ]]
+    done
+}
+
 @test "loop sequential mode runs commands in order" {
     # Run commands across all three projects
     run "$META_BIN" --include api,worker,frontend exec -- pwd

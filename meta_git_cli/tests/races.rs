@@ -264,3 +264,44 @@ fn prune_leaves_an_ephemeral_run_that_started_after_it_looked() {
     let run = run.wait_with_output().unwrap();
     assert!(run.status.success(), "{}", text(&run));
 }
+
+/// Where the workspace root isn't a repository, the leases' home is its
+/// first repository by path, which moves when one that sorts first is
+/// added. prune must still see a running ephemeral set's lease.
+#[test]
+fn prune_leaves_an_ephemeral_run_after_a_repository_is_added() {
+    let temp = tempfile::tempdir().unwrap();
+    let sb = Sandbox::new(&temp.path().canonicalize().unwrap());
+    sb.holding(&sb.root, "command", "");
+    let run = sb.start(&[
+        "exec",
+        "--ephemeral",
+        "zzz",
+        "--repo",
+        "frontend",
+        "--",
+        sb.root.join("command").to_str().unwrap(),
+    ]);
+    sb.wait_for("command-started");
+
+    let first = sb.ws.join("aaa");
+    fs::create_dir_all(&first).unwrap();
+    git(&first, &["init", "-q", "-b", "main"]);
+    git(&first, &["commit", "-q", "--allow-empty", "-m", "initial"]);
+    fs::write(
+        sb.ws.join(".meta.yaml"),
+        "projects:\n  aaa:\n    path: aaa\n  backend:\n    path: backend\n  frontend:\n    path: frontend\n",
+    )
+    .unwrap();
+    let pruned = sb.run(&["prune"]);
+    assert!(pruned.status.success(), "{}", text(&pruned));
+    assert!(
+        sb.ws.join(".worktrees/zzz/frontend").exists(),
+        "{}",
+        text(&pruned)
+    );
+
+    sb.release("command");
+    let run = run.wait_with_output().unwrap();
+    assert!(run.status.success(), "{}", text(&run));
+}

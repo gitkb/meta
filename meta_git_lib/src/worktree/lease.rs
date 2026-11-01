@@ -144,6 +144,7 @@ impl Found {
         let claim = Claim {
             path: self.path.clone(),
             _lock: lock,
+            elsewhere: Vec::new(),
         };
         match read_lease(&self.path) == self.lease {
             true => claim.delete(),
@@ -158,11 +159,17 @@ impl Found {
 pub struct Claim {
     path: PathBuf,
     _lock: File,
+    /// Leases of the set left in other repositories (see [`hold`]).
+    elsewhere: Vec<Found>,
 }
 
 impl Claim {
-    /// Delete the lease, if one was left.
+    /// Delete the lease, if one was left (and those left elsewhere, see
+    /// [`hold`]).
     pub fn delete(self) -> Result<()> {
+        for found in &self.elsewhere {
+            found.delete()?;
+        }
         remove(&self.path)
     }
 }
@@ -176,7 +183,13 @@ impl Drop for Claim {
 /// Hold the lease of the set at `set` (resolved) while it is deleted. Fails
 /// if its creator or ephemeral run still holds it. The lease its creator
 /// left, if one was (the set is half-made, or its ephemeral run ended).
-pub fn hold(home: &Path, set: &Path) -> Result<(Option<Lease>, Claim)> {
+///
+/// A creator kept it in `home` as it was then; where the workspace root
+/// isn't a repository, that moves when repositories are added. So the
+/// lease directories of all the workspace's `repos` are looked at too: a
+/// lease held there refuses, and one left there counts (and goes with the
+/// set).
+pub fn hold(home: &Path, repos: &[PathBuf], set: &Path) -> Result<(Option<Lease>, Claim)> {
     let path = path_for(home, set);
     let dir = home.join(LEASE_DIR);
     std::fs::create_dir_all(&dir)
@@ -184,8 +197,24 @@ pub fn hold(home: &Path, set: &Path) -> Result<(Option<Lease>, Claim)> {
     let Some(lock) = lock(&path)? else {
         anyhow::bail!("it is {}", read(path).doing());
     };
-    let left = read_lease(&path);
-    Ok((left, Claim { path, _lock: lock }))
+    let mut elsewhere = Vec::new();
+    for repo in repos.iter().filter(|repo| repo.as_path() != home) {
+        match find(repo, set) {
+            Some(found) if found.is_mine() => {}
+            Some(found) if found.live => anyhow::bail!("it is {}", found.doing()),
+            Some(found) => elsewhere.push(found),
+            None => {}
+        }
+    }
+    let left = read_lease(&path).or_else(|| elsewhere.iter().find_map(|f| f.lease.clone()));
+    Ok((
+        left,
+        Claim {
+            path,
+            _lock: lock,
+            elsewhere,
+        },
+    ))
 }
 
 fn read_lease(path: &Path) -> Option<Lease> {
@@ -214,12 +243,19 @@ fn lock_path(path: &Path) -> PathBuf {
 fn lock(path: &Path) -> Result<Option<File>> {
     let lock = lock_path(path);
     loop {
-        let file = std::fs::OpenOptions::new()
+        let file = match std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(false)
             .open(&lock)
-            .with_context(|| format!("Cannot open {}", escape_path(&lock)))?;
+        {
+            Ok(file) => file,
+            // Windows: its holder is deleting it, and still has it open
+            Err(e) if cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Ok(None)
+            }
+            Err(e) => return Err(e).with_context(|| format!("Cannot open {}", escape_path(&lock))),
+        };
         // A reader tests the lock by taking it for a moment: try a few times
         // before taking it for held
         let locked = (0..3).any(|attempt| {
@@ -381,7 +417,7 @@ mod tests {
         // another creator, or a command deleting the set, is refused
         let refused = take(&home, &lease(&set)).unwrap_err().to_string();
         assert!(refused.contains("is being created by pid"), "{refused}");
-        let refused = hold(&home, &set).unwrap_err().to_string();
+        let refused = hold(&home, &[], &set).unwrap_err().to_string();
         assert!(refused.contains("being created by pid"), "{refused}");
         drop(held);
         assert!(find(&home, &set).is_none());
@@ -413,7 +449,7 @@ mod tests {
         let home = temp.path().join("git");
         let set = temp.path().join("wt/a");
         // no lease: only the lock is held
-        let (left, claim) = hold(&home, &set).unwrap();
+        let (left, claim) = hold(&home, &[], &set).unwrap();
         assert!(left.is_none());
         let refused = take(&home, &lease(&set)).unwrap_err().to_string();
         assert!(refused.contains("in use by another meta"), "{refused}");
@@ -422,7 +458,7 @@ mod tests {
         // a lease left behind is handed over, and deleted with the set
         let old = lease(&set);
         let path = left_behind(&home, &old);
-        let (left, claim) = hold(&home, &set).unwrap();
+        let (left, claim) = hold(&home, &[], &set).unwrap();
         assert_eq!(left, Some(old));
         claim.delete().unwrap();
         assert!(!path.exists());

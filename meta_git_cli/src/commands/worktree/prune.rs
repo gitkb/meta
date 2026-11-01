@@ -141,7 +141,9 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
     let mut abandoned = BTreeMap::new();
     // a workspace with no repository has no sets, and no leases
     let home = lease::home(&workspace).ok();
-    for found in home.as_deref().map(lease::all).unwrap_or_default() {
+    // leases a creator kept where the workspace's lease home was then, too
+    let leases = workspace.repos.iter().flat_map(|repo| lease::all(repo));
+    for found in leases {
         match &found.lease {
             Some(lease) if !workspace.made_here(&lease.project) => {}
             Some(lease) if found.live => {
@@ -363,7 +365,7 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
                     let held = home
                         .as_deref()
                         .ok_or_else(|| anyhow::anyhow!("no repository keeps its lease"))
-                        .and_then(|home| lease::hold(home, wt_path));
+                        .and_then(|home| lease::hold(home, &workspace.repos, wt_path));
                     let token = |lease: Option<&lease::Lease>| lease.map(|l| l.token.clone());
                     let why = match &held {
                         Err(e) => Some(format!("{e:#}")),

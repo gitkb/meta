@@ -11,7 +11,7 @@ use std::process::Command;
 mod status;
 mod url;
 
-pub use status::{RepoStatus, StatusEntry};
+pub use status::{Operation, RepoStatus, StatusEntry};
 pub use url::GitUrl;
 
 /// The variables that tie git to one repository, which git itself clears

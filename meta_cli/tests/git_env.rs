@@ -71,7 +71,7 @@ fn a_hooks_repository_variables_do_not_reach_metas_git() {
 
     // A query meta makes itself
     let context: serde_json::Value =
-        serde_json::from_slice(&meta(&["context", "--json", "--no-cache"]).stdout).unwrap();
+        serde_json::from_slice(&meta(&["context", "--json"]).stdout).unwrap();
     assert_eq!(context["repos"][0]["branch"], "on-a", "{context}");
 
     // A command meta runs in each repo, with the user's settings
@@ -101,7 +101,7 @@ fn context_shows_the_branch_of_a_bare_project() {
     )
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_meta"))
-        .args(["context", "--json", "--no-cache"])
+        .args(["context", "--json"])
         .current_dir(&workspace)
         .env("HOME", &workspace)
         .env("XDG_CONFIG_HOME", workspace.join("xdg"))
@@ -130,7 +130,7 @@ fn context_shows_the_branch_of_a_checkout_git_calls_bare() {
     )
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_meta"))
-        .args(["context", "--json", "--no-cache"])
+        .args(["context", "--json"])
         .current_dir(&workspace)
         .env("HOME", &workspace)
         .env("XDG_CONFIG_HOME", workspace.join("xdg"))

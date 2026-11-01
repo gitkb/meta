@@ -298,7 +298,7 @@ preview() {
     [[ "$output" == *"needs the terminal"* ]]
 }
 
-@test "context previews without writing its cache" {
+@test "context previews without writing anything" {
     preview 0 context
 }
 

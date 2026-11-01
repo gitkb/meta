@@ -177,21 +177,25 @@ impl CloneQueue {
             let target_path = base_dir.join(&project.path);
 
             // A project that is one of the meta repos above it would be
-            // cloned inside itself again and again. A checkout is the
-            // repository its origin names, whatever .meta.yaml says.
+            // cloned inside itself again and again, if its .meta.yaml is
+            // read. A checkout is the repository its origin names, whatever
+            // .meta.yaml says.
             let resolved = target_path.canonicalize().ok();
             let url = match resolved {
                 Some(_) => origin(&target_path).or_else(|| project.repo.clone()),
                 None => project.repo.clone(),
             };
-            let repeats = above.iter().position(|meta| {
-                resolved.as_ref() == Some(&meta.dir)
-                    || meta
-                        .url
-                        .as_ref()
-                        .zip(url.as_ref())
-                        .is_some_and(same_repository)
-            });
+            let repeats = above
+                .iter()
+                .position(|meta| {
+                    resolved.as_ref() == Some(&meta.dir)
+                        || meta
+                            .url
+                            .as_ref()
+                            .zip(url.as_ref())
+                            .is_some_and(same_repository)
+                })
+                .filter(|_| self.reads(level + 1));
             if let Some(first) = repeats {
                 let mut chain: Vec<String> =
                     above[first..].iter().map(|m| m.name.clone()).collect();
@@ -642,6 +646,20 @@ mod tests {
         write_meta(&d.target_path, &back);
         assert!(queue.mark_completed(&d).is_empty());
         assert_eq!(queue.cycles().len(), 1);
+    }
+
+    #[test]
+    fn without_recursion_a_repeated_repo_is_no_cycle() {
+        // a second checkout of the workspace's own repo: its .meta.yaml is
+        // never read, so it is cloned like any project
+        let dir = tempfile::tempdir().unwrap();
+        write_meta(dir.path(), r#"{"projects": {"pages": "top.git"}}"#);
+        let queue = CloneQueue::new(None, Some(0), true);
+        let tasks = queue
+            .discover(dir.path(), 0, &top(dir.path(), Some("top.git")))
+            .unwrap();
+        assert_eq!(names(&tasks), ["pages"]);
+        assert!(queue.cycles().is_empty());
     }
 
     #[cfg(unix)]

@@ -170,7 +170,11 @@ pub(crate) fn execute_git_clone(
         dir: clone_dir_path
             .canonicalize()
             .unwrap_or_else(|_| clone_dir_path.clone()),
-        url: Some(url.clone()),
+        // as git recorded it: a relative URL resolved
+        url: meta_core::git::remote_url(&clone_dir_path)
+            .ok()
+            .flatten()
+            .or_else(|| Some(url.clone())),
     };
     let tasks = queue.discover(&clone_dir_path, 0, &Arc::from([top]))?;
     let initial_count = tasks.len();

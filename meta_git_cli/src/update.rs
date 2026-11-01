@@ -42,8 +42,11 @@ pub(crate) fn execute_git_update(
     };
     // A worktree set's checkouts are pulled with `meta git pull`; the
     // workspace around the set is not this command's to change from in it
+    // (A plain git worktree of a meta repo under .worktrees is a workspace
+    // of its own: one that meta didn't make, whose .meta.yaml is its own.)
     if let Some((set, set_dir)) = meta_cli::worktree::detect_worktree_location(cwd)? {
-        if !meta_cli::worktree::discover_worktree_members(&set_dir)?.is_empty()
+        let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        if !real(&workspace.dir).starts_with(real(&set_dir))
             || meta_cli::worktree::holds_meta_checkout(&set_dir)
         {
             anyhow::bail!(

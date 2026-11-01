@@ -227,11 +227,14 @@ pub(crate) fn nothing_to_pull(dir: &Path) -> Option<String> {
         Ok(None) => return Some("HEAD is not on a branch".to_string()),
         Err(_) => return None,
     };
-    let format = "--format=%(upstream)";
-    match meta_core::git::lookup(dir, ["for-each-ref", format, head.as_str()]) {
+    // From the config: a branch with no commits yet (an empty repo's
+    // clone) has its upstream there all the same
+    let branch = head.strip_prefix("refs/heads/").unwrap_or(&head);
+    let merge = format!("branch.{branch}.merge");
+    match meta_core::git::lookup(dir, ["config", "--get", merge.as_str()]) {
         Ok(None) => Some(format!(
             "its branch {} has no upstream",
-            meta_core::display::escape(head.strip_prefix("refs/heads/").unwrap_or(&head))
+            meta_core::display::escape(branch)
         )),
         _ => None,
     }

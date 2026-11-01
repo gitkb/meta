@@ -296,6 +296,38 @@ within() { perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$@"; }
     [[ "$output" == *"not worktree set 'review'"* ]]
 }
 
+@test "meta git update in a plain git worktree of the workspace updates that worktree" {
+    with_remotes
+    git worktree add --quiet "$TEST_DIR/.worktrees/x"
+    cd "$TEST_DIR/.worktrees/x"
+    # no .meta/plugins here: this build's plugin, not one installed
+    PATH="$(dirname "$META_GIT_BIN"):$PATH" run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Not pulled x: its branch x has no upstream"* ]]
+    [ -d "$TEST_DIR/.worktrees/x/frontend/.git" ]
+}
+
+@test "meta git update pulls a repo it cloned empty once its remote has commits" {
+    with_remotes
+    git init --quiet --bare "$TEST_DIR/remotes/empty.git"
+    local added
+    added=$(sed "s|\"shared\": \(.*\)|\"shared\": \1, \"empty\": \"file://$TEST_DIR/remotes/empty.git\"|" .meta.yaml)
+    printf '%s\n' "$added" > .meta.yaml
+    git commit --quiet -am empty
+    git push --quiet
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [ -d "$TEST_DIR/empty/.git" ]
+    # a teammate pushes the first commit
+    git clone --quiet "$TEST_DIR/remotes/empty.git" "$TEST_DIR/remotes/mate-empty" 2>/dev/null
+    git -C "$TEST_DIR/remotes/mate-empty" -c user.name=Mate -c user.email=mate@test.com \
+        commit --quiet --allow-empty -m first
+    git -C "$TEST_DIR/remotes/mate-empty" push --quiet origin HEAD
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [ "$(head_of empty)" = "$(head_of remotes/empty.git)" ]
+}
+
 @test "meta git clone -r and update -r of meta repos that list each other stop, naming the cycle" {
     TOP_BARE="$(mktemp -d)/top.git"
     KID_BARE="$(mktemp -d)/kid.git"

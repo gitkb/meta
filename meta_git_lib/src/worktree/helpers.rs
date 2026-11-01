@@ -70,8 +70,8 @@ impl Configs {
 }
 
 /// Where worktree sets go: `META_WORKTREES`, else the `worktrees_dir` of
-/// `owner`'s config (checked when it was loaded), else its `.worktrees`;
-/// outside a workspace, `.worktrees` in `cwd`.
+/// `owner`'s config (anywhere; checked when it was loaded), else its
+/// `.worktrees`; outside a workspace, `.worktrees` in `cwd`.
 pub fn resolve_worktree_root(owner: Option<&Workspace>, cwd: &Path) -> Result<PathBuf> {
     if let Ok(env_path) = std::env::var("META_WORKTREES") {
         return Ok(PathBuf::from(env_path));
@@ -79,48 +79,15 @@ pub fn resolve_worktree_root(owner: Option<&Workspace>, cwd: &Path) -> Result<Pa
     let Some(owner) = owner else {
         return Ok(cwd.join(".worktrees"));
     };
-    if let Some(configured) = &owner.worktrees_dir {
-        return Ok(owner.dir.join(configured));
-    }
-    // The default is held to the same rules: a committed symlink there must
-    // not send worktrees (and their removal) outside the workspace or into
-    // .git
-    let root = owner.dir.join(".worktrees");
-    meta_core::config::relative_dir(&owner.dir, ".worktrees").map_err(|why| {
-        anyhow::anyhow!(
-            "Refusing to keep worktrees in {}: {why}",
-            escape_path(&root)
-        )
-    })?;
-    Ok(root)
-}
-
-/// The directory of the worktree set `name` under `worktree_root`. A symlink
-/// there (say one tracked in a repo that holds `worktrees_dir`) must not
-/// lead commands, or a removal, outside the worktree root.
-pub fn worktree_set_dir(worktree_root: &Path, name: &str) -> Result<PathBuf> {
-    let wt_dir = worktree_root.join(name);
-    // meta makes set directories itself; one that is a link (even to another
-    // set) is someone else's doing
-    if wt_dir
-        .symlink_metadata()
-        .is_ok_and(|meta| meta.file_type().is_symlink())
-    {
-        anyhow::bail!(
-            "Refusing to use worktree '{}': {} is a symlink",
-            meta_core::display::escape(name),
-            escape_path(&wt_dir)
-        );
-    }
-    if worktree_root.exists() {
-        meta_core::config::resolve_inside(worktree_root, name).map_err(|why| {
-            anyhow::anyhow!(
-                "Refusing to use worktree '{}': {why}",
-                meta_core::display::escape(name)
-            )
-        })?;
-    }
-    Ok(worktree_root.join(name))
+    // A link there is followed, wherever it leads (removal checks what is in
+    // a set, not where it is), but not into git's data; a configured
+    // worktrees_dir was checked when it was loaded
+    let Some(configured) = &owner.worktrees_dir else {
+        meta_core::config::check_location(&owner.dir, ".worktrees", false)
+            .map_err(|why| anyhow::anyhow!("Refusing to keep worktrees in .worktrees: {why}"))?;
+        return Ok(owner.dir.join(".worktrees"));
+    };
+    Ok(owner.dir.join(configured))
 }
 
 /// The directory of the existing worktree set `name`.
@@ -129,7 +96,7 @@ pub fn resolve_existing_worktree(name: &str) -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     let configs = Configs::find_optional(&cwd)?;
     let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
-    let wt_dir = worktree_set_dir(&worktree_root, name)?;
+    let wt_dir = worktree_root.join(name);
     if !wt_dir.exists() {
         anyhow::bail!("Worktree '{}' not found at {}", name, escape_path(&wt_dir));
     }
@@ -205,7 +172,14 @@ pub fn place_in_set(meta_dir: &Path, alias: &str, source: &Path) -> String {
                 .map(Path::to_path_buf)
         })
         .ok()
-        .filter(|place| !place.as_os_str().is_empty())
+        // a source outside the meta dir (`../sib`) sits at its alias, as
+        // [`meta_core::config::ProjectInfo::set_place`] has it
+        .filter(|place| {
+            !place.as_os_str().is_empty()
+                && place
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+        })
         .map(|place| {
             place
                 .components()
@@ -346,20 +320,42 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
 
 /// Check if a repo's `origin` remote is exactly the given owner/repo.
 /// The URL git fetches from is what counts here, `insteadOf` rewrites
-/// applied (an origin of `gh:repo` may be GitHub's `org/repo`).
+/// applied (an origin of `gh:repo` may be GitHub's `org/repo`). A repo
+/// without `origin`, or not cloned, is no match.
 pub fn repo_matches_spec(repo_path: &Path, spec: &str) -> bool {
-    meta_core::git::query(repo_path, ["remote", "get-url", "origin"])
+    meta_core::git::run(repo_path, ["remote", "get-url", "origin"])
+        .ok()
         .and_then(|url| meta_core::git::GitUrl::from(url).owner_repo())
         .is_some_and(|owner_repo| owner_repo.eq_ignore_ascii_case(spec))
 }
 
+/// Add the worktrees folder `worktrees` (its path from `meta_dir`) to
+/// `meta_dir`'s `.gitignore`. A `link` (to a folder elsewhere) is ignored by
+/// its name: git sees a link as a file, which `name/` doesn't match.
 pub fn ensure_worktrees_in_gitignore(
     meta_dir: &Path,
-    worktrees_dirname: &str,
+    worktrees: &str,
+    link: bool,
     quiet: bool,
 ) -> Result<()> {
     let gitignore_path = meta_dir.join(".gitignore");
-    let pattern = format!("{worktrees_dirname}/");
+    // the path as a literal pattern: git reads `*?[\` as globs, and a leading
+    // `#` or `!` as a comment or a negation
+    let mut literal = String::new();
+    for c in worktrees.chars() {
+        if matches!(c, '*' | '?' | '[' | '\\') {
+            literal.push('\\');
+        }
+        literal.push(c);
+    }
+    if literal.starts_with(['#', '!']) {
+        literal.insert(0, '\\');
+    }
+    // and a trailing space, which git drops
+    if literal.ends_with(' ') {
+        literal.insert(literal.len() - 1, '\\');
+    }
+    let pattern = if link { literal } else { format!("{literal}/") };
 
     if gitignore_path.exists() {
         let content = std::fs::read_to_string(&gitignore_path)?;
@@ -544,7 +540,7 @@ mod tests {
     #[test]
     fn gitignore_creates_file_if_absent() {
         let tmp = tempfile::tempdir().unwrap();
-        ensure_worktrees_in_gitignore(tmp.path(), ".worktrees", true).unwrap();
+        ensure_worktrees_in_gitignore(tmp.path(), ".worktrees", false, true).unwrap();
         let content = std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
         assert!(content.contains(".worktrees/"));
     }
@@ -553,7 +549,7 @@ mod tests {
     fn gitignore_appends_if_not_present() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join(".gitignore"), "node_modules/\n").unwrap();
-        ensure_worktrees_in_gitignore(tmp.path(), ".worktrees", true).unwrap();
+        ensure_worktrees_in_gitignore(tmp.path(), ".worktrees", false, true).unwrap();
         let content = std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
         assert!(content.contains("node_modules/"));
         assert!(content.contains(".worktrees/"));
@@ -563,7 +559,7 @@ mod tests {
     fn gitignore_skips_if_already_present() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join(".gitignore"), ".worktrees/\n").unwrap();
-        ensure_worktrees_in_gitignore(tmp.path(), ".worktrees", true).unwrap();
+        ensure_worktrees_in_gitignore(tmp.path(), ".worktrees", false, true).unwrap();
         let content = std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
         // Should appear exactly once
         assert_eq!(content.matches(".worktrees/").count(), 1);

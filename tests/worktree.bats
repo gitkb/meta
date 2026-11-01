@@ -141,31 +141,31 @@ EOF
     rm -rf frontend
     run "$META_BIN" git worktree create some --all
     [ "$status" -eq 0 ]
-    [[ "$output" == *"'frontend' is not cloned at $TEST_DIR/frontend"*"skipping"* ]]
+    [[ "$output" == *"'frontend' at $TEST_DIR/frontend: not cloned"*"skipping"* ]]
     [ -d ".worktrees/some/backend" ]
     [ ! -e ".worktrees/some/frontend" ]
 
     # all or nothing with --strict
     run "$META_BIN" git worktree create strict --all --strict
     [ "$status" -ne 0 ]
-    [[ "$output" == *"'frontend' is not cloned"* ]]
+    [[ "$output" == *"'frontend' at $TEST_DIR/frontend: not cloned"* ]]
     [[ "$output" != *"skipping"* ]]
     [ ! -e ".worktrees/strict" ]
 
     run "$META_BIN" git worktree create one --repo frontend
     [ "$status" -ne 0 ]
-    [[ "$output" == *"'frontend' is not cloned at $TEST_DIR/frontend"* ]]
+    [[ "$output" == *"'frontend' at $TEST_DIR/frontend: not cloned"* ]]
     [ ! -e ".worktrees/one" ]
 
     # nor added to a set; a directory that is no repository neither, not
     # even as a worktree of the workspace repo around it
     run "$META_BIN" git worktree add some --repo frontend
     [ "$status" -ne 0 ]
-    [[ "$output" == *"'frontend' is not cloned at $TEST_DIR/frontend"* ]]
+    [[ "$output" == *"'frontend' at $TEST_DIR/frontend: not cloned"* ]]
     mkdir -p frontend/.git
     run "$META_BIN" git worktree add some --repo frontend:other
     [ "$status" -ne 0 ]
-    [[ "$output" == *"'frontend' at $TEST_DIR/frontend is not a git repository"* ]]
+    [[ "$output" == *"'frontend' at $TEST_DIR/frontend: not a git repository"* ]]
     [ ! -e ".worktrees/some/frontend" ]
     if git rev-parse --verify --quiet refs/heads/other; then false; fi
 }

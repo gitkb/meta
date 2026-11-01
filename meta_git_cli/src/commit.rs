@@ -54,7 +54,15 @@ pub(crate) fn execute_git_commit(
             cwd.join(dir)
         };
 
-        let staged = staged_files(&path);
+        // a folder with nothing git's in it (not cloned, or a workspace
+        // that is no repository) has nothing staged; a .git git can't use is
+        // the user's to know about
+        match meta_core::gitdir::common_dir(&path) {
+            Ok(Some(_)) => {}
+            Ok(None) => continue,
+            Err(e) => anyhow::bail!("{}: not a git repository ({e:#})", escape(dir)),
+        }
+        let staged = staged_files(&path)?;
         if !staged.is_empty() {
             repos_with_changes.push((dir.clone(), path.to_string_lossy().to_string(), staged));
         }
@@ -111,11 +119,14 @@ pub(crate) fn execute_git_commit(
     Ok(CommandResult::Message(String::new()))
 }
 
-/// The staged files of the repo at `path` (none if git can't tell).
-fn staged_files(path: &std::path::Path) -> Vec<String> {
-    meta_core::git::query(path, ["diff", "--cached", "--name-only"])
-        .map(|out| out.lines().map(String::from).collect())
-        .unwrap_or_default()
+/// The staged files of the repo at `path`.
+fn staged_files(path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    Ok(
+        meta_core::git::run(path, ["diff", "--cached", "--name-only"])?
+            .lines()
+            .map(String::from)
+            .collect(),
+    )
 }
 
 /// Execute commit with editor for per-repo messages
@@ -131,11 +142,12 @@ fn execute_editor_commit(
         return Ok(());
     };
     let first = Path::new(first);
-    let Some(editor) = meta_core::git::query(first, ["var", "GIT_EDITOR"]) else {
-        anyhow::bail!(
-            "git has no editor to use: set GIT_EDITOR, core.editor, VISUAL or EDITOR, or use -m <message>"
-        );
-    };
+    let editor = meta_core::git::run(first, ["var", "GIT_EDITOR"]).map_err(|e| {
+        anyhow::anyhow!(
+            "git has no editor to use ({e:#}): set GIT_EDITOR, core.editor, VISUAL or EDITOR, \
+             or use -m <message>"
+        )
+    })?;
     // As in git, the editor `:` leaves the message as it is
     let terminal = match editor.as_str() {
         ":" => None,
@@ -371,6 +383,102 @@ pub(crate) fn parse_multi_commit_file(content: &str) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commit_passes_over_folders_with_nothing_of_gits_but_reports_a_broken_one() {
+        let dir = tempfile::tempdir().unwrap();
+        meta_core::git::run(dir.path(), ["init", "-q"]).unwrap();
+        let args = || CommitArgs {
+            edit: false,
+            message: Some("x".to_string()),
+        };
+        let options = PluginRequestOptions::default();
+        let result = execute_git_commit(args(), &["missing".to_string()], &options, dir.path());
+        assert!(
+            matches!(result.unwrap(), CommandResult::Message(message) if message.contains("No staged changes"))
+        );
+
+        // nothing git's in it: nothing staged there
+        std::fs::create_dir(dir.path().join("plain")).unwrap();
+        let result = execute_git_commit(args(), &["plain".to_string()], &options, dir.path());
+        assert!(
+            matches!(result.unwrap(), CommandResult::Message(message) if message.contains("No staged changes"))
+        );
+        // a .git git can't use is named, never taken for "nothing staged"
+        std::fs::create_dir_all(dir.path().join("broken/.git")).unwrap();
+        let result = execute_git_commit(args(), &["broken".to_string()], &options, dir.path());
+        let error = result.err().expect("a broken repository must fail");
+        let error = error.to_string();
+        assert!(
+            error.contains("broken") && error.contains("not a git repository"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_workspace_root_that_is_no_repository_is_passed_over() {
+        let dir = tempfile::tempdir().unwrap();
+        // whatever the config is called (`meta -c meta.yml`)
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("meta.yml"), "projects:\n  p: u\n").unwrap();
+        let project = root.join("p");
+        std::fs::create_dir(&project).unwrap();
+        meta_core::git::run(&project, ["init", "-q"]).unwrap();
+        std::fs::write(project.join("new"), "x").unwrap();
+        meta_core::git::run(&project, ["add", "new"]).unwrap();
+        let options = PluginRequestOptions {
+            dry_run: true,
+            ..Default::default()
+        };
+        // from the root, and from inside the project (the host sends the
+        // workspace by its path then)
+        let shown = |p: &Path| p.to_string_lossy().into_owned();
+        for (cwd, projects) in [
+            (root.clone(), [shown(&root), "p".to_string()]),
+            (project.clone(), [shown(&root), shown(&project)]),
+        ] {
+            let args = CommitArgs {
+                edit: false,
+                message: Some("save".to_string()),
+            };
+            let result = execute_git_commit(args, &projects, &options, &cwd);
+            assert!(
+                matches!(
+                    result,
+                    Ok(CommandResult::Message(_) | CommandResult::Plan(..))
+                ),
+                "{cwd:?}: {:?}",
+                result.err()
+            );
+        }
+    }
+
+    #[test]
+    fn a_staged_file_read_git_fails_is_an_error_not_nothing_staged() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("broken");
+        std::fs::create_dir(&repo).unwrap();
+        meta_core::git::run(&repo, ["init", "-q"]).unwrap();
+        std::fs::write(repo.join(".git/index"), "not an index").unwrap();
+        let args = CommitArgs {
+            edit: false,
+            message: Some("x".to_string()),
+        };
+        let result = execute_git_commit(
+            args,
+            &["broken".to_string()],
+            &PluginRequestOptions::default(),
+            dir.path(),
+        );
+        let error = format!(
+            "{:#}",
+            result.err().expect("git failing is no empty answer")
+        );
+        assert!(
+            error.contains("diff --cached --name-only") && error.contains("broken"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn a_failed_commit_fails_the_command_after_the_others() {

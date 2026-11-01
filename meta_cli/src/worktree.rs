@@ -39,7 +39,8 @@ pub fn detect_worktree_context(cwd: &Path) -> Option<(String, PathBuf, Vec<PathB
     Some((task_name, task_dir, paths))
 }
 
-/// Locate the enclosing `.worktrees/<name>` set without scanning its contents.
+/// Locate the enclosing `.worktrees/<name>` set, or the set meta's record
+/// names for the checkout around `cwd`, without scanning its contents.
 /// This is a location hint, not validation. Callers must validate membership and
 /// report errors rather than silently falling back to a different set on failure.
 pub fn detect_worktree_location(cwd: &Path) -> Option<(String, PathBuf)> {
@@ -64,7 +65,17 @@ pub fn detect_worktree_location(cwd: &Path) -> Option<(String, PathBuf)> {
         }
     }
 
-    None
+    // A set elsewhere (`worktrees_dir` outside, or `.worktrees` a link, so
+    // the real path has no such part): the set meta recorded for the
+    // checkout around `cwd`
+    let real = cwd.canonicalize().ok()?;
+    real.ancestors()
+        .filter(|dir| dir.join(".git").is_file())
+        .find_map(|checkout| {
+            let set = meta_core::config::recorded_set(checkout)?;
+            let name = set.file_name()?.to_str()?.to_string();
+            real.starts_with(&set).then_some((name, set))
+        })
 }
 
 /// The config that names the members of the set at `set_dir`: the set's own
@@ -172,8 +183,17 @@ pub fn select_in_set(
             escape_path(set_dir)
         );
     }
-    let projects = workspace.map_or(&[][..], |w| &w.projects);
-    let tree = set_tree(set_dir, members, projects)?;
+    // where each project's checkout is in the set (an outside project's at
+    // its name)
+    let projects: Vec<_> = workspace
+        .map_or(&[][..], |w| &w.projects)
+        .iter()
+        .map(|project| meta_core::config::ProjectInfo {
+            path: project.set_place().to_string(),
+            ..project.clone()
+        })
+        .collect();
+    let tree = set_tree(set_dir, members, &projects)?;
     // Compared as directories: a project at a link in the set is the
     // checkout where the link leads
     let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -246,6 +266,7 @@ fn readable_tree(
             config::MetaTreeNode {
                 info: project.clone(),
                 is_meta: nested.is_some(),
+                error: None,
                 children,
             }
         })
@@ -341,7 +362,12 @@ pub fn discover_worktree_repos(task_dir: &Path) -> Result<Vec<WorktreeRepoInfo>>
 
 fn with_branch(member: WorktreeMemberInfo) -> WorktreeRepoInfo {
     WorktreeRepoInfo {
-        branch: meta_core::git::current_branch(&member.path).unwrap_or_else(|| "HEAD".to_string()),
+        // a branch git can't read is shown as by git for a detached HEAD;
+        // status and list say when a checkout can't be read
+        branch: meta_core::git::current_branch(&member.path)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "HEAD".to_string()),
         alias: member.alias,
         path: member.path,
         source_path: member.source_path,

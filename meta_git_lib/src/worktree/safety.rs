@@ -77,16 +77,15 @@ impl RemovalCheck {
 /// of the set has one.
 pub fn check_worktree_removal(wt_dir: &Path) -> Result<RemovalCheck> {
     let mut check = RemovalCheck::default();
-    if wt_dir.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
-        check.blockers.push(format!(
-            "{} is a symbolic link; meta doesn't delete through links",
-            escape_path(wt_dir)
-        ));
-        return Ok(check);
-    }
     let set = wt_dir
         .canonicalize()
         .with_context(|| format!("Cannot resolve {}", escape_path(wt_dir)))?;
+    // a set folder that is a link is the folder it leads to
+    let wt_dir = if is_link(wt_dir) {
+        set.as_path()
+    } else {
+        wt_dir
+    };
     let root_owned = match git_entry(wt_dir)? {
         GitEntry::Worktree(dirs) => {
             add_member(&mut check, &set, wt_dir, dirs);
@@ -165,6 +164,10 @@ pub fn check_worktree_removal(wt_dir: &Path) -> Result<RemovalCheck> {
     Ok(check)
 }
 
+fn is_link(path: &Path) -> bool {
+    path.symlink_metadata().is_ok_and(|meta| meta.is_symlink())
+}
+
 /// A file's path, size and modification time: enough to notice a rewrite.
 fn file_fingerprint(path: &Path) -> String {
     match path.symlink_metadata() {
@@ -207,8 +210,20 @@ pub fn delete_checked_set(
             remove_entry(path).with_context(|| format!("Cannot delete {}", escape_path(path)))?;
         }
     }
+    // a set folder that is a link: what it leads to, then the link
+    let link = is_link(wt_dir).then(|| wt_dir.to_path_buf());
+    let real = match &link {
+        Some(link) => link
+            .canonicalize()
+            .with_context(|| format!("Cannot resolve {}", escape_path(link)))?,
+        None => wt_dir.to_path_buf(),
+    };
+    let wt_dir = real.as_path();
     remove_worktree_repos(&check.members, force, verbose)?;
     remove_empty_dirs(wt_dir)?;
+    if let Some(link) = link.filter(|_| wt_dir.symlink_metadata().is_err()) {
+        remove_entry(&link).with_context(|| format!("Cannot delete {}", escape_path(&link)))?;
+    }
     if wt_dir.symlink_metadata().is_ok() {
         let left: Vec<PathBuf> = std::fs::read_dir(wt_dir)
             .map(|entries| entries.flatten().map(|e| e.path()).collect())
@@ -1090,7 +1105,7 @@ mod tests {
     }
 
     #[test]
-    fn symlinked_set_root_is_blocked() {
+    fn a_symlinked_set_folder_is_the_folder_it_leads_to() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("target");
         repo_with_worktree(tmp.path(), "root", &target);
@@ -1102,7 +1117,15 @@ mod tests {
             return; // creating links needs a privilege Windows CI may not have
         }
         let check = check_worktree_removal(&link).unwrap();
-        assert!(check.blockers[0].contains("symbolic link"), "{check:?}");
+        assert!(check.blockers.is_empty(), "{check:?}");
+        assert_eq!(check.members.len(), 1, "{check:?}");
+        // and still refuses what it would lose
+        std::fs::write(target.join("work.txt"), "x").unwrap();
+        let dirty = check_worktree_removal(&link).unwrap();
+        assert!(!dirty.is_clear(), "{dirty:?}");
+        std::fs::remove_file(target.join("work.txt")).unwrap();
+        delete_checked_set(&link, &check, false, false).unwrap();
+        assert!(link.symlink_metadata().is_err() && !target.exists());
     }
 
     #[test]

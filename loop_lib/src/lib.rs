@@ -54,6 +54,9 @@ pub struct DirCommand {
     pub argv: Vec<String>,
     /// Environment variables to set for this command's subprocess
     pub env: Option<HashMap<String, String>>,
+    /// Why the command must not run here (its folder is no project the
+    /// caller acts in, say): reported as a failed result, never run.
+    pub refused: Option<String>,
 }
 
 impl Default for LoopConfig {
@@ -373,6 +376,15 @@ fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
     }
 }
 
+/// The failed result of a command that was refused (see [`DirCommand::refused`]):
+/// `why` as its error output, exit code 1, nothing run.
+fn refused_result(job: &DirCommand, why: &str) -> CommandResult {
+    CommandResult {
+        exit_code: Some(1),
+        ..failed_result(&job.dir, display_command(&job.argv), format!("{why}\n"))
+    }
+}
+
 /// The dry-run line for `command` in `dir`.
 fn dry_run_line(dir: &Path, command: &str) -> String {
     let dir_display = if dir.as_os_str() == "." {
@@ -623,6 +635,7 @@ pub fn run(config: &LoopConfig, argv: &[String]) -> Result<()> {
             dir: dir.clone(),
             argv: argv.to_vec(),
             env: config.env.clone(),
+            refused: None,
         })
         .collect();
 
@@ -730,12 +743,15 @@ fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Comm
                 if let Some(pb) = spinner {
                     pb.set_message(format!("{}: running...", display_name(&job.dir, root)));
                 }
-                let result = execute_command_in_directory_capturing(
-                    &job.dir,
-                    &job.argv,
-                    config,
-                    job.env.as_ref(),
-                );
+                let result = match &job.refused {
+                    Some(why) => refused_result(job, why),
+                    None => execute_command_in_directory_capturing(
+                        &job.dir,
+                        &job.argv,
+                        config,
+                        job.env.as_ref(),
+                    ),
+                };
                 // results are shown once all are done
                 if let Some(pb) = spinner {
                     pb.finish_and_clear();
@@ -767,14 +783,26 @@ fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Comm
 fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<CommandResult>> {
     commands
         .iter()
-        .map(|job| match config.json_output {
-            true => Ok(execute_command_in_directory_capturing(
+        .map(|job| match (&job.refused, config.json_output) {
+            (Some(why), json) => {
+                if !json && !config.silent {
+                    command_println!(
+                        "\x1b[31m\n✗ {}: {why} (Exit code: 1)\x1b[0m",
+                        display_name(&job.dir, config.root_dir.as_deref()),
+                        why = escape(why)
+                    );
+                }
+                Ok(refused_result(job, why))
+            }
+            (None, true) => Ok(execute_command_in_directory_capturing(
                 &job.dir,
                 &job.argv,
                 config,
                 job.env.as_ref(),
             )),
-            false => execute_command_in_directory(&job.dir, &job.argv, config, job.env.as_ref()),
+            (None, false) => {
+                execute_command_in_directory(&job.dir, &job.argv, config, job.env.as_ref())
+            }
         })
         .collect()
 }

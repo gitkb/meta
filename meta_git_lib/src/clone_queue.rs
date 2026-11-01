@@ -2,6 +2,7 @@ use log::{debug, warn};
 use meta_core::config;
 use meta_core::display::escape_path;
 use meta_core::git::GitUrl;
+use meta_core::gitdir::Checkout;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,6 +39,9 @@ pub struct CloneQueue {
     completed: Mutex<HashSet<PathBuf>>,
     /// Failed clones, in the order they failed
     failures: Mutex<Vec<CloneFailure>>,
+    /// Projects not cloned because their folder holds something that is no
+    /// repository of its own: the name, and why
+    refused: Mutex<Vec<(String, String)>>,
     /// Total tasks discovered (for progress display)
     total_discovered: AtomicUsize,
     /// Total tasks finished, failed ones included (for progress display)
@@ -54,6 +58,7 @@ impl CloneQueue {
             pending: Mutex::new(Vec::new()),
             completed: Mutex::new(HashSet::new()),
             failures: Mutex::new(Vec::new()),
+            refused: Mutex::new(Vec::new()),
             total_discovered: AtomicUsize::new(0),
             total_completed: AtomicUsize::new(0),
             git_depth,
@@ -125,12 +130,23 @@ impl CloneQueue {
         for project in projects {
             let target_path = base_dir.join(&project.path);
 
-            // Skip if already exists
-            if target_path.exists() {
-                // But still look in it for nested discovery (push_from_meta
-                // checks the depth limit before it looks for a config)
-                added += self.push_from_meta(&target_path, depth_level + 1)?;
-                continue;
+            match Checkout::of(&target_path) {
+                // Cloned: still look in it for nested discovery
+                // (push_from_meta checks the depth limit before it looks for
+                // a config)
+                Checkout::Repo { .. } => {
+                    added += self.push_from_meta(&target_path, depth_level + 1)?;
+                    continue;
+                }
+                // git clones into an empty folder, and refuses any other
+                Checkout::NotARepo(why) if !is_empty_dir(&target_path) => {
+                    self.refused
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push((project.name.clone(), why));
+                    continue;
+                }
+                Checkout::Missing | Checkout::NotARepo(_) => {}
             }
 
             // Skip projects without a repo URL (cannot clone)
@@ -237,6 +253,15 @@ impl CloneQueue {
         });
     }
 
+    /// Projects left uncloned because their folder holds something else:
+    /// each name, and why its folder is no repository
+    pub fn refused(&self) -> Vec<(String, String)> {
+        self.refused
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     /// Clones that failed so far
     pub fn failures(&self) -> Vec<CloneFailure> {
         self.failures
@@ -244,6 +269,11 @@ impl CloneQueue {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
+}
+
+/// Whether `dir` is a folder with nothing in it.
+fn is_empty_dir(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none())
 }
 
 #[cfg(test)]
@@ -286,6 +316,7 @@ mod tests {
         // an error, not "no nested repos"
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("child")).unwrap();
+        meta_core::git::run(&dir.path().join("child"), ["init", "-q"]).unwrap();
         std::fs::write(
             dir.path().join(".meta.yaml"),
             r#"{"projects": {"child": {"repo": "u", "meta": true}}}"#,
@@ -432,19 +463,30 @@ mod tests {
     }
 
     #[test]
-    fn push_from_meta_skips_existing_dirs() {
+    fn push_from_meta_clones_only_where_no_repository_is() {
         let dir = tempfile::tempdir().unwrap();
-        // Create the project directory so it appears "already cloned"
-        std::fs::create_dir(dir.path().join("existing")).unwrap();
+        // a clone, an empty folder git can clone into, and a plain folder
+        for name in ["cloned", "empty", "plain"] {
+            std::fs::create_dir(dir.path().join(name)).unwrap();
+        }
+        meta_core::git::run(&dir.path().join("cloned"), ["init", "-q"]).unwrap();
+        std::fs::write(dir.path().join("plain/notes.txt"), "mine").unwrap();
         std::fs::write(
             dir.path().join(".meta.yaml"),
-            r#"{"projects": {"existing": "git@github.com:org/existing.git"}}"#,
+            r#"{"projects": {"cloned": "u1", "empty": "u2", "plain": "u3", "missing": "u4"}}"#,
         )
         .unwrap();
 
         let queue = CloneQueue::new(None, None);
-        let added = queue.push_from_meta(dir.path(), 0).unwrap();
-        assert_eq!(added, 0); // skipped because dir exists
+        assert_eq!(queue.push_from_meta(dir.path(), 0).unwrap(), 2);
+        let mut queued: Vec<_> = queue.drain_all().into_iter().map(|t| t.name).collect();
+        queued.sort();
+        assert_eq!(queued, ["empty", "missing"]);
+        // the plain folder is named, never cloned over nor taken for a clone
+        assert_eq!(
+            queue.refused(),
+            [("plain".to_string(), "folder exists, no .git".to_string())]
+        );
     }
 
     #[test]

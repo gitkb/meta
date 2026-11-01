@@ -142,24 +142,18 @@ pub(crate) fn warn_or_bail(strict: bool, message: impl std::fmt::Display) -> any
 }
 
 /// Why the project `alias` at `source` has no repository to make a worktree
-/// of, if it has none: not cloned yet, or a directory git doesn't take for
-/// a repository (it would act on the one around it).
-pub(crate) fn not_a_repository(alias: &str, source: &Path) -> Result<Option<String>> {
-    if meta_core::gitdir::common_dir(source)?.is_some() {
-        return Ok(None);
-    }
-    Ok(Some(match source.exists() {
-        false => format!(
-            "'{}' is not cloned at {} (run 'meta git update' to clone it)",
-            escape(alias),
-            escape_path(source)
-        ),
-        true => format!(
-            "'{}' at {} is not a git repository",
-            escape(alias),
-            escape_path(source)
-        ),
-    }))
+/// of, if it has none (see [`meta_core::gitdir::Checkout`]).
+pub(crate) fn not_a_repository(alias: &str, source: &Path) -> Option<String> {
+    meta_core::gitdir::Checkout::of(source)
+        .problem()
+        .map(|problem| {
+            format!(
+                "'{}' at {}: {}",
+                escape(alias),
+                escape_path(source),
+                escape(&problem)
+            )
+        })
 }
 
 /// Print a warning; the message can carry paths and names from git and

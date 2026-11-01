@@ -94,6 +94,9 @@ pub(crate) fn execute_git_update(
     let (_, initial_count) = queue.get_counts();
 
     if initial_count == 0 {
+        if let Some(error) = crate::clone_worker::report_failures(&queue) {
+            return Ok(CommandResult::Error(error));
+        }
         println!("All repositories are already cloned.");
         return Ok(CommandResult::Message(String::new()));
     }
@@ -111,6 +114,9 @@ pub(crate) fn execute_git_update(
                 task.url,
                 escape_path(&task.target_path)
             );
+        }
+        if let Some(error) = crate::clone_worker::report_failures(&queue) {
+            return Ok(CommandResult::Error(error));
         }
         return Ok(CommandResult::Message(String::new()));
     }

@@ -31,6 +31,7 @@ fn sequential_default_holds_wherever_the_config_is() {
         let workspace = tmp.join("workspace");
         for project in ["a", "b"] {
             std::fs::create_dir_all(workspace.join(project)).unwrap();
+            meta_core::git::run(&workspace.join(project), ["init", "-q"]).unwrap();
         }
         std::fs::write(workspace.join(".meta.yaml"), default_config).unwrap();
         if let Some(name) = chosen {

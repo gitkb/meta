@@ -703,15 +703,12 @@ the only commit message
         let temp_dir = TempDir::new().unwrap();
         std::fs::write(
             temp_dir.path().join(".meta.yaml"),
-            r#"{"projects": {"evil": {"repo": "u", "path": "../../x"}}}"#,
+            r#"{"projects": {"evil": {"repo": "u", "path": ".git/x"}}}"#,
         )
         .unwrap();
 
         let err = get_project_directories(temp_dir.path()).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("must not contain '..'"),
-            "{err:#}"
-        );
+        assert!(format!("{err:#}").contains("leads into .git"), "{err:#}");
     }
 
     #[test]

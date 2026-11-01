@@ -2,8 +2,10 @@
 //! inherits the variables that tie git to one repository.
 
 use crate::display::{escape, escape_path};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::process::Command;
 
 mod status;
@@ -43,19 +45,80 @@ pub fn clear_repo_env(command: &mut Command) -> &mut Command {
     command
 }
 
-/// `git`, to run in `dir`, without [`REPO_ENV_VARS`] and without optional
-/// locks, so a read such as `git status` never rewrites the index (meta's
-/// reads change nothing, previews included).
+/// The variable that keeps git started in the project folder `dir` to the
+/// repository there: `GIT_CEILING_DIRECTORIES` set to the parent of the
+/// folder's real path (git resolves the links in a ceiling but not in the
+/// folder it runs in). A folder that isn't its own repository then gives
+/// git none, never the workspace's around it. `None` where git can't be
+/// given that parent (its path holds the path-list separator, which git
+/// splits on without unquoting): git then looks up as it always did, and
+/// [`crate::gitdir::common_dir`] still tells a folder's own repository from
+/// the one around it.
+pub fn ceiling(dir: &Path) -> Option<(&'static str, OsString)> {
+    let real = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let Some(parent) = real.parent() else {
+        return Some(("GIT_CEILING_DIRECTORIES", OsString::new()));
+    };
+    // git reads `C:\...` and `\\host\share`, not the `\\?\` forms
+    // canonicalize gives on Windows
+    #[cfg(windows)]
+    let parent = &parent.to_str().map_or_else(
+        || parent.to_path_buf(),
+        |p| match (p.strip_prefix(r"\\?\UNC\"), p.strip_prefix(r"\\?\")) {
+            (Some(unc), _) => PathBuf::from(format!(r"\\{unc}")),
+            (None, Some(drive)) if drive.as_bytes().get(1) == Some(&b':') => PathBuf::from(drive),
+            _ => parent.to_path_buf(),
+        },
+    );
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    if parent.to_string_lossy().contains(separator) {
+        return None;
+    }
+    // the user's own ceilings still hold
+    let mut ceiling = parent.as_os_str().to_owned();
+    if let Some(theirs) = std::env::var_os("GIT_CEILING_DIRECTORIES").filter(|v| !v.is_empty()) {
+        ceiling.push(separator.to_string());
+        ceiling.push(theirs);
+    }
+    Some(("GIT_CEILING_DIRECTORIES", ceiling))
+}
+
+/// `git`, to run in `dir` and the repository there only (see [`ceiling`]),
+/// without [`REPO_ENV_VARS`] and without optional locks, so a read such as `git
+/// status` never rewrites the index (meta's reads change nothing, previews
+/// included).
 pub fn git(dir: &Path) -> Command {
     let mut command = Command::new("git");
     command.current_dir(dir).env("GIT_OPTIONAL_LOCKS", "0");
     clear_repo_env(&mut command);
+    command.envs(ceiling(dir));
     command
 }
 
 /// The output of `git <args>` in `dir`, without its trailing newline; when
 /// git fails, an error that names the command, `dir` and git's message.
 pub fn run<I, S>(dir: &Path, args: I) -> anyhow::Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    answer(dir, args, false).map(Option::unwrap_or_default)
+}
+
+/// What `git <args>` in `dir` prints (see [`run`]), for a command that
+/// exits 1 or prints nothing when what it reads is absent: `rev-parse
+/// --verify --quiet`, `config --get`, `branch --show-current`. Then `None`;
+/// any other failure is an error.
+pub fn lookup<I, S>(dir: &Path, args: I) -> anyhow::Result<Option<String>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    Ok(answer(dir, args, true)?.filter(|out| !out.is_empty()))
+}
+
+/// [`run`], with exit status 1 read as `None` when `absent_on_1`.
+fn answer<I, S>(dir: &Path, args: I, absent_on_1: bool) -> anyhow::Result<Option<String>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -74,6 +137,9 @@ where
             escape_path(dir)
         )
     })?;
+    if absent_on_1 && output.status.code() == Some(1) {
+        return Ok(None);
+    }
     if !output.status.success() {
         anyhow::bail!(
             "git {} failed in {}: {}",
@@ -82,33 +148,25 @@ where
             escape(String::from_utf8_lossy(&output.stderr).trim())
         );
     }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .trim_end_matches(['\n', '\r'])
-        .to_string())
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end_matches(['\n', '\r'])
+            .to_string(),
+    ))
 }
 
-/// The output of `git <args>` in `dir` (see [`run`]), or `None` if git fails.
-pub fn query<I, S>(dir: &Path, args: I) -> Option<String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    run(dir, args).ok()
-}
-
-/// The branch checked out at `dir`: `None` when HEAD is detached or git
-/// fails.
-pub fn current_branch(dir: &Path) -> Option<String> {
-    query(dir, ["branch", "--show-current"]).filter(|branch| !branch.is_empty())
+/// The branch checked out at `dir`; `None` when HEAD is detached.
+pub fn current_branch(dir: &Path) -> anyhow::Result<Option<String>> {
+    lookup(dir, ["branch", "--show-current"])
 }
 
 /// The URL configured for `origin` in the repository at `dir`, as written:
 /// what `.meta.yaml` lists is compared with this, so `insteadOf` rewrites
-/// don't apply.
-pub fn remote_url(dir: &Path) -> Option<GitUrl> {
-    query(dir, ["config", "--get", "remote.origin.url"])
-        .filter(|url| !url.is_empty())
-        .map(GitUrl::from)
+/// don't apply. Every config git reads there counts (the repository's,
+/// its worktree's, included files). `None` without one; ask only about a
+/// folder that is a repository (see [`crate::gitdir::common_dir`]).
+pub fn remote_url(dir: &Path) -> anyhow::Result<Option<GitUrl>> {
+    Ok(lookup(dir, ["config", "--get", "remote.origin.url"])?.map(GitUrl::from))
 }
 
 #[cfg(test)]
@@ -122,6 +180,62 @@ mod tests {
         for name in reported.lines().filter(|name| !kept.contains(name)) {
             assert!(REPO_ENV_VARS.contains(&name), "{name} is not cleared");
         }
+    }
+
+    #[test]
+    fn git_in_a_project_folder_never_reaches_the_repository_around_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("ws");
+        std::fs::create_dir_all(workspace.join("plain")).unwrap();
+        run(&workspace, ["init", "-q"]).unwrap();
+        let toplevel = ["rev-parse", "--show-toplevel"];
+        assert!(run(&workspace.join("plain"), toplevel).is_err());
+        // nor through a link to it from elsewhere, nor for any program the
+        // folder runs that starts git (`sh -c 'git ...'`)
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("link");
+            std::os::unix::fs::symlink(workspace.join("plain"), &link).unwrap();
+            assert!(run(&link, toplevel).is_err());
+            let shell = std::process::Command::new("sh")
+                .args(["-c", "git rev-parse --show-toplevel"])
+                .current_dir(&link)
+                .envs(ceiling(&link))
+                .output()
+                .unwrap();
+            assert!(!shell.status.success(), "{shell:?}");
+        }
+        // a repository of its own still is one
+        run(&workspace.join("plain"), ["init", "-q"]).unwrap();
+        assert!(run(&workspace.join("plain"), toplevel).is_ok());
+    }
+
+    #[test]
+    fn a_path_list_separator_in_the_path_still_keeps_git_inside() {
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join(format!("client{separator}acme"));
+        for folder in ["plain", "cloned/sub"] {
+            std::fs::create_dir_all(workspace.join(folder)).unwrap();
+        }
+        run(&workspace, ["init", "-q"]).unwrap();
+        run(&workspace.join("cloned"), ["init", "-q"]).unwrap();
+        let toplevel = ["rev-parse", "--show-toplevel"];
+        // a clone is still its own repository, from any folder in it
+        let real = |p: &Path| p.canonicalize().unwrap();
+        let shown = run(&workspace.join("cloned"), toplevel).unwrap();
+        assert_eq!(real(Path::new(&shown)), real(&workspace.join("cloned")));
+        let mut sub = git(&workspace.join("cloned"));
+        sub.current_dir(workspace.join("cloned/sub")).args(toplevel);
+        assert!(sub.output().unwrap().status.success());
+        // and the checkout state of a folder inside the workspace is still
+        // its own
+        std::fs::create_dir(workspace.join("plain/.git")).unwrap();
+        assert!(crate::gitdir::common_dir(&workspace.join("plain")).is_err());
+        assert_eq!(
+            crate::gitdir::common_dir(&workspace.join("cloned/sub")).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -144,8 +258,32 @@ mod tests {
             run(dir.path(), ["remote", "get-url", "origin"]).unwrap(),
             configured
         );
-        assert_eq!(remote_url(dir.path()), Some(configured.into()));
-        assert_eq!(remote_url(&dir.path().join("missing")), None);
+        assert_eq!(remote_url(dir.path()).unwrap(), Some(configured.into()));
+        // the repository's config includes what it includes
+        run(dir.path(), ["remote", "remove", "origin"]).unwrap();
+        let included = dir.path().join(".git/remote.conf");
+        std::fs::write(
+            &included,
+            format!("[remote \"origin\"]\n\turl = {configured}\n"),
+        )
+        .unwrap();
+        run(dir.path(), ["config", "include.path", "remote.conf"]).unwrap();
+        assert_eq!(remote_url(dir.path()).unwrap(), Some(configured.into()));
+        run(dir.path(), ["config", "--unset", "include.path"]).unwrap();
+        // and so does a worktree's own config
+        run(dir.path(), ["config", "extensions.worktreeConfig", "true"]).unwrap();
+        run(
+            dir.path(),
+            ["config", "--worktree", "remote.origin.url", configured],
+        )
+        .unwrap();
+        assert_eq!(remote_url(dir.path()).unwrap(), Some(configured.into()));
+        run(
+            dir.path(),
+            ["config", "--worktree", "--unset", "remote.origin.url"],
+        )
+        .unwrap();
+        assert_eq!(remote_url(dir.path()).unwrap(), None);
     }
 
     #[test]
@@ -157,6 +295,11 @@ mod tests {
                 .contains("git rev-parse --verify nope failed"),
             "{err}"
         );
-        assert_eq!(query(dir.path(), ["rev-parse", "--verify", "nope"]), None);
+        // absent, as `--verify --quiet` says by exiting 1; a git failure
+        // is still an error
+        run(dir.path(), ["init", "-q"]).unwrap();
+        let absent = lookup(dir.path(), ["rev-parse", "--verify", "--quiet", "nope"]);
+        assert_eq!(absent.unwrap(), None);
+        assert!(lookup(&dir.path().join("missing"), ["rev-parse", "HEAD"]).is_err());
     }
 }

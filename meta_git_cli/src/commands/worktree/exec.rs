@@ -191,7 +191,7 @@ fn handle_ephemeral_exec(
     let cwd = std::env::current_dir()?;
     let configs = Configs::find_optional(&cwd)?;
     let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
-    let wt_dir = worktree_set_dir(&worktree_root, &name)?;
+    let wt_dir = worktree_root.join(&name);
 
     // Run the command
     let repos = discover_worktree_repos(&wt_dir)?;

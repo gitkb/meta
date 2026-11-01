@@ -368,7 +368,8 @@ fn is_plain_dir(path: &Path) -> bool {
 /// directory above it became a symlink, which could lead into another set,
 /// or it can't be resolved at all.
 /// Each record holds its set's resolved path from when it was created. A link at
-/// the set directory itself is left to the removal check, which refuses it.
+/// the set directory itself is followed by the removal check; the set it leads
+/// to is deleted only when its own record is the one prune read.
 fn path_moved(path: &Path) -> Option<String> {
     match path.symlink_metadata() {
         Ok(meta) if !meta.file_type().is_symlink() => match path.canonicalize() {

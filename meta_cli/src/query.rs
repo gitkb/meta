@@ -135,14 +135,18 @@ impl Query {
 pub struct RepoState {
     pub name: String,
     pub path: String,
-    pub branch: String,
+    /// The branch checked out, `HEAD` when detached. Here and below, `None`
+    /// (`null`) is unknown: git couldn't read the repository (its work
+    /// tree, for the change flags), never taken for clean or level.
+    pub branch: Option<String>,
     pub tags: Vec<String>,
-    pub is_dirty: bool,
-    pub has_staged: bool,
-    pub has_unstaged: bool,
-    pub has_untracked: bool,
-    pub ahead: usize,
-    pub behind: usize,
+    pub is_dirty: Option<bool>,
+    pub has_staged: Option<bool>,
+    pub has_unstaged: Option<bool>,
+    pub has_untracked: Option<bool>,
+    /// Commits ahead of and behind the upstream; 0 without one.
+    pub ahead: Option<usize>,
+    pub behind: Option<usize>,
     pub last_commit_time: Option<i64>,
     pub last_commit_hash: Option<String>,
     pub last_commit_message: Option<String>,
@@ -154,22 +158,21 @@ impl RepoState {
     pub fn collect(name: &str, path: &Path, tags: &[String]) -> Result<Self> {
         let path_str = path.to_string_lossy().to_string();
 
-        // A repo git can't read shows as on branch "unknown", clean
         // a checkout whose work tree git refuses (`core.bare=true`) still
         // has its branch, commits and upstream
-        let status = RepoStatus::read(path)
-            .ok()
-            .or_else(|| RepoStatus::refs(path));
-        let branch = match &status {
-            Some(status) => status.branch.clone().unwrap_or_else(|| "HEAD".to_string()),
-            None => "unknown".to_string(),
+        let work_tree = RepoStatus::read(path).ok();
+        let refs = match &work_tree {
+            Some(status) => Some(status.clone()),
+            None => RepoStatus::refs(path).ok().flatten(),
         };
-        let status = status.unwrap_or_default();
-        let (ahead, behind) = status.ahead_behind.unwrap_or_default();
-        let last_commit = status
-            .oid
+        let counts = refs
             .as_ref()
-            .and_then(|_| meta_core::git::query(path, ["log", "-1", "--format=%ct%n%s"]));
+            .map(|refs| refs.ahead_behind.unwrap_or_default());
+        let flag = |read: fn(&RepoStatus) -> bool| work_tree.as_ref().map(read);
+        let last_commit = refs
+            .as_ref()
+            .and_then(|refs| refs.oid.as_ref())
+            .and_then(|_| meta_core::git::run(path, ["log", "-1", "--format=%ct%n%s"]).ok());
         let (last_commit_time, last_commit_message) = match last_commit.as_deref() {
             Some(log) => {
                 let (time, message) = log.split_once('\n').unwrap_or((log, ""));
@@ -184,16 +187,18 @@ impl RepoState {
         Ok(RepoState {
             name: name.to_string(),
             path: path_str,
-            branch,
+            branch: refs
+                .as_ref()
+                .map(|refs| refs.branch.clone().unwrap_or_else(|| "HEAD".to_string())),
             tags: tags.to_vec(),
-            is_dirty: status.is_dirty(),
-            has_staged: status.has_staged(),
-            has_unstaged: status.has_unstaged(),
-            has_untracked: status.has_untracked(),
-            ahead,
-            behind,
+            is_dirty: flag(RepoStatus::is_dirty),
+            has_staged: flag(RepoStatus::has_staged),
+            has_unstaged: flag(RepoStatus::has_unstaged),
+            has_untracked: flag(RepoStatus::has_untracked),
+            ahead: counts.map(|(ahead, _)| ahead),
+            behind: counts.map(|(_, behind)| behind),
             last_commit_time,
-            last_commit_hash: status.oid,
+            last_commit_hash: refs.and_then(|refs| refs.oid),
             last_commit_message,
             build_systems,
         })
@@ -211,8 +216,8 @@ impl RepoState {
 
     fn matches_condition(&self, condition: &QueryCondition) -> bool {
         match condition {
-            QueryCondition::Dirty(expected) => self.is_dirty == *expected,
-            QueryCondition::Branch(expected) => self.branch == *expected,
+            QueryCondition::Dirty(expected) => self.is_dirty == Some(*expected),
+            QueryCondition::Branch(expected) => self.branch.as_ref() == Some(expected),
             QueryCondition::Tag(expected) => self.tags.iter().any(|t| t == expected),
             QueryCondition::ModifiedIn(duration) => {
                 if let Some(commit_time) = self.last_commit_time {
@@ -232,9 +237,12 @@ impl RepoState {
                 .build_systems
                 .iter()
                 .any(|bs| bs.to_lowercase() == *lang),
-            QueryCondition::HasUnpushed(expected) => (self.ahead > 0) == *expected,
-            QueryCondition::AheadOfRemote(expected) => (self.ahead > 0) == *expected,
-            QueryCondition::BehindRemote(expected) => (self.behind > 0) == *expected,
+            QueryCondition::HasUnpushed(expected) | QueryCondition::AheadOfRemote(expected) => {
+                self.ahead.is_some_and(|ahead| (ahead > 0) == *expected)
+            }
+            QueryCondition::BehindRemote(expected) => {
+                self.behind.is_some_and(|behind| (behind > 0) == *expected)
+            }
         }
     }
 }
@@ -273,6 +281,8 @@ pub struct WorkspaceState {
     pub total_projects: usize,
     pub dirty_projects: usize,
     pub clean_projects: usize,
+    /// Projects whose work tree git couldn't read: neither dirty nor clean.
+    pub unknown_projects: usize,
     pub ahead_of_remote: usize,
     pub behind_remote: usize,
     pub projects_by_branch: HashMap<String, usize>,
@@ -287,22 +297,11 @@ impl WorkspaceState {
         let mut projects_by_tag: HashMap<String, usize> = HashMap::new();
         let mut projects_by_build_system: HashMap<String, usize> = HashMap::new();
 
-        let mut dirty_projects = 0;
-        let mut ahead_of_remote = 0;
-        let mut behind_remote = 0;
-
+        let count = |what: fn(&RepoState) -> bool| repos.iter().filter(|r| what(r)).count();
         for repo in repos {
-            if repo.is_dirty {
-                dirty_projects += 1;
-            }
-            if repo.ahead > 0 {
-                ahead_of_remote += 1;
-            }
-            if repo.behind > 0 {
-                behind_remote += 1;
-            }
-
-            *projects_by_branch.entry(repo.branch.clone()).or_insert(0) += 1;
+            *projects_by_branch
+                .entry(repo.branch.clone().unwrap_or_else(|| "unknown".to_string()))
+                .or_insert(0) += 1;
 
             for tag in &repo.tags {
                 *projects_by_tag.entry(tag.clone()).or_insert(0) += 1;
@@ -315,10 +314,11 @@ impl WorkspaceState {
 
         WorkspaceState {
             total_projects: repos.len(),
-            dirty_projects,
-            clean_projects: repos.len() - dirty_projects,
-            ahead_of_remote,
-            behind_remote,
+            dirty_projects: count(|r| r.is_dirty == Some(true)),
+            clean_projects: count(|r| r.is_dirty == Some(false)),
+            unknown_projects: count(|r| r.is_dirty.is_none()),
+            ahead_of_remote: count(|r| r.ahead.is_some_and(|n| n > 0)),
+            behind_remote: count(|r| r.behind.is_some_and(|n| n > 0)),
             projects_by_branch,
             projects_by_tag,
             projects_by_build_system,
@@ -393,10 +393,16 @@ mod tests {
         meta_core::git::run(dir.path(), ["init", "-q", "-b", "main"]).unwrap();
         std::fs::write(dir.path().join("new"), "").unwrap();
         let state = RepoState::collect("r", dir.path(), &[]).unwrap();
-        assert!(state.is_dirty && state.has_untracked);
-        assert!(!state.has_staged && !state.has_unstaged);
+        assert_eq!(
+            (state.is_dirty, state.has_untracked),
+            (Some(true), Some(true))
+        );
+        assert_eq!(
+            (state.has_staged, state.has_unstaged),
+            (Some(false), Some(false))
+        );
         // before the first commit, the branch it will be on
-        assert_eq!(state.branch, "main");
+        assert_eq!(state.branch.as_deref(), Some("main"));
         assert_eq!(state.last_commit_hash, None);
     }
 
@@ -419,10 +425,11 @@ mod tests {
         ]);
         run(&["update-ref", "refs/heads/main", &commit]);
         let state = RepoState::collect("r", dir.path(), &[]).unwrap();
-        assert_eq!(state.branch, "main");
+        assert_eq!(state.branch.as_deref(), Some("main"));
         assert_eq!(state.last_commit_hash.as_deref(), Some(commit.as_str()));
         assert_eq!(state.last_commit_message.as_deref(), Some("first"));
-        assert!(state.last_commit_time.is_some() && !state.is_dirty);
+        assert!(state.last_commit_time.is_some());
+        assert_eq!(state.is_dirty, Some(false));
     }
 
     #[test]
@@ -445,8 +452,12 @@ mod tests {
         ]);
         run(&["config", "core.bare", "true"]);
         let state = RepoState::collect("r", dir.path(), &[]).unwrap();
-        assert_eq!(state.branch, "main");
+        assert_eq!(state.branch.as_deref(), Some("main"));
         assert_eq!(state.last_commit_message.as_deref(), Some("first"));
+        // its changes are unknown, never clean
+        assert_eq!((state.is_dirty, state.ahead), (None, Some(0)));
+        let summary = WorkspaceState::from_repos(&[state]);
+        assert_eq!((summary.clean_projects, summary.unknown_projects), (0, 1));
     }
 
     #[test]
@@ -454,14 +465,14 @@ mod tests {
         let repo = RepoState {
             name: "test".to_string(),
             path: "/test".to_string(),
-            branch: "main".to_string(),
+            branch: Some("main".to_string()),
             tags: vec!["backend".to_string(), "rust".to_string()],
-            is_dirty: true,
-            has_staged: false,
-            has_unstaged: true,
-            has_untracked: false,
-            ahead: 2,
-            behind: 0,
+            is_dirty: Some(true),
+            has_staged: Some(false),
+            has_unstaged: Some(true),
+            has_untracked: Some(false),
+            ahead: Some(2),
+            behind: Some(0),
             last_commit_time: Some(
                 SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)

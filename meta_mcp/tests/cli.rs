@@ -776,3 +776,41 @@ fn a_server_whose_output_is_gone_drops_its_waiting_calls() {
     std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
     assert!(stderr.contains("not started"), "{stderr}");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_project_outside_the_workspace_is_selected_by_its_name() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir(&ws).unwrap();
+    let outside = tmp.path().join("sib");
+    std::fs::write(
+        ws.join(".meta.yaml"),
+        format!(
+            "projects:\n  sib:\n    repo: u\n    path: {}\n",
+            outside.display()
+        ),
+    )
+    .unwrap();
+    // a `meta` that writes down what it was asked to select
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let log = tmp.path().join("args");
+    std::fs::write(
+        bin.join("meta"),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho '{{}}'\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("meta"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "meta_git_status", "arguments": {"project": "sib"}}});
+    meta_mcp(&ws, &[], &request.to_string(), &[("PATH", &bin)]);
+    let args = std::fs::read_to_string(&log).unwrap();
+    let args: Vec<&str> = args.lines().collect();
+    let include = args.iter().position(|a| *a == "--include").unwrap();
+    assert_eq!(args[include + 1], "sib", "{args:?}");
+}

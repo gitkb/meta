@@ -640,8 +640,13 @@ impl McpServer {
             }
             Scope::Project(name) => {
                 let path = workspace.project(name)?.path;
+                let outside = std::path::Path::new(&path).is_absolute()
+                    || path.split('/').any(|part| part == "..");
                 meta.arg("--include").arg(match path.as_str() {
                     "." => path,
+                    // a project outside the workspace has no path from its
+                    // root; meta refuses its name if another's path is it
+                    _ if outside => name.clone(),
                     path => format!("./{path}"),
                 });
             }
@@ -799,18 +804,30 @@ impl McpServer {
             if !project.dir.exists() {
                 continue;
             }
+            // a work tree git refuses (`core.bare=true`) still has its refs;
+            // what git can't read at all is unknown, never level with main
             let status = RepoStatus::read(&project.dir)
-                .ok()
-                .or_else(|| RepoStatus::refs(&project.dir))
-                .unwrap_or_default();
-            let (ahead, behind) = status.ahead_behind.unwrap_or_default();
-            results.push(serde_json::json!({
-                "project": project.name,
-                "branch": status.branch.unwrap_or_else(|| "HEAD".to_string()),
-                "tracking": status.upstream.filter(|upstream| !upstream.is_empty()),
-                "ahead": ahead,
-                "behind": behind
-            }));
+                .or_else(|e| RepoStatus::refs(&project.dir).and_then(|refs| refs.ok_or(e)));
+            results.push(match status {
+                Ok(status) => {
+                    let (ahead, behind) = status.ahead_behind.unwrap_or_default();
+                    serde_json::json!({
+                        "project": project.name,
+                        "branch": status.branch.unwrap_or_else(|| "HEAD".to_string()),
+                        "tracking": status.upstream.filter(|upstream| !upstream.is_empty()),
+                        "ahead": ahead,
+                        "behind": behind
+                    })
+                }
+                Err(e) => serde_json::json!({
+                    "project": project.name,
+                    "branch": null,
+                    "tracking": null,
+                    "ahead": null,
+                    "behind": null,
+                    "error": format!("{e:#}")
+                }),
+            });
         }
         Ok(serde_json::to_string_pretty(&results)?)
     }
@@ -1119,28 +1136,20 @@ impl McpServer {
             ]);
             match meta_core::gitdir::common_dir(&project_path) {
                 Ok(Some(_)) => cmd.arg("--untracked"),
-                // only the directory's own .gitignore files: the workspace
-                // repo around it may ignore the whole project. The ceiling
-                // is a path list, which a separator in the path would split.
-                Ok(None) => {
-                    // git compares the ceiling with the real path it runs in
-                    let real = project_path
-                        .canonicalize()
-                        .unwrap_or_else(|_| project_path.clone());
-                    let ceiling = real.parent().unwrap_or(&real);
-                    if std::env::split_paths(ceiling).count() != 1 {
-                        results.push(serde_json::json!({
-                            "project": name,
-                            "error": format!(
-                                "Cannot search {}: its path contains the path list separator",
-                                meta_core::display::escape_path(&project_path)
-                            )
-                        }));
-                        continue;
-                    }
-                    cmd.args(["--no-index", "--exclude-standard"])
-                        .env("GIT_CEILING_DIRECTORIES", ceiling)
+                // only the directory's own .gitignore files: `git` keeps it
+                // from the workspace repo around it, which may ignore the
+                // whole project, unless the path can't be a ceiling
+                Ok(None) if meta_core::git::ceiling(&project_path).is_none() => {
+                    results.push(serde_json::json!({
+                        "project": name,
+                        "error": format!(
+                            "Cannot search {}: its path contains the path list separator",
+                            meta_core::display::escape_path(&project_path)
+                        )
+                    }));
+                    continue;
                 }
+                Ok(None) => cmd.args(["--no-index", "--exclude-standard"]),
                 Err(e) => {
                     results.push(serde_json::json!({
                         "project": name,
@@ -1338,14 +1347,10 @@ struct SearchTarget {
 /// Every project of `projects` (listed by the config in `dir`) and the ones
 /// nested in them, parents first, with paths under `prefix`. Each nested
 /// config is read on its own, so one that can't be read is only its
-/// project's error. Config checks keep every nested path inside its parent,
-/// so the walk only goes down.
+/// project's error.
 fn search_targets(dir: &Path, prefix: &str, projects: &[ProjectInfo], out: &mut Vec<SearchTarget>) {
     for project in projects {
-        let path = match prefix {
-            "" => project.path.clone(),
-            prefix => format!("{prefix}/{}", project.path),
-        };
+        let path = config::nested_path(prefix, &project.path);
         // one level: this project's own nested config
         let nested = config::walk_projects(dir, std::slice::from_ref(project), Some(1))
             .map(|nodes| {
@@ -1778,6 +1783,40 @@ mod tests {
     }
 
     #[test]
+    fn git_branch_reports_unknown_when_a_projects_git_file_points_nowhere() {
+        let (server, tmp) = server("projects:\n  broken: {}\n");
+        init_repo(tmp.path());
+        std::fs::create_dir(tmp.path().join("broken")).unwrap();
+        std::fs::write(
+            tmp.path().join("broken/.git"),
+            format!("gitdir: {}\n", tmp.path().join("gone").display()),
+        )
+        .unwrap();
+
+        let result = json(call(&server, "meta_git_branch", json!({})));
+        let project = result
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["project"] == "broken")
+            .unwrap();
+        assert_eq!(
+            project.get("branch"),
+            Some(&serde_json::Value::Null),
+            "{result}"
+        );
+        assert_eq!(
+            project.get("ahead"),
+            Some(&serde_json::Value::Null),
+            "{result}"
+        );
+        assert!(
+            project["error"].as_str().is_some_and(|e| e.contains("git")),
+            "{result}"
+        );
+    }
+
+    #[test]
     fn git_acts_only_in_a_project_that_is_its_own_repository() {
         // a plain folder, in a workspace root that is a repository with
         // work staged
@@ -1789,7 +1828,7 @@ mod tests {
         let commits = json!({"commits": [{"project": "plain", "message": "m"}]});
         let reply = call(&server, "meta_git_multi_commit", commits).unwrap();
         assert!(
-            reply.is_error && reply.text.contains("not a git repository of its own"),
+            reply.is_error && reply.text.contains("not a git repository"),
             "{}",
             reply.text
         );

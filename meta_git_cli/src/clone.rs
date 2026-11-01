@@ -130,6 +130,9 @@ pub(crate) fn execute_git_clone(
     let initial_count = queue.push_from_meta(&clone_dir_path, 0)?;
 
     if initial_count == 0 {
+        if let Some(error) = crate::clone_worker::report_failures(&queue) {
+            return Ok(CommandResult::Error(error));
+        }
         return Ok(CommandResult::Message(
             "No child repositories to clone".to_string(),
         ));

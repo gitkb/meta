@@ -1,25 +1,31 @@
 //! Git operations for worktree management.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use meta_core::display::{escape, escape_path};
-use meta_core::git::{git, RepoStatus};
+use meta_core::git::{lookup, run, RepoStatus};
+use meta_core::gitdir::{common_dir, Checkout};
+use std::ffi::OsStr;
 use std::path::Path;
-use std::process::Stdio;
 
 /// An error if the checkout at `repo_path` has `core.bare=true` in its
 /// config: git would make no worktree of it.
 pub fn ensure_checkout_config_is_not_bare(repo_path: &Path) -> Result<()> {
-    if !repo_path.join(".git").exists() {
-        return Ok(());
+    let checkout = Checkout::of(repo_path);
+    if let Some(problem) = checkout.problem() {
+        anyhow::bail!("{}: {problem}", escape_path(repo_path));
     }
-
-    let output = git(repo_path)
-        .args(["config", "--local", "--bool", "--get", "core.bare"])
-        .output()?;
-
-    if output.status.success() {
-        let value = String::from_utf8_lossy(&output.stdout);
-        if value.trim() == "true" {
+    // `config --get` exits 1 when core.bare isn't configured.
+    if lookup(
+        repo_path,
+        ["config", "--local", "--bool", "--get", "core.bare"],
+    )?
+    .as_deref()
+        == Some("true")
+    {
+        if let Checkout::Repo { git_dir } = checkout {
+            if repo_path.canonicalize()? == git_dir.canonicalize()? {
+                return Ok(()); // The bare repository itself has no checkout.
+            }
             anyhow::bail!(
                 "Repository '{}' is a checked-out work tree but its shared Git config has \
                  core.bare=true.\nRepair it with:\n  git -C {} config --local core.bare false",
@@ -29,13 +35,6 @@ pub fn ensure_checkout_config_is_not_bare(repo_path: &Path) -> Result<()> {
                 ))
             );
         }
-    } else if output.status.code() != Some(1) {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "Failed to inspect core.bare for '{}': {}",
-            escape_path(repo_path),
-            escape(stderr.trim())
-        );
     }
 
     Ok(())
@@ -112,55 +111,32 @@ pub fn git_worktree_add(
     from_ref: Option<&str>,
 ) -> Result<Option<String>> {
     let start = worktree_start(repo_path, branch, from_ref)?;
-    let dest = worktree_dest.to_string_lossy();
     let remote_ref = format!("origin/{branch}");
-    let args: Vec<&str> = match &start {
-        WorktreeStart::Ref { name, .. } => vec!["worktree", "add", "-b", branch, &dest, name],
-        WorktreeStart::Existing => vec!["worktree", "add", &dest, branch],
-        WorktreeStart::Remote { .. } => {
-            vec![
-                "worktree",
-                "add",
-                "--track",
-                "-b",
-                branch,
-                &dest,
-                &remote_ref,
-            ]
-        }
-        WorktreeStart::Head { .. } => vec!["worktree", "add", "-b", branch, &dest],
-    };
-    let output = git(repo_path).args(&args).output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let from = match &start {
-            WorktreeStart::Ref { name, .. } => format!(", ref: {}", escape(name)),
-            _ => String::new(),
-        };
-        anyhow::bail!(
-            "git worktree add failed for '{}' (branch: {}{from}): {}",
-            escape_path(repo_path),
-            escape(branch),
-            escape(stderr.trim())
-        );
+    let mut args: Vec<&OsStr> = vec!["worktree".as_ref(), "add".as_ref()];
+    if matches!(start, WorktreeStart::Remote { .. }) {
+        args.push("--track".as_ref());
     }
+    if !matches!(start, WorktreeStart::Existing) {
+        args.extend_from_slice(&["-b".as_ref(), branch.as_ref()]);
+    }
+    args.push(worktree_dest.as_os_str());
+    match &start {
+        WorktreeStart::Ref { name, .. } => args.push(name.as_ref()),
+        WorktreeStart::Existing => args.push(branch.as_ref()),
+        WorktreeStart::Remote { .. } => args.push(remote_ref.as_ref()),
+        WorktreeStart::Head { .. } => {}
+    }
+    run(repo_path, args)?;
     Ok(start.new_branch_at())
 }
 
 pub fn git_worktree_remove(repo_path: &Path, worktree_path: &Path, force: bool) -> Result<()> {
-    let mut args = vec!["worktree", "remove"];
+    let mut args: Vec<&OsStr> = vec!["worktree".as_ref(), "remove".as_ref()];
     if force {
-        args.push("--force");
+        args.push("--force".as_ref());
     }
-    let wt_str = worktree_path.to_string_lossy();
-    args.push(&wt_str);
-
-    let output = git(repo_path).args(&args).output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git worktree remove failed: {}", escape(stderr.trim()));
-    }
+    args.push(worktree_path.as_os_str());
+    run(repo_path, args)?;
     Ok(())
 }
 
@@ -175,43 +151,53 @@ pub fn git_diff_stat(
     worktree_path: &Path,
     base_ref: &str,
 ) -> Result<(usize, usize, usize, Vec<String>)> {
-    // Try three-dot diff first (changes since divergence)
-    let numstat_output = git(worktree_path)
-        .args(["diff", "--numstat", &format!("{base_ref}...HEAD")])
-        .stderr(Stdio::null())
-        .output()?;
-
-    let numstat_text = if numstat_output.status.success() {
-        String::from_utf8_lossy(&numstat_output.stdout).to_string()
+    // `merge-base` exits 1 only when there is no common ancestor. Only then
+    // use a two-dot diff; a bad ref or a failed read is still an error.
+    let range = if lookup(worktree_path, ["merge-base", base_ref, "HEAD"])?.is_some() {
+        format!("{base_ref}...HEAD")
     } else {
-        // Fallback to two-dot diff
-        let fallback = git(worktree_path)
-            .args(["diff", "--numstat", &format!("{base_ref}..HEAD")])
-            .stderr(Stdio::null())
-            .output()?;
-        if fallback.status.success() {
-            String::from_utf8_lossy(&fallback.stdout).to_string()
-        } else {
-            String::new()
-        }
+        format!("{base_ref}..HEAD")
     };
+    let numstat_text = run(worktree_path, ["diff", "--numstat", &range, "--"])?;
 
     let mut files_changed = 0;
-    let mut insertions = 0;
-    let mut deletions = 0;
+    let mut insertions = 0usize;
+    let mut deletions = 0usize;
     let mut files = Vec::new();
+    let count = |value: &str| -> Result<usize> {
+        match value {
+            "-" => Ok(0), // Binary files have no line counts.
+            _ => value.parse().with_context(|| {
+                format!(
+                    "Invalid git numstat count '{}' in {}",
+                    escape(value),
+                    escape_path(worktree_path)
+                )
+            }),
+        }
+    };
 
     for line in numstat_text.lines() {
         if line.is_empty() {
             continue;
         }
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 3 {
-            files_changed += 1;
-            insertions += parts[0].parse::<usize>().unwrap_or(0);
-            deletions += parts[1].parse::<usize>().unwrap_or(0);
-            files.push(parts[2].to_string());
-        }
+        let mut parts = line.splitn(3, '\t');
+        let (Some(added), Some(removed), Some(file)) = (parts.next(), parts.next(), parts.next())
+        else {
+            anyhow::bail!(
+                "Invalid git numstat in {}: {}",
+                escape_path(worktree_path),
+                escape(line)
+            );
+        };
+        files_changed += 1;
+        insertions = insertions
+            .checked_add(count(added)?)
+            .context("git numstat insertions overflow")?;
+        deletions = deletions
+            .checked_add(count(removed)?)
+            .context("git numstat deletions overflow")?;
+        files.push(file.to_string());
     }
 
     Ok((files_changed, insertions, deletions, files))
@@ -243,24 +229,7 @@ pub fn remove_worktree_repos(
 /// exists. Any other failure (a broken repository, say) is an error with
 /// git's message, never mistaken for a missing name.
 pub fn git_rev_parse(repo_path: &Path, rev: &str) -> Result<Option<String>> {
-    let output = git(repo_path)
-        .args(["rev-parse", "--verify", "--quiet", rev])
-        .output()?;
-    if output.status.success() {
-        return Ok(Some(
-            String::from_utf8_lossy(&output.stdout).trim().to_string(),
-        ));
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if output.status.code() == Some(1) && stderr.trim().is_empty() {
-        return Ok(None);
-    }
-    anyhow::bail!(
-        "git rev-parse {} failed in {}: {}",
-        escape(rev),
-        escape_path(repo_path),
-        escape(stderr.trim())
-    )
+    lookup(repo_path, ["rev-parse", "--verify", "--quiet", rev])
 }
 
 /// Fail if any worktree of the repository has `branch` checked out, or is
@@ -276,54 +245,23 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
 
     // A symbolic branch would carry a ref transaction to the branch it points
     // at, which this check never looked at.
-    let symbolic = git(repo_path)
-        .args(["symbolic-ref", "-q", &full])
-        .output()?;
-    match symbolic.status.code() {
-        Some(1) => {}
-        Some(0) => return Err(in_use("a symbolic ref; meta only moves plain branches")),
-        _ => anyhow::bail!(
-            "Cannot inspect '{}': {}",
-            escape(branch),
-            escape(String::from_utf8_lossy(&symbolic.stderr).trim())
-        ),
+    // `symbolic-ref -q` exits 1 for a plain or absent ref.
+    if lookup(repo_path, ["symbolic-ref", "-q", &full])?.is_some() {
+        return Err(in_use("a symbolic ref; meta only moves plain branches"));
     }
 
-    let list = git(repo_path)
-        .args(["worktree", "list", "--porcelain"])
-        .output()?;
-    anyhow::ensure!(
-        list.status.success(),
-        "Cannot list the worktrees of {}: {}",
-        escape_path(repo_path),
-        escape(String::from_utf8_lossy(&list.stderr).trim())
-    );
+    let list = run(repo_path, ["worktree", "list", "--porcelain"])?;
     let wanted = format!("branch {full}");
-    if String::from_utf8_lossy(&list.stdout)
-        .lines()
-        .any(|line| line == wanted)
-    {
+    if list.lines().any(|line| line == wanted) {
         return Err(in_use("checked out in a worktree"));
     }
 
-    let output = git(repo_path)
-        .args(["rev-parse", "--git-common-dir"])
-        .output()?;
-    anyhow::ensure!(
-        output.status.success(),
-        "Cannot find the git directory of {}: {}",
-        escape_path(repo_path),
-        escape(String::from_utf8_lossy(&output.stderr).trim())
-    );
-    // Relative output is relative to the repository, where git ran.
-    let common =
-        repo_path.join(String::from_utf8_lossy(&output.stdout).trim_end_matches(['\n', '\r']));
-    anyhow::ensure!(
-        common.is_dir(),
-        "Cannot find the git directory of {} (got {})",
-        escape_path(repo_path),
-        escape_path(&common)
-    );
+    let common = common_dir(repo_path)?.with_context(|| {
+        format!(
+            "Cannot find the git directory of {}",
+            escape_path(repo_path)
+        )
+    })?;
     let mut admin_dirs = vec![common.clone()];
     match std::fs::read_dir(common.join("worktrees")) {
         Ok(entries) => {
@@ -375,51 +313,164 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
 pub fn git_delete_branch_at(repo_path: &Path, branch: &str, expected: &str) -> Result<()> {
     git_branch_is_free(repo_path, branch)
         .map_err(|e| anyhow::anyhow!("Branch '{}' is in use; kept ({e})", escape(branch)))?;
-    let output = git(repo_path)
-        .args([
+    run(
+        repo_path,
+        [
             "update-ref",
             "--no-deref",
             "-d",
             &format!("refs/heads/{branch}"),
             expected,
-        ])
-        .output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "Branch '{}' no longer points where it was created; kept ({})",
-            escape(branch),
-            escape(stderr.trim())
-        );
+        ],
+    )
+    .with_context(|| {
+        format!(
+            "Branch '{}' no longer points where it was created; kept",
+            escape(branch)
+        )
+    })?;
+    // Only remove settings that exist: `--remove-section` treats an absent
+    // section as fatal, so its exit status can't distinguish a failed write.
+    let section = format!("branch.{branch}");
+    if run(repo_path, ["config", "--local", "--name-only", "--list"])?
+        .lines()
+        .any(|key| {
+            key.rsplit_once('.')
+                .is_some_and(|(name, _)| name == section)
+        })
+    {
+        run(
+            repo_path,
+            ["config", "--local", "--remove-section", &section],
+        )?;
     }
-    // Upstream settings of a deleted branch; there may be none.
-    let _ = git(repo_path)
-        .args(["config", "--remove-section", &format!("branch.{branch}")])
-        .output();
     Ok(())
 }
 
 /// Fetch a branch from origin if not locally available.
 pub fn git_fetch_branch(repo_path: &Path, branch: &str) -> Result<()> {
-    let output = git(repo_path)
-        .args(["fetch", "origin", branch])
-        .stderr(Stdio::piped())
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "Failed to fetch branch '{}': {}",
-            escape(branch),
-            escape(stderr.trim())
-        );
-    }
+    run(repo_path, ["fetch", "origin", branch])?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_core::git::run;
+    use std::process::{Command, Stdio};
+
+    fn git(dir: &Path) -> Command {
+        let mut command = meta_core::git::git(dir);
+        command.args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@test.com",
+            "-c",
+            "commit.gpgsign=false",
+        ]);
+        command
+    }
+
+    #[test]
+    fn checkout_guard_rejects_missing_plain_and_broken_repositories() {
+        let tmp = init_git_repo();
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        for path in [&tmp.path().join("missing"), &plain] {
+            let err = ensure_checkout_config_is_not_bare(path).unwrap_err();
+            assert!(
+                err.to_string().contains(&path.display().to_string()),
+                "{err}"
+            );
+        }
+        std::fs::write(plain.join(".git"), "gitdir: nowhere\n").unwrap();
+        assert!(ensure_checkout_config_is_not_bare(&plain).is_err());
+    }
+
+    // macOS and Windows file systems refuse a name that isn't UTF-8
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn worktree_add_preserves_non_utf8_destination() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = init_git_repo();
+        make_initial_commit(tmp.path());
+        let dest = tmp.path().join(std::ffi::OsStr::from_bytes(b"wt-\xff"));
+        git_worktree_add(tmp.path(), &dest, "topic", None).unwrap();
+        assert!(dest.join(".git").is_file());
+        assert!(!tmp.path().join("wt-\u{fffd}").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn worktree_remove_preserves_non_utf8_destination() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = init_git_repo();
+        make_initial_commit(tmp.path());
+        let dest = tmp.path().join(std::ffi::OsStr::from_bytes(b"wt-\xff"));
+        let out = git(tmp.path())
+            .args(["worktree", "add", "-b", "topic"])
+            .arg(&dest)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        git_worktree_remove(&tmp.path().join(".git"), &dest, false).unwrap();
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn delete_branch_reports_a_failed_config_cleanup() {
+        let tmp = init_git_repo();
+        make_initial_commit(tmp.path());
+        let head = git_rev_parse(tmp.path(), "HEAD").unwrap().unwrap();
+        git(tmp.path()).args(["branch", "t"]).status().unwrap();
+        git(tmp.path())
+            .args(["config", "branch.t.remote", "origin"])
+            .status()
+            .unwrap();
+        std::fs::write(tmp.path().join(".git/config.lock"), "locked").unwrap();
+
+        let err = git_delete_branch_at(tmp.path(), "t", &head).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("git config --local --remove-section branch.t"),
+            "{message}"
+        );
+        assert!(
+            message.contains(&tmp.path().display().to_string()),
+            "{message}"
+        );
+        assert!(message.contains("lock"), "{message}");
+    }
+
+    #[test]
+    fn diff_handles_unrelated_histories_but_rejects_a_bad_ref() {
+        let tmp = init_git_repo();
+        make_initial_commit(tmp.path());
+        git(tmp.path()).args(["branch", "base"]).status().unwrap();
+        git(tmp.path())
+            .args(["checkout", "-q", "--orphan", "other"])
+            .status()
+            .unwrap();
+        assert!(git(tmp.path())
+            .args(["rm", "-qf", "README.md"])
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(tmp.path().join("other"), "other\n").unwrap();
+        git(tmp.path()).args(["add", "other"]).status().unwrap();
+        git(tmp.path())
+            .args(["commit", "-qm", "unrelated"])
+            .status()
+            .unwrap();
+
+        let (files, added, deleted, _) = git_diff_stat(tmp.path(), "base").unwrap();
+        assert_eq!((files, added, deleted), (2, 1, 1));
+        let err = git_diff_stat(tmp.path(), "no-such-base").unwrap_err();
+        assert!(err.to_string().contains("no-such-base"), "{err}");
+    }
 
     #[test]
     fn a_failed_fetch_is_reported_on_one_line() {
@@ -443,14 +494,6 @@ mod tests {
             .args(["init"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .unwrap();
-        git(tmp.path())
-            .args(["config", "user.email", "test@test.com"])
-            .status()
-            .unwrap();
-        git(tmp.path())
-            .args(["config", "user.name", "Test"])
             .status()
             .unwrap();
         tmp
@@ -484,6 +527,10 @@ mod tests {
             .unwrap();
         let moved = git_rev_parse(tmp.path(), "HEAD").unwrap().unwrap();
         git(tmp.path())
+            .args(["config", "branch.t.foo.remote", "origin"])
+            .status()
+            .unwrap();
+        git(tmp.path())
             .args(["update-ref", "refs/heads/t", &moved])
             .status()
             .unwrap();
@@ -495,6 +542,10 @@ mod tests {
         );
         git_delete_branch_at(tmp.path(), "t", &moved).unwrap();
         assert_eq!(git_rev_parse(tmp.path(), "refs/heads/t").unwrap(), None);
+        assert_eq!(
+            run(tmp.path(), ["config", "branch.t.foo.remote"]).unwrap(),
+            "origin"
+        );
     }
 
     #[test]
@@ -546,9 +597,6 @@ mod tests {
             .unwrap();
         if !init.status.success() {
             return; // git older than 2.45 has no reftable support
-        }
-        for (key, value) in [("user.name", "Test"), ("user.email", "test@test.com")] {
-            git(&repo).args(["config", key, value]).status().unwrap();
         }
         make_initial_commit(&repo);
         assert!(git_rev_parse(&repo, "HEAD").unwrap().is_some());

@@ -396,7 +396,12 @@ impl SubprocessPlugin {
             .is_ok_and(|value| value.get("plan").is_some());
         match serde_json::from_str::<PlanResponse>(&stdout_str) {
             // Plugin returned an execution plan - execute it via loop_lib
-            Ok(response) => execute_plan(&response.plan, root_dir, &request.options),
+            Ok(response) => execute_plan(
+                &response.plan,
+                &request.projects,
+                root_dir,
+                &request.options,
+            ),
             Err(e) if is_plan => anyhow::bail!(
                 "plugin {} sent an execution plan this meta cannot read ({e}); \
                  upgrade the plugin to match this meta",
@@ -411,6 +416,7 @@ impl SubprocessPlugin {
 /// Execute an execution plan via loop_lib
 fn execute_plan(
     plan: &ExecutionPlan,
+    projects: &[String],
     root_dir: Option<&Path>,
     options: &PluginRequestOptions,
 ) -> Result<()> {
@@ -427,6 +433,7 @@ fn execute_plan(
         dir: PathBuf::from(&c.dir),
         argv: c.argv.clone(),
         env: c.env.clone(),
+        refused: None,
     };
     // Setup and cleanup run one at a time and silently unless verbose;
     // setup runs in a dry run too (it's required)
@@ -458,6 +465,9 @@ fn execute_plan(
     // Phase 2: Run main commands (may be parallel)
     if !plan.commands.is_empty() {
         let commands: Vec<DirCommand> = plan.commands.iter().map(job).collect();
+        // only in the selected projects that are repositories
+        let projects: Vec<PathBuf> = projects.iter().map(PathBuf::from).collect();
+        let commands = meta_cli::run_list::in_repos(commands, &projects, root_dir);
 
         // Repos are named by their path from the root (shown as "."). Without
         // projects from meta_cli the plugin lists the root first.

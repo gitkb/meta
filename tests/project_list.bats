@@ -32,10 +32,11 @@ setup() {
 }
 EOF
 
-    # Create project directories
-    mkdir -p "$TEST_DIR/frontend"
-    mkdir -p "$TEST_DIR/backend"
-    mkdir -p "$TEST_DIR/shared"
+    # Create the projects, each a repository of its own
+    for repo in frontend backend shared; do
+        mkdir -p "$TEST_DIR/$repo"
+        git -C "$TEST_DIR/$repo" init --quiet
+    done
 
     cd "$TEST_DIR"
 }
@@ -329,8 +330,15 @@ assert nested_lib is not None, f'nested-lib not found in vendor projects: {neste
 "
 }
 
-@test "meta project list rejects a project path outside the workspace" {
+@test "meta project list takes a project path outside the workspace" {
     for path in "../../outside" "/abs/outside"; do
+        printf '{"projects": {"sib": {"repo": "u", "path": "%s"}}}' "$path" > .meta.yaml
+        run "$META_BIN" project list --json
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"\"path\": \"$path\""* ]]
+    done
+    # but not the workspace's own folder, nor git's data
+    for path in "." ".git/x"; do
         printf '{"projects": {"evil": {"repo": "u", "path": "%s"}}}' "$path" > .meta.yaml
         run "$META_BIN" project list
         [ "$status" -ne 0 ]
@@ -338,14 +346,14 @@ assert nested_lib is not None, f'nested-lib not found in vendor projects: {neste
     done
 }
 
-@test "meta project list rejects a project reached through a symlink out of the workspace" {
+@test "meta project list takes a project reached through a symlink out of the workspace" {
     OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
     ln -s "$OUTSIDE" linked
     echo '{"projects": {"linked": "git@github.com:org/linked.git"}}' > .meta.yaml
     run "$META_BIN" project list
     rm -rf "$OUTSIDE"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"through the symlink"* ]]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"linked"* ]]
 }
 
 @test "meta project list never prints terminal escapes from .meta.yaml" {
@@ -390,11 +398,10 @@ J
 }
 
 @test "meta project check names the command that clones what is missing" {
-    rmdir "$TEST_DIR/shared"
+    rm -rf "$TEST_DIR/shared"
     run "$META_BIN" project check
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"git@github.com:org/shared.git"* ]]
-    [[ "$output" == *"Run \`meta git update\` to clone this repository."* ]]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"shared: not cloned (run 'meta git update')"* ]]
     [[ "$output" != *"meta project update"* ]]
 }
 
@@ -408,13 +415,13 @@ projects:
     repo: git@github.com:org/gone.git
     tags: [api]
 YAML
-    mkdir -p "$TEST_DIR/frontend"
+    git -C "$TEST_DIR/frontend" remote add origin git@github.com:org/frontend.git
     run "$META_BIN" --tag ui project check
     [ "$status" -eq 0 ]
     [[ "$output" == *"All projects are cloned"* ]]
     run "$META_BIN" --tag api project check
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"gone.git"* ]]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"gone: not cloned"* ]]
     run "$META_BIN" --tag api project dependents frontend
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not take --include/--exclude/--tag"* ]]

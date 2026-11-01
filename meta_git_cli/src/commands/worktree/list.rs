@@ -74,25 +74,23 @@ fn repo_entries(
     }
     let repos = if args.recursive {
         discover_worktree_repos_recursive(path)?
-    } else if selected {
-        discover_worktree_repos(path)?
     } else {
-        discover_worktree_repos(path).unwrap_or_default()
+        discover_worktree_repos(path)?
     };
     let record = record::find(path, repos.iter().map(|r| &r.path));
     let entries = repos
         .par_iter()
         .map(|repo| {
             let status = repo_status(&repo.path);
-            let dirty = if args.recursive || selected {
-                status?.is_dirty()
+            let status = if args.recursive || selected {
+                Some(status?)
             } else {
-                status.is_ok_and(|s| s.is_dirty())
+                status.ok()
             };
             Ok(RepoEntry::Observed(ListRepoEntry {
                 alias: repo.alias.clone(),
-                branch: repo.branch.clone(),
-                dirty,
+                branch: status.as_ref().map(|_| repo.branch.clone()),
+                dirty: status.map(|s| s.is_dirty()),
             }))
         })
         .collect::<Result<_>>()?;
@@ -121,7 +119,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
     let selected = match args.name.as_ref() {
         Some(name) => {
             validate_worktree_name(name)?;
-            let path = worktree_set_dir(&worktree_root, name)?;
+            let path = worktree_root.join(name);
             anyhow::ensure!(
                 path.is_dir(),
                 "Worktree '{name}' not found at {}",
@@ -148,10 +146,12 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
                     Err(_) => continue,
                 };
                 match entry.file_type() {
-                    Ok(kind) if kind.is_dir() => sets.push((
-                        entry.file_name().to_string_lossy().into_owned(),
-                        entry.path(),
-                    )),
+                    // a set folder that is a link counts as the folder it leads to
+                    Ok(kind) if kind.is_dir() || kind.is_symlink() && entry.path().is_dir() => sets
+                        .push((
+                            entry.file_name().to_string_lossy().into_owned(),
+                            entry.path(),
+                        )),
                     Err(error) if args.recursive || args.metadata_only => return Err(error.into()),
                     _ => {}
                 }
@@ -197,13 +197,12 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
         match result {
             Ok(Some(entry)) => worktrees.push(entry),
             Ok(None) => {}
-            Err(error) if !is_selected && (args.recursive || args.metadata_only) => {
-                warnings.push(ListWarning {
-                    name: name.clone(),
-                    root: path.display().to_string(),
-                    message: format!("{error:#}"),
-                })
-            }
+            // a set that can't be read is named with why, the others listed
+            Err(error) if !is_selected => warnings.push(ListWarning {
+                name: name.clone(),
+                root: path.display().to_string(),
+                message: format!("{error:#}"),
+            }),
             Err(error) => return Err(error),
         }
     }
@@ -253,15 +252,15 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
                     println!("  {}  {}", escape(&repo.alias), escape_path(&repo.path))
                 }
                 RepoEntry::Observed(repo) => {
-                    let status = if repo.dirty {
-                        "modified".yellow().to_string()
-                    } else {
-                        "clean".green().to_string()
+                    let status = match repo.dirty {
+                        Some(true) => "modified".yellow().to_string(),
+                        Some(false) => "clean".green().to_string(),
+                        None => "unknown: git can't read it".red().to_string(),
                     };
                     println!(
                         "  {:12} -> {:20} ({})",
                         escape(&repo.alias),
-                        escape(&repo.branch),
+                        escape(repo.branch.as_deref().unwrap_or("-")),
                         status
                     );
                 }

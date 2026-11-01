@@ -566,18 +566,17 @@ PY
     [[ "$output" == *"--update preserves settings"* ]]
 }
 
-@test "init claude does not read a settings.json reached through a link" {
-    # A settings.json holding meta's hooks, elsewhere
-    mkdir other
-    (cd other && echo 'projects: {}' > .meta.yaml && "$META_BIN" init claude >/dev/null)
-    grep -q SessionStart other/.claude/settings.json
-    mkdir -p .claude
-    ln -s ../other/.claude/settings.json .claude/settings.json
+@test "init claude merges into a settings.json reached through a link, keeping the link" {
+    # a stowed settings.json, elsewhere
+    mkdir -p other .claude
+    echo '{"permissions": {"allow": ["Bash(ls)"]}}' > other/settings.json
+    ln -s ../other/settings.json .claude/settings.json
 
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    [[ "$output" == *"reached through the symlink"* ]]
-    [[ "$output" != *"Hooks:"* ]]
+    [ "$(readlink .claude/settings.json)" = "../other/settings.json" ]
+    grep -q SessionStart other/settings.json
+    grep -q 'Bash(ls)' other/settings.json
 }
 
 @test "init claude offers --force and --update only for what they refresh" {
@@ -585,7 +584,8 @@ PY
     ln -s ../other/rules .claude/rules
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    [[ "$output" == *"reached through the symlink"* ]]
+    # the rules go where the link leads
+    [ -f other/rules/meta-workspace-discipline.md ]
     [[ "$output" != *"--force or --update"* ]]
 
     run "$META_BIN" init claude --update

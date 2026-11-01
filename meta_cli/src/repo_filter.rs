@@ -503,6 +503,7 @@ mod tests {
         let node = |info: ProjectInfo, children| MetaTreeNode {
             info,
             is_meta: true,
+            error: None,
             children,
         };
         // `cli` is tagged under a parent that isn't

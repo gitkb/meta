@@ -38,6 +38,7 @@ fn test_dry_run_integration_loop_lib() {
         dir: dir.path().to_path_buf(),
         argv: touch(&marker_file2),
         env: None,
+        refused: None,
     }];
 
     let result = run_commands(&config, &commands);
@@ -73,11 +74,13 @@ fn test_different_commands_per_directory() {
             dir: dir1.clone(),
             argv: touch(&file1),
             env: None,
+            refused: None,
         },
         DirCommand {
             dir: dir2.clone(),
             argv: touch(&file2),
             env: None,
+            refused: None,
         },
     ];
 
@@ -191,6 +194,7 @@ fn test_parallel_execution_with_different_commands() {
                 dir: d.clone(),
                 argv: touch(&file),
                 env: None,
+                refused: None,
             }
         })
         .collect();

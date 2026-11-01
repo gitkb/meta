@@ -421,11 +421,13 @@ fn test_run_commands_sequential() {
             dir: dir1.to_path_buf(),
             argv: sh("echo test1"),
             env: None,
+            refused: None,
         },
         DirCommand {
             dir: dir2.to_path_buf(),
             argv: sh("echo test2"),
             env: None,
+            refused: None,
         },
     ];
 
@@ -452,11 +454,13 @@ fn test_run_commands_parallel() {
             dir: dir1.to_path_buf(),
             argv: sh("echo test1"),
             env: None,
+            refused: None,
         },
         DirCommand {
             dir: dir2.to_path_buf(),
             argv: sh("echo test2"),
             env: None,
+            refused: None,
         },
     ];
 
@@ -485,11 +489,13 @@ fn test_run_commands_with_different_commands() {
             dir: dir1.to_path_buf(),
             argv: sh("echo command1"),
             env: None,
+            refused: None,
         },
         DirCommand {
             dir: dir2.to_path_buf(),
             argv: sh("echo command2"),
             env: None,
+            refused: None,
         },
     ];
 
@@ -515,6 +521,7 @@ fn test_run_commands_dry_run() {
         dir: temp_dir.path().to_path_buf(),
         argv: touch_cmd(&marker_file),
         env: None,
+        refused: None,
     }];
 
     let result = run_commands(&config, &commands);
@@ -538,6 +545,7 @@ fn test_run_commands_failure_handling() {
         dir: dir1.to_path_buf(),
         argv: fail_cmd(), // This command always fails
         env: None,
+        refused: None,
     }];
 
     let result = run_commands(&config, &commands);
@@ -558,6 +566,7 @@ fn test_run_commands_failure_in_dry_run_succeeds() {
         dir: temp_dir.path().to_path_buf(),
         argv: fail_cmd(),
         env: None,
+        refused: None,
     }];
 
     let result = run_commands(&config, &commands);
@@ -738,4 +747,30 @@ fn starts_are_one_interval_apart_however_long_commands_take() {
         *slept.borrow(),
         [interval, Duration::from_millis(6), Duration::ZERO]
     );
+}
+
+#[test]
+fn a_refused_command_is_a_failed_result_and_never_runs() {
+    let temp_dir = TempDir::new().unwrap();
+    let command = |refused: Option<&str>| DirCommand {
+        dir: temp_dir.path().to_path_buf(),
+        argv: sh("echo ran > ran"),
+        env: None,
+        refused: refused.map(str::to_string),
+    };
+    for parallel in [false, true] {
+        let config = LoopConfig {
+            parallel,
+            json_output: true,
+            ..Default::default()
+        };
+        let results = match parallel {
+            true => run_parallel(&config, &[command(Some("not a repository"))]),
+            false => run_sequential(&config, &[command(Some("not a repository"))]),
+        }
+        .unwrap();
+        assert!(!results[0].success);
+        assert_eq!(results[0].stderr, "not a repository\n");
+        assert!(!temp_dir.path().join("ran").exists());
+    }
 }

@@ -181,7 +181,7 @@ pub fn handle_context(
                     // a work tree git refuses (`core.bare=true`): its refs,
                     // and no word on its changes
                     Err(_) => {
-                        if let Some(refs) = RepoStatus::refs(&repo_path) {
+                        if let Ok(Some(refs)) = RepoStatus::refs(&repo_path) {
                             ctx.branch = refs.branch;
                             (ctx.ahead, ctx.behind) = refs.ahead_behind.unzip();
                         }

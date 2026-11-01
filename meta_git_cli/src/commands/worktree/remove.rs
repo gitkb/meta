@@ -26,7 +26,7 @@ pub(crate) fn handle_remove(
     let cwd = std::env::current_dir()?;
     let configs = Configs::find(&cwd)?;
     let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
-    let wt_dir = worktree_set_dir(&worktree_root, name)?;
+    let wt_dir = worktree_root.join(name);
 
     if !wt_dir.exists() {
         anyhow::bail!("Worktree '{}' not found at {}", name, escape_path(&wt_dir));
@@ -75,6 +75,16 @@ pub(crate) fn handle_remove(
                 "If it was made by hand or by an older meta (which kept its records elsewhere), \
                  run 'git worktree remove' for each worktree in it, then delete it."
             }
+        );
+    }
+    // A set folder may be a link, but to this set: one swapped for a link to
+    // another set must not remove that one
+    if let Some(made) = check.record().filter(|made| made.name() != *name) {
+        anyhow::bail!(
+            "Refusing to remove worktree '{name}': {} leads to worktree set '{}'; remove that \
+             by its own name",
+            escape_path(&wt_dir),
+            escape(&made.name())
         );
     }
     let preview = mode.is_preview();

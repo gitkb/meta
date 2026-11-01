@@ -265,12 +265,11 @@ YAML
     git clone --quiet "$TEST_DIR/backend.git" "$TEST_DIR/mate"
     run "$META_BIN" context --json
     [ "$status" -eq 0 ]
-    # an edit, a staged new file, a branch switch, a fetched commit and a
-    # new project
+    # an edit, a staged new file, a fetched commit and a new project: none
+    # of them moves a HEAD or a branch, which was all a cached context saw
     echo change >> backend/README.md
     echo new > frontend/new
     git -C frontend add new
-    git -C frontend switch --quiet -c topic
     echo theirs > mate/theirs
     git -C mate add theirs
     git -C mate -c user.name=T -c user.email=t@t commit --quiet -m theirs
@@ -283,9 +282,12 @@ YAML
 import json, sys
 repos = {r["name"]: r for r in json.load(sys.stdin)["repos"]}
 assert repos["backend"]["dirty"] and repos["backend"]["behind"] == 1, repos["backend"]
-assert repos["frontend"]["dirty"] and repos["frontend"]["branch"] == "topic", repos["frontend"]
+assert repos["frontend"]["dirty"], repos["frontend"]
 assert "extra" in repos, repos
 ' <<<"$output"
+    git -C frontend switch --quiet -c topic
+    run "$META_BIN" context
+    [[ "$output" == *"| frontend | topic | 1 modified, no upstream |"* ]]
     [ -z "$(ls -A "$META_DATA_DIR")" ]
     run "$META_BIN" context --no-cache
     [ "$status" -eq 2 ]

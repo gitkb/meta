@@ -193,18 +193,25 @@ impl RepoStatus {
         if crate::gitdir::common_dir(dir)?.is_none() {
             return Ok(None);
         }
-        let upstream = super::lookup(
-            dir,
-            [
-                "rev-parse",
-                "--abbrev-ref",
-                "--verify",
-                "--quiet",
-                "@{upstream}",
-            ],
-        )?;
+        let branch = super::current_branch(dir)?;
+        // the upstream as configured, there or gone: `@{upstream}` doesn't
+        // resolve a gone one
+        let upstream = match &branch {
+            Some(branch) => super::lookup(
+                dir,
+                [
+                    "for-each-ref",
+                    "--format=%(upstream:short)",
+                    &format!("refs/heads/{branch}"),
+                ],
+            )?,
+            None => None,
+        };
         let ahead_behind = match upstream {
-            Some(_) => {
+            Some(_)
+                if super::lookup(dir, ["rev-parse", "--verify", "--quiet", "@{upstream}"])?
+                    .is_some() =>
+            {
                 let counts = super::run(
                     dir,
                     ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
@@ -220,10 +227,10 @@ impl RepoStatus {
                     )
                 })?)
             }
-            None => None,
+            _ => None,
         };
         Ok(Some(Self {
-            branch: super::current_branch(dir)?,
+            branch,
             oid: super::lookup(dir, ["rev-parse", "--verify", "--quiet", "HEAD"])?,
             upstream,
             ahead_behind,
@@ -486,6 +493,11 @@ mod tests {
         assert_eq!(status.upstream.as_deref(), Some("origin/main"));
         assert_eq!(status.ahead_behind, Some((0, 1)));
         assert!(!status.is_dirty());
+        // an upstream that isn't there is named, and gone
+        run(&bare, ["config", "branch.main.merge", "refs/heads/gone"]).unwrap();
+        let status = RepoStatus::read(&bare).unwrap();
+        assert_eq!(status.upstream.as_deref(), Some("origin/gone"));
+        assert!(status.upstream_gone());
         // what isn't a repository is still an error, even inside one
         assert!(RepoStatus::read(dir.path()).is_err());
         let inside = upstream.path().join("not-cloned");

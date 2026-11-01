@@ -493,8 +493,9 @@ assert payload['custom']['env'] == 'yaml'
     [ "$status" -eq 0 ]
     [[ "$output" == *"prune-orphan2"* ]]
 
-    # git's entry goes, and meta's record with it
-    [ ! -e "$TEST_DIR/backend/.git/worktrees/backend" ]
+    # Only meta's record goes; git's entry stays for 'git worktree prune'
+    [ -d "$TEST_DIR/backend/.git/worktrees/backend" ]
+    [ ! -e "$TEST_DIR/backend/.git/worktrees/backend/meta-worktree.json" ]
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
     [[ "$output" != *"prune-orphan2"* ]]

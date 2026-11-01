@@ -111,6 +111,7 @@ pub fn git_worktree_add(
     from_ref: Option<&str>,
 ) -> Result<Option<String>> {
     let start = worktree_start(repo_path, branch, from_ref)?;
+    reclaim(repo_path, worktree_dest)?;
     let remote_ref = format!("origin/{branch}");
     let mut args: Vec<&OsStr> = vec!["worktree".as_ref(), "add".as_ref()];
     if matches!(start, WorktreeStart::Remote { .. }) {
@@ -128,6 +129,49 @@ pub fn git_worktree_add(
     }
     run(repo_path, args)?;
     Ok(start.new_branch_at())
+}
+
+/// Take back git's entry for a worktree of `repo_path` at `dest` whose
+/// folder was deleted by hand, so one can be added there again, if the entry
+/// holds nothing the folder didn't (see [`super::safety::entry_holds`]);
+/// otherwise say why it stays. git removes that one entry (meta's record, if
+/// any, with it). Entries anywhere else stay: a worktree that was moved can
+/// still be repaired.
+fn reclaim(repo_path: &Path, dest: &Path) -> Result<()> {
+    let Some(git_dir) = meta_core::gitdir::common_dir(repo_path)? else {
+        return Ok(());
+    };
+    // the set's folder exists by now; compare where it resolves
+    let resolved = |path: &Path| match (path.parent().map(Path::canonicalize), path.file_name()) {
+        (Some(Ok(parent)), Some(name)) => parent.join(name),
+        _ => path.to_path_buf(),
+    };
+    let dest = resolved(dest);
+    let entries = match std::fs::read_dir(git_dir.join("worktrees")) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries {
+        let admin = entry?.path();
+        let Some(checkout) = super::record::checkout(&admin) else {
+            continue;
+        };
+        if resolved(&checkout) != dest || !super::record::checkout_gone(&admin) {
+            continue;
+        }
+        if let Some(why) = super::safety::entry_holds(&admin)? {
+            anyhow::bail!(
+                "git still has an entry for the worktree that was at {}, and {why}; check it \
+                 (git --git-dir {}), then run 'git worktree prune' in {}",
+                escape_path(&dest),
+                escape_path(&admin),
+                escape_path(repo_path)
+            );
+        }
+        git_worktree_remove(repo_path, &checkout, false)?;
+    }
+    Ok(())
 }
 
 pub fn git_worktree_remove(repo_path: &Path, worktree_path: &Path, force: bool) -> Result<()> {

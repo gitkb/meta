@@ -313,6 +313,9 @@ mod imp {
         children.stopping = true;
         // the three signals `own` listens for all have names
         let sig = Signal::from_named_raw(signal).unwrap_or(Signal::TERM);
+        // a group that emptied since its last spawn is not signalled: its id
+        // may be another's by now
+        children.groups.retain(|group| group_alive(*group));
         for (pid, own_group) in &children.running {
             if !own_group && sent {
                 let _ = rustix::process::kill_process(*pid, sig);

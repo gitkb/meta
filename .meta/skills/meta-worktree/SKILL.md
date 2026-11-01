@@ -98,10 +98,12 @@ meta git worktree exec --ephemeral lint-check --all -- make lint
 ```
 
 `prune` removes sets whose TTL has expired, ephemeral sets whose run has
-ended, and sets a stopped `create` left half-made. For a worktree whose folder
-is gone (or a set whose directory is gone) it has git drop its entry, so the
-name and branch can be used again; it leaves an entry git has locked, or whose
-detached HEAD is a commit no branch or tag holds. Once its repos are taken out of the meta config,
+ended, and sets a stopped `create` left half-made; for a set whose directory
+is gone it only forgets meta's record (git's entries stay: a worktree that was
+moved can still be repaired). A worktree folder deleted by hand doesn't block
+making it again: `create` and `add` drop git's leftover entry at exactly that
+path, unless the entry still holds something (staged changes, a rebase under
+way, a lock, a HEAD no branch holds), which they name. Once its repos are taken out of the meta config,
 or the checkout it was made from is moved or deleted, a set is no longer the
 workspace's: remove each member with `git worktree remove`, run in the repo it
 was made from. A member whose repo was deleted with that checkout has no git

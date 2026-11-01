@@ -136,7 +136,15 @@ fn lock(path: &Path) -> Result<Option<File>> {
             .truncate(false)
             .open(&lock)
             .with_context(|| format!("Cannot open {}", escape_path(&lock)))?;
-        if file.try_lock().is_err() {
+        // A reader tests the lock by taking it for a moment: try a few times
+        // before taking it for held
+        let locked = (0..3).any(|attempt| {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            file.try_lock().is_ok()
+        });
+        if !locked {
             return Ok(None);
         }
         if still_at(&file, &lock) {

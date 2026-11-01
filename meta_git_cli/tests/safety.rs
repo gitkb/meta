@@ -1107,8 +1107,8 @@ fn records_live_beside_git_and_no_store_is_written() {
         "{list}"
     );
 
-    // A set whose directory is gone loses git's entries for its worktrees,
-    // and meta's records with them
+    // A set whose directory is gone loses only meta's records; git's own
+    // entries stay for `git worktree prune`
     fs::remove_dir_all(ws.join(".worktrees/t")).unwrap();
     let out = meta_git(
         root,
@@ -1125,7 +1125,8 @@ fn records_live_beside_git_and_no_store_is_written() {
         "orphaned (missing directory)"
     );
     for repo in ["a", "b"] {
-        assert!(!ws.join(repo).join(".git/worktrees").join(repo).exists());
+        let admin = ws.join(repo).join(".git/worktrees").join(repo);
+        assert!(admin.is_dir() && !admin.join("meta-worktree.json").exists());
     }
     let out = meta_git(
         root,
@@ -1208,17 +1209,7 @@ fn a_stale_record_does_not_expire_a_set_made_again_at_its_path() {
     );
     assert!(out.status.success(), "{}", stderr(&out));
     let report: Value = serde_json::from_slice(&out.stdout).unwrap();
-    // only git's registration of the deleted worktree goes, not the set
-    let removed: Vec<&str> = report["removed"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| e["path"].as_str().unwrap())
-        .collect();
-    assert!(
-        removed.len() == 1 && removed[0].ends_with("/t/a"),
-        "{report}"
-    );
+    assert_eq!(report["removed"], json!([]), "{report}");
     assert!(elsewhere.join("t/b/README").exists());
 }
 
@@ -1368,7 +1359,7 @@ fn prune_finds_sets_of_a_separate_git_dir_repository() {
 }
 
 #[test]
-fn prune_leaves_a_moved_set_alone_and_drops_a_deleted_worktree() {
+fn prune_leaves_a_moved_set_and_stale_records_alone() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let ws = workspace(root, &["a", "b"]);
@@ -1422,13 +1413,7 @@ fn prune_leaves_a_moved_set_alone_and_drops_a_deleted_worktree() {
     );
     assert!(out.status.success(), "{}", stderr(&out));
     let report: Value = serde_json::from_slice(&out.stdout).unwrap();
-    // only git's entry for the deleted worktree goes
-    let removed = report["removed"].as_array().unwrap();
-    assert!(
-        removed.len() == 1 && removed[0]["path"].as_str().unwrap().ends_with("/reused/b"),
-        "{report}"
-    );
-    assert!(elsewhere.join("reused/a").exists());
+    assert_eq!(report["removed"], json!([]), "{report}");
     assert_eq!(report["kept"], json!([]), "{report}");
     // The moved set keeps its record, and says why remove refuses it
     assert!(elsewhere.join("installed/a/README").exists());

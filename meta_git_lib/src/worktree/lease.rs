@@ -62,16 +62,28 @@ impl Lease {
 }
 
 /// A lease this process holds. Dropping it deletes the lease, then lets go
-/// of the lock.
+/// of the lock (see [`Held::leave`]).
 #[derive(Debug)]
 pub struct Held {
     path: PathBuf,
     _lock: File,
+    /// Let go of the lock but leave the lease, as a creator that is gone does.
+    leave: bool,
+}
+
+impl Held {
+    /// Let go of the lock and leave the lease where it is: the set is the
+    /// next `prune`'s to remove (`create --ephemeral`).
+    pub fn leave(mut self) {
+        self.leave = true;
+    }
 }
 
 impl Drop for Held {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if !self.leave {
+            let _ = std::fs::remove_file(&self.path);
+        }
         let _ = std::fs::remove_file(lock_path(&self.path));
         held().retain(|path| *path != self.path);
     }
@@ -300,7 +312,11 @@ pub fn take(lease: &Lease) -> Result<Held> {
     }
     written.with_context(|| format!("Cannot write {}", escape_path(&path)))?;
     held().push(path.clone());
-    Ok(Held { path, _lock: lock })
+    Ok(Held {
+        path,
+        _lock: lock,
+        leave: false,
+    })
 }
 
 /// The lease at `path`: whether its lock is held, and what it says.
@@ -438,5 +454,16 @@ mod tests {
         let found = find(&set).unwrap();
         found.delete().unwrap();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_lease_left_on_purpose_is_dead_and_stays() {
+        let temp = tempfile::tempdir().unwrap();
+        let set = temp.path().join("wt/a");
+        std::fs::create_dir_all(set.parent().unwrap()).unwrap();
+        take(&lease(&set)).unwrap().leave();
+        let found = find(&set).unwrap();
+        assert!(!found.live && !found.is_mine());
+        assert!(found.lease.is_some());
     }
 }

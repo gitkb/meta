@@ -105,15 +105,13 @@ fn set_of_admin(admin: &Path, worktree_root: &Path) -> Option<PathBuf> {
 }
 
 /// Why an existing set with `record` is due for pruning, if it is: the
-/// reason and, for an expired TTL, its age. An ephemeral set lives only as
-/// long as the run that made it holds its lease (see `lease`); prune never
-/// asks about one whose lease is held. (A set whose repositories were
-/// removed from the project, or whose project is gone, is no longer this
-/// workspace's: prune leaves it.)
+/// reason and, for an expired TTL, its age. (An ephemeral set is pruned once
+/// the run that made it is gone and left its lease beside it: see the
+/// leases in `handle_prune`. No lease is no proof the run ended: `git clean`
+/// may have deleted it. A set whose repositories were removed from the
+/// project, or whose project is gone, is no longer this workspace's: prune
+/// leaves it.)
 fn eligible(record: &SetRecord, now: i64) -> Option<(String, Option<u64>)> {
-    if record.ephemeral {
-        return Some(("ephemeral".to_string(), None));
-    }
     // Check TTL expiration
     let remaining = record.ttl_remaining(now).filter(|r| *r <= 0)?;
     // Total age = configured TTL + seconds past expiry

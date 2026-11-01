@@ -205,7 +205,11 @@ fn handle_ephemeral_exec(
     // Clean up before propagating the result; a failed cleanup (such as a
     // checkout git cannot delete) fails the command too
     let cleanup = guard.finish();
-    drop(lease);
+    // a set this run couldn't remove is the next prune's: its lease stays
+    match (&cleanup, lease) {
+        (Err(_), Some(lease)) => lease.leave(),
+        (_, lease) => drop(lease),
+    }
     match (exec_result, cleanup) {
         (Err(e), Err(cleanup_error)) => {
             eprintln!(

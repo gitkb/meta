@@ -371,3 +371,41 @@ fn a_lease_left_by_a_stopped_run_does_not_expire_a_set_made_again() {
         text(&pruned)
     );
 }
+
+/// `git clean -fdx` in the workspace deletes the loose files in the (ignored)
+/// worktrees folder, a running ephemeral set's lease among them. prune must
+/// not take a missing lease for a run that ended.
+#[test]
+fn prune_leaves_an_ephemeral_run_whose_lease_was_deleted() {
+    let temp = tempfile::tempdir().unwrap();
+    let sb = Sandbox::new(&temp.path().canonicalize().unwrap());
+    sb.holding(&sb.root, "command", "");
+    let run = sb.start(&[
+        "exec",
+        "--ephemeral",
+        "eph",
+        "--repo",
+        "backend",
+        "--",
+        sb.root.join("command").to_str().unwrap(),
+    ]);
+    sb.wait_for("command-started");
+    let worktrees = sb.ws.join(".worktrees");
+    let mut deleted = 0;
+    for entry in fs::read_dir(&worktrees).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            fs::remove_file(path).unwrap();
+            deleted += 1;
+        }
+    }
+    assert_eq!(deleted, 2, "the lease and its lock");
+
+    let pruned = sb.run(&["prune"]);
+    assert!(pruned.status.success(), "{}", text(&pruned));
+    assert!(worktrees.join("eph/backend").exists(), "{}", text(&pruned));
+
+    sb.release("command");
+    let run = run.wait_with_output().unwrap();
+    assert!(run.status.success(), "{}", text(&run));
+}

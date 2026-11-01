@@ -2432,3 +2432,26 @@ J
     git -C backend worktree repair "$BATS_TEST_TMPDIR/backend-moved"
     git -C "$BATS_TEST_TMPDIR/backend-moved" status --short
 }
+
+@test "the next prune removes a set made with create --ephemeral" {
+    "$META_BIN" git worktree create eph-made --repo backend --no-deps --ephemeral
+    [ -d .worktrees/eph-made/backend ]
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"eph-made (ephemeral"* ]]
+    [ ! -e .worktrees/eph-made ]
+    [ -z "$(ls -A .worktrees)" ]
+}
+
+@test "an ephemeral set its run couldn't remove itself is left for prune" {
+    [ "$(id -u)" -ne 0 ] || skip "root writes any directory"
+    run "$META_BIN" git worktree exec --ephemeral eph-left --repo backend -- chmod 555 .
+    [ "$status" -ne 0 ]
+    chmod -R u+w "$TEST_DIR/.worktrees/eph-left"
+    # the run left its lease: prune takes the set for one whose run ended
+    # (and keeps it here, as the failed removal left a folder git no longer
+    # knows)
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"eph-left (ephemeral, the run that made it"* ]]
+}

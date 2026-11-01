@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use meta_cli::worktree::discover_worktree_members;
-use meta_git_lib::worktree::git_ops::git_worktree_remove;
+use meta_git_lib::worktree::git_ops::{git_rev_parse, git_worktree_remove};
 use meta_git_lib::worktree::helpers::{resolve_worktree_root, Configs};
 use meta_git_lib::worktree::hooks::fire_post_prune;
 use meta_git_lib::worktree::lease;
@@ -226,10 +226,14 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
             {
                 continue;
             }
-            to_remove.push((
-                create_prune_entry(name, path_key, "orphaned (missing directory)", None),
-                Some(found.clone()),
-            ));
+            let entry = create_prune_entry(name, path_key, "orphaned (missing directory)", None);
+            match why_kept(records.iter().map(|(admin, _)| admin.as_path())) {
+                Some(why) => kept.push(PruneEntry {
+                    reason: format!("{}, but {why}", entry.reason),
+                    ..entry
+                }),
+                None => to_remove.push((entry, Some(found.clone()))),
+            }
             continue;
         }
 
@@ -239,16 +243,22 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
         for (admin, record) in records.iter().filter(|_| is_plain_dir(set)) {
             if let Some(checkout) = record::checkout(admin).filter(|_| record::checkout_gone(admin))
             {
-                to_remove.push((
-                    create_prune_entry(
-                        name.clone(),
-                        checkout.display().to_string(),
-                        "a worktree of it whose folder was deleted",
-                        None,
-                    ),
-                    Some(record.clone()),
-                ));
-                gone_members.insert(checkout, (admin.clone(), record.clone()));
+                let entry = create_prune_entry(
+                    name.clone(),
+                    checkout.display().to_string(),
+                    "a worktree of it whose folder was deleted",
+                    None,
+                );
+                match why_kept([admin.as_path()]) {
+                    Some(why) => kept.push(PruneEntry {
+                        reason: format!("{}, but {why}", entry.reason),
+                        ..entry
+                    }),
+                    None => {
+                        to_remove.push((entry, Some(record.clone())));
+                        gone_members.insert(checkout, (admin.clone(), record.clone()));
+                    }
+                }
             }
         }
 
@@ -476,15 +486,16 @@ fn forget(set: &Path, sets: &Records) -> Result<Option<String>> {
 }
 
 /// Have git drop its registration of the worktree whose admin directory is
-/// `admin`, if its checkout is still gone and it still holds the record
-/// prune read: git removes that one registration, and the record with it,
-/// so the name and branch can be used again. Nothing else in the repository
-/// is pruned. Left registered, and why: one with a git operation under way,
-/// a locked one (on a drive that isn't mounted, say), and one whose
-/// detached HEAD is a commit no branch or tag holds.
+/// `admin`, if its checkout is still gone, it still holds the record prune
+/// read, and [`must_keep`] finds nothing it holds: git removes that one
+/// registration, and the record with it, so the name and branch can be used
+/// again. Nothing else in the repository is pruned. Why it stays, if it does.
 fn drop_registration(admin: &Path, record: &SetRecord) -> Result<Option<String>> {
     if !record::checkout_gone(admin) || record::read(admin)?.as_ref() != Some(record) {
         return Ok(None);
+    }
+    if let Some(why) = must_keep(admin)? {
+        return Ok(Some(why));
     }
     let (Some(checkout), Some(repo)) = (
         record::checkout(admin),
@@ -492,23 +503,52 @@ fn drop_registration(admin: &Path, record: &SetRecord) -> Result<Option<String>>
     ) else {
         anyhow::bail!("Cannot read git's entry {}", escape_path(admin));
     };
-    if let Some(operation) = operation_at(admin) {
-        return Ok(Some(format!(
-            "{}: a {operation} is under way there, and git keeps its state (an autostash, say) \
-             with the entry",
-            escape_path(&checkout)
-        )));
-    }
+    git_worktree_remove(repo, &checkout, false).map(|()| None)
+}
+
+/// Why git's entries for the worktrees whose admin directories are `admins`
+/// (their checkouts gone) must stay, if any must (see [`must_keep`]).
+fn why_kept<'a>(admins: impl IntoIterator<Item = &'a Path>) -> Option<String> {
+    let why: Vec<String> = admins
+        .into_iter()
+        .filter_map(|admin| match must_keep(admin) {
+            Ok(why) => why,
+            Err(e) => Some(format!("cannot check {} ({e:#})", escape_path(admin))),
+        })
+        .collect();
+    (!why.is_empty()).then(|| why.join("; "))
+}
+
+/// Why git's entry for the worktree whose admin directory is `admin` (its
+/// checkout gone) must stay, if it must. It goes only when nothing but the
+/// deleted folder could have held work: not locked (a drive that isn't
+/// mounted?), no operation under way (a rebase keeps its autostash there),
+/// no refs of its own, HEAD on a branch that exists or a commit some branch
+/// or tag holds, and nothing staged that HEAD doesn't have.
+fn must_keep(admin: &Path) -> Result<Option<String>> {
+    let (Some(checkout), Some(repo)) = (
+        record::checkout(admin),
+        admin.parent().and_then(Path::parent),
+    ) else {
+        anyhow::bail!("Cannot read git's entry {}", escape_path(admin));
+    };
+    let keep = |why: String| Ok(Some(format!("{}: {why}", escape_path(&checkout))));
     if admin.join("locked").symlink_metadata().is_ok() {
-        return Ok(Some(format!(
-            "git has {} locked (on a drive that isn't mounted?)",
-            escape_path(&checkout)
-        )));
+        return keep("git has it locked (on a drive that isn't mounted?)".to_string());
+    }
+    if let Some(operation) = operation_at(admin) {
+        return keep(format!(
+            "a {operation} is under way there, and git keeps its state with the entry"
+        ));
+    }
+    if std::fs::read_dir(admin.join("refs")).is_ok_and(|mut refs| refs.next().is_some()) {
+        return keep("it has refs of its own".to_string());
     }
     let head = std::fs::read_to_string(admin.join("HEAD")).unwrap_or_default();
     let head = head.trim();
-    if !head.is_empty() && !head.starts_with("ref:") {
-        let holders = meta_core::git::run(
+    let held = match head.strip_prefix("ref:") {
+        Some(branch) => git_rev_parse(repo, branch.trim())?.is_some(),
+        None => !meta_core::git::run(
             repo,
             [
                 "for-each-ref",
@@ -517,17 +557,29 @@ fn drop_registration(admin: &Path, record: &SetRecord) -> Result<Option<String>>
                 "--count=1",
                 "--format=%(refname)",
             ],
-        )?;
-        if holders.trim().is_empty() {
-            return Ok(Some(format!(
-                "{}: its detached HEAD {} is on no branch or tag (if it was moved, run 'git \
-                 worktree repair')",
-                escape_path(&checkout),
-                escape(head)
-            )));
-        }
+        )?
+        .trim()
+        .is_empty(),
+    };
+    if !held {
+        return keep(format!(
+            "its HEAD {} is on no branch or tag (if it was moved, run 'git worktree repair')",
+            escape(head)
+        ));
     }
-    git_worktree_remove(repo, &checkout, false).map(|()| None)
+    let staged = meta_core::git::git(repo)
+        .arg("--git-dir")
+        .arg(admin)
+        .args(["diff-index", "--cached", "--quiet", "HEAD", "--"])
+        .output()?;
+    match staged.status.code() {
+        Some(0) => Ok(None),
+        Some(1) => keep("it has staged changes only its git entry holds".to_string()),
+        _ => keep(format!(
+            "its staged changes can't be checked ({})",
+            escape(String::from_utf8_lossy(&staged.stderr).trim())
+        )),
+    }
 }
 
 /// Whether `path` is a directory reached without following any link.

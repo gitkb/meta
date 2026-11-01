@@ -2313,8 +2313,14 @@ wait_for() {
     "$META_BIN" git worktree create part --repo backend --repo frontend --no-deps
     git -C backend worktree lock "$TEST_DIR/.worktrees/part/backend"
     rm -rf .worktrees/part/backend .worktrees/part/frontend
+    # the preview says what prune then does
+    run "$META_BIN" git worktree prune --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Would prune 1 "* ]]
+    [[ "$output" == *"Kept 1 "*"locked"* ]]
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
+    [[ "$output" == *"Pruned 1 "* ]]
     [[ "$output" == *"locked"* ]]
     [ "$(git -C frontend worktree list | wc -l)" -eq 1 ]
     [ "$(git -C backend worktree list | wc -l)" -eq 2 ]
@@ -2415,4 +2421,41 @@ J
         sleep 0.1
     done
     [ -z "$state" ] || [[ "$state" == Z* ]]
+}
+
+@test "prune keeps git's entry for a deleted worktree with staged changes, alone or with its set" {
+    "$META_BIN" git worktree create st --repo backend --repo frontend --no-deps
+    echo staged > .worktrees/st/backend/only-staged.txt
+    git -C .worktrees/st/backend add only-staged.txt
+    local admin
+    admin="$(git -C .worktrees/st/backend rev-parse --absolute-git-dir)"
+    rm -rf .worktrees/st/backend
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"staged changes only its git entry holds"* ]]
+    git --git-dir="$admin" show :only-staged.txt
+
+    rm -rf .worktrees/st
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"st (orphaned (missing directory), but"*"staged changes"* ]]
+    git --git-dir="$admin" show :only-staged.txt
+    [ "$(git -C frontend worktree list | wc -l)" -eq 2 ]
+}
+
+@test "a lease left in another repository doesn't make prune remove a set made again at its path" {
+    slow_checkout_hook 30
+    "$META_BIN" git worktree create same --repo backend --no-deps &
+    local pid=$!
+    wait_for "$TEST_DIR/hook-started"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    git config --global --unset core.hooksPath
+    rm -rf .worktrees/same
+
+    "$META_BIN" git worktree create same --repo frontend --no-deps
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"same ("* ]]
+    [ -d .worktrees/same/frontend ]
 }

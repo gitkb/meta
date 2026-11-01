@@ -326,6 +326,15 @@ pub(crate) fn handle_create(
         };
         let git_dir = meta_core::gitdir::common_dir(first)?
             .ok_or_else(|| anyhow::anyhow!("{} is not a git repository", escape_path(first)))?;
+        // A lease for this path left in another repository (by a create of
+        // other repos, whose set was then deleted by hand) would name the
+        // set this call makes: retire it first
+        if let Some(found) = lease::find(&workspace::Workspace::of(&configs.here).repos, &set) {
+            if found.live {
+                anyhow::bail!("Worktree set {} is {}", escape_path(&set), found.doing());
+            }
+            found.delete()?;
+        }
         lease::take(
             &git_dir,
             &lease::Lease {

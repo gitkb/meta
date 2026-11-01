@@ -52,7 +52,7 @@ pub struct CreateArgs {
     #[arg(long, value_name = "OWNER/REPO#N", conflicts_with = "commit_ish")]
     pub from_pr: Option<String>,
 
-    /// Mark for automatic cleanup
+    /// Let the next `prune` remove it
     #[arg(long)]
     pub ephemeral: bool,
 

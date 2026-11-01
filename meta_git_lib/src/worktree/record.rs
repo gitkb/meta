@@ -99,15 +99,11 @@ pub fn write(admin: &Path, record: &SetRecord) -> Result<()> {
     written.with_context(|| format!("Cannot write {}", escape_path(&path)))
 }
 
-/// Delete the record in a worktree's admin directory, if any.
-pub fn delete(admin: &Path) -> Result<()> {
-    let path = admin.join(RECORD_FILE);
-    match std::fs::remove_file(&path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(e).with_context(|| format!("Cannot delete {}", escape_path(&path)))
-        }
-        _ => Ok(()),
-    }
+/// Where git checked out the worktree whose admin directory is `admin`, if
+/// git's link back to it can be read. (git may write it relative to `admin`.)
+pub fn checkout(admin: &Path) -> Option<PathBuf> {
+    let gitdir = std::fs::read_to_string(admin.join("gitdir")).ok()?;
+    Some(admin.join(gitdir.trim()).parent()?.to_path_buf())
 }
 
 /// Whether the checkout of the worktree whose admin directory is `admin`
@@ -210,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn write_read_delete_round_trip() {
+    fn write_read_round_trip() {
         let temp = tempfile::tempdir().unwrap();
         let admin = temp.path().join("worktrees/wt");
         std::fs::create_dir_all(&admin).unwrap();
@@ -225,8 +221,7 @@ mod tests {
         assert_eq!(found[0].0, admin);
         assert_eq!(found[0].1.as_ref().unwrap(), &r);
 
-        delete(&admin).unwrap();
-        delete(&admin).unwrap();
+        std::fs::remove_file(admin.join(RECORD_FILE)).unwrap();
         assert_eq!(read(&admin).unwrap(), None);
         assert!(in_repo(temp.path()).is_empty());
     }

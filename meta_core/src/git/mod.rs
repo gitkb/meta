@@ -130,7 +130,8 @@ where
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let output = git(dir).args(&args).output().map_err(|e| {
+    // a child this program owns: stopping it stops git and its hooks too
+    let output = crate::children::output(git(dir).args(&args)).map_err(|e| {
         anyhow::anyhow!(
             "Cannot run git {} in {}: {e}",
             escape(&shown()),

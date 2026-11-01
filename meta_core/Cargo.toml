@@ -15,6 +15,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml_ng = "0.10"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process", "termios"] }
+signal-hook = { version = "0.4", features = ["extended-siginfo"] }
+
 [dev-dependencies]
 tempfile = "3.3"
 

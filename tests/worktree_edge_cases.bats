@@ -2211,6 +2211,104 @@ YAML
     git -C "$TEST_DIR/tools/cli" remote add origin git@github.com:org/cli.git
     run "$META_BIN" -r -t rust project check
     [[ "$output" == *"All projects are cloned"* ]]
+
+# A post-checkout hook that says it started, then takes $1 seconds
+slow_checkout_hook() {
+    mkdir -p "$TEST_DIR/hooks"
+    printf '#!/bin/sh\ntouch "%s/hook-started"\nsleep %s\n' "$TEST_DIR" "$1" > "$TEST_DIR/hooks/post-checkout"
+    chmod +x "$TEST_DIR/hooks/post-checkout"
+    git config --global core.hooksPath "$TEST_DIR/hooks"
+}
+
+# Wait up to 20 s for the file $1
+wait_for() {
+    for _ in $(seq 200); do [ -e "$1" ] && return 0; sleep 0.1; done
+    return 1
+}
+
+@test "a create stopped part way leaves a set remove takes back without --force" {
+    slow_checkout_hook 30
+    "$META_BIN" git worktree create half --all &
+    local pid=$!
+    wait_for "$TEST_DIR/hook-started"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    git config --global --unset core.hooksPath
+    [ -d .worktrees/half ]
+
+    run "$META_BIN" git worktree create half --all
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"left half-made by pid"* ]]
+
+    run "$META_BIN" git worktree remove half
+    [ "$status" -eq 0 ]
+    [ ! -e .worktrees/half ]
+    for repo in . backend frontend common; do
+        [ "$(git -C "$repo" worktree list | wc -l)" -eq 1 ]
+    done
+    run "$META_BIN" git worktree create half --all
+    [ "$status" -eq 0 ]
+}
+
+@test "remove says which process is still creating a set, and leaves it" {
+    slow_checkout_hook 3
+    "$META_BIN" git worktree create busy --all > /dev/null &
+    local pid=$!
+    wait_for "$TEST_DIR/hook-started"
+    run "$META_BIN" git worktree remove busy --force
+    local removed=$status
+    wait "$pid"
+    git config --global --unset core.hooksPath
+    [ "$removed" -ne 0 ]
+    [[ "$output" == *"being created by pid"* ]]
+    [ -d .worktrees/busy/backend ]
+}
+
+@test "prune removes an ephemeral set whose run was stopped" {
+    "$META_BIN" git worktree exec --ephemeral eph-stopped --repo backend -- \
+        sh -c 'touch "$0/started"; sleep 30' "$TEST_DIR" &
+    local pid=$!
+    wait_for "$TEST_DIR/started"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    [ -d .worktrees/eph-stopped/backend ]
+
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"eph-stopped (ephemeral, the run that made it"* ]]
+    [ ! -e .worktrees/eph-stopped ]
+}
+
+@test "prune leaves a running ephemeral set alone" {
+    "$META_BIN" git worktree exec --ephemeral eph-running --repo backend -- \
+        sh -c 'touch "$0/started"; sleep 3' "$TEST_DIR" &
+    local pid=$!
+    wait_for "$TEST_DIR/started"
+    run "$META_BIN" git worktree prune
+    wait "$pid"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"eph-running"* ]]
+}
+
+@test "a set deleted by hand can be made again after prune" {
+    "$META_BIN" git worktree create again --repo backend --repo frontend --no-deps
+    rm -rf .worktrees/again
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [ "$(git -C backend worktree list | wc -l)" -eq 1 ]
+    run "$META_BIN" git worktree create again --repo backend --repo frontend --no-deps
+    [ "$status" -eq 0 ]
+}
+
+@test "prune drops git's entry for one worktree deleted by hand, not a locked one" {
+    "$META_BIN" git worktree create part --repo backend --repo frontend --no-deps
+    git -C backend worktree lock "$TEST_DIR/.worktrees/part/backend"
+    rm -rf .worktrees/part/backend .worktrees/part/frontend
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"locked"* ]]
+    [ "$(git -C frontend worktree list | wc -l)" -eq 1 ]
+    [ "$(git -C backend worktree list | wc -l)" -eq 2 ]
 }
 
 @test "an absolute worktrees_dir spelled through a link is still ignored in the workspace" {

@@ -5,6 +5,7 @@ use meta_core::ExecutionMode;
 
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::hooks::fire_post_destroy;
+use meta_git_lib::worktree::lease;
 use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
 use meta_git_lib::worktree::types::*;
 use meta_git_lib::worktree::workspace::Workspace;
@@ -32,10 +33,34 @@ pub(crate) fn handle_remove(
         anyhow::bail!("Worktree '{}' not found at {}", name, escape_path(&wt_dir));
     }
 
+    let workspace = Workspace::of(&configs.here);
+    // A set being made is its creator's; one whose creator is gone without
+    // finishing it is meta's to remove, recorded or not. (A run removing
+    // the ephemeral set it made holds that set's lease itself.)
+    let abandoned = match wt_dir
+        .canonicalize()
+        .ok()
+        .and_then(|set| lease::find(&workspace.repos, &set))
+    {
+        Some(found) if found.is_mine() => None,
+        Some(found) if found.live => anyhow::bail!(
+            "Refusing to remove worktree '{name}': it is being created by {}. Wait for that \
+             to finish, or stop it first.",
+            found.holder()
+        ),
+        found => found,
+    };
+
     let check = check_worktree_removal(&wt_dir)?;
+    // In an abandoned set, worktrees not recorded yet are the creator's: meta's
+    let blockers: Vec<&str> = check
+        .blockers
+        .iter()
+        .filter(|b| abandoned.is_none() || !check.missing_records.contains(b))
+        .map(String::as_str)
+        .collect();
     // Only this workspace's sets: a shared worktree directory may hold
     // another workspace's. No flag overrides this.
-    let workspace = Workspace::of(&configs.here);
     let foreign = workspace.foreign_members(&wt_dir, &check);
     if !foreign.is_empty() {
         // Repositories meta couldn't read make sets from them look foreign
@@ -56,15 +81,15 @@ pub(crate) fn handle_remove(
             }
         );
     }
-    if !check.blockers.is_empty() {
+    if !blockers.is_empty() {
         anyhow::bail!(
             "Refusing to remove worktree '{name}':\n  {}\n\
              meta only deletes linked worktrees it can check; move or delete these yourself first.",
-            check.blockers.join("\n  ")
+            blockers.join("\n  ")
         );
     }
     // Only delete what meta created: it records each worktree it makes.
-    if check.record().is_none() {
+    if check.record().is_none() && abandoned.is_none() {
         anyhow::bail!(
             "Refusing to remove {}: meta has no record of creating a worktree set there.\n{}",
             escape_path(&wt_dir),
@@ -110,6 +135,9 @@ pub(crate) fn handle_remove(
     if !preview {
         // Remove exactly what was checked, nested worktrees first
         delete_checked_set(&wt_dir, &check, force, verbose)?;
+        if let Some(found) = &abandoned {
+            found.delete()?;
+        }
 
         // Fire post-destroy hook
         fire_post_destroy(name, &wt_dir, force, Some(&configs.owner));

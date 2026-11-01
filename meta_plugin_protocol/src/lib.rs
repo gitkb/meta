@@ -246,7 +246,25 @@ pub fn output_execution_plan_full(
             spawn_stagger_ms,
         },
     };
-    println!("{}", serde_json::to_string(&response).unwrap());
+    emit(&format!("{}\n", serde_json::to_string(&response).unwrap()));
+}
+
+/// Write `text` to stdout. meta reads a plugin's stdout until the plugin
+/// ends; once meta is gone, the plugin ends quietly instead of panicking.
+fn emit(text: &str) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    match stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(141),
+        Err(e) => {
+            eprintln!("Cannot write the plugin's output: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Read and parse a `PluginRequest` from stdin.
@@ -390,9 +408,14 @@ pub fn run_plugin(plugin: PluginDefinition) {
     match args[1].as_str() {
         "--meta-plugin-info" => {
             let json = serde_json::to_string_pretty(&plugin.info).unwrap();
-            println!("{json}");
+            emit(&format!("{json}\n"));
         }
         "--meta-plugin-exec" => {
+            if let Err(e) = meta_core::children::own() {
+                eprintln!(
+                    "Warning: cannot pass signals on to the programs this plugin starts: {e}"
+                );
+            }
             let mut request = match read_request_from_stdin() {
                 Ok(req) => req,
                 Err(e) => {
@@ -416,11 +439,11 @@ pub fn run_plugin(plugin: PluginDefinition) {
                 }
                 CommandResult::FullPlan(plan) => {
                     let response = PlanResponse { plan };
-                    println!("{}", serde_json::to_string(&response).unwrap());
+                    emit(&format!("{}\n", serde_json::to_string(&response).unwrap()));
                 }
                 CommandResult::Message(msg) => {
                     if !msg.is_empty() {
-                        println!("{msg}");
+                        emit(&format!("{msg}\n"));
                     }
                 }
                 CommandResult::Error(e) => {
@@ -435,14 +458,14 @@ pub fn run_plugin(plugin: PluginDefinition) {
                         eprint!("{}", help_text(&plugin.info));
                         std::process::exit(1);
                     } else {
-                        print!("{}", help_text(&plugin.info));
+                        emit(&help_text(&plugin.info));
                         std::process::exit(0);
                     }
                 }
             }
         }
         "--help" | "-h" => {
-            print!("{}", help_text(&plugin.info));
+            emit(&help_text(&plugin.info));
         }
         _ => {
             eprintln!("Unknown flag: {}. This binary is a meta plugin.", args[1]);

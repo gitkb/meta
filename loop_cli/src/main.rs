@@ -47,6 +47,7 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = meta_core::args::parse::<Cli>();
+    meta_core::children::own()?;
 
     // It writes ~/.looprc alone; the config file here has no say in it
     if cli.add_aliases_to_global_looprc {

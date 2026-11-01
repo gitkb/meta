@@ -473,17 +473,18 @@ fn execute_command_in_directory(
     }
 
     let status = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
-        cmd.stdout(if config.silent {
-            Stdio::null()
-        } else {
-            Stdio::inherit()
-        })
-        .stderr(if config.silent {
-            Stdio::null()
-        } else {
-            Stdio::inherit()
-        })
-        .status()
+        meta_core::children::status(
+            cmd.stdout(if config.silent {
+                Stdio::null()
+            } else {
+                Stdio::inherit()
+            })
+            .stderr(if config.silent {
+                Stdio::null()
+            } else {
+                Stdio::inherit()
+            }),
+        )
         .with_context(|| format!("Failed to run {}", escape(&command)))
     });
     let result = match status {
@@ -576,10 +577,8 @@ fn execute_command_in_directory_capturing(
         }
     }
 
-    let output = cmd_builder
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
+    // stdin from nothing, as `Command::output` gives
+    let output = meta_core::children::output(cmd_builder.stdin(Stdio::null()));
 
     match output {
         Ok(output) => {

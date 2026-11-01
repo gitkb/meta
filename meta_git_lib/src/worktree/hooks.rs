@@ -30,22 +30,23 @@ pub fn fire_worktree_hook(hook_name: &str, payload: &serde_json::Value, owner: O
     // inside it takes the caller's directory with it
     let mut command = Command::new("sh");
     meta_core::git::clear_repo_env(&mut command);
-    let result = command
-        .args(["-c", cmd_str])
-        .current_dir(&owner.dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .and_then(|mut child| {
-            // Write payload then drop stdin to signal EOF before waiting
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
-                let _ = stdin.write_all(payload_json.as_bytes());
-            }
-            // stdin is now dropped — child sees EOF
-            child.wait()
-        });
+    let result = meta_core::children::spawn(
+        command
+            .args(["-c", cmd_str])
+            .current_dir(&owner.dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit()),
+    )
+    .and_then(|mut child| {
+        // Write payload then drop stdin to signal EOF before waiting
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(payload_json.as_bytes());
+        }
+        // stdin is now dropped — child sees EOF
+        child.wait()
+    });
 
     match result {
         Ok(status) if !status.success() => {

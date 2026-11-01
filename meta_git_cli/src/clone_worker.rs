@@ -208,11 +208,10 @@ fn clone_single_repo(
     }
 
     // Run clone
-    match cmd
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
+    match meta_core::children::spawn(
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    ) {
         Ok(mut child) => {
             // Stream stderr for progress updates, and keep its last lines for
             // the failure report (the progress bar is hidden off a terminal).

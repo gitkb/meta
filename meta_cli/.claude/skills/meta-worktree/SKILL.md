@@ -97,14 +97,19 @@ meta git worktree create ci-check --all --ephemeral --meta agent=review-bot --me
 meta git worktree exec --ephemeral lint-check --all -- make lint
 ```
 
-`prune` removes sets whose TTL has expired; for a set whose directory is gone
-it only forgets meta's record. Once its repos are taken out of the meta config,
+`prune` removes sets whose TTL has expired, ephemeral sets whose run has
+ended, and sets a stopped `create` left half-made. For a worktree whose folder
+is gone (or a set whose directory is gone) it has git drop its entry, so the
+name and branch can be used again; it leaves an entry git has locked, or whose
+detached HEAD is a commit no branch or tag holds. Once its repos are taken out of the meta config,
 or the checkout it was made from is moved or deleted, a set is no longer the
 workspace's: remove each member with `git worktree remove`, run in the repo it
 was made from. A member whose repo was deleted with that checkout has no git
 record left, so git can't remove it: copy out any files you want to keep,
-then delete its folder by hand. `--ephemeral` alone only records metadata. A TTL is a backstop for a session that
-dies before removing its sets.
+then delete its folder by hand. `create --ephemeral` makes a set the next
+`prune` removes; `exec --ephemeral` removes its set when the command ends, and
+if the run is stopped first, `prune` removes it. A TTL is a backstop for a
+session that dies before removing its sets.
 
 ## Inspecting Worktrees
 
@@ -164,7 +169,7 @@ meta git worktree remove auth-fix          # refuses a set with work it would lo
 meta git worktree remove auth-fix --force  # discards that work
 meta git worktree remove auth-fix --force --dry-run  # what it would delete
 meta git worktree prune --dry-run          # preview
-meta git worktree prune                    # remove expired (TTL) and orphaned sets of this workspace
+meta git worktree prune                    # remove expired (TTL), ephemeral, half-made and orphaned sets of this workspace
 ```
 
 `remove` and `prune` delete only sets meta created, and check every repo in the
@@ -203,7 +208,10 @@ flag and custom metadata. Git deletes the record with the worktree. The record
 is how `remove` and `prune` know meta made a set: a set made by hand, or by a
 meta from before records, is refused, and so is a set holding a worktree meta
 has no record of (one added by hand with `git worktree add`); remove those with
-`git worktree remove`.
+`git worktree remove`. While `create` (or `exec --ephemeral`) runs, a lease in
+`<repo>/.git/meta-worktree-creating/` names its set: `remove` refuses a set
+that is being created, and takes back one whose creator stopped part way,
+worktrees not recorded yet included.
 `list` scans this project's `.worktrees/` and shows each set's record.
 
 ## Strict Mode
@@ -238,7 +246,7 @@ can't delete something, the error says what was left behind.
 | `--branch <name>` | Override the branch name |
 | `--from-pr <owner/repo#N>` | Start a child repo from a PR's head branch |
 | `--dry-run` | Preview without creating anything |
-| `--ephemeral` | Mark as ephemeral |
+| `--ephemeral` | The next `prune` removes it |
 | `--ttl <duration>` | Make `prune` remove it after this long |
 | `--meta <key=value>` | Record custom metadata |
 | `--strict` | Fail instead of skipping a repo (missing ref, not cloned) |

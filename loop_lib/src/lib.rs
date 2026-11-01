@@ -88,8 +88,9 @@ pub struct CommandResult {
     pub signal: Option<i32>,
     pub directory: PathBuf,
     pub command: String,
-    pub stdout: String,
-    pub stderr: String,
+    /// What the command wrote, as it wrote it (not necessarily UTF-8)
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
 }
 
 impl CommandResult {
@@ -372,8 +373,8 @@ fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
         signal: None,
         directory: dir.to_path_buf(),
         command,
-        stdout: String::new(),
-        stderr,
+        stdout: Vec::new(),
+        stderr: stderr.into_bytes(),
     }
 }
 
@@ -532,7 +533,7 @@ fn execute_command_in_directory_capturing(
 
     // Dry run mode: return what would be executed without running it
     if config.dry_run {
-        let stdout = format!("[DRY RUN] {}", dry_run_line(dir, &command));
+        let stdout = format!("[DRY RUN] {}", dry_run_line(dir, &command)).into_bytes();
         return CommandResult {
             success: true,
             exit_code: Some(0),
@@ -564,8 +565,8 @@ fn execute_command_in_directory_capturing(
                 signal,
                 directory: dir.to_path_buf(),
                 command,
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                stdout: output.stdout,
+                stderr: output.stderr,
             }
         }
         Err(e) => failed_result(
@@ -821,8 +822,8 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
                     success: r.success,
                     exit_code: r.exit_code,
                     signal: r.signal,
-                    stdout: r.stdout,
-                    stderr: r.stderr,
+                    stdout: String::from_utf8_lossy(&r.stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&r.stderr).into_owned(),
                 })
                 .collect(),
         };
@@ -871,9 +872,12 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
     Ok(())
 }
 
-/// The output parallel commands captured, each under its directory's name.
+/// The output parallel commands captured, each under its directory's name:
+/// what a command wrote to stdout on stdout, to stderr on stderr, as it
+/// wrote it.
 fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
-    let has_output = |r: &CommandResult| !r.stdout.trim().is_empty() || !r.stderr.trim().is_empty();
+    let has_output =
+        |r: &CommandResult| !r.stdout.trim_ascii().is_empty() || !r.stderr.trim_ascii().is_empty();
     if results.iter().any(has_output) {
         outln!()?;
     }
@@ -884,11 +888,13 @@ fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> 
         } else {
             outln!("{} {}:", "✗".red(), dir_name.red())?;
         }
-        if !result.stdout.trim().is_empty() {
-            out!("{}", result.stdout)?;
+        if !result.stdout.trim_ascii().is_empty() {
+            meta_core::out::stdout_bytes(&result.stdout)?;
         }
-        if !result.stderr.trim().is_empty() {
-            out!("{}", result.stderr)?;
+        if !result.stderr.trim_ascii().is_empty() {
+            // after the name and the stdout above it, with 2>&1 too
+            meta_core::out::flush()?;
+            meta_core::out::stderr_bytes(&result.stderr);
         }
         outln!()?; // Blank line after each repo's output
     }

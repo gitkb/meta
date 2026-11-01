@@ -404,9 +404,10 @@ impl SubprocessPlugin {
             return Ok(());
         }
 
-        // If stdout doesn't look like JSON, print it (legacy plugin output)
+        // If stdout doesn't look like JSON, print it (legacy plugin output),
+        // as the plugin wrote it
         if !stdout_str.trim().starts_with('{') {
-            return print_output(&stdout_str);
+            return Ok(meta_core::out::stdout_bytes(&output.stdout)?);
         }
 
         // A plan meta cannot read must not pass for success: an older plugin
@@ -427,7 +428,7 @@ impl SubprocessPlugin {
                 escape_path(&self.path)
             ),
             // Not a plan - print output as-is
-            Err(_) => print_output(&stdout_str),
+            Err(_) => Ok(meta_core::out::stdout_bytes(&output.stdout)?),
         }
     }
 }

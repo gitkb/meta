@@ -33,6 +33,11 @@ fn touch_cmd(path: &std::path::Path) -> Vec<String> {
     vec!["touch".to_string(), path.display().to_string()]
 }
 
+/// Captured output as text, for assertions
+fn text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 #[test]
 fn test_expand_directories() {
     let temp_dir = TempDir::new().unwrap();
@@ -204,7 +209,7 @@ fn test_execute_command_in_directory_capturing() {
         execute_command_in_directory_capturing(temp_dir.path(), &sh("echo hello"), &config, None);
     assert!(result.success);
     assert_eq!(result.exit_code, Some(0));
-    assert!(result.stdout.contains("hello"));
+    assert!(text(&result.stdout).contains("hello"));
 
     let result =
         execute_command_in_directory_capturing(temp_dir.path(), &fail_cmd(), &config, None);
@@ -229,7 +234,7 @@ fn test_execute_command_in_directory_capturing_stderr() {
         None,
     );
     assert!(result.success);
-    assert!(result.stderr.contains("error"));
+    assert!(text(&result.stderr).contains("error"));
 }
 
 #[test]
@@ -245,7 +250,7 @@ fn test_execute_command_nonexistent_directory() {
         execute_command_in_directory_capturing(nonexistent, &sh("echo test"), &config, None);
     assert!(!result.success);
     assert_eq!(result.exit_code, Some(1));
-    assert!(result.stderr.contains("does not exist"));
+    assert!(text(&result.stderr).contains("does not exist"));
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -261,9 +266,9 @@ fn git_sees(argv: &[&str], aliases: &BTreeMap<String, String>) -> String {
     };
     let result =
         execute_command_in_directory_capturing(temp_dir.path(), &strings(argv), &config, None);
-    assert!(result.success, "{}", result.stderr);
+    assert!(result.success, "{}", text(&result.stderr));
     assert!(fs::read_dir(temp_dir.path()).unwrap().next().is_none());
-    result.stdout.trim().to_string()
+    text(&result.stdout).trim().to_string()
 }
 
 #[test]
@@ -306,7 +311,11 @@ fn aliases_expand_into_words_not_shell() {
         let result =
             execute_command_in_directory_capturing(Path::new("."), &strings(&["q"]), &config, None);
         assert!(!result.success);
-        assert!(result.stderr.contains("Alias 'q'"), "{}", result.stderr);
+        assert!(
+            text(&result.stderr).contains("Alias 'q'"),
+            "{}",
+            text(&result.stderr)
+        );
     }
 }
 
@@ -390,8 +399,8 @@ fn test_execute_command_in_directory_capturing_dry_run() {
     let result =
         execute_command_in_directory_capturing(temp_dir.path(), &sh("echo hello"), &config, None);
     assert!(result.success);
-    assert!(result.stdout.contains("[DRY RUN]"));
-    assert!(result.stdout.contains("echo hello"));
+    assert!(text(&result.stdout).contains("[DRY RUN]"));
+    assert!(text(&result.stdout).contains("echo hello"));
 }
 
 #[test]
@@ -770,7 +779,7 @@ fn a_refused_command_is_a_failed_result_and_never_runs() {
         }
         .unwrap();
         assert!(!results[0].success);
-        assert_eq!(results[0].stderr, "not a repository\n");
+        assert_eq!(text(&results[0].stderr), "not a repository\n");
         assert!(!temp_dir.path().join("ran").exists());
     }
 }

@@ -54,8 +54,10 @@ fn exec_runs_only_in_projects_that_are_their_own_repository() {
         ("plain", "not a git repository (folder exists, no .git)"),
         ("missing", "not cloned (run 'meta git update')"),
     ];
+    // on stderr, as a command's own errors are
+    let stderr = String::from_utf8_lossy(&out.stderr);
     for (_, reason) in why {
-        assert!(stdout.contains(reason), "{stdout}");
+        assert!(stderr.contains(reason), "{stderr}");
     }
 
     // and each is a failed result in the JSON, never left out of it

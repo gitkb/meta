@@ -731,6 +731,20 @@ EOF
     [ -z "$(find "$TEST_DIR" -name ran)" ]
 }
 
+@test "exec keeps each command's stdout on stdout and stderr on stderr, bytes as written" {
+    for mode in --parallel --sequential; do
+        run bash -c '"$1" "$2" --include api exec -- sh -c "echo OUT; echo ERR >&2" 2>/dev/null' _ "$META_BIN" "$mode"
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"OUT"* ]]
+        [[ "$output" != *"ERR"* ]]
+        run bash -c '"$1" "$2" --include api exec -- sh -c "echo ERR >&2" 2>&1 >/dev/null' _ "$META_BIN" "$mode"
+        [[ "$output" == *"ERR"* ]]
+        # not UTF-8: passed on as it is
+        run bash -c '"$1" "$2" --include api exec -- printf "a\377b" | od -An -c' _ "$META_BIN" "$mode"
+        [[ "$output" == *"a 377   b"* ]]
+    done
+}
+
 @test "exec stdout broken pipe exits quietly without a panic" {
     for mode in --parallel --sequential; do
         run bash -c 'set -o pipefail; "$1" "$2" exec -- seq 1 20000 2>"$3" | head -1' _ "$META_BIN" "$mode" "$TEST_DIR/stderr"

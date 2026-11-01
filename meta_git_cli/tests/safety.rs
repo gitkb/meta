@@ -672,6 +672,20 @@ fn a_failing_hook_is_a_warning_naming_it_and_an_error_under_strict() {
     assert!(stderr(&out).contains("code 3"), "{}", stderr(&out));
     assert!(String::from_utf8_lossy(&out.stdout).contains("Created worktree"));
     assert!(ws.join(".worktrees/s/a").exists());
+
+    #[cfg(unix)]
+    {
+        let hooks = json!({"post-create": "kill -9 $$"});
+        let config = json!({"projects": {"a": "unused"}, "worktree": {"hooks": hooks}});
+        fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
+        let out = run(&["create", "k", "--repo", "a", "--no-deps"], false);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains("The post-create hook was killed by signal 9"),
+            "{}",
+            stderr(&out)
+        );
+    }
 }
 
 #[test]

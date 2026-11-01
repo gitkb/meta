@@ -50,10 +50,14 @@ pub fn fire_worktree_hook(
         child.wait()
     })
     .with_context(|| format!("{hook} could not run"))?;
+    #[cfg(unix)]
+    if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
+        anyhow::bail!("{hook} was killed by signal {signal}");
+    }
     match status.code() {
         Some(0) => Ok(()),
         Some(code) => anyhow::bail!("{hook} exited with code {code}"),
-        None => anyhow::bail!("{hook} was ended by {status}"),
+        None => anyhow::bail!("{hook} ended without an exit code ({status})"),
     }
 }
 

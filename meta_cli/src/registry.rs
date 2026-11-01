@@ -369,15 +369,13 @@ impl RegistryClient {
     /// for the latest release tag.
     pub fn get_latest_version(shorthand: &str) -> Result<String> {
         // Parse shorthand to extract user/repo
-        let parts: Vec<&str> = shorthand.split('@').collect();
-        let repo_path = parts[0];
-        let parts: Vec<&str> = repo_path.split('/').collect();
-
-        if parts.len() != 2 {
+        let repo_path = shorthand.split('@').next().unwrap_or_default();
+        let Some((user, repo)) = repo_path
+            .split_once('/')
+            .filter(|(_, repo)| !repo.contains('/'))
+        else {
             anyhow::bail!("Invalid GitHub shorthand: {}", escape(shorthand));
-        }
-
-        let (user, repo) = (parts[0], parts[1]);
+        };
         let api_url = format!(
             "https://api.github.com/repos/{}/{}/releases/latest",
             user, repo
@@ -404,8 +402,9 @@ impl RegistryClient {
         let json: serde_json::Value =
             serde_json::from_str(&body).with_context(|| "Failed to parse GitHub API response")?;
 
-        let tag_name = json["tag_name"]
-            .as_str()
+        let tag_name = json
+            .get("tag_name")
+            .and_then(serde_json::Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("No tag_name in release"))?;
 
         Ok(tag_name.to_string())
@@ -529,13 +528,8 @@ impl GitHubShorthand {
             return None;
         }
 
-        let parts: Vec<&str> = input.splitn(2, '/').collect();
-        if parts.len() != 2 {
-            return None;
-        }
-
-        let user = parts[0].to_string();
-        let repo_and_version = parts[1];
+        let (user, repo_and_version) = input.split_once('/')?;
+        let user = user.to_string();
 
         // Reject if repo contains additional slashes
         if repo_and_version.matches('/').count() > 0 {
@@ -543,9 +537,8 @@ impl GitHubShorthand {
         }
 
         // Check for @version suffix
-        if let Some(at_pos) = repo_and_version.find('@') {
-            let repo = repo_and_version[..at_pos].to_string();
-            let version = repo_and_version[at_pos + 1..].to_string();
+        if let Some((repo, version)) = repo_and_version.split_once('@') {
+            let (repo, version) = (repo.to_string(), version.to_string());
 
             if user.is_empty() || repo.is_empty() || version.is_empty() {
                 return None;
@@ -781,7 +774,10 @@ impl PluginInstaller {
             self.record_installation(plugin_name, url.to_string(), None)?;
         }
 
-        let primary_plugin = installed.first().unwrap().clone();
+        let primary_plugin = installed
+            .first()
+            .context("The plugin archive installed no plugin")?
+            .clone();
         info!("Successfully installed: {}", installed.join(", "));
 
         Ok(primary_plugin)
@@ -837,7 +833,10 @@ impl PluginInstaller {
                         )?;
                     }
 
-                    let primary_plugin = installed.first().unwrap().clone();
+                    let primary_plugin = installed
+                        .first()
+                        .context("The plugin archive installed no plugin")?
+                        .clone();
                     info!("Successfully installed: {}", installed.join(", "));
                     return Ok(primary_plugin);
                 }
@@ -863,12 +862,9 @@ impl PluginInstaller {
         // Determine version component
         let version_paths = if let Some(version) = &shorthand.version {
             // Try both with and without 'v' prefix
-            if version.starts_with('v') {
+            if let Some(bare) = version.strip_prefix('v') {
                 // If version already has 'v', try with and without
-                vec![
-                    format!("download/{version}"),
-                    format!("download/{}", version.strip_prefix('v').unwrap()),
-                ]
+                vec![format!("download/{version}"), format!("download/{bare}")]
             } else {
                 // If version doesn't have 'v', try both
                 vec![
@@ -1562,7 +1558,7 @@ mod tests {
         let later_header = {
             let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&zip_data)).unwrap();
             let file = archive.by_index(1).unwrap();
-            file.header_start() as usize
+            usize::try_from(file.header_start()).unwrap()
         };
         zip_data[later_header..later_header + 4].copy_from_slice(b"BAD!");
 

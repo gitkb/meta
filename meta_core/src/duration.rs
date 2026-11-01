@@ -17,8 +17,11 @@ pub fn parse_duration(s: &str) -> anyhow::Result<u64> {
     let (num_str, multiplier) = if s.chars().all(|c| c.is_ascii_digit()) {
         (s, 1)
     } else {
-        let suffix_at = s.len() - s.chars().last().map_or(0, char::len_utf8);
-        let (num_str, suffix) = s.split_at(suffix_at);
+        // the last character is the suffix
+        let mut chars = s.chars();
+        chars.next_back();
+        let num_str = chars.as_str();
+        let suffix = s.strip_prefix(num_str).unwrap_or_default();
         let multiplier = match suffix {
             "s" => 1,
             "m" => 60,
@@ -117,7 +120,7 @@ mod tests {
         ] {
             assert_eq!(format_duration(secs), text);
             if secs > 0 {
-                assert_eq!(parse_duration(text).unwrap(), secs as u64);
+                assert_eq!(parse_duration(text).unwrap(), secs.unsigned_abs());
             }
         }
     }

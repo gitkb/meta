@@ -220,18 +220,13 @@ impl RepoState {
             QueryCondition::Branch(expected) => self.branch.as_ref() == Some(expected),
             QueryCondition::Tag(expected) => self.tags.iter().any(|t| t == expected),
             QueryCondition::ModifiedIn(duration) => {
-                if let Some(commit_time) = self.last_commit_time {
-                    let commit_time =
-                        SystemTime::UNIX_EPOCH + Duration::from_secs(commit_time as u64);
-                    let now = SystemTime::now();
-                    if let Ok(elapsed) = now.duration_since(commit_time) {
-                        elapsed <= *duration
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
+                // a commit dated before 1970, or past what a time can
+                // hold, is no recent one
+                self.last_commit_time
+                    .and_then(|secs| u64::try_from(secs).ok())
+                    .and_then(|secs| SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(secs)))
+                    .and_then(|commit_time| SystemTime::now().duration_since(commit_time).ok())
+                    .is_some_and(|elapsed| elapsed <= *duration)
             }
             QueryCondition::Language(lang) => self
                 .build_systems
@@ -474,10 +469,13 @@ mod tests {
             ahead: Some(2),
             behind: Some(0),
             last_commit_time: Some(
-                SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64,
+                i64::try_from(
+                    SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                )
+                .unwrap(),
             ),
             last_commit_hash: Some("abc123".to_string()),
             last_commit_message: Some("test commit".to_string()),

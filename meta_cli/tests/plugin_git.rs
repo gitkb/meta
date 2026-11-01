@@ -1,5 +1,10 @@
 //! Integration tests for meta CLI and plugin behavior
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
+
 use std::fs;
 use std::path::Path;
 use tempfile::tempdir;

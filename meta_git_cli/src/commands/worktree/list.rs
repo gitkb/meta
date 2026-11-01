@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::*;
 use meta_core::display::{escape, escape_path};
@@ -106,7 +106,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
     let worktree_root = match (&location, std::env::var_os("META_WORKTREES")) {
         (Some((_, root)), None) => root
             .parent()
-            .expect("worktree location has a parent")
+            .context("The worktree set has no parent folder")?
             .to_path_buf(),
         _ => {
             let configs = Configs::find_optional(&cwd)?;

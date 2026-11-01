@@ -1,4 +1,10 @@
 //! Plugin scope and metadata probing must not break unrelated commands.
+
+#![expect(
+    clippy::disallowed_methods,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
 #![cfg(unix)]
 
 use std::fs;

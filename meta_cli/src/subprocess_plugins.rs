@@ -46,6 +46,10 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<PluginInfo, NoInfo> {
         ))
     };
     let deadline = Instant::now() + Duration::from_secs(5);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a plugin is meta's own program, not one in a repo"
+    )]
     let mut command = Command::new(path);
     command
         .arg("--meta-plugin-info")
@@ -377,6 +381,10 @@ impl SubprocessPlugin {
         // A plugin may answer without reading its request; then its output
         // and exit status decide, not the pipe. Meta shows what it prints,
         // so it colours as meta does.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a plugin is meta's own program, not one in a repo"
+        )]
         let mut plugin = Command::new(&self.path);
         plugin
             .arg("--meta-plugin-exec")

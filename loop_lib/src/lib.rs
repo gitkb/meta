@@ -173,6 +173,10 @@ fn prompt_user(question: &str) -> Result<bool> {
 /// The aliases your interactive shell defines (`alias` in `$SHELL -i`).
 fn shell_aliases() -> Result<BTreeMap<String, String>> {
     let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the user's shell, in no repo: it lists their aliases"
+    )]
     let output = Command::new(&shell)
         .args(["-i", "-c", "alias"])
         .output()
@@ -354,11 +358,10 @@ fn build_command(
     let (program, args) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("No command given"))?;
-    let mut cmd = Command::new(program);
-    cmd.args(args).current_dir(dir);
     // Each directory is its own repository: a GIT_DIR from a git hook around
     // meta would point git in every one of them at the hook's
-    meta_core::git::clear_repo_env(&mut cmd);
+    let mut cmd = meta_core::git::in_repo(program, dir);
+    cmd.args(args);
     // Plugin-specified environment variables (e.g., GIT_PAGER=cat)
     if let Some(extra) = extra_env {
         cmd.envs(extra);

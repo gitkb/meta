@@ -260,6 +260,9 @@ mod imp {
             children.groups.retain(|group| group_alive(*group));
             children.groups.push(pid);
         }
+        // held from the check above to here: a signal that stops this
+        // program either came first or sees the child
+        drop(children);
         Ok(child)
     }
 

@@ -1,5 +1,10 @@
 //! Workspaces for the tests, and calling a tool as a client does.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
+
 use crate::tools::{Reply, TOOLS};
 use crate::McpServer;
 use std::path::Path;

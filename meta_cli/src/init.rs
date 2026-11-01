@@ -785,6 +785,10 @@ fn merge_hooks_into_settings(
 fn agent_cli_available() -> bool {
     use std::process::{Command, Stdio};
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a probe for the agent CLI, in no repo"
+    )]
     Command::new("agent")
         .arg("--version")
         .stdout(Stdio::null())

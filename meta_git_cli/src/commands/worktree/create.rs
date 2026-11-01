@@ -348,7 +348,11 @@ pub(crate) fn handle_create(
         if let Some(ttl) = ttl_seconds {
             outln!(
                 "  {}",
-                format!("[TTL: {}]", format_duration(ttl as i64)).dimmed()
+                format!(
+                    "[TTL: {}]",
+                    format_duration(i64::try_from(ttl).unwrap_or(i64::MAX))
+                )
+                .dimmed()
             )?;
         }
     }
@@ -492,7 +496,10 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
         outln!("Ephemeral: true")?;
     }
     if let Some(ttl) = plan.ttl_seconds {
-        outln!("TTL: {}", format_duration(ttl as i64))?;
+        outln!(
+            "TTL: {}",
+            format_duration(i64::try_from(ttl).unwrap_or(i64::MAX))
+        )?;
     }
     if !plan.custom_meta.is_empty() {
         outln!(
@@ -842,6 +849,10 @@ fn nested_dep_graph(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests start the programs they test with"
+)]
 mod tests {
     use super::*;
     use std::process::Command;

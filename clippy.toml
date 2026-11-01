@@ -1,0 +1,17 @@
+# Tests may unwrap, expect and index: a panic there is a failed test
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# Warnings go through meta_core::out::warn, which the user sees
+disallowed-macros = [
+    { path = "log::warn", reason = "a warning for the user goes through meta_core::out::warn" },
+]
+
+disallowed-methods = [
+    { path = "std::env::args", reason = "panics on an argument that isn't UTF-8; use std::env::args_os" },
+    { path = "str::split_at", reason = "panics off a char boundary; use split_at_checked or split_once" },
+    { path = "std::vec::Vec::split_off", reason = "panics past the end" },
+    { path = "std::vec::Vec::drain", reason = "panics on a range past the end; use std::mem::take" },
+    { path = "std::process::Command::new", reason = "a program in a repo starts through meta_core::git::git or meta_core::process::in_repo, which clear the repo's git env" },
+]

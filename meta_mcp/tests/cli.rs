@@ -1,5 +1,13 @@
 //! The meta-mcp binary: its own flags, and the environment its tools run in.
 
+#![expect(
+    clippy::disallowed_methods,
+    clippy::indexing_slicing,
+    clippy::string_slice,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};

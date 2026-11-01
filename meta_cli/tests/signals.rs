@@ -1,6 +1,12 @@
 //! A signal that stops meta stops what meta started: the commands `meta exec`
 //! runs and the plugin a command goes to, with everything they started in
 //! turn, and meta ends as that signal ends a program.
+
+#![expect(
+    clippy::disallowed_methods,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
 #![cfg(unix)]
 
 use std::fs;

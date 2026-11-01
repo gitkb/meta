@@ -73,6 +73,10 @@ impl SshTarget {
 
     /// `ssh` with `args`, for this target, quiet.
     fn ssh(&self, args: &[&str]) -> Command {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ssh to a remote's host, in no repo"
+        )]
         let mut cmd = Command::new("ssh");
         cmd.args(args);
         if self.port != 22 {

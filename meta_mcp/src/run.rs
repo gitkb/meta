@@ -65,6 +65,8 @@ impl Calls {
         }
         state.running = Some(id);
         self.cancelled.store(false, Ordering::SeqCst);
+        // held to here, so a cancel for this call can't come in between
+        drop(state);
         true
     }
 
@@ -93,18 +95,18 @@ impl Calls {
     /// Cancels the running call and starts no other; the ones waiting are
     /// dropped, each said on stderr.
     pub(crate) fn cancel_all(&self) {
-        let dropped: Vec<String> = {
-            let mut state = self.state();
-            state.stopping = true;
-            if state.running.is_some() {
-                self.cancelled.store(true, Ordering::SeqCst);
-            }
-            let queued = state.queued.drain();
-            queued
-                .filter(|(_, cancelled)| !cancelled)
-                .map(|(id, _)| id)
-                .collect()
-        };
+        let mut state = self.state();
+        state.stopping = true;
+        if state.running.is_some() {
+            self.cancelled.store(true, Ordering::SeqCst);
+        }
+        let dropped: Vec<String> = state
+            .queued
+            .drain()
+            .filter(|(_, cancelled)| !cancelled)
+            .map(|(id, _)| id)
+            .collect();
+        drop(state);
         // said with the state free: stderr may be slow to take it
         for id in dropped {
             not_started(&id);
@@ -129,6 +131,8 @@ impl Calls {
         } else if let Some(cancelled) = state.queued.get_mut(id) {
             *cancelled = true;
         }
+        // held to here: the call can't start or end in between
+        drop(state);
     }
 
     /// Whether the running call was cancelled.
@@ -288,6 +292,10 @@ fn stop(child: &mut Child, kill: bool) {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests start the programs they test with"
+)]
 mod tests {
     use super::*;
     #[cfg(unix)]

@@ -1,6 +1,12 @@
 //! `meta exec` acts only in project folders that are repositories of their
 //! own, and names the others.
 
+#![expect(
+    clippy::disallowed_methods,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
+
 use meta_core::git::run;
 use std::fs;
 use tempfile::tempdir;

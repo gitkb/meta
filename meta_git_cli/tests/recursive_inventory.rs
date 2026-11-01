@@ -1,3 +1,10 @@
+#![expect(
+    clippy::disallowed_methods,
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
+
 use serde_json::{json, Value};
 use std::{
     fs,

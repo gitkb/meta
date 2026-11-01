@@ -621,9 +621,7 @@ impl McpServer {
 
     /// `meta` in the workspace root.
     fn meta(&self, workspace: &Workspace) -> Command {
-        let mut meta = Command::new("meta");
-        meta.current_dir(&workspace.dir);
-        meta
+        meta_core::git::in_repo("meta", &workspace.dir)
     }
 
     /// `meta --json` with `args`, in the projects `scope` selects (a project
@@ -1050,10 +1048,8 @@ impl McpServer {
             let Some((program, program_args)) = command(&target.dir) else {
                 continue;
             };
-            let mut cmd = Command::new(program);
-            meta_core::git::clear_repo_env(&mut cmd)
-                .args(&program_args)
-                .current_dir(&target.dir);
+            let mut cmd = meta_core::git::in_repo(program, &target.dir);
+            cmd.args(&program_args);
             let line = format!("{program} {}", program_args.join(" "))
                 .trim_end()
                 .to_string();

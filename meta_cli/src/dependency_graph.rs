@@ -291,10 +291,11 @@ impl DependencyGraph {
             // For each project that depends on 'current', decrease its in-degree
             if let Some(dependents) = self.dependents.get(current) {
                 for dependent in dependents {
-                    let degree = in_degree.get_mut(dependent.as_str()).unwrap();
-                    *degree -= 1;
-                    if *degree == 0 {
-                        queue.push_back(dependent.as_str());
+                    if let Some(degree) = in_degree.get_mut(dependent.as_str()) {
+                        *degree -= 1;
+                        if *degree == 0 {
+                            queue.push_back(dependent.as_str());
+                        }
                     }
                 }
             }

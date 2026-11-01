@@ -678,6 +678,10 @@ fn sample<T>(items: &[T], show: impl Fn(&T) -> String) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests start the programs they test with"
+)]
 mod tests {
     use super::*;
     use std::process::Command;

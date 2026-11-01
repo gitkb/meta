@@ -688,6 +688,10 @@ fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result
 // ============================================================================
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests start the programs they test with"
+)]
 mod tests {
     use super::*;
     use meta_plugin_protocol::{ExecutionPlan, PlanResponse, PlannedCommand};

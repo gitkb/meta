@@ -112,5 +112,9 @@ pub fn code(result: anyhow::Result<()>) -> u8 {
 /// End the program now with `code`. Only for where no `main` can return
 /// it: a plugin's harness and a signal that ends the program.
 pub fn now(code: i32) -> ! {
+    #[expect(
+        clippy::exit,
+        reason = "the one place a program ends without returning from main"
+    )]
     std::process::exit(code)
 }

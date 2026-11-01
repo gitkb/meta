@@ -462,6 +462,9 @@ mod tests {
         let output = "x".repeat(10_000_000);
         let tail = StderrTail::spawn(Some(std::io::Cursor::new(output)), |_| {});
         let text = tail.text();
-        assert!(text.len() <= StderrTail::KEPT_LINES * (StderrTail::LINE_BYTES as usize + 1));
+        assert!(
+            text.len()
+                <= StderrTail::KEPT_LINES * (usize::try_from(StderrTail::LINE_BYTES).unwrap() + 1)
+        );
     }
 }

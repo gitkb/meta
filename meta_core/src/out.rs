@@ -3,7 +3,7 @@
 //! Output goes through here, never `print!`: a write to stdout that fails
 //! is an error ([`StdoutError`]) the caller returns, so a closed pipe
 //! (`meta … | head`) ends the program quietly instead of a panic. Writes
-//! to stderr ([`errln!`]) ignore a failure: there is nowhere left to say it.
+//! to stderr ([`errln!`](crate::errln!)) ignore a failure: there is nowhere left to say it.
 
 use crate::display::escape_lines;
 use colored::Colorize;
@@ -78,7 +78,7 @@ pub fn flush() -> Result<(), StdoutError> {
     io::stdout().flush().map_err(StdoutError)
 }
 
-/// Write `args` to stderr (see [`errln!`]).
+/// Write `args` to stderr (see [`errln!`](crate::errln!)).
 pub fn stderr(args: fmt::Arguments<'_>) {
     let _ = io::stderr().lock().write_fmt(args);
 }

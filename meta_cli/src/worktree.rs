@@ -67,7 +67,7 @@ pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>>
                 };
 
                 // Reconstruct the task directory: everything up to and including .worktrees/<task>
-                let task_dir: PathBuf = components[..=i + 1].iter().collect();
+                let task_dir: PathBuf = components.iter().take(i + 2).collect();
                 return Ok(Some((task_name, task_dir)));
             }
         }
@@ -654,6 +654,10 @@ fn source_repo(checkout: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests start the programs they test with"
+)]
 mod recursive_tests {
     use super::*;
 

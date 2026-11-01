@@ -453,7 +453,7 @@ fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Resul
                 Some(sub) => sub,
                 None => anyhow::bail!(
                     "meta {} has no command '{}'",
-                    escape(&words[..i].join(" ")),
+                    escape(&words.iter().take(i).cloned().collect::<Vec<_>>().join(" ")),
                     escape(word)
                 ),
             };

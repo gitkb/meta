@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn test_bad_input_gets_an_error_reply_and_serving_goes_on() {
         let initialize = br#"{"jsonrpc":"2.0","id":99,"method":"initialize","params":{}}"#;
-        let too_large = vec![b' '; MAX_LINE_BYTES as usize + 1];
+        let too_large = vec![b' '; usize::try_from(MAX_LINE_BYTES).unwrap() + 1];
         for (line, code, id) in [
             (
                 &br#"{"jsonrpc":"2.0","id":7,"method":"tools/list""#[..],

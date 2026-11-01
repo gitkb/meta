@@ -3,6 +3,12 @@
 //! its creator left half-made stays removable. Each test holds one command
 //! at a chosen step (a fake `gh`, a checkout hook, a record read through a
 //! FIFO) while another runs.
+
+#![expect(
+    clippy::disallowed_methods,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
 #![cfg(unix)]
 
 use serde_json::json;

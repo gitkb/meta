@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use super::types::{CreateRepoEntry, PruneEntry};
 use meta_core::config::{HookEvent, Workspace};
@@ -32,12 +32,10 @@ pub fn fire_worktree_hook(
 
     // From the directory whose config names the hook: a set removed from
     // inside it takes the caller's directory with it
-    let mut command = Command::new("sh");
-    meta_core::git::clear_repo_env(&mut command);
+    let mut command = meta_core::git::in_repo("sh", &owner.dir);
     let status = meta_core::children::spawn(
         command
             .args(["-c", cmd_str])
-            .current_dir(&owner.dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit()),

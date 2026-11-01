@@ -276,6 +276,20 @@ Meta propagates exit codes from failed commands, making it suitable for CI/CD:
 meta exec -- npm test || echo "Tests failed in at least one repo"
 ```
 
+| Code | Meaning |
+|------|---------|
+| 0 | Done |
+| 1 | Something failed: a command in at least one repo (the summary names them), or meta itself (`Error: …` on stderr) |
+| 2 | The command line is wrong: an unknown command, option or value |
+| 141 | Its output was cut off: stdout closed early, as in `meta exec -- git log | head` |
+| 128 + n | Stopped by signal n (Ctrl-C: 130), or a plugin was |
+
+A plugin's own exit code passes through. `loop` and `meta-mcp` exit the same way.
+
+### Colour
+
+Output is coloured only on a terminal: never into a pipe, a file or `--json`. `NO_COLOR` turns colour off, `CLICOLOR_FORCE=1` turns it on anyway (not under `--json`), and `TERM=dumb` or `CLICOLOR=0` turn it off. A command meta captures (in parallel mode, or for JSON) is told the same, through `CLICOLOR_FORCE`/`FORCE_COLOR`; git gets `color.ui=always` after your own `GIT_CONFIG_*` entries, never in place of them. Each command's stdout goes to meta's stdout and its stderr to meta's stderr.
+
 ---
 
 ## JSON Output Mode
@@ -311,6 +325,8 @@ meta --json exec -- git rev-parse HEAD
 
 A command a signal ended has `"exit_code": null` and the signal's number in
 `"signal"` (`9` for `SIGKILL`); `signal` is left out otherwise.
+
+With `--json`, stdout is always JSON. An error before any output is `{"success": false, "error": "…"}` (an unknown command exits 2, other errors 1); one after a report was printed goes to stderr, so the report stays the only document. A plugin's output that isn't JSON comes as `{"success": …, "output": "…"}`. Warnings stay on stderr.
 
 ### Parsing with jq
 

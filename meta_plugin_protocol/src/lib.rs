@@ -13,7 +13,8 @@
 //! The protocol works as follows:
 //! 1. For `meta <word> ...` the host starts only `meta-<word>`, first with
 //!    `--meta-plugin-info` (plugin responds with `PluginInfo` JSON within
-//!    5 seconds). `meta --help` and `meta plugin list` ask every plugin.
+//!    5 seconds). `meta`, `meta help`, `meta --help` and `meta plugin list`
+//!    ask every plugin.
 //! 2. Host invokes the plugin via `--meta-plugin-exec` (sends `PluginRequest`
 //!    JSON on stdin)
 //! 3. Plugin responds with either a `PlanResponse` JSON (commands to execute) or direct output

@@ -71,6 +71,8 @@ run_ps1() {
     [[ "$output" == *"Installation complete"* ]]
     run "$INSTALL_DIR/meta"
     [ "$output" = "meta 1.0.0" ]
+    run "$INSTALL_DIR/meta-cargo"
+    [ "$output" = "meta-cargo 1.0.0" ]
 }
 
 @test "install.sh refuses a tampered archive and leaves the installed meta alone" {
@@ -134,6 +136,7 @@ run_ps1() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"Installation complete"* ]]
     [ "$(cat "$INSTALL_DIR/meta.exe")" = "fake meta" ]
+    [ "$(cat "$INSTALL_DIR/meta-cargo.exe")" = "fake meta-cargo" ]
 }
 
 @test "install.ps1 refuses a tampered archive" {

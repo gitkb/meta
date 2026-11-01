@@ -681,6 +681,9 @@ EOF
     run "$META_BIN" git worktree list
     [ "$status" -eq 0 ]
     [[ "$output" != *"skipping"* ]]
+    # Only the called plugin starts; the plugin list starts each one
+    run "$META_BIN" plugin list
+    [[ "$output" != *"skipping"* ]]
     [ -e "$TEST_DIR/ran-local" ]
     [ -e "$TEST_DIR/ran-global" ]
 
@@ -699,7 +702,8 @@ EOF
     ln -s "$REAL/data" "$META_DATA/linked"
     META_DATA_DIR="$META_DATA/linked" run "$META_BIN" git worktree create linked-store --repo backend
     [ "$status" -eq 0 ]
-    # The global plugin under the link loaded, so the link was followed
+    # The global plugin under the link loads, so the link is followed
+    META_DATA_DIR="$META_DATA/linked" run "$META_BIN" linked
     [ -e "$TEST_DIR/ran-linked" ]
     [ -f "$(record_file .worktrees/linked-store/backend)" ]
     [ "$(ls -A "$REAL/data")" = "plugins" ]
@@ -711,7 +715,7 @@ EOF
     mkdir -p "$TEST_DIR/gbin"
     printf '#!/bin/sh\ntouch "%s/ran"\n' "$TEST_DIR" > "$TEST_DIR/gbin/meta-shared"
     chmod 775 "$TEST_DIR/gbin" "$TEST_DIR/gbin/meta-shared"
-    PATH="$TEST_DIR/gbin:$PATH" run "$META_BIN" git worktree list
+    PATH="$TEST_DIR/gbin:$PATH" run "$META_BIN" shared
     [[ "$output" != *"skipping plugin"* ]]
     [ -e "$TEST_DIR/ran" ]
 }
@@ -929,6 +933,7 @@ EOF
 }
 
 @test "meta git status and project check fail on a refused .meta.yaml" {
+    cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/meta-project"
     echo '{"projects": {"evil": {"repo": "u", "path": "../../outside"}}}' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git status
     [ "$status" -ne 0 ]

@@ -74,13 +74,10 @@ fn run_meta(root: &Path, args: &[&str]) -> std::process::Output {
         .env("XDG_DATA_HOME", root.join("xdg/data"))
         .env("GIT_CONFIG_GLOBAL", root.join("gitconfig"))
         .env("META_DATA_DIR", root.join("data"))
+        // Only this workspace's plugins: none installed on the caller's PATH
         .env(
             "PATH",
-            std::env::join_paths(
-                std::iter::once(root.join("bin"))
-                    .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
-            )
-            .unwrap(),
+            format!("{}:/usr/bin:/bin", root.join("bin").display()),
         )
         .output()
         .unwrap()
@@ -135,11 +132,16 @@ fn only_the_plugin_a_command_names_is_started() {
     workspace(&root);
 
     meta(&root, &["touchy", "ran"]);
-    meta(&root, &["touchy", "--help"]);
+    // meta-touchy prints nothing for --help: its info stands in
+    let help = run_meta(&root, &["touchy", "--help"]);
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("Commands:\n  touch"));
     meta(&root, &["exec", "--", "true"]);
     meta(&root, &["context"]);
     let typo = run_meta(&root, &["touhcy"]);
     assert!(!typo.status.success());
+    let stderr = String::from_utf8_lossy(&typo.stderr);
+    assert!(stderr.contains("meta --help lists them"), "{stderr}");
     assert_eq!(spy_starts(&root), "", "an unrelated plugin was started");
 
     // Help and the plugin list ask every plugin, and name each by its file
@@ -163,6 +165,32 @@ fn only_the_plugin_a_command_names_is_started() {
         spy_starts(&root),
         "--meta-plugin-info\n--meta-plugin-info\n"
     );
+}
+
+#[test]
+fn a_workspace_plugin_comes_before_one_on_path() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    workspace(&root);
+    let local = root.join(".meta/plugins/meta-touchy");
+    fs::create_dir_all(local.parent().unwrap()).unwrap();
+    script(
+        &local,
+        &format!(
+            r#"[ "$1" = --meta-plugin-info ] && echo '{{"name":"touchy","version":"2.0.0","commands":[]}}'
+[ "$1" = --meta-plugin-exec ] && cat > "{}"
+exit 0"#,
+            root.join("local.log").display()
+        ),
+    );
+
+    meta(&root, &["touchy", "ran"]);
+
+    assert!(
+        root.join("local.log").exists(),
+        "the workspace plugin didn't run"
+    );
+    assert!(!root.join("plugin.log").exists(), "the one on PATH ran");
 }
 
 #[test]

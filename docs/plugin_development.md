@@ -74,7 +74,7 @@ Meta discovers plugins from these locations (in order):
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
 3. Executables named `meta-*` on PATH.
 
-The first file found with a given name wins. For `meta <word> ...`, meta starts only the file `meta-<word>`; if it doesn't answer `--meta-plugin-info` within 5 seconds, the command fails naming it. `meta --help` and `meta plugin list` start every plugin; there a plugins folder meta can't read, and a plugin that doesn't answer within 5 seconds, are skipped with a warning naming them; one that answers with anything but its info is left out. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
+The first file found with a given name wins. For `meta <word> ...`, meta starts only the file `meta-<word>`; if it doesn't answer `--meta-plugin-info` within 5 seconds, the command fails naming it. `meta`, `meta help`, `meta --help` and `meta plugin list` start every plugin; there a plugins folder meta can't read, and a plugin that doesn't answer within 5 seconds, are skipped with a warning naming them; one that answers with anything but its info is left out. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
 
 ### Naming Convention
 
@@ -100,7 +100,7 @@ meta-docker --meta-plugin-info
   "name": "docker",
   "version": "0.1.0",
   "description": "Docker operations for meta repositories",
-  "commands": ["build", "push", "compose"],
+  "commands": ["docker build", "docker push", "docker compose"],
   "help": {
     "build": "Build Docker images across repos",
     "push": "Push images to registry",
@@ -120,7 +120,7 @@ echo '<request>' | meta-docker --meta-plugin-exec
 **Request Format:**
 ```json
 {
-  "command": "build",
+  "command": "docker build",
   "args": ["--tag", "latest"],
   "projects": [
     {
@@ -243,7 +243,7 @@ fn main() {
             name: "docker",
             version: "0.1.0",
             description: "Docker operations for meta repos",
-            commands: vec!["build", "push"],
+            commands: vec!["docker build", "docker push"],
         };
         println!("{}", serde_json::to_string(&info).unwrap());
         return;
@@ -298,7 +298,7 @@ if [[ "$1" == "--meta-plugin-info" ]]; then
   "name": "hello",
   "version": "0.1.0",
   "description": "A friendly greeting plugin",
-  "commands": ["world", "there"]
+  "commands": ["hello world", "hello there"]
 }
 EOF
     exit 0
@@ -338,7 +338,7 @@ def get_info():
         "name": "py",
         "version": "0.1.0",
         "description": "Python operations plugin",
-        "commands": ["lint", "format"]
+        "commands": ["py lint", "py format"]
     }
 
 def execute(request):
@@ -374,7 +374,7 @@ Plugins can provide structured help via the `--meta-plugin-info` response:
   "name": "docker",
   "version": "0.1.0",
   "description": "Docker operations for meta repositories",
-  "commands": ["build", "push", "compose"],
+  "commands": ["docker build", "docker push", "docker compose"],
   "help": {
     "build": "Build Docker images\n\nUsage: meta docker build [OPTIONS]\n\nOptions:\n  --tag TAG  Image tag",
     "push": "Push images to registry",
@@ -450,7 +450,7 @@ Avoid OS-specific code when possible. Use standard paths and commands.
 ./meta-docker --meta-plugin-info | jq .
 
 # Test execution
-echo '{"command":"build","args":[],"projects":[{"name":"test","path":"./test"}],"options":{}}' \
+echo '{"command":"docker build","args":[],"projects":[{"name":"test","path":"./test"}],"options":{}}' \
   | ./meta-docker --meta-plugin-exec | jq .
 ```
 

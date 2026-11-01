@@ -271,7 +271,8 @@ impl SubprocessPluginManager {
 }
 
 impl SubprocessPlugin {
-    /// Help for `meta <word>`, from the plugin's `--help` or else its info
+    /// Help for `meta <word>`, from the plugin's `--help`, or its info when
+    /// that fails or prints nothing
     pub fn help(&self) -> String {
         let output = Command::new(&self.path)
             .arg("--help")
@@ -279,7 +280,10 @@ impl SubprocessPlugin {
             .stderr(Stdio::null())
             .output();
         match output {
-            Ok(output) if output.status.success() => {
+            Ok(output)
+                if output.status.success()
+                    && output.stdout.iter().any(|b| !b.is_ascii_whitespace()) =>
+            {
                 String::from_utf8_lossy(&output.stdout).to_string()
             }
             _ => meta_plugin_protocol::help_text(&self.info),
@@ -656,6 +660,28 @@ mod tests {
         // A claim under another word never shapes this plugin's command
         let other = plugin("other", &["git status"]);
         assert_eq!(command_len(&other, &["other", "status"]), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_word_that_is_a_path_finds_no_plugin() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let bin = temp.path().join("bin");
+        std::fs::create_dir_all(bin.join("meta-d")).unwrap();
+        let evil = temp.path().join("evil");
+        std::fs::write(&evil, "#!/bin/sh\ntouch ran\n").unwrap();
+        std::fs::set_permissions(&evil, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let manager = SubprocessPluginManager {
+            dirs: vec![(bin, true)],
+            verbose: false,
+        };
+
+        let absolute = evil.to_str().unwrap();
+        for word in ["d/../../evil", "d/../evil", absolute, "d/", "d/.", ""] {
+            assert!(manager.find(word).unwrap().is_none(), "{word}");
+        }
+        assert!(!temp.path().join("ran").exists());
     }
 
     #[test]

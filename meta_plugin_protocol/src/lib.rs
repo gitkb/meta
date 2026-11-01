@@ -247,6 +247,35 @@ impl From<anyhow::Error> for CommandResult {
 // Helper Functions
 // ============================================================================
 
+/// Serialize and print an execution plan to stdout.
+pub fn output_execution_plan(commands: Vec<PlannedCommand>, parallel: Option<bool>) {
+    output_execution_plan_full(vec![], commands, vec![], parallel, None, None);
+}
+
+/// Serialize and print a full execution plan with pre/post commands to
+/// stdout. A plugin whose stdout meta no longer reads ends here, quietly.
+pub fn output_execution_plan_full(
+    pre_commands: Vec<PlannedCommand>,
+    commands: Vec<PlannedCommand>,
+    post_commands: Vec<PlannedCommand>,
+    parallel: Option<bool>,
+    max_parallel: Option<usize>,
+    spawn_stagger_ms: Option<u64>,
+) {
+    let plan = ExecutionPlan {
+        pre_commands,
+        commands,
+        post_commands,
+        parallel,
+        max_parallel,
+        spawn_stagger_ms,
+    };
+    let code = meta_core::exit::code(emit_json(&PlanResponse { plan }));
+    if code != 0 {
+        meta_core::exit::now(code.into());
+    }
+}
+
 /// Write `text` to stdout, flushed: meta reads a plugin's stdout until the
 /// plugin ends.
 fn emit(text: &str) -> anyhow::Result<()> {
@@ -428,16 +457,10 @@ fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
         request.cwd = std::env::current_dir().context("Failed to get working directory")?;
     }
     match (plugin.execute)(request) {
-        CommandResult::Plan(commands, parallel) => emit_json(&PlanResponse {
-            plan: ExecutionPlan {
-                pre_commands: vec![],
-                commands,
-                post_commands: vec![],
-                parallel,
-                max_parallel: None,
-                spawn_stagger_ms: None,
-            },
-        }),
+        CommandResult::Plan(commands, parallel) => {
+            output_execution_plan(commands, parallel);
+            Ok(())
+        }
         CommandResult::FullPlan(plan) => emit_json(&PlanResponse { plan }),
         CommandResult::Message(msg) if msg.is_empty() => Ok(()),
         CommandResult::Message(msg) => emit(&format!("{msg}\n")),

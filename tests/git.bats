@@ -1328,12 +1328,14 @@ YAML
 
 @test "meta git status passes its arguments to git, and git update refuses ones it doesn't take" {
     echo change >> "$TEST_DIR/frontend/README.md"
-    # git colours it: meta's git runs keep colour on
     run "$META_BIN" git status --short
     [ "$status" -eq 0 ]
-    [[ "$output" == *"M"*"README.md"* ]]
-    [[ "$output" == *$'\033['* ]]
+    [[ "$output" == *" M README.md"* ]]
     [[ "$output" != *"Changes not staged"* ]]
+    # into a pipe uncoloured; colour forced, git colours it
+    [[ "$output" != *$'\033['* ]]
+    CLICOLOR_FORCE=1 run "$META_BIN" git status --short
+    [[ "$output" == *$'\033['* ]]
     # meta's flag after the command is git's argument
     run "$META_BIN" git status --tag backend
     [ "$status" -ne 0 ]

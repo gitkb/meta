@@ -38,10 +38,11 @@ pub const REPO_ENV_VARS: &[&str] = &[
 ];
 
 /// Remove [`REPO_ENV_VARS`] from what `command` will inherit.
-fn clear_repo_env(command: &mut Command) {
+pub fn clear_repo_env(command: &mut Command) -> &mut Command {
     for key in REPO_ENV_VARS {
         command.env_remove(key);
     }
+    command
 }
 
 /// `program`, to run in the repository folder `dir` with [`REPO_ENV_VARS`]

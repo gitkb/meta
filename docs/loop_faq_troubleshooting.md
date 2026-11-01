@@ -31,11 +31,11 @@ A: Use the `directories` and `ignore` fields in `.looprc`, or CLI flags like `--
 
 ## Parallel Execution
 
-**Q: How do I control concurrency?**
-A: Set the `concurrency` field in `.looprc` or use the `--concurrency` CLI flag.
+**Q: How do I run in parallel, and how many at once?**
+A: Set `"parallel": true` in `.looprc`, and `max_parallel` to cap it. Without it, loop runs one directory at a time.
 
 **Q: What happens if a command fails in one directory?**
-A: By default, loop will continue unless `fail_fast` is enabled.
+A: loop runs it in the others too, lists the failures at the end and exits non-zero.
 
 ## Debugging & Troubleshooting
 

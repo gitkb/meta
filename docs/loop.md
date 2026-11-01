@@ -1,6 +1,6 @@
 # loop – Command Line Utility
 
-**loop** is a command line utility for running commands in multiple repositories or directories in parallel. It is designed for monorepos and multi-package projects, making repetitive tasks like dependency management, testing, and code generation fast and easy. The utility consists of two main parts: [loop_cli](../loop_cli/README.md) (the CLI app) and [loop_lib](../loop_lib/src/lib.rs) (the Rust library for programmatic use).
+**loop** is a command line utility for running commands in multiple repositories or directories, one at a time or in parallel. It is designed for monorepos and multi-package projects, making repetitive tasks like dependency management, testing, and code generation fast and easy. The utility consists of two main parts: [loop_cli](../loop_cli/README.md) (the CLI app) and [loop_lib](../loop_lib/src/lib.rs) (the Rust library for programmatic use).
 
 ---
 
@@ -20,12 +20,12 @@
 
 ## Overview
 
-**loop** lets you run a command in multiple repositories or directories at once. By default, it runs in all child repositories of the current directory, but you can use expressive options to control exactly where your command will run. You can also specify defaults in a `.looprc` config file. For developers, the [loop_lib](../loop_lib/src/lib.rs) library exposes these capabilities for programmatic use, including directory filtering and config parsing.
+**loop** lets you run a command in multiple repositories or directories at once. By default, it runs in the current directory and each directory in it, but you can use expressive options to control exactly where your command will run. You can also specify defaults in a `.looprc` config file. For developers, the [loop_lib](../loop_lib/src/lib.rs) library exposes these capabilities for programmatic use, including directory filtering and config parsing.
 
 ## Key Features
 
-- Run any command in multiple directories in parallel (as a program with arguments, never through a shell; use `sh -c '...'` when you want one)
-- Defaults to all child repositories, with flexible inclusion/exclusion via CLI or config
+- Run any command in multiple directories, one at a time or in parallel (as a program with arguments, never through a shell; use `sh -c '...'` when you want one)
+- Defaults to the current directory and its child directories, with flexible inclusion/exclusion via CLI or config
 - Supports `.looprc` for persistent configuration
 - Verbose and silent output modes
 - Robust error handling and reporting
@@ -34,7 +34,7 @@
 ## How It Works
 
 1. **Configuration**: Specify target directories and options in `.looprc` (JSON).
-2. **Execution**: Use the `loop` CLI utility to run commands in parallel.
+2. **Execution**: Use the `loop` CLI utility to run commands.
 3. **Library**: App developers can use `loop_lib` to leverage loop's power programmatically, including directory filtering and config support.
 
 ## Usage

@@ -17,7 +17,7 @@ This document provides a high-level overview of the **loop** system's architectu
 
 ## System Overview
 
-The loop system is a modular, parallel command execution engine for the Meta platform, designed to automate tasks across multiple directories.
+The loop system is a command execution engine for the Meta platform, designed to automate tasks across multiple directories.
 
 ## Core Components
 
@@ -33,16 +33,18 @@ The `.looprc` file controls which directories are targeted and how commands are 
 {
   "directories": ["pkg1", "pkg2"],
   "ignore": ["legacy_pkg"],
-  "concurrency": 4
+  "parallel": true
 }
 ```
+
+Every key is listed in [loop_cli/README.md](../loop_cli/README.md#fields).
 
 ## Command Execution Flow
 
 1. User invokes a `loop` command via CLI.
 2. CLI loads `.looprc` and parses arguments.
 3. loop_lib expands directories and applies filters.
-4. Commands are executed in parallel.
+4. Commands run one at a time, or all at once with `"parallel": true`.
 5. Results are aggregated and reported.
 
 ## Extensibility Points

@@ -5,63 +5,54 @@ use meta_core::display::{escape, escape_path};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// What loop runs and how: the `.looprc` file (JSON), and what meta builds for
+/// the commands it runs. A key the file leaves out takes its default; a key
+/// loop doesn't know is an error.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct LoopConfig {
-    #[serde(default)]
-    pub directories: Vec<String>,
-    #[serde(default)]
+    pub directories: Vec<PathBuf>,
     pub ignore: Vec<String>,
-    #[serde(default)]
     pub verbose: bool,
-    #[serde(default)]
     pub silent: bool,
-    #[serde(default)]
-    pub add_aliases_to_global_looprc: bool,
-    #[serde(default)]
     pub parallel: bool,
-    #[serde(default)]
     pub dry_run: bool,
-    #[serde(default)]
     pub json_output: bool,
-    /// Milliseconds to wait between spawning threads in parallel mode.
-    /// Default is 0 (no stagger). Set to e.g. 10 to spread out connections.
-    #[serde(default)]
+    /// Milliseconds between two command starts in parallel mode (0: none),
+    /// to spread out connections
     pub spawn_stagger_ms: u64,
     /// Environment variables to set for all command subprocesses.
     /// Tool-specific env vars (e.g., GIT_PAGER) should be set by the caller.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<HashMap<String, String>>,
-    /// Maximum number of commands to run in parallel (pool size limit).
-    /// When set, limits the rayon thread pool to this many threads.
-    /// Use for operations with shared resources (e.g., SSH ControlMaster
-    /// has a default session limit of 10).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_parallel: Option<usize>,
+    /// At most this many commands at once in parallel mode, for shared
+    /// resources (an SSH ControlMaster allows 10 sessions by default)
+    pub max_parallel: Option<NonZeroUsize>,
+    /// Programs that stand for a command: with `{"gs": "git status"}`,
+    /// `gs -s` runs `git status -s`
+    pub aliases: BTreeMap<String, String>,
     /// The root directory of the meta workspace. When set, this directory
     /// is displayed as "." or ". (basename)" instead of its full path,
     /// and is sorted first in output.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_dir: Option<PathBuf>,
 }
 
 /// A command to execute in a specific directory
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct DirCommand {
-    pub dir: String,
+    pub dir: PathBuf,
     /// The program and its arguments, run as given: no shell parses them.
     pub argv: Vec<String>,
     /// Environment variables to set for this command's subprocess
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<HashMap<String, String>>,
 }
 
@@ -72,13 +63,13 @@ impl Default for LoopConfig {
             ignore: vec![".git".to_string()],
             verbose: false,
             silent: false,
-            add_aliases_to_global_looprc: false,
             parallel: false,
             dry_run: false,
             json_output: false,
             spawn_stagger_ms: 0,
             env: None,
             max_parallel: None,
+            aliases: BTreeMap::new(),
             root_dir: None,
         }
     }
@@ -87,23 +78,76 @@ impl Default for LoopConfig {
 #[derive(Default)]
 pub struct CommandResult {
     pub success: bool,
-    pub exit_code: i32,
+    /// None when a signal ended the command; -1 when it never started
+    pub exit_code: Option<i32>,
+    /// The signal that ended the command (unix)
+    pub signal: Option<i32>,
     pub directory: PathBuf,
     pub command: String,
     pub stdout: String,
     pub stderr: String,
 }
 
-pub fn load_aliases_from_file(path: &Path) -> Result<HashMap<String, String>> {
-    let content = fs::read_to_string(path)?;
-    let config: serde_json::Value = serde_json::from_str(&content)?;
-    let aliases = config["aliases"]
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("No 'aliases' object found in config file"))?;
-    Ok(aliases
-        .iter()
-        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
-        .collect())
+impl CommandResult {
+    /// How the command ended, for a failure line: `exit code 1`,
+    /// `killed by signal 9`.
+    fn ending(&self) -> String {
+        match (self.signal, self.exit_code) {
+            (Some(signal), _) => format!("killed by signal {signal}"),
+            (None, Some(code)) => format!("exit code {code}"),
+            (None, None) => "no exit code".to_string(),
+        }
+    }
+}
+
+/// The exit code and, on unix, the signal of a finished command.
+fn exit_of(status: ExitStatus) -> (Option<i32>, Option<i32>) {
+    #[cfg(unix)]
+    let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+    #[cfg(not(unix))]
+    let signal = None;
+    (status.code(), signal)
+}
+
+/// The `.looprc` at `path`. Errors name the file: missing, unreadable, not
+/// JSON, or with a key loop doesn't know.
+pub fn parse_config(path: &Path) -> Result<LoopConfig> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", escape_path(path)))?;
+    parse_looprc(path, &text)
+}
+
+/// [`parse_config`], or the default when there is no file at `path`.
+pub fn parse_config_if_present(path: &Path) -> Result<LoopConfig> {
+    match fs::read_to_string(path) {
+        Ok(text) => parse_looprc(path, &text),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(LoopConfig::default()),
+        Err(e) => Err(e).with_context(|| format!("Failed to read {}", escape_path(path))),
+    }
+}
+
+fn parse_looprc(path: &Path, text: &str) -> Result<LoopConfig> {
+    serde_json::from_str(text).with_context(|| format!("Failed to parse {}", escape_path(path)))
+}
+
+fn global_looprc() -> Option<PathBuf> {
+    env::var_os("HOME").map(|home| PathBuf::from(home).join(".looprc"))
+}
+
+/// `local` over the aliases of `~/.looprc`.
+pub fn with_global_aliases(local: BTreeMap<String, String>) -> Result<BTreeMap<String, String>> {
+    let mut aliases = match global_looprc() {
+        Some(path) => parse_config_if_present(&path)?.aliases,
+        None => BTreeMap::new(),
+    };
+    aliases.extend(local);
+    Ok(aliases)
+}
+
+/// The aliases meta expands: those of `~/.looprc`, then those of `./.looprc`,
+/// which win.
+pub fn aliases() -> Result<BTreeMap<String, String>> {
+    with_global_aliases(parse_config_if_present(Path::new(".looprc"))?.aliases)
 }
 
 fn prompt_user(question: &str) -> Result<bool> {
@@ -114,88 +158,95 @@ fn prompt_user(question: &str) -> Result<bool> {
     Ok(input.trim().to_lowercase() == "y")
 }
 
-pub fn add_aliases_to_global_looprc() -> Result<()> {
-    println!("Starting add_aliases_to_global_looprc function");
+/// The aliases your interactive shell defines (`alias` in `$SHELL -i`).
+fn shell_aliases() -> Result<BTreeMap<String, String>> {
+    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let output = Command::new(&shell)
+        .args(["-i", "-c", "alias"])
+        .output()
+        .with_context(|| format!("Failed to run {}", escape(&shell)))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "`{} -i -c alias` failed: {}",
+        escape(&shell),
+        escape(String::from_utf8_lossy(&output.stderr).trim())
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, value)| {
+            // `alias ll='ls -l'` (bash) or `ll='ls -l'` (zsh): the value is
+            // one word in shell quoting
+            let name = name.trim().trim_start_matches("alias ").to_string();
+            match shlex::split(value.trim()).as_deref() {
+                Some([command]) => Ok((name, command.clone())),
+                _ => Err(anyhow::anyhow!(
+                    "Can't read the alias '{}' your shell lists: {}",
+                    escape(&name),
+                    escape(value)
+                )),
+            }
+        })
+        .collect()
+}
 
-    let home = env::var("HOME").context("Failed to get HOME directory")?;
-    let global_looprc = PathBuf::from(home).join(".looprc");
-    println!("Global .looprc path: {global_looprc:?}");
-
-    let mut aliases = HashMap::new();
-    let mut existing_content = String::new();
-
-    if global_looprc.exists() {
-        println!("Global .looprc exists, loading existing aliases");
-        existing_content = fs::read_to_string(&global_looprc)?;
-        aliases = load_aliases_from_file(&global_looprc)?;
-    } else {
-        println!("Global .looprc does not exist");
-        if !prompt_user("The global .looprc file does not exist. Do you want to create it?")? {
-            println!("Operation cancelled by user.");
-            return Ok(());
-        }
-    }
-
-    if !prompt_user("Do you want to set the value of the 'aliases' property?")? {
-        println!("Operation cancelled by user.");
+/// `--add-aliases-to-global-looprc`: your shell's aliases into the `aliases`
+/// of `~/.looprc`, after a preview and your yes. Its other keys stay as they
+/// are; a file loop can't read is reported, not replaced.
+pub fn import_aliases(dry_run: bool) -> Result<()> {
+    if dry_run {
+        println!("[DRY RUN] Would add your shell's aliases to ~/.looprc");
         return Ok(());
     }
+    let path = global_looprc().context("HOME is not set")?;
+    let cancelled = || anyhow::anyhow!("Cancelled: {} is unchanged", escape_path(&path));
 
-    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    println!("Using shell: {shell}");
-
-    println!("Executing 'alias' command");
-    let output = Command::new(&shell)
-        .arg("-i")
-        .arg("-c")
-        .arg("alias")
-        .output()?;
-
-    println!("Processing 'alias' command output");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if let Some((alias, command)) = line.split_once('=') {
-            let alias = alias.trim().trim_start_matches("alias ").to_string();
-            let command = command
-                .trim()
-                .trim_matches('\'')
-                .trim_matches('"')
-                .to_string();
-            aliases.insert(alias, command);
+    let existing = match fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e).with_context(|| format!("Failed to read {}", escape_path(&path))),
+    };
+    let (mut doc, mut aliases) = match &existing {
+        Some(text) => {
+            let aliases = parse_looprc(&path, text)?.aliases;
+            let doc: serde_json::Map<String, serde_json::Value> = serde_json::from_str(text)
+                .with_context(|| format!("Failed to parse {}", escape_path(&path)))?;
+            (doc, aliases)
         }
+        None => {
+            if !prompt_user("The global .looprc file does not exist. Do you want to create it?")? {
+                return Err(cancelled());
+            }
+            Default::default()
+        }
+    };
+    if !prompt_user("Do you want to set the value of the 'aliases' property?")? {
+        return Err(cancelled());
     }
 
-    println!("Creating config JSON");
-    let config = serde_json::json!({
-        "aliases": aliases
-    });
+    aliases.extend(shell_aliases()?);
+    doc.insert("aliases".to_string(), serde_json::to_value(&aliases)?);
+    let new_content = serde_json::to_string_pretty(&doc)?;
 
-    println!("Serializing config to string");
-    let new_content = serde_json::to_string_pretty(&config)?;
-
-    // Show preview of changes
     println!("\nPreview of changes:");
-    if !existing_content.is_empty() {
-        for diff in diff::lines(&existing_content, &new_content) {
-            match diff {
-                diff::Result::Left(l) => println!("{}", format!("-{l}").red()),
-                diff::Result::Both(l, _) => println!(" {l}"),
-                diff::Result::Right(r) => println!("{}", format!("+{r}").green()),
+    match &existing {
+        Some(old) => {
+            for diff in diff::lines(old, &new_content) {
+                match diff {
+                    diff::Result::Left(l) => println!("{}", format!("-{l}").red()),
+                    diff::Result::Both(l, _) => println!(" {l}"),
+                    diff::Result::Right(r) => println!("{}", format!("+{r}").green()),
+                }
             }
         }
-    } else {
-        println!("{}", new_content.green());
+        None => println!("{}", new_content.green()),
     }
-
     if !prompt_user("Do you want to apply these changes?")? {
-        println!("Operation cancelled by user.");
-        return Ok(());
+        return Err(cancelled());
     }
 
-    println!("Writing config to file");
-    fs::write(global_looprc, new_content)?;
-
-    println!("Aliases have been added to ~/.looprc");
+    meta_core::store::write_atomic(&path, &doc)?;
+    println!("Aliases have been added to {}", escape_path(&path));
     Ok(())
 }
 
@@ -254,7 +305,7 @@ fn result_name(dir: &Path, root: Option<&Path>) -> String {
 /// `argv` with a `.looprc` alias for its program expanded. The alias value is
 /// split into words the way a POSIX shell splits them (quotes are honored,
 /// nothing is expanded or run) and replaces the program.
-fn resolve_aliases(argv: &[String], aliases: &HashMap<String, String>) -> Result<Vec<String>> {
+fn resolve_aliases(argv: &[String], aliases: &BTreeMap<String, String>) -> Result<Vec<String>> {
     let Some((program, args)) = argv.split_first() else {
         anyhow::bail!("No command given");
     };
@@ -304,7 +355,8 @@ fn build_command(
 fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
     CommandResult {
         success: false,
-        exit_code: -1,
+        exit_code: None,
+        signal: None,
         directory: dir.to_path_buf(),
         command,
         stdout: String::new(),
@@ -343,11 +395,10 @@ macro_rules! command_println {
     ($($arg:tt)*) => { writeln!(io::stdout().lock(), $($arg)*).map_err(StdoutError)? };
 }
 
-pub fn execute_command_in_directory(
+fn execute_command_in_directory(
     dir: &Path,
     argv: &[String],
     config: &LoopConfig,
-    aliases: &HashMap<String, String>,
     extra_env: Option<&HashMap<String, String>>,
 ) -> Result<CommandResult> {
     if !dir.exists() {
@@ -359,12 +410,12 @@ pub fn execute_command_in_directory(
             1
         );
         return Ok(CommandResult {
-            exit_code: 1,
+            exit_code: Some(1),
             ..failed_result(dir, display_command(argv), String::new())
         });
     }
 
-    let argv = match resolve_aliases(argv, aliases) {
+    let argv = match resolve_aliases(argv, &config.aliases) {
         Ok(argv) => argv,
         Err(e) => {
             if !config.silent {
@@ -384,11 +435,10 @@ pub fn execute_command_in_directory(
         command_println!("{} {}", "[DRY RUN]".cyan(), dry_run_line(dir, &command));
         return Ok(CommandResult {
             success: true,
-            exit_code: 0,
+            exit_code: Some(0),
             directory: dir.to_path_buf(),
             command,
-            stdout: String::new(),
-            stderr: String::new(),
+            ..Default::default()
         });
     }
 
@@ -415,47 +465,50 @@ pub fn execute_command_in_directory(
         .status()
         .with_context(|| format!("Failed to run {}", escape(&command)))
     });
-    let (success, exit_code) = match status {
-        Ok(status) => (status.success(), status.code().unwrap_or(-1)),
+    let result = match status {
+        Ok(status) => {
+            let (exit_code, signal) = exit_of(status);
+            CommandResult {
+                success: status.success(),
+                exit_code,
+                signal,
+                directory: dir.to_path_buf(),
+                command,
+                // Sequential mode uses Stdio::inherit(), so no capture
+                ..Default::default()
+            }
+        }
         Err(e) => {
             if !config.silent {
                 eprintln!("{e:#}");
             }
-            (false, -1)
+            failed_result(dir, command, String::new())
         }
     };
 
     if !config.silent {
         let name = result_name(dir, config.root_dir.as_deref());
-        if success {
+        if result.success {
             command_println!("\x1b[32m\n✓ {name}\x1b[0m");
         } else {
-            command_println!("\x1b[31m\n✗ {name}: exited code {exit_code}\x1b[0m");
+            command_println!("\x1b[31m\n✗ {name}: {}\x1b[0m", result.ending());
         }
         io::stdout().flush().map_err(StdoutError)?;
     }
 
-    Ok(CommandResult {
-        success,
-        exit_code,
-        directory: dir.to_path_buf(),
-        command,
-        stdout: String::new(), // Sequential mode uses Stdio::inherit(), so no capture
-        stderr: String::new(),
-    })
+    Ok(result)
 }
 
 /// Capturing version for parallel execution - captures stdout/stderr for display after completion
-pub fn execute_command_in_directory_capturing(
+fn execute_command_in_directory_capturing(
     dir: &Path,
     argv: &[String],
     config: &LoopConfig,
-    aliases: &HashMap<String, String>,
     extra_env: Option<&HashMap<String, String>>,
 ) -> CommandResult {
     if !dir.exists() {
         return CommandResult {
-            exit_code: 1,
+            exit_code: Some(1),
             ..failed_result(
                 dir,
                 display_command(argv),
@@ -464,7 +517,7 @@ pub fn execute_command_in_directory_capturing(
         };
     }
 
-    let argv = match resolve_aliases(argv, aliases) {
+    let argv = match resolve_aliases(argv, &config.aliases) {
         Ok(argv) => argv,
         Err(e) => return failed_result(dir, display_command(argv), format!("{e:#}\n")),
     };
@@ -475,11 +528,11 @@ pub fn execute_command_in_directory_capturing(
         let stdout = format!("[DRY RUN] {}", dry_run_line(dir, &command));
         return CommandResult {
             success: true,
-            exit_code: 0,
+            exit_code: Some(0),
             directory: dir.to_path_buf(),
             command,
             stdout,
-            stderr: String::new(),
+            ..Default::default()
         };
     }
 
@@ -509,11 +562,11 @@ pub fn execute_command_in_directory_capturing(
 
     match output {
         Ok(output) => {
-            let success = output.status.success();
-            let exit_code = output.status.code().unwrap_or(-1);
+            let (exit_code, signal) = exit_of(output.status);
             CommandResult {
-                success,
+                success: output.status.success(),
                 exit_code,
+                signal,
                 directory: dir.to_path_buf(),
                 command,
                 stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -528,55 +581,43 @@ pub fn execute_command_in_directory_capturing(
     }
 }
 
-pub fn expand_directories(directories: &[String], ignore: &[String]) -> Result<Vec<String>> {
+/// Each of `directories` and the directories in it, in name order, without
+/// those `ignore` names.
+pub fn expand_directories(directories: &[PathBuf], ignore: &[String]) -> Result<Vec<PathBuf>> {
     let mut expanded = Vec::new();
-
-    use std::fs;
-
     for dir in directories {
-        let dir_path = PathBuf::from(dir);
-        if dir_path.is_dir() {
+        if dir.is_dir() {
             // an excluded directory's children still count
-            if !should_ignore(&dir_path, ignore) {
-                expanded.push(dir_path.to_string_lossy().into_owned());
+            if !should_ignore(dir, ignore) {
+                expanded.push(dir.clone());
             }
-
-            for entry in fs::read_dir(&dir_path)? {
-                let entry = entry?;
-                let path = entry.path();
+            let mut children = Vec::new();
+            for entry in fs::read_dir(dir)? {
+                let path = entry?.path();
                 if path.is_dir() && !should_ignore(&path, ignore) {
-                    expanded.push(path.to_string_lossy().into_owned());
+                    children.push(path);
                 }
             }
+            children.sort();
+            expanded.extend(children);
         }
     }
-
     Ok(expanded)
 }
 
 /// Run the same command across multiple directories.
-pub fn run(orig_config: &LoopConfig, argv: &[String]) -> Result<()> {
-    // Handle special case: add_aliases_to_global_looprc
-    if orig_config.add_aliases_to_global_looprc {
-        if orig_config.dry_run {
-            println!("[DRY RUN] Would add your shell's aliases to ~/.looprc");
-            return Ok(());
-        }
-        return add_aliases_to_global_looprc();
-    }
-
-    // Build DirCommand list with same command for each directory
-    let commands: Vec<DirCommand> = orig_config
+pub fn run(config: &LoopConfig, argv: &[String]) -> Result<()> {
+    let commands: Vec<DirCommand> = config
         .directories
         .iter()
         .map(|dir| DirCommand {
             dir: dir.clone(),
             argv: argv.to_vec(),
-            env: orig_config.env.clone(),
+            env: config.env.clone(),
         })
         .collect();
 
-    run_commands(orig_config, &commands)
+    run_commands(config, &commands)
 }
 
 /// JSON output structure for command results
@@ -592,7 +633,10 @@ pub struct JsonCommandResult {
     pub directory: String,
     pub command: String,
     pub success: bool,
-    pub exit_code: i32,
+    /// null when a signal ended the command: see `signal`
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub stdout: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -607,229 +651,168 @@ pub struct JsonSummary {
     pub dry_run: bool,
 }
 
-// ============================================================================
-// Unified Execution Engine
-// ============================================================================
+/// Spaces command starts at least `interval` apart.
+struct Stagger {
+    interval: Duration,
+    /// When the last command started
+    last: Mutex<Option<Instant>>,
+}
 
-/// Internal execution engine that handles both parallel and sequential execution.
-/// This is the unified implementation used by both `run()` and `run_commands()`.
-fn execute_commands_internal(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> {
+impl Stagger {
+    fn new(interval: Duration) -> Self {
+        Stagger {
+            interval,
+            last: Mutex::new(None),
+        }
+    }
+
+    /// Waits until `interval` after the last start, then counts this one as
+    /// started. The others wait meanwhile, so no two start closer together.
+    fn wait(&self) {
+        self.wait_with(Instant::now, std::thread::sleep);
+    }
+
+    fn wait_with(&self, now: impl Fn() -> Instant, sleep: impl FnOnce(Duration)) {
+        if self.interval.is_zero() {
+            return;
+        }
+        let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(last) = *last {
+            sleep(self.interval.saturating_sub(now().duration_since(last)));
+        }
+        *last = Some(now());
+    }
+}
+
+/// Every command at once (up to `max_parallel`), each output captured and
+/// shown once all are done, sorted for deterministic output: the root (".")
+/// first, then by displayed path, component by component so nested repos sit
+/// under their parent (`a/b` before `a-b`).
+fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<CommandResult>> {
+    let root = config.root_dir.as_deref();
+    let progress = (io::stdout().is_terminal() && !config.json_output).then(MultiProgress::new);
+    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
+        .unwrap_or_else(|_| ProgressStyle::default_spinner())
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+
+    // All spinners made up front, in order, so they show in that order
+    let total = commands.len();
+    let jobs: Vec<(&DirCommand, Option<ProgressBar>)> = commands
+        .iter()
+        .enumerate()
+        .map(|(i, job)| {
+            let spinner = progress.as_ref().map(|mp| {
+                let pb = mp.add(ProgressBar::new_spinner());
+                pb.set_style(spinner_style.clone());
+                pb.set_prefix(format!("[{}/{}]", i + 1, total));
+                pb.set_message(format!("{}: pending...", display_name(&job.dir, root)));
+                pb.enable_steady_tick(Duration::from_millis(100));
+                pb
+            });
+            (job, spinner)
+        })
+        .collect();
+
+    let stagger = Stagger::new(Duration::from_millis(config.spawn_stagger_ms));
+    let execute = || -> Vec<CommandResult> {
+        jobs.par_iter()
+            .map(|(job, spinner)| {
+                stagger.wait();
+                if let Some(pb) = spinner {
+                    pb.set_message(format!("{}: running...", display_name(&job.dir, root)));
+                }
+                let result = execute_command_in_directory_capturing(
+                    &job.dir,
+                    &job.argv,
+                    config,
+                    job.env.as_ref(),
+                );
+                // results are shown once all are done
+                if let Some(pb) = spinner {
+                    pb.finish_and_clear();
+                }
+                result
+            })
+            .collect()
+    };
+    let mut results = match config.max_parallel {
+        Some(max) => ThreadPoolBuilder::new()
+            .num_threads(max.get())
+            .build()
+            .context("Failed to create thread pool")?
+            .install(execute),
+        None => execute(),
+    };
+    if let Some(mp) = &progress {
+        let _ = mp.clear();
+    }
+
+    results.sort_by_cached_key(|r| {
+        let name = display_name(&r.directory, root);
+        (name != ".", PathBuf::from(name))
+    });
+    Ok(results)
+}
+
+/// Every command in turn, its output live unless it goes into JSON.
+fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<CommandResult>> {
+    commands
+        .iter()
+        .map(|job| match config.json_output {
+            true => Ok(execute_command_in_directory_capturing(
+                &job.dir,
+                &job.argv,
+                config,
+                job.env.as_ref(),
+            )),
+            false => execute_command_in_directory(&job.dir, &job.argv, config, job.env.as_ref()),
+        })
+        .collect()
+}
+
+/// Execute a list of commands (each with its own directory) and report how
+/// they went. This is the execution engine for meta and its plugins.
+pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> {
     if commands.is_empty() {
         return Ok(());
     }
-
-    let results = Arc::new(Mutex::new(Vec::new()));
-    let aliases = Arc::new(get_aliases());
-
-    if config.parallel {
-        // Parallel execution using rayon thread pool with spinners
-        let is_tty = std::io::stdout().is_terminal() && !config.json_output;
-        let mp = if is_tty {
-            Some(Arc::new(MultiProgress::new()))
-        } else {
-            None
-        };
-        let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner())
-            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
-
-        let total = commands.len();
-
-        // Pre-create all spinners (in order) so they display in correct sequence
-        let spinners: Vec<Option<ProgressBar>> = commands
-            .iter()
-            .enumerate()
-            .map(|(i, dir_cmd)| {
-                if let Some(ref mp) = mp {
-                    let pb = mp.add(ProgressBar::new_spinner());
-                    pb.set_style(spinner_style.clone());
-                    pb.set_prefix(format!("[{}/{}]", i + 1, total));
-                    let dir_name =
-                        display_name(Path::new(&dir_cmd.dir), config.root_dir.as_deref());
-                    pb.set_message(format!("{dir_name}: pending..."));
-                    pb.enable_steady_tick(Duration::from_millis(100));
-                    Some(pb)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // Atomic counter for staggered spawning - prevents SSH socket saturation
-        let spawn_counter = Arc::new(AtomicUsize::new(0));
-        let stagger_ms = config.spawn_stagger_ms;
-
-        // Closure to execute commands in parallel
-        let execute_parallel = || {
-            commands
-                .par_iter()
-                .enumerate()
-                .map(|(i, dir_cmd)| {
-                    // Apply stagger delay to spread out connection attempts.
-                    // Each thread gets a slot number and sleeps proportionally.
-                    if stagger_ms > 0 {
-                        let slot = spawn_counter.fetch_add(1, Ordering::SeqCst);
-                        let delay = Duration::from_millis(stagger_ms * slot as u64);
-                        std::thread::sleep(delay);
-                    }
-
-                    let dir = PathBuf::from(&dir_cmd.dir);
-                    let dir_name = display_name(&dir, config.root_dir.as_deref());
-
-                    // Update spinner to show running
-                    if let Some(ref pb) = spinners[i] {
-                        pb.set_message(format!("{dir_name}: running..."));
-                    }
-
-                    let result = execute_command_in_directory_capturing(
-                        &dir,
-                        &dir_cmd.argv,
-                        config,
-                        &aliases,
-                        dir_cmd.env.as_ref(),
-                    );
-
-                    // Update spinner with result (only if not JSON output)
-                    // Note: We don't print completion status here - detailed results shown after all complete
-                    if !config.json_output {
-                        if let Some(ref pb) = spinners[i] {
-                            // Clear spinner - detailed results shown later
-                            pb.finish_and_clear();
-                        }
-                        // Non-TTY: no per-command output, detailed results shown after all complete
-                    }
-
-                    result
-                })
-                .collect()
-        };
-
-        // Use custom thread pool if max_parallel is set, otherwise use global pool
-        let parallel_results: Vec<CommandResult> = if let Some(max) = config.max_parallel {
-            // Create a custom thread pool with limited threads
-            let pool = ThreadPoolBuilder::new()
-                .num_threads(max)
-                .build()
-                .context("Failed to create thread pool")?;
-            pool.install(execute_parallel)
-        } else {
-            execute_parallel()
-        };
-
-        // Store results (already collected from rayon), sorted for deterministic output:
-        // the root (".") first, then by displayed path, component by component so
-        // nested repos sit under their parent (`a/b` before `a-b`)
-        let mut sorted_results = parallel_results;
-        sorted_results.sort_by_cached_key(|r| {
-            let name = display_name(&r.directory, config.root_dir.as_deref());
-            (name != ".", PathBuf::from(name))
-        });
-        results
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .extend(sorted_results);
-
-        // Clear spinner lines before showing detailed output
-        if let Some(ref mp) = mp {
-            let _ = mp.clear();
-        }
-
-        // Print captured output after all spinners complete (if not JSON)
+    let results = if config.parallel {
+        let results = run_parallel(config, commands)?;
         if !config.silent && !config.json_output {
-            let results = results.lock().unwrap_or_else(|e| e.into_inner());
-            let has_any_output = results
-                .iter()
-                .any(|r| !r.stdout.trim().is_empty() || !r.stderr.trim().is_empty());
-
-            if has_any_output {
-                command_println!();
-            }
-
-            for result in results.iter() {
-                let dir_name = result_name(&result.directory, config.root_dir.as_deref());
-
-                let has_output =
-                    !result.stdout.trim().is_empty() || !result.stderr.trim().is_empty();
-                if has_output {
-                    if result.success {
-                        command_println!("{} {}:", "✓".green(), dir_name.green());
-                    } else {
-                        command_println!("{} {}:", "✗".red(), dir_name.red());
-                    }
-                    if !result.stdout.trim().is_empty() {
-                        command_print!("{}", result.stdout);
-                    }
-                    if !result.stderr.trim().is_empty() {
-                        command_print!("{}", result.stderr);
-                    }
-                    command_println!(); // Blank line after each repo's output
-                }
-            }
+            print_captured(config, &results)?;
         }
+        results
     } else {
-        // Sequential execution
-        for dir_cmd in commands {
-            let dir = PathBuf::from(&dir_cmd.dir);
-            let result = if config.json_output {
-                // Capture output for JSON mode
-                execute_command_in_directory_capturing(
-                    &dir,
-                    &dir_cmd.argv,
-                    config,
-                    &aliases,
-                    dir_cmd.env.as_ref(),
-                )
-            } else {
-                execute_command_in_directory(
-                    &dir,
-                    &dir_cmd.argv,
-                    config,
-                    &aliases,
-                    dir_cmd.env.as_ref(),
-                )?
-            };
-            results
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(result);
-        }
-    }
+        run_sequential(config, commands)?
+    };
 
-    // Build results summary
-    let results = results.lock().unwrap_or_else(|e| e.into_inner());
     let total = results.len();
-    let failed: Vec<_> = results.iter().filter(|r| !r.success).collect();
-    let failed_count = failed.len();
+    let failed_count = results.iter().filter(|r| !r.success).count();
 
-    // Output results
     if config.json_output {
-        // JSON output mode
-        let json_results: Vec<JsonCommandResult> = results
-            .iter()
-            .map(|r| JsonCommandResult {
-                directory: r.directory.display().to_string(),
-                command: r.command.clone(),
-                success: r.success,
-                exit_code: r.exit_code,
-                stdout: r.stdout.clone(),
-                stderr: r.stderr.clone(),
-            })
-            .collect();
-
         let output = JsonOutput {
             success: failed_count == 0,
-            results: json_results,
             summary: JsonSummary {
                 total,
                 succeeded: total - failed_count,
                 failed: failed_count,
                 dry_run: config.dry_run,
             },
+            results: results
+                .into_iter()
+                .map(|r| JsonCommandResult {
+                    directory: r.directory.display().to_string(),
+                    command: r.command,
+                    success: r.success,
+                    exit_code: r.exit_code,
+                    signal: r.signal,
+                    stdout: r.stdout,
+                    stderr: r.stderr,
+                })
+                .collect(),
         };
-
         command_println!("{}", serde_json::to_string_pretty(&output)?);
     } else if !config.silent {
-        // Text output mode
         if config.dry_run {
             command_println!(
                 "\n{} Would run {} command(s) across {} directories",
@@ -846,18 +829,18 @@ fn execute_commands_internal(config: &LoopConfig, commands: &[DirCommand]) -> Re
                 failed_count.to_string().red(),
                 total
             );
-            for result in &failed {
+            for result in results.iter().filter(|r| !r.success) {
                 // Without a root the basename is ambiguous, so keep the full path
                 let name = match config.root_dir.as_deref() {
                     Some(root) => result_name(&result.directory, Some(root)),
                     None => escape_path(&result.directory),
                 };
                 command_println!(
-                    "\n{} {}: {} (Exit code {}) ",
+                    "\n{} {}: {} ({}) ",
                     "✗".red(),
                     name,
                     escape(&result.command),
-                    result.exit_code
+                    result.ending()
                 );
             }
             command_println!();
@@ -873,10 +856,28 @@ fn execute_commands_internal(config: &LoopConfig, commands: &[DirCommand]) -> Re
     Ok(())
 }
 
-/// Execute a list of commands (each with its own directory)
-/// This is the unified execution engine for plugins.
-pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> {
-    execute_commands_internal(config, commands)
+/// The output parallel commands captured, each under its directory's name.
+fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
+    let has_output = |r: &CommandResult| !r.stdout.trim().is_empty() || !r.stderr.trim().is_empty();
+    if results.iter().any(has_output) {
+        command_println!();
+    }
+    for result in results.iter().filter(|r| has_output(r)) {
+        let dir_name = result_name(&result.directory, config.root_dir.as_deref());
+        if result.success {
+            command_println!("{} {}:", "✓".green(), dir_name.green());
+        } else {
+            command_println!("{} {}:", "✗".red(), dir_name.red());
+        }
+        if !result.stdout.trim().is_empty() {
+            command_print!("{}", result.stdout);
+        }
+        if !result.stderr.trim().is_empty() {
+            command_print!("{}", result.stderr);
+        }
+        command_println!(); // Blank line after each repo's output
+    }
+    Ok(())
 }
 
 /// Whether the directory `path` is one an `ignore` entry names: by its name
@@ -902,50 +903,6 @@ pub fn should_ignore(path: &Path, ignore: &[String]) -> bool {
                 false => path.ends_with(entry),
             }
         })
-}
-
-pub fn parse_config(config_path: &Path) -> Result<LoopConfig> {
-    let config_str = fs::read_to_string(config_path)
-        .with_context(|| format!("Failed to read looprc config file: {config_path:?}"))?;
-    let config: LoopConfig = serde_json::from_str(&config_str)
-        .with_context(|| format!("Failed to parse looprc config file: {config_path:?}"))?;
-    Ok(config)
-}
-
-pub fn get_aliases() -> HashMap<String, String> {
-    let mut aliases = HashMap::new();
-
-    if let Some(home) = env::var_os("HOME") {
-        let global_looprc = PathBuf::from(home).join(".looprc");
-        if global_looprc.exists() {
-            if let Ok(global_aliases) = load_aliases_from_file(&global_looprc) {
-                aliases.extend(global_aliases);
-            }
-        }
-    }
-
-    if aliases.is_empty() {
-        if let Ok(output) = Command::new("sh").arg("-c").arg("alias").output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                if let Some((alias, command)) = line.split_once('=') {
-                    let alias = alias.trim().trim_start_matches("alias ").to_string();
-                    let command = command
-                        .trim()
-                        .trim_matches('\'')
-                        .trim_matches('"')
-                        .to_string();
-                    aliases.insert(alias, command);
-                }
-            }
-        }
-    }
-
-    if let Ok(local_aliases) = load_aliases_from_file(Path::new(".looprc")) {
-        aliases.extend(local_aliases);
-    }
-
-    aliases
 }
 
 #[cfg(test)]

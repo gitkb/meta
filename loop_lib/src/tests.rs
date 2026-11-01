@@ -34,66 +34,27 @@ fn touch_cmd(path: &std::path::Path) -> Vec<String> {
 }
 
 #[test]
-fn test_parse_config() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = temp_dir.path().join(".looprc");
-    let config_content = r#"
-    {
-        "directories": ["dir1", "dir2"],
-        "ignore": [".git"],
-        "verbose": true,
-        "silent": false,
-        "add_aliases_to_global_looprc": false
-    }
-    "#;
-    fs::write(&config_path, config_content).unwrap();
-
-    let config = parse_config(&config_path).unwrap();
-    assert_eq!(config.directories, vec!["dir1", "dir2"]);
-    assert_eq!(config.ignore, vec![".git"]);
-    assert!(config.verbose);
-    assert!(!config.silent);
-    assert!(!config.add_aliases_to_global_looprc);
-}
-
-#[test]
 fn test_expand_directories() {
     let temp_dir = TempDir::new().unwrap();
-    let dir1 = temp_dir.path().join("dir1");
-    let dir2 = temp_dir.path().join("dir2");
-    let subdir = dir1.join("subdir");
-    fs::create_dir_all(&subdir).unwrap();
-
-    fs::create_dir(&dir2).unwrap();
-
-    let directories = vec![temp_dir.path().to_str().unwrap().to_string()];
+    let root = temp_dir.path().to_path_buf();
+    for dir in ["dir2", "dir1/subdir", ".git", ".github"] {
+        fs::create_dir_all(root.join(dir)).unwrap();
+    }
     let ignore = vec![".git".to_string()];
-    fs::create_dir(temp_dir.path().join(".git")).unwrap();
-    fs::create_dir(temp_dir.path().join(".github")).unwrap();
 
-    let expanded = crate::expand_directories(&directories, &ignore).unwrap();
-
-    assert_eq!(expanded.len(), 4); // Including the root directory itself, not .git
-    assert!(expanded.contains(
-        &temp_dir
-            .path()
-            .join(".github")
-            .to_str()
-            .unwrap()
-            .to_string()
-    ));
-    assert!(expanded.contains(&temp_dir.path().to_str().unwrap().to_string()));
-    assert!(expanded.contains(&dir1.to_str().unwrap().to_string()));
-    assert!(expanded.contains(&dir2.to_str().unwrap().to_string()));
-    assert!(!expanded.contains(&subdir.to_str().unwrap().to_string())); // Ensure subdirectories are not included
+    // the root, then its children by name; not .git, not grandchildren
+    let expanded = crate::expand_directories(std::slice::from_ref(&root), &ignore).unwrap();
+    let names = [".github", "dir1", "dir2"].map(|name| root.join(name));
+    assert_eq!(expanded, [&[root.clone()][..], &names].concat());
 
     // the root excluded, its children still run
-    let root = temp_dir.path().to_str().unwrap().to_string();
-    let expanded =
-        crate::expand_directories(std::slice::from_ref(&root), std::slice::from_ref(&root))
-            .unwrap();
-    assert!(!expanded.contains(&root));
-    assert!(expanded.contains(&dir1.to_str().unwrap().to_string()));
+    let root_name = root.to_str().unwrap().to_string();
+    let expanded = crate::expand_directories(
+        std::slice::from_ref(&root),
+        &[root_name, ".git".to_string()],
+    )
+    .unwrap();
+    assert_eq!(expanded, names);
 }
 
 #[test]
@@ -108,7 +69,7 @@ fn test_should_ignore() {
     assert!(should_ignore(Path::new("./a"), &ignore));
     assert!(should_ignore(Path::new("a"), &["./a".to_string()]));
     // `.` is the directory loop runs in, not every directory
-    let dot = vec![".".to_string()];
+    let dot = vec![".".into()];
     assert!(should_ignore(Path::new("."), &dot));
     assert!(!should_ignore(Path::new("./b"), &dot));
     assert!(!should_ignore(Path::new("b"), &[String::new()]));
@@ -121,31 +82,6 @@ fn test_should_ignore() {
 }
 
 #[test]
-fn test_get_aliases() {
-    let temp_dir = TempDir::new().unwrap();
-    let looprc_path = temp_dir.path().join(".looprc");
-    let looprc_content = r#"
-    {
-        "aliases": {
-            "ll": "ls -l",
-            "gst": "git status"
-        }
-    }
-    "#;
-    fs::write(&looprc_path, looprc_content).unwrap();
-
-    // Temporarily set HOME to our temp directory
-    std::env::set_var("HOME", temp_dir.path());
-
-    let aliases = get_aliases();
-    assert_eq!(aliases.get("ll"), Some(&"ls -l".to_string()));
-    assert_eq!(aliases.get("gst"), Some(&"git status".to_string()));
-
-    // Reset HOME
-    std::env::remove_var("HOME");
-}
-
-#[test]
 fn test_run() {
     let temp_dir = TempDir::new().unwrap();
     let dir1 = temp_dir.path().join("dir1");
@@ -154,14 +90,10 @@ fn test_run() {
     fs::create_dir(&dir2).unwrap();
 
     let config = LoopConfig {
-        directories: vec![
-            dir1.to_str().unwrap().to_string(),
-            dir2.to_str().unwrap().to_string(),
-        ],
+        directories: vec![dir1.to_path_buf(), dir2.to_path_buf()],
         ignore: vec![],
         verbose: false,
         silent: true,
-        add_aliases_to_global_looprc: false,
         parallel: false,
         dry_run: false,
         json_output: false,
@@ -169,6 +101,7 @@ fn test_run() {
         env: None,
         max_parallel: None,
         root_dir: None,
+        ..Default::default()
     };
 
     let result = run(&config, &sh("echo test"));
@@ -180,45 +113,22 @@ fn test_run() {
 }
 
 #[test]
-fn test_load_aliases_from_file() {
-    let temp_dir = TempDir::new().unwrap();
-    let looprc_path = temp_dir.path().join(".looprc");
-    let looprc_content = r#"
-    {
-        "aliases": {
-            "ll": "ls -l",
-            "gst": "git status"
-        }
-    }
-    "#;
-    fs::write(&looprc_path, looprc_content).unwrap();
-
-    let aliases = load_aliases_from_file(&looprc_path).unwrap();
-    assert_eq!(aliases.get("ll"), Some(&"ls -l".to_string()));
-    assert_eq!(aliases.get("gst"), Some(&"git status".to_string()));
-}
-
-#[test]
 fn test_execute_command_in_directory() {
     let config = LoopConfig {
         verbose: false,
         silent: true,
         ..Default::default()
     };
-    let aliases = HashMap::new();
     let temp_dir = TempDir::new().unwrap();
 
     let result =
-        execute_command_in_directory(temp_dir.path(), &sh("echo test"), &config, &aliases, None)
-            .unwrap();
+        execute_command_in_directory(temp_dir.path(), &sh("echo test"), &config, None).unwrap();
     assert!(result.success);
-    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.exit_code, Some(0));
 
-    let result =
-        execute_command_in_directory(temp_dir.path(), &fail_cmd(), &config, &aliases, None)
-            .unwrap();
+    let result = execute_command_in_directory(temp_dir.path(), &fail_cmd(), &config, None).unwrap();
     assert!(!result.success);
-    assert_eq!(result.exit_code, 1);
+    assert_eq!(result.exit_code, Some(1));
 }
 #[test]
 fn test_run_without_looprc() {
@@ -230,11 +140,10 @@ fn test_run_without_looprc() {
 
     // Run without a .looprc file
     let config = LoopConfig {
-        directories: vec![temp_dir.path().to_str().unwrap().to_string()],
+        directories: vec![temp_dir.path().to_path_buf()],
         ignore: vec![],
         verbose: false,
         silent: true,
-        add_aliases_to_global_looprc: false,
         parallel: false,
         dry_run: false,
         json_output: false,
@@ -242,6 +151,7 @@ fn test_run_without_looprc() {
         env: None,
         max_parallel: None,
         root_dir: None,
+        ..Default::default()
     };
 
     let result = run(&config, &sh("echo test"));
@@ -259,15 +169,10 @@ fn test_run_parallel() {
     fs::create_dir(&dir3).unwrap();
 
     let config = LoopConfig {
-        directories: vec![
-            dir1.to_str().unwrap().to_string(),
-            dir2.to_str().unwrap().to_string(),
-            dir3.to_str().unwrap().to_string(),
-        ],
+        directories: vec![dir1.to_path_buf(), dir2.to_path_buf(), dir3.to_path_buf()],
         ignore: vec![],
         verbose: false,
         silent: true,
-        add_aliases_to_global_looprc: false,
         parallel: true,
         dry_run: false,
         json_output: false,
@@ -275,6 +180,7 @@ fn test_run_parallel() {
         env: None,
         max_parallel: None,
         root_dir: None,
+        ..Default::default()
     };
 
     let result = run(&config, &sh("echo test"));
@@ -292,29 +198,18 @@ fn test_execute_command_in_directory_capturing() {
         silent: true,
         ..Default::default()
     };
-    let aliases = HashMap::new();
     let temp_dir = TempDir::new().unwrap();
 
-    let result = execute_command_in_directory_capturing(
-        temp_dir.path(),
-        &sh("echo hello"),
-        &config,
-        &aliases,
-        None,
-    );
+    let result =
+        execute_command_in_directory_capturing(temp_dir.path(), &sh("echo hello"), &config, None);
     assert!(result.success);
-    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.exit_code, Some(0));
     assert!(result.stdout.contains("hello"));
 
-    let result = execute_command_in_directory_capturing(
-        temp_dir.path(),
-        &fail_cmd(),
-        &config,
-        &aliases,
-        None,
-    );
+    let result =
+        execute_command_in_directory_capturing(temp_dir.path(), &fail_cmd(), &config, None);
     assert!(!result.success);
-    assert_eq!(result.exit_code, 1);
+    assert_eq!(result.exit_code, Some(1));
 }
 
 #[test]
@@ -324,7 +219,6 @@ fn test_execute_command_in_directory_capturing_stderr() {
         silent: true,
         ..Default::default()
     };
-    let aliases = HashMap::new();
     let temp_dir = TempDir::new().unwrap();
 
     // Command that writes to stderr
@@ -332,7 +226,6 @@ fn test_execute_command_in_directory_capturing_stderr() {
         temp_dir.path(),
         &sh("echo error >&2"),
         &config,
-        &aliases,
         None,
     );
     assert!(result.success);
@@ -346,28 +239,13 @@ fn test_execute_command_nonexistent_directory() {
         silent: true,
         ..Default::default()
     };
-    let aliases = HashMap::new();
     let nonexistent = Path::new("/nonexistent/path/that/does/not/exist");
 
-    let result = execute_command_in_directory_capturing(
-        nonexistent,
-        &sh("echo test"),
-        &config,
-        &aliases,
-        None,
-    );
+    let result =
+        execute_command_in_directory_capturing(nonexistent, &sh("echo test"), &config, None);
     assert!(!result.success);
-    assert_eq!(result.exit_code, 1);
+    assert_eq!(result.exit_code, Some(1));
     assert!(result.stderr.contains("does not exist"));
-}
-
-#[test]
-fn test_command_result_default() {
-    let result = CommandResult::default();
-    assert!(!result.success);
-    assert_eq!(result.exit_code, 0);
-    assert!(result.stdout.is_empty());
-    assert!(result.stderr.is_empty());
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -375,16 +253,14 @@ fn strings(values: &[&str]) -> Vec<String> {
 }
 
 /// What git receives as its arguments, quoted by git itself
-fn git_sees(argv: &[&str], aliases: &HashMap<String, String>) -> String {
+fn git_sees(argv: &[&str], aliases: &BTreeMap<String, String>) -> String {
     let temp_dir = TempDir::new().unwrap();
-    let config = LoopConfig::default();
-    let result = execute_command_in_directory_capturing(
-        temp_dir.path(),
-        &strings(argv),
-        &config,
-        aliases,
-        None,
-    );
+    let config = LoopConfig {
+        aliases: aliases.clone(),
+        ..LoopConfig::default()
+    };
+    let result =
+        execute_command_in_directory_capturing(temp_dir.path(), &strings(argv), &config, None);
     assert!(result.success, "{}", result.stderr);
     assert!(fs::read_dir(temp_dir.path()).unwrap().next().is_none());
     result.stdout.trim().to_string()
@@ -409,30 +285,26 @@ fn arguments_reach_the_program_as_given() {
         .iter()
         .map(|arg| format!("'{}'", arg.replace('\'', "'\\''")))
         .collect();
-    assert_eq!(git_sees(&argv, &HashMap::new()), quoted.join(" "));
+    assert_eq!(git_sees(&argv, &BTreeMap::new()), quoted.join(" "));
 }
 
 #[test]
 fn aliases_expand_into_words_not_shell() {
-    let aliases = HashMap::from([(
+    let aliases = BTreeMap::from([(
         "q".to_string(),
         "git rev-parse --sq-quote 'two words' ;".to_string(),
     )]);
     assert_eq!(git_sees(&["q", "$(x)"], &aliases), "'two words' ';' '$(x)'");
 
-    let broken = HashMap::from([("q".to_string(), "git 'unclosed".to_string())]);
+    let broken = BTreeMap::from([("q".to_string(), "git 'unclosed".to_string())]);
     for dry_run in [false, true] {
         let config = LoopConfig {
             dry_run,
+            aliases: broken.clone(),
             ..LoopConfig::default()
         };
-        let result = execute_command_in_directory_capturing(
-            Path::new("."),
-            &strings(&["q"]),
-            &config,
-            &broken,
-            None,
-        );
+        let result =
+            execute_command_in_directory_capturing(Path::new("."), &strings(&["q"]), &config, None);
         assert!(!result.success);
         assert!(result.stderr.contains("Alias 'q'"), "{}", result.stderr);
     }
@@ -441,7 +313,7 @@ fn aliases_expand_into_words_not_shell() {
 #[test]
 fn a_missing_program_fails_without_panicking() {
     let config = LoopConfig {
-        directories: vec![".".to_string()],
+        directories: vec![".".into()],
         silent: true,
         ..LoopConfig::default()
     };
@@ -453,20 +325,12 @@ fn a_missing_program_fails_without_panicking() {
 // ============================================================================
 
 #[test]
-fn test_loop_config_default_includes_new_fields() {
-    let config = LoopConfig::default();
-    assert!(!config.dry_run);
-    assert!(!config.json_output);
-    assert!(!config.parallel);
-}
-
-#[test]
 fn test_dry_run_does_not_execute() {
     let temp_dir = TempDir::new().unwrap();
     let marker_file = temp_dir.path().join("marker.txt");
 
     let config = LoopConfig {
-        directories: vec![temp_dir.path().to_str().unwrap().to_string()],
+        directories: vec![temp_dir.path().to_path_buf()],
         dry_run: true,
         silent: true,
         ..Default::default()
@@ -486,7 +350,7 @@ fn test_dry_run_returns_success() {
     let temp_dir = TempDir::new().unwrap();
 
     let config = LoopConfig {
-        directories: vec![temp_dir.path().to_str().unwrap().to_string()],
+        directories: vec![temp_dir.path().to_path_buf()],
         dry_run: true,
         silent: true,
         ..Default::default()
@@ -507,14 +371,11 @@ fn test_execute_command_in_directory_dry_run() {
         silent: true,
         ..Default::default()
     };
-    let aliases = HashMap::new();
     let temp_dir = TempDir::new().unwrap();
 
-    let result =
-        execute_command_in_directory(temp_dir.path(), &fail_cmd(), &config, &aliases, None)
-            .unwrap();
+    let result = execute_command_in_directory(temp_dir.path(), &fail_cmd(), &config, None).unwrap();
     assert!(result.success, "dry_run should return success");
-    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.exit_code, Some(0));
 }
 
 #[test]
@@ -524,30 +385,13 @@ fn test_execute_command_in_directory_capturing_dry_run() {
         silent: true,
         ..Default::default()
     };
-    let aliases = HashMap::new();
     let temp_dir = TempDir::new().unwrap();
 
-    let result = execute_command_in_directory_capturing(
-        temp_dir.path(),
-        &sh("echo hello"),
-        &config,
-        &aliases,
-        None,
-    );
+    let result =
+        execute_command_in_directory_capturing(temp_dir.path(), &sh("echo hello"), &config, None);
     assert!(result.success);
     assert!(result.stdout.contains("[DRY RUN]"));
     assert!(result.stdout.contains("echo hello"));
-}
-
-#[test]
-fn test_dir_command_struct() {
-    let cmd = DirCommand {
-        dir: "/some/path".to_string(),
-        argv: vec!["git".to_string(), "status".to_string()],
-        env: None,
-    };
-    assert_eq!(cmd.dir, "/some/path");
-    assert_eq!(cmd.argv, ["git", "status"]);
 }
 
 #[test]
@@ -574,12 +418,12 @@ fn test_run_commands_sequential() {
 
     let commands = vec![
         DirCommand {
-            dir: dir1.to_str().unwrap().to_string(),
+            dir: dir1.to_path_buf(),
             argv: sh("echo test1"),
             env: None,
         },
         DirCommand {
-            dir: dir2.to_str().unwrap().to_string(),
+            dir: dir2.to_path_buf(),
             argv: sh("echo test2"),
             env: None,
         },
@@ -605,12 +449,12 @@ fn test_run_commands_parallel() {
 
     let commands = vec![
         DirCommand {
-            dir: dir1.to_str().unwrap().to_string(),
+            dir: dir1.to_path_buf(),
             argv: sh("echo test1"),
             env: None,
         },
         DirCommand {
-            dir: dir2.to_str().unwrap().to_string(),
+            dir: dir2.to_path_buf(),
             argv: sh("echo test2"),
             env: None,
         },
@@ -638,12 +482,12 @@ fn test_run_commands_with_different_commands() {
     // that different commands can be executed in different directories
     let commands = vec![
         DirCommand {
-            dir: dir1.to_str().unwrap().to_string(),
+            dir: dir1.to_path_buf(),
             argv: sh("echo command1"),
             env: None,
         },
         DirCommand {
-            dir: dir2.to_str().unwrap().to_string(),
+            dir: dir2.to_path_buf(),
             argv: sh("echo command2"),
             env: None,
         },
@@ -668,7 +512,7 @@ fn test_run_commands_dry_run() {
     };
 
     let commands = vec![DirCommand {
-        dir: temp_dir.path().to_str().unwrap().to_string(),
+        dir: temp_dir.path().to_path_buf(),
         argv: touch_cmd(&marker_file),
         env: None,
     }];
@@ -691,7 +535,7 @@ fn test_run_commands_failure_handling() {
     };
 
     let commands = vec![DirCommand {
-        dir: dir1.to_str().unwrap().to_string(),
+        dir: dir1.to_path_buf(),
         argv: fail_cmd(), // This command always fails
         env: None,
     }];
@@ -711,7 +555,7 @@ fn test_run_commands_failure_in_dry_run_succeeds() {
     };
 
     let commands = vec![DirCommand {
-        dir: temp_dir.path().to_str().unwrap().to_string(),
+        dir: temp_dir.path().to_path_buf(),
         argv: fail_cmd(),
         env: None,
     }];
@@ -732,7 +576,8 @@ fn test_json_output_structures() {
             directory: "/test".to_string(),
             command: "echo hello".to_string(),
             success: true,
-            exit_code: 0,
+            exit_code: Some(0),
+            signal: None,
             stdout: "hello\n".to_string(),
             stderr: String::new(),
         }],
@@ -756,7 +601,8 @@ fn test_json_output_skips_empty_strings() {
         directory: "/test".to_string(),
         command: "echo".to_string(),
         success: true,
-        exit_code: 0,
+        exit_code: Some(0),
+        signal: None,
         stdout: String::new(),
         stderr: String::new(),
     };
@@ -765,69 +611,6 @@ fn test_json_output_skips_empty_strings() {
     // Empty stdout/stderr should be skipped due to skip_serializing_if
     assert!(!json.contains("\"stdout\":\"\""));
     assert!(!json.contains("\"stderr\":\"\""));
-}
-
-#[test]
-fn test_loop_config_serialization() {
-    let config = LoopConfig {
-        directories: vec!["dir1".to_string()],
-        dry_run: true,
-        json_output: true,
-        parallel: true,
-        ..Default::default()
-    };
-
-    let json = serde_json::to_string(&config).unwrap();
-    assert!(json.contains("\"dry_run\":true"));
-    assert!(json.contains("\"json_output\":true"));
-    assert!(json.contains("\"parallel\":true"));
-}
-
-#[test]
-fn test_loop_config_deserialization_with_new_fields() {
-    let json = r#"{
-        "directories": ["test"],
-        "dry_run": true,
-        "json_output": true,
-        "parallel": false
-    }"#;
-
-    let config: LoopConfig = serde_json::from_str(json).unwrap();
-    assert!(config.dry_run);
-    assert!(config.json_output);
-    assert!(!config.parallel);
-}
-
-#[test]
-fn test_loop_config_deserialization_missing_new_fields() {
-    // Old config format without new fields should deserialize with defaults
-    let json = r#"{
-        "directories": ["test"],
-        "verbose": false
-    }"#;
-
-    let config: LoopConfig = serde_json::from_str(json).unwrap();
-    assert!(!config.dry_run, "dry_run should default to false");
-    assert!(!config.json_output, "json_output should default to false");
-    assert!(!config.parallel, "parallel should default to false");
-}
-
-#[test]
-fn test_dir_command_serialization() {
-    let cmd = DirCommand {
-        dir: "/path/to/dir".to_string(),
-        argv: vec!["git".to_string(), "status".to_string()],
-        env: None,
-    };
-
-    let json = serde_json::to_string(&cmd).unwrap();
-    assert!(json.contains("\"dir\":\"/path/to/dir\""));
-    assert!(json.contains("\"argv\":[\"git\",\"status\"]"));
-
-    // Test deserialization
-    let parsed: DirCommand = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed.dir, "/path/to/dir");
-    assert_eq!(parsed.argv, ["git", "status"]);
 }
 
 #[test]
@@ -872,7 +655,7 @@ fn test_display_names_escape_control_characters() {
 
 #[test]
 fn a_malformed_alias_is_named_escaped() {
-    let aliases = HashMap::from([(
+    let aliases = BTreeMap::from([(
         "bad\u{1b}[2J".to_string(),
         "'unclosed\u{1b}[2J\nFORGED".to_string(),
     )]);
@@ -881,5 +664,76 @@ fn a_malformed_alias_is_named_escaped() {
     assert!(
         !message.contains('\u{1b}') && !message.contains('\n'),
         "{message}"
+    );
+}
+
+/// `contents` as a `.looprc`, parsed
+fn looprc(contents: &str) -> Result<LoopConfig> {
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join(".looprc");
+    fs::write(&path, contents).unwrap();
+    parse_config(&path)
+}
+
+#[test]
+fn a_looprc_is_one_format_with_one_default() {
+    // a key left out takes the same default as no file at all
+    assert_eq!(looprc("{}").unwrap().ignore, LoopConfig::default().ignore);
+    assert_eq!(LoopConfig::default().ignore, [".git"]);
+
+    let config = looprc(
+        r#"{"directories": ["a"], "silent": true, "max_parallel": 2,
+            "aliases": {"gs": "git status"}}"#,
+    )
+    .unwrap();
+    assert_eq!(config.directories, [PathBuf::from("a")]);
+    assert!(config.silent);
+    assert_eq!(config.max_parallel.map(NonZeroUsize::get), Some(2));
+    assert_eq!(config.aliases["gs"], "git status");
+
+    // what loop can't use is an error naming the file, not ignored
+    for (contents, says) in [
+        (r#"{"concurrency": 4}"#, "unknown field `concurrency`"),
+        (r#"{"max_parallel": 0}"#, "nonzero"),
+        (r#"{"aliases": {"gs": 1}}"#, "invalid type"),
+        (r#"{"add_aliases_to_global_looprc": true}"#, "unknown field"),
+    ] {
+        let message = format!("{:#}", looprc(contents).unwrap_err());
+        assert!(
+            message.contains(".looprc") && message.contains(says),
+            "{message}"
+        );
+    }
+
+    let message = format!("{:#}", parse_config(Path::new("no-such.json")).unwrap_err());
+    assert!(message.contains("no-such.json"), "{message}");
+    assert!(parse_config_if_present(Path::new("no-such.json")).is_ok());
+}
+
+#[test]
+fn starts_are_one_interval_apart_however_long_commands_take() {
+    use std::cell::{Cell, RefCell};
+    let interval = Duration::from_millis(10);
+    let stagger = Stagger::new(interval);
+    let clock = Cell::new(Instant::now());
+    let slept = RefCell::new(Vec::new());
+    let wait = |busy: Duration| {
+        clock.set(clock.get() + busy);
+        stagger.wait_with(
+            || clock.get(),
+            |d| {
+                slept.borrow_mut().push(d);
+                clock.set(clock.get() + d);
+            },
+        );
+    };
+
+    wait(Duration::ZERO); // the first starts at once
+    wait(Duration::ZERO); // the next one interval later
+    wait(Duration::from_millis(4)); // the rest of the interval
+    wait(Duration::from_millis(50)); // the interval long past: at once
+    assert_eq!(
+        *slept.borrow(),
+        [interval, Duration::from_millis(6), Duration::ZERO]
     );
 }

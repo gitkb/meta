@@ -6,12 +6,13 @@
 use anyhow::{Context, Result};
 use meta_core::display::{escape, escape_path};
 use std::io::Read;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use meta_plugin_protocol::{
-    ExecutionPlan, PlanResponse, PluginInfo, PluginRequest, PluginRequestOptions,
+    ExecutionPlan, PlanResponse, PlannedCommand, PluginInfo, PluginRequest, PluginRequestOptions,
 };
 
 /// Query metadata with one deadline for both process exit and stdout EOF.
@@ -419,6 +420,27 @@ fn execute_plan(
 ) -> Result<()> {
     use loop_lib::{run_commands, DirCommand, LoopConfig};
 
+    // Checked once, before any phase runs, so a plan never stops half done
+    // over them
+    let max_parallel = plan
+        .max_parallel
+        .map(|max| NonZeroUsize::new(max).context("The plugin's plan has max_parallel 0"))
+        .transpose()?;
+    let aliases = loop_lib::aliases()?;
+    let job = |c: &PlannedCommand| DirCommand {
+        dir: PathBuf::from(&c.dir),
+        argv: c.argv.clone(),
+        env: c.env.clone(),
+    };
+    // Setup and cleanup run one at a time and silently unless verbose;
+    // setup runs in a dry run too (it's required)
+    let phase_config = LoopConfig {
+        verbose: options.verbose,
+        silent: true,
+        aliases: aliases.clone(),
+        ..LoopConfig::default()
+    };
+
     // Phase 1: Run pre_commands sequentially (setup tasks like SSH ControlMaster)
     if !plan.pre_commands.is_empty() {
         if !options.silent {
@@ -426,30 +448,10 @@ fn execute_plan(
             eprintln!("{} Preparing connections...", "⟳".cyan());
         }
 
-        let pre_config = LoopConfig {
-            directories: vec![],
-            ignore: vec![],
-            verbose: options.verbose,
-            silent: true, // Pre-commands run silently unless verbose
-            add_aliases_to_global_looprc: false,
-            parallel: false, // Sequential execution
-            dry_run: false,  // Pre-commands always run (setup is required)
-            json_output: false,
-            spawn_stagger_ms: 0,
-            env: None,
-            max_parallel: None, // Pre-commands are sequential
-            root_dir: None,     // Pre-commands don't need "." display
-        };
-
         for pre_cmd in &plan.pre_commands {
-            let cmd = DirCommand {
-                dir: pre_cmd.dir.clone(),
-                argv: pre_cmd.argv.clone(),
-                env: pre_cmd.env.clone(),
-            };
             // Ignore failures for pre_commands (e.g., SSH socket already exists)
             // The main commands will fail if setup was actually needed
-            if let Err(e) = run_commands(&pre_config, &[cmd]) {
+            if let Err(e) = run_commands(&phase_config, &[job(pre_cmd)]) {
                 if options.verbose {
                     eprintln!("Pre-command failed (continuing): {e}");
                 }
@@ -459,67 +461,35 @@ fn execute_plan(
 
     // Phase 2: Run main commands (may be parallel)
     if !plan.commands.is_empty() {
-        let commands: Vec<DirCommand> = plan
-            .commands
-            .iter()
-            .map(|c| DirCommand {
-                dir: c.dir.clone(),
-                argv: c.argv.clone(),
-                env: c.env.clone(),
-            })
-            .collect();
+        let commands: Vec<DirCommand> = plan.commands.iter().map(job).collect();
 
         // Repos are named by their path from the root (shown as "."). Without
         // projects from meta_cli the plugin lists the root first.
         let root_dir = root_dir
             .map(Path::to_path_buf)
-            .or_else(|| commands.first().map(|c| PathBuf::from(&c.dir)));
+            .or_else(|| commands.first().map(|c| c.dir.clone()));
 
         let config = LoopConfig {
-            directories: vec![],
-            ignore: vec![],
             verbose: options.verbose,
             silent: options.silent,
-            add_aliases_to_global_looprc: false,
             parallel: plan.parallel.unwrap_or(options.parallel),
             dry_run: options.dry_run,
             json_output: options.json_output,
             spawn_stagger_ms: plan.spawn_stagger_ms.unwrap_or(0),
-            env: None,
-            max_parallel: plan.max_parallel,
+            max_parallel,
+            aliases,
             root_dir,
+            ..LoopConfig::default()
         };
 
         run_commands(&config, &commands)?;
     }
 
     // Phase 3: Run post_commands sequentially (cleanup tasks)
-    if !plan.post_commands.is_empty() {
-        let post_config = LoopConfig {
-            directories: vec![],
-            ignore: vec![],
-            verbose: options.verbose,
-            silent: true,
-            add_aliases_to_global_looprc: false,
-            parallel: false,
-            dry_run: false,
-            json_output: false,
-            spawn_stagger_ms: 0,
-            env: None,
-            max_parallel: None, // Post-commands are sequential
-            root_dir: None,     // Post-commands don't need "." display
-        };
-
-        for post_cmd in &plan.post_commands {
-            let cmd = DirCommand {
-                dir: post_cmd.dir.clone(),
-                argv: post_cmd.argv.clone(),
-                env: post_cmd.env.clone(),
-            };
-            if let Err(e) = run_commands(&post_config, &[cmd]) {
-                if options.verbose {
-                    eprintln!("Post-command failed: {e}");
-                }
+    for post_cmd in &plan.post_commands {
+        if let Err(e) = run_commands(&phase_config, &[job(post_cmd)]) {
+            if options.verbose {
+                eprintln!("Post-command failed: {e}");
             }
         }
     }

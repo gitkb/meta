@@ -363,6 +363,16 @@ SCRIPT
     [[ "$output" == *"json-test"* ]] || [[ "$output" == *"api"* ]]
 }
 
+@test "a command a signal ends has exit_code null and the signal in --json" {
+    # stdout alone: the JSON
+    run sh -c '"$1" --json --include api exec -- sh -c "kill -9 \$\$" 2>/dev/null' _ "$META_BIN"
+    [ "$status" -ne 0 ]
+    echo "$output" | jq -e '.results[0] | .exit_code == null and .signal == 9'
+    # one that exits has its code and no signal
+    run sh -c '"$1" --json --include api exec -- sh -c "exit 3" 2>/dev/null' _ "$META_BIN"
+    echo "$output" | jq -e '.results[0] | .exit_code == 3 and (has("signal") | not)'
+}
+
 @test "loop handles commands with pipes via script" {
     cat > "$TEST_DIR/api/pipe.sh" <<'SCRIPT'
 #!/bin/sh

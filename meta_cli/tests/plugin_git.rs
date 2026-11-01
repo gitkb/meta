@@ -18,7 +18,7 @@ fn test_dry_run_integration_loop_lib() {
 
     // Test dry_run with run() function
     let config = LoopConfig {
-        directories: vec![dir.path().to_str().unwrap().to_string()],
+        directories: vec![dir.path().to_path_buf()],
         dry_run: true,
         silent: true,
         ..Default::default()
@@ -35,7 +35,7 @@ fn test_dry_run_integration_loop_lib() {
     // Test dry_run with run_commands() function
     let marker_file2 = dir.path().join("also_should_not_exist.txt");
     let commands = vec![DirCommand {
-        dir: dir.path().to_str().unwrap().to_string(),
+        dir: dir.path().to_path_buf(),
         argv: touch(&marker_file2),
         env: None,
     }];
@@ -46,39 +46,6 @@ fn test_dry_run_integration_loop_lib() {
         !marker_file2.exists(),
         "dry_run should NOT create file via run_commands()"
     );
-}
-
-/// Test that LoopConfig properly serializes/deserializes with all new fields
-#[test]
-fn test_loop_config_full_serialization_round_trip() {
-    use loop_lib::LoopConfig;
-
-    let config = LoopConfig {
-        directories: vec!["dir1".to_string(), "dir2".to_string()],
-        ignore: vec![".git".to_string()],
-        verbose: true,
-        silent: false,
-        add_aliases_to_global_looprc: false,
-        parallel: true,
-        dry_run: true,
-        json_output: true,
-        spawn_stagger_ms: 0,
-        env: None,
-        max_parallel: Some(5),
-        root_dir: None,
-    };
-
-    let json = serde_json::to_string(&config).unwrap();
-    let restored: LoopConfig = serde_json::from_str(&json).unwrap();
-
-    assert_eq!(restored.directories, config.directories);
-    assert_eq!(restored.ignore, config.ignore);
-    assert_eq!(restored.verbose, config.verbose);
-    assert_eq!(restored.silent, config.silent);
-    assert_eq!(restored.parallel, config.parallel);
-    assert_eq!(restored.dry_run, config.dry_run);
-    assert_eq!(restored.json_output, config.json_output);
-    assert_eq!(restored.max_parallel, config.max_parallel);
 }
 
 /// Test that DirCommand allows different commands per directory
@@ -103,12 +70,12 @@ fn test_different_commands_per_directory() {
 
     let commands = vec![
         DirCommand {
-            dir: dir1.to_str().unwrap().to_string(),
+            dir: dir1.clone(),
             argv: touch(&file1),
             env: None,
         },
         DirCommand {
-            dir: dir2.to_str().unwrap().to_string(),
+            dir: dir2.clone(),
             argv: touch(&file2),
             env: None,
         },
@@ -221,7 +188,7 @@ fn test_parallel_execution_with_different_commands() {
         .map(|(i, d)| {
             let file = d.join(format!("file{i}.txt"));
             DirCommand {
-                dir: d.to_str().unwrap().to_string(),
+                dir: d.clone(),
                 argv: touch(&file),
                 env: None,
             }
@@ -252,28 +219,6 @@ fn test_empty_execution_plan() {
 
     let result = run_commands(&config, &commands);
     assert!(result.is_ok(), "Empty command list should succeed");
-}
-
-/// Test backward compatibility - old configs without new fields should work
-#[test]
-fn test_backward_compatibility_config_parsing() {
-    use loop_lib::LoopConfig;
-
-    // Old config format without dry_run, json_output, parallel
-    let old_config_json = r#"{
-        "directories": ["dir1", "dir2"],
-        "ignore": [".git"],
-        "verbose": false,
-        "silent": true,
-        "add_aliases_to_global_looprc": false
-    }"#;
-
-    let config: LoopConfig = serde_json::from_str(old_config_json).unwrap();
-
-    // New fields should have defaults
-    assert!(!config.dry_run);
-    assert!(!config.json_output);
-    assert!(!config.parallel);
 }
 
 /// A malformed selected worktree must fail before ordinary config fallback or exec.

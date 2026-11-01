@@ -311,6 +311,9 @@ meta --json exec -- git rev-parse HEAD
 }
 ```
 
+A command a signal ended has `"exit_code": null` and the signal's number in
+`"signal"` (`9` for `SIGKILL`); `signal` is left out otherwise.
+
 ### Parsing with jq
 
 ```bash

@@ -591,7 +591,7 @@ assert d['totals']['files_changed'] >= 1
 @test "unrecognized worktree command is escaped on one line" {
     cd "$TEST_DIR"
     run "$META_BIN" git worktree $'bad\033]0;TITLE\007\nFORGED'
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
     [[ "$output" != *$'\033'* ]]
     [[ "$output" != *$'\nFORGED'* ]]
     [[ "$output" == *"unrecognized subcommand 'bad"* ]]
@@ -676,7 +676,7 @@ assert d['totals']['files_changed'] >= 1
 @test "unrecognized worktree command shows help" {
     cd "$TEST_DIR"
     run "$META_BIN" git worktree blablabla
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
     # the error, once
     [ "$(grep -c "unrecognized subcommand 'blablabla'" <<<"$output")" -eq 1 ]
     # Must show ACTUAL help content (not just a reference to --help)

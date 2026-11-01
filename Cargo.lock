@@ -954,6 +954,7 @@ dependencies = [
  "log",
  "meta",
  "meta_core",
+ "same-file",
  "serde",
  "serde_json",
  "tempfile",

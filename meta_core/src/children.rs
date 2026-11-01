@@ -243,12 +243,21 @@ mod imp {
     pub(super) fn exited(child: &Child) {
         use rustix::process::{waitid, WaitId, WaitIdOptions};
         let pid = Pid::from_child(child);
-        // Interrupted: try again. Any other error (already reaped) is for
-        // std's wait to report.
-        while let Err(rustix::io::Errno::INTR) = waitid(
-            WaitId::Pid(pid),
-            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
-        ) {}
+        loop {
+            match waitid(
+                WaitId::Pid(pid),
+                WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+            ) {
+                Err(rustix::io::Errno::INTR) => {}
+                // macOS can answer for a child that is only stopped
+                Ok(Some(status)) if status.stopped() || status.continued() => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                // ended, or not this program's to wait for (already reaped):
+                // std's wait reports that
+                _ => break,
+            }
+        }
         let mut children = lock();
         children.running.retain(|(running, _)| *running != pid);
         registry().changed.notify_all();
@@ -324,11 +333,12 @@ mod imp {
         for group in &children.groups {
             let _ = rustix::process::kill_process_group(*group, sig);
         }
-        // With no terminal, what still runs after the grace is killed, and
-        // after as long again this program ends whatever is left (a dead
-        // process no one reaps still counts as in its group). In a terminal,
-        // a second Ctrl-C does that.
-        let mut deadline = (!shared()).then(|| Instant::now() + grace());
+        // With no terminal, or when another process sent it, what still runs
+        // after the grace is killed, and after as long again this program
+        // ends whatever is left (a dead process no one reaps still counts as
+        // in its group). After the terminal's own Ctrl-C, a second one does
+        // that.
+        let mut deadline = (sent || !shared()).then(|| Instant::now() + grace());
         let mut killed = false;
         loop {
             children.groups.retain(|group| group_alive(*group));
@@ -339,9 +349,7 @@ mod imp {
                 if killed {
                     break;
                 }
-                for group in &children.groups {
-                    let _ = rustix::process::kill_process_group(*group, Signal::KILL);
-                }
+                kill(&children);
                 killed = true;
                 deadline = Some(Instant::now() + grace());
             }
@@ -359,7 +367,10 @@ mod imp {
 
     /// Kill every child and every group this program made.
     fn kill_all() {
-        let children = lock();
+        kill(&lock());
+    }
+
+    fn kill(children: &Children) {
         for (pid, own_group) in &children.running {
             if !own_group {
                 let _ = rustix::process::kill_process(*pid, Signal::KILL);

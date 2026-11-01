@@ -201,11 +201,14 @@ fn still_at(file: &File, path: &Path) -> bool {
     }
 }
 
-/// Whether `file` is still the file at `path`. Windows doesn't delete a file
-/// that is open (meta opens it to lock it) until the last handle closes.
+/// Whether `file` is still the file at `path` (by volume and file index).
 #[cfg(not(unix))]
-fn still_at(_file: &File, path: &Path) -> bool {
-    path.symlink_metadata().is_ok()
+fn still_at(file: &File, path: &Path) -> bool {
+    let open = file.try_clone().and_then(same_file::Handle::from_file);
+    match (open, same_file::Handle::from_path(path)) {
+        (Ok(open), Ok(there)) => open == there,
+        _ => false,
+    }
 }
 
 /// The lease file for `set` in the repository whose git directory is

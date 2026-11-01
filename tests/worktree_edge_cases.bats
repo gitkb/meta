@@ -2211,11 +2211,14 @@ YAML
     git -C "$TEST_DIR/tools/cli" remote add origin git@github.com:org/cli.git
     run "$META_BIN" -r -t rust project check
     [[ "$output" == *"All projects are cloned"* ]]
+}
 
-# A post-checkout hook that says it started, then takes $1 seconds
+# A post-checkout hook that says it started, then waits until
+# $TEST_DIR/release exists (or the test's directory is gone)
 slow_checkout_hook() {
     mkdir -p "$TEST_DIR/hooks"
-    printf '#!/bin/sh\ntouch "%s/hook-started"\nsleep %s\n' "$TEST_DIR" "$1" > "$TEST_DIR/hooks/post-checkout"
+    printf '#!/bin/sh\ntouch "%s/hook-started"\nwhile [ ! -e "%s/release" ] && [ -d "%s" ]; do sleep 0.05; done\n' \
+        "$TEST_DIR" "$TEST_DIR" "$TEST_DIR" > "$TEST_DIR/hooks/post-checkout"
     chmod +x "$TEST_DIR/hooks/post-checkout"
     git config --global core.hooksPath "$TEST_DIR/hooks"
 }
@@ -2227,7 +2230,7 @@ wait_for() {
 }
 
 @test "a create stopped part way leaves a set remove takes back without --force" {
-    slow_checkout_hook 30
+    slow_checkout_hook
     "$META_BIN" git worktree create half --all &
     local pid=$!
     wait_for "$TEST_DIR/hook-started"
@@ -2251,12 +2254,13 @@ wait_for() {
 }
 
 @test "remove says which process is still creating a set, and leaves it" {
-    slow_checkout_hook 3
+    slow_checkout_hook
     "$META_BIN" git worktree create busy --all > /dev/null &
     local pid=$!
     wait_for "$TEST_DIR/hook-started"
     run "$META_BIN" git worktree remove busy --force
     local removed=$status
+    touch "$TEST_DIR/release"
     wait "$pid"
     git config --global --unset core.hooksPath
     [ "$removed" -ne 0 ]
@@ -2371,7 +2375,7 @@ J
     mkdir -p "$B/.meta/plugins"
     cp "$META_GIT_BIN" "$B/.meta/plugins/meta-git"
     export META_WORKTREES="$BATS_TEST_TMPDIR/shared"
-    slow_checkout_hook 30
+    slow_checkout_hook
     (cd "$B" && exec "$META_BIN" git worktree create bhalf --repo . --no-deps) &
     local pid=$!
     wait_for "$TEST_DIR/hook-started"
@@ -2405,24 +2409,16 @@ J
 
 @test "TERM ends meta and a command under the plugin that ignores it" {
     "$META_BIN" git worktree create stubborn --repo backend --no-deps
-    "$META_BIN" git worktree exec stubborn --repo backend -- sh -c \
-        'trap "" TERM; echo $$ > "$0/stubborn"; while [ -d "$0" ]; do sleep 0.05; done' "$TEST_DIR" &
-    local pid=$!
-    wait_for "$TEST_DIR/stubborn"
-    kill -TERM "$pid"
-    # meta kills what is left 2 s after the signal and ends 2 s after that
-    local ended=
-    for _ in $(seq 100); do kill -0 "$pid" 2>/dev/null || { ended=1; break; }; sleep 0.1; done
-    [ -n "$ended" ]
-    wait "$pid" || true
-    local stubborn
-    stubborn="$(cat "$TEST_DIR/stubborn")"
-    for _ in $(seq 50); do
-        state="$(ps -o stat= -p "$stubborn" || true)"
-        [ -z "$state" ] || [[ "$state" == Z* ]] && break
-        sleep 0.1
-    done
-    [ -z "$state" ] || [[ "$state" == Z* ]]
+    bash "$BATS_TEST_DIRNAME/helpers/term_stubborn.sh" "$META_BIN" "$TEST_DIR" < /dev/null
+    [ "$(cat "$TEST_DIR/result")" = "$(printf 'ended\nstubborn ended')" ]
+}
+
+@test "in a terminal, TERM from another process ends meta and a command that ignores it" {
+    "$META_BIN" git worktree create stubborn --repo backend --no-deps
+    # the foreground job of a terminal of its own (a pty)
+    python3 -c 'import pty, sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)' \
+        bash "$BATS_TEST_DIRNAME/helpers/term_stubborn.sh" "$META_BIN" "$TEST_DIR" < /dev/null
+    [ "$(cat "$TEST_DIR/result")" = "$(printf 'ended\nstubborn ended')" ]
 }
 
 @test "a worktree is not added again over an entry holding staged changes" {
@@ -2447,7 +2443,7 @@ J
 }
 
 @test "a lease left in another repository doesn't make prune remove a set made again at its path" {
-    slow_checkout_hook 30
+    slow_checkout_hook
     "$META_BIN" git worktree create same --repo backend --no-deps &
     local pid=$!
     wait_for "$TEST_DIR/hook-started"
@@ -2465,12 +2461,9 @@ J
 
 @test "prune leaves git's entry for a worktree that was moved, so it can be repaired" {
     "$META_BIN" git worktree create mv1 --repo backend --repo frontend --no-deps
-    echo staged > .worktrees/mv1/backend/new.txt
-    git -C .worktrees/mv1/backend add new.txt
     mv .worktrees/mv1/backend "$BATS_TEST_TMPDIR/backend-moved"
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
     git -C backend worktree repair "$BATS_TEST_TMPDIR/backend-moved"
-    git -C "$BATS_TEST_TMPDIR/backend-moved" diff --cached --quiet && false
-    true
+    git -C "$BATS_TEST_TMPDIR/backend-moved" status --short
 }

@@ -149,7 +149,7 @@ fn terminating_meta_exec_stops_its_commands_and_theirs() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     workspace(&root);
-    let meta = start_meta(&root, &["exec", "--parallel", "--", "sh", "-c", SLOW]);
+    let meta = start_meta(&root, &["--parallel", "exec", "--", "sh", "-c", SLOW]);
     started(&root, 3);
     terminate(&root, meta);
 }
@@ -216,7 +216,7 @@ fn terminating_meta_ends_a_stopped_command() {
     let stopped = r#"echo "$$" >> "$ROOT/started"; kill -STOP "$$"; echo "$PWD" >> "$ROOT/late""#;
     let mut meta = start_meta(
         &root,
-        &["exec", "--include", "a", "--", "sh", "-c", stopped],
+        &["--include", "a", "exec", "--", "sh", "-c", stopped],
     );
     started(&root, 1);
     let pid = fs::read_to_string(root.join("started")).unwrap();

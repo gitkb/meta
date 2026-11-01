@@ -176,17 +176,17 @@ fn local_aliases_win_over_global_ones() {
     let ws = sandbox(&["a"]);
     fs::write(
         ws.home.join(".looprc"),
-        r#"{"aliases": {"say": "echo GLOBAL", "only-global": "echo G2"}}"#,
+        r#"{"aliases": {"meta-say": "echo GLOBAL", "only-global": "echo G2"}}"#,
     )
     .unwrap();
     fs::write(
         ws.ws.join(".looprc"),
-        r#"{"aliases": {"say": "echo LOCAL"}}"#,
+        r#"{"aliases": {"meta-say": "echo LOCAL"}}"#,
     )
     .unwrap();
     fs::write(
         ws.ws.join("other.json"),
-        r#"{"aliases": {"say": "echo OTHER"}}"#,
+        r#"{"aliases": {"meta-say": "echo OTHER"}}"#,
     )
     .unwrap();
     let said = |args: &[&str]| {
@@ -194,10 +194,10 @@ fn local_aliases_win_over_global_ones() {
         assert!(out.status.success(), "{out:?}");
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
-    assert!(said(&["say"]).contains("LOCAL"));
+    assert!(said(&["meta-say"]).contains("LOCAL"));
     assert!(said(&["only-global"]).contains("G2"));
     // -c names the local file
-    assert!(said(&["-c", "other.json", "say"]).contains("OTHER"));
+    assert!(said(&["-c", "other.json", "meta-say"]).contains("OTHER"));
 }
 
 /// A shell whose `alias` lists `q` with quotes inside its value, and `new`

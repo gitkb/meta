@@ -176,7 +176,8 @@ loop -s npm test
 ```
 
 Prints no command output and no summary; a directory that doesn't exist is
-still reported. If a command fails, loop ends with
+still reported. With `"json_output": true` the JSON (each command's output
+and the summary) is still printed. If a command fails, loop ends with
 `Error: At least one command failed` and a non-zero exit status.
 
 ## Error Handling

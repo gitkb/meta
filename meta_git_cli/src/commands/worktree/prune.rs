@@ -352,13 +352,18 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
     once_each(&mut kept);
     report(&removed, &kept, dry_run, json)?;
     // What was done is reported first: a failing hook doesn't undo it
-    if attempted {
-        fire_post_prune(&removed, Some(&configs.owner))
-            .or_else(|e| super::warn_or_bail(strict, format!("{e:#}")))?;
-    }
+    let hook = match attempted {
+        true => fire_post_prune(&removed, Some(&configs.owner)),
+        false => Ok(()),
+    };
+    // a removal that failed is the error; a failing hook then only warns
     if !failed.is_empty() {
+        if let Err(e) = hook {
+            super::warn(format!("{e:#}"));
+        }
         anyhow::bail!("Failed to prune: {}", escape(&failed.join(", ")));
     }
+    hook.or_else(|e| super::warn_or_bail(strict, format!("{e:#}")))?;
     warn_kept(&kept, strict)
 }
 

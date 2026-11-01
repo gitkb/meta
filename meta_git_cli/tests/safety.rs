@@ -727,6 +727,50 @@ fn a_name_with_a_slash_names_its_project_not_a_place() {
 }
 
 #[test]
+fn with_recursive_all_every_place_is_a_place_whatever_it_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["bar", "baz"]);
+    let url = |name: &str| root.join("up").join(format!("{name}.git"));
+    // the project named `bar` is at `baz`; another is at `bar`
+    let config = json!({"projects": {
+        "foo": {"repo": url("bar"), "path": "bar"},
+        "bar": {"repo": url("baz"), "path": "baz"},
+    }});
+    fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
+    let out = worktree(root, &ws, &["create", "x", "--all", "-r"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    for place in ["bar", "baz"] {
+        assert!(
+            ws.join(".worktrees/x").join(place).join("README").exists(),
+            "{place}"
+        );
+    }
+}
+
+#[test]
+fn a_root_git_cannot_use_is_no_reason_to_fail_a_create_without_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["a"]);
+    fs::remove_dir_all(ws.join(".git")).unwrap();
+    fs::write(
+        ws.join(".git"),
+        format!("gitdir: {}\n", root.join("gone").display()),
+    )
+    .unwrap();
+    let out = worktree(root, &ws, &["create", "n", "--repo", "a", "--no-deps"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    // --all names the root it skips
+    let out = worktree(root, &ws, &["create", "l", "--all"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stderr(&out).contains("'.' at"), "{}", stderr(&out));
+    for set in ["n", "l"] {
+        assert!(ws.join(".worktrees").join(set).join("a/README").exists());
+    }
+}
+
+#[test]
 fn an_ephemeral_exec_removes_the_set_it_made_wherever_the_config_moves_sets() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

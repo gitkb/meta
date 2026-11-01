@@ -93,7 +93,8 @@ pub(crate) fn execute_git_clone(
     };
     let occupied = match clone_dir_path.symlink_metadata() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Ok(meta) if meta.is_dir() => std::fs::read_dir(&clone_dir_path)
+        // a link to a directory, as git sees it, is that directory
+        Ok(_) if clone_dir_path.is_dir() => std::fs::read_dir(&clone_dir_path)
             .with_context(inspect)?
             .next()
             .is_some(),

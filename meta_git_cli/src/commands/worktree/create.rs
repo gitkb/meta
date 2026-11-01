@@ -613,12 +613,6 @@ fn plan_repos(
     let workspace = index.workspace;
     let meta_dir = workspace.dir.as_path();
     let branch = |asked: Option<&str>| resolve_branch(&args.name, args.branch.as_deref(), asked);
-    let root_is_repo = match meta_core::gitdir::common_dir(meta_dir) {
-        Ok(found) => found.is_some(),
-        // with --all, a root git can't use is skipped with the rest, saying why
-        Err(_) if args.all => true,
-        Err(e) => return Err(e),
-    };
     let mut plan = Plan {
         meta_dir,
         repos: Vec::new(),
@@ -626,19 +620,25 @@ fn plan_repos(
     };
 
     if args.all {
-        // the root, when it is a repository, and every project (with
-        // --recursive, of the whole tree)
-        let keys: Vec<String> = match index.tree() {
+        // the root, when something is there for git (one git can't use is
+        // skipped with the rest, saying why), and every project: by name,
+        // or with --recursive, every place of the tree
+        if !matches!(meta_core::gitdir::common_dir(meta_dir), Ok(None)) {
+            plan.add(index.find(".")?, branch(None), Why::All, None)?;
+        }
+        match index.tree() {
             Some(tree) => {
-                let mut places: Vec<String> = tree.keys().cloned().collect();
+                let mut places: Vec<&String> = tree.keys().collect();
                 places.sort();
-                places
+                for place in places {
+                    plan.add(index.place(place)?, branch(None), Why::All, None)?;
+                }
             }
-            None => workspace.projects.iter().map(|p| p.name.clone()).collect(),
-        };
-        let root = root_is_repo.then(|| ".".to_string());
-        for key in root.into_iter().chain(keys) {
-            plan.add(index.find(&key)?, branch(None), Why::All, None)?;
+            None => {
+                for project in &workspace.projects {
+                    plan.add(index.find(&project.name)?, branch(None), Why::All, None)?;
+                }
+            }
         }
     } else {
         let mut asked_keys = Vec::new();
@@ -651,7 +651,7 @@ fn plan_repos(
         if !args.no_deps {
             // The root holds what the workspace's repos share (its Cargo
             // workspace, .claude/, build scripts)
-            if root_is_repo {
+            if meta_core::gitdir::common_dir(meta_dir)?.is_some() {
                 plan.add(index.find(".")?, branch(None), Why::Needed, None)?;
             }
             let graph = match index.tree() {
@@ -675,7 +675,12 @@ fn plan_repos(
                             escape(key)
                         );
                     }
-                    plan.add(index.find(dep)?, branch(None), Why::Needed, None)?;
+                    // the graph names projects as the index keys them
+                    let found = match index.tree() {
+                        Some(_) => index.place(dep)?,
+                        None => index.find(dep)?,
+                    };
+                    plan.add(found, branch(None), Why::Needed, None)?;
                 }
             }
         }

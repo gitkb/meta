@@ -286,9 +286,10 @@ pub fn repo_matches_spec(repo_path: &Path, spec: &str) -> bool {
 /// two resolve (an absolute `worktrees_dir` spelled another way). It goes in
 /// the repository's `info/exclude`, which is local and untracked, so nothing
 /// the workspace commits changes. A folder outside `owner`, or an `owner`
-/// that isn't a repository of its own, needs nothing.
+/// that isn't a repository of its own (or one git can't use: it has no
+/// status to keep the folder out of), needs nothing.
 pub fn exclude_worktrees(owner: &Path, worktree_root: &Path) -> Result<()> {
-    let Some(git_dir) = meta_core::gitdir::common_dir(owner)? else {
+    let Ok(Some(git_dir)) = meta_core::gitdir::common_dir(owner) else {
         return Ok(());
     };
     let plain = |rel: &Path| {

@@ -124,6 +124,18 @@ impl<'a> Index<'a> {
         }
     }
 
+    /// The project at `place`, which a project list named (with
+    /// `--recursive`, every key is a place): never one whose name it is.
+    pub fn place(&self, place: &str) -> Result<Found> {
+        match self.at_place(place)? {
+            Some(source) => Ok(Found {
+                key: place.to_string(),
+                source,
+            }),
+            None => Err(self.unknown(place)),
+        }
+    }
+
     /// The error for a key no project has, with the names and places there
     /// are (nested ones as far as their configs can be read).
     fn unknown(&self, key: &str) -> anyhow::Error {

@@ -624,9 +624,11 @@ fn target(cli: &Cli, start: &Path) -> Result<Target> {
     };
 
     // Inside a set, the command runs in the set's checkouts
-    if let Some((name, set_dir)) =
-        worktree::detect_worktree_location(start).filter(|_| !cli.primary)
-    {
+    let location = match cli.primary {
+        true => None,
+        false => worktree::detect_worktree_location(start)?,
+    };
+    if let Some((name, set_dir)) = location {
         let members: Vec<_> = worktree::discover_worktree_members(&set_dir)?
             .into_iter()
             .map(|member| member.path)
@@ -1052,7 +1054,8 @@ fn check_and_warn_orphan() {
         Err(_) => return,
     };
 
-    if worktree::detect_worktree_context(&current_dir).is_some() {
+    // inside a set, or where that can't be told (the command reports why)
+    if !matches!(worktree::detect_worktree_context(&current_dir), Ok(None)) {
         return;
     }
 
@@ -1068,7 +1071,7 @@ fn check_and_warn_orphan() {
 
     // Check if this meta repo is orphaned (not tracked by parent)
     // A set's checkout is meta's own, not a repo its parent forgot to list
-    if config::set_source(&meta_dir).is_some() {
+    if !matches!(config::set_source(&meta_dir), Ok(None)) {
         return;
     }
     if let Some(warning) = config::check_orphan_status(&meta_dir) {

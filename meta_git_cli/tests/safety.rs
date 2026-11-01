@@ -639,6 +639,281 @@ fn hook_with_large_stderr_output_does_not_hang_create() {
 }
 
 #[test]
+fn a_failing_hook_is_a_warning_naming_it_and_an_error_under_strict() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["a"]);
+    let hooks = json!({"post-create": "exit 3", "post-destroy": "exit 4"});
+    let config = json!({"projects": {"a": "unused"}, "worktree": {"hooks": hooks}});
+    fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
+    let run = |args: &[&str], strict: bool| {
+        let (sub, rest) = args.split_first().unwrap();
+        let command = format!("git worktree {sub}");
+        meta_git(root, &ws, &command, rest, json!({"strict": strict}))
+    };
+
+    let out = run(&["create", "w", "--repo", "a", "--no-deps"], false);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("The post-create hook exited with code 3")
+            && !stderr(&out).contains("`exit 3`"),
+        "{}",
+        stderr(&out)
+    );
+    let out = run(&["remove", "w"], true);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("code 4"), "{}", stderr(&out));
+    // what the command did is done, and said, before the hook
+    assert!(!ws.join(".worktrees/w").exists());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Removed worktree"));
+
+    let out = run(&["create", "s", "--repo", "a", "--no-deps"], true);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("code 3"), "{}", stderr(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Created worktree"));
+    assert!(ws.join(".worktrees/s/a").exists());
+
+    #[cfg(unix)]
+    {
+        let hooks = json!({"post-create": "kill -9 $$"});
+        let config = json!({"projects": {"a": "unused"}, "worktree": {"hooks": hooks}});
+        fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
+        let out = run(&["create", "k", "--repo", "a", "--no-deps"], false);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains("The post-create hook was killed by signal 9"),
+            "{}",
+            stderr(&out)
+        );
+    }
+}
+
+#[test]
+fn a_corrupt_record_is_an_error_naming_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["a"]);
+    // with the root, whose checkout holds the set's config
+    let out = worktree(root, &ws, &["create", "w", "--repo", "a"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let record = ws.join(".git/worktrees/w/meta-worktree.json");
+    fs::write(&record, "{not json").unwrap();
+
+    // inside the set, meta can't tell which checkout it stands for
+    let set = ws.join(".worktrees/w");
+    let out = worktree(root, &set, &["create", "x", "--repo", "a", "--no-deps"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("Cannot parse") && stderr(&out).contains("meta-worktree.json"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!set.join(".worktrees").exists());
+}
+
+#[test]
+fn a_name_with_a_slash_names_its_project_not_a_place() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["actual-api", "b"]);
+    let url = |name: &str| root.join("up").join(format!("{name}.git"));
+    let config = json!({"projects": {
+        "group/api": {"repo": url("actual-api"), "path": "actual-api"},
+        "b": url("b"),
+    }});
+    fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
+
+    for (set, args) in [("c", &["--no-deps"][..]), ("d", &[]), ("r", &["-r"])] {
+        let mut create = vec!["create", set, "--repo", "group/api"];
+        create.extend_from_slice(args);
+        let out = worktree(root, &ws, &create);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        assert!(ws
+            .join(".worktrees")
+            .join(set)
+            .join("actual-api/README")
+            .exists());
+    }
+    let out = worktree(root, &ws, &["create", "e", "--repo", "b", "--no-deps"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = worktree(root, &ws, &["add", "e", "--repo", "group/api"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(ws.join(".worktrees/e/actual-api/README").exists());
+}
+
+#[test]
+fn with_recursive_all_every_place_is_a_place_whatever_it_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["bar", "baz"]);
+    let url = |name: &str| root.join("up").join(format!("{name}.git"));
+    // the project named `bar` is at `baz`; another is at `bar`
+    let config = json!({"projects": {
+        "foo": {"repo": url("bar"), "path": "bar"},
+        "bar": {"repo": url("baz"), "path": "baz"},
+    }});
+    fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
+    let out = worktree(root, &ws, &["create", "x", "--all", "-r"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    // each place holds the checkout of its own repository
+    for place in ["bar", "baz"] {
+        let origin = Command::new("git")
+            .arg("-C")
+            .arg(ws.join(".worktrees/x").join(place))
+            .args(["remote", "get-url", "origin"])
+            .output()
+            .unwrap();
+        let origin = String::from_utf8_lossy(&origin.stdout);
+        assert!(
+            origin.trim().ends_with(&format!("{place}.git")),
+            "{place}: {origin}"
+        );
+    }
+}
+
+#[test]
+fn one_repo_named_twice_is_refused_only_on_two_branches() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["a"]);
+    let url = root.join("up/a.git");
+    let config = json!({"projects": {"p": {"repo": url, "path": "a"}}});
+    fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
+    // by name, on the set's branch, and by path, on that branch by name
+    let out = worktree(
+        root,
+        &ws,
+        &[
+            "create",
+            "same",
+            "--repo",
+            "p",
+            "--repo",
+            "a:same",
+            "--no-deps",
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = worktree(
+        root,
+        &ws,
+        &[
+            "create",
+            "two",
+            "--repo",
+            "p",
+            "--repo",
+            "a:other",
+            "--no-deps",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("given twice"), "{}", stderr(&out));
+}
+
+#[test]
+fn an_ephemeral_exec_of_all_keeps_a_branch_given_for_one_repo() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["a", "b"]);
+    let out = meta_git(
+        root,
+        &ws,
+        "git worktree exec",
+        &[
+            "run",
+            "--ephemeral",
+            "--all",
+            "--repo",
+            "a:asked",
+            "--",
+            "true",
+        ],
+        json!({"dry_run": true}),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let plan = String::from_utf8_lossy(&out.stdout);
+    assert!(plan.contains("branch: asked"), "{plan}");
+    assert!(plan.contains("branch: run"), "{plan}");
+    // and one repo on two branches is refused, as without --all
+    let out = meta_git(
+        root,
+        &ws,
+        "git worktree exec",
+        &[
+            "run",
+            "--ephemeral",
+            "--all",
+            "--repo",
+            "a:x",
+            "--repo",
+            "a:y",
+            "--",
+            "true",
+        ],
+        json!({"dry_run": true}),
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("given twice"), "{}", stderr(&out));
+}
+
+#[test]
+fn a_root_git_cannot_use_is_no_reason_to_fail_a_create_without_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["a"]);
+    fs::remove_dir_all(ws.join(".git")).unwrap();
+    fs::write(
+        ws.join(".git"),
+        format!("gitdir: {}\n", root.join("gone").display()),
+    )
+    .unwrap();
+    let out = worktree(root, &ws, &["create", "n", "--repo", "a", "--no-deps"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    // --all names the root it skips
+    let out = worktree(root, &ws, &["create", "l", "--all"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stderr(&out).contains("'.' at"), "{}", stderr(&out));
+    for set in ["n", "l"] {
+        assert!(ws.join(".worktrees").join(set).join("a/README").exists());
+    }
+}
+
+#[test]
+fn an_ephemeral_exec_removes_the_set_it_made_wherever_the_config_moves_sets() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["a"]);
+    // the command moves the workspace's worktrees elsewhere meanwhile
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(ws.join(".meta.yaml")).unwrap()).unwrap();
+    config["worktrees_dir"] = json!("elsewhere");
+    fs::write(root.join("moved.yaml"), config.to_string()).unwrap();
+    let command = format!(
+        "cp '{}' '{}'",
+        root.join("moved.yaml").display(),
+        ws.join(".meta.yaml").display()
+    );
+    let out = worktree(
+        root,
+        &ws,
+        &[
+            "exec",
+            "eph",
+            "--ephemeral",
+            "--repo",
+            "a",
+            "--",
+            "sh",
+            "-c",
+            &command,
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!ws.join(".worktrees/eph").exists(), "{}", stderr(&out));
+}
+
+#[test]
 fn a_commit_ish_no_repo_has_creates_nothing() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

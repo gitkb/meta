@@ -7,14 +7,15 @@
 //! Only something that can write the repository's git directory can make
 //! one, so a record is meta's proof that it made the set the record names.
 
+use crate::display::escape_path;
+use crate::gitdir;
 use anyhow::{Context, Result};
-use meta_core::display::escape_path;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// The record's file name inside a worktree's admin directory.
-pub const RECORD_FILE: &str = meta_core::config::WORKTREE_RECORD_FILE;
+pub const RECORD_FILE: &str = "meta-worktree.json";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetRecord {
@@ -38,27 +39,6 @@ impl SetRecord {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default()
-    }
-
-    /// Seconds until the TTL expires: `None` without a TTL, negative once
-    /// expired. A malformed `created_at` warns and never expires.
-    pub fn ttl_remaining(&self, now_epoch: i64) -> Option<i64> {
-        self.ttl_seconds.map(|ttl| {
-            let created = match chrono::DateTime::parse_from_rfc3339(&self.created_at) {
-                Ok(dt) => dt.timestamp(),
-                Err(e) => {
-                    log::warn!(
-                        "Malformed created_at '{}' in the record of '{}': {}",
-                        meta_core::display::escape(&self.created_at),
-                        escape_path(&self.set),
-                        e
-                    );
-                    return i64::MAX;
-                }
-            };
-            let ttl = i64::try_from(ttl).unwrap_or(i64::MAX);
-            created.saturating_add(ttl).saturating_sub(now_epoch)
-        })
     }
 }
 
@@ -131,8 +111,7 @@ pub fn checkout_gone(admin: &Path) -> bool {
 }
 
 /// Meta's record of creating the set at `set`, from the first of its
-/// worktrees `checkouts` with a trusted record naming it (see
-/// [`super::safety::member_record`]). Worktrees whose record can't be used
+/// worktrees `checkouts` with a trusted record naming it (see [`member`]). Worktrees whose record can't be used
 /// are passed over: the removal check blocks on them.
 pub fn find<P: AsRef<Path>>(
     set: &Path,
@@ -140,7 +119,7 @@ pub fn find<P: AsRef<Path>>(
 ) -> Option<SetRecord> {
     let set = set.canonicalize().ok()?;
     checkouts.into_iter().find_map(|checkout| {
-        super::safety::member_record(checkout.as_ref())
+        member(checkout.as_ref())
             .ok()
             .flatten()
             .map(|(_, record)| record)
@@ -178,6 +157,42 @@ pub fn in_repo(git_dir: &Path) -> Vec<(PathBuf, Result<SetRecord>)> {
         .collect()
 }
 
+/// Meta's record of the linked worktree checked out at `checkout`, with its
+/// admin directory: `None` if it isn't a linked worktree or has no record,
+/// an error if it has a record that can't be read or trusted.
+pub fn member(checkout: &Path) -> Result<Option<(PathBuf, SetRecord)>> {
+    let Ok(gitdir::Linked {
+        admin,
+        common: repo_git_dir,
+    }) = gitdir::linked(checkout)
+    else {
+        return Ok(None);
+    };
+    Ok(trusted(&admin, &repo_git_dir)?.map(|record| (admin, record)))
+}
+
+/// The record in `admin`, the admin directory of a worktree of the
+/// repository whose git directory is `repo_git_dir`. Git keeps every
+/// worktree's admin directory in its repository's `worktrees` directory; a
+/// record anywhere else is no proof of anything, and an error.
+pub fn trusted(admin: &Path, repo_git_dir: &Path) -> Result<Option<SetRecord>> {
+    let Some(record) = read(admin)? else {
+        return Ok(None);
+    };
+    let registered = || -> Option<bool> {
+        Some(
+            admin.canonicalize().ok()?.parent()?
+                == repo_git_dir.join("worktrees").canonicalize().ok()?,
+        )
+    };
+    anyhow::ensure!(
+        registered() == Some(true),
+        "its git metadata {} is not where git keeps a worktree's",
+        escape_path(admin)
+    );
+    Ok(Some(record))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,24 +211,6 @@ mod tests {
     #[test]
     fn name_is_the_set_directory_name() {
         assert_eq!(record("", None).name(), "test-wt");
-    }
-
-    #[test]
-    fn ttl_remaining() {
-        // 2025-01-01T00:00:00Z is epoch 1735689600
-        let created = 1_735_689_600i64;
-        let r = record("2025-01-01T00:00:00Z", Some(3600));
-        assert_eq!(r.ttl_remaining(created + 1800), Some(1800));
-        assert_eq!(r.ttl_remaining(created + 3600), Some(0));
-        assert_eq!(r.ttl_remaining(created + 7200), Some(-3600));
-        assert_eq!(record("2025-01-01T00:00:00Z", None).ttl_remaining(0), None);
-        let huge = record("2025-01-01T00:00:00Z", Some(u64::MAX));
-        assert_eq!(
-            huge.ttl_remaining(1_800_000_000),
-            Some(i64::MAX - 1_800_000_000)
-        );
-        let malformed = record("not-a-date", Some(3600));
-        assert_eq!(malformed.ttl_remaining(1_700_000_000), Some(i64::MAX));
     }
 
     #[test]

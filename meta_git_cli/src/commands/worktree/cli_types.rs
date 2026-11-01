@@ -69,7 +69,8 @@ pub struct CreateArgs {
     /// Repos are normally skipped with a warning when they don't have the
     /// commit-ish to start from, or (with --all, or as an intermediate
     /// parent) aren't cloned. With --strict, the entire operation fails
-    /// instead. Useful in CI/automation where you want all-or-nothing behavior.
+    /// instead, and nothing is made. A failing post-create hook fails it
+    /// too, after the set was made: that set stays.
     #[arg(long)]
     pub strict: bool,
 

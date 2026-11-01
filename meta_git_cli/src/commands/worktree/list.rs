@@ -11,9 +11,10 @@ use meta_cli::worktree::{
     discover_worktree_repos, discover_worktree_repos_recursive, WorktreeMemberInfo,
 };
 use meta_core::duration::format_duration;
+use meta_core::set_record::{self as record, SetRecord};
 use meta_git_lib::worktree::git_ops::repo_status;
 use meta_git_lib::worktree::helpers::*;
-use meta_git_lib::worktree::record::{self, SetRecord};
+use meta_git_lib::worktree::ttl;
 use meta_git_lib::worktree::types::ListRepoEntry;
 
 use super::cli_types::ListArgs;
@@ -100,7 +101,7 @@ fn repo_entries(
 /// A selected set fails closed. All-set listing retains healthy sets and warnings.
 pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> Result<()> {
     let cwd = cwd.canonicalize()?;
-    let location = detect_worktree_location(&cwd);
+    let location = detect_worktree_location(&cwd)?;
     let worktree_root = match (&location, std::env::var_os("META_WORKTREES")) {
         (Some((_, root)), None) => root
             .parent()
@@ -175,7 +176,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
             let (ephemeral, ttl_remaining_seconds, custom) = match record {
                 Some(record) => (
                     Some(record.ephemeral),
-                    record.ttl_remaining(now),
+                    ttl::remaining(&record, now),
                     (!record.custom.is_empty()).then_some(record.custom),
                 ),
                 None => (None, None, None),

@@ -141,10 +141,17 @@ impl SubprocessPluginManager {
             );
             None
         });
-        if let Some(nearest) = nearest {
-            for dir in meta_core::config::workspace_meta_dirs(&nearest) {
-                add(dir.join(".meta/plugins"), false);
+        let project_dirs = nearest.map(|nearest| meta_core::config::workspace_meta_dirs(&nearest));
+        match project_dirs.transpose() {
+            Ok(project_dirs) => {
+                for dir in project_dirs.into_iter().flatten() {
+                    add(dir.join(".meta/plugins"), false);
+                }
             }
+            Err(e) => eprintln!(
+                "Warning: {} Skipping project plugins.",
+                escape(&format!("{e:#}"))
+            ),
         }
 
         // ~/.meta/plugins/ (global installed). No home just means no global

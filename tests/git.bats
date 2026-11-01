@@ -125,6 +125,35 @@ teardown() {
     done
 }
 
+@test "with --json, stdout is one JSON document whatever happens, and usage errors exit 2" {
+    # stdout alone; stderr in $TEST_DIR/stderr
+    json_run() { run bash -c 'err=$1; shift; "$@" 2>"$err"' _ "$TEST_DIR/stderr" "$@"; }
+    json_has() { jq -e "$1" >/dev/null <<<"$output"; }
+    json_run "$META_BIN" --json nosuchcmd
+    [ "$status" -eq 2 ]
+    json_has '.success == false and (.error | contains("unrecognized command"))'
+
+    json_run "$META_BIN" --json --include nope exec -- true
+    [ "$status" -eq 1 ]
+    json_has '.success == false and (.error | contains("--include"))'
+
+    json_run "$META_BIN" --json git commit --amend
+    [ "$status" -eq 2 ]
+    json_has '.success == false and (.error | contains("--amend"))'
+
+    # a plugin's text, wrapped
+    json_run "$META_BIN" --json git commit -m x
+    [ "$status" -eq 0 ]
+    json_has '.success == true and (.output | contains("No staged changes"))'
+
+    # a report, then a failure: the report stays the only document
+    cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" .meta/plugins/
+    json_run "$META_BIN" --json project check
+    [ "$status" -eq 1 ]
+    json_has '.problems | length > 0'
+    grep -q "not clones of their configured repository" "$TEST_DIR/stderr"
+}
+
 @test "meta git status shows clean repos" {
     run "$META_BIN" git status
     [ "$status" -eq 0 ]

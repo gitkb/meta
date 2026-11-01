@@ -392,7 +392,7 @@ impl SubprocessPlugin {
             // Plugin already printed its error to stderr. What it printed
             // before failing (say the worktrees it removed before a store
             // error) is shown too; then its exit code is propagated.
-            meta_core::out::stdout_bytes(&output.stdout)?;
+            relay(&output.stdout, request.options.json_output, false)?;
             return Err(meta_core::exit::ExitWith::of(output.status).into());
         }
 
@@ -407,7 +407,7 @@ impl SubprocessPlugin {
         // If stdout doesn't look like JSON, print it (legacy plugin output),
         // as the plugin wrote it
         if !stdout_str.trim().starts_with('{') {
-            return Ok(meta_core::out::stdout_bytes(&output.stdout)?);
+            return relay(&output.stdout, request.options.json_output, true);
         }
 
         // A plan meta cannot read must not pass for success: an older plugin
@@ -428,9 +428,27 @@ impl SubprocessPlugin {
                 escape_path(&self.path)
             ),
             // Not a plan - print output as-is
-            Err(_) => Ok(meta_core::out::stdout_bytes(&output.stdout)?),
+            Err(_) => relay(&output.stdout, request.options.json_output, true),
         }
     }
+}
+
+/// Show what a plugin printed, as it wrote it; with `--json`, text that is
+/// no JSON goes into `{"success": .., "output": ..}`, so stdout stays JSON.
+fn relay(stdout: &[u8], json: bool, success: bool) -> Result<()> {
+    let is_json = || {
+        serde_json::Deserializer::from_slice(stdout)
+            .into_iter::<serde::de::IgnoredAny>()
+            .all(|value| value.is_ok())
+    };
+    if json && !stdout.trim_ascii().is_empty() && !is_json() {
+        let wrapped = serde_json::json!({
+            "success": success,
+            "output": String::from_utf8_lossy(stdout),
+        });
+        return Ok(meta_core::outln!("{wrapped}")?);
+    }
+    Ok(meta_core::out::stdout_bytes(stdout)?)
 }
 
 /// Execute an execution plan via loop_lib

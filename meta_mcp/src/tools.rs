@@ -670,13 +670,19 @@ impl McpServer {
                 text: stdout,
             }),
             Err(_) if output.status.success() => Ok(stdout.into()),
-            Err(_) => anyhow::bail!(
-                "{} failed ({}): {}{}",
-                escape(&what),
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim(),
-                stdout
-            ),
+            Err(_) => {
+                // with --json, meta's error is JSON on stdout
+                let error = serde_json::from_str::<serde_json::Value>(&stdout)
+                    .ok()
+                    .and_then(|v| v.get("error")?.as_str().map(str::to_string));
+                anyhow::bail!(
+                    "{} failed ({}): {}{}",
+                    escape(&what),
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim(),
+                    error.unwrap_or(stdout)
+                )
+            }
         }
     }
 

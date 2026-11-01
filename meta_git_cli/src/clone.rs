@@ -40,11 +40,6 @@ pub(crate) fn execute_git_clone(
     let meta_depth = args.meta_depth;
     let mut parallel = args.parallel.get();
     let url = args.url;
-    anyhow::ensure!(
-        !url.has_credentials(),
-        "The URL {url} {}",
-        meta_core::git::CREDENTIALS_REFUSED
-    );
     let git_clone_args: Vec<String> = depth
         .iter()
         .flat_map(|d| ["--depth".to_string(), d.clone()])
@@ -74,26 +69,24 @@ pub(crate) fn execute_git_clone(
         }
     });
 
-    // The clone, shown as it runs (the URL holds no credentials: refused
-    // above): the URL after `--`, so it can't be read as an option, and the
-    // directory meta reads next named explicitly
-    let clone_argv: Vec<String> = ["git", "clone"]
-        .into_iter()
-        .map(str::to_string)
-        .chain(git_clone_args)
-        .chain([
-            "--".to_string(),
-            url.as_git_arg().to_string_lossy().into_owned(),
-            clone_dir.clone(),
-        ])
-        .collect();
-    let clone_cmd_str = loop_lib::display_command(&clone_argv);
+    // The clone, with the URL as git gets it or as meta shows it: after
+    // `--`, so it can't be read as an option, and the directory meta reads
+    // next named explicitly
+    let clone_argv = |url: String| -> Vec<String> {
+        ["git", "clone"]
+            .into_iter()
+            .map(str::to_string)
+            .chain(git_clone_args.iter().cloned())
+            .chain(["--".to_string(), url, clone_dir.clone()])
+            .collect()
+    };
 
     if options.mode().is_preview() {
         // Output what we know - just the meta repo clone command
         // (Child repos are in .meta.yaml file which hasn't been cloned yet)
         println!("{} Would clone meta repository:", style("[DRY RUN]").cyan());
-        println!("  {}", meta_core::display::escape(&clone_cmd_str));
+        let shown = loop_lib::display_command(&clone_argv(url.to_string()));
+        println!("  {}", meta_core::display::escape(&shown));
         return Ok(CommandResult::Message(String::new()));
     }
 
@@ -105,7 +98,11 @@ pub(crate) fn execute_git_clone(
 
     println!("Cloning meta repository: {url}");
     let mut clone_cmd = meta_core::git::git(cwd);
-    clone_cmd.args(clone_argv.iter().skip(1));
+    clone_cmd.args(
+        clone_argv(url.as_git_arg().to_string_lossy().into_owned())
+            .iter()
+            .skip(1),
+    );
     if let Some(ref ssh) = ssh_cmd {
         clone_cmd.env("GIT_SSH_COMMAND", ssh);
     }

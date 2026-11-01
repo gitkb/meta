@@ -73,7 +73,7 @@ Runs `meta exec` with the given program and arguments.
 ```
 
 #### meta_get_config
-Get the raw meta configuration file, as written, even one meta can't load. A config with a password or token in any URL in it is not shown: the reply says so, without the token.
+Get the raw meta configuration file.
 
 **Parameters:** None
 

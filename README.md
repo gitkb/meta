@@ -226,6 +226,8 @@ projects:
 | `provides` | No | Array of capabilities this project provides |
 | `depends_on` | No | Array of project names or provided capabilities this depends on |
 
+A token in a `repo` URL (`https://user:token@host/org/repo.git`) works, and meta prints it as `***`, but it is stored in plain text in `.meta.yaml` and in the clone's `.git/config`; prefer a git credential helper, such as `gh auth setup-git`.
+
 **Rules for names and values.** meta checks every entry when it reads the config and stops with an error that names the file and the project:
 
 - `path` (the name when it is omitted) is relative and stays inside the directory of the config file: no `..`, no absolute paths, and no symlink that leads outside it or into `.git` or `.worktrees`. `\` reads as `/`, and `./`, `//` and a trailing `/` are dropped.
@@ -234,7 +236,6 @@ projects:
 - No two projects share a path, and no project's path lies inside another's. Paths are compared after following existing symlinks, and without regard to case (some filesystems ignore it). Project names may not be equal or nested either, also without regard to case. A repo inside another repo goes in a nested meta config (`meta: true`).
 - No name, path, repo, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline), a bidirectional-text control, or an invisible format character (such as a zero-width space).
 - `repo` does not start with `-`.
-- No value is a URL with a password or token in it (`https://user:token@host/...`, or `https://ghp_...@github.com/...` with the token as the user name): meta refuses the config and says which project. Let a git credential helper supply the token instead (for GitHub, `gh auth setup-git`). A user name alone is fine where it can't be a token, such as ssh's `git@host:org/repo.git` or `ssh://deploy@host/repo.git`; for `https://` give it with `git config credential.https://host.username <name>`.
 - Tags contain no whitespace and no `,`.
 - `worktrees_dir`, if set, lies inside the workspace (relative, or absolute but inside), not inside a project and not in `.git`. For a directory elsewhere, set `META_WORKTREES`.
 - A key meta doesn't know at the top level, under `defaults` or under `worktree` is an error, so a misspelling isn't ignored. Project entries may carry keys of their own for other tools.

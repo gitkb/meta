@@ -4,7 +4,7 @@
 //! meta's YAML configuration files.
 
 use crate::display::{escape, escape_path, is_unsafe_char};
-use crate::git::{GitUrl, CREDENTIALS_REFUSED};
+use crate::git::GitUrl;
 use crate::gitdir;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -170,23 +170,6 @@ fn config_file(path: PathBuf) -> anyhow::Result<Option<PathBuf>> {
     }
     std::fs::File::open(&path).with_context(|| format!("Cannot read {}", escape_path(&path)))?;
     Ok(Some(path))
-}
-
-/// Whether a key or value anywhere in the YAML `text` is a URL with
-/// credentials ([`GitUrl::has_credentials`]). Text that isn't YAML holds none
-/// that meta reads.
-pub fn holds_credentials(text: &str) -> bool {
-    fn holds(value: &serde_yaml_ng::Value) -> bool {
-        use serde_yaml_ng::Value;
-        match value {
-            Value::String(s) => GitUrl::from(s.as_str()).has_credentials(),
-            Value::Sequence(items) => items.iter().any(holds),
-            Value::Mapping(map) => map.iter().any(|(k, v)| holds(k) || holds(v)),
-            Value::Tagged(tagged) => holds(&tagged.value),
-            _ => false,
-        }
-    }
-    serde_yaml_ng::from_str(text).is_ok_and(|value| holds(&value))
 }
 
 /// The [`META_CONFIG_NAME`] file directly in `dir`. A candidate that cannot
@@ -536,8 +519,7 @@ impl Workspace {
                         .map_err(|reason| {
                             anyhow::anyhow!(
                                 "Invalid project '{}' in {}: {reason}",
-                                // printed as a URL: a name may be one
-                                GitUrl::from(info.name.as_str()),
+                                escape(&info.name),
                                 escape_path(meta_path)
                             )
                         })?;
@@ -587,8 +569,6 @@ impl Workspace {
 ///   directory: `\` reads as `/`, empty and `.` components are dropped, `..`
 ///   is rejected, something must remain, and no symlink along it may lead
 ///   outside the directory.
-/// - No value is a URL with a password or token in it
-///   ([`GitUrl::has_credentials`]): a git credential helper holds those.
 /// - `repo` does not start with `-`, so git cannot read it as an option.
 /// - Tags hold no whitespace and no `,`, which the `--tag` filter splits on.
 ///
@@ -613,17 +593,14 @@ fn validate_project(
                 .flat_map(|(what, l)| l.iter().map(move |v| (what, v.as_str()))),
         )
     {
-        // before anything that shows the value
-        if GitUrl::from(value).has_credentials() {
-            return Err(format!("{what} {CREDENTIALS_REFUSED}"));
-        }
         if value.is_empty() {
             return Err(format!("{what} is empty"));
         }
         if value.chars().any(is_unsafe_char) {
             return Err(format!(
                 "{what} '{}' contains control characters",
-                escape(value)
+                // printed as a URL prints: the repo's credentials hidden
+                GitUrl::from(value)
             ));
         }
     }
@@ -1764,47 +1741,16 @@ mod tests {
     }
 
     #[test]
-    fn credentials_in_urls_are_refused() {
+    fn a_url_with_credentials_reaches_git_unchanged() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".meta.yaml");
-        for (config, what) in [
-            (
-                "projects:\n  r: https://alice:ghp_SECRET@h/r.git\n",
-                "'r' in",
-            ),
-            // a token as the user name
-            (
-                "projects:\n  r:\n    repo: https://ghp_SECRET@h/r.git\n",
-                "'r' in",
-            ),
-            ("projects:\n  r: ssh://git:ghp_SECRET@h/r.git\n", "'r' in"),
-            (
-                "projects:\n  r: persistent-https::https://ghp_SECRET@h/r\n",
-                "'r' in",
-            ),
-            // where a name or a tag goes, printed hidden
-            (
-                "projects:\n  \"https://alice:ghp_SECRET@h/r.git\": git@h:r.git\n",
-                "'https://***@h/r.git' in",
-            ),
-            (
-                "projects:\n  r:\n    repo: git@h:r.git\n    tags: [https://ghp_SECRET@h]\n",
-                "tag holds",
-            ),
-        ] {
-            std::fs::write(&path, config).unwrap();
-            let err = format!("{:#}", Workspace::load(&path).unwrap_err());
-            assert!(err.contains(what), "{err}");
-            assert!(err.contains(CREDENTIALS_REFUSED), "{err}");
-            assert!(!err.contains("ghp_SECRET"), "{err}");
-        }
-        // a user name alone is no credential, but for curl's URLs
-        std::fs::write(
-            &path,
-            "projects:\n  a: git@h:a.git\n  b: ssh://deploy@h/b.git\n  c: https://h/c.git\n",
-        )
-        .unwrap();
-        assert_eq!(Workspace::load(&path).unwrap().projects.len(), 3);
+        std::fs::write(&path, "projects:\n  r: https://alice:ghp_SECRET@h/r.git\n").unwrap();
+        let repo = Workspace::load(&path).unwrap().projects[0]
+            .repo
+            .clone()
+            .unwrap();
+        assert_eq!(repo.as_git_arg(), "https://alice:ghp_SECRET@h/r.git");
+        assert_eq!(repo.to_string(), "https://***@h/r.git");
     }
 
     #[test]
@@ -1869,7 +1815,7 @@ mod tests {
             ),
             (
                 r#"{"projects": {"a": "https://ghp_SECRET@h/r\n"}}"#,
-                "repo holds a password or token",
+                "repo 'https://***@h/r\\n' contains control characters",
             ),
         ] {
             let err = parse_err(json);

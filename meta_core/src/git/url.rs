@@ -6,11 +6,10 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::ops::Range;
 
-/// A remote URL: as configured, where meta refuses credentials (see
-/// [`GitUrl::has_credentials`]), or as a clone's remote has it, which may hold
-/// them. Everything that prints one (`Display`, `Debug`, `Serialize`) hides
-/// them (`https://***@host/org/repo`); the URL itself reaches only git's
-/// argv, through [`GitUrl::as_git_arg`].
+/// A remote URL, as configured or as a clone's remote has it, credentials
+/// and all. Everything that prints one (`Display`, `Debug`, `Serialize`)
+/// hides those (`https://***@host/org/repo`); the URL itself reaches only
+/// git's argv, through [`GitUrl::as_git_arg`].
 #[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GitUrl(String);
 
@@ -136,13 +135,6 @@ impl<'de> serde::Deserialize<'de> for GitUrl {
     }
 }
 
-/// Why meta refuses a URL that [`GitUrl::has_credentials`], and what to do
-/// instead.
-pub const CREDENTIALS_REFUSED: &str = "holds a password or token, which meta refuses: \
-     remove it from the URL and let a git credential helper supply it \
-     (for GitHub: gh auth setup-git); a user name goes in \
-     git config credential.<url>.username";
-
 impl GitUrl {
     /// The URL as configured, for git's argv and nothing else.
     pub fn as_git_arg(&self) -> &OsStr {
@@ -166,8 +158,7 @@ impl GitUrl {
         }
     }
 
-    /// Whether the URL holds a password or token: meta refuses such a URL
-    /// in its config, and git's own credential helpers are for them.
+    /// Whether the URL holds a password or token, which it prints hidden.
     pub fn has_credentials(&self) -> bool {
         self.credentials().is_some()
     }

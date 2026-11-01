@@ -271,13 +271,18 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
     eprintln!();
     eprintln!("  Fix manually with:");
     for (project, expected, _) in &mismatches {
+        // printed as a URL prints, escaped; hidden credentials would break
+        // the command, so the reader fills those in
+        let url = if expected.has_credentials() {
+            "<the repo URL in .meta.yaml>".to_string()
+        } else {
+            shell_quote(&expected.to_string())
+        };
         eprintln!(
-            "    git -C {} remote set-url origin {}",
+            "    git -C {} remote set-url origin {url}",
             escape(&shell_quote(
                 &workspace.dir.join(&project.path).to_string_lossy()
-            )),
-            // printed as a URL prints: escaped (no config URL holds credentials)
-            shell_quote(&expected.to_string())
+            ))
         );
     }
 }

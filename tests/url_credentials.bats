@@ -2,8 +2,7 @@
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
-# meta refuses a token in a configured repo URL, and prints none it reads
-# from a clone's remote
+# A token in a repo URL reaches git as written, and meta prints it hidden
 
 TOKEN=ghp_SECRETTOKEN123
 
@@ -55,35 +54,52 @@ meta_without_token() {
     fi
 }
 
-@test "a repo URL with credentials is refused, the token never printed" {
+@test "a repo URL with credentials reaches git, the token never printed" {
+    # git fetches each token URL from a local bare repo: the clone works only
+    # if git gets the URL exactly as configured
+    for name in lib meta; do
+        git config --global "url.$TEST_DIR/remotes/$name.git.insteadOf" \
+            "https://$TOKEN@example.invalid/org/$name.git"
+    done
+    git config --global "url.$TEST_DIR/remotes/other.git.insteadOf" \
+        "https://alice:$TOKEN@example.invalid/org/svc.git"
     cat > .meta.yaml <<EOF
 projects:
   lib: https://$TOKEN@example.invalid/org/lib.git
   svc:
-    repo: https://alice:$TOKEN@127.0.0.1:9/org/svc.git
+    repo: https://alice:$TOKEN@example.invalid/org/svc.git
 EOF
-    for command in "--dry-run git update" "git update" "project list" "project list --json" \
-        "--recursive project list --json" "project check" "context --json" "exec -- true"; do
+    meta_without_token --dry-run git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"git clone https://***@example.invalid/org/lib.git"* ]] || false
+    meta_without_token git update
+    [ "$status" -eq 0 ]
+    [ -d lib/.git ]
+    [ -d svc/.git ]
+    [ "$(git -C svc config remote.origin.url)" = "https://alice:$TOKEN@example.invalid/org/svc.git" ]
+    for command in "project list" "project list --json" "--recursive project list --json" \
+        "project check" "context --json" "git status" "exec -- true"; do
         # shellcheck disable=SC2086
         meta_without_token $command
-        [ "$status" -ne 0 ]
-        [[ "$output" == *"Invalid project 'lib'"*"repo holds a password or token"*"gh auth setup-git"* ]] || false
+        [ "$status" -eq 0 ]
     done
-    [ ! -e lib ]
+    meta_without_token project list --json
+    [[ "$output" == *'"repo": "https://***@example.invalid/org/svc.git"'* ]] || false
+
+    # a checkout of another repository: the fix can't print the hidden URL
+    git -C svc remote set-url origin "$TEST_DIR/remotes/lib.git"
+    meta_without_token git update
+    [[ "$output" == *"expected: https://***@example.invalid/org/svc.git"* ]] || false
+    [[ "$output" == *"remote set-url origin <the repo URL in .meta.yaml>"* ]] || false
 
     cd "$TEST_DIR"
-    for dry in --dry-run ""; do
-        # shellcheck disable=SC2086
-        RUST_LOG=debug meta_without_token $dry git clone "https://$TOKEN@example.invalid/org/meta.git" fresh
-        [ "$status" -ne 0 ]
-        [[ "$output" == *"The URL https://***@example.invalid/org/meta.git holds a password or token"* ]] || false
-        [ ! -e fresh ]
-    done
-    # a meta repo whose own config holds one: cloned, its projects refused
-    meta_without_token git clone "$TEST_DIR/remotes/meta.git" fresh
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"Invalid project 'lib'"*"gh auth setup-git"* ]] || false
-    [ ! -e fresh/lib ]
+    RUST_LOG=debug meta_without_token --dry-run git clone "https://$TOKEN@example.invalid/org/meta.git" fresh
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"git clone -- 'https://***@example.invalid/org/meta.git' fresh"* ]] || false
+    # the meta repo, and the project its own config lists with a token
+    RUST_LOG=debug meta_without_token git clone "https://$TOKEN@example.invalid/org/meta.git" fresh
+    [ "$status" -eq 0 ]
+    [ -d fresh/lib/.git ]
 }
 
 @test "a clone's remote with a token prints hidden" {

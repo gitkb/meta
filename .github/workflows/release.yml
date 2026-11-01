@@ -78,7 +78,7 @@ jobs:
           cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dist/
           cp target/${{ matrix.target }}/release/meta-git dist/
           cp target/${{ matrix.target }}/release/meta-project dist/
-          cp target/${{ matrix.target }}/release/meta-rust dist/
+          cp target/${{ matrix.target }}/release/meta-cargo dist/
           cp target/${{ matrix.target }}/release/meta-mcp dist/
           cp target/${{ matrix.target }}/release/loop dist/
           cd dist
@@ -93,7 +93,7 @@ jobs:
           copy target\${{ matrix.target }}\release\${{ matrix.binary_name }} dist\
           copy target\${{ matrix.target }}\release\meta-git.exe dist\
           copy target\${{ matrix.target }}\release\meta-project.exe dist\
-          copy target\${{ matrix.target }}\release\meta-rust.exe dist\
+          copy target\${{ matrix.target }}\release\meta-cargo.exe dist\
           copy target\${{ matrix.target }}\release\meta-mcp.exe dist\
           copy target\${{ matrix.target }}\release\loop.exe dist\
           cd dist
@@ -335,7 +335,7 @@ jobs:
               bin.install "meta"
               bin.install "meta-git"
               bin.install "meta-project"
-              bin.install "meta-rust"
+              bin.install "meta-cargo"
               bin.install "meta-mcp"
               bin.install "loop"
             end

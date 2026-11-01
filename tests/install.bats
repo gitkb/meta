@@ -20,12 +20,12 @@ setup() {
     esac
     ASSET="meta-${os}-${arch}.tar.gz"
 
-    for binary in meta meta-git meta-project meta-rust meta-mcp loop; do
+    for binary in meta meta-git meta-project meta-cargo meta-mcp loop; do
         printf '#!/bin/sh\necho %s 1.0.0\n' "$binary" > "$TEST_DIR/archive/$binary"
         printf 'fake %s\n' "$binary" > "$TEST_DIR/archive/$binary.exe"
     done
     tar -czf "$RELEASES/latest/download/$ASSET" -C "$TEST_DIR/archive" \
-        meta meta-git meta-project meta-rust meta-mcp loop
+        meta meta-git meta-project meta-cargo meta-mcp loop
     (cd "$RELEASES/latest/download" && sha256 "$ASSET" > "$ASSET.sha256")
 
     # Windows checksums are certutil output, CRLF line endings included
@@ -71,6 +71,8 @@ run_ps1() {
     [[ "$output" == *"Installation complete"* ]]
     run "$INSTALL_DIR/meta"
     [ "$output" = "meta 1.0.0" ]
+    run "$INSTALL_DIR/meta-cargo"
+    [ "$output" = "meta-cargo 1.0.0" ]
 }
 
 @test "install.sh refuses a tampered archive and leaves the installed meta alone" {
@@ -134,6 +136,7 @@ run_ps1() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"Installation complete"* ]]
     [ "$(cat "$INSTALL_DIR/meta.exe")" = "fake meta" ]
+    [ "$(cat "$INSTALL_DIR/meta-cargo.exe")" = "fake meta-cargo" ]
 }
 
 @test "install.ps1 refuses a tampered archive" {

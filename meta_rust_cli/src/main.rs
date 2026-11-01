@@ -1,4 +1,4 @@
-//! meta-rust subprocess plugin
+//! meta-cargo subprocess plugin
 
 use indexmap::IndexMap;
 use meta_plugin_protocol::{
@@ -14,7 +14,7 @@ fn main() {
 
     run_plugin(PluginDefinition {
         info: PluginInfo {
-            name: "rust".to_string(),
+            name: "cargo".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             commands: vec!["cargo".to_string()],
             description: Some("Run cargo across the Rust repos of a meta workspace".to_string()),

@@ -54,6 +54,12 @@ pub fn is_newer_version(current: &str, new: &str) -> bool {
     new > current
 }
 
+/// The plugin a tar entry installs: its file name, when that is `meta-*`
+fn plugin_entry_name(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    name.starts_with(PLUGIN_PREFIX).then(|| name.to_string())
+}
+
 /// Check if a filename is a plugin binary (has prefix, no excluded extension)
 fn is_plugin_binary(name: &str) -> bool {
     name.starts_with(PLUGIN_PREFIX) && !EXCLUDED_EXTENSIONS.iter().any(|ext| name.ends_with(ext))
@@ -569,18 +575,17 @@ impl GitHubShorthand {
     }
 }
 
-/// Make a file executable on Unix systems (chmod 755)
+/// Make an open file executable on Unix systems (chmod 755). It acts on the
+/// file itself, so no link at its path is followed.
 #[cfg(unix)]
-fn make_executable(path: &Path) -> Result<()> {
+fn make_executable(file: &std::fs::File) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(path)?.permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(path, perms)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<()> {
+fn make_executable(_file: &std::fs::File) -> Result<()> {
     Ok(())
 }
 
@@ -985,28 +990,33 @@ impl PluginInstaller {
 
     /// Extract a tar.gz archive
     fn extract_tar_gz(&self, bytes: &[u8]) -> Result<Vec<String>> {
-        let mut installed = Vec::new();
-        let decoder = flate2::read::GzDecoder::new(bytes);
-        let mut archive = tar::Archive::new(decoder);
+        let archive = || tar::Archive::new(flate2::read::GzDecoder::new(bytes));
 
-        for entry in archive.entries()? {
-            let mut entry = entry?;
-            let file_name = entry
-                .path()?
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|s| s.to_string());
-
-            if let Some(name) = file_name {
-                if name.starts_with(PLUGIN_PREFIX) {
-                    let dest = self.plugins_dir.join(&name);
-                    entry.unpack(&dest)?;
-                    make_executable(&dest)?;
-                    installed.push(name);
-                }
+        // Check every plugin entry before writing any: a plugin is a file,
+        // never a link or a device
+        for entry in archive().entries()? {
+            let entry = entry?;
+            let kind = entry.header().entry_type();
+            if plugin_entry_name(&entry.path()?).is_some() && !kind.is_dir() {
+                anyhow::ensure!(
+                    kind.is_file(),
+                    "Archive entry {} is not a regular file or a directory; nothing was installed",
+                    escape(&String::from_utf8_lossy(&entry.path_bytes()))
+                );
             }
         }
 
+        let mut installed = Vec::new();
+        for entry in archive().entries()? {
+            let mut entry = entry?;
+            if !entry.header().entry_type().is_file() {
+                continue;
+            }
+            if let Some(name) = plugin_entry_name(&entry.path()?) {
+                self.write_plugin(&name, &mut entry)?;
+                installed.push(name);
+            }
+        }
         Ok(installed)
     }
 
@@ -1021,11 +1031,21 @@ impl PluginInstaller {
         for i in 0..archive.len() {
             let file = archive.by_index(i)?;
             let file_name = file.name()?.into_owned();
-            if file_name.starts_with(PLUGIN_PREFIX) {
+            if file_name.starts_with(PLUGIN_PREFIX) && !file.is_dir() {
                 // Require one filename component on both Unix and Windows.
                 anyhow::ensure!(
                     !file_name.contains(['/', '\\']),
                     "ZIP plugin entry must be a top-level filename: {}",
+                    escape(&file_name)
+                );
+                // A plugin is a file, never a link or a device (a mode
+                // without a file type is a file)
+                anyhow::ensure!(
+                    matches!(
+                        file.unix_mode().map(|mode| mode & 0o170000),
+                        None | Some(0 | 0o100000)
+                    ),
+                    "Archive entry {} is not a regular file or a directory; nothing was installed",
                     escape(&file_name)
                 );
                 entries.push((i, file_name));
@@ -1034,14 +1054,25 @@ impl PluginInstaller {
 
         for (i, file_name) in entries {
             let mut file = archive.by_index(i)?;
-            let dest = self.plugins_dir.join(&file_name);
-            let mut dest_file = std::fs::File::create(&dest)?;
-            std::io::copy(&mut file, &mut dest_file)?;
-            make_executable(&dest)?;
+            self.write_plugin(&file_name, &mut file)?;
             installed.push(file_name);
         }
 
         Ok(installed)
+    }
+
+    /// Write a plugin into the plugins directory: to a new file there (which
+    /// never follows a link), made executable through the open file, then
+    /// renamed to `name`. A link already at `name` is replaced, not written
+    /// through.
+    fn write_plugin(&self, name: &str, contents: &mut impl std::io::Read) -> Result<()> {
+        let mut file = tempfile::NamedTempFile::new_in(&self.plugins_dir)?;
+        std::io::copy(contents, &mut file)?;
+        make_executable(file.as_file())?;
+        file.persist(self.plugins_dir.join(name))
+            .map_err(|e| e.error)
+            .with_context(|| format!("Cannot install plugin {}", escape(name)))?;
+        Ok(())
     }
 
     /// Get the download URL for a specific platform
@@ -1618,6 +1649,157 @@ mod tests {
         }
     }
 
+    /// A tar.gz of `(path, kind, contents or link target)` entries
+    #[cfg(unix)]
+    fn tar_gz(entries: &[(&str, tar::EntryType, &str)]) -> Vec<u8> {
+        use std::io::Write;
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, kind, data) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(*kind);
+            header.set_mode(0o755);
+            if matches!(kind, tar::EntryType::Symlink | tar::EntryType::Link) {
+                header.set_size(0);
+                builder.append_link(&mut header, path, data).unwrap();
+            } else {
+                header.set_size(data.len() as u64);
+                builder
+                    .append_data(&mut header, path, data.as_bytes())
+                    .unwrap();
+            }
+        }
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&builder.into_inner().unwrap()).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    /// A zip with a plugin, then a symlink to `target` if given
+    #[cfg(unix)]
+    fn zip_with(plugin: &str, contents: &str, link_to: Option<&str>) -> Vec<u8> {
+        use std::io::Write;
+        let mut zip_data = Vec::new();
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_data));
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file(plugin, options).unwrap();
+        zip.write_all(contents.as_bytes()).unwrap();
+        if let Some(target) = link_to {
+            zip.add_symlink("meta-link", target, options).unwrap();
+        }
+        zip.finish().unwrap();
+        zip_data
+    }
+
+    /// An executable outside the plugins dir, mode 0644
+    #[cfg(unix)]
+    fn victim(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let victim = dir.join("victim.sh");
+        std::fs::write(&victim, "victim").unwrap();
+        std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o644)).unwrap();
+        victim
+    }
+
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_that_is_not_a_file_or_directory_installs_nothing() {
+        use tar::EntryType::{Fifo, Link, Regular, Symlink};
+        let outside = tempfile::tempdir().unwrap();
+        let victim = victim(outside.path());
+        let target = victim.to_str().unwrap();
+        // A valid plugin comes first, so nothing written shows the whole
+        // archive was checked before writing
+        let good = ("meta-good", Regular, "#!/bin/sh\n");
+        let archives = [
+            (
+                "meta-link",
+                "p.tar.gz",
+                tar_gz(&[good, ("meta-link", Symlink, target)]),
+            ),
+            (
+                "meta-hard",
+                "p.tar.gz",
+                tar_gz(&[good, ("meta-hard", Link, target)]),
+            ),
+            (
+                "meta-fifo",
+                "p.tar.gz",
+                tar_gz(&[good, ("meta-fifo", Fifo, "")]),
+            ),
+            (
+                "meta-link",
+                "p.zip",
+                zip_with("meta-good", "#!/bin/sh\n", Some(target)),
+            ),
+        ];
+        for (entry, url, bytes) in archives {
+            let dir = tempfile::tempdir().unwrap();
+            let installer = PluginInstaller {
+                plugins_dir: dir.path().to_path_buf(),
+                scope: InstallScope::Global,
+            };
+            let err = format!("{:#}", installer.extract_archive(url, &bytes).unwrap_err());
+            assert!(err.contains(entry), "{url} {entry}: {err}");
+            assert!(err.contains("not a regular file"), "{err}");
+            let written: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+            assert!(written.is_empty(), "{url} {entry}: wrote {written:?}");
+            assert_eq!(mode(&victim), 0o644, "{url} {entry}");
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "victim");
+        }
+
+        // A link that installs no plugin is left alone
+        let dir = tempfile::tempdir().unwrap();
+        let installer = PluginInstaller {
+            plugins_dir: dir.path().to_path_buf(),
+            scope: InstallScope::Global,
+        };
+        let bytes = tar_gz(&[good, ("lib/libx.so", Symlink, "libx.so.1")]);
+        let installed = installer.extract_archive("p.tar.gz", &bytes).unwrap();
+        assert_eq!(installed, ["meta-good"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn installing_over_a_link_replaces_the_link_not_its_target() {
+        let outside = tempfile::tempdir().unwrap();
+        let victim = victim(outside.path());
+        let archives = [
+            (
+                "p.tar.gz",
+                tar_gz(&[("meta-x", tar::EntryType::Regular, "new")]),
+            ),
+            ("p.zip", zip_with("meta-x", "new", None)),
+        ];
+        for (url, bytes) in archives {
+            for hard in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let installer = PluginInstaller {
+                    plugins_dir: dir.path().to_path_buf(),
+                    scope: InstallScope::Global,
+                };
+                let dest = dir.path().join("meta-x");
+                if hard {
+                    std::fs::hard_link(&victim, &dest).unwrap();
+                } else {
+                    std::os::unix::fs::symlink(&victim, &dest).unwrap();
+                }
+
+                installer.extract_archive(url, &bytes).unwrap();
+
+                assert_eq!(std::fs::read_to_string(&victim).unwrap(), "victim", "{url}");
+                assert_eq!(mode(&victim), 0o644, "{url} hard={hard}");
+                assert!(!dest.symlink_metadata().unwrap().is_symlink(), "{url}");
+                assert_eq!(std::fs::read_to_string(&dest).unwrap(), "new", "{url}");
+                assert_eq!(mode(&dest), 0o755, "{url}");
+            }
+        }
+    }
+
     #[test]
     fn test_extract_archive_unsupported_format() {
         let dir = tempfile::tempdir().unwrap();
@@ -1993,13 +2175,12 @@ mod tests {
 
         // Create plugin file
         std::fs::create_dir_all(dir.path()).unwrap();
-        let plugin_path = dir.path().join("meta-test");
-        std::fs::write(
-            &plugin_path,
-            b"#!/bin/sh\necho '{\"name\":\"test\",\"version\":\"2.0.0\",\"commands\":[]}'\n",
-        )
-        .unwrap();
-        make_executable(&plugin_path).unwrap();
+        installer
+            .write_plugin(
+                "meta-test",
+                &mut &b"#!/bin/sh\necho '{\"name\":\"test\",\"version\":\"2.0.0\",\"commands\":[]}'\n"[..],
+            )
+            .unwrap();
 
         // Create manifest
         let mut manifest = PluginManifest::default();

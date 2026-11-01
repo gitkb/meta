@@ -1,11 +1,22 @@
 //! Shared plugin protocol types for meta subprocess plugins.
 //!
 //! This crate defines the communication protocol between the meta CLI host
-//! and its subprocess plugins (meta-git, meta-project, meta-rust, etc.).
+//! and its subprocess plugins (meta-git, meta-project, meta-cargo, etc.).
+//!
+//! A plugin is an executable named `meta-<word>` (`meta-<word>.exe` on
+//! Windows), and it serves `meta <word> ...`: its file name, not anything it
+//! answers, decides which command reaches it. To serve two top-level words,
+//! ship two files. The host looks in `.meta/plugins/` of the workspace's meta
+//! directories (nearest first), then `~/.meta/plugins/`, then PATH; the first
+//! file with the name wins.
 //!
 //! The protocol works as follows:
-//! 1. Host discovers plugins via `--meta-plugin-info` (plugin responds with `PluginInfo` JSON)
-//! 2. Host invokes plugins via `--meta-plugin-exec` (sends `PluginRequest` JSON on stdin)
+//! 1. For `meta <word> ...` the host starts only `meta-<word>`, first with
+//!    `--meta-plugin-info` (plugin responds with `PluginInfo` JSON within
+//!    5 seconds). `meta`, `meta help`, `meta --help` and `meta plugin list`
+//!    ask every plugin.
+//! 2. Host invokes the plugin via `--meta-plugin-exec` (sends `PluginRequest`
+//!    JSON on stdin)
 //! 3. Plugin responds with either a `PlanResponse` JSON (commands to execute) or direct output
 
 use indexmap::IndexMap;
@@ -21,8 +32,16 @@ use std::path::PathBuf;
 /// Metadata about a plugin, returned in response to `--meta-plugin-info`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginInfo {
+    /// The plugin's name for itself. The host names a plugin by its file's
+    /// word instead, and routes by that.
     pub name: String,
     pub version: String,
+    /// Commands the plugin handles, as words starting with its file's word
+    /// (`"git worktree create"` for `meta-git`). For `meta <word> ...` the
+    /// longest one that matches the typed words whole becomes the request's
+    /// `command`, and the rest its `args`; with none matching, `command` is
+    /// the word alone. A bare `meta <word>` prints the plugin's help. A
+    /// command under another word never reaches the plugin.
     pub commands: Vec<String>,
     #[serde(default)]
     pub description: Option<String>,

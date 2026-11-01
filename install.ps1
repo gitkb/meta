@@ -96,7 +96,7 @@ function Install-Meta {
 
     # Install binaries
     Write-Info "Installing to $InstallDir..."
-    $expectedBinaries = @("meta.exe", "meta-git.exe", "meta-project.exe", "meta-rust.exe", "meta-mcp.exe", "loop.exe")
+    $expectedBinaries = @("meta.exe", "meta-git.exe", "meta-project.exe", "meta-cargo.exe", "meta-mcp.exe", "loop.exe")
     foreach ($binary in $expectedBinaries) {
         $binaryPath = Join-Path $tempDir $binary
         if (Test-Path $binaryPath) {

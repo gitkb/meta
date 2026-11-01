@@ -8,9 +8,9 @@ setup() {
     META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
     META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
     META_PROJECT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-project"
-    META_RUST_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-rust"
+    META_CARGO_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-cargo"
 
-    if [ ! -f "$META_BIN" ] || [ ! -f "$META_GIT_BIN" ] || [ ! -f "$META_PROJECT_BIN" ] || [ ! -f "$META_RUST_BIN" ]; then
+    if [ ! -f "$META_BIN" ] || [ ! -f "$META_GIT_BIN" ] || [ ! -f "$META_PROJECT_BIN" ] || [ ! -f "$META_CARGO_BIN" ]; then
         cargo build --workspace --quiet
     fi
 
@@ -20,12 +20,12 @@ setup() {
     mkdir -p "$NO_CONFIG_DIR/.meta/plugins"
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
     cp "$META_PROJECT_BIN" "$TEST_DIR/.meta/plugins/meta-project"
-    cp "$META_RUST_BIN" "$TEST_DIR/.meta/plugins/meta-rust"
+    cp "$META_CARGO_BIN" "$TEST_DIR/.meta/plugins/meta-cargo"
     cp "$META_GIT_BIN" "$NO_CONFIG_DIR/.meta/plugins/meta-git"
-    cp "$META_RUST_BIN" "$NO_CONFIG_DIR/.meta/plugins/meta-rust"
-    chmod +x "$TEST_DIR/.meta/plugins/meta-git" "$TEST_DIR/.meta/plugins/meta-project" "$TEST_DIR/.meta/plugins/meta-rust"
+    cp "$META_CARGO_BIN" "$NO_CONFIG_DIR/.meta/plugins/meta-cargo"
+    chmod +x "$TEST_DIR/.meta/plugins/meta-git" "$TEST_DIR/.meta/plugins/meta-project" "$TEST_DIR/.meta/plugins/meta-cargo"
     chmod +x "$NO_CONFIG_DIR/.meta/plugins/meta-git"
-    chmod +x "$NO_CONFIG_DIR/.meta/plugins/meta-rust"
+    chmod +x "$NO_CONFIG_DIR/.meta/plugins/meta-cargo"
 
     cat > "$TEST_DIR/.meta.yaml" <<'JSON'
 {
@@ -179,7 +179,8 @@ teardown() {
 }
 
 @test "help lists cargo but not the rust plugin name as a command" {
-    run "$META_BIN" --help
+    # Only the workspace's plugins: none from PATH, not even system ones
+    run env PATH="$TEST_DIR/no-such-dir" "$META_BIN" --help
     [ "$status" -eq 0 ]
     [[ "$output" =~ [[:space:]]cargo[[:space:]] ]]
     if printf '%s\n' "$output" | grep -Eq '^  rust[[:space:]]'; then false; fi

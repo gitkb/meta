@@ -238,6 +238,7 @@ fn importing_aliases_changes_only_the_aliases() {
     );
     assert!(!out.status.success());
     assert!(!ws.ws.join("a/ran").exists() && !ws.ws.join("ran").exists());
+    assert_eq!(fs::read(&target).unwrap(), before, "it imported anyway");
 
     let out = ws.run(&["--add-aliases-to-global-looprc"], "y\ny\n");
     assert!(out.status.success(), "{out:?}");

@@ -376,6 +376,17 @@ SCRIPT
     echo "$output" | jq -e '.results[0] | .exit_code == -1 and (has("signal") | not)'
 }
 
+@test "meta exec expands ./.looprc aliases over ~/.looprc ones" {
+    echo '{"aliases":{"say":"echo GLOBAL","only-global":"echo G2"}}' > "$HOME/.looprc"
+    echo '{"aliases":{"say":"echo LOCAL"}}' > .looprc
+    run "$META_BIN" --include api exec -- say
+    [ "$status" -eq 0 ]
+    [[ "$output" == *LOCAL* ]] && [[ "$output" != *GLOBAL* ]]
+    run "$META_BIN" --include api exec -- only-global
+    [ "$status" -eq 0 ]
+    [[ "$output" == *G2* ]]
+}
+
 @test "--add-aliases-to-global-looprc with a command refuses and runs nothing" {
     run "$META_BIN" --add-aliases-to-global-looprc exec -- touch RAN </dev/null
     [ "$status" -ne 0 ]

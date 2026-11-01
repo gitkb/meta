@@ -269,3 +269,26 @@ esac
     assert!(stderr.contains("max_parallel"), "{stderr}");
     assert!(!root.join("setup-ran").exists() && !root.join("ran").exists());
 }
+
+#[test]
+fn a_broken_looprc_stops_only_what_runs_through_loop() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    workspace(&root);
+    // HOME is root too: ~/.looprc and ./.looprc are this file
+    fs::write(root.join(".looprc"), r#"{"bogus": 1}"#).unwrap();
+
+    // the plugin answers with output, not a plan: loop never runs
+    meta(&root, &["touchy", "ran"]);
+    assert!(fs::read_to_string(root.join("plugin.log"))
+        .unwrap()
+        .contains("touchy"));
+
+    let output = run_meta(&root, &["exec", "--", "true"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains(".looprc") && stderr.contains("bogus"),
+        "{stderr}"
+    );
+}

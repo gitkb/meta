@@ -304,6 +304,22 @@ teardown() {
     [[ "$output" == *"frontend"* ]]
 }
 
+@test "each repo's name comes before its output, and a sequential prompt reads the terminal's input" {
+    for mode in --parallel --sequential; do
+        run "$META_BIN" "$mode" --include api,worker exec -- sh -c 'echo "out-of-$(basename "$PWD")"'
+        [ "$status" -eq 0 ]
+        api_label=$(grep -n '^.*\./api:$' <<<"$output" | cut -d: -f1)
+        api_out=$(grep -n '^out-of-api$' <<<"$output" | cut -d: -f1)
+        worker_label=$(grep -n '^.*\./worker:$' <<<"$output" | cut -d: -f1)
+        [ -n "$api_label" ] && [ -n "$api_out" ] && [ -n "$worker_label" ]
+        [ "$api_label" -lt "$api_out" ]
+        [ "$api_out" -lt "$worker_label" ]
+    done
+    run bash -c 'printf "y\nn\n" | "$1" --sequential --include api,worker exec -- sh -c "read a; echo answer=\$a"' _ "$META_BIN"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"./api:"*"answer=y"*"./worker:"*"answer=n"* ]]
+}
+
 @test "loop sequential mode runs commands in order" {
     # Run commands across all three projects
     run "$META_BIN" --include api,worker,frontend exec -- pwd

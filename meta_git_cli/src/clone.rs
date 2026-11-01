@@ -5,7 +5,7 @@ use colored::Colorize;
 use indicatif::MultiProgress;
 use meta_core::config;
 use meta_core::git::GitUrl;
-use meta_core::outln;
+use meta_core::{errln, outln};
 use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::sync::Arc;
@@ -135,7 +135,9 @@ pub(crate) fn execute_git_clone(
         ssh::SshMasters::UserManaged | ssh::SshMasters::Failed => None,
     };
 
-    outln!("Cloning meta repository: {url}")?;
+    // progress, on stderr beside the clones' own: meta shows a plugin's
+    // stdout only once it ends
+    errln!("Cloning meta repository: {url}");
     let mut clone_cmd = meta_core::git::git(cwd);
     clone_cmd.args(
         clone_argv(url.as_git_arg().to_string_lossy().into_owned())
@@ -204,11 +206,11 @@ pub(crate) fn execute_git_clone(
         }
     }
 
-    outln!(
+    errln!(
         "Cloning {} child repositories{}",
         initial_count,
         if recursive { " (recursive mode)" } else { "" }
-    )?;
+    );
 
     let mp = MultiProgress::new();
 

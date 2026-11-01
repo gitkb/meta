@@ -6,6 +6,7 @@ use meta_core::git::GitUrl;
 use meta_git_lib::clone_queue::{CloneQueue, CloneTask, Outcome, Work};
 use std::ffi::OsString;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -32,6 +33,7 @@ pub(crate) fn clone_with_queue(
             .context("Bad progress template")?
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
         ssh_cmd,
+        started: AtomicUsize::new(0),
     };
     pool.scope(|scope| {
         for task in tasks {
@@ -47,6 +49,8 @@ struct Worker<'a> {
     mp: &'a MultiProgress,
     style: ProgressStyle,
     ssh_cmd: Option<&'a str>,
+    /// How many tasks have started, to number each once
+    started: AtomicUsize,
 }
 
 impl<'a> Worker<'a> {
@@ -64,10 +68,11 @@ impl<'a> Worker<'a> {
 
     /// Clone or pull one repository; the tasks its `.meta.yaml` adds.
     fn run(&self, task: &CloneTask) -> Vec<CloneTask> {
-        let (completed, total) = self.queue.get_counts();
+        let number = self.started.fetch_add(1, Ordering::SeqCst) + 1;
+        let (_, total) = self.queue.get_counts();
         let pb = self.mp.add(ProgressBar::new_spinner());
         pb.set_style(self.style.clone());
-        pb.set_prefix(format!("[{}/{}]", completed + 1, total));
+        pb.set_prefix(format!("[{number}/{total}]"));
         let (doing, done) = match task.work {
             Work::Clone(_) => ("Cloning", "Cloned"),
             Work::Pull => ("Pulling", "Pulled"),

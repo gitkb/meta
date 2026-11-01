@@ -453,8 +453,11 @@ fn execute_command_in_directory(
         outln!("Executing in directory: {}", escape_path(dir))?;
     }
 
+    // Its name before what it prints (a prompt says which repo asks),
+    // flushed before it writes to the same terminal
+    let name = result_name(dir, config.root_dir.as_deref());
     if !config.silent {
-        outln!()?;
+        outln!("\n{}", format!("{name}:").bold())?;
         meta_core::out::flush()?;
     }
 
@@ -494,14 +497,10 @@ fn execute_command_in_directory(
         }
     };
 
-    if !config.silent {
-        let name = result_name(dir, config.root_dir.as_deref());
-        if result.success {
-            outln!("\n{}", format!("✓ {name}").green())?;
-        } else {
-            outln!("\n{}", format!("✗ {name}: {}", result.ending()).red())?;
-        }
-        meta_core::out::flush()?;
+    // A failure is said under what the command printed; the summary
+    // counts the rest
+    if !config.silent && !result.success {
+        outln!("{}", format!("✗ {name}: {}", result.ending()).red())?;
     }
 
     Ok(result)

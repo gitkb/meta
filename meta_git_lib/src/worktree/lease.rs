@@ -338,7 +338,12 @@ pub fn take(lease: &Lease) -> Result<Held> {
 
 /// The lease at `path`: whether its lock is held, and what it says.
 fn read(path: PathBuf) -> Found {
-    let live = match File::open(lock_path(&path)) {
+    // opened for writing: on NFS an exclusive lock needs it, and a read-only
+    // handle would make an abandoned lease look held
+    let live = match std::fs::OpenOptions::new()
+        .write(true)
+        .open(lock_path(&path))
+    {
         // a lock that can't be tested counts as held
         Ok(file) => !matches!(taken(file.try_lock()), Ok(true)),
         Err(e) => e.kind() != std::io::ErrorKind::NotFound,

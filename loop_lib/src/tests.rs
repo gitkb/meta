@@ -697,6 +697,8 @@ fn a_looprc_is_one_format_with_one_default() {
         (r#"{"max_parallel": 0}"#, "nonzero"),
         (r#"{"aliases": {"gs": 1}}"#, "invalid type"),
         (r#"{"add_aliases_to_global_looprc": true}"#, "unknown field"),
+        // the file's text in the message is escaped
+        (r#"{"\u001b[2J": 1}"#, "\\u{1b}[2J"),
     ] {
         let message = format!("{:#}", looprc(contents).unwrap_err());
         assert!(

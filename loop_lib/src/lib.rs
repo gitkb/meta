@@ -127,7 +127,14 @@ pub fn parse_config_if_present(path: &Path) -> Result<LoopConfig> {
 }
 
 fn parse_looprc(path: &Path, text: &str) -> Result<LoopConfig> {
-    serde_json::from_str(text).with_context(|| format!("Failed to parse {}", escape_path(path)))
+    // serde's message quotes the file's text (an unknown key): escaped too
+    serde_json::from_str(text).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to parse {}: {}",
+            escape_path(path),
+            escape(&e.to_string())
+        )
+    })
 }
 
 fn global_looprc() -> Option<PathBuf> {

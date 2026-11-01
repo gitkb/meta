@@ -98,12 +98,50 @@ impl Found {
         }
     }
 
-    /// Delete a lease whose creator is gone. Taking the lock first keeps it
-    /// from deleting one a new creator has just taken.
-    pub fn delete(&self) -> Result<()> {
-        let Some(_lock) = lock(&self.path)? else {
+    /// Claim a lease whose creator is gone: take its lock, so no new creator
+    /// can take it meanwhile, and check that it still says what it said when
+    /// found. `None` if it is gone or changed (a new create of the same set
+    /// retired it): what it named isn't the set it was any more.
+    pub fn claim(&self) -> Result<Option<Claim>> {
+        let Some(lock) = lock(&self.path)? else {
             anyhow::bail!("{} is in use again", escape_path(&self.path));
         };
+        let now: Option<Lease> = std::fs::read(&self.path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        if now.is_none() || now != self.lease {
+            if self.path.symlink_metadata().is_err() {
+                // the lock file this made, of a lease that is gone
+                let _ = std::fs::remove_file(lock_path(&self.path));
+            }
+            return Ok(None);
+        }
+        Ok(Some(Claim {
+            path: self.path.clone(),
+            _lock: lock,
+        }))
+    }
+
+    /// Delete a lease whose creator is gone, if it is still the one found.
+    pub fn delete(&self) -> Result<()> {
+        match self.claim()? {
+            Some(claim) => claim.delete(),
+            None => Ok(()),
+        }
+    }
+}
+
+/// A lease left behind, claimed (see [`Found::claim`]): its lock is held
+/// until it is deleted or dropped.
+#[derive(Debug)]
+pub struct Claim {
+    path: PathBuf,
+    _lock: File,
+}
+
+impl Claim {
+    /// Delete the lease.
+    pub fn delete(self) -> Result<()> {
         remove(&self.path)?;
         remove(&lock_path(&self.path))
     }
@@ -331,5 +369,30 @@ mod tests {
         assert!(found.delete().is_err());
         assert!(found.path.exists());
         drop(held);
+    }
+
+    #[test]
+    fn a_lease_made_again_since_it_was_found_is_not_claimed() {
+        let temp = tempfile::tempdir().unwrap();
+        let git_dir = temp.path().join("git");
+        let set = temp.path().join("wt/a");
+        let path = path_for(&git_dir, &set);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_string(&lease(&set)).unwrap()).unwrap();
+        let found = find(std::slice::from_ref(&git_dir), &set).unwrap();
+        // another create of the set retired it and left its own
+        let other = Lease {
+            pid: 1,
+            ..lease(&set)
+        };
+        std::fs::write(&path, serde_json::to_string(&other).unwrap()).unwrap();
+        assert!(found.claim().unwrap().is_none());
+        assert!(path.exists());
+        // the one found, unchanged, is claimed and held
+        let found = find(std::slice::from_ref(&git_dir), &set).unwrap();
+        let claim = found.claim().unwrap().unwrap();
+        assert!(take(&git_dir, &lease(&set)).is_err());
+        claim.delete().unwrap();
+        assert!(!path.exists());
     }
 }

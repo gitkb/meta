@@ -58,7 +58,10 @@ pub(crate) fn handle_remove(
         {
             None
         }
-        found => found,
+        // held until the set is deleted: no new create of it can start, and
+        // a lease that changed since names another set
+        Some(found) => found.claim()?,
+        None => None,
     };
 
     let check = check_worktree_removal(&wt_dir)?;
@@ -143,8 +146,8 @@ pub(crate) fn handle_remove(
     if !preview {
         // Remove exactly what was checked, nested worktrees first
         delete_checked_set(&wt_dir, &check, force, verbose)?;
-        if let Some(found) = &abandoned {
-            found.delete()?;
+        if let Some(claim) = abandoned {
+            claim.delete()?;
         }
 
         // Fire post-destroy hook

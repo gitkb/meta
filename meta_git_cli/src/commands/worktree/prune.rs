@@ -353,7 +353,26 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
         let removal = match &check {
             // Checked again: a directory above may have become a link since
             Some(check) => match path_moved(wt_path) {
-                None => delete_checked_set(wt_path, check, false, false),
+                // An abandoned set's lease, claimed and held through the
+                // deletion: a create of the same set since then retired it
+                None => match abandoned
+                    .get(wt_path)
+                    .map(|found| found.claim())
+                    .transpose()
+                {
+                    Ok(Some(None)) => {
+                        kept.push(create_prune_entry(
+                            prune_entry.name,
+                            prune_entry.path,
+                            format!("{}, but it was made again since", prune_entry.reason),
+                            prune_entry.age_seconds,
+                        ));
+                        continue;
+                    }
+                    Ok(claim) => delete_checked_set(wt_path, check, false, false)
+                        .and_then(|()| claim.flatten().map_or(Ok(()), |claim| claim.delete())),
+                    Err(e) => Err(e),
+                },
                 Some(why) => {
                     kept.push(create_prune_entry(
                         prune_entry.name,
@@ -375,13 +394,13 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
                 ));
                 continue;
             }
-            None => forget(wt_path, &sets),
+            // its lease, if one was left, goes with it
+            None => forget(wt_path, &sets).and_then(|()| {
+                abandoned
+                    .get(wt_path)
+                    .map_or(Ok(()), |found| found.delete())
+            }),
         };
-        // its lease goes with it
-        let removal = removal.and_then(|()| match abandoned.get(wt_path) {
-            Some(found) => found.delete(),
-            None => Ok(()),
-        });
         match removal {
             Ok(()) => removed.push(prune_entry),
             Err(e) => {

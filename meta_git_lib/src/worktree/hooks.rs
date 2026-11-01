@@ -13,8 +13,10 @@ use meta_core::config::{HookEvent, Workspace};
 /// JSON to its stdin.
 /// The hook's stderr goes to meta's stderr, as git does for its hooks; a
 /// pipe that nobody reads would block a verbose hook forever.
-/// A hook that fails, or can't start, is an error naming its event (not its
-/// command, which may hold a secret); what it followed is done either way.
+/// A hook that fails, or can't start or be sent its payload, is an error
+/// naming its event (not its command, which may hold a secret); what it
+/// followed is done either way. A hook that doesn't read its payload is no
+/// failure.
 pub fn fire_worktree_hook(
     event: HookEvent,
     payload: &serde_json::Value,
@@ -40,16 +42,9 @@ pub fn fire_worktree_hook(
             .stdout(Stdio::null())
             .stderr(Stdio::inherit()),
     )
-    .and_then(|mut child| {
-        // Write payload then drop stdin to signal EOF before waiting; a hook
-        // that doesn't read it is no failure
-        if let Some(mut stdin) = child.stdin() {
-            use std::io::Write;
-            let _ = stdin.write_all(payload.to_string().as_bytes());
-        }
-        child.wait()
-    })
-    .with_context(|| format!("{hook} could not run"))?;
+    .and_then(|child| child.exchange(payload.to_string().as_bytes()))
+    .with_context(|| format!("{hook} could not run, or be sent its payload"))?
+    .status;
     #[cfg(unix)]
     if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
         anyhow::bail!("{hook} was killed by signal {signal}");

@@ -959,12 +959,8 @@ impl PluginInstaller {
         for plugin_name in installed {
             let plugin_path = self.plugins_dir.join(plugin_name);
             // A plugin answers --meta-plugin-info with its info, in time
-            let answered =
-                crate::subprocess_plugins::probe_plugin_info(&plugin_path).and_then(|info| {
-                    info.map(|_| ()).ok_or_else(|| {
-                        anyhow::anyhow!("Plugin did not answer --meta-plugin-info with its info")
-                    })
-                });
+            let answered = crate::subprocess_plugins::probe_plugin_info(&plugin_path)
+                .map_err(crate::subprocess_plugins::NoInfo::into_error);
             answered.with_context(|| {
                 // Remove invalid plugin on failure
                 let _ = std::fs::remove_file(&plugin_path);
@@ -1105,9 +1101,9 @@ impl PluginInstaller {
                         plugins.push(PluginInfo {
                             name: name.to_string(),
                             version: match crate::subprocess_plugins::probe_plugin_info(&path) {
-                                Ok(info) => info.map(|info| info.version),
+                                Ok(info) => Some(info.version),
                                 Err(e) => {
-                                    eprintln!("Warning: {e}");
+                                    eprintln!("Warning: {}", e.into_error());
                                     None
                                 }
                             },
@@ -1149,48 +1145,51 @@ impl PluginInstaller {
         }
     }
 
-    /// Check for updates for a specific plugin
-    ///
-    /// Returns Some((current_version, latest_version)) if an update is available,
-    /// None if already up to date or if version info is unavailable.
+    /// The plugins `meta plugin install` installed here, by command word,
+    /// sorted
+    pub fn installed_words(&self) -> Result<Vec<String>> {
+        let mut words: Vec<String> = self
+            .load_manifest()?
+            .plugins
+            .into_keys()
+            .map(|name| {
+                name.strip_prefix(PLUGIN_PREFIX)
+                    .map_or(name.clone(), str::to_string)
+            })
+            .collect();
+        words.sort();
+        Ok(words)
+    }
+
+    /// The installed and the latest version of a plugin, when the latest is
+    /// newer. A plugin that can't be checked (not installed from a GitHub
+    /// `user/repo`, or with no version recorded) is an error saying why,
+    /// never "up to date".
     pub fn check_update(&self, plugin_name: &str) -> Result<Option<(String, String)>> {
         let manifest = self.load_manifest()?;
         let plugin_name = ensure_plugin_prefix(plugin_name);
+        let cannot =
+            |why: &str| anyhow::anyhow!("Cannot check {} for updates: {why}", escape(&plugin_name));
 
-        let entry = manifest.get_plugin(&plugin_name).ok_or_else(|| {
-            anyhow::anyhow!("Plugin {} not found in manifest", escape(&plugin_name))
-        })?;
-
-        // Check if source is a GitHub shorthand
-        if !entry.source.contains('/') {
-            debug!(
-                "Plugin {} source is not a GitHub shorthand, skipping update check",
-                plugin_name
-            );
-            return Ok(None);
+        let entry = manifest
+            .get_plugin(&plugin_name)
+            .ok_or_else(|| cannot("it was not installed with meta plugin install"))?;
+        // the source isn't shown: a URL may hold a credential
+        if GitHubShorthand::parse(&entry.source).is_none() {
+            return Err(cannot(
+                "it was not installed from a GitHub user/repo; reinstall it to update it",
+            ));
         }
-
-        // Get current version
-        let current_version = match &entry.version {
-            Some(v) => v.clone(),
-            None => {
-                debug!(
-                    "Plugin {} has no version in manifest, cannot check for updates",
-                    plugin_name
-                );
-                return Ok(None);
-            }
+        let Some(current_version) = entry.version.clone() else {
+            return Err(cannot(
+                "its installed version is not recorded; reinstall it to update it",
+            ));
         };
+        let latest_version = RegistryClient::get_latest_version(&entry.source)
+            .with_context(|| cannot("the latest release could not be read"))?;
 
-        // Get latest version from GitHub
-        let latest_version = RegistryClient::get_latest_version(&entry.source)?;
-
-        // Compare versions
-        if is_newer_version(&current_version, &latest_version) {
-            Ok(Some((current_version, latest_version)))
-        } else {
-            Ok(None)
-        }
+        Ok(is_newer_version(&current_version, &latest_version)
+            .then_some((current_version, latest_version)))
     }
 
     /// Update a plugin to the latest version

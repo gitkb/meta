@@ -950,23 +950,29 @@ fn handle_plugin_command(
                     }
                 }
             } else {
-                // Update all plugins
-                let plugins = installer.list_plugins_detailed()?;
+                // Update every plugin meta installed. One that can't be
+                // checked or updated is reported and the rest still are;
+                // then the command fails naming them.
                 let mut updates_available = Vec::new();
                 let mut updated_count = 0;
+                let mut failed = Vec::new();
+                let mut report = |name: &str, e: anyhow::Error| {
+                    eprintln!("{}", escape_lines(&format!("{e:#}")));
+                    failed.push(name.to_string());
+                };
 
-                for plugin in plugins {
-                    let name = plugin
-                        .name
-                        .strip_prefix(PLUGIN_PREFIX)
-                        .unwrap_or(&plugin.name);
-                    if let Ok(Some((current, latest))) = installer.check_update(name) {
-                        updates_available.push((name.to_string(), current, latest));
+                for name in installer.installed_words()? {
+                    match installer.check_update(&name) {
+                        Ok(Some((current, latest))) => {
+                            updates_available.push((name, current, latest))
+                        }
+                        Ok(None) => {}
+                        Err(e) => report(&name, e),
                     }
                 }
 
                 if updates_available.is_empty() {
-                    if !json {
+                    if !json && failed.is_empty() {
                         println!("All plugins are up to date");
                     }
                 } else if check {
@@ -995,15 +1001,10 @@ fn handle_plugin_command(
                                 }
                                 updated_count += 1;
                             }
-                            Err(e) => {
-                                if !json {
-                                    eprintln!(
-                                        "Failed to update {}: {}",
-                                        escape(name),
-                                        escape_lines(&format!("{e:#}"))
-                                    );
-                                }
-                            }
+                            Err(e) => report(
+                                name,
+                                e.context(format!("Failed to update {}", escape(name))),
+                            ),
                         }
                     }
                     if !json {
@@ -1013,6 +1014,10 @@ fn handle_plugin_command(
                             escape(location)
                         );
                     }
+                }
+                if !failed.is_empty() {
+                    let not = if check { "checked" } else { "updated" };
+                    anyhow::bail!("Plugins not {not}: {}", escape(&failed.join(", ")));
                 }
             }
         }

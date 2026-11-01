@@ -36,7 +36,7 @@ use std::io;
 use std::process::{Child, Command, ExitStatus, Output};
 
 /// A child started through [`spawn`]. Wait for it through [`Owned::wait`]
-/// or [`Owned::wait_with_output`]. One dropped unwaited for is let go: a
+/// or [`Owned::exchange`]. One dropped unwaited for is let go: a
 /// stop no longer waits for it (its process group still gets the signal).
 pub struct Owned {
     child: Child,
@@ -74,15 +74,10 @@ pub fn output(command: &mut Command) -> io::Result<Output> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    spawn(command)?.wait_with_output()
+    spawn(command)?.exchange(&[])
 }
 
 impl Owned {
-    /// The child's stdin, if piped and not taken yet.
-    pub fn stdin(&mut self) -> Option<std::process::ChildStdin> {
-        self.child.stdin.take()
-    }
-
     /// The child's stderr, if piped and not taken yet.
     pub fn stderr(&mut self) -> Option<std::process::ChildStderr> {
         self.child.stderr.take()
@@ -99,34 +94,67 @@ impl Owned {
         status
     }
 
-    /// Read the child's piped stdout and stderr to their end, then wait for
-    /// it, as [`Child::wait_with_output`] does.
-    pub fn wait_with_output(mut self) -> io::Result<Output> {
-        use std::io::Read;
-        drop(self.child.stdin.take());
-        let stderr = self.child.stderr.take().map(|mut pipe| {
-            std::thread::spawn(move || {
-                let mut bytes = Vec::new();
-                pipe.read_to_end(&mut bytes).map(|_| bytes)
-            })
+    /// Write `input` to the child's piped stdin and close it, while reading
+    /// its piped stdout and stderr to their end, then wait for it, as
+    /// [`Child::wait_with_output`] does: neither side can block the other on
+    /// a full pipe. A child that ends without reading all its input is no
+    /// error; its exit status says how it went. Whatever goes wrong, the
+    /// child is waited for (killed first if its pipes can't be served).
+    pub fn exchange(mut self, input: &[u8]) -> io::Result<Output> {
+        use std::io::Write;
+        let stdin = self.child.stdin.take();
+        let stdout = self.child.stdout.take();
+        let stderr = self.child.stderr.take();
+        let child = &mut self.child;
+        let served: io::Result<_> = std::thread::scope(|scope| {
+            // a pipe that can't be served is let go by killing the child, so
+            // nothing waits on it
+            let mut kill = |e: io::Error| {
+                let _ = child.kill();
+                e
+            };
+            let sent = std::thread::Builder::new()
+                .spawn_scoped(scope, move || match stdin {
+                    // dropped once written: the child reads its end
+                    Some(mut pipe) => match pipe.write_all(input) {
+                        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+                        sent => sent,
+                    },
+                    None => Ok(()),
+                })
+                .map_err(&mut kill)?;
+            let stderr = std::thread::Builder::new()
+                .spawn_scoped(scope, move || read_all(stderr))
+                .map_err(&mut kill)?;
+            let stdout = read_all(stdout).map_err(&mut kill)?;
+            let stderr = joined(stderr).map_err(&mut kill)?;
+            joined(sent)?;
+            Ok((stdout, stderr))
         });
-        let mut stdout = Vec::new();
-        if let Some(mut pipe) = self.child.stdout.take() {
-            pipe.read_to_end(&mut stdout)?;
-        }
-        let stderr = match stderr {
-            Some(reader) => reader
-                .join()
-                .map_err(|_| io::Error::other("the stderr reader panicked"))??,
-            None => Vec::new(),
-        };
         let status = self.wait()?;
+        let (stdout, stderr) = served?;
         Ok(Output {
             status,
             stdout,
             stderr,
         })
     }
+}
+
+/// What a thread of [`Owned::exchange`] ended with.
+fn joined<T>(thread: std::thread::ScopedJoinHandle<'_, io::Result<T>>) -> io::Result<T> {
+    thread
+        .join()
+        .unwrap_or_else(|_| Err(io::Error::other("a pipe's thread panicked")))
+}
+
+/// What `pipe` holds to its end (nothing for no pipe).
+fn read_all(pipe: Option<impl std::io::Read>) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    if let Some(mut pipe) = pipe {
+        pipe.read_to_end(&mut bytes)?;
+    }
+    Ok(bytes)
 }
 
 /// Make this program the owner of its children's signals (see the module

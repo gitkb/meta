@@ -406,12 +406,15 @@ pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
     let born = meta_core::git::lookup(repo, ["rev-parse", "--verify", "--quiet", "HEAD"])?;
     let mut found = match born {
         Some(_) => unsaved_work(repo, &[])?.0,
-        // nothing committed yet: every file in it is the only copy
+        // nothing committed on its branch yet: every file in it is the only copy
         None => {
             let status = ["status", "--porcelain", "--untracked-files=all"];
             match meta_core::git::run(repo, status)?.lines().count() {
-                0 => vec!["no commits".to_string()],
-                n => vec![format!("no commits, and {}", plural(n, "file"))],
+                0 => vec!["a branch with no commits yet".to_string()],
+                n => vec![format!(
+                    "a branch with no commits yet, and {}",
+                    plural(n, "file")
+                )],
             }
         }
     };
@@ -725,7 +728,10 @@ mod tests {
             git(&repo, &["config", key, value.to_str().unwrap()]);
         }
         std::fs::write(repo.join("a.txt"), "a").unwrap();
-        assert_eq!(repo_holds(&repo).unwrap(), ["no commits, and 1 file"]);
+        assert_eq!(
+            repo_holds(&repo).unwrap(),
+            ["a branch with no commits yet, and 1 file"]
+        );
 
         git(&repo, &["add", "a.txt"]);
         git(&repo, &["commit", "-q", "-m", "first"]);

@@ -237,7 +237,7 @@ within() {
     run "$META_BIN" git update
     [ "$status" -eq 1 ]
     [[ "$output" == *"Could not pull backend"*"fast-forward"* ]]
-    [[ "$output" == *"2 repositories could not be fast-forwarded: "* ]]
+    [[ "$output" == *"2 repositories could not be pulled (fast-forward only): "* ]]
     # nothing merged or rebased
     [ "$(head_of backend)" = "$backend_head" ]
     # the workspace's .meta.yaml as it is is still read

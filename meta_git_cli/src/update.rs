@@ -19,13 +19,14 @@ use std::sync::Arc;
     long_about = "Bring the workspace up to date: fast-forward each repo that is cloned \
                   (git pull --ff-only) and clone each project in .meta.yaml that isn't.\n\n\
                   The workspace repo is pulled first, so projects added to its .meta.yaml \
-                  upstream are cloned in the same run. A repo that can't be fast-forwarded \
-                  is named with git's error and the command exits 1; nothing is merged or \
-                  rebased. With -r the same goes for the meta repos nested in it, each \
-                  pulled before its .meta.yaml is read."
+                  upstream are cloned in the same run. A repo that can't be pulled \
+                  (fast-forward only) is named with git's error and the command exits 1; \
+                  nothing is merged or rebased. A repo on no branch, or whose branch has no \
+                  upstream, is named and left alone. With -r the same goes for the meta repos \
+                  nested in it, each pulled before its .meta.yaml is read."
 )]
 pub(crate) struct UpdateArgs {
-    /// Also the projects of the meta repos nested in it
+    /// Also update the projects of nested meta repos
     #[arg(short, long)]
     recursive: bool,
 }

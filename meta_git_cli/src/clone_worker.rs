@@ -119,6 +119,7 @@ impl<'a> Worker<'a> {
 /// stderr; return the command's error, or `None` when nothing failed.
 pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     let Outcome {
+        cloned,
         failures,
         refused,
         cycles,
@@ -170,7 +171,6 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
             meta_core::display::escape_lines(line)
         );
     }
-    let (finished, _) = queue.get_counts();
     let failed = |clone: bool| -> Vec<&str> {
         failures
             .iter()
@@ -183,14 +183,15 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
         [
             (!clones.is_empty()).then(|| {
                 format!(
-                    "{} of {finished} repositories failed to clone: {}",
+                    "{} of {} repositories failed to clone: {}",
                     clones.len(),
+                    cloned + clones.len(),
                     clones.join(", ")
                 )
             }),
             (!pulls.is_empty()).then(|| {
                 format!(
-                    "{} could not be fast-forwarded: {}",
+                    "{} could not be pulled (fast-forward only): {}",
                     plural(pulls.len()),
                     pulls.join(", ")
                 )

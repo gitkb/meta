@@ -179,8 +179,8 @@ teardown() {
 }
 
 @test "help lists cargo but not the rust plugin name as a command" {
-    # Only the workspace's plugins: none installed on the caller's PATH
-    run env PATH=/usr/bin:/bin "$META_BIN" --help
+    # Only the workspace's plugins: none from PATH, not even system ones
+    run env PATH="$TEST_DIR/no-such-dir" "$META_BIN" --help
     [ "$status" -eq 0 ]
     [[ "$output" =~ [[:space:]]cargo[[:space:]] ]]
     if printf '%s\n' "$output" | grep -Eq '^  rust[[:space:]]'; then false; fi

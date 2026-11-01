@@ -203,7 +203,7 @@ When you run `meta <command>`:
 
 1. **If `meta exec`** - Run the command as typed via `loop_lib` in all (filtered) repos, never through a plugin
 2. **Check for plugin** - Is there a plugin file named `meta-<word>` for the first word (`meta-git` for `meta git ...`, `meta-cargo` for `meta cargo ...`)?
-3. **If plugin exists** - Route to plugin with project list and filters
+3. **If plugin exists** - Start only that plugin, with the project list and filters
 4. **Otherwise** - Show "unrecognized command" error
 
 **Important:** Bare commands like `meta npm install` are not supported. You must either:

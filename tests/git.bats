@@ -84,6 +84,15 @@ teardown() {
     [[ "$output" == *"modified"* ]] || [[ "$output" == *"Changes"* ]]
 }
 
+@test "meta git status keeps the user's own GIT_CONFIG_* settings" {
+    echo "change" >> "$TEST_DIR/frontend/README.md"
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=status.short GIT_CONFIG_VALUE_0=true \
+        run "$META_BIN" --include frontend git status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"README.md"* ]]
+    [[ "$output" != *"Changes not staged"* ]]
+}
+
 @test "meta git status shows clean repos" {
     run "$META_BIN" git status
     [ "$status" -eq 0 ]

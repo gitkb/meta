@@ -111,7 +111,7 @@ pub fn git_worktree_add(
     from_ref: Option<&str>,
 ) -> Result<Option<String>> {
     let start = worktree_start(repo_path, branch, from_ref)?;
-    reclaim(repo_path, worktree_dest)?;
+    leftover_entry(repo_path, worktree_dest)?;
     let remote_ref = format!("origin/{branch}");
     let mut args: Vec<&OsStr> = vec!["worktree".as_ref(), "add".as_ref()];
     if matches!(start, WorktreeStart::Remote { .. }) {
@@ -131,13 +131,13 @@ pub fn git_worktree_add(
     Ok(start.new_branch_at())
 }
 
-/// Take back git's entry for a worktree of `repo_path` at `dest` whose
-/// folder was deleted by hand, so one can be added there again, if the entry
-/// holds nothing the folder didn't (see [`super::safety::entry_holds`]);
-/// otherwise say why it stays. git removes that one entry (meta's record, if
-/// any, with it). Entries anywhere else stay: a worktree that was moved can
-/// still be repaired.
-fn reclaim(repo_path: &Path, dest: &Path) -> Result<()> {
+/// Fail, saying what to do, if git still has an entry for a worktree of
+/// `repo_path` at `dest` whose folder is gone (deleted by hand): git refuses
+/// to add one there. meta never drops git's entries itself: one can hold
+/// what its folder didn't (staged changes, a rebase or merge under way,
+/// commits only its reflog knows), and a worktree that was moved can still
+/// be repaired.
+fn leftover_entry(repo_path: &Path, dest: &Path) -> Result<()> {
     let Some(git_dir) = meta_core::gitdir::common_dir(repo_path)? else {
         return Ok(());
     };
@@ -157,19 +157,19 @@ fn reclaim(repo_path: &Path, dest: &Path) -> Result<()> {
         let Some(checkout) = super::record::checkout(&admin) else {
             continue;
         };
-        if resolved(&checkout) != dest || !super::record::checkout_gone(&admin) {
-            continue;
-        }
-        if let Some(why) = super::safety::entry_holds(&admin)? {
+        if resolved(&checkout) == dest && super::record::checkout_gone(&admin) {
             anyhow::bail!(
-                "git still has an entry for the worktree that was at {}, and {why}; check it \
-                 (git --git-dir {}), then run 'git worktree prune' in {}",
+                "{} still has git's entry for a worktree at {}, whose folder is gone. git may \
+                 hold work there that the folder didn't: staged changes, a rebase or merge \
+                 under way, commits only its reflog knows (its git directory is {}). Once \
+                 checked, drop it with: git -C {} worktree remove {}",
+                escape_path(repo_path),
                 escape_path(&dest),
                 escape_path(&admin),
-                escape_path(repo_path)
+                meta_core::display::shell_quote(&repo_path.to_string_lossy()),
+                meta_core::display::shell_quote(&dest.to_string_lossy())
             );
         }
-        git_worktree_remove(repo_path, &checkout, false)?;
     }
     Ok(())
 }

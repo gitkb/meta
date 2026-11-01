@@ -2303,17 +2303,26 @@ wait_for() {
     [ ! -e .worktrees/eph-running ]
 }
 
-@test "a set deleted by hand can be made again, with or without prune" {
+@test "making a set again over a worktree deleted by hand says how, and drops nothing" {
     "$META_BIN" git worktree create again --repo backend --repo frontend --no-deps
-    rm -rf .worktrees/again
-    run "$META_BIN" git worktree create again --repo backend --repo frontend --no-deps
-    [ "$status" -eq 0 ]
+    echo staged > .worktrees/again/backend/only-staged.txt
+    git -C .worktrees/again/backend add only-staged.txt
+    local admin
+    admin="$(git -C .worktrees/again/backend rev-parse --absolute-git-dir)"
     rm -rf .worktrees/again
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
     run "$META_BIN" git worktree create again --repo backend --repo frontend --no-deps
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$TEST_DIR/backend still has git's entry for a worktree at $TEST_DIR/.worktrees/again/backend"* ]]
+    [[ "$output" == *"Once checked, drop it with: git -C $TEST_DIR/backend worktree remove $TEST_DIR/.worktrees/again/backend"* ]]
+    # nothing was dropped
+    git --git-dir="$admin" show :only-staged.txt
+
+    git -C backend worktree remove "$TEST_DIR/.worktrees/again/backend"
+    git -C frontend worktree remove "$TEST_DIR/.worktrees/again/frontend"
+    run "$META_BIN" git worktree create again --repo backend --repo frontend --no-deps
     [ "$status" -eq 0 ]
-    [ "$(git -C backend worktree list | wc -l)" -eq 2 ]
 }
 
 @test "an absolute worktrees_dir spelled through a link is still ignored in the workspace" {
@@ -2334,38 +2343,15 @@ J
     git -C "$TEST_DIR" check-ignore -q 'cache[1]/sets/pattern/backend'
 }
 
-@test "a worktree deleted by hand can be added again, but not over an entry git has locked" {
+@test "adding a worktree over one deleted by hand says how" {
     "$META_BIN" git worktree create part --repo backend --repo frontend --no-deps
-    git -C backend worktree lock "$TEST_DIR/.worktrees/part/backend"
-    rm -rf .worktrees/part/backend .worktrees/part/frontend
+    rm -rf .worktrees/part/frontend
+    run "$META_BIN" git worktree add part --repo frontend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"drop it with: git -C $TEST_DIR/frontend worktree remove $TEST_DIR/.worktrees/part/frontend"* ]]
+    git -C frontend worktree remove "$TEST_DIR/.worktrees/part/frontend"
     run "$META_BIN" git worktree add part --repo frontend
     [ "$status" -eq 0 ]
-    run "$META_BIN" git worktree add part --repo backend
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"locked"* ]]
-    # prune leaves git's entries alone: a worktree may have been moved
-    run "$META_BIN" git worktree prune
-    [ "$status" -eq 0 ]
-    [ "$(git -C backend worktree list | wc -l)" -eq 2 ]
-}
-
-@test "a set is not made again over a deleted worktree with a rebase under way" {
-    "$META_BIN" git worktree create rb --repo backend --no-deps
-    local wt="$TEST_DIR/.worktrees/rb/backend"
-    echo ours > "$wt/README.md"
-    git -C "$wt" commit --quiet -am ours
-    echo theirs > backend/README.md
-    git -C backend commit --quiet -am theirs
-    run git -C "$wt" rebase main
-    [ "$status" -ne 0 ]
-    local admin
-    admin="$(git -C "$wt" rev-parse --absolute-git-dir)"
-    rm -rf .worktrees/rb
-
-    run "$META_BIN" git worktree create rb --repo backend --no-deps
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"rebase is under way"* ]]
-    [ -d "$admin/rebase-merge" ]
 }
 
 @test "remove leaves another workspace's half-made set, made from a repository both share" {
@@ -2419,27 +2405,6 @@ J
     python3 -c 'import pty, sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)' \
         bash "$BATS_TEST_DIRNAME/helpers/term_stubborn.sh" "$META_BIN" "$TEST_DIR" < /dev/null
     [ "$(cat "$TEST_DIR/result")" = "$(printf 'ended\nstubborn ended')" ]
-}
-
-@test "a worktree is not added again over an entry holding staged changes" {
-    "$META_BIN" git worktree create st --repo backend --repo frontend --no-deps
-    echo staged > .worktrees/st/backend/only-staged.txt
-    git -C .worktrees/st/backend add only-staged.txt
-    local admin
-    admin="$(git -C .worktrees/st/backend rev-parse --absolute-git-dir)"
-    rm -rf .worktrees/st/backend
-    run "$META_BIN" git worktree add st --repo backend
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"it has staged changes"* ]]
-    git --git-dir="$admin" show :only-staged.txt
-
-    rm -rf .worktrees/st
-    run "$META_BIN" git worktree prune
-    [ "$status" -eq 0 ]
-    run "$META_BIN" git worktree create st --repo backend --no-deps
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"it has staged changes"* ]]
-    git --git-dir="$admin" show :only-staged.txt
 }
 
 @test "a lease left in another repository doesn't make prune remove a set made again at its path" {

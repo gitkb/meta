@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use meta_core::display::{escape, escape_path};
 use std::path::{Path, PathBuf};
 
-use super::git_ops::{git_rev_parse, remove_worktree_repos};
+use super::git_ops::remove_worktree_repos;
 use super::record::{self, SetRecord};
 use meta_core::git::git;
 use meta_core::gitdir;
@@ -608,13 +608,6 @@ fn operation_in_progress(repo: &Path) -> Result<Option<&'static str>> {
         escape(String::from_utf8_lossy(&output.stderr).trim())
     );
     let git_dir = repo.join(String::from_utf8_lossy(&output.stdout).trim_end_matches(['\n', '\r']));
-    Ok(operation_at(&git_dir))
-}
-
-/// The git operation (rebase, merge, ...) under way in the checkout whose
-/// own git directory is `git_dir`, if any: its saved state (an autostash,
-/// say) is there.
-pub fn operation_at(git_dir: &Path) -> Option<&'static str> {
     let markers = [
         ("rebase-merge", "rebase"),
         ("rebase-apply", "rebase or am"),
@@ -624,10 +617,10 @@ pub fn operation_at(git_dir: &Path) -> Option<&'static str> {
         ("sequencer", "cherry-pick or revert"),
         ("BISECT_START", "bisect"),
     ];
-    markers
+    Ok(markers
         .into_iter()
         .find(|(marker, _)| git_dir.join(marker).symlink_metadata().is_ok())
-        .map(|(_, name)| name)
+        .map(|(_, name)| name))
 }
 
 pub(super) fn relative_label(root: &Path, path: &Path) -> String {
@@ -659,65 +652,6 @@ fn sample<T>(items: &[T], show: impl Fn(&T) -> String) -> String {
         text.push_str(&format!(", and {} more", items.len() - SHOWN));
     }
     text
-}
-
-/// What the git entry whose admin directory is `admin` holds that its
-/// checkout, now gone, didn't, if anything: dropping the entry would lose
-/// it. Nothing, only if it isn't locked (a drive that isn't mounted?), has
-/// no operation under way (a rebase keeps its autostash there) and no refs
-/// of its own, its HEAD is a branch that exists or a commit some branch or
-/// tag holds, and nothing is staged that HEAD lacks.
-pub fn entry_holds(admin: &Path) -> Result<Option<String>> {
-    let Some(repo) = admin.parent().and_then(Path::parent) else {
-        anyhow::bail!("Cannot read git's entry {}", escape_path(admin));
-    };
-    if admin.join("locked").symlink_metadata().is_ok() {
-        return Ok(Some(
-            "git has it locked (on a drive that isn't mounted?)".to_string(),
-        ));
-    }
-    if let Some(operation) = operation_at(admin) {
-        return Ok(Some(format!("a {operation} is under way in it")));
-    }
-    if std::fs::read_dir(admin.join("refs")).is_ok_and(|mut refs| refs.next().is_some()) {
-        return Ok(Some("it has refs of its own".to_string()));
-    }
-    let head = std::fs::read_to_string(admin.join("HEAD")).unwrap_or_default();
-    let head = head.trim();
-    let held = match head.strip_prefix("ref:") {
-        Some(branch) => git_rev_parse(repo, branch.trim())?.is_some(),
-        None => !meta_core::git::run(
-            repo,
-            [
-                "for-each-ref",
-                "--contains",
-                head,
-                "--count=1",
-                "--format=%(refname)",
-            ],
-        )?
-        .trim()
-        .is_empty(),
-    };
-    if !held {
-        return Ok(Some(format!(
-            "its HEAD {} is on no branch or tag",
-            escape(head)
-        )));
-    }
-    let staged = git(repo)
-        .arg("--git-dir")
-        .arg(admin)
-        .args(["diff-index", "--cached", "--quiet", "HEAD", "--"])
-        .output()?;
-    Ok(match staged.status.code() {
-        Some(0) => None,
-        Some(1) => Some("it has staged changes".to_string()),
-        _ => Some(format!(
-            "its staged changes can't be checked ({})",
-            escape(String::from_utf8_lossy(&staged.stderr).trim())
-        )),
-    })
 }
 
 #[cfg(test)]

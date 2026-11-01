@@ -278,7 +278,7 @@ fn a_broken_looprc_stops_only_what_runs_through_loop() {
     // HOME is root too: ~/.looprc and ./.looprc are this file
     fs::write(root.join(".looprc"), r#"{"bogus": 1}"#).unwrap();
 
-    // the plugin answers with output, not a plan: loop never runs
+    // the plugin answers without a plan: loop never runs
     meta(&root, &["touchy", "ran"]);
     assert!(fs::read_to_string(root.join("plugin.log"))
         .unwrap()

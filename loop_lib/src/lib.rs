@@ -206,7 +206,7 @@ pub fn import_aliases(dry_run: bool) -> Result<()> {
         return Ok(());
     }
     let path = global_looprc().context("HOME is not set")?;
-    let cancelled = || anyhow::anyhow!("Cancelled: {} is unchanged", escape_path(&path));
+    let cancelled = || anyhow::anyhow!("Cancelled: nothing written to {}", escape_path(&path));
 
     let existing = match fs::read_to_string(&path) {
         Ok(text) => Some(text),

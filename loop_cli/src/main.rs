@@ -38,7 +38,7 @@ struct Cli {
     )]
     include: Option<Vec<PathBuf>>,
 
-    #[arg(short, long, help = "Enable silent mode (suppress all output)")]
+    #[arg(short, long, help = "Suppress command output")]
     silent: bool,
 
     #[arg(short, long, help = "Enable verbose output")]

@@ -377,11 +377,12 @@ SCRIPT
 }
 
 @test "meta exec expands ./.looprc aliases over ~/.looprc ones" {
-    echo '{"aliases":{"say":"echo GLOBAL","only-global":"echo G2"}}' > "$HOME/.looprc"
-    echo '{"aliases":{"say":"echo LOCAL"}}' > .looprc
-    run "$META_BIN" --include api exec -- say
+    echo '{"aliases":{"meta-say":"echo GLOBAL","only-global":"echo G2"}}' > "$HOME/.looprc"
+    echo '{"aliases":{"meta-say":"echo LOCAL"}}' > .looprc
+    run "$META_BIN" --include api exec -- meta-say
     [ "$status" -eq 0 ]
-    [[ "$output" == *LOCAL* ]] && [[ "$output" != *GLOBAL* ]]
+    [[ "$output" == *LOCAL* ]]
+    [[ "$output" != *GLOBAL* ]]
     run "$META_BIN" --include api exec -- only-global
     [ "$status" -eq 0 ]
     [[ "$output" == *G2* ]]

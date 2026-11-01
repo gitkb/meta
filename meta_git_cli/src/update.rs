@@ -151,9 +151,13 @@ fn report_unlisted(queue: &CloneQueue, cwd: &Path) {
         let shown = escape_path(path.strip_prefix(cwd).unwrap_or(&path));
         let holds = match meta_git_lib::worktree::safety::repo_holds(&path) {
             Ok(held) if held.is_empty() => "it has no uncommitted or untracked files, stashes, \
-                 worktrees or commits missing from its remote branches (ignored files not checked)"
+                 worktrees, or commits on a branch, tag or HEAD that its remote branches lack \
+                 (ignored files and the reflog not checked)"
                 .to_string(),
-            Ok(held) => format!("it holds {} (ignored files not checked)", held.join("; ")),
+            Ok(held) => format!(
+                "it holds {} (ignored files and the reflog not checked)",
+                held.join("; ")
+            ),
             Err(e) => format!(
                 "meta can't tell what it holds ({})",
                 escape(&format!("{e:#}"))

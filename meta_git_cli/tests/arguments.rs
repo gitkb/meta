@@ -185,3 +185,25 @@ fn worktree_list_finds_the_workspace_of_the_requests_directory() {
     let listed: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(listed["worktrees"][0]["name"], "s", "{listed}");
 }
+
+/// A plugin whose stdout meta no longer reads (meta was killed) ends
+/// quietly, without a panic.
+#[test]
+fn a_closed_stdout_ends_the_plugin_without_a_panic() {
+    let temp = tempfile::tempdir().unwrap();
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let out = Command::new(env!("CARGO_BIN_EXE_meta-git"))
+        .arg("--meta-plugin-info")
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("GIT_CONFIG_GLOBAL", temp.path().join("no-gitconfig"))
+        .env("META_DATA_DIR", temp.path().join("meta-data"))
+        .stdout(writer)
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert_eq!(out.status.code(), Some(141), "{stderr}");
+}

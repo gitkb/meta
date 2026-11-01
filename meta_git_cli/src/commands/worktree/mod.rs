@@ -114,7 +114,13 @@ fn handle_worktree_command(
 ) -> Result<()> {
     match command {
         WorktreeCommands::Create(args) => {
-            create::handle_create(args, mode, verbose, json, global_strict)
+            // An ephemeral set is the next prune's: its lease stays beside it
+            let ephemeral = args.ephemeral;
+            let lease = create::handle_create(args, mode, verbose, json, global_strict)?;
+            if let Some(lease) = lease.filter(|_| ephemeral) {
+                lease.leave();
+            }
+            Ok(())
         }
         WorktreeCommands::Add(args) => add::handle_add(args, mode, verbose, json),
         WorktreeCommands::Remove(args) => remove::handle_remove(args, mode, verbose, json),

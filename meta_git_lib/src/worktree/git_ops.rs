@@ -111,6 +111,7 @@ pub fn git_worktree_add(
     from_ref: Option<&str>,
 ) -> Result<Option<String>> {
     let start = worktree_start(repo_path, branch, from_ref)?;
+    leftover_entry(repo_path, worktree_dest)?;
     let remote_ref = format!("origin/{branch}");
     let mut args: Vec<&OsStr> = vec!["worktree".as_ref(), "add".as_ref()];
     if matches!(start, WorktreeStart::Remote { .. }) {
@@ -128,6 +129,52 @@ pub fn git_worktree_add(
     }
     run(repo_path, args)?;
     Ok(start.new_branch_at())
+}
+
+/// Fail, saying what to do, if git still has an entry for a worktree of
+/// `repo_path` at `dest` whose folder is gone (deleted by hand): git refuses
+/// to add one there. meta never drops git's entries itself: one can hold
+/// what its folder didn't (staged changes, a rebase or merge under way,
+/// commits only its reflog knows), and a worktree that was moved can still
+/// be repaired.
+fn leftover_entry(repo_path: &Path, dest: &Path) -> Result<()> {
+    let Some(git_dir) = meta_core::gitdir::common_dir(repo_path)? else {
+        return Ok(());
+    };
+    // the set's folder exists by now; compare where it resolves
+    let resolved = |path: &Path| match (path.parent().map(Path::canonicalize), path.file_name()) {
+        (Some(Ok(parent)), Some(name)) => parent.join(name),
+        _ => path.to_path_buf(),
+    };
+    let dest = resolved(dest);
+    let entries = match std::fs::read_dir(git_dir.join("worktrees")) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    for entry in entries {
+        let admin = entry?.path();
+        let Some(checkout) = super::record::checkout(&admin) else {
+            continue;
+        };
+        if resolved(&checkout) == dest && super::record::checkout_gone(&admin) {
+            anyhow::bail!(
+                "{} still has git's entry for a worktree at {}, whose folder is gone. git may \
+                 hold work there that the folder didn't: staged changes, a rebase or merge \
+                 under way, commits only its reflog knows (its git directory is {}). Once \
+                 checked, drop it with: git -C {} worktree remove {}",
+                escape_path(repo_path),
+                escape_path(&dest),
+                escape_path(&admin),
+                // quoted for a shell, then escaped for the terminal
+                escape(&meta_core::display::shell_quote(
+                    &repo_path.to_string_lossy()
+                )),
+                escape(&meta_core::display::shell_quote(&dest.to_string_lossy()))
+            );
+        }
+    }
+    Ok(())
 }
 
 pub fn git_worktree_remove(repo_path: &Path, worktree_path: &Path, force: bool) -> Result<()> {
@@ -485,6 +532,30 @@ mod tests {
             !message.contains('\n') && !message.contains('\u{1b}'),
             "{message}"
         );
+    }
+
+    /// The command a leftover git entry's message gives is quoted for a shell
+    /// and escaped for the terminal: a path's control characters print as
+    /// visible escapes. (Windows allows no control characters in file names.)
+    #[cfg(unix)]
+    #[test]
+    fn a_leftover_entry_is_reported_with_its_paths_escaped() {
+        let tmp = init_git_repo();
+        make_initial_commit(tmp.path());
+        let set = tmp.path().join("set\u{1b}[2J");
+        std::fs::create_dir(&set).unwrap();
+        let dest = set.join("wt");
+        let added = git(tmp.path())
+            .args(["worktree", "add", "-q", "-b", "b"])
+            .arg(&dest)
+            .status()
+            .unwrap();
+        assert!(added.success());
+        std::fs::remove_dir_all(&dest).unwrap();
+        let err = leftover_entry(tmp.path(), &dest).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("worktree remove"), "{message}");
+        assert!(!message.contains('\u{1b}'), "{message}");
     }
 
     /// Create a minimal git repo in a tempdir and return the tempdir handle.

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use meta_cli::worktree::discover_worktree_members;
 use meta_git_lib::worktree::helpers::{resolve_worktree_root, Configs};
 use meta_git_lib::worktree::hooks::fire_post_prune;
+use meta_git_lib::worktree::lease;
 use meta_git_lib::worktree::record::{self, SetRecord};
 use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
 use meta_git_lib::worktree::types::*;
@@ -104,9 +105,12 @@ fn set_of_admin(admin: &Path, worktree_root: &Path) -> Option<PathBuf> {
 }
 
 /// Why an existing set with `record` is due for pruning, if it is: the
-/// reason and, for an expired TTL, its age. (A set whose repositories were
-/// removed from the project, or whose project is gone, is no longer this
-/// workspace's: prune leaves it.)
+/// reason and, for an expired TTL, its age. (An ephemeral set is pruned once
+/// the run that made it is gone and left its lease beside it: see the
+/// leases in `handle_prune`. No lease is no proof the run ended: `git clean`
+/// may have deleted it. A set whose repositories were removed from the
+/// project, or whose project is gone, is no longer this workspace's: prune
+/// leaves it.)
 fn eligible(record: &SetRecord, now: i64) -> Option<(String, Option<u64>)> {
     // Check TTL expiration
     let remaining = record.ttl_remaining(now).filter(|r| *r <= 0)?;
@@ -128,7 +132,46 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
     let workspace = Workspace::of(&configs.here);
     let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
-    if sets.is_empty() && kept.is_empty() {
+    // A set whose lease is held is being created, or is an ephemeral set
+    // whose run goes on: prune leaves it. One whose creator is gone without
+    // finishing it is pruned, recorded or not.
+    let mut held = BTreeSet::new();
+    let mut abandoned = BTreeMap::new();
+    // Leases sit beside their sets: in the worktrees folder, and beside each
+    // set a record names
+    let folders: BTreeSet<PathBuf> = std::iter::once(
+        worktree_root
+            .canonicalize()
+            .unwrap_or_else(|_| worktree_root.clone()),
+    )
+    .chain(
+        sets.keys()
+            .filter_map(|set| set.parent().map(Path::to_path_buf)),
+    )
+    .collect();
+    for found in folders.iter().flat_map(|folder| lease::all(folder)) {
+        match &found.lease {
+            Some(lease) if !workspace.made_here(&lease.project) => {}
+            Some(lease) if found.live => {
+                held.insert(lease.set.clone());
+            }
+            Some(lease) => {
+                abandoned.insert(lease.set.clone(), found);
+            }
+            // being written, or unreadable: which set it names is unknown
+            None => {}
+        }
+    }
+    // a lease left behind by a set that is gone too names nothing
+    abandoned.retain(|set, found| {
+        let stale =
+            is_missing(set) && set.parent().is_some_and(is_plain_dir) && !sets.contains_key(set);
+        if stale && !dry_run {
+            let _ = found.delete();
+        }
+        !stale
+    });
+    if sets.is_empty() && kept.is_empty() && abandoned.is_empty() {
         if json {
             println!(
                 "{}",
@@ -145,9 +188,33 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
     }
 
     let now = Utc::now().timestamp();
-    let mut to_remove: Vec<(PruneEntry, SetRecord)> = Vec::new();
+    let mut to_remove: Vec<(PruneEntry, Option<SetRecord>)> = Vec::new();
+    for (set, found) in &abandoned {
+        if is_missing(set) {
+            continue;
+        }
+        let name = set
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        to_remove.push((
+            create_prune_entry(
+                name,
+                set.display().to_string(),
+                match found.lease.as_ref().is_some_and(|l| l.ephemeral) {
+                    true => format!("ephemeral, the run that made it ({}) ended", found.holder()),
+                    false => format!("abandoned while {} was creating it", found.holder()),
+                },
+                None,
+            ),
+            None,
+        ));
+    }
 
     for (set, records) in &sets {
+        if held.contains(set) || (abandoned.contains_key(set) && !is_missing(set)) {
+            continue;
+        }
         let path_key = set.display().to_string();
         let Some((_, found)) = records.first() else {
             continue;
@@ -155,8 +222,12 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
         let name = found.name();
 
         // Check if path exists (orphaned detection). A set with a worktree
-        // still checked out (moved elsewhere) is left alone.
+        // still checked out (moved elsewhere) is left alone, and so is one
+        // whose worktrees folder is gone too (a drive that isn't mounted?)
         if is_missing(set) {
+            if !set.parent().is_some_and(is_plain_dir) {
+                continue;
+            }
             if !records
                 .iter()
                 .all(|(admin, _)| record::checkout_gone(admin))
@@ -165,7 +236,7 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
             }
             to_remove.push((
                 create_prune_entry(name, path_key, "orphaned (missing directory)", None),
-                found.clone(),
+                Some(found.clone()),
             ));
             continue;
         }
@@ -190,7 +261,10 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
         };
 
         if let Some((reason, age)) = eligible(&record, now) {
-            to_remove.push((create_prune_entry(name, path_key, reason, age), record));
+            to_remove.push((
+                create_prune_entry(name, path_key, reason, age),
+                Some(record),
+            ));
         }
     }
 
@@ -214,19 +288,31 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
         }
         // A set holding another set is blocked by the check, and one holding
         // another workspace's worktrees is that workspace's to prune.
-        let checked = check_worktree_removal(wt_path)
-            .map(|check| (workspace.foreign_members(wt_path, &check), check));
+        // In an abandoned set, worktrees not recorded yet are the creator's
+        let is_abandoned = record.is_none();
+        let checked = check_worktree_removal(wt_path).map(|check| {
+            let problems: Vec<String> = check
+                .blockers_but(is_abandoned)
+                .chain(&check.unsaved)
+                .cloned()
+                .collect();
+            (workspace.foreign_members(wt_path, &check), problems, check)
+        });
         let problems = match checked {
-            Ok((foreign, _)) if !foreign.is_empty() => foreign.join("; "),
-            Ok((_, check)) if check.is_clear() && check.record() == Some(&record) => {
+            Ok((foreign, _, _)) if !foreign.is_empty() => foreign.join("; "),
+            Ok((_, problems, check))
+                if problems.is_empty() && (is_abandoned || check.record() == record.as_ref()) =>
+            {
                 candidates.push((entry, Some(check)));
                 continue;
             }
-            Ok((_, check)) if check.is_clear() && check.record().is_some() => {
+            Ok((_, problems, check)) if problems.is_empty() && check.record().is_some() => {
                 "its record changed after prune read it".to_string()
             }
-            Ok((_, check)) if check.is_clear() => "meta's record of it is gone".to_string(),
-            Ok((_, check)) => [check.blockers, check.unsaved].concat().join("; "),
+            Ok((_, problems, _)) if problems.is_empty() => {
+                "meta's record of it is gone".to_string()
+            }
+            Ok((_, problems, _)) => problems.join("; "),
             Err(e) => format!("cannot inspect it: {e:#}"),
         };
         kept.push(create_prune_entry(
@@ -277,7 +363,34 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
         let removal = match &check {
             // Checked again: a directory above may have become a link since
             Some(check) => match path_moved(wt_path) {
-                None => delete_checked_set(wt_path, check, false, false),
+                // The set's lease, held through the deletion so no create of
+                // it starts meanwhile. Refused if one is creating it or an
+                // ephemeral run uses it; an abandoned set whose lease is
+                // another's now was made again since.
+                None => {
+                    let held = lease::hold(wt_path);
+                    let token = |lease: Option<&lease::Lease>| lease.map(|l| l.token.clone());
+                    let why = match &held {
+                        Err(e) => Some(format!("{e:#}")),
+                        Ok((left, _)) => abandoned
+                            .get(wt_path)
+                            .filter(|found| token(found.lease.as_ref()) != token(left.as_ref()))
+                            .map(|_| "it was made again since".to_string()),
+                    };
+                    match (why, held) {
+                        (None, Ok((_, claim))) => delete_checked_set(wt_path, check, false, false)
+                            .and_then(|()| claim.delete()),
+                        (why, _) => {
+                            kept.push(create_prune_entry(
+                                prune_entry.name,
+                                prune_entry.path,
+                                format!("{}, but {}", prune_entry.reason, why.unwrap_or_default()),
+                                prune_entry.age_seconds,
+                            ));
+                            continue;
+                        }
+                    }
+                }
                 Some(why) => {
                     kept.push(create_prune_entry(
                         prune_entry.name,
@@ -299,7 +412,12 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
                 ));
                 continue;
             }
-            None => forget(Path::new(&prune_entry.path), &sets),
+            // its lease, if one was left, goes with it
+            None => forget(wt_path, &sets).and_then(|()| {
+                abandoned
+                    .get(wt_path)
+                    .map_or(Ok(()), |found| found.delete())
+            }),
         };
         match removal {
             Ok(()) => removed.push(prune_entry),
@@ -349,7 +467,9 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
 
 /// Delete the records of a set whose directory is gone, each only if its
 /// worktree is still gone and it is still the record prune read. Git's own
-/// entries for its worktrees stay, for `git worktree prune`.
+/// entries for its worktrees stay: one can hold work its folder didn't, and
+/// a moved worktree can still be repaired (`create` and `add` at that path
+/// say how to drop one).
 fn forget(set: &Path, sets: &Records) -> Result<()> {
     for (admin, record) in sets.get(set).into_iter().flatten() {
         if record::checkout_gone(admin) && record::read(admin)?.as_ref() == Some(record) {

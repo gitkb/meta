@@ -47,6 +47,9 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = meta_core::args::parse::<Cli>();
+    if let Err(e) = meta_core::children::own() {
+        eprintln!("Warning: cannot pass signals on to the programs loop starts: {e}");
+    }
 
     // It writes ~/.looprc alone; the config file here has no say in it
     if cli.add_aliases_to_global_looprc {

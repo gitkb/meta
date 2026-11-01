@@ -2213,6 +2213,118 @@ YAML
     [[ "$output" == *"All projects are cloned"* ]]
 }
 
+# A post-checkout hook that says it started, then waits until
+# $TEST_DIR/release exists (or the test's directory is gone)
+slow_checkout_hook() {
+    mkdir -p "$TEST_DIR/hooks"
+    printf '#!/bin/sh\ntouch "%s/hook-started"\nwhile [ ! -e "%s/release" ] && [ -d "%s" ]; do sleep 0.05; done\n' \
+        "$TEST_DIR" "$TEST_DIR" "$TEST_DIR" > "$TEST_DIR/hooks/post-checkout"
+    chmod +x "$TEST_DIR/hooks/post-checkout"
+    git config --global core.hooksPath "$TEST_DIR/hooks"
+}
+
+# Wait up to 20 s for the file $1
+wait_for() {
+    for _ in $(seq 200); do [ -e "$1" ] && return 0; sleep 0.1; done
+    return 1
+}
+
+@test "a create stopped part way leaves a set remove takes back without --force" {
+    slow_checkout_hook
+    "$META_BIN" git worktree create half --all &
+    local pid=$!
+    wait_for "$TEST_DIR/hook-started"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    git config --global --unset core.hooksPath
+    [ -d .worktrees/half ]
+
+    run "$META_BIN" git worktree create half --all
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"left half-made by pid"* ]]
+
+    run "$META_BIN" git worktree remove half
+    [ "$status" -eq 0 ]
+    [ ! -e .worktrees/half ]
+    for repo in . backend frontend common; do
+        [ "$(git -C "$repo" worktree list | wc -l)" -eq 1 ]
+    done
+    run "$META_BIN" git worktree create half --all
+    [ "$status" -eq 0 ]
+}
+
+@test "remove says which process is still creating a set, and leaves it" {
+    slow_checkout_hook
+    "$META_BIN" git worktree create busy --all > /dev/null &
+    local pid=$!
+    wait_for "$TEST_DIR/hook-started"
+    run "$META_BIN" git worktree remove busy --force
+    local removed=$status
+    touch "$TEST_DIR/release"
+    wait "$pid"
+    git config --global --unset core.hooksPath
+    [ "$removed" -ne 0 ]
+    [[ "$output" == *"being created by pid"* ]]
+    [ -d .worktrees/busy/backend ]
+}
+
+@test "prune removes an ephemeral set whose run was stopped" {
+    "$META_BIN" git worktree exec --ephemeral eph-stopped --repo backend -- \
+        sh -c 'touch "$0/started"; sleep 30' "$TEST_DIR" &
+    local pid=$!
+    wait_for "$TEST_DIR/started"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    [ -d .worktrees/eph-stopped/backend ]
+
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"eph-stopped (ephemeral, the run that made it"* ]]
+    [ ! -e .worktrees/eph-stopped ]
+}
+
+@test "prune and remove leave a running ephemeral set alone" {
+    "$META_BIN" git worktree exec --ephemeral eph-running --repo backend -- \
+        sh -c 'touch "$0/started"; while [ ! -e "$0/release" ] && [ -d "$0" ]; do sleep 0.05; done' "$TEST_DIR" &
+    local pid=$!
+    wait_for "$TEST_DIR/started"
+    run "$META_BIN" git worktree prune
+    local pruned=$status pruned_output=$output
+    run "$META_BIN" git worktree remove eph-running --force
+    local removed=$status removed_output=$output
+    [ -d .worktrees/eph-running/backend ]
+    kill -0 "$pid"
+    touch "$TEST_DIR/release"
+    wait "$pid"
+    [ "$pruned" -eq 0 ]
+    [[ "$pruned_output" != *"eph-running"* ]]
+    [ "$removed" -ne 0 ]
+    [[ "$removed_output" == *"in use by the ephemeral run of pid"* ]]
+    [ ! -e .worktrees/eph-running ]
+}
+
+@test "making a set again over a worktree deleted by hand says how, and drops nothing" {
+    "$META_BIN" git worktree create again --repo backend --repo frontend --no-deps
+    echo staged > .worktrees/again/backend/only-staged.txt
+    git -C .worktrees/again/backend add only-staged.txt
+    local admin
+    admin="$(git -C .worktrees/again/backend rev-parse --absolute-git-dir)"
+    rm -rf .worktrees/again
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree create again --repo backend --repo frontend --no-deps
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$TEST_DIR/backend still has git's entry for a worktree at $TEST_DIR/.worktrees/again/backend"* ]]
+    [[ "$output" == *"Once checked, drop it with: git -C $TEST_DIR/backend worktree remove $TEST_DIR/.worktrees/again/backend"* ]]
+    # nothing was dropped
+    git --git-dir="$admin" show :only-staged.txt
+
+    git -C backend worktree remove "$TEST_DIR/.worktrees/again/backend"
+    git -C frontend worktree remove "$TEST_DIR/.worktrees/again/frontend"
+    run "$META_BIN" git worktree create again --repo backend --repo frontend --no-deps
+    [ "$status" -eq 0 ]
+}
+
 @test "an absolute worktrees_dir spelled through a link is still ignored in the workspace" {
     # teardown removes OTHER
     OTHER="${TEST_DIR}-alias"
@@ -2229,4 +2341,125 @@ J
     run env META_WORKTREES="$TEST_DIR/cache[1]/sets" "$META_BIN" git worktree create pattern --repo backend --no-deps
     [ "$status" -eq 0 ]
     git -C "$TEST_DIR" check-ignore -q 'cache[1]/sets/pattern/backend'
+}
+
+@test "adding a worktree over one deleted by hand says how" {
+    "$META_BIN" git worktree create part --repo backend --repo frontend --no-deps
+    rm -rf .worktrees/part/frontend
+    run "$META_BIN" git worktree add part --repo frontend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"drop it with: git -C $TEST_DIR/frontend worktree remove $TEST_DIR/.worktrees/part/frontend"* ]]
+    git -C frontend worktree remove "$TEST_DIR/.worktrees/part/frontend"
+    run "$META_BIN" git worktree add part --repo frontend
+    [ "$status" -eq 0 ]
+}
+
+@test "remove leaves another workspace's half-made set, made from a repository both share" {
+    # B: the root checked out again by hand, so A and B share its repository
+    B="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/B"
+    git -C "$TEST_DIR" worktree add --quiet -b bws "$B"
+    mkdir -p "$B/.meta/plugins"
+    cp "$META_GIT_BIN" "$B/.meta/plugins/meta-git"
+    export META_WORKTREES="$BATS_TEST_TMPDIR/shared"
+    slow_checkout_hook
+    (cd "$B" && exec "$META_BIN" git worktree create bhalf --repo . --no-deps) &
+    local pid=$!
+    wait_for "$TEST_DIR/hook-started"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    git config --global --unset core.hooksPath
+    [ -d "$META_WORKTREES/bhalf" ]
+
+    run "$META_BIN" git worktree remove bhalf --force
+    [ "$status" -ne 0 ]
+    [ -d "$META_WORKTREES/bhalf" ]
+
+    cd "$B"
+    run "$META_BIN" git worktree remove bhalf
+    [ "$status" -eq 0 ]
+    [ ! -e "$META_WORKTREES/bhalf" ]
+}
+
+@test "prune leaves the sets of a worktrees folder that is gone for now" {
+    "$META_BIN" git worktree create away --repo backend --no-deps
+    echo staged > .worktrees/away/backend/new.txt
+    git -C .worktrees/away/backend add new.txt
+    mv .worktrees "$BATS_TEST_TMPDIR/unmounted"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"away"* ]]
+    mv "$BATS_TEST_TMPDIR/unmounted" .worktrees
+    git -C .worktrees/away/backend diff --cached --quiet && false
+    [ "$(git -C backend worktree list | wc -l)" -eq 2 ]
+}
+
+@test "TERM ends meta and a command under the plugin that ignores it" {
+    "$META_BIN" git worktree create stubborn --repo backend --no-deps
+    bash "$BATS_TEST_DIRNAME/helpers/term_stubborn.sh" "$META_BIN" "$TEST_DIR" < /dev/null
+    [ "$(cat "$TEST_DIR/result")" = "$(printf 'ended\nstubborn ended')" ]
+}
+
+@test "in a terminal, TERM from another process ends meta and a command that ignores it" {
+    "$META_BIN" git worktree create stubborn --repo backend --no-deps
+    # the foreground job of a terminal of its own (a pty)
+    python3 -c 'import pty, sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)' \
+        bash "$BATS_TEST_DIRNAME/helpers/term_stubborn.sh" "$META_BIN" "$TEST_DIR" < /dev/null
+    [ "$(cat "$TEST_DIR/result")" = "$(printf 'ended\nstubborn ended')" ]
+}
+
+@test "a lease left by a stopped create whose set was then deleted doesn't make prune remove a set made again at its path" {
+    slow_checkout_hook
+    "$META_BIN" git worktree create same --repo backend --no-deps &
+    local pid=$!
+    wait_for "$TEST_DIR/hook-started"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    git config --global --unset core.hooksPath
+    rm -rf .worktrees/same
+
+    "$META_BIN" git worktree create same --repo frontend --no-deps
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"same ("* ]]
+    [ -d .worktrees/same/frontend ]
+}
+
+@test "prune leaves git's entry for a worktree that was moved, so it can be repaired" {
+    "$META_BIN" git worktree create mv1 --repo backend --repo frontend --no-deps
+    mv .worktrees/mv1/backend "$BATS_TEST_TMPDIR/backend-moved"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    git -C backend worktree repair "$BATS_TEST_TMPDIR/backend-moved"
+    git -C "$BATS_TEST_TMPDIR/backend-moved" status --short
+}
+
+@test "the next prune removes a set made with create --ephemeral" {
+    "$META_BIN" git worktree create eph-made --repo backend --no-deps --ephemeral
+    [ -d .worktrees/eph-made/backend ]
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"eph-made (ephemeral"* ]]
+    [ ! -e .worktrees/eph-made ]
+    [ -z "$(ls -A .worktrees)" ]
+}
+
+@test "an ephemeral set its run couldn't remove itself is left for prune" {
+    [ "$(id -u)" -ne 0 ] || skip "root writes any directory"
+    run "$META_BIN" git worktree exec --ephemeral eph-left --repo backend -- chmod 555 .
+    [ "$status" -ne 0 ]
+    chmod -R u+w "$TEST_DIR/.worktrees/eph-left"
+    # the run left its lease: prune takes the set for one whose run ended
+    # (and keeps it here, as the failed removal left a folder git no longer
+    # knows)
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"eph-left (ephemeral, the run that made it"* ]]
+}
+
+@test "a terminal that hangs up ends meta and a command that ignores the hangup" {
+    # elsewhere meta leaves SIGHUP alone (it can't tell whether it was ignored)
+    [ "$(uname -s)" = Linux ] || skip "meta handles a hangup on Linux only"
+    "$META_BIN" git worktree create stubborn --repo backend --no-deps
+    python3 "$BATS_TEST_DIRNAME/helpers/hangup_stubborn.py" "$META_BIN" "$TEST_DIR"
+    [ "$(cat "$TEST_DIR/result")" = "$(printf 'ended\nstubborn ended')" ]
 }

@@ -344,17 +344,18 @@ impl SubprocessPlugin {
             );
         }
 
-        let mut child = Command::new(&self.path)
-            .arg("--meta-plugin-exec")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped()) // Capture stdout to parse response
-            .stderr(Stdio::inherit()) // Let stderr pass through for error messages
-            .spawn()
-            .with_context(|| format!("Failed to execute plugin {}", escape_path(&self.path)))?;
+        let mut child = meta_core::children::spawn(
+            Command::new(&self.path)
+                .arg("--meta-plugin-exec")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped()) // Capture stdout to parse response
+                .stderr(Stdio::inherit()), // Let stderr pass through for error messages
+        )
+        .with_context(|| format!("Failed to execute plugin {}", escape_path(&self.path)))?;
 
         // Send request to plugin's stdin. A plugin may answer without
         // reading it; then its output and exit status decide, not the pipe.
-        if let Some(mut stdin) = child.stdin.take() {
+        if let Some(mut stdin) = child.stdin() {
             use std::io::Write;
             match stdin.write_all(request_json.as_bytes()) {
                 Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}

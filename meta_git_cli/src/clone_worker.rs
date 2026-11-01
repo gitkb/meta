@@ -208,17 +208,16 @@ fn clone_single_repo(
     }
 
     // Run clone
-    match cmd
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
+    match meta_core::children::spawn(
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    ) {
         Ok(mut child) => {
             // Stream stderr for progress updates, and keep its last lines for
             // the failure report (the progress bar is hidden off a terminal).
             let pb_clone = pb.clone();
             let task_name = task.name.clone();
-            let tail = StderrTail::spawn(child.stderr.take(), move |line| {
+            let tail = StderrTail::spawn(child.stderr(), move |line| {
                 // git's progress names paths from the filesystem
                 pb_clone.set_message(format!("{task_name}: {}", meta_core::display::escape(line)))
             });

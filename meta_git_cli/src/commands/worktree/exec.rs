@@ -169,7 +169,9 @@ fn handle_ephemeral_exec(
         eprintln!("Creating ephemeral worktree '{name}'...");
     }
     // Ephemeral worktrees use global_strict=false to ensure creation succeeds
-    super::create::handle_create(create_args, mode, verbose, json, false)?;
+    // The lease, held for the run: the set lives as long as it does, and once
+    // this process is gone, however it ends, prune removes the set
+    let lease = super::create::handle_create(create_args, mode, verbose, json, false)?;
     // A preview made no set
     if mode.is_preview() {
         println!(
@@ -203,6 +205,11 @@ fn handle_ephemeral_exec(
     // Clean up before propagating the result; a failed cleanup (such as a
     // checkout git cannot delete) fails the command too
     let cleanup = guard.finish();
+    // a set this run couldn't remove is the next prune's: its lease stays
+    match (&cleanup, lease) {
+        (Err(_), Some(lease)) => lease.leave(),
+        (_, lease) => drop(lease),
+    }
     match (exec_result, cleanup) {
         (Err(e), Err(cleanup_error)) => {
             eprintln!(

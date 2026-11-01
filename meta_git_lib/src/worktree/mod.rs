@@ -6,6 +6,7 @@
 pub mod git_ops;
 pub mod helpers;
 pub mod hooks;
+pub mod lease;
 pub mod record;
 pub mod safety;
 pub mod types;

@@ -110,6 +110,13 @@ pub fn delete(admin: &Path) -> Result<()> {
     }
 }
 
+/// Where git checked out the worktree whose admin directory is `admin`, if
+/// git's link back to it can be read. (git may write it relative to `admin`.)
+pub fn checkout(admin: &Path) -> Option<PathBuf> {
+    let gitdir = std::fs::read_to_string(admin.join("gitdir")).ok()?;
+    Some(admin.join(gitdir.trim()).parent()?.to_path_buf())
+}
+
 /// Whether the checkout of the worktree whose admin directory is `admin`
 /// is gone (git calls such a worktree prunable). Anything that can't be
 /// read counts as still there.

@@ -909,10 +909,12 @@ dependencies = [
  "anyhow",
  "clap",
  "dirs",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "shlex",
+ "signal-hook",
  "tempfile",
 ]
 
@@ -952,6 +954,7 @@ dependencies = [
  "log",
  "meta",
  "meta_core",
+ "same-file",
  "serde",
  "serde_json",
  "tempfile",
@@ -1427,6 +1430,7 @@ version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49f7447afd772ca79ad17ae0a3972a6b0df0cb4b80990fd82707593e9e012a74"
 dependencies = [
+ "cc",
  "libc",
  "signal-hook-registry",
 ]

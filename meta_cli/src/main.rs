@@ -363,6 +363,9 @@ fn is_closed_stdout_panic(message: &str) -> bool {
 
 fn main() -> std::process::ExitCode {
     exit_quietly_on_closed_stdout();
+    if let Err(e) = meta_core::children::own() {
+        eprintln!("Warning: cannot pass signals on to the programs meta starts: {e}");
+    }
     match run_cli() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e)

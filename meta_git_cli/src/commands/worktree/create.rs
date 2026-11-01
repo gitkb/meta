@@ -11,6 +11,7 @@ use meta_core::duration::format_duration;
 use meta_git_lib::worktree::git_ops::*;
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::hooks::fire_post_create;
+use meta_git_lib::worktree::lease;
 use meta_git_lib::worktree::record::{self, SetRecord};
 use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
 use meta_git_lib::worktree::types::{CreateOutput, CreateRepoEntry};
@@ -24,7 +25,7 @@ pub(crate) fn handle_create(
     verbose: bool,
     json: bool,
     global_strict: bool,
-) -> Result<()> {
+) -> Result<Option<lease::Held>> {
     // Merge global --strict with local --strict (either enables strict mode)
     let strict = args.strict || global_strict;
 
@@ -94,11 +95,15 @@ pub(crate) fn handle_create(
     // Check if worktree already exists
     let wt_dir = worktree_root.join(name);
     if wt_dir.exists() {
+        let lease = wt_dir.canonicalize().ok().and_then(|set| lease::find(&set));
         anyhow::bail!(
-            "Worktree '{}' already exists at {}. Use 'meta worktree remove {}' first.",
-            name,
+            "Worktree '{name}' already exists at {}{}. Use 'meta worktree remove {name}' first.",
             escape_path(&wt_dir),
-            name
+            match lease {
+                Some(found) if found.live => format!(" ({})", found.doing()),
+                Some(found) => format!(" (left half-made by {}, which is gone)", found.holder()),
+                None => String::new(),
+            }
         );
     }
 
@@ -275,7 +280,7 @@ pub(crate) fn handle_create(
             custom_meta: &custom_meta,
         };
         print_create_dry_run(&plan);
-        return Ok(());
+        return Ok(None);
     }
 
     // Resolve/apply --from-pr: get PR head branch, override branch for the matching repo, and fetch
@@ -300,12 +305,29 @@ pub(crate) fn handle_create(
         *branch = pr_branch.clone();
     }
 
-    // Claim the set directory atomically: if another create claimed it first,
-    // this fails and nothing of theirs is touched. Everything in it from here
-    // on was made by this call.
+    // Before anything of the set exists, its lease: until this call is done,
+    // whatever is in the set is this call's, even before it is recorded
     if let Some(parent) = wt_dir.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let lease = {
+        let set = match (wt_dir.parent(), wt_dir.file_name()) {
+            (Some(parent), Some(name)) => parent
+                .canonicalize()
+                .with_context(|| format!("Cannot resolve {}", escape_path(parent)))?
+                .join(name),
+            _ => anyhow::bail!("Cannot resolve {}", escape_path(&wt_dir)),
+        };
+        lease::take(&lease::Lease::new(
+            set,
+            configs.owner.dir.clone(),
+            ephemeral,
+        ))?
+    };
+
+    // Claim the set directory atomically: if another create claimed it first,
+    // this fails and nothing of theirs is touched. Everything in it from here
+    // on was made by this call.
     if let Err(e) = std::fs::create_dir(&wt_dir) {
         if e.kind() == std::io::ErrorKind::AlreadyExists {
             anyhow::bail!(
@@ -520,7 +542,7 @@ pub(crate) fn handle_create(
         }
     }
 
-    Ok(())
+    Ok(Some(lease))
 }
 
 /// The commit-ish a repo doesn't have, if any: such repos are skipped. A

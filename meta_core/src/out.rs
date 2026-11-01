@@ -164,6 +164,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn warn_or_bail_is_an_error_naming_strict_mode_only_with_strict() {
+        assert!(warn_or_bail(false, "a problem").is_ok());
+        let error = warn_or_bail(true, "a problem").unwrap_err().to_string();
+        assert_eq!(error, "a problem (strict mode)");
+    }
+
+    #[test]
     fn color_is_off_for_no_color_and_dumb_terminals_and_forced_on_by_clicolor_force() {
         let some = |s: &str| Some(OsString::from(s));
         assert!(decide_color(None, None, None, some("xterm"), true));

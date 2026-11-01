@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::Utc;
 use colored::*;
 use meta_core::display::{escape, escape_path};
-use meta_core::{errln, outln};
+use meta_core::outln;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -177,7 +177,10 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
             let (ephemeral, ttl_remaining_seconds, custom) = match record {
                 Some(record) => (
                     Some(record.ephemeral),
-                    ttl::remaining(&record, now),
+                    ttl::remaining(&record, now).unwrap_or_else(|e| {
+                        meta_core::out::warn(format!("{e:#}"));
+                        None
+                    }),
                     (!record.custom.is_empty()).then_some(record.custom),
                 ),
                 None => (None, None, None),
@@ -271,11 +274,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
         outln!()?;
     }
     for warning in warnings {
-        errln!(
-            "Warning: {}: {}",
-            escape(&warning.name),
-            escape(&warning.message)
-        );
+        meta_core::out::warn(format!("{}: {}", warning.name, warning.message));
     }
     Ok(())
 }

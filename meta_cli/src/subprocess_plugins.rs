@@ -162,10 +162,7 @@ impl SubprocessPluginManager {
         // A config meta can't use leaves no project plugins; the command
         // itself reports it, and `--help` still prints
         let nearest = meta_core::config::nearest_meta_dir(&cwd).unwrap_or_else(|e| {
-            errln!(
-                "Warning: {} Skipping project plugins.",
-                escape(&format!("{e:#}"))
-            );
+            meta_core::out::warn(format!("{e:#} Skipping project plugins."));
             None
         });
         let project_dirs = nearest.map(|nearest| meta_core::config::workspace_meta_dirs(&nearest));
@@ -175,10 +172,7 @@ impl SubprocessPluginManager {
                     add(dir.join(".meta/plugins"), false);
                 }
             }
-            Err(e) => errln!(
-                "Warning: {} Skipping project plugins.",
-                escape(&format!("{e:#}"))
-            ),
+            Err(e) => meta_core::out::warn(format!("{e:#} Skipping project plugins.")),
         }
 
         // ~/.meta/plugins/ (global installed). No home just means no global
@@ -232,7 +226,7 @@ impl SubprocessPluginManager {
                 Ok(info) => Some(self.loaded(word, path, info)),
                 Err(NoInfo::NotAPlugin(_)) if on_path => None,
                 Err(e) => {
-                    errln!("Warning: {}; skipping", e.into_error());
+                    meta_core::out::warn(format!("{}; skipping", e.into_error()));
                     None
                 }
             })
@@ -252,11 +246,11 @@ impl SubprocessPluginManager {
                 Ok(entries) => entries,
                 Err(e) if *on_path || e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => {
-                    errln!(
-                        "Warning: Cannot read plugins directory {}: {}; skipping",
+                    meta_core::out::warn(format!(
+                        "Cannot read plugins directory {}: {}; skipping",
                         escape_path(dir),
                         escape(&e.to_string())
-                    );
+                    ));
                     continue;
                 }
             };
@@ -265,11 +259,11 @@ impl SubprocessPluginManager {
                     Ok(entry) => entry,
                     Err(_) if *on_path => continue,
                     Err(e) => {
-                        errln!(
-                            "Warning: Cannot read plugins directory {}: {}; skipping entry",
+                        meta_core::out::warn(format!(
+                            "Cannot read plugins directory {}: {}; skipping entry",
                             escape_path(dir),
                             escape(&e.to_string())
-                        );
+                        ));
                         continue;
                     }
                 };
@@ -284,10 +278,10 @@ impl SubprocessPluginManager {
                 if is_executable(&path) {
                     files.entry(word.to_string()).or_insert((path, *on_path));
                 } else if !on_path && path.is_file() {
-                    errln!(
-                        "Warning: Plugin {} is not executable; skipping",
+                    meta_core::out::warn(format!(
+                        "Plugin {} is not executable; skipping",
                         escape_path(&path)
-                    );
+                    ));
                 }
             }
         }

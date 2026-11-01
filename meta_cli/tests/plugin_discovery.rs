@@ -367,7 +367,7 @@ fn unreadable_plugin_directory_warns_and_help_still_runs() {
     assert!(output_local.status.success());
     let err = String::from_utf8_lossy(&output_local.stderr);
     assert!(
-        err.contains("Warning: Cannot read plugins directory"),
+        err.contains("warning: Cannot read plugins directory"),
         "{err}"
     );
     assert!(err.contains(path.to_str().unwrap()), "{err}");
@@ -624,7 +624,7 @@ fn unusable_files_in_plugin_folders_are_warned_about_but_not_on_path() {
     for path in &warned {
         assert!(
             err.lines()
-                .any(|line| line.starts_with("Warning:") && line.contains(path.to_str().unwrap())),
+                .any(|line| line.starts_with("warning:") && line.contains(path.to_str().unwrap())),
             "{}: {err}",
             path.display()
         );

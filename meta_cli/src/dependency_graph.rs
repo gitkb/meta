@@ -59,16 +59,25 @@ pub struct DependencyGraph {
     dependencies: HashMap<String, Vec<String>>,
     /// Reverse adjacency list: project -> projects that depend on it
     dependents: HashMap<String, Vec<String>>,
+    /// Each `depends_on` that names neither a project nor what one provides:
+    /// (project, the name)
+    unresolved: Vec<(String, String)>,
+    /// Each item two projects provide: (item, the project kept, the other)
+    duplicates: Vec<(String, String, String)>,
 }
 
 impl DependencyGraph {
-    /// Build a dependency graph from a list of projects
-    pub fn build(projects: Vec<ProjectDependencies>) -> Result<Self> {
+    /// Build a dependency graph from a list of projects. What it can't
+    /// resolve is kept for the caller to report: [`Self::unresolved`],
+    /// [`Self::duplicates`].
+    pub fn build(projects: Vec<ProjectDependencies>) -> Self {
         let mut graph = DependencyGraph {
             projects: HashMap::new(),
             providers: HashMap::new(),
             dependencies: HashMap::new(),
             dependents: HashMap::new(),
+            unresolved: Vec::new(),
+            duplicates: Vec::new(),
         };
 
         // First pass: register all projects and their provides
@@ -77,59 +86,68 @@ impl DependencyGraph {
 
             // Register provided items
             for provided in &project.provides {
-                if let Some(existing) = graph.providers.get(provided) {
-                    log::warn!(
-                        "Multiple projects provide '{}': {} and {}",
-                        provided,
-                        existing,
-                        project.name
-                    );
-                }
-                graph
+                if let Some(existing) = graph
                     .providers
-                    .insert(provided.clone(), project.name.clone());
+                    .insert(provided.clone(), project.name.clone())
+                {
+                    graph
+                        .duplicates
+                        .push((provided.clone(), project.name.clone(), existing));
+                }
             }
-
-            // Initialize adjacency lists
-            graph.dependencies.insert(project.name.clone(), Vec::new());
-            graph.dependents.insert(project.name.clone(), Vec::new());
         }
 
         // Second pass: resolve dependencies
         for project in &projects {
             for dep in &project.depends_on {
-                // Try to resolve the dependency
+                // A project's name, or what a project provides
                 let resolved = if graph.projects.contains_key(dep) {
-                    // Direct project reference
                     dep.clone()
                 } else if let Some(provider) = graph.providers.get(dep) {
-                    // Provided item reference
                     provider.clone()
                 } else {
-                    log::warn!(
-                        "Unresolved dependency '{}' in project '{}'",
-                        dep,
-                        project.name
-                    );
+                    graph.unresolved.push((project.name.clone(), dep.clone()));
                     continue;
                 };
-
-                // Add to adjacency lists
-                graph
-                    .dependencies
-                    .get_mut(&project.name)
-                    .unwrap()
-                    .push(resolved.clone());
-
                 graph
                     .dependents
-                    .get_mut(&resolved)
-                    .unwrap()
+                    .entry(resolved.clone())
+                    .or_default()
                     .push(project.name.clone());
+                graph
+                    .dependencies
+                    .entry(project.name.clone())
+                    .or_default()
+                    .push(resolved);
             }
         }
 
-        Ok(graph)
+        graph
+    }
+
+    /// Each `depends_on` the graph couldn't resolve: (project, the name).
+    pub fn unresolved(&self) -> &[(String, String)] {
+        &self.unresolved
+    }
+
+    /// Each item two projects provide: (item, the project the graph
+    /// uses, the other).
+    pub fn duplicates(&self) -> &[(String, String, String)] {
+        &self.duplicates
+    }
+
+    /// Warn about what [`Self::build`] couldn't resolve.
+    pub fn warn_unresolved(&self) {
+        for (project, dep) in &self.unresolved {
+            meta_core::out::warn(format!(
+                "'{project}' depends on '{dep}', which no project is or provides"
+            ));
+        }
+        for (item, kept, other) in &self.duplicates {
+            meta_core::out::warn(format!(
+                "Both '{other}' and '{kept}' provide '{item}'; '{kept}' is used"
+            ));
+        }
     }
 
     /// Get direct dependencies of a project
@@ -358,7 +376,7 @@ mod tests {
     #[test]
     fn test_build_graph() {
         let projects = create_test_projects();
-        let graph = DependencyGraph::build(projects).unwrap();
+        let graph = DependencyGraph::build(projects);
 
         assert_eq!(graph.projects.len(), 4);
         assert!(graph.providers.contains_key("utils"));
@@ -368,7 +386,7 @@ mod tests {
     #[test]
     fn test_get_dependencies() {
         let projects = create_test_projects();
-        let graph = DependencyGraph::build(projects).unwrap();
+        let graph = DependencyGraph::build(projects);
 
         let deps = graph.get_dependencies("api-service");
         assert!(deps.contains(&"auth-service"));
@@ -378,7 +396,7 @@ mod tests {
     #[test]
     fn test_impact_analysis() {
         let projects = create_test_projects();
-        let graph = DependencyGraph::build(projects).unwrap();
+        let graph = DependencyGraph::build(projects);
 
         let impact = graph.analyze_impact("shared-utils");
         assert_eq!(impact.project, "shared-utils");
@@ -397,7 +415,7 @@ mod tests {
     #[test]
     fn test_execution_order() {
         let projects = create_test_projects();
-        let graph = DependencyGraph::build(projects).unwrap();
+        let graph = DependencyGraph::build(projects);
 
         let order = graph.execution_order().unwrap();
 
@@ -418,7 +436,7 @@ mod tests {
     #[test]
     fn test_provided_item_resolution() {
         let projects = create_test_projects();
-        let graph = DependencyGraph::build(projects).unwrap();
+        let graph = DependencyGraph::build(projects);
 
         // web-app depends on "api-v2" which is provided by api-service
         let deps = graph.get_dependencies("web-app");
@@ -444,8 +462,7 @@ mod tests {
             project("db_a", &["db"], &[]),
             project("db_b", &["db"], &[]),
             project("app", &[], &["db"]),
-        ])
-        .unwrap();
+        ]);
         // by name or by what it provides, each dependent once, sorted
         for query in ["loop_lib", "loop-lib"] {
             assert_eq!(graph.dependents_of(query), Some(vec!["meta_cli", "plugin"]));

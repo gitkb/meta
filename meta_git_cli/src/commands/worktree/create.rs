@@ -2,8 +2,10 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::*;
 use meta_core::display::{escape, escape_path};
+use meta_core::out;
 use meta_core::ExecutionMode;
 use meta_core::{errln, outln};
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 use meta_cli::dependency_graph::{DependencyGraph, ProjectDependencies};
@@ -48,7 +50,7 @@ pub(crate) fn handle_create(
         if let Some((key, value)) = s.split_once('=') {
             custom_meta.insert(key.to_string(), value.to_string());
         } else {
-            super::warn_or_bail(
+            out::warn_or_bail(
                 strict,
                 format!(
                     "--meta value '{}' missing '=' separator (expected key=value), skipping",
@@ -116,7 +118,7 @@ pub(crate) fn handle_create(
         let mut kept = Vec::new();
         for repo in repos_to_create {
             match missing_ref(&repo.source, from_ref)? {
-                Some(r) => super::warn_or_bail(
+                Some(r) => out::warn_or_bail(
                     strict,
                     format!(
                         "Skipping '{}': ref '{}' not found",
@@ -247,7 +249,7 @@ pub(crate) fn handle_create(
         for repo in &repos_to_create {
             if let Some(r) = missing_ref(&repo.source, from_ref)? {
                 // skip repos where the commit-ish doesn't exist
-                super::warn_or_bail(
+                out::warn_or_bail(
                     strict,
                     format!(
                         "Skipping '{}': ref '{}' not found",
@@ -361,7 +363,7 @@ pub(crate) fn handle_create(
         &output.custom,
         Some(&configs.owner),
     )
-    .or_else(|e| super::warn_or_bail(strict, format!("{e:#}")));
+    .or_else(|e| out::warn_or_bail(strict, format!("{e:#}")));
     if let Err(e) = hook {
         // the set is made: an ephemeral one is the next prune's
         if ephemeral {
@@ -674,8 +676,33 @@ fn plan_repos(
                         .iter()
                         .map(|p| p.clone().into())
                         .collect(),
-                )?,
+                ),
             };
+            for (item, kept, other) in graph.duplicates() {
+                out::warn(format!(
+                    "Both '{other}' and '{kept}' provide '{item}'; '{kept}' is used"
+                ));
+            }
+            // a dependency the set would need and can't have
+            let mut needed: BTreeSet<&str> = BTreeSet::new();
+            for key in asked_keys.iter().filter(|key| *key != ".") {
+                needed.insert(key);
+                needed.extend(graph.get_all_dependencies(key));
+            }
+            for (project, dep) in graph.unresolved() {
+                if needed.contains(project.as_str()) {
+                    let hint = match index.tree() {
+                        None => " (nested projects count with -r)",
+                        Some(_) => "",
+                    };
+                    out::warn_or_bail(
+                        strict,
+                        format!(
+                            "'{project}' depends on '{dep}', which no project is or provides{hint}"
+                        ),
+                    )?;
+                }
+            }
             for key in asked_keys.iter().filter(|key| *key != ".") {
                 let deps = graph.get_all_dependencies(key);
                 log::debug!("Resolved transitive dependencies for '{key}': {deps:?}");
@@ -725,7 +752,7 @@ fn plan_repos(
                 // A plain directory on the way is no parent; a repo that
                 // isn't a project is worth saying so
                 if meta_core::gitdir::common_dir(&meta_dir.join(&parent))?.is_some() {
-                    super::warn(format!(
+                    out::warn(format!(
                         "Intermediate parent '{}' for nested repo '{}' is not a project of the \
                          workspace, skipping",
                         escape(&parent),
@@ -771,7 +798,7 @@ fn plan_repos(
         if strict {
             anyhow::bail!("{why} (strict mode)");
         }
-        super::warn(format!("{why}, skipping"));
+        out::warn(format!("{why}, skipping"));
     }
     repos.sort_by(|a, b| {
         let order = |r: &PlannedRepo| (r.place != ".", r.place.split('/').count());
@@ -811,7 +838,7 @@ fn nested_dep_graph(
             depends_on: info.depends_on.iter().map(|d| qualify(d)).collect(),
         });
     }
-    DependencyGraph::build(project_deps)
+    Ok(DependencyGraph::build(project_deps))
 }
 
 #[cfg(test)]

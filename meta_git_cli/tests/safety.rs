@@ -207,7 +207,7 @@ fn text_list_warns_about_an_unreadable_set_and_lists_healthy_sets() {
     assert!(
         error
             .lines()
-            .any(|line| { line.starts_with("Warning: broken:") && line.contains("git") }),
+            .any(|line| { line.starts_with("warning: broken:") && line.contains("git") }),
         "{error}"
     );
 }

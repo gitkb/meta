@@ -1,6 +1,5 @@
 use anyhow::Result;
-use colored::*;
-use meta_core::display::{escape, escape_lines};
+use meta_core::display::escape;
 use meta_core::ExecutionMode;
 use meta_core::{errln, outln};
 use std::path::{Path, PathBuf};
@@ -97,16 +96,11 @@ impl Drop for EphemeralGuard {
             return;
         }
         if let Err(e) = self.remove() {
-            errln!(
-                "{} Failed to remove ephemeral worktree '{}': {}",
-                "warning:".yellow().bold(),
-                self.name,
-                escape_lines(&format!("{e:#}"))
-            );
-            errln!(
-                "  Run 'meta worktree remove {} --force' or 'meta worktree prune' to clean up.",
-                self.name
-            );
+            meta_core::out::warn(format!(
+                "Failed to remove ephemeral worktree '{}': {e:#}\n  \
+                 Run 'meta git worktree remove {} --force' or 'meta git worktree prune' to clean up.",
+                self.name, self.name
+            ));
         }
     }
 }
@@ -208,11 +202,7 @@ fn handle_ephemeral_exec(
     }
     match (exec_result, cleanup) {
         (Err(e), Err(cleanup_error)) => {
-            errln!(
-                "{} {}",
-                "warning:".yellow().bold(),
-                escape_lines(&format!("{cleanup_error:#}"))
-            );
+            meta_core::out::warn(format!("{cleanup_error:#}"));
             Err(e)
         }
         (Err(e), Ok(())) => Err(e),

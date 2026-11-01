@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use colored::*;
 use meta_core::display::{escape, escape_path};
+use meta_core::out;
+use meta_core::outln;
 use meta_core::ExecutionMode;
-use meta_core::{errln, outln};
 
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::hooks::fire_post_destroy;
@@ -153,15 +154,14 @@ pub(crate) fn remove_set(
                  Commit and push it, or use --force to discard it."
             );
         }
-        errln!(
-            "{} {} work in worktree '{name}':\n  {found}",
-            "warning:".yellow().bold(),
+        out::warn(format!(
+            "{} work in worktree '{name}':\n  {found}",
             if preview {
                 "would discard"
             } else {
                 "discarding"
             }
-        );
+        ));
     }
 
     if !preview {
@@ -197,5 +197,5 @@ pub(crate) fn remove_set(
     }
     // What was done is reported first: a failing hook doesn't undo it
     fire_post_destroy(name, &wt_dir, force, Some(&configs.owner))
-        .or_else(|e| super::warn_or_bail(strict, format!("{e:#}")))
+        .or_else(|e| out::warn_or_bail(strict, format!("{e:#}")))
 }

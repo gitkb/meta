@@ -137,6 +137,37 @@ EOF
     [ -d ".worktrees/full-task/frontend" ]
 }
 
+@test "worktree create warns about a depends_on that names no project, and fails on it with --strict" {
+    cat > .meta.yaml <<'EOF'
+projects:
+  backend: {repo: "git@github.com:org/backend.git", depends_on: [nosuch]}
+  frontend: "git@github.com:org/frontend.git"
+EOF
+    run "$META_BIN" git worktree create loose --repo backend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: 'backend' depends on 'nosuch', which no project is or provides"* ]]
+
+    run "$META_BIN" --strict git worktree create tight --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'backend' depends on 'nosuch'"*"(strict mode)"* ]]
+    [ ! -e ".worktrees/tight" ]
+}
+
+@test "worktree prune names a set whose created_at it can't read, and fails on it with --strict" {
+    run "$META_BIN" git worktree create aged --repo backend --ttl 1h
+    [ "$status" -eq 0 ]
+    record="$(git -C .worktrees/aged/backend rev-parse --git-dir)/meta-worktree.json"
+    [ -f "$record" ]
+    sed -i.bak 's/"created_at": *"[^"]*"/"created_at": "not-a-date"/' "$record"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: Malformed created_at 'not-a-date'"* ]]
+    run "$META_BIN" --strict git worktree prune
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Malformed created_at"*"(strict mode)"* ]]
+    [ -d ".worktrees/aged" ]
+}
+
 @test "worktree create --all skips a repo that is not cloned; --repo and add refuse it" {
     rm -rf frontend
     run "$META_BIN" git worktree create some --all

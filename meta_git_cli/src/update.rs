@@ -135,7 +135,9 @@ pub(crate) fn execute_git_update(
         ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
         ssh::SshMasters::UserManaged => None, // parallel OK
         ssh::SshMasters::Failed => {
-            ssh::warn("SSH multiplexing could not be set up: updating one repository at a time");
+            meta_core::out::warn(
+                "SSH multiplexing could not be set up: updating one repository at a time",
+            );
             parallel = 1;
             None
         }
@@ -179,10 +181,6 @@ fn report_unlisted(queue: &CloneQueue, cwd: &Path) {
                 escape(&format!("{e:#}"))
             ),
         };
-        errln!(
-            "{} {} is not in .meta.yaml; {holds}",
-            style("⚠").yellow(),
-            style(shown).yellow().bold(),
-        );
+        meta_core::out::warn(format!("{shown} is not in .meta.yaml; {holds}"));
     }
 }

@@ -1298,12 +1298,12 @@ impl McpServer {
 
     fn dependency_graph(&self) -> Result<dependency_graph::DependencyGraph> {
         let projects = self.workspace()?.projects;
-        dependency_graph::DependencyGraph::build(
+        Ok(dependency_graph::DependencyGraph::build(
             projects
                 .into_iter()
                 .map(ProjectDependencies::from)
                 .collect(),
-        )
+        ))
     }
 
     fn analyze_impact(&self, args: ProjectArgs) -> Result<String> {

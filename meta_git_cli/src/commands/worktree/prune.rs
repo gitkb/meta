@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::Utc;
 use colored::*;
 use meta_core::display::escape;
+use meta_core::out;
 use meta_core::outln;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -113,15 +114,19 @@ fn set_of_admin(admin: &Path, worktree_root: &Path) -> Option<PathBuf> {
 /// may have deleted it. A set whose repositories were removed from the
 /// project, or whose project is gone, is no longer this workspace's: prune
 /// leaves it.)
-fn eligible(record: &SetRecord, now: i64) -> Option<(String, Option<u64>)> {
+///
+/// A set whose TTL can't be read isn't due: an error.
+fn eligible(record: &SetRecord, now: i64) -> Result<Option<(String, Option<u64>)>> {
     // Check TTL expiration
-    let remaining = ttl::remaining(record, now).filter(|r| *r <= 0)?;
+    let Some(remaining) = ttl::remaining(record, now)?.filter(|r| *r <= 0) else {
+        return Ok(None);
+    };
     // Total age = configured TTL + seconds past expiry
     let age = record
         .ttl_seconds
         .unwrap_or(0)
         .saturating_add(remaining.unsigned_abs());
-    Some(("ttl_expired".to_string(), Some(age)))
+    Ok(Some(("ttl_expired".to_string(), Some(age))))
 }
 
 pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Result<()> {
@@ -236,8 +241,12 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
             None => found.clone(),
         };
 
-        if let Some((reason, age)) = eligible(&record, now) {
-            to_remove.push((Candidate::new(set, name, reason, age), Some(record)));
+        match eligible(&record, now) {
+            Ok(Some((reason, age))) => {
+                to_remove.push((Candidate::new(set, name, reason, age), Some(record)));
+            }
+            Ok(None) => {}
+            Err(e) => out::warn_or_bail(strict, format!("{e:#}"))?,
         }
     }
 
@@ -360,11 +369,11 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
     // a removal that failed is the error; a failing hook then only warns
     if !failed.is_empty() {
         if let Err(e) = hook {
-            super::warn(format!("{e:#}"));
+            out::warn(format!("{e:#}"));
         }
         anyhow::bail!("Failed to prune: {}", escape(&failed.join(", ")));
     }
-    hook.or_else(|e| super::warn_or_bail(strict, format!("{e:#}")))?;
+    hook.or_else(|e| out::warn_or_bail(strict, format!("{e:#}")))?;
     warn_kept(&kept, strict)
 }
 
@@ -496,7 +505,7 @@ fn warn_kept(kept: &[PruneEntry], strict: bool) -> Result<()> {
         return Ok(());
     }
     let names: Vec<_> = kept.iter().map(|e| escape(&e.name)).collect();
-    super::warn_or_bail(strict, format!("Kept worktrees: {}", names.join(", ")))
+    out::warn_or_bail(strict, format!("Kept worktrees: {}", names.join(", ")))
 }
 
 #[cfg(test)]

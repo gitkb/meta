@@ -7,7 +7,6 @@
 use anyhow::{Context, Result};
 use log::{debug, info};
 use meta_core::display::{escape, escape_path};
-use meta_core::errln;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
@@ -271,7 +270,7 @@ impl RegistryClient {
                     combined_index.plugins.extend(index.plugins);
                 }
                 Err(e) => {
-                    log::warn!("Failed to fetch from {}: {}", registry_url, e);
+                    meta_core::out::warn(format!("Failed to fetch from {registry_url}: {e:#}"));
                 }
             }
         }
@@ -324,7 +323,9 @@ impl RegistryClient {
             match self.fetch_json::<PluginMetadata>(&plugin_url) {
                 Ok(metadata) => return Ok(metadata),
                 Err(e) => {
-                    log::warn!("Plugin {} not found in {}: {}", name, registry_url, e);
+                    meta_core::out::warn(format!(
+                        "Plugin {name} not found in {registry_url}: {e:#}"
+                    ));
                 }
             }
         }
@@ -1104,7 +1105,7 @@ impl PluginInstaller {
                             version: match crate::subprocess_plugins::probe_plugin_info(&path) {
                                 Ok(info) => Some(info.version),
                                 Err(e) => {
-                                    errln!("Warning: {}", e.into_error());
+                                    meta_core::out::warn(e.into_error());
                                     None
                                 }
                             },

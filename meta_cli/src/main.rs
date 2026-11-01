@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use colored::*;
 use meta_cli::repo_filter::{Filters, Scope};
 use meta_core::config::{self, find_meta_config, Workspace};
 use meta_core::display::{escape, escape_lines, escape_path};
@@ -613,11 +612,10 @@ fn target(cli: &Cli, start: &Path) -> Result<Target> {
             if cli.verbose {
                 match &workspace {
                     Some(w) => errln!("Using config {}", escape_path(&w.config_path)),
-                    None => errln!(
-                        "{} No .meta.yaml found for worktree '{}'. Tags, plugins, and dependency features unavailable.",
-                        "warning:".yellow().bold(),
+                    None => meta_core::out::warn(format!(
+                        "No .meta.yaml found for worktree '{}'. Tags, plugins, and dependency features unavailable.",
                         escape(&name)
-                    ),
+                    )),
                 }
             }
             let dirs = worktree::select_in_set(&set_dir, &members, workspace.as_ref(), &filters)?;
@@ -1032,22 +1030,15 @@ fn check_and_warn_orphan() {
         return;
     }
     if let Some(warning) = config::check_orphan_status(&meta_dir) {
-        errln!(
-            "{}: This meta repo is not tracked by its parent.",
-            "warning".yellow().bold()
-        );
-        errln!("  Current: {}", escape_path(&warning.current));
-        errln!("  Parent:  {}", escape_path(&warning.parent));
-        errln!();
-
-        errln!(
-            "  To include it, add to {}:",
-            escape_path(&warning.parent_config)
-        );
-        errln!("    {}:", escape(&warning.suggested_key));
-        errln!("      repo: <git-url>");
-        errln!("      meta: true");
-        errln!();
+        meta_core::out::warn(format!(
+            "This meta repo is not tracked by its parent.\n  \
+             Current: {}\n  Parent:  {}\n\n  \
+             To include it, add to {}:\n    {}:\n      repo: <git-url>\n      meta: true\n",
+            escape_path(&warning.current),
+            escape_path(&warning.parent),
+            escape_path(&warning.parent_config),
+            escape(&warning.suggested_key)
+        ));
     }
 }
 

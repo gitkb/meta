@@ -6,7 +6,6 @@
 //! dependency on `~/.ssh/config`), let them share one connection through the
 //! `GIT_SSH_COMMAND` this module returns.
 
-use console::style;
 use log::debug;
 use meta_core::config::{ProjectInfo, Workspace};
 use meta_core::display::escape;
@@ -117,13 +116,13 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
     }
 
     let Some(home) = dirs::home_dir() else {
-        warn("could not find the HOME directory for SSH sockets");
+        meta_core::out::warn("could not find the HOME directory for SSH sockets");
         return SshMasters::Failed;
     };
     let sockets_dir = match ensure_ssh_sockets_dir(&home) {
         Ok(dir) => dir,
         Err(e) => {
-            warn(format!("could not create the SSH sockets directory: {e}"));
+            meta_core::out::warn(format!("could not create the SSH sockets directory: {e}"));
             return SshMasters::Failed;
         }
     };
@@ -183,7 +182,7 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
             );
             any_succeeded = true;
         } else {
-            warn(format!(
+            meta_core::out::warn(format!(
                 "SSH master for {} (port {}) could not be started",
                 escape(&target.destination()),
                 target.port
@@ -202,11 +201,6 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
     } else {
         SshMasters::Failed
     }
-}
-
-/// Tell the user, on stderr, what meta couldn't set up.
-pub(crate) fn warn(message: impl std::fmt::Display) {
-    errln!("{} {message}", style("⚠").yellow().bold());
 }
 
 /// A `GIT_SSH_COMMAND` value that reuses established ControlMaster
@@ -258,21 +252,21 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
         return;
     }
 
-    errln!(
-        "{} Found {} remote URL mismatch{}:",
-        style("⚠").yellow().bold(),
+    let mut message = format!(
+        "Found {} remote URL mismatch{}:",
         mismatches.len(),
         if mismatches.len() == 1 { "" } else { "es" }
     );
     for (project, expected, actual) in &mismatches {
-        errln!("  {}", style(escape(&project.name)).bold());
-        errln!("    actual:   {}", style(actual).red());
-        errln!("    expected: {}", style(expected).green());
+        message.push_str(&format!(
+            "\n  {}\n    actual:   {actual}\n    expected: {expected}",
+            project.name
+        ));
         if actual.to_string() == expected.to_string() {
-            errln!("    (they differ only in their hidden credentials)");
+            message.push_str("\n    (they differ only in their hidden credentials)");
         }
     }
-    errln!();
+    meta_core::out::warn(message);
     errln!("  Fix manually with:");
     for (project, expected, _) in &mismatches {
         // printed as a URL prints, escaped; hidden credentials would break

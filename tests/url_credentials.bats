@@ -176,4 +176,9 @@ EOF
     run "$META_BIN" git update
     [[ "$output" == *"SSH master for git@nohost.invalid (port 22) could not be started"* ]] || false
     [[ "$output" == *"updating one repository at a time"* ]]
+    # the same for empty folders git clones into
+    mkdir a b
+    run "$META_BIN" git update
+    [[ "$output" == *"SSH master for git@nohost.invalid (port 22) could not be started"* ]] || false
+    [[ "$output" == *"updating one repository at a time"* ]]
 }

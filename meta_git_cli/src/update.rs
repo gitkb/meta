@@ -118,7 +118,11 @@ pub(crate) fn execute_git_update(
             meta_core::git::remote_url(dir).ok().flatten()
         }
         Checkout::Repo { .. } => None,
+        // git clones into an empty folder too
         Checkout::Missing => listed.cloned(),
+        Checkout::NotARepo(_) if std::fs::read_dir(dir).is_ok_and(|mut e| e.next().is_none()) => {
+            listed.cloned()
+        }
         Checkout::NotARepo(_) => None,
     };
     let projects = workspace.projects.iter();

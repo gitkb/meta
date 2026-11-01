@@ -100,26 +100,34 @@ pub struct ListEntry {
 #[derive(Debug, Serialize)]
 pub struct ListRepoEntry {
     pub alias: String,
-    pub branch: String,
-    pub dirty: bool,
+    /// `None` (`null`) here and below: git couldn't read the checkout, so
+    /// it is unknown, never clean.
+    pub branch: Option<String>,
+    pub dirty: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct StatusOutput {
     pub name: String,
     pub repos: Vec<StatusRepoEntry>,
+    /// Projects whose checkout in the set is gone while their repository
+    /// still records it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct StatusRepoEntry {
     pub alias: String,
     pub path: String,
-    pub branch: String,
-    pub dirty: bool,
-    pub modified_count: usize,
-    pub untracked_count: usize,
-    pub ahead: usize,
-    pub behind: usize,
+    /// `None` (`null`) here and below: git couldn't read it (the branch and
+    /// counts of a work tree git refuses still show), never clean or 0.
+    pub branch: Option<String>,
+    pub dirty: Option<bool>,
+    pub modified_count: Option<usize>,
+    pub untracked_count: Option<usize>,
+    pub ahead: Option<usize>,
+    pub behind: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub modified_files: Vec<String>,
 }
@@ -136,11 +144,13 @@ pub struct DiffOutput {
 pub struct DiffRepoEntry {
     pub alias: String,
     pub base_ref: String,
-    pub files_changed: usize,
-    pub insertions: usize,
-    pub deletions: usize,
+    pub files_changed: Option<usize>,
+    pub insertions: Option<usize>,
+    pub deletions: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

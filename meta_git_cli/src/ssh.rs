@@ -246,10 +246,10 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
         .filter_map(|project| {
             let expected = project.repo.as_ref()?;
             let dir = workspace.dir.join(&project.path);
-            // A project not cloned yet has no origin; git would read the
-            // one of the repository around it
+            // only a repository has an origin (`project check` names the
+            // others)
             meta_core::gitdir::common_dir(&dir).ok()??;
-            let actual = meta_core::git::remote_url(&dir)?;
+            let actual = meta_core::git::remote_url(&dir).ok()??;
             (!actual.same_repository(expected)).then_some((project, expected, actual))
         })
         .collect();

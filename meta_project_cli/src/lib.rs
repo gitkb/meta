@@ -70,6 +70,10 @@ pub struct ProjectTreeNode {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     pub is_meta: bool,
+    /// Why its folder couldn't be looked into (its own projects may be
+    /// missing from `projects`); absent when it could.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<ProjectTreeNode>,
 }
@@ -135,9 +139,15 @@ struct ListArgs {
 
 Examples:
   meta project check
+  meta project check --json
   meta --recursive project check"
 )]
-struct CheckArgs {}
+struct CheckArgs {
+    /// Emit one record per project that is not a clone of its configured
+    /// repository
+    #[arg(long)]
+    json: bool,
+}
 
 /// `meta project dependents`
 #[derive(clap::Parser)]
@@ -204,7 +214,9 @@ pub fn execute_command(
             Err(result) => result,
         },
         "project check" => match parse_args::<CheckArgs>(command, args) {
-            Ok(CheckArgs {}) => check(options, provided_projects, cwd),
+            Ok(CheckArgs { json }) => {
+                check(options.json_output || json, options, provided_projects, cwd)
+            }
             Err(result) => result,
         },
         // meta_cli sends an unclaimed `project <word>` as `project` plus args
@@ -239,67 +251,164 @@ Examples:
   meta project check
   meta project dependents meta_core";
 
-/// `meta project check`: every project of the workspace is cloned.
-fn check(options: &ExecuteOptions, provided_projects: &[String], cwd: &Path) -> CommandResult {
-    match missing_projects(options, provided_projects, cwd) {
-        Err(e) => CommandResult::Error(format!("{e:#}")),
-        Ok(missing) if missing.is_empty() => {
-            CommandResult::Message("All projects are cloned and present.".to_string())
-        }
-        Ok(missing) => {
-            print_missing(&missing);
-            CommandResult::Message(format!(
-                "{} project(s) missing. Run 'meta git update' to clone them.",
-                missing.len()
-            ))
-        }
-    }
+/// One project that is not a clone of what its config lists.
+#[derive(Debug, Serialize, PartialEq)]
+struct CheckProblem {
+    name: String,
+    /// From the directory the command runs in.
+    path: String,
+    /// `missing`, `not_a_repo` or `wrong_remote`.
+    state: &'static str,
+    reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo: Option<GitUrl>,
+    /// The checkout's `origin`, for `wrong_remote` (`null` without one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    actual: Option<Option<GitUrl>>,
 }
 
-/// The URLs of the projects not cloned: those of the nearest config at or
-/// above cwd; with meta's --recursive, those of cwd's config and of each
-/// meta repo meta_cli sent. A config that can't be read is an error, not
-/// "nothing missing".
-fn missing_projects(
+/// `meta project check`: every project of the workspace is a clone of its
+/// configured repository; each that isn't is named, and the command fails.
+fn check(
+    json: bool,
     options: &ExecuteOptions,
     provided_projects: &[String],
     cwd: &Path,
-) -> anyhow::Result<Vec<GitUrl>> {
-    if options.selected.is_some() {
-        return missing_selected(options, cwd);
-    }
-    if !options.recursive || provided_projects.is_empty() {
-        let workspace = config::Workspace::find(cwd, None)?
-            .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
-        return Ok(find_missing_projects(&workspace));
-    }
-    let mut seen = HashSet::new();
-    let mut missing = Vec::new();
-    for dir in
-        std::iter::once(cwd.to_path_buf()).chain(provided_projects.iter().map(|p| cwd.join(p)))
-    {
-        let key = dir.canonicalize().unwrap_or_else(|_| dir.clone());
-        if !seen.insert(key) {
-            continue;
+) -> CommandResult {
+    let problems = match check_projects(options, provided_projects, cwd) {
+        Ok(problems) => problems,
+        Err(e) => return CommandResult::Error(format!("{e:#}")),
+    };
+    if json {
+        match serde_json::to_string_pretty(&serde_json::json!({ "problems": problems })) {
+            Ok(out) if problems.is_empty() => return CommandResult::Message(out),
+            // the report on stdout, the failure in the exit code
+            Ok(out) => println!("{out}"),
+            Err(e) => return CommandResult::Error(format!("Failed to serialize JSON: {e}")),
         }
-        if let Some(workspace) = config::Workspace::in_dir(&dir)? {
-            missing.extend(find_missing_projects(&workspace));
+    } else if problems.is_empty() {
+        return CommandResult::Message("All projects are cloned and present.".to_string());
+    } else {
+        for problem in &problems {
+            println!("✗ {}: {}", escape(&problem.path), escape(&problem.reason));
         }
     }
-    Ok(missing)
+    let missing = problems.iter().any(|p| p.state == "missing");
+    CommandResult::Error(format!(
+        "{} project(s) are not clones of their configured repository{}",
+        problems.len(),
+        if missing {
+            "; run 'meta git update' to clone the missing ones"
+        } else {
+            ""
+        }
+    ))
 }
 
-/// The URLs of the projects meta's filters selected that aren't cloned:
-/// the nearest workspace's, with meta's --recursive its nested ones too,
-/// in project order.
-fn missing_selected(options: &ExecuteOptions, cwd: &Path) -> anyhow::Result<Vec<GitUrl>> {
-    fn walk(nodes: &[MetaTreeNode], dir: &Path, options: &ExecuteOptions, out: &mut Vec<GitUrl>) {
+/// What is wrong with the projects of the nearest config at or above cwd;
+/// with meta's --recursive, of cwd's config and of each meta repo meta_cli
+/// sent; with meta's filters, of the projects they selected. A config that
+/// can't be read is an error, not "nothing wrong".
+fn check_projects(
+    options: &ExecuteOptions,
+    provided_projects: &[String],
+    cwd: &Path,
+) -> anyhow::Result<Vec<CheckProblem>> {
+    if options.selected.is_some() {
+        return check_selected(options, cwd);
+    }
+    let mut workspaces = Vec::new();
+    if !options.recursive || provided_projects.is_empty() {
+        workspaces.push(
+            config::Workspace::find(cwd, None)?
+                .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?,
+        );
+    } else {
+        let mut seen = HashSet::new();
+        for dir in
+            std::iter::once(cwd.to_path_buf()).chain(provided_projects.iter().map(|p| cwd.join(p)))
+        {
+            let key = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+            if seen.insert(key) {
+                workspaces.extend(config::Workspace::in_dir(&dir)?);
+            }
+        }
+    }
+    Ok(workspaces
+        .iter()
+        .flat_map(|workspace| {
+            workspace
+                .projects
+                .iter()
+                .filter_map(|project| check_project(&workspace.dir, project, cwd))
+        })
+        .collect())
+}
+
+/// What is wrong with `project`, if anything.
+fn check_project(
+    config_dir: &Path,
+    project: &config::ProjectInfo,
+    cwd: &Path,
+) -> Option<CheckProblem> {
+    use meta_core::gitdir::Checkout;
+    let dir = config_dir.join(&project.path);
+    let problem = |state, reason: String| CheckProblem {
+        name: project.name.clone(),
+        path: dir
+            .strip_prefix(cwd)
+            .unwrap_or(&dir)
+            .to_string_lossy()
+            .into_owned(),
+        state,
+        reason,
+        repo: project.repo.clone(),
+        actual: None,
+    };
+    let checkout = Checkout::of(&dir);
+    if let Some(why) = checkout.problem() {
+        let state = match checkout {
+            Checkout::Missing => "missing",
+            _ => "not_a_repo",
+        };
+        return Some(problem(state, why));
+    }
+    let expected = project.repo.as_ref()?;
+    match meta_core::git::remote_url(&dir) {
+        Ok(Some(actual)) if actual.same_repository(expected) => None,
+        Ok(actual) => Some(CheckProblem {
+            actual: Some(actual.clone()),
+            ..problem(
+                "wrong_remote",
+                match actual {
+                    Some(actual) => format!("origin is {actual}, but .meta.yaml lists {expected}"),
+                    None => format!("has no origin; .meta.yaml lists {expected}"),
+                },
+            )
+        }),
+        Err(e) => Some(problem(
+            "not_a_repo",
+            format!("can't read its origin: {e:#}"),
+        )),
+    }
+}
+
+/// What is wrong with the projects meta's filters selected: the nearest
+/// workspace's, with meta's --recursive its nested ones too, in project order.
+fn check_selected(options: &ExecuteOptions, cwd: &Path) -> anyhow::Result<Vec<CheckProblem>> {
+    fn walk(
+        nodes: &[MetaTreeNode],
+        dir: &Path,
+        options: &ExecuteOptions,
+        cwd: &Path,
+        out: &mut Vec<CheckProblem>,
+    ) {
         for node in nodes {
             let path = dir.join(&node.info.path);
-            if options.acts_on(&path) && !path.is_dir() {
-                out.extend(node.info.repo.clone());
+            if options.acts_on(&path) {
+                out.extend(check_project(dir, &node.info, cwd));
             }
-            walk(&node.children, &path, options, out);
+            walk(&node.children, &path, options, cwd, out);
         }
     }
     let workspace = config::Workspace::find(cwd, None)?
@@ -310,9 +419,9 @@ fn missing_selected(options: &ExecuteOptions, cwd: &Path) -> anyhow::Result<Vec<
         Some(0)
     };
     let tree = config::walk_projects(&workspace.dir, &workspace.projects, depth)?;
-    let mut missing = Vec::new();
-    walk(&tree, &workspace.dir, options, &mut missing);
-    Ok(missing)
+    let mut problems = Vec::new();
+    walk(&tree, &workspace.dir, options, cwd, &mut problems);
+    Ok(problems)
 }
 
 // ============================================================================
@@ -354,7 +463,15 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
         Err(e) => return CommandResult::Error(format!("{e}")),
     };
 
-    let root_repo = meta_core::git::remote_url(&start_dir);
+    // The remote of the workspace whose projects these are, not of the
+    // repository the command runs in (a project's, from inside it); none
+    // when the workspace is no repository
+    let root_repo = match config::find_meta_config(&start_dir, None) {
+        Ok(found) => found
+            .and_then(|config| config.parent().map(Path::to_path_buf))
+            .and_then(|dir| meta_core::git::remote_url(&dir).ok().flatten()),
+        Err(e) => return CommandResult::Error(format!("{e:#}")),
+    };
     let project_nodes: Vec<ProjectTreeNode> = tree.iter().map(to_project_tree_node).collect();
     let abs_cwd = cwd
         .canonicalize()
@@ -435,6 +552,7 @@ fn to_project_tree_node(node: &MetaTreeNode) -> ProjectTreeNode {
         repo: node.info.repo.clone(),
         tags: node.info.tags.clone(),
         is_meta: node.is_meta,
+        error: node.error.clone(),
         projects: node.children.iter().map(to_project_tree_node).collect(),
     }
 }
@@ -477,6 +595,9 @@ fn format_project_tree(nodes: &[ProjectTreeNode], output: &mut String, prefix: &
             remote_label(node.repo.as_ref()),
             tags_str
         ));
+        if let Some(error) = &node.error {
+            output.push_str(&format!("{prefix}    ✗ {}\n", escape(error)));
+        }
 
         if !node.projects.is_empty() {
             let child_prefix = if is_last {
@@ -558,25 +679,6 @@ fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-/// The URLs of the projects of `workspace` that aren't cloned.
-fn find_missing_projects(workspace: &config::Workspace) -> Vec<GitUrl> {
-    workspace
-        .projects
-        .iter()
-        .filter(|p| !workspace.dir.join(&p.path).is_dir())
-        .filter_map(|p| p.repo.clone())
-        .collect()
-}
-
-fn print_missing(urls: &[GitUrl]) {
-    if !urls.is_empty() {
-        for url in urls {
-            meta_git_lib::print_missing_repo(url);
-        }
-        println!();
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -673,9 +775,21 @@ mod tests {
             ..Default::default()
         };
         let provided = [root.to_string_lossy().into_owned(), "c".to_string()];
+        let missing: Vec<_> = check_projects(&recursive, &provided, &root)
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.name, p.state))
+            .collect();
         assert_eq!(
-            missing_projects(&recursive, &provided, &root).unwrap(),
-            ["git@x:o/alpha.git", "git@x:o/user.git", "git@x:o/zed.git"].map(GitUrl::from)
+            missing,
+            [
+                ("alpha", "missing"),
+                ("c", "not_a_repo"),
+                ("user", "missing"),
+                ("zed", "missing"),
+                ("g", "not_a_repo")
+            ]
+            .map(|(n, s)| (n.to_string(), s))
         );
         assert!(error(run("project check", &["x"], &root))
             .unwrap()
@@ -734,6 +848,55 @@ mod tests {
         assert_eq!(dependents("utils-api", &root), "api\ntools/cli");
         assert_eq!(dependents("terraform", &root), "infra/k8s");
         assert_eq!(dependents("terraform", &root.join("infra")), "infra/k8s");
+    }
+
+    #[test]
+    fn check_names_a_wrong_remote_and_list_shows_the_roots_from_a_child() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().canonicalize().unwrap();
+        let git = |dir: &Path, args: &[&str]| meta_core::git::run(dir, args).unwrap();
+        std::fs::write(
+            root.join(".meta.yaml"),
+            "projects:\n  web:\n    repo: https://example.invalid/web.git\n    path: apps/web\n",
+        )
+        .unwrap();
+        git(&root, &["init", "-q"]);
+        git(
+            &root,
+            &["remote", "add", "origin", "https://example.invalid/ws.git"],
+        );
+        let web = root.join("apps/web");
+        std::fs::create_dir_all(&web).unwrap();
+        git(&web, &["init", "-q"]);
+        git(
+            &web,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://example.invalid/docs.git",
+            ],
+        );
+
+        let problems = check_projects(&ExecuteOptions::default(), &[], &root).unwrap();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(
+            (problems[0].name.as_str(), problems[0].state),
+            ("web", "wrong_remote")
+        );
+        assert!(matches!(
+            check(true, &ExecuteOptions::default(), &[], &root),
+            CommandResult::Error(e) if e.contains("1 project(s)")
+        ));
+
+        // listed from inside the child, the root is still the workspace's
+        let options = ExecuteOptions {
+            json_output: true,
+            ..Default::default()
+        };
+        let listed = message(execute_command("project list", &[], &options, &[], &web)).unwrap();
+        let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
+        assert_eq!(listed["repo"], "https://example.invalid/ws.git", "{listed}");
     }
 
     #[test]
@@ -885,6 +1048,7 @@ mod tests {
     fn test_format_project_tree() {
         let nodes = vec![
             ProjectTreeNode {
+                error: None,
                 name: "api".to_string(),
                 path: "services/api".to_string(),
                 repo: Some("git@github.com:org/api.git".into()),
@@ -893,6 +1057,7 @@ mod tests {
                 projects: vec![],
             },
             ProjectTreeNode {
+                error: None,
                 name: "frontend".to_string(),
                 path: "frontend".to_string(),
                 repo: Some("git@github.com:org/frontend.git".into()),
@@ -914,6 +1079,7 @@ mod tests {
     #[test]
     fn test_format_project_tree_escapes_control_characters() {
         let nodes = vec![ProjectTreeNode {
+            error: None,
             name: "x\u{1b}]0;PWNED\u{7}".to_string(),
             path: "t\u{1b}[1A".to_string(),
             repo: Some("u\u{9b}2J".into()),
@@ -933,6 +1099,7 @@ mod tests {
     #[test]
     fn test_format_project_tree_without_remote() {
         let nodes = vec![ProjectTreeNode {
+            error: None,
             name: "scratch".to_string(),
             path: "scratch".to_string(),
             repo: None,

@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use colored::*;
-use loop_lib::run;
 use meta_cli::repo_filter::{Filters, Scope};
 use meta_core::config::{self, find_meta_config, Workspace};
 use meta_core::display::{escape, escape_lines, escape_path};
@@ -11,7 +10,7 @@ use std::path::{Path, PathBuf};
 mod init;
 mod registry;
 mod subprocess_plugins;
-use meta_cli::worktree;
+use meta_cli::{run_list, worktree};
 use meta_plugin_protocol::PluginRequestOptions;
 use subprocess_plugins::{SubprocessPlugin, SubprocessPluginManager};
 
@@ -576,17 +575,28 @@ fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin
     match plugin {
         None => {
             let config = loop_lib::LoopConfig {
-                directories: target.dirs,
                 verbose: cli.verbose,
                 silent: cli.silent,
                 parallel: target.parallel,
                 dry_run: cli.dry_run,
                 json_output: cli.json,
                 aliases: loop_lib::aliases()?,
-                root_dir: Some(target.root),
+                root_dir: Some(target.root.clone()),
                 ..Default::default()
             };
-            run(&config, command_args)
+            // only in the selected projects that are repositories
+            let commands = target
+                .dirs
+                .iter()
+                .map(|dir| loop_lib::DirCommand {
+                    dir: dir.clone(),
+                    argv: command_args.to_vec(),
+                    env: None,
+                    refused: None,
+                })
+                .collect();
+            let commands = run_list::in_repos(commands, &target.dirs, Some(&target.root));
+            loop_lib::run_commands(&config, &commands)
         }
         Some(plugin) => plugin.execute(
             command_args,

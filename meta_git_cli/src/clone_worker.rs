@@ -123,11 +123,13 @@ pub(crate) fn clone_with_queue(
     Ok(())
 }
 
-/// Print each failed clone with git's error to stderr, and return the
-/// command's error, or `None` when every clone succeeded.
+/// Print each failed clone with git's error, and each project left uncloned
+/// because its folder holds something else, to stderr; return the command's
+/// error, or `None` when every project is cloned.
 pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     let failures = queue.failures();
-    if failures.is_empty() {
+    let refused = queue.refused();
+    if failures.is_empty() && refused.is_empty() {
         return None;
     }
     for failure in &failures {
@@ -142,16 +144,38 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
             eprintln!("    {}", meta_core::display::escape(line));
         }
     }
+    for (name, why) in &refused {
+        eprintln!(
+            "{} {}: not a git repository ({}); move it away and run 'meta git update' again",
+            style("Not cloned").red().bold(),
+            meta_core::display::escape(name),
+            meta_core::display::escape(why)
+        );
+    }
     let (finished, _) = queue.get_counts();
-    Some(format!(
-        "{} of {finished} repositories failed to clone: {}",
-        failures.len(),
-        failures
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    ))
+    let names = |names: Vec<&str>| names.join(", ");
+    Some(
+        [
+            (!failures.is_empty()).then(|| {
+                format!(
+                    "{} of {finished} repositories failed to clone: {}",
+                    failures.len(),
+                    names(failures.iter().map(|f| f.name.as_str()).collect())
+                )
+            }),
+            (!refused.is_empty()).then(|| {
+                format!(
+                    "{} project folder(s) hold something that is not a git repository: {}",
+                    refused.len(),
+                    names(refused.iter().map(|(name, _)| name.as_str()).collect())
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("; "),
+    )
 }
 
 /// Clone a single repository and handle .meta.yaml discovery
@@ -168,30 +192,8 @@ fn clone_single_repo(
             .unwrap_or_else(|e| e.into_inner())
             .push(format!("  {}: {e:#}", task.name));
     };
-    // Skip if target exists
-    if task.target_path.exists()
-        && task
-            .target_path
-            .read_dir()
-            .map(|mut iter| iter.next().is_some())
-            .unwrap_or(false)
-    {
-        pb.finish_with_message(format!(
-            "{}",
-            style(format!("Skipped {} (exists)", task.name)).yellow()
-        ));
-        // Still mark as completed and check for nested .meta.yaml
-        if let Err(e) = queue.mark_completed(task) {
-            debug!(
-                "Failed to check nested .meta.yaml for {}: {}",
-                task.name,
-                meta_core::display::escape_lines(&format!("{e:#}"))
-            );
-            record(e);
-        }
-        return;
-    }
-
+    // What appeared in the folder since it was queued makes git refuse it,
+    // which is reported like any failed clone: never taken for a clone
     // Build git clone command
     let mut cmd = meta_core::git::git(Path::new("."));
     cmd.arg("clone");

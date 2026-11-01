@@ -92,7 +92,7 @@ pub(crate) fn handle_create(
     let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
 
     // Check if worktree already exists
-    let wt_dir = worktree_set_dir(&worktree_root, name)?;
+    let wt_dir = worktree_root.join(name);
     if wt_dir.exists() {
         anyhow::bail!(
             "Worktree '{}' already exists at {}. Use 'meta worktree remove {}' first.",
@@ -174,7 +174,7 @@ pub(crate) fn handle_create(
     let mut cloned = Vec::with_capacity(repos_to_create.len());
     for repo in repos_to_create {
         let (alias, source, _) = &repo;
-        let Some(why) = super::not_a_repository(alias, source)? else {
+        let Some(why) = super::not_a_repository(alias, source) else {
             cloned.push(repo);
             continue;
         };
@@ -441,13 +441,33 @@ pub(crate) fn handle_create(
             }
         }
 
-        // Ensure .worktrees/ is in .gitignore
-        let dirname = worktree_root
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(".worktrees");
-        // in the checkout whose sets these are
-        ensure_worktrees_in_gitignore(owner, dirname, json)
+        // Keep the sets out of the git status of the checkout whose sets
+        // these are, when they are in it (`worktrees_dir` may be elsewhere)
+        // as written (a `.worktrees` link to another disk is still in it), or
+        // as the two resolve (an absolute worktrees_dir spelled another way)
+        let plain = |rel: &std::path::Path| {
+            rel.components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+        };
+        let real = |path: &std::path::Path| path.canonicalize().ok();
+        let inside = worktree_root
+            .strip_prefix(owner)
+            .ok()
+            .filter(|rel| plain(rel))
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| {
+                let (root, owner) = (real(&worktree_root)?, real(owner)?);
+                Some(root.strip_prefix(owner).ok()?.to_path_buf()).filter(|rel| plain(rel))
+            });
+        match inside.as_deref().and_then(|rel| rel.to_str()) {
+            Some(rel) if !rel.is_empty() => {
+                let link = worktree_root
+                    .symlink_metadata()
+                    .is_ok_and(|meta| meta.is_symlink());
+                ensure_worktrees_in_gitignore(owner, &rel.replace('\\', "/"), link, json)
+            }
+            _ => Ok(()),
+        }
     })();
     built.map_err(|e| roll_back(&wt_dir, &new_branches, e))?;
 
@@ -965,15 +985,12 @@ fn ensure_intermediate_parents(
                 );
                 continue;
             };
-            if meta_core::gitdir::common_dir(&parent_source)?.is_none() {
+            if let Some(problem) = meta_core::gitdir::Checkout::of(&parent_source).problem() {
                 let why = format!(
-                    "Intermediate parent '{}' for nested repo '{}' {}",
+                    "Intermediate parent '{}' for nested repo '{}': {}",
                     escape(&parent_alias),
                     escape(alias),
-                    match parent_source.exists() {
-                        false => "is not cloned",
-                        true => "is not a git repository",
-                    }
+                    escape(&problem)
                 );
                 if strict {
                     anyhow::bail!("{why} (strict mode)");

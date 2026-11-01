@@ -18,16 +18,25 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
     let diff_entries: Vec<DiffRepoEntry> = repos
         .par_iter()
         .map(|r| {
-            let (files_changed, insertions, deletions, files) =
-                git_diff_stat(&r.path, base_ref).unwrap_or((0, 0, 0, vec![]));
-            DiffRepoEntry {
+            let mut entry = DiffRepoEntry {
                 alias: r.alias.clone(),
                 base_ref: base_ref.to_string(),
-                files_changed,
-                insertions,
-                deletions,
-                files,
+                files_changed: None,
+                insertions: None,
+                deletions: None,
+                files: Vec::new(),
+                error: None,
+            };
+            match git_diff_stat(&r.path, base_ref) {
+                Ok((files_changed, insertions, deletions, files)) => {
+                    entry.files_changed = Some(files_changed);
+                    entry.insertions = Some(insertions);
+                    entry.deletions = Some(deletions);
+                    entry.files = files;
+                }
+                Err(error) => entry.error = Some(format!("{error:#}")),
             }
+            entry
         })
         .collect();
 
@@ -35,12 +44,18 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
     let mut total_files = 0;
     let mut total_insertions = 0;
     let mut total_deletions = 0;
+    let failed = diff_entries.iter().filter(|d| d.error.is_some()).count();
     for d in &diff_entries {
-        if d.files_changed > 0 {
+        if let (Some(files), Some(insertions), Some(deletions)) =
+            (d.files_changed, d.insertions, d.deletions)
+        {
+            if files == 0 {
+                continue;
+            }
             total_repos_changed += 1;
-            total_files += d.files_changed;
-            total_insertions += d.insertions;
-            total_deletions += d.deletions;
+            total_files += files;
+            total_insertions += insertions;
+            total_deletions += deletions;
         }
     }
 
@@ -61,15 +76,20 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
         // Human mode: always show stat summary
         println!("{} vs {}:", name.bold(), escape(base_ref));
         for d in &diff_entries {
-            if d.files_changed > 0 {
-                let insertions = d.insertions;
-                let deletions = d.deletions;
+            if let Some(error) = &d.error {
+                println!("  {:12} error: {}", escape(&d.alias), escape(error));
+            } else if let (Some(files), Some(insertions), Some(deletions)) =
+                (d.files_changed, d.insertions, d.deletions)
+            {
+                if files == 0 {
+                    continue;
+                }
                 println!(
                     "  {:12} {} {} ({} files)",
                     escape(&d.alias),
                     format!("+{insertions}").green(),
                     format!("-{deletions}").red(),
-                    d.files_changed,
+                    files,
                 );
             }
         }
@@ -83,10 +103,15 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
                 total_files,
                 total_repos_changed,
             );
-        } else {
+        } else if failed == 0 {
             println!("  No changes vs {}", escape(base_ref));
         }
     }
 
+    anyhow::ensure!(
+        failed == 0,
+        "Failed to diff {failed} repos against {}",
+        escape(base_ref)
+    );
     Ok(())
 }

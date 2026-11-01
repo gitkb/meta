@@ -21,9 +21,11 @@ setup() {
     cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
     chmod +x "$TEST_DIR/.meta/plugins/meta-git"
 
-    # Create project directories
+    # Create the projects: repositories of their own (meta runs nothing in
+    # a plain folder)
     for repo in api worker frontend; do
         mkdir -p "$TEST_DIR/$repo"
+        git -C "$TEST_DIR/$repo" init --quiet
         echo "# $repo" > "$TEST_DIR/$repo/README.md"
     done
 
@@ -545,8 +547,16 @@ SCRIPT
 
 # ============ --include / --exclude name whole repos ============
 
+# mkrepo DIR...: each a git repository of its own, as a project folder must be
+mkrepo() {
+    for dir in "$@"; do
+        mkdir -p "$dir"
+        git -C "$dir" init --quiet
+    done
+}
+
 add_api_legacy() {
-    mkdir -p "$TEST_DIR/api-legacy" "$TEST_DIR/libs/core"
+    mkrepo "$TEST_DIR/api-legacy" "$TEST_DIR/libs/core"
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
@@ -634,7 +644,7 @@ EOF
 
 @test "--recursive with --config walks the chosen config" {
     add_api_legacy
-    mkdir -p "$TEST_DIR/staging/api"
+    mkrepo "$TEST_DIR/staging/api"
     cat > "$TEST_DIR/alt.json" <<'EOF'
 { "projects": { "staging-api": { "repo": "git@github.com:org/api.git", "path": "staging/api" } } }
 EOF
@@ -674,7 +684,7 @@ EOF
 }
 
 @test "--recursive with --config expands each nested meta repo once" {
-    mkdir -p "$TEST_DIR/child/inner" "$TEST_DIR/legacy"
+    mkrepo "$TEST_DIR/child" "$TEST_DIR/child/inner" "$TEST_DIR/legacy"
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 { "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
 EOF
@@ -699,14 +709,14 @@ EOF
 { "projects": { "child": "git@github.com:org/child.git", "legacy": "git@github.com:org/legacy.git" } }
 EOF
     cat > "$TEST_DIR/child/.meta.yaml" <<'EOF'
-{ "projects": { "up": { "repo": "git@github.com:org/up.git", "path": ".." } } }
+{ "projects": { "up": { "repo": "git@github.com:org/up.git", "path": ".git/up" } } }
 EOF
     run "$META_BIN" --recursive exec -- touch ran
     [ "$status" -ne 0 ]
-    [[ "$output" == *"must not contain '..'"* ]]
+    [[ "$output" == *"leads into .git"* ]]
     run "$META_BIN" --config .meta.yaml --recursive exec -- touch ran
     [ "$status" -ne 0 ]
-    [[ "$output" == *"must not contain '..'"* ]]
+    [[ "$output" == *"leads into .git"* ]]
     [ -z "$(find "$TEST_DIR" -name ran)" ]
 }
 
@@ -779,7 +789,7 @@ EOF
     cd "$TEST_DIR/ghostws"
     echo '{"projects": {"ghost": "git@x:o/ghost.git"}}' > .meta.yaml
     run "$META_BIN" --sequential exec -- "$E"
-    [[ "$output" == *"No directory found"* ]]
+    [[ "$output" == *"ghost: not cloned"* ]]
     [[ "$output" != *$'\033[2J'* ]]
     [[ "$output" != *$'\nFORGED'* ]]
 }
@@ -817,7 +827,7 @@ SH
 # ============ One selection ============
 
 @test "-r --tag selects a nested project by its own tag under an untagged parent" {
-    mkdir -p "$TEST_DIR/tools/cli"
+    mkrepo "$TEST_DIR/tools" "$TEST_DIR/tools/cli"
     printf 'projects:\n  cli:\n    repo: git@github.com:org/cli.git\n    tags: [cli-tools]\n' > "$TEST_DIR/tools/.meta.yaml"
     cat > "$TEST_DIR/.meta.yaml" <<'YAML'
 projects:

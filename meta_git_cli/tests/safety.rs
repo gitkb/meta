@@ -116,6 +116,247 @@ fn stderr(out: &Output) -> String {
 }
 
 #[test]
+fn unreadable_members_are_unknown_in_status_and_list() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["r1", "r2"]);
+    let out = worktree(root, &ws, &["create", "w", "--all"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    fs::write(
+        ws.join(".worktrees/w/r1/.git"),
+        format!("gitdir: {}\n", root.join("gone").display()),
+    )
+    .unwrap();
+
+    let mut observations = Vec::new();
+    for (command, args) in [("status", vec!["w"]), ("list", vec![])] {
+        let out = meta_git(
+            root,
+            &ws,
+            &format!("git worktree {command}"),
+            &args,
+            json!({"json_output": true}),
+        );
+        assert!(out.status.success(), "{}", stderr(&out));
+        let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let repos = if command == "status" {
+            &value["repos"]
+        } else {
+            &value["worktrees"][0]["repos"]
+        };
+        let repos = repos.as_array().unwrap();
+        let healthy = repos.iter().find(|r| r["alias"] == "r2").unwrap();
+        assert_eq!(healthy["dirty"], false, "{command}: {value}");
+        let broken = repos.iter().find(|r| r["alias"] == "r1").unwrap();
+        observations.push((command, broken.clone()));
+    }
+    assert!(
+        observations.iter().all(|(_, repo)| {
+            repo.get("dirty") == Some(&Value::Null) && repo.get("branch") == Some(&Value::Null)
+        }),
+        "{observations:?}"
+    );
+}
+
+#[test]
+fn status_names_a_missing_member_and_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["r1", "r2"]);
+    let out = worktree(root, &ws, &["create", "w", "--all"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    fs::remove_dir_all(ws.join(".worktrees/w/r2")).unwrap();
+
+    let out = meta_git(
+        root,
+        &ws,
+        "git worktree status",
+        &["w"],
+        json!({"json_output": true}),
+    );
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["missing"], json!(["r2"]), "{value}");
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+
+    let out = worktree(root, &ws, &["status", "w"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.lines()
+            .any(|line| line.contains("r2") && line.contains("missing")),
+        "{text}"
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+}
+
+#[test]
+fn text_list_warns_about_an_unreadable_set_and_lists_healthy_sets() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["r1"]);
+    for name in ["broken", "healthy"] {
+        let out = worktree(root, &ws, &["create", name, "--all"]);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    fs::write(ws.join(".worktrees/broken/.git"), "garbage\n").unwrap();
+
+    let out = worktree(root, &ws, &["list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.lines().any(|line| line.contains("healthy")), "{text}");
+    let error = stderr(&out);
+    assert!(
+        error
+            .lines()
+            .any(|line| { line.starts_with("Warning: broken:") && line.contains("git") }),
+        "{error}"
+    );
+}
+
+#[test]
+fn create_all_warns_about_broken_git_entries_and_creates_healthy_members() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["r1", "r2", "r3"]);
+    fs::remove_dir_all(ws.join("r1/.git")).unwrap();
+    fs::write(ws.join("r1/.git"), "gitdir: /nonexistent\n").unwrap();
+    fs::remove_dir_all(ws.join("r2/.git")).unwrap();
+    fs::create_dir(ws.join("r2/.git")).unwrap();
+
+    let out = worktree(root, &ws, &["create", "w", "--all"]);
+    let error = stderr(&out);
+    assert_eq!(out.status.code(), Some(0), "{error}");
+    for name in ["r1", "r2"] {
+        assert!(
+            error
+                .lines()
+                .any(|line| { line.contains(name) && line.contains("not a git repository") }),
+            "{error}"
+        );
+        assert!(!ws.join(".worktrees/w").join(name).exists());
+    }
+    assert!(ws.join(".worktrees/w/r3/.git").is_file());
+    git(
+        &ws.join(".worktrees/w/r3"),
+        &["rev-parse", "--verify", "HEAD"],
+    );
+}
+
+#[test]
+fn diff_reports_a_missing_base_and_keeps_other_repos_including_binary_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["a", "b"]);
+    git(&ws.join("a"), &["branch", "only-a"]);
+    let out = worktree(
+        root,
+        &ws,
+        &["create", "t", "--repo", "a", "--repo", "b", "--no-deps"],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let a = ws.join(".worktrees/t/a");
+    fs::write(a.join("added"), "new line\n").unwrap();
+    fs::write(a.join("binary"), b"\0\xff\x01").unwrap();
+    git(&a, &["add", "added", "binary"]);
+    git(&a, &["commit", "-qm", "change"]);
+
+    let out = meta_git(
+        root,
+        &ws,
+        "git worktree diff",
+        &["t", "--base", "only-a"],
+        json!({"json_output": true}),
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let repos = value["repos"].as_array().unwrap();
+    assert_eq!(repos.len(), 2, "{value}");
+    let good = repos.iter().find(|r| r["alias"] == "a").unwrap();
+    let bad = repos.iter().find(|r| r["alias"] == "b").unwrap();
+    assert!(good.get("error").is_none(), "{value}");
+    assert_eq!(good["files_changed"], 2, "{value}");
+    assert_eq!(good["insertions"], 1, "{value}");
+    assert_eq!(good["deletions"], 0, "{value}");
+    assert!(good["files"].as_array().unwrap().contains(&json!("binary")));
+    assert!(bad["error"].as_str().unwrap().contains("only-a"), "{value}");
+    assert!(bad["files_changed"].is_null(), "{value}");
+    assert_eq!(value["totals"]["repos_changed"], 1, "{value}");
+    assert_eq!(value["totals"]["files_changed"], 2, "{value}");
+    let out = worktree(root, &ws, &["diff", "t", "--base", "only-a"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.lines()
+            .any(|line| line.contains('a') && line.contains("+1")),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.contains('b') && line.contains("only-a")),
+        "{text}"
+    );
+    assert!(!text.contains("No changes"), "{text}");
+
+    // No observed changes still doesn't mean clean when one repo failed.
+    git(&a, &["branch", "-f", "only-a", "HEAD"]);
+    let out = worktree(root, &ws, &["diff", "t", "--base", "only-a"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("No changes"));
+    git(&ws.join("b"), &["branch", "only-a"]);
+    let out = worktree(root, &ws, &["diff", "t", "--base", "only-a"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("No changes"));
+}
+
+#[cfg(unix)]
+#[test]
+fn diff_reports_failed_commands_and_malformed_numstat_instead_of_zero_counts() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["a"]);
+    let out = worktree(root, &ws, &["create", "t", "--repo", "a", "--no-deps"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let path = std::env::var("PATH").unwrap();
+    let quote = meta_core::display::shell_quote;
+    let bin = root.join("bin");
+    fs::create_dir(&bin).unwrap();
+    for numstat in [
+        Some("bad\t0\tREADME"),
+        Some("1\tbad\tREADME"),
+        Some("missing-fields"),
+        Some("999999999999999999999999\t0\tREADME"),
+        None,
+    ] {
+        let answer = numstat.map_or_else(
+            || "echo 'diff failed' >&2; exit 42".to_string(),
+            |text| format!("printf '%s\\n' {}", quote(text)),
+        );
+        fs::write(bin.join("git"), format!(
+            "#!/bin/sh\nif [ \"$1\" = diff ]; then\n  {answer}\nelse\n  PATH={} exec git \"$@\"\nfi\n",
+            quote(&path)
+        )).unwrap();
+        fs::set_permissions(bin.join("git"), fs::Permissions::from_mode(0o700)).unwrap();
+        let out = meta_git(
+            root,
+            &ws,
+            "git worktree diff",
+            &["t", "--base", "main"],
+            json!({"json_output": true}),
+        );
+        assert_eq!(out.status.code(), Some(1), "{numstat:?}: {}", stderr(&out));
+        let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let error = value["repos"][0]["error"].as_str().unwrap();
+        assert!(error.contains("numstat"), "{value}");
+        assert!(error.contains(".worktrees/t/a"), "{value}");
+        if numstat.is_none() {
+            assert!(error.contains("diff failed"), "{value}");
+        }
+        assert!(value["repos"][0]["files_changed"].is_null(), "{value}");
+    }
+}
+
+#[test]
 fn remove_refuses_directories_meta_did_not_create() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
@@ -1368,4 +1609,35 @@ fn prune_finds_sets_of_a_repository_whose_git_dir_is_a_link() {
     assert_eq!(report["removed"][0]["name"], "t", "{report}");
     assert_eq!(report["kept"], json!([]), "{report}");
     assert!(!elsewhere.join("t").exists());
+}
+
+#[test]
+fn a_project_outside_the_workspace_gets_a_worktree_at_its_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let ws = workspace(root, &["r1"]);
+    let url = root.join("up/sib.git");
+    upstream(&url);
+    git(root, &["clone", "-q", url.to_str().unwrap(), "sib"]);
+    fs::write(
+        ws.join(".meta.yaml"),
+        json!({"projects": {"r1": root.join("up/r1.git"), "sib": {"repo": url, "path": "../sib"}}})
+            .to_string(),
+    )
+    .unwrap();
+
+    let out = worktree(root, &ws, &["create", "w", "--all"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(ws.join(".worktrees/w/sib/.git").is_file());
+    assert!(!ws.join(".worktrees/sib").exists());
+
+    // its work is kept as any member's is
+    fs::write(ws.join(".worktrees/w/sib/new.txt"), "work").unwrap();
+    let out = worktree(root, &ws, &["remove", "w"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("sib"), "{}", stderr(&out));
+    fs::remove_file(ws.join(".worktrees/w/sib/new.txt")).unwrap();
+    let out = worktree(root, &ws, &["remove", "w"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!ws.join(".worktrees/w").exists());
 }

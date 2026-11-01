@@ -16,8 +16,11 @@ fn workspace(root: &Path) {
         r#"{"projects":{"a":"https://example.invalid/a.git","b":"https://example.invalid/b.git"}}"#,
     )
     .unwrap();
-    fs::create_dir_all(root.join("a")).unwrap();
-    fs::create_dir_all(root.join("b")).unwrap();
+    // projects are repositories: meta runs nothing in a plain folder
+    for project in ["a", "b"] {
+        fs::create_dir_all(root.join(project)).unwrap();
+        meta_core::git::run(&root.join(project), ["init", "-q"]).unwrap();
+    }
     let bin = root.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let plugin = bin.join("meta-touchy");
@@ -306,6 +309,7 @@ fn a_directory_name_that_is_not_utf8_runs_in_that_directory() {
     let twin = root.join("ws\u{fffd}");
     for ws in [&raw, &twin] {
         fs::create_dir_all(ws.join("a")).unwrap();
+        meta_core::git::run(&ws.join("a"), ["init", "-q"]).unwrap();
         fs::write(ws.join(".meta.yaml"), "projects:\n  a: git@x:o/a.git\n").unwrap();
     }
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_meta"))

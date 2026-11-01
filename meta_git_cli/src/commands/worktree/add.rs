@@ -34,7 +34,7 @@ pub(crate) fn handle_add(
     let configs = Configs::find(&cwd)?;
     let meta_dir = &configs.here.dir;
     let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
-    let wt_dir = worktree_set_dir(&worktree_root, name)?;
+    let wt_dir = worktree_root.join(name);
 
     if !wt_dir.exists() {
         anyhow::bail!(
@@ -59,7 +59,7 @@ pub(crate) fn handle_add(
         let (source, _project) = lookup_nested_project(&configs.here, &spec.alias)?;
         // as in create: no worktree of a project not cloned, nor of the
         // repository around a directory that is none
-        if let Some(why) = super::not_a_repository(&spec.alias, &source)? {
+        if let Some(why) = super::not_a_repository(&spec.alias, &source) {
             anyhow::bail!("{why}");
         }
         // The repo goes where it is in the workspace

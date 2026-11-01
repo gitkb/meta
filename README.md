@@ -230,18 +230,22 @@ A token in a `repo` URL (`https://user:token@host/org/repo.git`) works, and meta
 
 **Rules for names and values.** meta checks every entry when it reads the config and stops with an error that names the file and the project:
 
-- `path` (the name when it is omitted) is relative and stays inside the directory of the config file: no `..`, no absolute paths, and no symlink that leads outside it or into `.git` or `.worktrees`. `\` reads as `/`, and `./`, `//` and a trailing `/` are dropped.
-- A project name is usually one word; a nested alias such as `vendor/lib` is fine. It follows the same rules as `path` and must already be in plain form.
-- Names and path components use only ASCII letters, digits, space and `._-+@`, so one config names the same directories on every platform (no Unicode that macOS or Windows would treat as another name, no `C:`, `<>:"|?*` or short names like `PROGRA~1`). They have no trailing dot or space, are not Windows device names (`CON`, `NUL`, `COM1`, ...) or `.git`, and do not start with `.worktrees` or lie under the configured `worktrees_dir`.
+- `path` (the name when it is omitted) is where the project lives, anywhere on disk: relative to the config's directory (`../shared-lib` is fine), absolute, or through a symlink that leads elsewhere. It may not be the config's directory itself or one around it, lead into `.git`, or lie under `.worktrees` or a `worktrees_dir` inside the workspace. In a relative path `\` reads as `/`, and `./`, `//` and a trailing `/` are dropped. In a worktree set, a project outside the workspace sits at its name.
+- A project name is usually one word; a nested alias such as `vendor/lib` is fine. It must be a plain relative path in normal form.
+- Names use only ASCII letters, digits, space and `._-+@`, so one config names the same projects on every platform (no Unicode that macOS or Windows would treat as another name, no `C:`, `<>:"|?*` or short names like `PROGRA~1`). They have no trailing dot or space, are not Windows device names (`CON`, `NUL`, `COM1`, ...) or `.git`, and do not start with `.worktrees` or lie under the configured `worktrees_dir`.
 - No two projects share a path, and no project's path lies inside another's. Paths are compared after following existing symlinks, and without regard to case (some filesystems ignore it). Project names may not be equal or nested either, also without regard to case. A repo inside another repo goes in a nested meta config (`meta: true`).
 - No name, path, repo, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline), a bidirectional-text control, or an invisible format character (such as a zero-width space).
 - `repo` does not start with `-`.
 - Tags contain no whitespace and no `,`.
-- `worktrees_dir`, if set, lies inside the workspace (relative, or absolute but inside), not inside a project and not in `.git`. For a directory elsewhere, set `META_WORKTREES`.
+- `worktrees_dir`, if set, may be anywhere (relative, `..`, absolute, or `.worktrees` a symlink to another disk), but not the config's directory itself, not inside a project and not in `.git`. `META_WORKTREES` overrides it.
 - A key meta doesn't know at the top level, under `defaults` or under `worktree` is an error, so a misspelling isn't ignored. Project entries may carry keys of their own for other tools.
 - Each `worktree.hooks` value is a command string (`false` or `123` is refused, not run).
 
 The same rules apply to every meta config that a recursive command reads, including one inside a cloned project: a refused nested config stops the command rather than silently leaving out that part of the tree.
+
+YAML anchors and merge keys (`<<: *defaults`) work as YAML defines them.
+
+**A project is acted on only if its folder is its own repository.** `meta exec` and the per-repo `meta git` commands run in each selected project that is a git repository of its own, and name the others, then exit 1: `web: not cloned (run 'meta git update')`, or `r1: not a git repository (folder exists, no .git)`. git started for a project never looks above the project's folder, so it can't reach the workspace repository around it: meta sets `GIT_CEILING_DIRECTORIES` (added to any you set) for every command it runs in a project, the root included. `meta git update` clones a missing project, or into an empty folder, and names a folder that holds something else. `meta project check` names every project that is missing, not a repository, or cloned from another remote, and exits 1. `--json` prints `{"problems": [{"name", "path", "state", "reason", "repo"?, "actual"?}]}` on stdout, `state` being `missing`, `not_a_repo` or `wrong_remote` (`actual`: the checkout's origin, `null` without one).
 
 You can mix simple and extended formats in the same file.
 

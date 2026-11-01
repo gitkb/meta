@@ -495,8 +495,13 @@ worktree, no name lists metadata for all sets.
 Metadata-only without recursion retains legacy traversal boundaries. Recursive
 metadata discovery launches no Git probes and uses strict bounded traversal:
 invalid Git metadata, backlink mismatches and traversal failures are errors for
-a selected set. All-set listing reports failed sets as warnings, so consumers
-must check warnings before treating an aggregate inventory as complete.
+a selected set. All-set listing (recursive or not, with or without
+`--metadata-only`) reports failed sets as warnings, in the text listing too, so
+consumers must check warnings before treating an aggregate inventory as
+complete. Without `--metadata-only`, a member git can't read has `"branch":
+null` and `"dirty": null` (unknown, never clean). `meta git worktree status`
+shows the same unknowns, and names members whose checkout is gone in
+`"missing"`, exiting 1.
 
 Implicit worktree scoping uses metadata-only paths rather than branch probes
 before dispatch. Membership discovery errors stop dispatch instead of silently

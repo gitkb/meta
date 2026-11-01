@@ -581,7 +581,7 @@ EOF
     run "$META_BIN" git worktree create nested-live --no-deps --repo group/core
     [ "$status" -eq 0 ]
     # The nested config now has an entry the path rules refuse
-    printf '{"projects": {"core": "git@github.com:org/core.git", "x": {"repo": "u", "path": "../outside"}}}' > "$TEST_DIR/group/.meta.yaml"
+    printf '{"projects": {"core": "git@github.com:org/core.git", "x": {"repo": "u", "path": ".git/x"}}}' > "$TEST_DIR/group/.meta.yaml"
     run "$META_BIN" git worktree prune
     [[ "$output" != *"orphaned"* ]]
     [ -d "$TEST_DIR/.worktrees/nested-live/group/core" ]
@@ -775,12 +775,14 @@ J
     [ "$status" -eq 0 ]
 }
 
-@test "worktrees are not kept where a .worktrees symlink or worktrees_dir points outside" {
+@test "worktrees go where a .worktrees symlink or worktrees_dir points, outside too" {
     OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
     ln -s "$OUTSIDE" "$TEST_DIR/.worktrees"
     run "$META_BIN" git worktree create out --repo backend
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"Refusing to keep worktrees in"* ]]
+    [ "$status" -eq 0 ]
+    [ -d "$OUTSIDE/out/backend" ]
+    run "$META_BIN" git worktree remove out
+    [ "$status" -eq 0 ]
     [ -z "$(ls -A "$OUTSIDE")" ]
     rm "$TEST_DIR/.worktrees"
 
@@ -788,9 +790,8 @@ J
 {"projects": {"backend": "git@github.com:org/backend.git"}, "worktrees_dir": "$OUTSIDE"}
 J
     run "$META_BIN" git worktree create out --repo backend
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"Invalid worktrees_dir"* ]]
-    [ -z "$(ls -A "$OUTSIDE")" ]
+    [ "$status" -eq 0 ]
+    [ -d "$OUTSIDE/out/backend" ]
     rm -rf "$OUTSIDE"
 }
 
@@ -823,7 +824,7 @@ EOF
     printf '{"projects": {"backend": "git@github.com:org/backend.git", "vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git worktree create nested --no-deps --repo vendor/lib
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Intermediate parent 'vendor' for nested repo 'vendor/lib' is not a git repository, skipping"* ]]
+    [[ "$output" == *"Intermediate parent 'vendor' for nested repo 'vendor/lib': not a git repository"*", skipping"* ]]
     [ -d "$TEST_DIR/.worktrees/nested/vendor/lib" ]
 
     run "$META_BIN" git worktree create strict --no-deps --strict --repo vendor/lib
@@ -900,14 +901,14 @@ EOF
     [ ! -e "$TEST_DIR/.worktrees/add-twice/frontend" ]
 }
 
-@test "a worktree set that is a symlink out of the worktree root is refused" {
+@test "a set folder that links to a folder meta didn't make is not removed" {
     OUTSIDE="$(cd "$(mktemp -d)" && pwd -P)"
     echo keep > "$OUTSIDE/file"
     mkdir -p "$TEST_DIR/.worktrees"
     ln -s "$OUTSIDE" "$TEST_DIR/.worktrees/review"
     run "$META_BIN" git worktree remove --force review
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Refusing to use worktree 'review'"* ]]
+    [[ "$output" == *"meta has no record of creating a worktree set there"* ]]
     [ -f "$OUTSIDE/file" ]
     rm -rf "$OUTSIDE"
 }
@@ -922,6 +923,10 @@ EOF
     # The built project plugin, not one that happens to be on PATH
     cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/"
     ln -s missing.json "$TEST_DIR/frontend/.meta.yaml"
+    # each a clone of what the config lists
+    for repo in backend frontend common; do
+        git -C "$TEST_DIR/$repo" remote add origin "git@github.com:org/$repo.git"
+    done
     run "$META_BIN" project check
     [ "$status" -eq 0 ]
     # From a subdirectory with no config of its own, the workspace's counts
@@ -934,13 +939,13 @@ EOF
 
 @test "meta git status and project check fail on a refused .meta.yaml" {
     cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/meta-project"
-    echo '{"projects": {"evil": {"repo": "u", "path": "../../outside"}}}' > "$TEST_DIR/.meta.yaml"
+    echo '{"projects": {"evil": {"repo": "u", "path": ".git/evil"}}}' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git status
     [ "$status" -ne 0 ]
-    [[ "$output" == *"must not contain '..'"* ]]
+    [[ "$output" == *"leads into .git"* ]]
     run "$META_BIN" project check --recursive
     [ "$status" -ne 0 ]
-    [[ "$output" == *"must not contain '..'"* ]]
+    [[ "$output" == *"leads into .git"* ]]
 }
 
 @test "prune does not follow a worktree path that became a symlink" {
@@ -955,8 +960,10 @@ EOF
     mv "$TEST_DIR/.worktrees/swapped" "$TEST_DIR/swapped-moved"
     ln -s "$OUTSIDE" "$TEST_DIR/.worktrees/swapped"
     run "$META_BIN" git worktree prune
-    [[ "$output" == *"meta doesn't delete through links"* ]]
+    # the link is followed, to nothing meta recorded for this set: kept
+    [[ "$output" == *"swapped"* ]]
     [ -f "$OUTSIDE/wt/mine" ]
+    [ "$(git -C frontend worktree list | grep -c outside-wt)" -eq 1 ]
     rm -rf "$OUTSIDE"
 }
 
@@ -994,15 +1001,16 @@ EOF
     [ "$status" -eq 0 ]
     run "$META_BIN" git worktree create live --repo frontend
     [ "$status" -eq 0 ]
-    echo mine > "$TEST_DIR/.worktrees/live/frontend/mine"
     sleep 2
     mv "$TEST_DIR/.worktrees/old" "$TEST_DIR/old-moved"
     ln -s "$TEST_DIR/.worktrees/live" "$TEST_DIR/.worktrees/old"
+    # the clean live set behind the link is not old's: its record says so
     run "$META_BIN" git worktree prune
-    [ -f "$TEST_DIR/.worktrees/live/frontend/mine" ]
+    [ -d "$TEST_DIR/.worktrees/live/frontend" ]
+    echo mine > "$TEST_DIR/.worktrees/live/frontend/mine"
     run "$META_BIN" git worktree remove --force old
     [ "$status" -ne 0 ]
-    [[ "$output" == *"is a symlink"* ]]
+    [[ "$output" == *"leads to worktree set 'live'"* ]]
     [ -f "$TEST_DIR/.worktrees/live/frontend/mine" ]
 }
 
@@ -1189,9 +1197,10 @@ PY2
     "$META_BIN" git worktree create ctx --repo backend
     "$META_BIN" git worktree create gone --repo frontend --no-deps --ttl 0
     cd "$TEST_DIR/wt/ctx"
+    # inside a set, as under .worktrees: that set
     run "$META_BIN" git worktree list --recursive --metadata-only --json
     [ "$status" -eq 0 ]
-    [[ "$output" == *'"worktrees"'*'"gone"'* ]]
+    [[ "$output" == *'"name": "ctx"'* ]]
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
     [ ! -e "$TEST_DIR/wt/gone" ]
@@ -2194,11 +2203,30 @@ projects:
 YAML
     for filter in "-t rust" "-i tools/cli"; do
         run "$META_BIN" -r $filter project check
-        [[ "$output" == *"git@github.com:org/cli.git"* ]]
-        [[ "$output" != *"other.git"* ]]
-        [[ "$output" == *"1 project(s) missing"* ]]
+        [[ "$output" == *"tools/cli: not cloned"* ]]
+        [[ "$output" != *"other"* ]]
+        [[ "$output" == *"1 project(s) are not clones"* ]]
     done
-    mkdir "$TEST_DIR/tools/cli"
+    git init --quiet "$TEST_DIR/tools/cli"
+    git -C "$TEST_DIR/tools/cli" remote add origin git@github.com:org/cli.git
     run "$META_BIN" -r -t rust project check
     [[ "$output" == *"All projects are cloned"* ]]
+}
+
+@test "an absolute worktrees_dir spelled through a link is still ignored in the workspace" {
+    # teardown removes OTHER
+    OTHER="${TEST_DIR}-alias"
+    ln -s "$TEST_DIR" "$OTHER"
+    cat > "$TEST_DIR/.meta.yaml" <<J
+{"projects": {"backend": "git@github.com:org/backend.git"}, "worktrees_dir": "$OTHER/sets"}
+J
+    run "$META_BIN" git worktree create r6 --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    git -C "$TEST_DIR" check-ignore -q sets/r6/backend
+}
+
+@test "a worktrees folder whose path holds glob characters is ignored as written" {
+    run env META_WORKTREES="$TEST_DIR/cache[1]/sets" "$META_BIN" git worktree create pattern --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    git -C "$TEST_DIR" check-ignore -q 'cache[1]/sets/pattern/backend'
 }

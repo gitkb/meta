@@ -184,8 +184,11 @@ teardown() {
     git -C "$TEST_DIR" remote add origin git@github.com:org/workspace.git
     rm -rf "$TEST_DIR/shared"
     mkdir "$TEST_DIR/shared"
+    echo notes > "$TEST_DIR/shared/notes.txt"
     run "$META_BIN" git update
-    [ "$status" -eq 0 ]
+    # the folder is named, never cloned over
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"shared: not a git repository (folder exists, no .git)"* ]]
     [[ "$output" != *"mismatch"* ]]
     [[ "$output" != *"remote set-url"* ]]
 }
@@ -197,7 +200,9 @@ teardown() {
     chmod 000 "$TEST_DIR/backend/.git/HEAD"
     run "$META_BIN" git update
     chmod 644 "$TEST_DIR/backend/.git/HEAD"
-    [ "$status" -eq 0 ]
+    # named as no repository git can use, never cloned over
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"backend: not a git repository"* ]]
     [[ "$output" != *"remote set-url"* ]]
     [ "$(git -C "$TEST_DIR" remote get-url origin)" = "git@github.com:org/workspace.git" ]
 }
@@ -389,8 +394,10 @@ EOF
 }
 EOF
     run "$META_BIN" git status
-    [ "$status" -eq 0 ]
-    # Should still succeed, handling the non-git dir gracefully
+    # the repo reports; the folder is named, and git never runs in it
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"frontend"* ]]
+    [[ "$output" == *"not-a-repo"*"not a git repository (folder exists, no .git)"* ]]
 }
 
 @test "meta git commit -m with special characters in message" {
@@ -536,6 +543,7 @@ EOF
 
 @test "meta exec --recursive runs in nested project dirs" {
     mkdir -p "$TEST_DIR/backend/sub-service"
+    git -C "$TEST_DIR/backend/sub-service" init --quiet
     cat > "$TEST_DIR/backend/.meta.yaml" <<'EOF'
 {
     "projects": {
@@ -919,17 +927,16 @@ EOF
         git -C "$UP/work-$1" -c user.email=t@t -c user.name=t commit --quiet -m meta
         git -C "$UP/work-$1" push --quiet origin HEAD:main
     }
-    bare_with_meta child '{"projects": {"x": {"repo": "u", "path": "../../outside"}}}'
+    bare_with_meta child '{"projects": {"x": {"repo": "u", "path": ".git/x"}}}'
     bare_with_meta root "{\"projects\": {\"child\": {\"repo\": \"$UP/child.git\", \"meta\": true}, \"gone\": \"$UP/gone.git\"}}"
 
     cd "$TEST_DIR"
     run "$META_BIN" git clone --recursive "$UP/root.git" "$UP/clone"
     [ "$status" -ne 0 ]
     [[ "$output" == *"Could not read nested .meta.yaml files"* ]]
-    [[ "$output" == *"must not contain '..'"* ]]
+    [[ "$output" == *"leads into .git"* ]]
     # A failed clone is still reported alongside it
     [[ "$output" == *"Failed to clone"*"gone"* ]]
-    [ ! -e "$UP/outside" ]
     rm -rf "$UP"
 }
 

@@ -63,46 +63,62 @@ impl RepoStatus {
             // nothing in it is changed; its branch and upstream still count.
             // A checkout whose config says `core.bare` is no bare repository:
             // its work tree may hold changes git can't report.
-            Err(e) if Self::is_bare(dir) => Self::refs(dir).ok_or(e),
+            Err(e) if Self::is_bare(dir) => Self::refs(dir)?.ok_or(e),
             Err(e) => Err(e),
         }
     }
 
     /// Whether `dir` is itself the git directory of a bare repository.
     fn is_bare(dir: &Path) -> bool {
-        super::query(dir, ["rev-parse", "--is-bare-repository", "--git-dir"]).as_deref()
-            == Some("true\n.")
+        super::run(dir, ["rev-parse", "--is-bare-repository", "--git-dir"])
+            .is_ok_and(|answer| answer == "true\n.")
     }
 
     /// What git says about the repository at `dir` without its work tree:
     /// branch, commit and upstream, and no entries. For a bare repository,
     /// or a checkout whose work tree git refuses (`core.bare=true`), for
     /// callers that show what they can. `None` when `dir` has no repository
-    /// of its own.
-    pub fn refs(dir: &Path) -> Option<Self> {
-        crate::gitdir::common_dir(dir).ok()??;
-        // nor when git can't read it at all (ownership, a broken `.git`)
-        super::query(dir, ["rev-parse", "--git-dir"])?;
-        let upstream = super::query(dir, ["rev-parse", "--abbrev-ref", "@{upstream}"]);
-        let ahead_behind = upstream
-            .as_ref()
-            .and_then(|_| {
-                super::query(
+    /// of its own; an error when git can't read the one it has.
+    pub fn refs(dir: &Path) -> anyhow::Result<Option<Self>> {
+        if crate::gitdir::common_dir(dir)?.is_none() {
+            return Ok(None);
+        }
+        let upstream = super::lookup(
+            dir,
+            [
+                "rev-parse",
+                "--abbrev-ref",
+                "--verify",
+                "--quiet",
+                "@{upstream}",
+            ],
+        )?;
+        let ahead_behind = match upstream {
+            Some(_) => {
+                let counts = super::run(
                     dir,
                     ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
-                )
-            })
-            .and_then(|counts| {
-                let (ahead, behind) = counts.split_once('\t')?;
-                Some((ahead.parse().ok()?, behind.parse().ok()?))
-            });
-        Some(Self {
-            branch: super::current_branch(dir),
-            oid: super::query(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]),
+                )?;
+                let parsed = counts
+                    .split_once('\t')
+                    .and_then(|(ahead, behind)| Some((ahead.parse().ok()?, behind.parse().ok()?)));
+                Some(parsed.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "git rev-list --count in {} printed '{}'",
+                        crate::display::escape_path(dir),
+                        crate::display::escape(&counts)
+                    )
+                })?)
+            }
+            None => None,
+        };
+        Ok(Some(Self {
+            branch: super::current_branch(dir)?,
+            oid: super::lookup(dir, ["rev-parse", "--verify", "--quiet", "HEAD"])?,
             upstream,
             ahead_behind,
             entries: Vec::new(),
-        })
+        }))
     }
 
     fn parse(output: &str) -> Self {
@@ -346,9 +362,9 @@ mod tests {
         run(checkout.path(), ["config", "core.bare", "true"]).unwrap();
         assert!(RepoStatus::read(checkout.path()).is_err());
         // whose refs can still be shown
-        let refs = RepoStatus::refs(checkout.path()).unwrap();
+        let refs = RepoStatus::refs(checkout.path()).unwrap().unwrap();
         assert_eq!(refs.branch.as_deref(), Some("main"));
-        assert!(RepoStatus::refs(&inside).is_none());
+        assert!(RepoStatus::refs(&inside).unwrap().is_none());
     }
 
     #[test]

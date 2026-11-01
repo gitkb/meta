@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -163,7 +163,7 @@ pub fn aliases() -> Result<BTreeMap<String, String>> {
 
 fn prompt_user(question: &str) -> Result<bool> {
     out!("{question} [y/N]: ")?;
-    io::stdout().flush()?;
+    meta_core::out::flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     Ok(input.trim().to_lowercase() == "y")
@@ -407,10 +407,13 @@ fn execute_command_in_directory(
     if !dir.exists() {
         outln!("\nNo directory found for {}", escape_path(dir))?;
         outln!(
-            "\x1b[31m\n✗ {}: No directory found. Command: {} (Exit code: {})\x1b[0m",
-            display_name(dir, config.root_dir.as_deref()),
-            escape(&display_command(argv)),
-            1
+            "\n{}",
+            format!(
+                "✗ {}: No directory found. Command: {} (Exit code: 1)",
+                display_name(dir, config.root_dir.as_deref()),
+                escape(&display_command(argv)),
+            )
+            .red()
         )?;
         return Ok(CommandResult {
             exit_code: Some(1),
@@ -493,9 +496,9 @@ fn execute_command_in_directory(
     if !config.silent {
         let name = result_name(dir, config.root_dir.as_deref());
         if result.success {
-            outln!("\x1b[32m\n✓ {name}\x1b[0m")?;
+            outln!("\n{}", format!("✓ {name}").green())?;
         } else {
-            outln!("\x1b[31m\n✗ {name}: {}\x1b[0m", result.ending())?;
+            outln!("\n{}", format!("✗ {name}: {}", result.ending()).red())?;
         }
         meta_core::out::flush()?;
     }
@@ -545,19 +548,10 @@ fn execute_command_in_directory_capturing(
         Err(e) => return failed_result(dir, command, format!("{e:#}\n")),
     };
 
-    // Force color output when parent stdout is a TTY
-    // This is needed because piped stdout makes child processes think they're not in a terminal
-    // Note: Tool-specific color vars (e.g., git's GIT_CONFIG_*) should be set by the
-    // plugin that knows about that tool, not here. loop_lib is tool-agnostic.
-    if io::stdout().is_terminal() {
-        cmd_builder
-            .env("FORCE_COLOR", "1") // Node.js ecosystem
-            .env("CLICOLOR_FORCE", "1"); // BSD/macOS convention
-                                         // Preserve TERM if set, otherwise provide a reasonable default
-        if env::var("TERM").is_err() {
-            cmd_builder.env("TERM", "xterm-256color");
-        }
-    }
+    // Its output goes through a pipe to meta: it colours as meta does.
+    // Tool-specific settings (git's GIT_CONFIG_*) are the plugin's to set;
+    // loop_lib is tool-agnostic.
+    meta_core::out::pass_color(&mut cmd_builder);
 
     let output = meta_core::children::output(&mut cmd_builder);
 
@@ -767,9 +761,13 @@ fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Co
             (Some(why), json) => {
                 if !json && !config.silent {
                     outln!(
-                        "\x1b[31m\n✗ {}: {why} (Exit code: 1)\x1b[0m",
-                        display_name(&job.dir, config.root_dir.as_deref()),
-                        why = escape(why)
+                        "\n{}",
+                        format!(
+                            "✗ {}: {} (Exit code: 1)",
+                            display_name(&job.dir, config.root_dir.as_deref()),
+                            escape(why)
+                        )
+                        .red()
                     )?;
                 }
                 Ok(refused_result(job, why))

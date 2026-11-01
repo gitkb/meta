@@ -207,8 +207,9 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
     let (repo_spec, pr_num) = parse_from_pr(from_pr)?;
     let repo_spec = repo_spec.as_str();
 
-    // Resolve head branch via gh CLI
+    // Resolve head branch via gh CLI: its answer is read, never coloured
     let output = Command::new("gh")
+        .env_remove("CLICOLOR_FORCE")
         .args([
             "pr",
             "view",

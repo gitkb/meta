@@ -145,6 +145,27 @@ fn decide_color(
     terminal && clicolor.is_none_or(|c| c != "0") && term.is_none_or(|term| term != "dumb")
 }
 
+/// Have `command`, whose output meta reads through a pipe (to show, relay
+/// or put in JSON), colour as meta does ([`color`]): with colour, the
+/// conventional variables that force it (`CLICOLOR_FORCE`, Node's
+/// `FORCE_COLOR`) are set, without it they are removed, since a user's own
+/// would win over the pipe.
+pub fn pass_color(command: &mut std::process::Command) {
+    const FORCE: [&str; 2] = ["CLICOLOR_FORCE", "FORCE_COLOR"];
+    if color() {
+        for name in FORCE {
+            command.env(name, "1");
+        }
+        if std::env::var_os("TERM").is_none() {
+            command.env("TERM", "xterm-256color");
+        }
+    } else {
+        for name in FORCE {
+            command.env_remove(name);
+        }
+    }
+}
+
 static JSON: AtomicBool = AtomicBool::new(false);
 
 /// Output is JSON (`--json`), for programs that read it: no colour, and

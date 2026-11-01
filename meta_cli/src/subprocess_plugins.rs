@@ -375,16 +375,18 @@ impl SubprocessPlugin {
         }
 
         // A plugin may answer without reading its request; then its output
-        // and exit status decide, not the pipe
-        let output = meta_core::children::spawn(
-            Command::new(&self.path)
-                .arg("--meta-plugin-exec")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped()) // Capture stdout to parse response
-                .stderr(Stdio::inherit()), // Let stderr pass through for error messages
-        )
-        .and_then(|child| child.exchange(request_json.as_bytes()))
-        .with_context(|| format!("Failed to execute plugin {}", escape_path(&self.path)))?;
+        // and exit status decide, not the pipe. Meta shows what it prints,
+        // so it colours as meta does.
+        let mut plugin = Command::new(&self.path);
+        plugin
+            .arg("--meta-plugin-exec")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped()) // Capture stdout to parse response
+            .stderr(Stdio::inherit()); // Let stderr pass through for error messages
+        meta_core::out::pass_color(&mut plugin);
+        let output = meta_core::children::spawn(&mut plugin)
+            .and_then(|child| child.exchange(request_json.as_bytes()))
+            .with_context(|| format!("Failed to execute plugin {}", escape_path(&self.path)))?;
 
         if !output.status.success() {
             // Plugin already printed its error to stderr. What it printed

@@ -1,5 +1,5 @@
 use anyhow::Context;
-use console::style;
+use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use meta_core::errln;
 use meta_core::git::GitUrl;
@@ -81,7 +81,7 @@ impl<'a> Worker<'a> {
         {
             pb.finish_with_message(format!(
                 "{}",
-                style(format!("Not pulled {}: {why}", task.name)).yellow()
+                format!("Not pulled {}: {why}", task.name).yellow()
             ));
             return self.queue.mark_not_pulled(task, why);
         }
@@ -94,7 +94,7 @@ impl<'a> Worker<'a> {
                 };
                 pb.finish_with_message(format!(
                     "{}",
-                    style(format!("{done} {}{nested}", task.name)).green()
+                    format!("{done} {}{nested}", task.name).green()
                 ));
                 found
             }
@@ -107,7 +107,7 @@ impl<'a> Worker<'a> {
                 let why = "its upstream branch isn't on the remote".to_string();
                 pb.finish_with_message(format!(
                     "{}",
-                    style(format!("Not pulled {}: {why}", task.name)).yellow()
+                    format!("Not pulled {}: {why}", task.name).yellow()
                 ));
                 self.queue.mark_not_pulled(task, why)
             }
@@ -117,10 +117,7 @@ impl<'a> Worker<'a> {
                     Work::Clone(_) => "Failed to clone",
                     Work::Pull => "Could not pull",
                 };
-                pb.finish_with_message(format!(
-                    "{}",
-                    style(format!("{failed} {}", task.name)).red()
-                ));
+                pb.finish_with_message(format!("{}", format!("{failed} {}", task.name).red()));
                 found
             }
         }
@@ -147,12 +144,12 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
         match &failure.work {
             Work::Clone(url) => errln!(
                 "{} {} ({url})",
-                style("Failed to clone").red().bold(),
+                "Failed to clone".red().bold(),
                 meta_core::display::escape(&failure.name),
             ),
             Work::Pull => errln!(
                 "{} {}",
-                style("Could not pull").red().bold(),
+                "Could not pull".red().bold(),
                 meta_core::display::escape(&failure.name),
             ),
         }
@@ -164,7 +161,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     for (name, why) in &refused {
         errln!(
             "{} {}: not a git repository ({}); move it away and run 'meta git update' again",
-            style("Not cloned").red().bold(),
+            "Not cloned".red().bold(),
             meta_core::display::escape(name),
             meta_core::display::escape(why)
         );
@@ -173,7 +170,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     for names in &cycles {
         errln!(
             "{} {}: it is a meta repo above it again; the meta repos list each other ({})",
-            style("Left out").red().bold(),
+            "Left out".red().bold(),
             meta_core::display::escape(names.last().map_or("", String::as_str)),
             chain(names)
         );
@@ -181,7 +178,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     for line in &unreadable {
         errln!(
             "{} {}",
-            style("Cannot read nested .meta.yaml").red().bold(),
+            "Cannot read nested .meta.yaml".red().bold(),
             meta_core::display::escape_lines(line)
         );
     }

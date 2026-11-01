@@ -1,7 +1,7 @@
 use crate::clone_worker::clone_with_queue;
 use crate::ssh;
 use anyhow::Context;
-use console::style;
+use colored::Colorize;
 use indicatif::MultiProgress;
 use meta_core::config;
 use meta_core::git::GitUrl;
@@ -123,7 +123,7 @@ pub(crate) fn execute_git_clone(
     if options.mode().is_preview() {
         // Output what we know - just the meta repo clone command
         // (Child repos are in .meta.yaml file which hasn't been cloned yet)
-        outln!("{} Would clone meta repository:", style("[DRY RUN]").cyan())?;
+        outln!("{} Would clone meta repository:", "[DRY RUN]".cyan())?;
         let shown = loop_lib::display_command(&clone_argv(url.to_string()));
         outln!("  {}", meta_core::display::escape(&shown))?;
         return Ok(CommandResult::Message(String::new()));

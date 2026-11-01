@@ -93,6 +93,38 @@ teardown() {
     [[ "$output" != *"Changes not staged"* ]]
 }
 
+@test "meta git status colours a terminal only, never a pipe or JSON" {
+    echo "change" >> "$TEST_DIR/frontend/README.md"
+    esc=$'\033['
+    red=$'\033[31mmodified'
+    run "$META_BIN" --include frontend git status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"modified"* ]]
+    [[ "$output" != *"$esc"* ]]
+
+    run "$META_BIN" --json --include frontend git status
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"$esc"* ]]
+    [[ "$output" != *'\u001b'* ]]
+
+    # forced colour reaches git; JSON and NO_COLOR win over it
+    CLICOLOR_FORCE=1 run "$META_BIN" --include frontend git status
+    [[ "$output" == *"$red"* ]]
+    CLICOLOR_FORCE=1 run "$META_BIN" --json --include frontend git status
+    [[ "$output" != *'\u001b'* ]]
+    NO_COLOR=1 CLICOLOR_FORCE=1 run "$META_BIN" --include frontend git status
+    [[ "$output" != *"$esc"* ]]
+
+    # on a terminal it is coloured, in both modes, unless TERM=dumb
+    for mode in --parallel --sequential; do
+        TERM=xterm run with_terminal "$META_BIN" $mode --include frontend git status
+        [[ "$output" == *"$red"* ]]
+        TERM=dumb run with_terminal "$META_BIN" $mode --include frontend git status
+        [[ "$output" == *"modified"* ]]
+        [[ "$output" != *"$red"* ]]
+    done
+}
+
 @test "meta git status shows clean repos" {
     run "$META_BIN" git status
     [ "$status" -eq 0 ]

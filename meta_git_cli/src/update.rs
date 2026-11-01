@@ -1,6 +1,6 @@
 use crate::clone_worker::clone_with_queue;
 use crate::ssh;
-use console::style;
+use colored::Colorize;
 use indicatif::MultiProgress;
 use meta_core::config;
 use meta_core::display::{escape, escape_path};
@@ -83,7 +83,7 @@ pub(crate) fn execute_git_update(
         // the pulls would add isn't known
         outln!(
             "{} Would run (from the .meta.yaml files as they are now; the pulls may add projects):",
-            style("[DRY RUN]").cyan()
+            "[DRY RUN]".cyan()
         )?;
         let mut tasks = VecDeque::from(tasks);
         while let Some(task) = tasks.pop_front() {
@@ -148,7 +148,7 @@ pub(crate) fn execute_git_update(
     report_unlisted(&queue, cwd);
     let outcome = queue.outcome();
     for (name, why) in &outcome.not_pulled {
-        errln!("{} {}: {why}", style("Not pulled").yellow(), escape(name));
+        errln!("{} {}: {why}", "Not pulled".yellow(), escape(name));
     }
     if let Some(error) = crate::clone_worker::report_failures(&queue) {
         return Ok(CommandResult::Error(error));

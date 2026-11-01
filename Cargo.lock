@@ -927,7 +927,6 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
- "console",
  "dirs",
  "indexmap",
  "indicatif",
@@ -951,7 +950,6 @@ version = "0.2.22"
 dependencies = [
  "anyhow",
  "chrono",
- "console",
  "log",
  "meta",
  "meta_core",

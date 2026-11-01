@@ -1,4 +1,4 @@
-use console::style;
+use colored::Colorize;
 use meta_core::config;
 use meta_core::display::{escape, escape_lines, escape_path};
 use meta_core::outln;
@@ -104,16 +104,20 @@ pub(crate) fn execute_git_commit(
         // No message provided, show what would be committed
         outln!("Repositories with staged changes:")?;
         for (name, _path, files) in &repos_with_changes {
-            outln!("  {} ({} files)", style(escape(name)).cyan(), files.len())?;
+            outln!(
+                "  {} ({} files)",
+                escape(name).to_string().cyan(),
+                files.len()
+            )?;
         }
         outln!()?;
         outln!(
             "Use {} to create per-repo commit messages",
-            style("--edit").yellow()
+            "--edit".yellow()
         )?;
         outln!(
             "Use {} to apply the same message to all",
-            style("-m \"message\"").yellow()
+            "-m \"message\"".yellow()
         )?;
     }
 
@@ -166,7 +170,11 @@ fn execute_editor_commit(
             escape(&editor)
         )?;
         for (name, _path, files) in repos {
-            outln!("  {} ({} files)", style(escape(name)).cyan(), files.len())?;
+            outln!(
+                "  {} ({} files)",
+                escape(name).to_string().cyan(),
+                files.len()
+            )?;
         }
         return Ok(());
     }
@@ -248,8 +256,8 @@ fn commit_each(
 
         outln!(
             "{} Committing {}...",
-            style("→").cyan(),
-            style(escape(repo_name)).bold()
+            "→".cyan(),
+            escape(repo_name).to_string().bold()
         )?;
 
         let status = meta_core::git::git(Path::new(path))
@@ -260,7 +268,7 @@ fn commit_each(
             Ok(s) if s.success() => {
                 outln!(
                     "  {} {}",
-                    style("✓").green(),
+                    "✓".green(),
                     escape(message.lines().next().unwrap_or(""))
                 )?;
                 succeeded += 1;
@@ -269,7 +277,7 @@ fn commit_each(
                 // the message is in no file any more: show it, to reuse
                 outln!(
                     "  {} Failed to commit; the message was:\n{}",
-                    style("✗").red(),
+                    "✗".red(),
                     escape_lines(message)
                 )?;
                 failed += 1;
@@ -281,7 +289,7 @@ fn commit_each(
     if failed > 0 {
         anyhow::bail!("Committed {succeeded} repo(s), {failed} failed");
     }
-    outln!("Committed {} repo(s)", style(succeeded).green())?;
+    outln!("Committed {} repo(s)", succeeded.to_string().green())?;
 
     Ok(())
 }

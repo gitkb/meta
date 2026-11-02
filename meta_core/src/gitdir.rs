@@ -224,13 +224,6 @@ pub fn linked(checkout: &Path) -> anyhow::Result<Linked> {
 }
 
 #[cfg(test)]
-#[cfg_attr(
-    unix,
-    expect(
-        clippy::disallowed_methods,
-        reason = "tests start the programs they test with"
-    )
-)]
 mod tests {
     use super::*;
     use crate::git::run;
@@ -310,10 +303,7 @@ mod tests {
             for dir in ["objects", "refs"] {
                 std::fs::create_dir_all(plain.join(dir)).unwrap();
             }
-            let fifo = std::process::Command::new("mkfifo")
-                .arg(plain.join("HEAD"))
-                .status();
-            if fifo.is_ok_and(|status| status.success()) {
+            if meta_test_support::mkfifo(&plain.join("HEAD")) {
                 let (send, receive) = std::sync::mpsc::channel();
                 let dir = plain.clone();
                 std::thread::spawn(move || send.send(common_dir(&dir).ok().flatten()));
@@ -325,10 +315,7 @@ mod tests {
             for dir in ["objects", "refs"] {
                 std::fs::create_dir_all(real.join(dir)).unwrap();
             }
-            let made = std::process::Command::new("mkfifo")
-                .arg(real.join("HEAD"))
-                .status();
-            if made.is_ok_and(|status| status.success()) {
+            if meta_test_support::mkfifo(&real.join("HEAD")) {
                 let checkouts = ["dir", "link", "file"].map(|kind| tmp.path().join(kind));
                 for checkout in &checkouts {
                     std::fs::create_dir(checkout).unwrap();

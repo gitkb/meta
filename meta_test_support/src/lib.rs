@@ -10,6 +10,7 @@
     clippy::disallowed_methods,
     clippy::unwrap_used,
     clippy::print_stdout,
+    clippy::print_stderr,
     reason = "test support: a panic is a failed test, and tests start the programs they test"
 )]
 
@@ -216,6 +217,41 @@ fn repo_env() -> &'static [String] {
             .map(String::from)
             .collect()
     })
+}
+
+/// Whether git can make reftable repos (2.45 on); says why not when not.
+pub fn git_has_reftable() -> bool {
+    let out = Command::new("git").arg("version").output().unwrap();
+    let version = String::from_utf8_lossy(&out.stdout);
+    // "git version 2.45.1", "git version 2.45.1.windows.1"
+    let mut numbers = version
+        .split_whitespace()
+        .nth(2)
+        .unwrap_or_default()
+        .split('.')
+        .map(|n| n.parse::<u32>().unwrap_or(0));
+    let (major, minor) = (numbers.next().unwrap_or(0), numbers.next().unwrap_or(0));
+    let has = (major, minor) >= (2, 45);
+    if !has {
+        eprintln!("skipped: {} has no reftable (2.45 on)", version.trim());
+    }
+    has
+}
+
+/// Makes a named pipe at `path`; false, saying why, where there's no
+/// `mkfifo` to make one. Fails the test if `mkfifo` is there and fails.
+#[cfg(unix)]
+pub fn mkfifo(path: &Path) -> bool {
+    match Command::new("mkfifo").arg(path).status() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipped: no mkfifo to make {}", path.display());
+            false
+        }
+        status => {
+            assert!(status.unwrap().success(), "mkfifo {}", path.display());
+            true
+        }
+    }
 }
 
 /// `path` as an argument

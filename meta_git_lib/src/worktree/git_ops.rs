@@ -662,14 +662,15 @@ mod tests {
     fn branch_is_free_sees_checkouts_in_a_reftable_repository() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
+        if !meta_test_support::git_has_reftable() {
+            return;
+        }
         let init = git(tmp.path())
             .args(["init", "-q", "--ref-format=reftable"])
             .arg(&repo)
             .output()
             .unwrap();
-        if !init.status.success() {
-            return; // git older than 2.45 has no reftable support
-        }
+        assert!(init.status.success(), "{init:?}");
         make_initial_commit(&repo);
         assert!(git_rev_parse(&repo, "HEAD").unwrap().is_some());
         git(&repo).args(["branch", "t"]).status().unwrap();

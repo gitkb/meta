@@ -646,15 +646,14 @@ mod tests {
     #[test]
     fn a_stopped_cherry_pick_is_found_in_a_reftable_repository() {
         let dir = tempfile::tempdir().unwrap();
-        // git before 2.45 has no reftable: nothing to check there
-        if run(
+        if !meta_test_support::git_has_reftable() {
+            return;
+        }
+        run(
             dir.path(),
             ["init", "-q", "-b", "main", "--ref-format=reftable"],
         )
-        .is_err()
-        {
-            return;
-        }
+        .unwrap();
         make_conflicting(dir.path());
         assert!(as_t(dir.path(), &["cherry-pick", "side"]).is_err());
         assert!(!dir.path().join(".git/CHERRY_PICK_HEAD").exists());

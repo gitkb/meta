@@ -12,9 +12,6 @@ setup_suite() {
             python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')" || return 1
         META_BIN_DIR="$target/debug"
     fi
-    # every test cds first, so the path must not be relative
-    META_BIN_DIR="$(cd "$META_BIN_DIR" && pwd -P)" || return 1
-    export META_BIN_DIR
     local bin missing=""
     for bin in meta meta-git meta-project meta-cargo meta-mcp loop; do
         [ -x "$META_BIN_DIR/$bin" ] || missing="$missing $bin"
@@ -23,4 +20,7 @@ setup_suite() {
         echo "not in META_BIN_DIR ($META_BIN_DIR):$missing; build them with cargo build --workspace" >&2
         return 1
     fi
+    # every test cds first, so the path must not be relative
+    META_BIN_DIR="$(cd "$META_BIN_DIR" && pwd -P)"
+    export META_BIN_DIR
 }

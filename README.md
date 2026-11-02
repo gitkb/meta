@@ -366,13 +366,7 @@ meta --recursive --depth 2 git pull
 
 ## Plugins
 
-Plugins are standalone executables that extend meta. They're discovered automatically from:
-
-1. `.meta/plugins/` next to the nearest meta config at or above the current directory, then next to each parent meta config that lists that directory as a project (the same workspace), nearest first. A parent that doesn't list it is another workspace and is not read. Inside a worktree set meta made, a checkout's own `.meta/plugins/` comes first, then those of the checkout it stands for (the one it was made from) and its workspace. `meta plugin install <name> --local` installs into the nearest one.
-2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
-3. Executables named `meta-*` on PATH.
-
-A plugin named `meta-<word>` serves `meta <word> ...`, and the first file found with that name wins. For a command meta starts only that file; if it doesn't answer `--meta-plugin-info` with its info within 5 seconds, the command fails naming it. `meta`, `meta help`, `meta --help` and `meta plugin list` start every plugin; there a plugins folder meta can't read, and a plugin that doesn't answer within 5 seconds, are skipped with a warning naming them. So is a file in `.meta/plugins` or `~/.meta/plugins` that can't be started, isn't executable, or answers with anything but its info; a `meta-*` program on PATH that can't be started or isn't a plugin is just left out, as it may be any program. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
+Plugins are standalone executables that extend meta: a program named `meta-<word>` serves `meta <word> ...`. meta finds them in the workspace's `.meta/plugins/` folders, then `~/.meta/plugins/` (where `meta plugin install <name>` puts them; `--local` installs into the workspace), then PATH; the first file with the name wins. `meta plugin list` shows what it found. See [docs/plugin_development.md](docs/plugin_development.md#discovery-and-naming) for the details.
 
 ### Built-in Plugins
 

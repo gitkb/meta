@@ -15,6 +15,9 @@
 //! out. `meta git WORD` has to name a git command, since meta passes it to
 //! git unread.
 //!
+//! It runs the plugins built in the target dir, which a `cargo test -p meta`
+//! alone doesn't rebuild: CI and `make test` build the workspace first.
+//!
 //! What this can't catch: text that says the wrong thing about a command
 //! that exists (`exec` "runs sequentially"), arguments that reach a program
 //! unread (`meta git pull --tag backend`, `meta exec -- …`), and `loop`
@@ -34,7 +37,6 @@ use std::process::{Command, Output, Stdio};
 use syn::visit::Visit;
 
 /// A command found somewhere, as the words after `meta`.
-#[derive(Debug, PartialEq)]
 struct Line {
     at: String,
     words: Vec<String>,
@@ -145,7 +147,9 @@ fn string_lines(text: &str, at: &str, doc: bool) -> Vec<Line> {
     lines
 }
 
-/// meta's command words: its own and its plugins'.
+/// meta's command words: its own (`meta --help`), its plugins' and the
+/// guide's example plugin's. A word missing here only makes a whole string
+/// starting with it go unchecked.
 const COMMANDS: &[&str] = &[
     "context", "exec", "help", "init", "plugin", "git", "project", "cargo", "hello",
 ];
@@ -154,7 +158,8 @@ fn is_meta(command: &str) -> bool {
     command == "meta" || command.starts_with("meta ")
 }
 
-/// meta's options that take a value: the word after one isn't the command.
+/// meta's options that take a value (`meta --help`): the word after one isn't
+/// the command.
 const VALUED: &[&str] = &[
     "-c",
     "--config",
@@ -230,26 +235,45 @@ fn commands_of(command: &str, at: &str, in_prose: bool) -> Vec<Line> {
     lines
 }
 
-/// Whether the next word after `words` is where a command word goes: the
-/// first word after meta's options, or the one after a command that has
-/// subcommands.
-fn at_command_word(words: &[String]) -> bool {
-    if words.last().is_some_and(|word| {
-        ["git", "plugin", "project", "init", "help", "worktree"].contains(&word.as_str())
-    }) {
-        return true;
+/// `words` with meta's `--dry-run` among the options before the command,
+/// whatever the command's own arguments hold (`exec -- x --dry-run`).
+fn previewed(words: &[String]) -> Vec<String> {
+    let mut words = words.to_vec();
+    let options = words.get(..command_word(&words)).unwrap_or_default();
+    if !options.iter().any(|word| word == "--dry-run") {
+        words.insert(0, "--dry-run".into());
     }
+    words
+}
+
+/// Where the command word is in `words`: the first word after meta's
+/// options and their values.
+fn command_word(words: &[String]) -> usize {
     let mut expects_value = false;
-    for word in words {
+    for (at, word) in words.iter().enumerate() {
         if expects_value {
             expects_value = false;
         } else if word.starts_with('-') {
             expects_value = VALUED.contains(&word.as_str());
         } else {
-            return false;
+            return at;
         }
     }
-    !expects_value
+    words.len()
+}
+
+/// Whether the next word after `words` is where a command word goes: the
+/// first word after meta's options, or the one after a command that has
+/// subcommands.
+fn at_command_word(words: &[String]) -> bool {
+    let after_command = words.last().is_some_and(|word| {
+        ["git", "plugin", "project", "init", "help", "worktree"].contains(&word.as_str())
+    });
+    after_command
+        || command_word(words) == words.len()
+            && !words
+                .last()
+                .is_some_and(|word| VALUED.contains(&word.as_str()))
 }
 
 /// What a filled-in word becomes: a project and a tag of the sandbox, and a
@@ -513,10 +537,7 @@ impl Sandbox {
 
     /// Why meta doesn't accept `line`, if it doesn't.
     fn rejects(&self, line: &Line) -> Option<String> {
-        let mut words = line.words.clone();
-        if !words.iter().any(|word| word == "--dry-run") {
-            words.insert(0, "--dry-run".into());
-        }
+        let mut words = previewed(&line.words);
         let out = self.meta(&words);
         let accepted = matches!(out.status.code(), Some(0 | 1))
             || (line.name_only && out.status.code() == Some(2) && {
@@ -643,6 +664,16 @@ fn a_command_ends_where_the_shell_takes_over_and_its_blanks_are_filled_in() {
             (w(&["plugin", "install", FILL]), true),
             (w(&["git", "status"]), true)
         ]
+    );
+    // meta's --dry-run goes before the command, whatever the command takes
+    let w2 = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        previewed(&w2(&["--tag", "x", "exec", "--", "rm", "--dry-run"])),
+        w2(&["--dry-run", "--tag", "x", "exec", "--", "rm", "--dry-run"])
+    );
+    assert_eq!(
+        previewed(&w2(&["--dry-run", "git", "update"])),
+        w2(&["--dry-run", "git", "update"])
     );
     // a blank where the command goes leaves a command name
     assert_eq!(

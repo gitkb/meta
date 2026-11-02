@@ -63,7 +63,7 @@ It answers on stdout with one of:
   ```json
   {"plan": {"commands": [{"dir": "/home/me/ws/api", "argv": ["echo", "hello team"]}]}}
   ```
-  Each `argv` runs as given, with no shell. A plan can also carry `pre_commands`, `post_commands`, `parallel`, `max_parallel`, `spawn_stagger_ms` and a per-command `env` (`ExecutionPlan`).
+  Each `argv` runs as given, with no shell. A plan can also carry `pre_commands` and `post_commands`, which run one at a time before and after the main ones and **run under `--dry-run` too** (they are for setup such as an SSH connection, not for changes), and `parallel`, `max_parallel`, `spawn_stagger_ms` and a per-command `env` (`ExecutionPlan`).
 - any other output, which meta prints as it is.
 
 and ends with its exit code: 0 done, 1 failed, 2 the command line was wrong (`CommandResult::Error` and `CommandResult::Usage` print the message on stderr and exit 1 and 2). meta ends with the plugin's code. A plugin that changes something itself (instead of planning) honours `options.dry_run`, or refuses it with exit 2.

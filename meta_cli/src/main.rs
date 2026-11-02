@@ -998,7 +998,7 @@ fn unrecognized_command_error(
     plugins: &SubprocessPluginManager,
 ) -> anyhow::Error {
     let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
-    let cli = Cli::command();
+    let mut cli = Cli::command();
     let builtins: Vec<&str> = cli.get_subcommands().map(|sub| sub.get_name()).collect();
     // Plugins by their file names: none is started to list them
     let words = plugins.words();
@@ -1033,7 +1033,7 @@ fn unrecognized_command_error(
         "unrecognized command '{}'\n\n{suggestion}\n\n\
          Plugins add more commands: meta --help lists them.\n\n{}",
         escape(first_cmd),
-        cli.clone().render_help().to_string().trim_end()
+        cli.render_help().to_string().trim_end()
     ))
     .into()
 }

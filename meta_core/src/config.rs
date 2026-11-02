@@ -18,33 +18,26 @@ pub enum ProjectEntry {
     /// Simple format: just a git URL string
     Simple(GitUrl),
     /// Extended format: object with repo, path, tags, and dependency info
-    Extended {
-        /// Git remote URL (optional for local-only projects).
-        repo: Option<GitUrl>,
-        path: Option<String>,
-        tags: Vec<String>,
-        provides: Vec<String>,
-        depends_on: Vec<String>,
-        /// If true, this directory contains a nested .meta.yaml
-        meta: bool,
-    },
+    Extended(ExtendedEntry),
 }
 
-/// The fields of [`ProjectEntry::Extended`]; others are left to other tools.
-#[derive(Deserialize)]
-struct ExtendedEntry {
+/// An extended project entry's fields; others are left to other tools.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExtendedEntry {
+    /// Git remote URL (optional for local-only projects).
     #[serde(default)]
-    repo: Option<GitUrl>,
+    pub repo: Option<GitUrl>,
     #[serde(default)]
-    path: Option<String>,
+    pub path: Option<String>,
     #[serde(default)]
-    tags: Vec<String>,
+    pub tags: Vec<String>,
     #[serde(default)]
-    provides: Vec<String>,
+    pub provides: Vec<String>,
     #[serde(default)]
-    depends_on: Vec<String>,
+    pub depends_on: Vec<String>,
+    /// If true, this directory contains a nested .meta.yaml
     #[serde(default)]
-    meta: bool,
+    pub meta: bool,
 }
 
 /// A URL or a mapping, and an error that says so (and what was wrong in the
@@ -72,16 +65,8 @@ impl<'de> Deserialize<'de> for ProjectEntry {
                 self,
                 map: M,
             ) -> Result<Self::Value, M::Error> {
-                let entry =
-                    ExtendedEntry::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
-                Ok(ProjectEntry::Extended {
-                    repo: entry.repo,
-                    path: entry.path,
-                    tags: entry.tags,
-                    provides: entry.provides,
-                    depends_on: entry.depends_on,
-                    meta: entry.meta,
-                })
+                ExtendedEntry::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(ProjectEntry::Extended)
             }
         }
         deserializer.deserialize_any(EntryVisitor)
@@ -588,14 +573,14 @@ impl Workspace {
                     }
                     // Extended object -> repo with additional fields
                     // meta: true indicates this project is also a meta-repo (has its own .meta.yaml)
-                    ProjectEntry::Extended {
+                    ProjectEntry::Extended(ExtendedEntry {
                         repo,
                         path,
                         tags,
                         provides,
                         depends_on,
                         meta,
-                    } => {
+                    }) => {
                         let resolved_path = path.unwrap_or_else(|| name.clone());
                         (repo, resolved_path, tags, provides, depends_on, meta)
                     }

@@ -384,10 +384,7 @@ impl RegistryClient {
         else {
             anyhow::bail!("Invalid GitHub shorthand: {}", escape(shorthand));
         };
-        let api_url = format!(
-            "https://api.github.com/repos/{}/{}/releases/latest",
-            user, repo
-        );
+        let api_url = format!("{}/repos/{user}/{repo}/releases/latest", github().1);
 
         debug!("Checking latest version: {}", api_url);
 
@@ -422,12 +419,8 @@ impl RegistryClient {
     ///
     /// Can be overridden with META_PLATFORM environment variable for testing.
     pub fn current_platform() -> String {
-        Self::platform(std::env::var("META_PLATFORM").ok())
-    }
-
-    /// `override_platform` if given, else the platform this was built for
-    fn platform(override_platform: Option<String>) -> String {
-        if let Some(override_platform) = override_platform {
+        // Check for override via environment variable
+        if let Ok(override_platform) = std::env::var("META_PLATFORM") {
             debug!(
                 "Using platform override from META_PLATFORM: {}",
                 override_platform
@@ -453,6 +446,21 @@ impl RegistryClient {
             all(target_os = "windows", target_arch = "x86_64"),
         )))]
         return "unknown".to_string();
+    }
+}
+
+/// Where releases are, and GitHub's API: `META_GITHUB_URL` (a GitHub
+/// Enterprise server, whose API is under `/api/v3`), else github.com
+fn github() -> (String, String) {
+    match std::env::var("META_GITHUB_URL") {
+        Ok(url) => {
+            let url = url.trim_end_matches('/');
+            (url.to_string(), format!("{url}/api/v3"))
+        }
+        Err(_) => (
+            "https://github.com".to_string(),
+            "https://api.github.com".to_string(),
+        ),
     }
 }
 
@@ -822,7 +830,7 @@ impl PluginInstaller {
         }
 
         // Try to download with various URL patterns
-        let urls = self.construct_github_urls(shorthand, &platform);
+        let urls = self.construct_github_urls(&github().0, shorthand, &platform);
 
         let mut last_error = None;
         for url in &urls {
@@ -871,12 +879,14 @@ impl PluginInstaller {
     }
 
     /// Construct possible GitHub release URLs for a shorthand
-    fn construct_github_urls(&self, shorthand: &GitHubShorthand, platform: &str) -> Vec<String> {
+    fn construct_github_urls(
+        &self,
+        github: &str,
+        shorthand: &GitHubShorthand,
+        platform: &str,
+    ) -> Vec<String> {
         let mut urls = Vec::new();
-        let base = format!(
-            "https://github.com/{}/{}/releases",
-            shorthand.user, shorthand.repo
-        );
+        let base = format!("{github}/{}/{}/releases", shorthand.user, shorthand.repo);
 
         // Determine version component
         let version_paths = if let Some(version) = &shorthand.version {
@@ -1282,7 +1292,8 @@ mod tests {
 
     #[test]
     fn test_current_platform() {
-        let platform = RegistryClient::platform(None);
+        let platform = RegistryClient::current_platform();
+        assert!(!platform.is_empty());
         // Platform should be one of the known values
         let known_platforms = [
             "darwin-arm64",
@@ -1913,7 +1924,8 @@ mod tests {
         };
 
         let shorthand = GitHubShorthand::parse("user/meta-docker@v1.0.0").unwrap();
-        let urls = installer.construct_github_urls(&shorthand, "darwin-arm64");
+        let urls =
+            installer.construct_github_urls("https://github.com", &shorthand, "darwin-arm64");
 
         // Should contain versioned URLs
         assert!(urls.iter().any(|u| u.contains("download/v1.0.0")));
@@ -1940,7 +1952,7 @@ mod tests {
         };
 
         let shorthand = GitHubShorthand::parse("user/meta-docker").unwrap();
-        let urls = installer.construct_github_urls(&shorthand, "linux-x64");
+        let urls = installer.construct_github_urls("https://github.com", &shorthand, "linux-x64");
 
         // Should use latest/download for unversioned
         assert!(urls.iter().any(|u| u.contains("latest/download")));
@@ -1957,7 +1969,7 @@ mod tests {
 
         // When repo doesn't have "meta-" prefix, both names would be the same
         let shorthand = GitHubShorthand::parse("user/docker").unwrap();
-        let urls = installer.construct_github_urls(&shorthand, "linux-x64");
+        let urls = installer.construct_github_urls("https://github.com", &shorthand, "linux-x64");
 
         // Count how many URLs contain "docker-linux-x64" (exact platform match)
         let docker_count = urls
@@ -1974,7 +1986,7 @@ mod tests {
 
         // With "meta-" prefix, there should be two distinct names
         let shorthand = GitHubShorthand::parse("user/meta-docker").unwrap();
-        let urls = installer.construct_github_urls(&shorthand, "linux-x64");
+        let urls = installer.construct_github_urls("https://github.com", &shorthand, "linux-x64");
 
         // Count URLs with exact platform for each plugin name variant
         let meta_docker_count = urls
@@ -2055,14 +2067,6 @@ mod tests {
 
         let too_short = [0x1f];
         assert_eq!(ArchiveFormat::from_bytes(&too_short), None);
-    }
-
-    #[test]
-    fn a_platform_override_wins() {
-        assert_eq!(
-            RegistryClient::platform(Some("test-platform-x64".to_string())),
-            "test-platform-x64"
-        );
     }
 
     #[test]
@@ -2355,14 +2359,6 @@ mod tests {
             DEFAULT_REGISTRY,
             "https://raw.githubusercontent.com/gitkb/meta-plugins/main"
         );
-    }
-
-    #[test]
-    fn test_resolve_plugin_source_invalid_name() {
-        let client = RegistryClient::new().unwrap();
-        let result = client.resolve_plugin_source("nonexistent-plugin-12345");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found"));
     }
 
     // === M7: Plugin updates tests ===

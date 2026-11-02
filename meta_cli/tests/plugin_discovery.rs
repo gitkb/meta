@@ -5,6 +5,7 @@
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
+// Unix only: the plugins here are shell scripts
 #![cfg(unix)]
 
 use std::fs;

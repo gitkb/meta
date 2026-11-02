@@ -7,6 +7,7 @@
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
+// Unix only: signals and process groups
 #![cfg(unix)]
 
 use std::fs;

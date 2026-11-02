@@ -9,6 +9,7 @@
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
+// Unix only: the commands held mid-way are shell scripts that block on a pipe
 #![cfg(unix)]
 
 use serde_json::json;

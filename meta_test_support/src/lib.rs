@@ -5,6 +5,11 @@
 //! [`Sandbox::command`] gets those instead of the user's, so a test never
 //! reads or writes the user's settings (their git identity, hooks, signing,
 //! plugins). Git a fixture runs fails the test unless it succeeds.
+//!
+//! On Windows the user's home is found without `HOME`, so there meta's own
+//! files stay out of it through `META_DATA_DIR` alone.
+//!
+//! This is test code: a panic here is a failed test.
 
 #![expect(
     clippy::disallowed_methods,
@@ -43,8 +48,13 @@ impl Default for Sandbox {
 impl Sandbox {
     pub fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        // the path programs see: macOS's temp dir is behind a symlink
-        let root = dir.path().canonicalize().unwrap();
+        // the path programs see: macOS's temp dir is behind a symlink. Not
+        // on Windows, where git refuses the `\\?\` form canonicalize gives
+        let root = if cfg!(windows) {
+            dir.path().to_path_buf()
+        } else {
+            dir.path().canonicalize().unwrap()
+        };
         for sub in ["home", "config", "data", "runtime", "meta", "tmp", "work"] {
             std::fs::create_dir(root.join(sub)).unwrap();
         }

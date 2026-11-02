@@ -522,8 +522,11 @@ fn each_command_runs_in_its_own_directory_with_its_own_env() {
 }
 
 /// With `max_parallel` 2, never more than two commands run at once. Each
-/// command takes a slot and waits (up to 5 s) until two are taken, so two
-/// do run together; a third would see three.
+/// command takes a slot, waits (up to 5 s) until two are taken, so two do
+/// run together, and counts the slots on taking one and before giving it
+/// back: a third running would be counted. Unix only: counting files in
+/// `cmd` is impractical, and the bound (the pool's size) is the same code
+/// everywhere.
 #[cfg(unix)]
 #[test]
 fn max_parallel_bounds_how_many_run_at_once() {
@@ -532,7 +535,7 @@ fn max_parallel_bounds_how_many_run_at_once() {
     fs::create_dir(root.join("slots")).unwrap();
     let script = "touch ../slots/$WHO; ls ../slots | wc -l >> ../seen; i=0; \
         while [ \"$(ls ../slots | wc -l)\" -lt 2 ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done; \
-        sleep 0.1; rm ../slots/$WHO";
+        sleep 0.1; ls ../slots | wc -l >> ../seen; rm ../slots/$WHO";
     let commands: Vec<_> = (0..6)
         .map(|n| {
             let dir = root.join(format!("d{n}"));
@@ -552,7 +555,7 @@ fn max_parallel_bounds_how_many_run_at_once() {
         .lines()
         .map(|n| n.trim().parse().unwrap())
         .collect();
-    assert_eq!(seen.len(), 6);
+    assert_eq!(seen.len(), 12);
     assert_eq!(seen.iter().max(), Some(&2), "{seen:?}");
 }
 

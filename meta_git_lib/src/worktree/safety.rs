@@ -695,9 +695,7 @@ mod tests {
 
     #[test]
     fn repo_holds_names_what_only_this_clone_has() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let (repo, remote) = (tmp.join("repo"), tmp.join("remote.git"));
         std::fs::create_dir(&repo).unwrap();
@@ -738,9 +736,7 @@ mod tests {
 
     #[test]
     fn clean_nested_set_is_clear() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "root", &set);
@@ -778,9 +774,7 @@ mod tests {
 
     #[test]
     fn records_name_their_set_and_block_any_other() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "root", &set);
@@ -817,9 +811,7 @@ mod tests {
 
     #[test]
     fn records_that_differ_or_sit_outside_git_layout_block() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "root", &set);
@@ -877,9 +869,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_record_is_trusted_when_the_worktrees_dir_is_a_link() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let source = tmp.join("root");
         sandbox.repo(&source);
@@ -899,9 +889,7 @@ mod tests {
 
     #[test]
     fn a_locked_worktree_blocks() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "root", &set);
@@ -918,9 +906,7 @@ mod tests {
 
     #[test]
     fn reports_dirty_nested_repo_loose_files_and_primary_checkouts() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "leaf", &set.join("sub/leaf"));
@@ -951,9 +937,7 @@ mod tests {
 
     #[test]
     fn reports_commits_only_a_detached_head_holds() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "root", &set);
@@ -972,9 +956,7 @@ mod tests {
 
     #[test]
     fn delete_checked_set_refuses_files_that_appeared_after_the_check() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "leaf", &set.join("sub/leaf"));
@@ -1000,9 +982,7 @@ mod tests {
 
     #[test]
     fn recheck_sees_changes_the_summary_hides() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "root", &set);
@@ -1018,9 +998,7 @@ mod tests {
 
     #[test]
     fn a_worktree_of_a_bare_repository_is_clear() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let seed = tmp.join("seed");
         std::fs::create_dir(&seed).unwrap();
@@ -1053,9 +1031,7 @@ mod tests {
 
     #[test]
     fn reports_files_hidden_by_index_flags_and_operations_in_progress() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "root", &set);
@@ -1084,9 +1060,7 @@ mod tests {
     fn files_with_non_utf8_names_are_tracked_exactly() {
         use std::os::unix::ffi::OsStrExt;
 
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "root", &set);
@@ -1104,9 +1078,7 @@ mod tests {
 
     #[test]
     fn a_checkout_git_cannot_inspect_is_a_blocker() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "root", &set);
@@ -1122,9 +1094,7 @@ mod tests {
 
     #[test]
     fn recheck_sees_a_rewritten_file() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "leaf", &set.join("leaf"));
@@ -1152,9 +1122,7 @@ mod tests {
 
     #[test]
     fn recheck_sees_a_change_only_in_the_index() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "root", &set);
@@ -1182,9 +1150,7 @@ mod tests {
 
     #[test]
     fn delete_checked_set_refuses_a_set_that_changed_inside_a_worktree() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         repo_with_worktree(&sandbox, &tmp, "root", &set);
@@ -1207,9 +1173,7 @@ mod tests {
 
     #[test]
     fn a_symlinked_set_folder_is_the_folder_it_leads_to() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let target = tmp.join("target");
         repo_with_worktree(&sandbox, &tmp, "root", &target);
@@ -1234,9 +1198,7 @@ mod tests {
 
     #[test]
     fn separate_git_dir_checkout_is_not_a_worktree() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         std::fs::create_dir_all(set.join("repo")).unwrap();
@@ -1262,9 +1224,7 @@ mod tests {
 
     #[test]
     fn set_root_that_is_a_primary_checkout_is_blocked() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q"]);
         let check = check_worktree_removal(&tmp).unwrap();

@@ -575,7 +575,6 @@ mod test_support;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::Sandbox;
     use serde_json::json;
 
     #[test]
@@ -695,9 +694,7 @@ mod tests {
 
     #[test]
     fn a_call_cancelled_before_it_starts_never_runs_or_answers() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let (server, tmp) = test_support::workspace(&sandbox);
         let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "meta_batch_execute", "arguments": {"command": ["touch", "ran"]}}});
@@ -717,9 +714,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn a_stopping_server_writes_the_reply_of_a_call_that_ended() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         use std::sync::atomic::{AtomicBool, Ordering};
         /// Output whose first write waits until it is let through.
         struct Gate<'a> {
@@ -770,9 +765,7 @@ mod tests {
 
     #[test]
     fn a_malformed_cancellation_in_a_batch_cancels_nothing() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let (server, tmp) = test_support::workspace(&sandbox);
         let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "meta_batch_execute", "arguments": {"command": ["git", "init", "-q", "ran"]}}});
@@ -796,9 +789,7 @@ mod tests {
 
     #[test]
     fn a_tool_error_keeps_its_cause() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let (server, _tmp) = test_support::server(&sandbox, "unknown_top: 1\n");
         let result = server
             .handle_call_tool(&json!({"name": "meta_list_projects"}))

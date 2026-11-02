@@ -187,13 +187,10 @@ pub fn remote_url(dir: &Path) -> anyhow::Result<Option<GitUrl>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::Sandbox;
 
     #[test]
     fn every_variable_git_reports_is_cleared() {
-        let Some(_sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let _sandbox = meta_test_support::isolated!();
         let reported = run(Path::new("."), ["rev-parse", "--local-env-vars"]).unwrap();
         let kept = ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"];
         for name in reported.lines().filter(|name| !kept.contains(name)) {
@@ -203,9 +200,7 @@ mod tests {
 
     #[test]
     fn git_in_a_project_folder_never_reaches_the_repository_around_it() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.work();
         let workspace = dir.join("ws");
         std::fs::create_dir_all(workspace.join("plain")).unwrap();
@@ -235,9 +230,7 @@ mod tests {
 
     #[test]
     fn a_path_list_separator_in_the_path_still_keeps_git_inside() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let separator = if cfg!(windows) { ";" } else { ":" };
         let dir = sandbox.work();
         let workspace = dir.join(format!("client{separator}acme"));
@@ -266,9 +259,7 @@ mod tests {
 
     #[test]
     fn remote_url_is_the_configured_one() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.work();
         let configured = "https://example.invalid/org/repo.git";
         for args in [
@@ -318,9 +309,7 @@ mod tests {
 
     #[test]
     fn run_names_the_failing_command() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.work();
         let err = run(dir.as_path(), ["rev-parse", "--verify", "nope"]).unwrap_err();
         assert!(

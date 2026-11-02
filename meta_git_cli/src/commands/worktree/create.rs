@@ -865,13 +865,10 @@ fn nested_dep_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::Sandbox;
 
     #[test]
     fn roll_back_deletes_a_set_whose_records_were_not_all_written() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         for (repo, wt) in [("root", set.clone()), ("leaf", set.join("leaf"))] {
@@ -906,9 +903,7 @@ mod tests {
 
     #[test]
     fn journal_keeps_only_branches_this_call_created() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q"]);
         sandbox.git(&tmp, &["commit", "-q", "--allow-empty", "-m", "init"]);

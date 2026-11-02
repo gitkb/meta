@@ -77,9 +77,7 @@ impl Sandbox {
     /// copy of the test running in the sandbox's environment; in the test
     /// as started, runs that copy, fails unless it passes, and returns None.
     ///
-    /// ```ignore
-    /// let Some(sandbox) = Sandbox::isolated() else { return };
-    /// ```
+    /// [`isolated!`] is the one line a test needs.
     pub fn isolated() -> Option<Sandbox> {
         if let Some(root) = std::env::var_os(ISOLATED) {
             return Some(Sandbox {
@@ -230,6 +228,18 @@ fn repo_env() -> &'static [String] {
     })
 }
 
+/// `let sandbox = isolated!();`: the sandbox of [`Sandbox::isolated`]; in
+/// the test as started, which only runs the copy, it returns.
+#[macro_export]
+macro_rules! isolated {
+    () => {
+        match $crate::Sandbox::isolated() {
+            Some(sandbox) => sandbox,
+            None => return,
+        }
+    };
+}
+
 /// Whether git can make reftable repos (2.45 on); says why not when not.
 pub fn git_has_reftable() -> bool {
     let out = Command::new("git").arg("version").output().unwrap();
@@ -318,9 +328,7 @@ mod tests {
 
     #[test]
     fn an_isolated_test_runs_with_the_sandbox_as_its_environment() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = isolated!();
         assert_eq!(std::env::var_os("HOME"), Some(sandbox.home().into()));
         let global = std::env::var_os("GIT_CONFIG_GLOBAL").unwrap();
         assert_eq!(Path::new(&global), sandbox.root.join("gitconfig"));

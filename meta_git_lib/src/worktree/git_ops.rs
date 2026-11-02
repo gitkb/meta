@@ -404,13 +404,10 @@ pub fn git_fetch_branch(repo_path: &Path, branch: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::Sandbox;
 
     #[test]
     fn checkout_guard_rejects_missing_plain_and_broken_repositories() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q", "-b", "main"]);
         let plain = tmp.join("plain");
@@ -432,9 +429,7 @@ mod tests {
     fn worktree_add_preserves_non_utf8_destination() {
         use std::os::unix::ffi::OsStrExt;
 
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.repo(&sandbox.work());
         let dest = tmp.join(std::ffi::OsStr::from_bytes(b"wt-\xff"));
         git_worktree_add(&tmp, &dest, "topic", None).unwrap();
@@ -447,9 +442,7 @@ mod tests {
     fn worktree_remove_preserves_non_utf8_destination() {
         use std::os::unix::ffi::OsStrExt;
 
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.repo(&sandbox.work());
         let dest = tmp.join(std::ffi::OsStr::from_bytes(b"wt-\xff"));
         let out = sandbox
@@ -466,9 +459,7 @@ mod tests {
 
     #[test]
     fn delete_branch_reports_a_failed_config_cleanup() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.repo(&sandbox.work());
         let head = git_rev_parse(&tmp, "HEAD").unwrap().unwrap();
         sandbox.git(&tmp, &["branch", "t"]);
@@ -487,9 +478,7 @@ mod tests {
 
     #[test]
     fn diff_handles_unrelated_histories_but_rejects_a_bad_ref() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.repo(&sandbox.work());
         sandbox.git(&tmp, &["branch", "base"]);
         sandbox.git(&tmp, &["checkout", "-q", "--orphan", "other"]);
@@ -506,9 +495,7 @@ mod tests {
 
     #[test]
     fn a_failed_fetch_keeps_each_line_under_the_message() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q", "-b", "main"]);
         sandbox.git(
@@ -529,9 +516,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_leftover_entry_is_reported_with_its_paths_escaped() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.repo(&sandbox.work());
         let set = tmp.join("set\u{1b}[2J");
         std::fs::create_dir(&set).unwrap();
@@ -551,9 +536,7 @@ mod tests {
 
     #[test]
     fn delete_branch_keeps_a_branch_that_moved() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.repo(&sandbox.work());
         let start = git_rev_parse(&tmp, "HEAD").unwrap().unwrap();
         sandbox.git(&tmp, &["branch", "t"]);
@@ -579,9 +562,7 @@ mod tests {
 
     #[test]
     fn branch_is_free_reads_reservations_and_changes_nothing() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.repo(&sandbox.work());
         sandbox.git(&tmp, &["branch", "t"]);
         sandbox.git(&tmp, &["config", "branch.autoSetupMerge", "always"]);
@@ -607,9 +588,7 @@ mod tests {
 
     #[test]
     fn branch_is_free_sees_checkouts_in_a_reftable_repository() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let repo = tmp.join("repo");
         if !meta_test_support::git_has_reftable() {
@@ -640,9 +619,7 @@ mod tests {
 
     #[test]
     fn a_symbolic_branch_is_never_moved_or_deleted() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.repo(&sandbox.work());
         let main = git_rev_parse(&tmp, "HEAD").unwrap().unwrap();
         let current = sandbox.git(&tmp, &["symbolic-ref", "HEAD"]);
@@ -656,9 +633,7 @@ mod tests {
 
     #[test]
     fn checkout_config_reports_core_bare_corruption_with_scoped_repair() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q", "-b", "main"]);
         sandbox.git(&tmp, &["config", "--local", "core.bare", "true"]);
@@ -673,9 +648,7 @@ mod tests {
 
     #[test]
     fn checkout_config_guard_allows_legitimate_bare_repository() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "--bare", "--quiet"]);
 

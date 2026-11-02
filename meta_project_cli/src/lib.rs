@@ -692,7 +692,6 @@ fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::Sandbox;
 
     /// The text of a `Message` result, or `None` for any other result.
     fn message(result: CommandResult) -> Option<String> {
@@ -720,9 +719,7 @@ mod tests {
 
     #[test]
     fn test_execute_command_no_meta_file() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
 
         let options = ExecuteOptions::default();
@@ -734,9 +731,7 @@ mod tests {
 
     #[test]
     fn test_unknown_command() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file
@@ -752,9 +747,7 @@ mod tests {
 
     #[test]
     fn test_project_check_all_present() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file with no projects
@@ -769,9 +762,7 @@ mod tests {
 
     #[test]
     fn arguments_after_the_command_and_each_config_once() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         let root = temp_dir.canonicalize().unwrap();
         std::fs::write(
@@ -831,9 +822,7 @@ mod tests {
 
     #[test]
     fn recursive_dependents_cover_nested_projects_by_path() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         let root = temp_dir.canonicalize().unwrap();
         let config = |dir: &Path, yaml: &str| {
@@ -875,9 +864,7 @@ mod tests {
 
     #[test]
     fn check_names_a_wrong_remote_and_list_shows_the_roots_from_a_child() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         let root = temp_dir.canonicalize().unwrap();
         std::fs::write(
@@ -926,9 +913,7 @@ mod tests {
 
     #[test]
     fn test_project_sync_removed() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file
@@ -949,9 +934,7 @@ mod tests {
 
     #[test]
     fn test_project_list_basic() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file with projects
@@ -972,9 +955,7 @@ mod tests {
 
     #[test]
     fn test_project_list_json() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
 
         std::fs::write(
@@ -1001,9 +982,7 @@ mod tests {
 
     #[test]
     fn test_project_ls_alias() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
 
         std::fs::write(
@@ -1021,9 +1000,7 @@ mod tests {
 
     #[test]
     fn test_project_list_recursive() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
 
         // Create root .meta.yaml
@@ -1178,9 +1155,7 @@ mod tests {
 
     #[test]
     fn test_project_list_json_includes_cwd() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
 
         std::fs::write(
@@ -1217,9 +1192,7 @@ mod tests {
 
     #[test]
     fn test_project_list_json_includes_linked_worktree_context() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1287,9 +1260,7 @@ mod tests {
     fn test_project_list_json_root_differs_from_cwd_in_nested_recursive() {
         // Regression: when invoked from a child directory with --recursive,
         // `root` must point to the outermost workspace root, NOT to cwd.
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         let child = temp_dir.join("child");
         std::fs::create_dir_all(&child).unwrap();
@@ -1339,9 +1310,7 @@ mod tests {
     fn test_project_list_recursive_from_nested() {
         // root has child, child has grandchild
         // Running recursive from child should show root's tree
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         let child = temp_dir.join("child");
         let grandchild = child.join("grandchild");
@@ -1384,9 +1353,7 @@ mod tests {
     #[test]
     fn test_project_list_non_recursive_stays_local() {
         // Running non-recursive from child should only show child's projects
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         let child = temp_dir.join("child");
         let grandchild = child.join("grandchild");
@@ -1424,9 +1391,7 @@ mod tests {
 
     #[test]
     fn test_project_dependents_command() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1460,9 +1425,7 @@ projects:
     #[test]
     fn test_project_dependents_from_subdirectory() {
         // T8: running from a subdirectory should climb to the nearest .meta.yaml ancestor
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1497,9 +1460,7 @@ projects:
 
     #[test]
     fn test_project_dependents_json() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1537,9 +1498,7 @@ projects:
 
     #[test]
     fn test_project_dependents_json_flag_in_args() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1574,9 +1533,7 @@ projects:
 
     #[test]
     fn test_project_dependents_rejects_what_it_does_not_take() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1605,9 +1562,7 @@ projects:
     #[test]
     fn test_project_dependents_unknown_project_error() {
         // T13: querying a nonexistent project name should error, not say "no dependents"
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),

@@ -335,7 +335,6 @@ pub fn exclude_worktrees(owner: &Path, worktree_root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::Sandbox;
 
     // ── validate_worktree_name ──────────────────────────────
 
@@ -417,9 +416,7 @@ mod tests {
 
     #[test]
     fn repo_matches_spec_requires_the_exact_repo() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q"]);
         sandbox.git(
@@ -474,9 +471,7 @@ mod tests {
 
     #[test]
     fn worktrees_go_to_info_exclude_not_gitignore() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q"]);
         std::fs::create_dir(tmp.join(".worktrees")).unwrap();
@@ -491,9 +486,7 @@ mod tests {
 
     #[test]
     fn a_gitignore_is_left_as_it_is() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q"]);
         std::fs::write(tmp.join(".gitignore"), "node_modules/").unwrap();
@@ -511,9 +504,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_worktrees_link_is_excluded_by_its_name() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let repo = tmp.join("ws");
         std::fs::create_dir_all(tmp.join("elsewhere")).unwrap();
@@ -527,9 +518,7 @@ mod tests {
 
     #[test]
     fn worktrees_outside_or_without_a_repository_need_nothing() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let ws = tmp.join("ws");
         std::fs::create_dir(&ws).unwrap();

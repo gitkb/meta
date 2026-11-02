@@ -392,13 +392,10 @@ pub(crate) fn parse_multi_commit_file(content: &str) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::Sandbox;
 
     #[test]
     fn commit_passes_over_folders_with_nothing_of_gits_but_reports_a_broken_one() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.work();
         sandbox.git(&dir, &["init", "-q"]);
         let args = || CommitArgs {
@@ -430,9 +427,7 @@ mod tests {
 
     #[test]
     fn a_workspace_root_that_is_no_repository_is_passed_over() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.work();
         // whatever the config is called (`meta -c meta.yml`)
         let root = dir;
@@ -471,9 +466,7 @@ mod tests {
 
     #[test]
     fn a_staged_file_read_git_fails_is_an_error_not_nothing_staged() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.work();
         let repo = dir.join("broken");
         std::fs::create_dir(&repo).unwrap();
@@ -501,9 +494,7 @@ mod tests {
 
     #[test]
     fn a_failed_commit_fails_the_command_after_the_others() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.work();
         // Each its own repository, so git never finds one around the
         // temporary directory; "a" has nothing staged, so its commit fails

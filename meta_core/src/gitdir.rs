@@ -239,9 +239,7 @@ mod tests {
 
     #[test]
     fn finds_the_common_dir_of_each_kind() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let (repo, wt) = repo_and_worktree(&sandbox);
         let canonical = |p: Option<PathBuf>| p.unwrap().canonicalize().unwrap();
@@ -318,9 +316,7 @@ mod tests {
 
     #[test]
     fn a_bare_repository_is_its_own_common_dir() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let bare = tmp.join("bare.git");
         std::fs::create_dir(&bare).unwrap();
@@ -349,9 +345,7 @@ mod tests {
 
     #[test]
     fn a_moved_worktree_is_not_linked() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let tmp = sandbox.work();
         let (_, wt) = repo_and_worktree(&sandbox);
         let moved = tmp.join("moved");

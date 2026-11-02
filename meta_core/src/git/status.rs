@@ -405,9 +405,7 @@ mod tests {
 
     #[test]
     fn reads_branch_changes_and_upstream() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let upstream = sandbox.repo(&sandbox.work().join("upstream"));
         commit(&sandbox, &upstream, "a");
         let dir = sandbox.work();
@@ -438,9 +436,7 @@ mod tests {
 
     #[test]
     fn each_kind_of_change_is_told_apart() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.repo(&sandbox.work().join("repo"));
         commit(&sandbox, dir.as_path(), "a");
         let status = |dir: &Path| RepoStatus::read(dir).unwrap();
@@ -471,9 +467,7 @@ mod tests {
 
     #[test]
     fn a_bare_repository_has_a_branch_commit_and_upstream() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let upstream = sandbox.repo(&sandbox.work().join("upstream"));
         commit(&sandbox, &upstream, "a");
         let dir = sandbox.work();
@@ -527,9 +521,7 @@ mod tests {
 
     #[test]
     fn a_new_repo_has_no_commit_or_upstream() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.work();
         sandbox.git(&dir, &["init", "-q", "-b", "main"]);
         let status = RepoStatus::read(dir.as_path()).unwrap();
@@ -540,9 +532,7 @@ mod tests {
 
     #[test]
     fn detached_head_has_no_branch() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.repo(&sandbox.work().join("repo"));
         commit(&sandbox, dir.as_path(), "a");
         sandbox.git(dir.as_path(), &["checkout", "-q", "--detach"]);
@@ -551,9 +541,7 @@ mod tests {
 
     #[test]
     fn each_stopped_operation_is_named() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.repo(&sandbox.work().join("main-conflict"));
         make_conflicting(&sandbox, &dir);
         let dir = dir.as_path();
@@ -654,9 +642,7 @@ mod tests {
 
     #[test]
     fn a_cherry_pick_sequence_stays_named_after_its_stopped_pick_is_committed() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.repo(&sandbox.work().join("repo"));
         make_conflicting(&sandbox, &dir);
         let dir = dir.as_path();
@@ -680,9 +666,7 @@ mod tests {
 
     #[test]
     fn a_stopped_cherry_pick_is_found_in_a_reftable_repository() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.work();
         if !meta_test_support::git_has_reftable() {
             return;
@@ -710,9 +694,7 @@ mod tests {
 
     #[test]
     fn an_operation_belongs_to_the_worktree_it_stopped_in() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let dir = sandbox.repo(&sandbox.work().join("repo"));
         make_conflicting(&sandbox, &dir);
         let linked = dir.join("linked");
@@ -734,9 +716,7 @@ mod tests {
 
     #[test]
     fn an_upstream_is_gone_only_when_its_branch_is() {
-        let Some(sandbox) = Sandbox::isolated() else {
-            return;
-        };
+        let sandbox = meta_test_support::isolated!();
         let upstream = sandbox.repo(&sandbox.work().join("upstream"));
         commit(&sandbox, &upstream, "a");
         sandbox.git(&upstream, &["branch", "topic"]);

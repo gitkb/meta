@@ -426,7 +426,7 @@ fn run_cli() -> Result<()> {
                 None => None,
             };
             let Some(plugin) = plugin else {
-                return Err(unrecognized_command_error(args, &subprocess_plugins));
+                return Err(unrecognized_command_error(args, &subprocess_plugins, true));
             };
             plugin_command(&cli, args, &plugin)
         }
@@ -467,7 +467,7 @@ fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Resul
         return Ok(out!("{}", found.render_help())?);
     }
     let Some(plugin) = plugins.find(first)? else {
-        return Err(unrecognized_command_error(words, plugins));
+        return Err(unrecognized_command_error(words, plugins, false));
     };
     // The command's words only: what follows `--` is its arguments, and
     // help never runs the command
@@ -989,13 +989,16 @@ fn handle_plugin_command(
 // === Helpers ===
 
 /// The usage error for a command meta doesn't know, with meta's help and a
-/// suggestion: the command its first word is a typo of, else running it in
-/// each repo. A program on PATH (`cp`) is no typo, and a
-/// plugin word is suggested only once its file answers as a plugin: the file
-/// the suggestion would start.
+/// suggestion made by changing the line as typed at the command word alone,
+/// so everything else typed stays as it was: the command its first word is
+/// a typo of, else (unless `meta help` was asked) `exec --` before it, to run
+/// it in each repo. A program on PATH (`cp`) is no typo, and a plugin word is
+/// suggested only once its file answers as a plugin: the file the suggestion
+/// would start.
 fn unrecognized_command_error(
     command_args: &[String],
     plugins: &SubprocessPluginManager,
+    run_it: bool,
 ) -> anyhow::Error {
     let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
     let mut cli = Cli::command();
@@ -1014,45 +1017,36 @@ fn unrecognized_command_error(
         })
         .flatten()
         .filter(|word| builtins.contains(word) || matches!(plugins.find(word), Ok(Some(_))));
-    // what the user typed before the command (meta's options, `help`) stays
+    // the line as typed, whose words from the command word on are command_args
     let typed: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    let before = typed
-        .get(..typed.len().saturating_sub(command_args.len()))
-        .unwrap_or_default();
-    let shown = |before: &[String], words: &[&str]| -> String {
-        let argv: Vec<String> = before
+    let at = typed.len().saturating_sub(command_args.len());
+    let edited = |command: &[&str]| -> String {
+        let argv: Vec<String> = typed
             .iter()
+            .take(at)
             .cloned()
-            .chain(words.iter().map(|word| word.to_string()))
+            .chain(command.iter().map(|word| word.to_string()))
+            .chain(typed.iter().skip(at + 1).cloned())
             .collect();
         escape(&loop_lib::display_command(&argv)).into_owned()
     };
-    let rest: Vec<&str> = command_args.iter().skip(1).map(String::as_str).collect();
     let suggestion = match near {
         Some(word) => format!(
-            "A command with a similar name exists:\n    meta {}",
-            shown(before, &[&[word][..], &rest].concat())
+            "\n\nA command with a similar name exists:\n    meta {}",
+            edited(&[word])
         ),
-        None => {
-            let command_str = escape(&loop_lib::display_command(command_args)).into_owned();
-            // `meta help printf`: printf runs with `meta exec`, not `meta help exec`
-            let options = match before.split_last() {
-                Some((last, options)) if last == "help" => options,
-                _ => before,
-            };
-            let mut exec = vec!["exec", "--"];
-            exec.extend(command_args.iter().map(String::as_str));
-            format!(
-                "To run '{command_str}' across all repos:\n    meta {}",
-                shown(options, &exec)
-            )
-        }
+        None if run_it => format!(
+            "\n\nTo run '{}' across all repos:\n    meta {}",
+            escape(&loop_lib::display_command(command_args)),
+            edited(&["exec", "--", first_cmd])
+        ),
+        None => String::new(),
     };
     meta_core::exit::Usage(format!(
-        "unrecognized command '{}'\n\n{suggestion}\n\n\
+        "unrecognized command '{}'{suggestion}\n\n\
          Plugins add more commands: meta --help lists them.\n\n{}",
         escape(first_cmd),
         cli.render_help().to_string().trim_end()

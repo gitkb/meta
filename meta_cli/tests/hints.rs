@@ -136,14 +136,19 @@ fn a_typo_of_a_command_suggests_the_command_it_is_near() {
         suggested(&out),
         ["--include", "api", "exec", "--", "query", "x"]
     );
-    // through help too, where only a command near the word keeps `help`
+    // the line is changed at the command word alone: an option's value that
+    // looks like a command word stays (a project named `help`)
+    let out = workspace.meta(&["--exclude", "help", "printf", "x"]);
+    assert_eq!(
+        suggested(&out),
+        ["--exclude", "help", "exec", "--", "printf", "x"]
+    );
+    // through help, a typo is fixed; a program isn't run
     let out = workspace.meta(&["help", "gti", "status"]);
     assert_eq!(suggested(&out), ["help", "git", "status"]);
     let out = workspace.meta(&["--include", "api", "help", "printf", "x"]);
-    assert_eq!(
-        suggested(&out),
-        ["--include", "api", "exec", "--", "printf", "x"]
-    );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(suggested(&out).is_empty(), "{}", text(&out));
     // nothing near, a program on PATH (`cp` is near the `meta-mcp` file
     // beside meta), or a word whose file isn't a plugin (`meta-mcp`): run it
     // in each repo

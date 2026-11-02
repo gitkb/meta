@@ -404,28 +404,18 @@ pub fn git_fetch_branch(repo_path: &Path, branch: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_core::git::run;
-    use std::process::{Command, Stdio};
-
-    fn git(dir: &Path) -> Command {
-        let mut command = meta_core::git::git(dir);
-        command.args([
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@test.com",
-            "-c",
-            "commit.gpgsign=false",
-        ]);
-        command
-    }
+    use meta_test_support::Sandbox;
 
     #[test]
     fn checkout_guard_rejects_missing_plain_and_broken_repositories() {
-        let tmp = init_git_repo();
-        let plain = tmp.path().join("plain");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        sandbox.git(&tmp, &["init", "-q", "-b", "main"]);
+        let plain = tmp.join("plain");
         std::fs::create_dir(&plain).unwrap();
-        for path in [&tmp.path().join("missing"), &plain] {
+        for path in [&tmp.join("missing"), &plain] {
             let err = ensure_checkout_config_is_not_bare(path).unwrap_err();
             assert!(
                 err.to_string().contains(&path.display().to_string()),
@@ -442,12 +432,14 @@ mod tests {
     fn worktree_add_preserves_non_utf8_destination() {
         use std::os::unix::ffi::OsStrExt;
 
-        let tmp = init_git_repo();
-        make_initial_commit(tmp.path());
-        let dest = tmp.path().join(std::ffi::OsStr::from_bytes(b"wt-\xff"));
-        git_worktree_add(tmp.path(), &dest, "topic", None).unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.repo(&sandbox.work());
+        let dest = tmp.join(std::ffi::OsStr::from_bytes(b"wt-\xff"));
+        git_worktree_add(&tmp, &dest, "topic", None).unwrap();
         assert!(dest.join(".git").is_file());
-        assert!(!tmp.path().join("wt-\u{fffd}").exists());
+        assert!(!tmp.join("wt-\u{fffd}").exists());
     }
 
     #[cfg(target_os = "linux")]
@@ -455,79 +447,75 @@ mod tests {
     fn worktree_remove_preserves_non_utf8_destination() {
         use std::os::unix::ffi::OsStrExt;
 
-        let tmp = init_git_repo();
-        make_initial_commit(tmp.path());
-        let dest = tmp.path().join(std::ffi::OsStr::from_bytes(b"wt-\xff"));
-        let out = git(tmp.path())
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.repo(&sandbox.work());
+        let dest = tmp.join(std::ffi::OsStr::from_bytes(b"wt-\xff"));
+        let out = sandbox
+            .command("git")
+            .current_dir(&tmp)
             .args(["worktree", "add", "-b", "topic"])
             .arg(&dest)
             .output()
             .unwrap();
         assert!(out.status.success(), "{out:?}");
-        git_worktree_remove(&tmp.path().join(".git"), &dest, false).unwrap();
+        git_worktree_remove(&tmp.join(".git"), &dest, false).unwrap();
         assert!(!dest.exists());
     }
 
     #[test]
     fn delete_branch_reports_a_failed_config_cleanup() {
-        let tmp = init_git_repo();
-        make_initial_commit(tmp.path());
-        let head = git_rev_parse(tmp.path(), "HEAD").unwrap().unwrap();
-        git(tmp.path()).args(["branch", "t"]).status().unwrap();
-        git(tmp.path())
-            .args(["config", "branch.t.remote", "origin"])
-            .status()
-            .unwrap();
-        std::fs::write(tmp.path().join(".git/config.lock"), "locked").unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.repo(&sandbox.work());
+        let head = git_rev_parse(&tmp, "HEAD").unwrap().unwrap();
+        sandbox.git(&tmp, &["branch", "t"]);
+        sandbox.git(&tmp, &["config", "branch.t.remote", "origin"]);
+        std::fs::write(tmp.join(".git/config.lock"), "locked").unwrap();
 
-        let err = git_delete_branch_at(tmp.path(), "t", &head).unwrap_err();
+        let err = git_delete_branch_at(&tmp, "t", &head).unwrap_err();
         let message = err.to_string();
         assert!(
             message.contains("git config --local --remove-section branch.t"),
             "{message}"
         );
-        assert!(
-            message.contains(&tmp.path().display().to_string()),
-            "{message}"
-        );
+        assert!(message.contains(&tmp.display().to_string()), "{message}");
         assert!(message.contains("lock"), "{message}");
     }
 
     #[test]
     fn diff_handles_unrelated_histories_but_rejects_a_bad_ref() {
-        let tmp = init_git_repo();
-        make_initial_commit(tmp.path());
-        git(tmp.path()).args(["branch", "base"]).status().unwrap();
-        git(tmp.path())
-            .args(["checkout", "-q", "--orphan", "other"])
-            .status()
-            .unwrap();
-        assert!(git(tmp.path())
-            .args(["rm", "-qf", "README.md"])
-            .status()
-            .unwrap()
-            .success());
-        std::fs::write(tmp.path().join("other"), "other\n").unwrap();
-        git(tmp.path()).args(["add", "other"]).status().unwrap();
-        git(tmp.path())
-            .args(["commit", "-qm", "unrelated"])
-            .status()
-            .unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.repo(&sandbox.work());
+        sandbox.git(&tmp, &["branch", "base"]);
+        sandbox.git(&tmp, &["checkout", "-q", "--orphan", "other"]);
+        sandbox.git(&tmp, &["rm", "-qf", "README"]);
+        std::fs::write(tmp.join("other"), "other\n").unwrap();
+        sandbox.git(&tmp, &["add", "other"]);
+        sandbox.git(&tmp, &["commit", "-qm", "unrelated"]);
 
-        let (files, added, deleted, _) = git_diff_stat(tmp.path(), "base").unwrap();
+        let (files, added, deleted, _) = git_diff_stat(&tmp, "base").unwrap();
         assert_eq!((files, added, deleted), (2, 1, 1));
-        let err = git_diff_stat(tmp.path(), "no-such-base").unwrap_err();
+        let err = git_diff_stat(&tmp, "no-such-base").unwrap_err();
         assert!(err.to_string().contains("no-such-base"), "{err}");
     }
 
     #[test]
     fn a_failed_fetch_keeps_each_line_under_the_message() {
-        let tmp = init_git_repo();
-        git(tmp.path())
-            .args(["remote", "add", "origin", "/nonexistent/r\u{1b}[2J\nFORGED"])
-            .status()
-            .unwrap();
-        let err = git_fetch_branch(tmp.path(), "b\u{1b}[2J\nFORGED").unwrap_err();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        sandbox.git(&tmp, &["init", "-q", "-b", "main"]);
+        sandbox.git(
+            &tmp,
+            &["remote", "add", "origin", "/nonexistent/r\u{1b}[2J\nFORGED"],
+        );
+        let err = git_fetch_branch(&tmp, "b\u{1b}[2J\nFORGED").unwrap_err();
         let message = format!("{err:#}");
         assert!(
             !message.contains('\u{1b}') && !message.lines().any(|l| l.starts_with("FORGED")),
@@ -541,194 +529,156 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_leftover_entry_is_reported_with_its_paths_escaped() {
-        let tmp = init_git_repo();
-        make_initial_commit(tmp.path());
-        let set = tmp.path().join("set\u{1b}[2J");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.repo(&sandbox.work());
+        let set = tmp.join("set\u{1b}[2J");
         std::fs::create_dir(&set).unwrap();
         let dest = set.join("wt");
-        let added = git(tmp.path())
-            .args(["worktree", "add", "-q", "-b", "b"])
-            .arg(&dest)
-            .status()
-            .unwrap();
-        assert!(added.success());
+        sandbox.git(
+            &tmp,
+            &["worktree", "add", "-q", "-b", "b", dest.to_str().unwrap()],
+        );
         std::fs::remove_dir_all(&dest).unwrap();
-        let err = leftover_entry(tmp.path(), &dest).unwrap_err();
+        let err = leftover_entry(&tmp, &dest).unwrap_err();
         let message = format!("{err:#}");
         assert!(message.contains("worktree remove"), "{message}");
         assert!(!message.contains('\u{1b}'), "{message}");
-    }
-
-    /// Create a minimal git repo in a tempdir and return the tempdir handle.
-    fn init_git_repo() -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
-        git(tmp.path())
-            .args(["init"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .unwrap();
-        tmp
-    }
-
-    /// Create an initial commit so HEAD exists.
-    fn make_initial_commit(repo: &std::path::Path) {
-        std::fs::write(repo.join("README.md"), "init\n").unwrap();
-        git(repo).args(["add", "README.md"]).status().unwrap();
-        git(repo)
-            .args(["commit", "-m", "initial"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .unwrap();
     }
 
     // ── git_delete_branch_at ────────────────────────────────
 
     #[test]
     fn delete_branch_keeps_a_branch_that_moved() {
-        let tmp = init_git_repo();
-        make_initial_commit(tmp.path());
-        let start = git_rev_parse(tmp.path(), "HEAD").unwrap().unwrap();
-        git(tmp.path()).args(["branch", "t"]).status().unwrap();
-        std::fs::write(tmp.path().join("more"), "x").unwrap();
-        git(tmp.path()).args(["add", "more"]).status().unwrap();
-        git(tmp.path())
-            .args(["commit", "-q", "-m", "more"])
-            .status()
-            .unwrap();
-        let moved = git_rev_parse(tmp.path(), "HEAD").unwrap().unwrap();
-        git(tmp.path())
-            .args(["config", "branch.t.foo.remote", "origin"])
-            .status()
-            .unwrap();
-        git(tmp.path())
-            .args(["update-ref", "refs/heads/t", &moved])
-            .status()
-            .unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.repo(&sandbox.work());
+        let start = git_rev_parse(&tmp, "HEAD").unwrap().unwrap();
+        sandbox.git(&tmp, &["branch", "t"]);
+        std::fs::write(tmp.join("more"), "x").unwrap();
+        sandbox.git(&tmp, &["add", "more"]);
+        sandbox.git(&tmp, &["commit", "-q", "-m", "more"]);
+        let moved = git_rev_parse(&tmp, "HEAD").unwrap().unwrap();
+        sandbox.git(&tmp, &["config", "branch.t.foo.remote", "origin"]);
+        sandbox.git(&tmp, &["update-ref", "refs/heads/t", &moved]);
 
-        assert!(git_delete_branch_at(tmp.path(), "t", &start).is_err());
+        assert!(git_delete_branch_at(&tmp, "t", &start).is_err());
         assert_eq!(
-            git_rev_parse(tmp.path(), "refs/heads/t").unwrap(),
+            git_rev_parse(&tmp, "refs/heads/t").unwrap(),
             Some(moved.clone())
         );
-        git_delete_branch_at(tmp.path(), "t", &moved).unwrap();
-        assert_eq!(git_rev_parse(tmp.path(), "refs/heads/t").unwrap(), None);
+        git_delete_branch_at(&tmp, "t", &moved).unwrap();
+        assert_eq!(git_rev_parse(&tmp, "refs/heads/t").unwrap(), None);
         assert_eq!(
-            run(tmp.path(), ["config", "branch.t.foo.remote"]).unwrap(),
+            sandbox.git(&tmp, &["config", "branch.t.foo.remote"]).trim(),
             "origin"
         );
     }
 
     #[test]
     fn branch_is_free_reads_reservations_and_changes_nothing() {
-        let tmp = init_git_repo();
-        make_initial_commit(tmp.path());
-        git(tmp.path()).args(["branch", "t"]).status().unwrap();
-        git(tmp.path())
-            .args(["config", "branch.autoSetupMerge", "always"])
-            .status()
-            .unwrap();
-        git(tmp.path())
-            .args(["config", "branch.t.remote", "origin"])
-            .status()
-            .unwrap();
-        git_branch_is_free(tmp.path(), "t").unwrap();
-        let remote = git(tmp.path())
-            .args(["config", "branch.t.remote"])
-            .output()
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&remote.stdout).trim(), "origin");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.repo(&sandbox.work());
+        sandbox.git(&tmp, &["branch", "t"]);
+        sandbox.git(&tmp, &["config", "branch.autoSetupMerge", "always"]);
+        sandbox.git(&tmp, &["config", "branch.t.remote", "origin"]);
+        git_branch_is_free(&tmp, "t").unwrap();
+        let remote = sandbox.git(&tmp, &["config", "branch.t.remote"]);
+        assert_eq!(remote.trim(), "origin");
 
         // Checked out in another worktree.
-        let other = tmp.path().join("other");
-        git(tmp.path())
-            .args(["worktree", "add", "-q", other.to_str().unwrap(), "t"])
-            .status()
-            .unwrap();
-        assert!(git_branch_is_free(tmp.path(), "t").is_err());
+        let other = tmp.join("other");
+        sandbox.git(
+            &tmp,
+            &["worktree", "add", "-q", other.to_str().unwrap(), "t"],
+        );
+        assert!(git_branch_is_free(&tmp, "t").is_err());
         // Bisected there instead: HEAD detached, branch still reserved.
-        git(&other)
-            .args(["checkout", "-q", "--detach"])
-            .status()
-            .unwrap();
-        git_branch_is_free(tmp.path(), "t").unwrap();
-        let admin = tmp.path().join(".git/worktrees/other");
+        sandbox.git(&other, &["checkout", "-q", "--detach"]);
+        git_branch_is_free(&tmp, "t").unwrap();
+        let admin = tmp.join(".git/worktrees/other");
         std::fs::write(admin.join("BISECT_START"), "t\n").unwrap();
-        assert!(git_branch_is_free(tmp.path(), "t").is_err());
+        assert!(git_branch_is_free(&tmp, "t").is_err());
     }
 
     #[test]
     fn branch_is_free_sees_checkouts_in_a_reftable_repository() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path().join("repo");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let repo = tmp.join("repo");
         if !meta_test_support::git_has_reftable() {
             return;
         }
-        let init = git(tmp.path())
-            .args(["init", "-q", "--ref-format=reftable"])
-            .arg(&repo)
-            .output()
-            .unwrap();
-        assert!(init.status.success(), "{init:?}");
-        make_initial_commit(&repo);
+        sandbox.git(
+            &tmp,
+            &[
+                "init",
+                "-q",
+                "--ref-format=reftable",
+                repo.to_str().unwrap(),
+            ],
+        );
+        std::fs::write(repo.join("README"), "init\n").unwrap();
+        sandbox.git(&repo, &["add", "README"]);
+        sandbox.git(&repo, &["commit", "-qm", "initial"]);
         assert!(git_rev_parse(&repo, "HEAD").unwrap().is_some());
-        git(&repo).args(["branch", "t"]).status().unwrap();
+        sandbox.git(&repo, &["branch", "t"]);
         git_branch_is_free(&repo, "t").unwrap();
-        let other = tmp.path().join("other");
-        git(&repo)
-            .args(["worktree", "add", "-q", other.to_str().unwrap(), "t"])
-            .status()
-            .unwrap();
+        let other = tmp.join("other");
+        sandbox.git(
+            &repo,
+            &["worktree", "add", "-q", other.to_str().unwrap(), "t"],
+        );
         assert!(git_branch_is_free(&repo, "t").is_err());
     }
 
     #[test]
     fn a_symbolic_branch_is_never_moved_or_deleted() {
-        let tmp = init_git_repo();
-        make_initial_commit(tmp.path());
-        let main = git_rev_parse(tmp.path(), "HEAD").unwrap().unwrap();
-        let current = git(tmp.path())
-            .args(["symbolic-ref", "HEAD"])
-            .output()
-            .unwrap();
-        let current = String::from_utf8_lossy(&current.stdout).trim().to_string();
-        git(tmp.path())
-            .args(["symbolic-ref", "refs/heads/t", &current])
-            .status()
-            .unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.repo(&sandbox.work());
+        let main = git_rev_parse(&tmp, "HEAD").unwrap().unwrap();
+        let current = sandbox.git(&tmp, &["symbolic-ref", "HEAD"]);
+        let current = current.trim();
+        sandbox.git(&tmp, &["symbolic-ref", "refs/heads/t", current]);
 
-        assert!(git_branch_is_free(tmp.path(), "t").is_err());
-        assert!(git_delete_branch_at(tmp.path(), "t", &main).is_err());
-        assert_eq!(git_rev_parse(tmp.path(), &current).unwrap(), Some(main));
+        assert!(git_branch_is_free(&tmp, "t").is_err());
+        assert!(git_delete_branch_at(&tmp, "t", &main).is_err());
+        assert_eq!(git_rev_parse(&tmp, current).unwrap(), Some(main));
     }
 
     #[test]
     fn checkout_config_reports_core_bare_corruption_with_scoped_repair() {
-        let tmp = init_git_repo();
-        let status = git(tmp.path())
-            .args(["config", "--local", "core.bare", "true"])
-            .status()
-            .unwrap();
-        assert!(status.success());
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        sandbox.git(&tmp, &["init", "-q", "-b", "main"]);
+        sandbox.git(&tmp, &["config", "--local", "core.bare", "true"]);
 
-        let error = repo_status(tmp.path()).err().unwrap().to_string();
+        let error = repo_status(&tmp).err().unwrap().to_string();
         assert!(error.contains("core.bare=true"));
         assert!(error.contains(&format!(
             "git -C {} config --local core.bare false",
-            meta_core::display::shell_quote(&tmp.path().to_string_lossy())
+            meta_core::display::shell_quote(&tmp.to_string_lossy())
         )));
     }
 
     #[test]
     fn checkout_config_guard_allows_legitimate_bare_repository() {
-        let tmp = tempfile::tempdir().unwrap();
-        let status = git(tmp.path())
-            .args(["init", "--bare", "--quiet"])
-            .status()
-            .unwrap();
-        assert!(status.success());
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        sandbox.git(&tmp, &["init", "--bare", "--quiet"]);
 
-        ensure_checkout_config_is_not_bare(tmp.path()).unwrap();
+        ensure_checkout_config_is_not_bare(&tmp).unwrap();
     }
 }

@@ -189,6 +189,7 @@ fn project_at(workspace: &Workspace, place: &str) -> Result<Option<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_test_support::Sandbox;
     use std::path::Path;
 
     fn workspace(dir: &Path) -> Workspace {
@@ -202,51 +203,50 @@ mod tests {
 
     #[test]
     fn a_name_is_found_before_a_place_whatever_it_holds() {
-        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = Sandbox::new();
+        let tmp = sandbox.work();
         write(
-            tmp.path(),
+            &tmp,
             r#"{"projects": {"group/api": {"repo": "u", "path": "actual-api"},
                              "web": {"repo": "u", "path": "group/api"}}}"#,
         );
-        let ws = workspace(tmp.path());
+        let ws = workspace(&tmp);
         let found = Index::new(&ws).find("group/api").unwrap();
-        assert_eq!(found.source, tmp.path().join("actual-api"));
+        assert_eq!(found.source, tmp.join("actual-api"));
         assert_eq!(found.key, "group/api");
         // and a place, when no project has that name, keyed by the name
         // of the project there
         let found = Index::new(&ws).find("actual-api").unwrap();
-        assert_eq!(found.source, tmp.path().join("actual-api"));
+        assert_eq!(found.source, tmp.join("actual-api"));
         assert_eq!(found.key, "group/api");
         let found = Index::recursive(&ws).unwrap().find("group/api").unwrap();
-        assert_eq!(found.source, tmp.path().join("actual-api"));
+        assert_eq!(found.source, tmp.join("actual-api"));
         assert_eq!(found.key, "actual-api");
     }
 
     #[test]
     fn nested_projects_are_found_by_place_reading_only_the_way_there() {
-        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = Sandbox::new();
+        let tmp = sandbox.work();
         write(
-            tmp.path(),
+            &tmp,
             r#"{"projects": {"vendor": {"repo": "u", "meta": true},
                              "broken": {"repo": "u", "meta": true}}}"#,
         );
         write(
-            &tmp.path().join("vendor"),
+            &tmp.join("vendor"),
             r#"{"projects": {"mylib": {"repo": "u", "path": "packages/mylib"},
                              "sub": {"repo": "u", "meta": true}}}"#,
         );
-        write(
-            &tmp.path().join("vendor/sub"),
-            r#"{"projects": {"deep": "u"}}"#,
-        );
-        write(&tmp.path().join("broken"), "{not yaml");
-        let ws = workspace(tmp.path());
+        write(&tmp.join("vendor/sub"), r#"{"projects": {"deep": "u"}}"#);
+        write(&tmp.join("broken"), "{not yaml");
+        let ws = workspace(&tmp);
         let index = Index::new(&ws);
         for (place, source) in [
             ("vendor/packages/mylib", "vendor/packages/mylib"),
             ("vendor/sub/deep", "vendor/sub/deep"),
         ] {
-            assert_eq!(index.find(place).unwrap().source, tmp.path().join(source));
+            assert_eq!(index.find(place).unwrap().source, tmp.join(source));
         }
         assert!(index.find("vendor/nope").is_err());
         // a nested project's name alone is no key without --recursive
@@ -255,17 +255,15 @@ mod tests {
 
     #[test]
     fn recursive_finds_the_one_place_that_ends_with_a_key() {
-        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = Sandbox::new();
+        let tmp = sandbox.work();
         write(
-            tmp.path(),
+            &tmp,
             r#"{"projects": {"a": {"repo": "u", "meta": true}, "b": {"repo": "u", "meta": true}}}"#,
         );
-        write(
-            &tmp.path().join("a"),
-            r#"{"projects": {"core": "u", "x": "u"}}"#,
-        );
-        write(&tmp.path().join("b"), r#"{"projects": {"core": "u"}}"#);
-        let ws = workspace(tmp.path());
+        write(&tmp.join("a"), r#"{"projects": {"core": "u", "x": "u"}}"#);
+        write(&tmp.join("b"), r#"{"projects": {"core": "u"}}"#);
+        let ws = workspace(&tmp);
         let index = Index::recursive(&ws).unwrap();
         assert_eq!(index.find("x").unwrap().key, "a/x");
         let err = index.find("core").unwrap_err().to_string();
@@ -274,12 +272,13 @@ mod tests {
 
     #[test]
     fn errors_escape_the_names_they_show() {
-        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = Sandbox::new();
+        let tmp = sandbox.work();
         write(
-            tmp.path(),
+            &tmp,
             r#"{"projects": {"vendor": {"repo": "u", "meta": true}}}"#,
         );
-        let ws = workspace(tmp.path());
+        let ws = workspace(&tmp);
         for key in ["a\nFORGED", "vendor/\nFORGED", "vendor/\x1b[2J"] {
             let err = Index::new(&ws).find(key).unwrap_err().to_string();
             assert!(!err.contains('\n') && !err.contains('\x1b'), "{err:?}");

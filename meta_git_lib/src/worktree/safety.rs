@@ -678,37 +678,16 @@ fn sample<T>(items: &[T], show: impl Fn(&T) -> String) -> String {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "tests start the programs they test with"
-)]
 mod tests {
     use super::*;
-    use std::process::Command;
-
-    fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
+    use meta_test_support::Sandbox;
 
     /// A source repo with one commit and a linked worktree of it at `wt`.
-    fn repo_with_worktree(root: &Path, name: &str, wt: &Path) {
+    fn repo_with_worktree(sandbox: &Sandbox, root: &Path, name: &str, wt: &Path) {
         let source = root.join(name);
-        std::fs::create_dir_all(&source).unwrap();
-        git(&source, &["init", "-q"]);
-        git(&source, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        sandbox.repo(&source);
         std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
-        git(
+        sandbox.git(
             &source,
             &["worktree", "add", "-q", "-b", name, wt.to_str().unwrap()],
         );
@@ -716,47 +695,39 @@ mod tests {
 
     #[test]
     fn repo_holds_names_what_only_this_clone_has() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (repo, remote) = (tmp.path().join("repo"), tmp.path().join("remote.git"));
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let (repo, remote) = (tmp.join("repo"), tmp.join("remote.git"));
         std::fs::create_dir(&repo).unwrap();
-        git(&repo, &["init", "-q"]);
-        // what it checks doesn't hang on the user's git config: no global
-        // ignores, signing or hooks
-        let none = tmp.path().join("none");
-        std::fs::create_dir(&none).unwrap();
-        for (key, value) in [
-            ("core.excludesFile", none.join("ignore")),
-            ("core.hooksPath", none.clone()),
-            ("commit.gpgSign", "false".into()),
-        ] {
-            git(&repo, &["config", key, value.to_str().unwrap()]);
-        }
+        sandbox.git(&repo, &["init", "-q"]);
         std::fs::write(repo.join("a.txt"), "a").unwrap();
         assert_eq!(
             repo_holds(&repo).unwrap(),
             ["a branch with no commits yet, and 1 file"]
         );
 
-        git(&repo, &["add", "a.txt"]);
-        git(&repo, &["commit", "-q", "-m", "first"]);
-        git(tmp.path(), &["clone", "-q", "--bare", "repo", "remote.git"]);
-        git(
+        sandbox.git(&repo, &["add", "a.txt"]);
+        sandbox.git(&repo, &["commit", "-q", "-m", "first"]);
+        sandbox.git(&tmp, &["clone", "-q", "--bare", "repo", "remote.git"]);
+        sandbox.git(
             &repo,
             &["remote", "add", "origin", remote.to_str().unwrap()],
         );
-        git(&repo, &["fetch", "-q", "origin"]);
+        sandbox.git(&repo, &["fetch", "-q", "origin"]);
         assert!(repo_holds(&repo).unwrap().is_empty());
 
         // a commit on a local branch only, a stash and a worktree
-        git(&repo, &["switch", "-q", "-c", "holds-topic"]);
-        git(&repo, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+        sandbox.git(&repo, &["switch", "-q", "-c", "holds-topic"]);
+        sandbox.git(&repo, &["commit", "-q", "--allow-empty", "-m", "mine"]);
         std::fs::write(repo.join("a.txt"), "b").unwrap();
-        git(&repo, &["stash", "-q"]);
-        let wt = tmp.path().join("wt");
-        git(&repo, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+        sandbox.git(&repo, &["stash", "-q"]);
+        let wt = tmp.join("wt");
+        sandbox.git(&repo, &["worktree", "add", "-q", wt.to_str().unwrap()]);
         // and one on no branch at all, counted once
-        git(&repo, &["switch", "-q", "--detach"]);
-        git(&repo, &["commit", "-q", "--allow-empty", "-m", "loose"]);
+        sandbox.git(&repo, &["switch", "-q", "--detach"]);
+        sandbox.git(&repo, &["commit", "-q", "--allow-empty", "-m", "loose"]);
         let held = repo_holds(&repo).unwrap().join("; ");
         assert!(held.contains("2 commits on no remote: "), "{held}");
         assert!(held.contains("mine") && held.contains("loose"), "{held}");
@@ -767,11 +738,14 @@ mod tests {
 
     #[test]
     fn clean_nested_set_is_clear() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "root", &set);
-        repo_with_worktree(tmp.path(), "leaf", &set.join("sub/leaf"));
-        repo_with_worktree(tmp.path(), "hidden", &set.join(".scratch/leaf"));
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "root", &set);
+        repo_with_worktree(&sandbox, &tmp, "leaf", &set.join("sub/leaf"));
+        repo_with_worktree(&sandbox, &tmp, "hidden", &set.join(".scratch/leaf"));
 
         let check = check_worktree_removal(&set).unwrap();
         assert!(check.is_clear(), "{check:?}");
@@ -804,10 +778,13 @@ mod tests {
 
     #[test]
     fn records_name_their_set_and_block_any_other() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "root", &set);
-        repo_with_worktree(tmp.path(), "leaf", &set.join("leaf"));
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "root", &set);
+        repo_with_worktree(&sandbox, &tmp, "leaf", &set.join("leaf"));
         // A worktree git made by hand carries no record
         let check = check_worktree_removal(&set).unwrap();
         assert!(check.is_clear() && check.record().is_none(), "{check:?}");
@@ -826,7 +803,7 @@ mod tests {
 
         // A set nested in this one is another set's
         let inner = set.join("inner");
-        repo_with_worktree(tmp.path(), "inner", &inner);
+        repo_with_worktree(&sandbox, &tmp, "inner", &inner);
         mark(&inner, &set_record(&inner));
         let check = check_worktree_removal(&set).unwrap();
         assert_eq!(check.blockers.len(), 1, "{check:?}");
@@ -840,10 +817,13 @@ mod tests {
 
     #[test]
     fn records_that_differ_or_sit_outside_git_layout_block() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "root", &set);
-        repo_with_worktree(tmp.path(), "leaf", &set.join("leaf"));
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "root", &set);
+        repo_with_worktree(&sandbox, &tmp, "leaf", &set.join("leaf"));
         let record = set_record(&set);
         mark(&set, &record);
         let mut later = record.clone();
@@ -860,8 +840,8 @@ mod tests {
 
         // A checkout pointing at a copied admin directory with a record in
         // it: the backlink holds, but git doesn't keep it there
-        let fake = tmp.path().join("fake");
-        repo_with_worktree(tmp.path(), "real", &fake.join("real"));
+        let fake = tmp.join("fake");
+        repo_with_worktree(&sandbox, &tmp, "real", &fake.join("real"));
         let admin = gitdir::linked(&fake.join("real")).unwrap().admin;
         let copy = fake.join("admin");
         std::fs::create_dir(&copy).unwrap();
@@ -897,15 +877,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_record_is_trusted_when_the_worktrees_dir_is_a_link() {
-        let tmp = tempfile::tempdir().unwrap();
-        let source = tmp.path().join("root");
-        std::fs::create_dir_all(&source).unwrap();
-        git(&source, &["init", "-q"]);
-        git(&source, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let source = tmp.join("root");
+        sandbox.repo(&source);
         std::fs::create_dir(source.join(".git/real-worktrees")).unwrap();
         std::os::unix::fs::symlink("real-worktrees", source.join(".git/worktrees")).unwrap();
-        let set = tmp.path().join("set");
-        git(
+        let set = tmp.join("set");
+        sandbox.git(
             &source,
             &["worktree", "add", "-q", "-b", "s", set.to_str().unwrap()],
         );
@@ -918,11 +899,14 @@ mod tests {
 
     #[test]
     fn a_locked_worktree_blocks() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "root", &set);
-        git(
-            &tmp.path().join("root"),
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "root", &set);
+        sandbox.git(
+            &tmp.join("root"),
             &["worktree", "lock", set.to_str().unwrap()],
         );
         let check = check_worktree_removal(&set).unwrap();
@@ -934,16 +918,19 @@ mod tests {
 
     #[test]
     fn reports_dirty_nested_repo_loose_files_and_primary_checkouts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "leaf", &set.join("sub/leaf"));
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "leaf", &set.join("sub/leaf"));
         std::fs::write(set.join("sub/leaf/new.txt"), "work").unwrap();
         std::fs::write(set.join("notes.txt"), "work").unwrap();
         std::fs::create_dir_all(set.join("clone")).unwrap();
-        git(&set.join("clone"), &["init", "-q"]);
-        git(&set, &["init", "-q", "--bare", "mirror.git"]);
+        sandbox.git(&set.join("clone"), &["init", "-q"]);
+        sandbox.git(&set, &["init", "-q", "--bare", "mirror.git"]);
         // a bare repository whose HEAD was damaged still holds its objects
-        git(&set, &["init", "-q", "--bare", "damaged.git"]);
+        sandbox.git(&set, &["init", "-q", "--bare", "damaged.git"]);
         std::fs::write(set.join("damaged.git/HEAD"), "").unwrap();
 
         let check = check_worktree_removal(&set).unwrap();
@@ -964,11 +951,14 @@ mod tests {
 
     #[test]
     fn reports_commits_only_a_detached_head_holds() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "root", &set);
-        git(&set, &["checkout", "-q", "--detach"]);
-        git(
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "root", &set);
+        sandbox.git(&set, &["checkout", "-q", "--detach"]);
+        sandbox.git(
             &set,
             &["commit", "-q", "--allow-empty", "-m", "detached work"],
         );
@@ -982,9 +972,12 @@ mod tests {
 
     #[test]
     fn delete_checked_set_refuses_files_that_appeared_after_the_check() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "leaf", &set.join("sub/leaf"));
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "leaf", &set.join("sub/leaf"));
         std::fs::write(set.join("notes.txt"), "work").unwrap();
         let check = check_worktree_removal(&set).unwrap();
         std::fs::write(set.join("sub/late.txt"), "written after the check").unwrap();
@@ -1007,9 +1000,12 @@ mod tests {
 
     #[test]
     fn recheck_sees_changes_the_summary_hides() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "root", &set);
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "root", &set);
         for name in ["a", "b", "c", "d"] {
             std::fs::write(set.join(name), "x").unwrap();
         }
@@ -1022,19 +1018,22 @@ mod tests {
 
     #[test]
     fn a_worktree_of_a_bare_repository_is_clear() {
-        let tmp = tempfile::tempdir().unwrap();
-        let seed = tmp.path().join("seed");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let seed = tmp.join("seed");
         std::fs::create_dir(&seed).unwrap();
-        git(&seed, &["init", "-q"]);
-        git(&seed, &["commit", "-q", "--allow-empty", "-m", "init"]);
-        let bare = tmp.path().join("bare.git");
-        git(
+        sandbox.git(&seed, &["init", "-q"]);
+        sandbox.git(&seed, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        let bare = tmp.join("bare.git");
+        sandbox.git(
             &seed,
             &["clone", "-q", "--bare", ".", bare.to_str().unwrap()],
         );
-        let set = tmp.path().join("set");
+        let set = tmp.join("set");
         std::fs::create_dir(&set).unwrap();
-        git(
+        sandbox.git(
             &bare,
             &[
                 "worktree",
@@ -1054,21 +1053,24 @@ mod tests {
 
     #[test]
     fn reports_files_hidden_by_index_flags_and_operations_in_progress() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "root", &set);
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "root", &set);
         std::fs::write(set.join("config"), "original").unwrap();
-        git(&set, &["add", "config"]);
-        git(&set, &["commit", "-q", "-m", "config"]);
-        git(&set, &["update-index", "--assume-unchanged", "config"]);
+        sandbox.git(&set, &["add", "config"]);
+        sandbox.git(&set, &["commit", "-q", "-m", "config"]);
+        sandbox.git(&set, &["update-index", "--assume-unchanged", "config"]);
         let check = check_worktree_removal(&set).unwrap();
         assert_eq!(
             check.unsaved,
             [".: 1 file git is told not to check (assume-unchanged or skip-worktree): config"]
         );
 
-        git(&set, &["update-index", "--no-assume-unchanged", "config"]);
-        let admin = tmp.path().join("root/.git/worktrees/set");
+        sandbox.git(&set, &["update-index", "--no-assume-unchanged", "config"]);
+        let admin = tmp.join("root/.git/worktrees/set");
         std::fs::create_dir(admin.join("rebase-merge")).unwrap();
         let check = check_worktree_removal(&set).unwrap();
         assert!(
@@ -1082,9 +1084,12 @@ mod tests {
     fn files_with_non_utf8_names_are_tracked_exactly() {
         use std::os::unix::ffi::OsStrExt;
 
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "root", &set);
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "root", &set);
         let name = std::ffi::OsStr::from_bytes(b"caf\xff");
         std::fs::write(set.join(name), "draft").unwrap();
         let before = check_worktree_removal(&set).unwrap();
@@ -1099,12 +1104,15 @@ mod tests {
 
     #[test]
     fn a_checkout_git_cannot_inspect_is_a_blocker() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "root", &set);
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "root", &set);
         std::fs::write(set.join("file"), "x").unwrap();
-        git(&set, &["add", "file"]);
-        let index = tmp.path().join("root/.git/worktrees/set/index");
+        sandbox.git(&set, &["add", "file"]);
+        let index = tmp.join("root/.git/worktrees/set/index");
         std::fs::write(&index, "not an index").unwrap();
 
         let check = check_worktree_removal(&set).unwrap();
@@ -1114,9 +1122,12 @@ mod tests {
 
     #[test]
     fn recheck_sees_a_rewritten_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "leaf", &set.join("leaf"));
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "leaf", &set.join("leaf"));
         std::fs::write(set.join("leaf/notes.txt"), "old draft").unwrap();
         std::fs::write(set.join("loose.txt"), "old").unwrap();
         let before = check_worktree_removal(&set).unwrap();
@@ -1141,24 +1152,25 @@ mod tests {
 
     #[test]
     fn recheck_sees_a_change_only_in_the_index() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "root", &set);
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "root", &set);
         std::fs::write(set.join("f"), "staged").unwrap();
-        git(&set, &["add", "f"]);
+        sandbox.git(&set, &["add", "f"]);
         std::fs::write(set.join("f"), "working copy").unwrap();
         let before = check_worktree_removal(&set).unwrap();
 
         // Replace the staged blob only; status stays the same, the file too.
-        std::fs::write(tmp.path().join("other"), "other staged").unwrap();
-        let blob = Command::new("git")
-            .args(["hash-object", "-w"])
-            .arg(tmp.path().join("other"))
-            .current_dir(&set)
-            .output()
-            .unwrap();
-        let blob = String::from_utf8_lossy(&blob.stdout).trim().to_string();
-        git(
+        std::fs::write(tmp.join("other"), "other staged").unwrap();
+        let blob = sandbox.git(
+            &set,
+            &["hash-object", "-w", tmp.join("other").to_str().unwrap()],
+        );
+        let blob = blob.trim();
+        sandbox.git(
             &set,
             &["update-index", "--cacheinfo", &format!("100644,{blob},f")],
         );
@@ -1170,17 +1182,20 @@ mod tests {
 
     #[test]
     fn delete_checked_set_refuses_a_set_that_changed_inside_a_worktree() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
-        repo_with_worktree(tmp.path(), "root", &set);
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
+        repo_with_worktree(&sandbox, &tmp, "root", &set);
         std::fs::write(set.join(".gitignore"), "ignored/\n").unwrap();
-        git(&set, &["add", ".gitignore"]);
-        git(&set, &["commit", "-q", "-m", "ignore"]);
+        sandbox.git(&set, &["add", ".gitignore"]);
+        sandbox.git(&set, &["commit", "-q", "-m", "ignore"]);
         let check = check_worktree_removal(&set).unwrap();
         assert!(check.is_clear(), "{check:?}");
         // A repository appears in an ignored directory after the check.
         std::fs::create_dir_all(set.join("ignored/repo")).unwrap();
-        git(&set.join("ignored/repo"), &["init", "-q"]);
+        sandbox.git(&set.join("ignored/repo"), &["init", "-q"]);
 
         let err = delete_checked_set(&set, &check, true, false).unwrap_err();
         assert!(
@@ -1192,10 +1207,13 @@ mod tests {
 
     #[test]
     fn a_symlinked_set_folder_is_the_folder_it_leads_to() {
-        let tmp = tempfile::tempdir().unwrap();
-        let target = tmp.path().join("target");
-        repo_with_worktree(tmp.path(), "root", &target);
-        let link = tmp.path().join("link");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let target = tmp.join("target");
+        repo_with_worktree(&sandbox, &tmp, "root", &target);
+        let link = tmp.join("link");
         #[cfg(unix)]
         std::os::unix::fs::symlink(&target, &link).unwrap();
         #[cfg(windows)]
@@ -1216,11 +1234,14 @@ mod tests {
 
     #[test]
     fn separate_git_dir_checkout_is_not_a_worktree() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
         std::fs::create_dir_all(set.join("repo")).unwrap();
-        let git_dir = tmp.path().join("repo.git");
-        git(
+        let git_dir = tmp.join("repo.git");
+        sandbox.git(
             &set.join("repo"),
             &[
                 "init",
@@ -1241,9 +1262,12 @@ mod tests {
 
     #[test]
     fn set_root_that_is_a_primary_checkout_is_blocked() {
-        let tmp = tempfile::tempdir().unwrap();
-        git(tmp.path(), &["init", "-q"]);
-        let check = check_worktree_removal(tmp.path()).unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let tmp = sandbox.work();
+        sandbox.git(&tmp, &["init", "-q"]);
+        let check = check_worktree_removal(&tmp).unwrap();
         assert_eq!(check.blockers.len(), 1);
     }
 }

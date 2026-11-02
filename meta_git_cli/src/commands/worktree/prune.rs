@@ -511,15 +511,17 @@ fn warn_kept(kept: &[PruneEntry], strict: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_test_support::Sandbox;
 
     #[test]
     fn a_relative_gitdir_finds_its_set() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap().join("wt");
+        let sandbox = Sandbox::new();
+        let tmp = sandbox.work();
+        let root = tmp.canonicalize().unwrap().join("wt");
         let checkout = root.join("broken/a");
         std::fs::create_dir_all(&checkout).unwrap();
         std::fs::write(checkout.join(".git"), "").unwrap();
-        let admin = tmp.path().join("repo/.git/worktrees/a");
+        let admin = tmp.join("repo/.git/worktrees/a");
         std::fs::create_dir_all(&admin).unwrap();
         std::fs::write(admin.join("gitdir"), "../../../../wt/broken/a/.git\n").unwrap();
         assert_eq!(set_of_admin(&admin, &root), Some(root.join("broken")));

@@ -296,20 +296,21 @@ fn execute_raw_git_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_test_support::Sandbox;
 
     fn argv(line: &str) -> Vec<String> {
         line.split_whitespace().map(str::to_string).collect()
     }
     use commit::parse_multi_commit_file;
     use helpers::get_project_directories;
-    use tempfile::TempDir;
 
     #[test]
     fn test_execute_git_status_no_meta_file() {
-        let temp_dir = TempDir::new().unwrap();
+        let sandbox = Sandbox::new();
+        let temp_dir = sandbox.work();
         let options = PluginRequestOptions::default();
 
-        let result = execute_command("git status", &[], &[], &options, temp_dir.path());
+        let result = execute_command("git status", &[], &[], &options, &temp_dir);
 
         // Should succeed (returns a Plan, not an Error)
         assert!(!matches!(result, CommandResult::Error(_)));
@@ -475,9 +476,10 @@ the only commit message
 
     #[test]
     fn test_get_project_directories_no_meta_file() {
-        let temp_dir = TempDir::new().unwrap();
+        let sandbox = Sandbox::new();
+        let temp_dir = sandbox.work();
 
-        let dirs = get_project_directories(temp_dir.path()).unwrap();
+        let dirs = get_project_directories(&temp_dir).unwrap();
 
         // Should return just "." when no .meta.yaml file
         assert_eq!(dirs, vec!["."]);
@@ -486,26 +488,28 @@ the only commit message
     #[test]
     fn test_get_project_directories_refuses_a_bad_meta_file() {
         // A refused config is an error, not "just the root"
-        let temp_dir = TempDir::new().unwrap();
+        let sandbox = Sandbox::new();
+        let temp_dir = sandbox.work();
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"{"projects": {"evil": {"repo": "u", "path": ".git/x"}}}"#,
         )
         .unwrap();
 
-        let err = get_project_directories(temp_dir.path()).unwrap_err();
+        let err = get_project_directories(&temp_dir).unwrap_err();
         assert!(format!("{err:#}").contains("leads into .git"), "{err:#}");
     }
 
     #[test]
     fn test_get_project_directories_with_meta_file() {
-        let temp_dir = TempDir::new().unwrap();
+        let sandbox = Sandbox::new();
+        let temp_dir = sandbox.work();
 
         // Create .meta.yaml file
         let meta_content = r#"{"projects": {"alpha": "url1", "beta": "url2", "gamma": "url3"}}"#;
-        std::fs::write(temp_dir.path().join(".meta.yaml"), meta_content).unwrap();
+        std::fs::write(temp_dir.join(".meta.yaml"), meta_content).unwrap();
 
-        let dirs = get_project_directories(temp_dir.path()).unwrap();
+        let dirs = get_project_directories(&temp_dir).unwrap();
 
         // Should return "." plus sorted project names
         assert_eq!(dirs.len(), 4);
@@ -517,13 +521,14 @@ the only commit message
 
     #[test]
     fn test_get_project_directories_sorted() {
-        let temp_dir = TempDir::new().unwrap();
+        let sandbox = Sandbox::new();
+        let temp_dir = sandbox.work();
 
         // Create .meta.yaml file with unsorted projects
         let meta_content = r#"{"projects": {"zebra": "url1", "alpha": "url2", "middle": "url3"}}"#;
-        std::fs::write(temp_dir.path().join(".meta.yaml"), meta_content).unwrap();
+        std::fs::write(temp_dir.join(".meta.yaml"), meta_content).unwrap();
 
-        let dirs = get_project_directories(temp_dir.path()).unwrap();
+        let dirs = get_project_directories(&temp_dir).unwrap();
 
         // Projects should be sorted alphabetically
         assert_eq!(dirs[1], "alpha");
@@ -533,8 +538,9 @@ the only commit message
 
     #[test]
     fn test_get_project_directories_from_inside_a_project() {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path();
+        let sandbox = Sandbox::new();
+        let temp_dir = sandbox.work();
+        let root = &temp_dir;
         std::fs::write(
             root.join(".meta.yaml"),
             r#"{"projects": {"a": "u", "b": "u"}}"#,
@@ -550,13 +556,14 @@ the only commit message
 
     #[test]
     fn test_get_project_directories_empty_projects() {
-        let temp_dir = TempDir::new().unwrap();
+        let sandbox = Sandbox::new();
+        let temp_dir = sandbox.work();
 
         // Create .meta.yaml file with no projects
         let meta_content = r#"{"projects": {}}"#;
-        std::fs::write(temp_dir.path().join(".meta.yaml"), meta_content).unwrap();
+        std::fs::write(temp_dir.join(".meta.yaml"), meta_content).unwrap();
 
-        let dirs = get_project_directories(temp_dir.path()).unwrap();
+        let dirs = get_project_directories(&temp_dir).unwrap();
 
         // Should return just "."
         assert_eq!(dirs, vec!["."]);

@@ -1,32 +1,12 @@
 #![expect(
-    clippy::disallowed_methods,
     clippy::indexing_slicing,
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
+use meta_test_support::Sandbox;
 use serde_json::{json, Value};
-use std::{
-    fs,
-    io::Write,
-    path::Path,
-    process::{Command, Stdio},
-};
-
-/// Run a Git fixture command and surface diagnostics on failure.
-fn git(path: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+use std::{fs, io::Write, path::Path, process::Stdio};
 
 /// Invoke the public plugin protocol with isolated worktree and data roots.
 /// Whether `stdout` is the JSON error a failed `--json` command prints in
@@ -37,16 +17,23 @@ fn is_error(stdout: &[u8]) -> bool {
     })
 }
 
-fn request(root: &Path, command: &str, recursive: bool, explicit: bool) -> std::process::Output {
+fn request(
+    sandbox: &Sandbox,
+    root: &Path,
+    command: &str,
+    recursive: bool,
+    explicit: bool,
+) -> std::process::Output {
     let args = if command == "status" {
         vec!["example"]
     } else {
         vec![]
     };
-    request_args(root, command, args, recursive, explicit)
+    request_args(sandbox, root, command, args, recursive, explicit)
 }
 
 fn request_args(
+    sandbox: &Sandbox,
     root: &Path,
     command: &str,
     mut args: Vec<&str>,
@@ -58,7 +45,7 @@ fn request_args(
     }
     let request = json!({"command": format!("git worktree {command}"), "args": args,
         "cwd": root, "options": {"json_output": true, "recursive": recursive}});
-    let mut executable = Command::new(env!("CARGO_BIN_EXE_meta-git"));
+    let mut executable = sandbox.command(env!("CARGO_BIN_EXE_meta-git"));
     if root.join("bin").is_dir() {
         executable.env("PATH", root.join("bin"));
     }
@@ -66,7 +53,6 @@ fn request_args(
         .arg("--meta-plugin-exec")
         .current_dir(root)
         .env("META_WORKTREES", root.join("sets"))
-        .env("META_DATA_DIR", root.join("data"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -84,8 +70,9 @@ fn request_args(
 #[test]
 /// Verify real nested members, option forwarding and command-specific error output.
 fn public_list_status_recursive_protocol_and_explicit_flags() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
+    let sandbox = Sandbox::new();
+    let temp = sandbox.work();
+    let root = &temp;
     let set = root.join("sets").join("example");
     for (index, alias) in [".", "open-source", "open-source/atc", "other/atc"]
         .iter()
@@ -93,23 +80,11 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
     {
         let source = root.join(format!("source{index}"));
         fs::create_dir(&source).unwrap();
-        git(&source, &["init", "-q"]);
-        git(
-            &source,
-            &[
-                "-c",
-                "user.name=Test",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "--allow-empty",
-                "-qm",
-                "initial",
-            ],
-        );
+        sandbox.git(&source, &["init", "-q"]);
+        sandbox.git(&source, &["commit", "--allow-empty", "-qm", "initial"]);
         let destination = set.join(alias);
         fs::create_dir_all(destination.parent().unwrap()).unwrap();
-        git(
+        sandbox.git(
             &source,
             &[
                 "worktree",
@@ -123,7 +98,7 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
     fs::write(set.join("open-source/atc/untracked.txt"), "dirty").unwrap();
     for command in ["list", "status"] {
         for (recursive, explicit) in [(false, false), (true, false), (false, true), (true, true)] {
-            let out = request(root, command, recursive, explicit);
+            let out = request(&sandbox, root, command, recursive, explicit);
             assert!(
                 out.status.success(),
                 "{}",
@@ -131,7 +106,8 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
             );
             let value: Value = serde_json::from_slice(&out.stdout).unwrap();
             if command == "list" {
-                let named = request_args(root, "list", vec!["example"], recursive, explicit);
+                let named =
+                    request_args(&sandbox, root, "list", vec!["example"], recursive, explicit);
                 assert!(named.status.success());
                 assert_eq!(
                     serde_json::from_slice::<Value>(&named.stdout).unwrap(),
@@ -171,7 +147,7 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
     }
     fs::write(set.join("open-source/atc/.git"), "broken").unwrap();
     let healthy_set = root.join("sets").join("healthy");
-    git(
+    sandbox.git(
         &root.join("source0"),
         &[
             "worktree",
@@ -181,7 +157,7 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
             healthy_set.to_str().unwrap(),
         ],
     );
-    let out = request(root, "list", true, false);
+    let out = request(&sandbox, root, "list", true, false);
     assert!(out.status.success());
     let value: Value = serde_json::from_slice(&out.stdout).unwrap();
     let worktrees = value["worktrees"].as_array().unwrap();
@@ -200,13 +176,13 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
         .unwrap()
         .contains("Invalid .git file format"));
 
-    let out = request(root, "status", true, false);
+    let out = request(&sandbox, root, "status", true, false);
     assert!(!out.status.success());
     assert!(
         is_error(&out.stdout),
         "named status must not emit an incomplete successful inventory"
     );
-    let selected = request_args(root, "list", vec!["example"], true, false);
+    let selected = request_args(&sandbox, root, "list", vec!["example"], true, false);
     assert!(!selected.status.success());
     assert!(is_error(&selected.stdout));
 }
@@ -214,13 +190,14 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
 /// A missing configured root is empty for list and an error for named status.
 #[test]
 fn missing_worktree_root_preserves_list_and_status_contracts() {
-    let temp = tempfile::tempdir().unwrap();
+    let sandbox = Sandbox::new();
+    let temp = sandbox.work();
     for recursive in [false, true] {
-        let out = request(temp.path(), "list", recursive, false);
+        let out = request(&sandbox, &temp, "list", recursive, false);
         assert!(out.status.success());
         let value: Value = serde_json::from_slice(&out.stdout).unwrap();
         assert_eq!(value, json!({"worktrees": []}));
-        let out = request(temp.path(), "status", recursive, false);
+        let out = request(&sandbox, &temp, "status", recursive, false);
         assert!(!out.status.success());
         assert!(is_error(&out.stdout));
     }
@@ -230,34 +207,23 @@ fn missing_worktree_root_preserves_list_and_status_contracts() {
 #[test]
 fn membership_only_protocol_runs_without_git_and_rejects_partial_membership() {
     use std::os::unix::fs::PermissionsExt;
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
+    let sandbox = Sandbox::new();
+    let temp = sandbox.work();
+    let root = temp.canonicalize().unwrap();
     let source = root.join("source");
     fs::create_dir(&source).unwrap();
-    git(&source, &["init", "-q"]);
-    git(
-        &source,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "--allow-empty",
-            "-qm",
-            "initial",
-        ],
-    );
+    sandbox.git(&source, &["init", "-q"]);
+    sandbox.git(&source, &["commit", "--allow-empty", "-qm", "initial"]);
     let set = root.join("sets/example");
     fs::create_dir_all(set.parent().unwrap()).unwrap();
-    git(
+    sandbox.git(
         &source,
         &["worktree", "add", "-qb", "topic", set.to_str().unwrap()],
     );
     fs::write(set.join("untracked"), "dirty, deliberately unobserved").unwrap();
     let nested = set.join("nested/child");
     fs::create_dir_all(nested.parent().unwrap()).unwrap();
-    git(
+    sandbox.git(
         &source,
         &["worktree", "add", "-qb", "nested", nested.to_str().unwrap()],
     );
@@ -273,6 +239,7 @@ fn membership_only_protocol_runs_without_git_and_rejects_partial_membership() {
     fs::set_permissions(&fake_git, fs::Permissions::from_mode(0o700)).unwrap();
     for (recursive, explicit) in [(true, false), (false, true)] {
         let out = request_args(
+            &sandbox,
             &root,
             "list",
             vec!["example", "--metadata-only"],
@@ -304,6 +271,7 @@ fn membership_only_protocol_runs_without_git_and_rejects_partial_membership() {
     fs::create_dir(set.join("broken")).unwrap();
     fs::write(set.join("broken/.git"), "broken").unwrap();
     let out = request_args(
+        &sandbox,
         &root,
         "list",
         vec!["example", "--metadata-only"],
@@ -316,7 +284,14 @@ fn membership_only_protocol_runs_without_git_and_rejects_partial_membership() {
         "must not report a partial successful inventory"
     );
     assert!(!bin.join("git.calls").exists());
-    let aggregate = request_args(&root, "list", vec!["--metadata-only"], true, false);
+    let aggregate = request_args(
+        &sandbox,
+        &root,
+        "list",
+        vec!["--metadata-only"],
+        true,
+        false,
+    );
     assert!(aggregate.status.success());
     let value: Value = serde_json::from_slice(&aggregate.stdout).unwrap();
     assert!(value["worktrees"].as_array().unwrap().is_empty());
@@ -330,27 +305,16 @@ fn membership_only_protocol_runs_without_git_and_rejects_partial_membership() {
 #[test]
 fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
     use std::os::unix::fs::PermissionsExt;
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
+    let sandbox = Sandbox::new();
+    let temp = sandbox.work();
+    let root = temp.canonicalize().unwrap();
     let source = root.join("source");
     fs::create_dir(&source).unwrap();
-    git(&source, &["init", "-q"]);
-    git(
-        &source,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "--allow-empty",
-            "-qm",
-            "initial",
-        ],
-    );
+    sandbox.git(&source, &["init", "-q"]);
+    sandbox.git(&source, &["commit", "--allow-empty", "-qm", "initial"]);
     let set = root.join(".worktrees/example");
     fs::create_dir_all(set.parent().unwrap()).unwrap();
-    git(
+    sandbox.git(
         &source,
         &["worktree", "add", "-qb", "topic", set.to_str().unwrap()],
     );
@@ -359,7 +323,7 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
     fs::write(set.join("untracked"), "dirty").unwrap();
     let other = root.join("configured/other");
     fs::create_dir_all(other.parent().unwrap()).unwrap();
-    git(
+    sandbox.git(
         &source,
         &["worktree", "add", "-qb", "other", other.to_str().unwrap()],
     );
@@ -373,7 +337,8 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
     .unwrap();
     fs::set_permissions(&fake_git, fs::Permissions::from_mode(0o700)).unwrap();
     let invoke = |cwd: &Path, args: Vec<&str>, recursive: bool| {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_meta-git"))
+        let mut child = sandbox
+            .command(env!("CARGO_BIN_EXE_meta-git"))
             .arg("--meta-plugin-exec")
             .current_dir(&source)
             .env(
@@ -385,7 +350,6 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
                 },
             )
             .env("META_WORKTREES", root.join("configured"))
-            .env("META_DATA_DIR", root.join("data"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

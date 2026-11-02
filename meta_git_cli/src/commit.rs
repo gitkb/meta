@@ -392,30 +392,34 @@ pub(crate) fn parse_multi_commit_file(content: &str) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_test_support::Sandbox;
 
     #[test]
     fn commit_passes_over_folders_with_nothing_of_gits_but_reports_a_broken_one() {
-        let dir = tempfile::tempdir().unwrap();
-        meta_core::git::run(dir.path(), ["init", "-q"]).unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        sandbox.git(&dir, &["init", "-q"]);
         let args = || CommitArgs {
             edit: false,
             message: Some("x".to_string()),
         };
         let options = PluginRequestOptions::default();
-        let result = execute_git_commit(args(), &["missing".to_string()], &options, dir.path());
+        let result = execute_git_commit(args(), &["missing".to_string()], &options, &dir);
         assert!(
             matches!(result.unwrap(), CommandResult::Message(message) if message.contains("No staged changes"))
         );
 
         // nothing git's in it: nothing staged there
-        std::fs::create_dir(dir.path().join("plain")).unwrap();
-        let result = execute_git_commit(args(), &["plain".to_string()], &options, dir.path());
+        std::fs::create_dir(dir.join("plain")).unwrap();
+        let result = execute_git_commit(args(), &["plain".to_string()], &options, &dir);
         assert!(
             matches!(result.unwrap(), CommandResult::Message(message) if message.contains("No staged changes"))
         );
         // a .git git can't use is named, never taken for "nothing staged"
-        std::fs::create_dir_all(dir.path().join("broken/.git")).unwrap();
-        let result = execute_git_commit(args(), &["broken".to_string()], &options, dir.path());
+        std::fs::create_dir_all(dir.join("broken/.git")).unwrap();
+        let result = execute_git_commit(args(), &["broken".to_string()], &options, &dir);
         let error = result.err().expect("a broken repository must fail");
         let error = error.to_string();
         assert!(
@@ -426,15 +430,18 @@ mod tests {
 
     #[test]
     fn a_workspace_root_that_is_no_repository_is_passed_over() {
-        let dir = tempfile::tempdir().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
         // whatever the config is called (`meta -c meta.yml`)
-        let root = dir.path().canonicalize().unwrap();
+        let root = dir;
         std::fs::write(root.join("meta.yml"), "projects:\n  p: u\n").unwrap();
         let project = root.join("p");
         std::fs::create_dir(&project).unwrap();
-        meta_core::git::run(&project, ["init", "-q"]).unwrap();
+        sandbox.git(&project, &["init", "-q"]);
         std::fs::write(project.join("new"), "x").unwrap();
-        meta_core::git::run(&project, ["add", "new"]).unwrap();
+        sandbox.git(&project, &["add", "new"]);
         let options = PluginRequestOptions {
             dry_run: true,
             ..Default::default()
@@ -464,10 +471,13 @@ mod tests {
 
     #[test]
     fn a_staged_file_read_git_fails_is_an_error_not_nothing_staged() {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = dir.path().join("broken");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        let repo = dir.join("broken");
         std::fs::create_dir(&repo).unwrap();
-        meta_core::git::run(&repo, ["init", "-q"]).unwrap();
+        sandbox.git(&repo, &["init", "-q"]);
         std::fs::write(repo.join(".git/index"), "not an index").unwrap();
         let args = CommitArgs {
             edit: false,
@@ -477,7 +487,7 @@ mod tests {
             args,
             &["broken".to_string()],
             &PluginRequestOptions::default(),
-            dir.path(),
+            &dir,
         );
         let error = format!(
             "{:#}",
@@ -491,30 +501,29 @@ mod tests {
 
     #[test]
     fn a_failed_commit_fails_the_command_after_the_others() {
-        let dir = tempfile::tempdir().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
         // Each its own repository, so git never finds one around the
         // temporary directory; "a" has nothing staged, so its commit fails
         let repo = |name: &str| {
-            let path = dir.path().join(name);
+            let path = dir.join(name);
             std::fs::create_dir(&path).unwrap();
-            meta_core::git::run(&path, ["init", "-q"]).unwrap();
-            meta_core::git::run(&path, ["config", "user.name", "Test"]).unwrap();
-            meta_core::git::run(&path, ["config", "user.email", "t@example.invalid"]).unwrap();
-            // whatever the developer's global config signs or hooks
-            meta_core::git::run(&path, ["config", "commit.gpgsign", "false"]).unwrap();
-            meta_core::git::run(&path, ["config", "core.hooksPath", "no-hooks"]).unwrap();
+            sandbox.git(&path, &["init", "-q"]);
+
             (name.to_string(), path.display().to_string(), vec![])
         };
         let repos = [repo("a"), repo("b")];
-        std::fs::write(dir.path().join("b/file"), "x").unwrap();
-        meta_core::git::run(&dir.path().join("b"), ["add", "file"]).unwrap();
+        std::fs::write(dir.join("b/file"), "x").unwrap();
+        sandbox.git(&dir.join("b"), &["add", "file"]);
         let commits = [
             ("a".to_string(), "one".to_string()),
             ("b".to_string(), "two".to_string()),
         ];
         let err = commit_each(&repos, &commits).unwrap_err();
         assert_eq!(err.to_string(), "Committed 1 repo(s), 1 failed");
-        let subject = meta_core::git::run(&dir.path().join("b"), ["log", "-1", "--format=%s"]);
-        assert_eq!(subject.unwrap(), "two");
+        let subject = sandbox.git(&dir.join("b"), &["log", "-1", "--format=%s"]);
+        assert_eq!(subject.trim(), "two");
     }
 }

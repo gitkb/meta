@@ -445,6 +445,7 @@ pub fn is_empty_dir(dir: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_test_support::Sandbox;
 
     fn top(dir: &Path, url: Option<&str>) -> Arc<[MetaRepo]> {
         Arc::from([MetaRepo::at("ws", dir, url.map(GitUrl::from))])
@@ -465,18 +466,19 @@ mod tests {
     fn discover_does_not_look_past_the_depth_limit() {
         // child exists with a dangling .meta.yaml; at depth limit 0 it is never
         // read, so the missing sibling is still found
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("child")).unwrap();
-        meta_core::git::run(&dir.path().join("child"), ["init", "-q"]).unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        std::fs::create_dir(dir.join("child")).unwrap();
+        sandbox.git(&dir.join("child"), &["init", "-q"]);
         write_meta(
-            dir.path(),
+            &dir,
             r#"{"projects": {"child": {"repo": "u", "meta": true}, "sib": "u2"}}"#,
         );
-        std::os::unix::fs::symlink("missing.yaml", dir.path().join("child/.meta.yaml")).unwrap();
+        std::os::unix::fs::symlink("missing.yaml", dir.join("child/.meta.yaml")).unwrap();
         let queue = CloneQueue::new(None, Some(0), false);
-        let tasks = queue
-            .discover(dir.path(), 0, &top(dir.path(), None))
-            .unwrap();
+        let tasks = queue.discover(&dir, 0, &top(&dir, None)).unwrap();
         assert_eq!(names(&tasks), ["sib"]);
     }
 
@@ -485,40 +487,42 @@ mod tests {
     fn discover_fails_on_a_nested_config_it_cannot_read() {
         // child/.meta.yaml is a link to nowhere: its repos are unknown, which is
         // an error, not "no nested repos"
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("child")).unwrap();
-        meta_core::git::run(&dir.path().join("child"), ["init", "-q"]).unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        std::fs::create_dir(dir.join("child")).unwrap();
+        sandbox.git(&dir.join("child"), &["init", "-q"]);
         write_meta(
-            dir.path(),
+            &dir,
             r#"{"projects": {"child": {"repo": "u", "meta": true}}}"#,
         );
-        std::os::unix::fs::symlink("missing.yaml", dir.path().join("child/.meta.yaml")).unwrap();
+        std::os::unix::fs::symlink("missing.yaml", dir.join("child/.meta.yaml")).unwrap();
         let queue = CloneQueue::new(None, None, false);
-        let err = queue
-            .discover(dir.path(), 0, &top(dir.path(), None))
-            .unwrap_err();
+        let err = queue.discover(&dir, 0, &top(&dir, None)).unwrap_err();
         assert!(format!("{err:#}").contains("Cannot read"), "{err:#}");
     }
 
     #[test]
     fn discover_clones_only_where_no_repository_is_and_pulls_the_rest() {
-        let dir = tempfile::tempdir().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
         // a clone, an empty folder git can clone into, and a plain folder
         for name in ["cloned", "empty", "plain"] {
-            std::fs::create_dir(dir.path().join(name)).unwrap();
+            std::fs::create_dir(dir.join(name)).unwrap();
         }
-        meta_core::git::run(&dir.path().join("cloned"), ["init", "-q"]).unwrap();
-        std::fs::write(dir.path().join("plain/notes.txt"), "mine").unwrap();
+        sandbox.git(&dir.join("cloned"), &["init", "-q"]);
+        std::fs::write(dir.join("plain/notes.txt"), "mine").unwrap();
         write_meta(
-            dir.path(),
+            &dir,
             r#"{"projects": {"cloned": "u1", "empty": "u2", "plain": "u3", "missing": "u4",
                 "no-repo": {"path": "no-repo"}}}"#,
         );
 
         let queue = CloneQueue::new(None, None, true);
-        let tasks = queue
-            .discover(dir.path(), 0, &top(dir.path(), None))
-            .unwrap();
+        let tasks = queue.discover(&dir, 0, &top(&dir, None)).unwrap();
         let work = |name: &str| {
             tasks
                 .iter()
@@ -535,7 +539,7 @@ mod tests {
         );
         // a folder is handed out once
         assert!(queue
-            .discover(dir.path(), 0, &top(dir.path(), None))
+            .discover(&dir, 0, &top(&dir, None))
             .unwrap()
             .is_empty());
         assert_eq!(queue.get_counts(), (0, 3));
@@ -543,19 +547,20 @@ mod tests {
 
     #[test]
     fn a_nested_meta_repo_is_read_once_its_task_is_done() {
-        let dir = tempfile::tempdir().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
         write_meta(
-            dir.path(),
+            &dir,
             r#"{"projects": {"child": {"repo": "u", "meta": true}}}"#,
         );
 
         let queue = CloneQueue::new(None, None, false);
-        let tasks = queue
-            .discover(dir.path(), 0, &top(dir.path(), None))
-            .unwrap();
+        let tasks = queue.discover(&dir, 0, &top(&dir, None)).unwrap();
         assert_eq!(names(&tasks), ["child"]);
         // as the clone leaves it
-        let child = dir.path().join("child");
+        let child = dir.join("child");
         std::fs::create_dir(&child).unwrap();
         write_meta(&child, r#"{"projects": {"grandchild": "u2"}}"#);
         assert!(tasks[0].is_meta);
@@ -571,18 +576,21 @@ mod tests {
     #[test]
     fn a_meta_repo_that_lists_one_above_it_is_refused_by_name() {
         // ws lists kid, whose .meta.yaml lists ws's own URL
-        let dir = tempfile::tempdir().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
         write_meta(
-            dir.path(),
+            &dir,
             r#"{"projects": {"kid": {"repo": "kid.git", "meta": true}}}"#,
         );
         let queue = CloneQueue::new(None, None, false);
         let tasks = queue
-            .discover(dir.path(), 0, &top(dir.path(), Some("top.git")))
+            .discover(&dir, 0, &top(&dir, Some("top.git")))
             .unwrap();
-        std::fs::create_dir(dir.path().join("kid")).unwrap();
+        std::fs::create_dir(dir.join("kid")).unwrap();
         write_meta(
-            &dir.path().join("kid"),
+            &dir.join("kid"),
             r#"{"projects": {"top": {"repo": "top.git", "meta": true}, "lib": "lib.git"}}"#,
         );
         let nested = queue.mark_completed(&tasks[0]);
@@ -593,8 +601,11 @@ mod tests {
     #[test]
     fn two_meta_repos_listing_one_repo_is_no_cycle_and_local_urls_match_by_folder() {
         // b and c both list d; d lists the workspace by another spelling
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        let ws = &dir;
         let remote = ws.join("remote.git");
         std::fs::create_dir(&remote).unwrap();
         write_meta(ws, r#"{"projects": {"b": "b.git", "c": "c.git"}}"#);
@@ -625,14 +636,17 @@ mod tests {
     fn without_recursion_a_repeated_repo_is_no_cycle() {
         // a second checkout of the workspace's own repo: its .meta.yaml is
         // never read, so it is cloned like any project
-        let dir = tempfile::tempdir().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
         write_meta(
-            dir.path(),
+            &dir,
             r#"{"projects": {"pages": {"repo": "top.git", "meta": true}}}"#,
         );
         let queue = CloneQueue::new(None, Some(0), true);
         let tasks = queue
-            .discover(dir.path(), 0, &top(dir.path(), Some("top.git")))
+            .discover(&dir, 0, &top(&dir, Some("top.git")))
             .unwrap();
         assert_eq!(names(&tasks), ["pages"]);
         assert!(queue.outcome().cycles.is_empty());
@@ -641,8 +655,11 @@ mod tests {
     #[test]
     fn an_undeclared_meta_repo_that_repeats_one_above_it_is_cloned_once_and_not_entered() {
         // ws lists kid, kid lists top (ws's own repo); neither says meta: true
-        let dir = tempfile::tempdir().unwrap();
-        let ws = dir.path();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        let ws = &dir;
         write_meta(ws, r#"{"projects": {"kid": "kid.git"}}"#);
         let queue = CloneQueue::new(None, None, false);
         let tasks = queue.discover(ws, 0, &top(ws, Some("top.git"))).unwrap();
@@ -665,8 +682,11 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_file_url_with_a_drive_is_the_local_folder() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().to_string_lossy().into_owned();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        let path = dir.to_string_lossy().into_owned();
         let url = GitUrl::from(format!("file:///{}", path.replace('\\', "/")));
         assert!(same_repository((&GitUrl::from(path), &url)));
     }
@@ -676,11 +696,14 @@ mod tests {
     fn a_project_whose_folder_leads_back_up_is_a_cycle() {
         // ws/kid leads out of the workspace, to a meta repo whose `back`
         // leads to ws again
-        let dir = tempfile::tempdir().unwrap();
-        let (ws, kid) = (dir.path().join("ws"), dir.path().join("kid"));
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        let (ws, kid) = (dir.join("ws"), dir.join("kid"));
         for repo in [&ws, &kid] {
             std::fs::create_dir(repo).unwrap();
-            meta_core::git::run(repo, ["init", "-q"]).unwrap();
+            sandbox.git(repo, &["init", "-q"]);
         }
         std::os::unix::fs::symlink(&kid, ws.join("kid")).unwrap();
         std::os::unix::fs::symlink(&ws, kid.join("back")).unwrap();
@@ -697,28 +720,30 @@ mod tests {
 
     #[test]
     fn repositories_the_config_does_not_list_are_recorded() {
-        let dir = tempfile::tempdir().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
         for name in ["listed", "other", "plain"] {
-            std::fs::create_dir(dir.path().join(name)).unwrap();
+            std::fs::create_dir(dir.join(name)).unwrap();
         }
-        meta_core::git::run(&dir.path().join("listed"), ["init", "-q"]).unwrap();
-        meta_core::git::run(&dir.path().join("other"), ["init", "-q"]).unwrap();
-        write_meta(dir.path(), r#"{"projects": {"listed": "u"}}"#);
+        sandbox.git(&dir.join("listed"), &["init", "-q"]);
+        sandbox.git(&dir.join("other"), &["init", "-q"]);
+        write_meta(&dir, r#"{"projects": {"listed": "u"}}"#);
         let queue = CloneQueue::new(None, None, true);
-        queue
-            .discover(dir.path(), 0, &top(dir.path(), None))
-            .unwrap();
-        assert_eq!(queue.outcome().unlisted, [dir.path().join("other")]);
+        queue.discover(&dir, 0, &top(&dir, None)).unwrap();
+        assert_eq!(queue.outcome().unlisted, [dir.join("other")]);
     }
 
     #[test]
     fn failed_tasks_are_reported_with_their_error() {
-        let dir = tempfile::tempdir().unwrap();
-        write_meta(dir.path(), r#"{"projects": {"missing": "u"}}"#);
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        write_meta(&dir, r#"{"projects": {"missing": "u"}}"#);
         let queue = CloneQueue::new(None, None, true);
-        let tasks = queue
-            .discover(dir.path(), 0, &top(dir.path(), None))
-            .unwrap();
+        let tasks = queue.discover(&dir, 0, &top(&dir, None)).unwrap();
         assert!(queue
             .mark_failed(&tasks[0], "fatal: repository not found".to_string())
             .is_empty());

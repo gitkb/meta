@@ -294,6 +294,7 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_test_support::Sandbox;
 
     #[test]
     fn git_ssh_command_quotes_the_control_path_for_the_shell() {
@@ -324,12 +325,13 @@ mod tests {
     fn sockets_dir_is_private() {
         use std::os::unix::fs::PermissionsExt;
 
-        let tmp = tempfile::tempdir().unwrap();
-        let sockets = tmp.path().join(".ssh/sockets");
+        let sandbox = Sandbox::new();
+        let tmp = sandbox.work();
+        let sockets = tmp.join(".ssh/sockets");
         std::fs::create_dir_all(&sockets).unwrap();
         std::fs::set_permissions(&sockets, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(ensure_ssh_sockets_dir(tmp.path()).unwrap(), sockets);
-        for dir in [&sockets, &tmp.path().join(".ssh")] {
+        assert_eq!(ensure_ssh_sockets_dir(&tmp).unwrap(), sockets);
+        for dir in [&sockets, &tmp.join(".ssh")] {
             let mode = std::fs::metadata(dir).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o700, "{}", dir.display());
         }

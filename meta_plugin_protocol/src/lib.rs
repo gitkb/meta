@@ -598,36 +598,34 @@ mod tests {
     }
 
     #[test]
-    fn every_plan_control_arrives_as_sent() {
-        let command = |dir: &str| PlannedCommand {
-            dir: dir.to_string(),
-            argv: vec!["true".to_string()],
-            env: Some(HashMap::from([(
-                "GIT_PAGER".to_string(),
-                "cat".to_string(),
-            )])),
-        };
-        let sent = PlanResponse {
-            plan: ExecutionPlan {
-                pre_commands: vec![command("pre")],
-                commands: vec![command("a"), command("b")],
-                post_commands: vec![command("post")],
-                parallel: Some(false),
-                max_parallel: Some(3),
-                spawn_stagger_ms: Some(25),
-            },
-        };
-        let got = round_trip(&sent).plan;
+    fn every_plan_control_arrives_as_a_plugin_writes_it() {
+        let written = serde_json::json!({"plan": {
+            "pre_commands": [{"dir": "pre", "argv": ["true"]}],
+            "commands": [
+                {"dir": "a", "argv": ["true"]},
+                {"dir": "b", "argv": ["true"], "env": {"GIT_PAGER": "cat"}},
+            ],
+            "post_commands": [{"dir": "post", "argv": ["true"]}],
+            "parallel": false,
+            "max_parallel": 3,
+            "spawn_stagger_ms": 25,
+        }});
+        let plan = serde_json::from_value::<PlanResponse>(written.clone())
+            .unwrap()
+            .plan;
         let dirs = |c: &[PlannedCommand]| c.iter().map(|c| c.dir.clone()).collect::<Vec<_>>();
-        assert_eq!(dirs(&got.pre_commands), ["pre"]);
-        assert_eq!(dirs(&got.commands), ["a", "b"]);
-        assert_eq!(dirs(&got.post_commands), ["post"]);
+        assert_eq!(dirs(&plan.pre_commands), ["pre"]);
+        assert_eq!(dirs(&plan.commands), ["a", "b"]);
+        assert_eq!(dirs(&plan.post_commands), ["post"]);
         assert_eq!(
-            (got.parallel, got.max_parallel, got.spawn_stagger_ms),
+            (plan.parallel, plan.max_parallel, plan.spawn_stagger_ms),
             (Some(false), Some(3), Some(25))
         );
-        let env = got.commands[1].env.as_ref().unwrap();
+        let env = plan.commands[1].env.as_ref().unwrap();
         assert_eq!(env.get("GIT_PAGER").map(String::as_str), Some("cat"));
+        // and a plugin built on this crate writes the same keys
+        let rewritten = serde_json::to_value(PlanResponse { plan }).unwrap();
+        assert_eq!(rewritten, written);
     }
 
     #[test]
@@ -690,6 +688,27 @@ mod tests {
         assert_eq!(help.usage, "meta git");
         assert!(help.commands.is_empty() && help.command_sections.is_empty());
         assert!(help.examples.is_empty() && help.note.is_none());
+        let written = serde_json::json!({
+            "name": "git", "version": "1.0", "commands": ["git status"],
+            "description": "Git across repos",
+            "help": {
+                "usage": "meta git <command>",
+                "commands": {"status": "Show status"},
+                "command_sections": {"Worktrees": {"worktree create": "Make a set"}},
+                "examples": ["meta git status"],
+                "note": "Raw git: meta exec -- git",
+            },
+        });
+        let info: PluginInfo = serde_json::from_value(written.clone()).unwrap();
+        let help = info.help.as_ref().unwrap();
+        assert_eq!(info.description.as_deref(), Some("Git across repos"));
+        assert_eq!(help.commands["status"], "Show status");
+        assert_eq!(
+            help.command_sections["Worktrees"]["worktree create"],
+            "Make a set"
+        );
+        assert_eq!((help.examples.len(), help.note.is_some()), (1, true));
+        assert_eq!(serde_json::to_value(&info).unwrap(), written);
         // the order of the help's commands is kept
         let mut commands = IndexMap::new();
         for name in ["z", "a", "m"] {

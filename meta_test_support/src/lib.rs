@@ -9,6 +9,7 @@
 #![expect(
     clippy::disallowed_methods,
     clippy::unwrap_used,
+    clippy::print_stdout,
     reason = "test support: a panic is a failed test, and tests start the programs they test"
 )]
 
@@ -43,7 +44,7 @@ impl Sandbox {
         let dir = tempfile::tempdir().unwrap();
         // the path programs see: macOS's temp dir is behind a symlink
         let root = dir.path().canonicalize().unwrap();
-        for sub in ["home", "config", "data", "runtime", "meta", "work"] {
+        for sub in ["home", "config", "data", "runtime", "meta", "tmp", "work"] {
             std::fs::create_dir(root.join(sub)).unwrap();
         }
         #[cfg(unix)]
@@ -79,19 +80,20 @@ impl Sandbox {
         let test = std::thread::current().name().unwrap().to_string();
         let out = sandbox
             .command(std::env::current_exe().unwrap())
-            .args([test.as_str(), "--exact", "--nocapture", "--test-threads=1"])
+            .args([test.as_str(), "--exact", "--include-ignored", "--nocapture"])
             .env(ISOLATED, &sandbox.root)
             .current_dir(std::env::current_dir().unwrap())
             .output()
             .unwrap();
-        let output = format!(
-            "{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
+        let output = String::from_utf8_lossy(&out.stdout);
+        // the copy's output as this test's, which libtest shows when asked
+        print!("{output}{}", String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "{test} failed in its sandbox");
+        // libtest exits 0 when the name matches no test
+        assert!(
+            output.contains("1 passed"),
+            "{test} didn't run in its sandbox"
         );
-        assert!(out.status.success(), "{test} in its sandbox:\n{output}");
-        // libtest exits 0 when the filter matches nothing
-        assert!(output.contains("1 passed"), "{test} didn't run:\n{output}");
         None
     }
 
@@ -121,6 +123,9 @@ impl Sandbox {
             ("GIT_CONFIG_GLOBAL", self.root.join("gitconfig")),
             ("GIT_CONFIG_NOSYSTEM", "1".into()),
             ("META_DATA_DIR", self.meta_data()),
+            ("TMPDIR", self.root.join("tmp")),
+            ("TEMP", self.root.join("tmp")),
+            ("TMP", self.root.join("tmp")),
             ("GIT_AUTHOR_NAME", NAME.into()),
             ("GIT_AUTHOR_EMAIL", EMAIL.into()),
             ("GIT_COMMITTER_NAME", NAME.into()),

@@ -597,8 +597,9 @@ assert 'removed' in payload
     # With --primary, should ignore worktree context
     run "$META_BIN" --primary exec -- pwd
     [ "$status" -eq 0 ]
-    # Output should NOT include the worktree path if --primary works
-    [[ "$output" != *"ctx-primary/backend"* ]] || [[ "$output" == *"$TEST_DIR/backend"* ]]
+    # the primary checkouts, never the set's
+    [[ "$output" != *"ctx-primary/backend"* ]]
+    grep -qx "$TEST_DIR/backend" <<<"$output"
 }
 
 # ============ Combined Flags ============

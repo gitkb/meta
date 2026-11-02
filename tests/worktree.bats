@@ -341,8 +341,9 @@ assert any(w['name'] == 'list-json' for w in data['worktrees'])
     run "$META_BIN" git worktree list
     [ "$status" -eq 0 ]
     [[ "$output" == *"multi-list"* ]]
-    # Should mention both repos somehow
-    [[ "$output" == *"2"* ]] || [[ "$output" == *"backend"* ]]
+    # each repo, on the set's branch
+    grep -Eq 'backend +-> multi-list' <<<"$output"
+    grep -Eq 'frontend +-> multi-list' <<<"$output"
 }
 
 # ============ Status ============
@@ -352,7 +353,7 @@ assert any(w['name'] == 'list-json' for w in data['worktrees'])
     run "$META_BIN" git worktree status status-clean
     [ "$status" -eq 0 ]
     [[ "$output" == *"status-clean"* ]]
-    [[ "$output" == *"clean"* ]] || [[ "$output" != *"dirty"* ]]
+    grep -Eq 'backend +status-clean +clean$' <<<"$output"
 }
 
 @test "worktree status shows dirty state" {
@@ -360,7 +361,7 @@ assert any(w['name'] == 'list-json' for w in data['worktrees'])
     echo "change" >> ".worktrees/status-dirty/backend/README.md"
     run "$META_BIN" git worktree status status-dirty
     [ "$status" -eq 0 ]
-    [[ "$output" == *"modified"* ]] || [[ "$output" == *"dirty"* ]] || [[ "$output" == *"1"* ]]
+    grep -Eq 'backend +status-dirty +1 modified$' <<<"$output"
 }
 
 @test "worktree status --json includes modified files" {
@@ -392,7 +393,7 @@ assert repo['modified_count'] >= 1
         --author "Test <test@test.com>"
     run "$META_BIN" git worktree diff diff-test
     [ "$status" -eq 0 ]
-    [[ "$output" == *"README"* ]] || [[ "$output" == *"1 file"* ]] || [[ "$output" == *"backend"* ]]
+    grep -Eq 'backend +\+1 -0 \(1 files\)' <<<"$output"
 }
 
 @test "worktree diff --json returns structured output" {
@@ -424,7 +425,7 @@ assert d['totals']['files_changed'] >= 1
         --author "Test <test@test.com>"
     run "$META_BIN" git worktree diff diff-stat --stat
     [ "$status" -eq 0 ]
-    [[ "$output" == *"+"* ]] || [[ "$output" == *"file"* ]]
+    grep -Eq 'backend +\+1 -0' <<<"$output"
 }
 
 @test "worktree diff on nonexistent worktree fails" {
@@ -498,7 +499,8 @@ assert d['totals']['files_changed'] >= 1
 @test "worktree exec with no command shows error" {
     "$META_BIN" git worktree create exec-nocmd --repo backend
     run "$META_BIN" git worktree exec exec-nocmd --
-    [ "$status" -ne 0 ] || [[ "$output" == *"Usage"* ]] || [[ "$output" == *"command"* ]]
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Usage: meta git worktree exec"* ]]
 }
 
 # ============ Remove ============

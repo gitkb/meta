@@ -875,12 +875,16 @@ sys.stderr.buffer.write(p.stderr); sys.exit(p.returncode)' "$@"; }
     printf '%s\n' '#!/bin/sh' \
         'if [ "$1" = --meta-plugin-info ]; then' \
         '    echo '"'"'{"name":"frag","version":"1","commands":["frag"]}'"'"'' \
+        'elif grep -q fail; then printf fragment; exit 3' \
         'else printf fragment; fi' > .meta/plugins/meta-frag
     chmod +x .meta/plugins/meta-frag
-    run python3 -c 'import os, subprocess, sys
+    # whether the plugin succeeded or failed
+    for how in now fail; do
+        run python3 -c 'import os, subprocess, sys
 r, w = os.pipe(); os.close(r)
-sys.exit(subprocess.run(sys.argv[1:], stdout=w).returncode)' "$META_BIN" frag now
-    [ "$status" -eq 141 ]
+sys.exit(subprocess.run(sys.argv[1:], stdout=w).returncode)' "$META_BIN" frag "$how"
+        [ "$status" -eq 141 ]
+    done
 }
 
 @test "a command's own --json makes its errors JSON; a .looprc's json_output keeps colour out" {
@@ -888,6 +892,9 @@ sys.exit(subprocess.run(sys.argv[1:], stdout=w).returncode)' "$META_BIN" frag no
     [ "$status" -eq 1 ]
     jq -e '.success == false' <<<"$output"
     echo '{"json_output": true}' > .looprc
+    # loop's --verbose lines go to stderr, so stdout stays JSON
+    run bash -c '"$1" -v -i api true 2>/dev/null' _ "$BATS_TEST_DIRNAME/../target/debug/loop"
+    jq -e '.success == true' <<<"$output"
     CLICOLOR_FORCE=1 run "$BATS_TEST_DIRNAME/../target/debug/loop" -i api sh -c 'if [ -n "$CLICOLOR_FORCE" ]; then echo forced; else echo plain; fi'
     jq -e '.results[0].stdout == "plain\n"' <<<"$output"
 }

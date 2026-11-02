@@ -64,13 +64,22 @@ impl std::error::Error for Usage {}
 /// Run `main` with colour decided ([`out::color`]) and report how it went.
 pub fn run(main: impl FnOnce() -> anyhow::Result<()>) -> ExitCode {
     out::color();
-    // what is still buffered (a last line without its newline) goes out
-    // here, where a closed stdout can still be told
-    let code = code(main().and_then(|()| Ok(out::flush()?)));
+    let code = code(flushed(main()));
     // an ExitCode holds a byte; Windows passes on a plugin's 256 or -1
     match u8::try_from(code) {
         Ok(code) => ExitCode::from(code),
         Err(_) => now(code),
+    }
+}
+
+/// `result`, after what is still buffered (a last line without its
+/// newline) went out: a closed stdout found then ends the program as one
+/// found before, whatever else happened.
+pub fn flushed(result: anyhow::Result<()>) -> anyhow::Result<()> {
+    match (result, out::flush()) {
+        (result, Ok(())) => result,
+        (Err(e), Err(StdoutError(io))) if io.kind() != std::io::ErrorKind::BrokenPipe => Err(e),
+        (_, Err(closed)) => Err(closed.into()),
     }
 }
 

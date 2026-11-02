@@ -5,7 +5,7 @@ use loop_lib::{
     display_command, expand_directories, import_aliases, parse_config, parse_config_if_present,
     run, should_ignore, with_global_aliases,
 };
-use meta_core::outln;
+use meta_core::{errln, outln};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -84,16 +84,17 @@ fn run_loop() -> Result<()> {
         return Ok(());
     }
 
+    // diagnostics, on stderr: stdout is the commands' (or the JSON)
     if cli.verbose {
-        outln!("{}", "Verbose mode enabled".green())?;
-        outln!(
+        errln!("{}", "Verbose mode enabled".green());
+        errln!(
             "\nResolved config file path: {}",
             meta_core::display::escape_path(&std::env::current_dir()?.join(&config_path))
-        )?;
-        outln!(
+        );
+        errln!(
             "Executing command: {}",
             meta_core::display::escape(&display_command(&cli.command))
-        )?;
+        );
     }
 
     // Flags only turn settings on: one the file sets stays when they're absent

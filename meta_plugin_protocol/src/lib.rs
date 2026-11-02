@@ -414,10 +414,7 @@ pub fn run_plugin(plugin: PluginDefinition) {
     // Initialize logger for subprocess - inherits RUST_LOG from parent
     env_logger::init();
     meta_core::out::color();
-    // a last line without its newline is still buffered: flushed here, where
-    // a closed stdout can still be told
-    let served = serve(&plugin).and_then(|()| Ok(meta_core::out::flush()?));
-    let code = meta_core::exit::code(served);
+    let code = meta_core::exit::code(meta_core::exit::flushed(serve(&plugin)));
     if code != 0 {
         meta_core::exit::now(code);
     }

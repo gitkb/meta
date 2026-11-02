@@ -456,7 +456,7 @@ fn execute_command_in_directory(
     }
 
     if config.verbose {
-        outln!("Executing in directory: {}", escape_path(dir))?;
+        errln!("Executing in directory: {}", escape_path(dir));
     }
 
     // Its name before what it prints (a prompt says which repo asks),

@@ -49,10 +49,14 @@ fn with_color(env: &mut HashMap<String, String>, var: impl Fn(&str) -> Option<St
     let Some(next) = n.checked_add(1) else {
         return;
     };
-    if (0..n).any(|i| {
-        var(&format!("GIT_CONFIG_KEY_{i}")).is_some_and(|key| key.eq_ignore_ascii_case("color.ui"))
-    }) {
-        return;
+    for i in 0..n {
+        match var(&format!("GIT_CONFIG_KEY_{i}")) {
+            // their own colour setting stays theirs
+            Some(key) if key.eq_ignore_ascii_case("color.ui") => return,
+            Some(_) => {}
+            // git refuses a count past its keys: nothing to add to
+            None => return,
+        }
     }
     env.insert("GIT_CONFIG_COUNT".to_string(), next.to_string());
     env.insert(format!("GIT_CONFIG_KEY_{n}"), "color.ui".to_string());
@@ -87,7 +91,11 @@ mod tests {
 
     #[test]
     fn color_comes_after_the_users_own_entries() {
-        let env = with(&[("GIT_CONFIG_COUNT", "2"), ("GIT_CONFIG_KEY_0", "user.name")]);
+        let env = with(&[
+            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_KEY_0", "user.name"),
+            ("GIT_CONFIG_KEY_1", "status.short"),
+        ]);
         assert_eq!(env["GIT_CONFIG_COUNT"], "3");
         assert_eq!(env["GIT_CONFIG_KEY_2"], "color.ui");
         assert_eq!(env["GIT_CONFIG_VALUE_2"], "always");
@@ -110,5 +118,7 @@ mod tests {
         assert!(with(&theirs).is_empty());
         assert!(with(&[("GIT_CONFIG_COUNT", "many")]).is_empty());
         assert!(with(&[("GIT_CONFIG_COUNT", "4294967295")]).is_empty());
+        // a count past the keys there are is git's to refuse, at once
+        assert!(with(&[("GIT_CONFIG_COUNT", "4294967294")]).is_empty());
     }
 }

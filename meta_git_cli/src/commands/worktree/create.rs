@@ -685,7 +685,7 @@ fn plan_repos(
                         .collect(),
                 ),
             };
-            graph.warn_duplicates();
+            graph.warn_duplicates(strict)?;
             // a dependency the set would need and can't have
             let mut needed: BTreeSet<&str> = BTreeSet::new();
             for key in asked_keys.iter().filter(|key| *key != ".") {

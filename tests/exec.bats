@@ -327,6 +327,10 @@ teardown() {
         [[ "$output" == *"1 out of 1 commands failed"* ]]
         [[ "$output" != *"Error:"* ]]
     done
+    # silenced, there is no summary: the error says it
+    run "$META_BIN" --silent --include api exec -- sh -c 'exit 3'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: At least one command failed"* ]]
 }
 
 @test "loop sequential mode runs commands in order" {

@@ -137,6 +137,17 @@ EOF
     [ -d ".worktrees/full-task/frontend" ]
 }
 
+@test "worktree exec keeps the user's own GIT_CONFIG_* settings, colour or not" {
+    run "$META_BIN" git worktree create cfg --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    for force in "" 1; do
+        CLICOLOR_FORCE=$force GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0="Env Name" \
+            run "$META_BIN" git worktree exec cfg -- git config user.name
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"Env Name"* ]]
+    done
+}
+
 @test "git's error over several lines keeps its line breaks" {
     git -C backend switch --quiet -c feature/login
     run "$META_BIN" git worktree create login --repo backend --no-deps --branch feature/login
@@ -159,6 +170,20 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"'backend' depends on 'nosuch'"*"(strict mode)"* ]]
     [ ! -e ".worktrees/tight" ]
+
+    # two projects provide what one depends on: a warning, an error with --strict
+    printf '%s\n' 'projects:' \
+        '  backend: {repo: "git@github.com:org/backend.git", depends_on: [db]}' \
+        '  frontend: {repo: "git@github.com:org/frontend.git", provides: [db]}' \
+        '  shared: {repo: "git@github.com:org/shared.git", provides: [db]}' > .meta.yaml
+    mkdir -p shared && git -C shared init --quiet --initial-branch=main
+    git -C shared -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m init
+    run "$META_BIN" --dry-run git worktree create both --repo backend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: Both '"*"provide 'db'"* ]]
+    run "$META_BIN" --strict --dry-run git worktree create both --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"provide 'db'"*"(strict mode)"* ]]
 }
 
 @test "a warning keeps a name's line break escaped, so it can't forge a line" {
@@ -179,6 +204,9 @@ EOF
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"warning: Malformed created_at 'not-a-date'"* ]]
+    run "$META_BIN" git worktree list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: Malformed created_at"* ]]
     run "$META_BIN" --strict git worktree prune
     [ "$status" -ne 0 ]
     [[ "$output" == *"Malformed created_at"*"(strict mode)"* ]]

@@ -145,20 +145,25 @@ impl DependencyGraph {
         for (project, dep) in &self.unresolved {
             meta_core::out::warn(unresolved_message(project, dep));
         }
-        self.warn_duplicates();
+        // nothing to fail: without strict, warn_or_bail only warns
+        let _ = self.warn_duplicates(false);
     }
 
-    /// Warn about each item two projects provide.
-    pub fn warn_duplicates(&self) {
+    /// Warn about each item two projects provide, or with `strict` fail.
+    pub fn warn_duplicates(&self, strict: bool) -> Result<()> {
         use meta_core::display::escape;
         for (item, kept, other) in &self.duplicates {
             let kept = escape(kept);
-            meta_core::out::warn(format!(
-                "Both '{}' and '{kept}' provide '{}'; '{kept}' is used",
-                escape(other),
-                escape(item)
-            ));
+            meta_core::out::warn_or_bail(
+                strict,
+                format!(
+                    "Both '{}' and '{kept}' provide '{}'; '{kept}' is used",
+                    escape(other),
+                    escape(item)
+                ),
+            )?;
         }
+        Ok(())
     }
 
     /// Get direct dependencies of a project

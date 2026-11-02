@@ -91,6 +91,11 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"README.md"* ]]
     [[ "$output" != *"Changes not staged"* ]]
+    # with colour forced, git gets colour after the user's entry, not over it
+    CLICOLOR_FORCE=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=status.short GIT_CONFIG_VALUE_0=true \
+        run "$META_BIN" --include frontend git status
+    [[ "$output" == *$'\033['* ]]
+    [[ "$output" != *"Changes not staged"* ]]
 }
 
 @test "meta git status colours a terminal only, never a pipe or JSON" {
@@ -140,6 +145,12 @@ teardown() {
     json_run "$META_BIN" --json git commit --amend
     [ "$status" -eq 2 ]
     json_has '.success == false and (.error | contains("--amend"))'
+
+    # meta's --verbose lines, and a command's own --json
+    json_run "$META_BIN" --json --verbose --include frontend exec -- true
+    json_has '.success == true'
+    json_run "$META_BIN" --include nope context --json
+    json_has '.success == false'
 
     # a plugin's text, wrapped
     json_run "$META_BIN" --json git commit -m x
@@ -552,6 +563,36 @@ within() {
 }
 
 # ============ meta git clone (local) ============
+
+@test "meta git clone numbers each repo once, after the header that announces the work" {
+    remotes="$(cd "$(mktemp -d)" && pwd -P)"
+    seed="$remotes/seed"
+    mkdir -p "$seed"
+    git -C "$seed" init --quiet --initial-branch=main
+    printf 'projects:\n' > "$seed/.meta.yaml"
+    for i in 1 2 3 4 5 6 7 8; do
+        git init --quiet --bare --initial-branch=main "$remotes/a$i.git"
+        git -C "$remotes" clone --quiet "$remotes/a$i.git" "w$i" 2>/dev/null
+        git -C "$remotes/w$i" -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m init
+        git -C "$remotes/w$i" push --quiet origin main
+        printf '  a%s: %s\n' "$i" "$remotes/a$i.git" >> "$seed/.meta.yaml"
+    done
+    git -C "$seed" add .meta.yaml
+    git -C "$seed" -c user.name=t -c user.email=t@t commit --quiet -m ws
+    git clone --quiet --bare "$seed" "$remotes/ws.git"
+    # from the workspace, whose .meta/plugins holds meta-git
+    run with_terminal "$META_BIN" git clone "$remotes/ws.git" "$remotes/ws"
+    [ "$status" -eq 0 ]
+    screen=$(printf '%s' "$output" | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr '\r' '\n')
+    # the number each repo finished with: 1..8, once each
+    numbers=$(grep -ao '\[[0-9]/8\] *Cloned a[0-9]' <<<"$screen" | sort -u | grep -o '^\[[0-9]' | sort | tr -d '[' | tr -d '\n')
+    [ "$numbers" = "12345678" ]
+    # the header comes before the first repo's progress
+    header=$(grep -an 'Cloning meta repository' <<<"$screen" | head -1 | cut -d: -f1)
+    first=$(grep -an 'Cloned a' <<<"$screen" | head -1 | cut -d: -f1)
+    [ -n "$header" ] && [ "$header" -lt "$first" ]
+    rm -rf "$remotes"
+}
 
 @test "meta git clone from local path works" {
     # Create a "remote" bare repo that IS a meta repo

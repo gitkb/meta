@@ -148,21 +148,25 @@ fn decide_color(
 /// Have `command`, whose output meta reads through a pipe (to show, relay
 /// or put in JSON), colour as meta does ([`color`]): with colour, the
 /// conventional variables that force it (`CLICOLOR_FORCE`, Node's
-/// `FORCE_COLOR`) are set, without it they are removed, since a user's own
-/// would win over the pipe. They reach what that program starts too (a
-/// plugin's hooks and git); one whose output meta parses removes them.
+/// `FORCE_COLOR`, unless the user set their own) are set; without it a
+/// user's `CLICOLOR_FORCE` is removed, since it would win over the pipe,
+/// and under `--json` their `FORCE_COLOR` too. They reach what that program
+/// starts as well (a plugin's hooks and git); one whose output meta parses
+/// removes them.
 pub fn pass_color(command: &mut std::process::Command) {
-    const FORCE: [&str; 2] = ["CLICOLOR_FORCE", "FORCE_COLOR"];
     if color() {
-        for name in FORCE {
-            command.env(name, "1");
+        command.env("CLICOLOR_FORCE", "1");
+        if std::env::var_os("FORCE_COLOR").is_none() {
+            command.env("FORCE_COLOR", "1");
         }
-        if std::env::var_os("TERM").is_none() {
+        // a terminal's programs expect a TERM; a pipe's get none made up
+        if std::env::var_os("TERM").is_none() && io::stdout().is_terminal() {
             command.env("TERM", "xterm-256color");
         }
     } else {
-        for name in FORCE {
-            command.env_remove(name);
+        command.env_remove("CLICOLOR_FORCE");
+        if json() {
+            command.env_remove("FORCE_COLOR");
         }
     }
 }

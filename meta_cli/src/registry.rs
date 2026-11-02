@@ -422,8 +422,12 @@ impl RegistryClient {
     ///
     /// Can be overridden with META_PLATFORM environment variable for testing.
     pub fn current_platform() -> String {
-        // Check for override via environment variable
-        if let Ok(override_platform) = std::env::var("META_PLATFORM") {
+        Self::platform(std::env::var("META_PLATFORM").ok())
+    }
+
+    /// `override_platform` if given, else the platform this was built for
+    fn platform(override_platform: Option<String>) -> String {
+        if let Some(override_platform) = override_platform {
             debug!(
                 "Using platform override from META_PLATFORM: {}",
                 override_platform
@@ -1278,8 +1282,7 @@ mod tests {
 
     #[test]
     fn test_current_platform() {
-        let platform = RegistryClient::current_platform();
-        assert!(!platform.is_empty());
+        let platform = RegistryClient::platform(None);
         // Platform should be one of the known values
         let known_platforms = [
             "darwin-arm64",
@@ -2055,19 +2058,11 @@ mod tests {
     }
 
     #[test]
-    fn test_platform_override_via_env_var() {
-        // Save current env state
-        let original = std::env::var("META_PLATFORM").ok();
-
-        // Test override
-        std::env::set_var("META_PLATFORM", "test-platform-x64");
-        assert_eq!(RegistryClient::current_platform(), "test-platform-x64");
-
-        // Restore original env state
-        match original {
-            Some(val) => std::env::set_var("META_PLATFORM", val),
-            None => std::env::remove_var("META_PLATFORM"),
-        }
+    fn a_platform_override_wins() {
+        assert_eq!(
+            RegistryClient::platform(Some("test-platform-x64".to_string())),
+            "test-platform-x64"
+        );
     }
 
     #[test]

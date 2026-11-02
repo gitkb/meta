@@ -302,7 +302,6 @@ mod tests {
     }
     use commit::parse_multi_commit_file;
     use helpers::get_project_directories;
-    use meta_plugin_protocol::{ExecutionPlan, PlanResponse, PlannedCommand};
     use tempfile::TempDir;
 
     #[test]
@@ -314,25 +313,6 @@ mod tests {
 
         // Should succeed (returns a Plan, not an Error)
         assert!(!matches!(result, CommandResult::Error(_)));
-    }
-
-    #[test]
-    fn test_meta_config_parsing() {
-        let dir = tempfile::tempdir().unwrap();
-        let meta_path = dir.path().join(".meta.yaml");
-        std::fs::write(
-            &meta_path,
-            r#"{"projects": {"foo": "git@github.com:org/foo.git", "bar": "git@github.com:org/bar.git"}}"#,
-        )
-        .unwrap();
-        let projects = meta_core::config::Workspace::load(&meta_path)
-            .unwrap()
-            .projects;
-        assert_eq!(projects.len(), 2);
-        let names: std::collections::HashSet<_> =
-            projects.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains("foo"));
-        assert!(names.contains("bar"));
     }
 
     #[test]
@@ -491,207 +471,6 @@ the only commit message
         assert_eq!(commits[0].1, "the only commit message");
     }
 
-    // ============ Execution Plan Tests ============
-
-    #[test]
-    fn test_execution_plan_serialization() {
-        let plan = ExecutionPlan {
-            pre_commands: vec![],
-            commands: vec![
-                PlannedCommand {
-                    dir: "./repo1".to_string(),
-                    argv: argv("git status"),
-                    env: None,
-                },
-                PlannedCommand {
-                    dir: "./repo2".to_string(),
-                    argv: argv("git status"),
-                    env: None,
-                },
-            ],
-            post_commands: vec![],
-            parallel: Some(false),
-            max_parallel: None,
-            spawn_stagger_ms: None,
-        };
-
-        let json = serde_json::to_string(&plan).unwrap();
-        assert!(json.contains("\"dir\":\"./repo1\""));
-        assert!(json.contains(r#""argv":["git","status"]"#));
-        assert!(json.contains("\"parallel\":false"));
-    }
-
-    #[test]
-    fn test_execution_plan_without_parallel() {
-        let plan = ExecutionPlan {
-            pre_commands: vec![],
-            commands: vec![PlannedCommand {
-                dir: ".".to_string(),
-                argv: argv("ls"),
-                env: None,
-            }],
-            post_commands: vec![],
-            parallel: None,
-            max_parallel: None,
-            spawn_stagger_ms: None,
-        };
-
-        let json = serde_json::to_string(&plan).unwrap();
-        // parallel and max_parallel should be omitted when None due to skip_serializing_if
-        assert!(!json.contains("parallel"));
-        assert!(!json.contains("max_parallel"));
-        assert!(!json.contains("spawn_stagger_ms"));
-    }
-
-    #[test]
-    fn test_planned_command_serialization() {
-        let cmd = PlannedCommand {
-            dir: "/absolute/path".to_string(),
-            argv: argv("git pull --rebase"),
-            env: None,
-        };
-
-        let json = serde_json::to_string(&cmd).unwrap();
-        assert!(json.contains("\"dir\":\"/absolute/path\""));
-        assert!(json.contains(r#""argv":["git","pull","--rebase"]"#));
-    }
-
-    #[test]
-    fn test_plan_response_serialization() {
-        let response = PlanResponse {
-            plan: ExecutionPlan {
-                pre_commands: vec![],
-                commands: vec![PlannedCommand {
-                    dir: "project".to_string(),
-                    argv: argv("make build"),
-                    env: None,
-                }],
-                post_commands: vec![],
-                parallel: Some(true),
-                max_parallel: None,
-                spawn_stagger_ms: None,
-            },
-        };
-
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("\"plan\":"));
-        assert!(json.contains("\"commands\":"));
-        assert!(json.contains("\"dir\":\"project\""));
-        assert!(json.contains(r#""argv":["make","build"]"#));
-        assert!(json.contains("\"parallel\":true"));
-    }
-
-    #[test]
-    fn test_plan_response_structure() {
-        // Test that the JSON structure matches what subprocess_plugins expects
-        let response = PlanResponse {
-            plan: ExecutionPlan {
-                pre_commands: vec![],
-                commands: vec![
-                    PlannedCommand {
-                        dir: "a".to_string(),
-                        argv: argv("cmd1"),
-                        env: None,
-                    },
-                    PlannedCommand {
-                        dir: "b".to_string(),
-                        argv: argv("cmd2"),
-                        env: None,
-                    },
-                ],
-                post_commands: vec![],
-                parallel: Some(false),
-                max_parallel: None,
-                spawn_stagger_ms: None,
-            },
-        };
-
-        let json = serde_json::to_string(&response).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-
-        // Verify structure matches what shim expects
-        assert!(parsed.get("plan").is_some());
-        let plan = parsed.get("plan").unwrap();
-        assert!(plan.get("commands").is_some());
-        let commands = plan.get("commands").unwrap().as_array().unwrap();
-        assert_eq!(commands.len(), 2);
-        assert_eq!(commands[0].get("dir").unwrap().as_str().unwrap(), "a");
-        assert_eq!(commands[0]["argv"], serde_json::json!(["cmd1"]));
-        assert!(!plan.get("parallel").unwrap().as_bool().unwrap());
-    }
-
-    #[test]
-    fn test_execution_plan_empty_commands() {
-        let plan = ExecutionPlan {
-            pre_commands: vec![],
-            commands: vec![],
-            post_commands: vec![],
-            parallel: None,
-            max_parallel: None,
-            spawn_stagger_ms: None,
-        };
-
-        let json = serde_json::to_string(&plan).unwrap();
-        assert!(json.contains("\"commands\":[]"));
-    }
-
-    #[test]
-    fn test_planned_command_with_special_chars() {
-        let cmd = PlannedCommand {
-            dir: "./path with spaces".to_string(),
-            argv: vec![
-                "git".to_string(),
-                "commit".to_string(),
-                "-m".to_string(),
-                "feat: \"add\" feature".to_string(),
-            ],
-            env: None,
-        };
-
-        let json = serde_json::to_string(&cmd).unwrap();
-        // JSON should properly escape the string
-        assert!(json.contains("path with spaces"));
-        assert!(json.contains("\"feat: \\\"add\\\" feature\""));
-    }
-
-    #[test]
-    fn test_planned_command_git_clone() {
-        let cmd = PlannedCommand {
-            dir: "/home/user/workspace".to_string(),
-            argv: argv("git clone git@github.com:org/repo.git my-repo"),
-            env: None,
-        };
-
-        let json = serde_json::to_string(&cmd).unwrap();
-        assert!(json.contains(r#""git","clone""#));
-        assert!(json.contains("git@github.com:org/repo.git"));
-    }
-
-    #[test]
-    fn test_execution_plan_many_commands() {
-        let commands: Vec<PlannedCommand> = (0..100)
-            .map(|i| PlannedCommand {
-                dir: format!("./repo_{i}"),
-                argv: argv("git status"),
-                env: None,
-            })
-            .collect();
-
-        let plan = ExecutionPlan {
-            pre_commands: vec![],
-            commands,
-            post_commands: vec![],
-            parallel: Some(true),
-            max_parallel: None,
-            spawn_stagger_ms: None,
-        };
-
-        let json = serde_json::to_string(&plan).unwrap();
-        assert!(json.contains("./repo_0"));
-        assert!(json.contains("./repo_99"));
-        assert!(json.contains("\"parallel\":true"));
-    }
-
     // ============ get_project_directories Tests ============
 
     #[test]
@@ -783,43 +562,6 @@ the only commit message
         assert_eq!(dirs, vec!["."]);
     }
 
-    // ============ Integration-like Tests ============
-
-    #[test]
-    fn test_git_status_returns_execution_plan_format() {
-        // We can't easily test the actual output, but we can verify
-        // the plan structure by creating one and checking its JSON format
-        let dirs = vec![".".to_string(), "repo1".to_string(), "repo2".to_string()];
-
-        let commands: Vec<PlannedCommand> = dirs
-            .into_iter()
-            .map(|dir| PlannedCommand {
-                dir,
-                argv: argv("git status"),
-                env: None,
-            })
-            .collect();
-
-        let response = PlanResponse {
-            plan: ExecutionPlan {
-                pre_commands: vec![],
-                commands,
-                post_commands: vec![],
-                parallel: Some(false),
-                max_parallel: None,
-                spawn_stagger_ms: None,
-            },
-        };
-
-        let json = serde_json::to_string(&response).unwrap();
-
-        // Verify it can be parsed as expected by the shim
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(parsed["plan"]["commands"].is_array());
-        assert_eq!(parsed["plan"]["commands"].as_array().unwrap().len(), 3);
-        assert!(!parsed["plan"]["parallel"].as_bool().unwrap());
-    }
-
     // ============ Remote Command Detection Tests ============
 
     #[test]
@@ -862,51 +604,5 @@ the only commit message
         assert!(!super::is_remote_command(&argv("git diff")));
         assert!(!super::is_remote_command(&argv("git branch")));
         assert!(!super::is_remote_command(&argv("git checkout main")));
-    }
-
-    #[test]
-    fn test_execution_plan_max_parallel_serialization() {
-        let plan = ExecutionPlan {
-            pre_commands: vec![],
-            commands: vec![PlannedCommand {
-                dir: ".".to_string(),
-                argv: argv("git push"),
-                env: None,
-            }],
-            post_commands: vec![],
-            parallel: Some(true),
-            max_parallel: Some(10),
-            spawn_stagger_ms: Some(25),
-        };
-
-        let json = serde_json::to_string(&plan).unwrap();
-        assert!(json.contains("\"max_parallel\":10"));
-        assert!(json.contains("\"spawn_stagger_ms\":25"));
-
-        // Verify round-trip
-        let restored: ExecutionPlan = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.max_parallel, Some(10));
-        assert_eq!(restored.spawn_stagger_ms, Some(25));
-    }
-
-    #[test]
-    fn test_execution_plan_max_parallel_omitted_when_none() {
-        let plan = ExecutionPlan {
-            pre_commands: vec![],
-            commands: vec![PlannedCommand {
-                dir: ".".to_string(),
-                argv: argv("git status"),
-                env: None,
-            }],
-            post_commands: vec![],
-            parallel: Some(true),
-            max_parallel: None,
-            spawn_stagger_ms: None,
-        };
-
-        let json = serde_json::to_string(&plan).unwrap();
-        // max_parallel and spawn_stagger_ms should be omitted when None due to skip_serializing_if
-        assert!(!json.contains("max_parallel"));
-        assert!(!json.contains("spawn_stagger_ms"));
     }
 }

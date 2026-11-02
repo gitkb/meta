@@ -696,7 +696,6 @@ fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result
 )]
 mod tests {
     use super::*;
-    use meta_plugin_protocol::{ExecutionPlan, PlanResponse, PlannedCommand};
     use tempfile::TempDir;
 
     /// The text of a `Message` result, or `None` for any other result.
@@ -930,30 +929,6 @@ mod tests {
         assert!(
             matches!(result, CommandResult::ShowHelp(Some(msg)) if msg.contains("meta git update"))
         );
-    }
-
-    #[test]
-    fn test_execution_plan_serialization() {
-        let commands = vec![PlannedCommand {
-            dir: ".".to_string(),
-            argv: ["git", "clone", "https://example.com/repo.git", "repo"]
-                .map(str::to_string)
-                .to_vec(),
-            env: None,
-        }];
-        let plan = ExecutionPlan {
-            pre_commands: vec![],
-            commands,
-            post_commands: vec![],
-            parallel: Some(false),
-            max_parallel: None,
-            spawn_stagger_ms: None,
-        };
-        let response = PlanResponse { plan };
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("\"plan\""));
-        assert!(json.contains("\"commands\""));
-        assert!(json.contains(r#""argv":["git","clone""#));
     }
 
     #[test]

@@ -1361,27 +1361,82 @@ mod tests {
     }
 
     #[test]
-    fn test_walk_meta_tree_depth_zero_no_recursion() {
+    fn a_depth_limit_stops_the_walk_that_many_levels_down() {
         let dir = tempfile::tempdir().unwrap();
-        let child = dir.path().join("child");
-        let grandchild = child.join("grandchild");
-        std::fs::create_dir_all(&grandchild).unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"child": "git@github.com:org/child.git"}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            child.join(".meta.yaml"),
-            r#"{"projects": {"grandchild": "git@github.com:org/grandchild.git"}}"#,
-        )
-        .unwrap();
+        meta_yaml(dir.path(), r#""child": "u""#);
+        meta_yaml(&dir.path().join("child"), r#""grandchild": "u""#);
+        meta_yaml(&dir.path().join("child/grandchild"), r#""great": "u""#);
+        let walk = |depth| flatten_meta_tree(&walk_meta_tree(dir.path(), depth).unwrap());
 
-        let tree = walk_meta_tree(dir.path(), Some(0)).unwrap();
-        assert_eq!(tree.len(), 1);
-        assert_eq!(tree[0].info.name, "child");
-        assert!(tree[0].is_meta);
-        assert!(tree[0].children.is_empty()); // No recursion
+        assert_eq!(walk(Some(0)), ["child"]);
+        assert_eq!(walk(Some(1)), ["child", "child/grandchild"]);
+        assert_eq!(
+            walk(None),
+            ["child", "child/grandchild", "child/grandchild/great"]
+        );
+    }
+
+    #[test]
+    fn each_project_form_gives_its_name_path_repo_and_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".meta.yaml");
+        std::fs::write(
+            &config,
+            "projects:\n  simple: git@x:o/simple.git\n  extended:\n    repo: git@x:o/extended.git\n    tags: [t]\n",
+        )
+        .unwrap();
+        let projects = Workspace::load(&config).unwrap().projects;
+        // in name order
+        let got: Vec<_> = projects
+            .iter()
+            .map(|p| {
+                let repo = p.repo.as_ref().map(|r| r.raw().to_string());
+                (p.name.as_str(), p.path.as_str(), repo, p.tags.clone())
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "extended",
+                    "extended",
+                    Some("git@x:o/extended.git".into()),
+                    vec!["t".to_string()]
+                ),
+                (
+                    "simple",
+                    "simple",
+                    Some("git@x:o/simple.git".into()),
+                    vec![]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_config_that_does_not_parse_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".meta.yaml");
+        for text in [
+            "{not json",
+            "projects: [unclosed",
+            "projects:\n  a: {repo: [}\n",
+        ] {
+            std::fs::write(&config, text).unwrap();
+            assert!(Workspace::load(&config).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_config_is_found_from_any_depth_below_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("a/b/c");
+        std::fs::create_dir_all(&nested).unwrap();
+        meta_yaml(dir.path(), "");
+        assert_eq!(
+            find_meta_config(&nested, None).unwrap(),
+            Some(dir.path().join(".meta.yaml"))
+        );
     }
 
     #[test]

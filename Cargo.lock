@@ -824,7 +824,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "loop_cli"
-version = "0.2.22"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "loop_lib"
-version = "0.2.22"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "colored",
@@ -859,7 +859,7 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
 name = "meta"
-version = "0.2.22"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "meta-mcp"
-version = "0.2.22"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -904,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "meta_core"
-version = "0.2.22"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -922,7 +922,7 @@ dependencies = [
 
 [[package]]
 name = "meta_git_cli"
-version = "0.2.22"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -947,7 +947,7 @@ dependencies = [
 
 [[package]]
 name = "meta_git_lib"
-version = "0.2.22"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -962,7 +962,7 @@ dependencies = [
 
 [[package]]
 name = "meta_plugin_protocol"
-version = "0.2.22"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -975,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "meta_project_cli"
-version = "0.2.22"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -991,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "meta_rust_cli"
-version = "0.2.22"
+version = "0.3.0"
 dependencies = [
  "indexmap",
  "meta_core",

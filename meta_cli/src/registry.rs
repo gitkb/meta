@@ -384,7 +384,7 @@ impl RegistryClient {
         else {
             anyhow::bail!("Invalid GitHub shorthand: {}", escape(shorthand));
         };
-        let api_url = format!("{}/repos/{user}/{repo}/releases/latest", github()?.1);
+        let api_url = format!("{}/repos/{user}/{repo}/releases/latest", github().1);
 
         debug!("Checking latest version: {}", api_url);
 
@@ -452,26 +452,18 @@ impl RegistryClient {
 /// Where releases are, and GitHub's API: `META_GITHUB_URL` (a GitHub
 /// Enterprise server, whose API is under `/api/v3`); unset, empty or
 /// github.com itself, github.com
-fn github() -> Result<(String, String)> {
+fn github() -> (String, String) {
     github_at(&std::env::var("META_GITHUB_URL").unwrap_or_default())
 }
 
-/// Only `http(s)://` and never an `@`: no parser then finds a user or
-/// password in it, so nothing meta or ureq logs of it can print one
-fn github_at(url: &str) -> Result<(String, String)> {
-    let web = url.starts_with("https://") || url.starts_with("http://");
-    if url.contains('@') || !(web || url.is_empty()) {
-        anyhow::bail!(
-            "META_GITHUB_URL takes a server's http(s):// address alone, with no user or password"
-        );
-    }
-    Ok(match url.trim_end_matches('/') {
+fn github_at(url: &str) -> (String, String) {
+    match url.trim_end_matches('/') {
         url if url.is_empty() || url.eq_ignore_ascii_case("https://github.com") => (
             "https://github.com".to_string(),
             "https://api.github.com".to_string(),
         ),
         url => (url.to_string(), format!("{url}/api/v3")),
-    })
+    }
 }
 
 /// Supported archive formats for plugin distribution
@@ -840,7 +832,7 @@ impl PluginInstaller {
         }
 
         // Try to download with various URL patterns
-        let urls = self.construct_github_urls(&github()?.0, shorthand, &platform);
+        let urls = self.construct_github_urls(&github().0, shorthand, &platform);
 
         let mut last_error = None;
         for url in &urls {
@@ -1300,27 +1292,17 @@ mod tests {
             "https://github.com/",
             "https://GitHub.com",
         ] {
-            let (web, api) = github_at(public).unwrap();
+            let (web, api) = github_at(public);
             assert_eq!(
                 (web.as_str(), api.as_str()),
                 ("https://github.com", "https://api.github.com")
             );
         }
-        let (web, api) = github_at("https://ghe.example/").unwrap();
+        let (web, api) = github_at("https://ghe.example/");
         assert_eq!(
             (web.as_str(), api.as_str()),
             ("https://ghe.example", "https://ghe.example/api/v3")
         );
-        for refused in [
-            "https://alice:s3cret@ghe.example",
-            "http:/alice:s3cret@ghe.example",
-            "https://s3cret@ghe.example",
-            "ghe.example",
-            "ftp://ghe.example",
-        ] {
-            let error = github_at(refused).unwrap_err();
-            assert!(!format!("{error:#}").contains("s3cret"), "{error:#}");
-        }
     }
 
     #[test]

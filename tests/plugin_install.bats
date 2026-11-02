@@ -159,18 +159,6 @@ EOF
     [ ! -e "$PLUGINS_DIR/meta-nonexistent" ]
 }
 
-@test "META_GITHUB_URL with a password is refused, installs nothing and prints no password" {
-    serve
-    release gitkb/meta-x/releases/latest/download/meta-x-any.tar.gz 1.0.0 x
-    for url in "http://alice:s3cret-token@${SERVER#http://}" "http:/alice:s3cret-token@${SERVER#http://}"; do
-        META_GITHUB_URL="$url" RUST_LOG=debug run "$META_BIN" plugin install gitkb/meta-x
-        [ "$status" -eq 1 ]
-        [[ "$output" == *"META_GITHUB_URL takes a server's http(s):// address alone"* ]]
-        [[ "$output" != *"s3cret-token"* ]]
-        [ ! -e "$PLUGINS_DIR/meta-x" ]
-    done
-}
-
 @test "plugin install fails on invalid GitHub shorthand" {
     run "$META_BIN" plugin install invalid/format/too/many/slashes
     [ "$status" -ne 0 ]

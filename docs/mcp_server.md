@@ -1,28 +1,14 @@
 # Meta MCP Server
 
-The Meta MCP (Model Context Protocol) server provides AI agents with structured access to multi-repository operations. It exposes 26 tools across core operations, git workflows, build/test orchestration, code discovery, and AI-dominance features.
+`meta-mcp` is an MCP (Model Context Protocol) server that gives AI agents structured access to a meta workspace through 26 tools: core operations, git, build and test, code discovery, and workspace analysis.
 
 ## Installation
 
-The `meta-mcp` binary is included in the standard release package. Install via:
-
-```bash
-# Via install script
-curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | bash
-
-# Or via Homebrew
-brew install gitkb/tap/meta-cli
-```
+`meta-mcp` ships with meta: the install script, Homebrew (`brew install gitkb/tap/meta-cli`) and `make install` all install it next to `meta`.
 
 ## Usage
 
-The MCP server runs as a stdio-based JSON-RPC server:
-
-```bash
-meta-mcp
-```
-
-Configure in Claude Desktop's `claude_desktop_config.json`:
+The server speaks JSON-RPC over stdin and stdout, one message per line. It acts on the workspace of the directory it starts in: the nearest `.meta.yaml` at or above it. Configure it in your client, for example Claude Desktop's `claude_desktop_config.json`:
 
 ```json
 {
@@ -35,139 +21,48 @@ Configure in Claude Desktop's `claude_desktop_config.json`:
 }
 ```
 
+Claude Code's `meta` plugin (`claude plugin install meta@gitkb`) registers it for you.
+
 ## Tool Reference
 
-Each tool takes only the arguments listed for it. A misspelled argument, or a value of the wrong type (`"atomic": "true"` for `true`), is an error that names the tool, the argument and the value, and nothing runs. `null` is the same as leaving an argument out.
+`tools/list` gives each tool's description and the schema of its arguments. Each tool takes only the arguments listed for it. A misspelled argument, or a value of the wrong type (`"atomic": "true"` for `true`), is an error that names the tool, the argument and the value, and nothing runs. `null` is the same as leaving an argument out.
 
-A `tag` parameter takes one tag or a comma-separated list, and selects the projects that have any of them, as `meta --tag` does. A blank list is no filter.
+A `tag` argument takes one tag or a comma-separated list, and selects the projects that have any of them, as `meta --tag` does. A blank list is no filter. The tools that run `meta` (`meta_exec` and the `meta git` ones) act where `meta` would, the workspace root included; the others act on the projects of `.meta.yaml`, and on the root only when `project` is `.` (`meta_build` always includes it).
 
-A `project` parameter is a project's name in `.meta.yaml`, or `.` for the workspace root. It is never a path, so a tool goes only where the config puts a project (which may be outside the workspace); a name the config doesn't list is an error. `meta_git_multi_commit` and `meta_git_diff` refuse a project folder that is not a git repository of its own (git would use the repository around it); the tools that run `meta` act in it as `meta` does. A tool that takes both `project` and `tag` refuses them together.
+A `project` argument is a project's name in `.meta.yaml`, or `.` for the workspace root. It is never a path, so a tool goes only where the config puts a project (which may be outside the workspace); a name the config doesn't list is an error. `meta_git_multi_commit` and `meta_git_diff` refuse a project folder that is not a git repository of its own (git would use the repository around it); the tools that run `meta` act in it as `meta` does. A tool that takes both `project` and `tag` refuses them together.
 
 Tools that act in several repositories report each one: its directory or name, whether it succeeded, and its output. The result is an error (`isError: true`) only when the tool itself failed or every repository failed; for the rest, an entry with `success: false` or an `error` field is a repository that failed (`meta_git_diff` and `meta_search_code` entries carry only `error`).
 
-### Core Tools
+### Core
 
-#### meta_list_projects
-Lists all projects in the meta repository.
+| Tool | Arguments | What it does |
+|------|-----------|--------------|
+| `meta_list_projects` | `tag` | Lists the projects, with their paths and tags |
+| `meta_exec` | `command`, `tag` | Runs `meta exec` with `command`: the program and its arguments, one per item, with no shell (for one: `["sh", "-c", "..."]`) |
+| `meta_get_config` | none | The config file's path and its text, as it is |
+| `meta_get_project_path` | `project` | `{"project", "path", "exists"}`: the project's absolute path |
 
-**Parameters:**
-- `tag` (optional): Filter by tag
-
-**Example:**
-```json
-{"name": "meta_list_projects", "arguments": {"tag": "backend"}}
-```
-
-#### meta_exec
-Execute a command across all projects.
-
-Runs `meta exec` with the given program and arguments.
-
-**Parameters:**
-- `command` (required): The program and its arguments, one per item. They reach the program as given, with no shell; for a shell, ask for one: `["sh", "-c", "..."]`
-- `tag` (optional): Filter by tag
-
-**Example:**
 ```json
 {"name": "meta_exec", "arguments": {"command": ["git", "log", "--format=%h %s", "-1"], "tag": "frontend"}}
 ```
 
-#### meta_get_config
-Get the raw meta configuration file.
+### Git
 
-**Parameters:** None
+| Tool | Arguments | What it does |
+|------|-----------|--------------|
+| `meta_git_status` | `project`, `tag` | `meta git status` |
+| `meta_git_pull` | `tag`, `rebase` | `meta git pull` (`--rebase` with `rebase: true`) |
+| `meta_git_push` | `tag` | `meta git push` |
+| `meta_git_fetch` | `tag` | `meta git fetch` |
+| `meta_git_diff` | `project`, `tag`, `staged` | `git diff` (`--staged`) in each repository; only those with a diff are listed |
+| `meta_git_branch` | `tag` | Each repository's branch, tracking branch, and commits ahead and behind |
+| `meta_git_add` | `files`, `project`, `tag` | `meta git add` with `files`, passed to git as given (default `["."]`) |
+| `meta_git_commit` | `message`, `project`, `tag` | `meta git commit -m`: commits what is staged, in each repository with staged changes |
+| `meta_git_checkout` | `branch`, `create`, `tag` | `meta git checkout` (`-b` with `create: true`). A name `git check-ref-format --branch` refuses (such as `--orphan=x`) is an error, and it is never taken for a file to restore |
+| `meta_git_multi_commit` | `commits` | Commits what is staged with a different message in each project |
 
-#### meta_get_project_path
-Get the absolute path for a specific project.
+`meta_git_multi_commit` takes a list of `{"project", "message"}` (`"."` for the root). Every `project` is checked before anything is committed: one `.meta.yaml` doesn't list is an error, and no commit is made. An entry that fails has git's reason in `error` (`nothing to commit`, say).
 
-**Parameters:**
-- `project` (required): Project name
-
----
-
-### Git Tools
-
-#### meta_git_status
-Get git status across all repositories.
-
-**Parameters:**
-- `project` (optional): Filter to specific project
-- `tag` (optional): Filter by tag
-
-#### meta_git_pull
-Pull changes in all repositories.
-
-**Parameters:**
-- `tag` (optional): Filter by tag
-- `rebase` (optional): Use --rebase
-
-#### meta_git_push
-Push commits across repositories.
-
-**Parameters:**
-- `tag` (optional): Filter by tag
-
-#### meta_git_fetch
-Fetch from remotes.
-
-**Parameters:**
-- `tag` (optional): Filter by tag
-
-#### meta_git_diff
-Get diffs across repositories.
-
-**Parameters:**
-- `project` (optional): Filter to specific project
-- `tag` (optional): Filter by tag
-- `staged` (optional): Show staged changes only
-
-#### meta_git_branch
-Get branch information (current, tracking, ahead/behind).
-
-**Parameters:**
-- `tag` (optional): Filter by tag
-
-#### meta_git_add
-Stage files across repositories.
-
-**Parameters:**
-- `files` (optional): Paths to stage, one per item, passed to git as given (default: `["."]`)
-- `project` (optional): Stage only in this project
-- `tag` (optional): Filter by tag
-
-#### meta_git_commit
-Create commits across repositories, in each one with staged changes.
-
-**Parameters:**
-- `message` (required): Commit message
-- `project` (optional): Commit only in this project
-- `tag` (optional): Filter by tag
-
-#### meta_git_checkout
-Switch branches across repositories.
-
-**Parameters:**
-- `branch` (required): Branch name. One `git check-ref-format --branch` refuses (such as `--orphan=x`) is an error, and it is never taken for a file to restore.
-- `create` (optional): Create new branch
-- `tag` (optional): Filter by tag
-
-#### meta_git_multi_commit
-Create commits with different messages for each repository. Useful for tailored commit messages.
-
-**Parameters:**
-- `commits` (required): Array of commit objects
-
-**Commit Object:**
-```json
-{
-  "project": "project-name",  // Use "." for root repo
-  "message": "Commit message for this project"
-}
-```
-
-Every `project` is checked before anything is committed: one `.meta.yaml` doesn't list is an error, and no commit is made. An entry that fails has git's reason in `error` (`nothing to commit`, say).
-
-**Example:**
 ```json
 {
   "name": "meta_git_multi_commit",
@@ -181,126 +76,69 @@ Every `project` is checked before anything is committed: one `.meta.yaml` doesn'
 }
 ```
 
-**Returns:**
 ```json
 {
+  "summary": {"total": 3, "succeeded": 2, "failed": 1},
   "results": [
     {"project": ".", "success": true, "message": "feat: add new meta feature"},
     {"project": "api-service", "success": true, "message": "fix: resolve API bug"},
     {"project": "web-app", "success": false, "message": "chore: update dependencies", "error": "nothing to commit"}
-  ],
-  "summary": {"total": 3, "succeeded": 2, "failed": 1}
+  ]
 }
 ```
 
----
+### Build and test
 
-### Build/Test Tools
+| Tool | Arguments | What it does |
+|------|-----------|--------------|
+| `meta_detect_build_systems` | `tag` | Which of cargo, npm, make, go, maven, gradle and python each project uses, by its files |
+| `meta_run_tests` | `project`, `tag` | `cargo test`, `npm test`, `go test ./...` or `make test`, by the first of `Cargo.toml`, `package.json`, `go.mod`, `Makefile` a project has |
+| `meta_build` | `release`, `tag` | `cargo build` (`--release`), `npm run build`, `go build ./...` or `make`, the same way, in the workspace root and then each selected project |
+| `meta_clean` | `tag` | `cargo clean`, `go clean` or `make clean`; npm projects are skipped |
 
-#### meta_detect_build_systems
-Detect build systems (Cargo, npm, go, make, etc.) in each project.
+They run one project at a time, in `.meta.yaml` order, and skip a project with none of those files. `meta_build` always includes the root, even with a `tag`, and doesn't follow `meta_execution_order`: for dependency order, build each project in the order that tool gives.
 
-**Parameters:**
-- `tag` (optional): Filter by tag
+### Discovery
 
-#### meta_run_tests
-Run tests across projects with auto-detection of test commands.
+`meta_search_code` (`pattern`, `file_pattern`, `tag`) searches with `git grep`: tracked files, and untracked files that `.gitignore` doesn't ignore; never `.git`. `pattern` is an extended regular expression (as `grep -E`); `file_pattern` matches file names in any directory (`"*.rs"`). Projects nested in meta projects are searched too. Each project is listed by its path in the workspace, a nested one too (`platform/api`), and is searched once: a project's search leaves out the projects nested in it. A nested `.meta.yaml` that can't be read is its project's error, reported whatever the tag filter; the projects beside it are still searched. When git reports a problem, the project's entry has an `error`, beside any `matches` git still found (an unreadable file, say). A project gives at most 50 matches; an entry cut there has `"truncated": true`.
 
-**Parameters:**
-- `project` (optional): Filter to specific project
-- `tag` (optional): Filter by tag
+`meta_get_file_tree` (`project`, `tag`, `depth`, a non-negative integer, default 3) gives each project's files and folders. Hidden entries, `node_modules` and `target` are left out; a symbolic link is listed as `{"type": "symlink", "name": ...}` and not followed.
 
-#### meta_build
-Build all projects.
+`meta_list_plugins` (no arguments) gives `meta plugin list --json`.
 
-**Parameters:**
-- `release` (optional): Build in release mode
-- `tag` (optional): Filter by tag
+### Workspace analysis
 
-#### meta_clean
-Clean build artifacts.
+`meta_query_repos` (`query`) lists the projects that match every condition of a query, with each one's state (branch, dirty, ahead and behind, last commit, build systems):
 
-**Parameters:**
-- `tag` (optional): Filter by tag
+| Condition | Matches |
+|-----------|---------|
+| `dirty:true`, `dirty:false` | Projects with or without uncommitted changes |
+| `branch:main` | Projects on that branch |
+| `tag:backend` | Projects with that tag |
+| `ahead:true`, `behind:true` | Projects ahead of or behind their upstream (`has_unpushed:true` is `ahead:true`) |
+| `modified_in:24h` | Projects with a commit in that time (`30s`, `5m`, `2h`, `1d`, `1w`) |
+| `language:cargo` | Projects with that build system (`cargo`, `npm`, `go`, `make`, `maven`, `gradle`, `python`, `cmake`, `meson`) |
 
----
+Join conditions with AND (in any case): `dirty:true AND tag:backend AND branch:main`. There is no `OR` or `NOT`, and a value holds no spaces: anything else in a query, or a condition with no value (`tag:`), is an error naming it.
 
-### Discovery Tools
+`meta_workspace_state` (no arguments) sums the workspace up:
 
-#### meta_search_code
-Search for patterns across all repositories, those nested in meta projects too, with `git grep`: tracked files, and untracked files that `.gitignore` doesn't ignore; never `.git`. Each project is listed by its path in the workspace, a nested one too (`platform/api`), and is searched once: a project's search leaves out the projects nested in it. A nested `.meta.yaml` that can't be read is its project's error, reported whatever the tag filter; the projects beside it are still searched. When git reports a problem, the project's entry has an `error`, beside any `matches` git still found (an unreadable file, say). A project gives at most 50 matches; an entry cut there has `"truncated": true`.
-
-**Parameters:**
-- `pattern` (required): Search pattern, an extended regular expression (as `grep -E`)
-- `file_pattern` (optional): Filter by file name pattern, in any directory (e.g., "*.rs")
-- `tag` (optional): Filter by tag
-
-#### meta_get_file_tree
-Get file tree structure for projects.
-
-**Parameters:**
-- `project` (optional): Filter to specific project
-- `tag` (optional): Filter by tag
-- `depth` (optional): Max depth, a non-negative integer (default: 3)
-
-A symbolic link is listed as `{"type": "symlink", "name": ...}` and not followed.
-
-#### meta_list_plugins
-List installed meta plugins.
-
-**Parameters:** None
-
----
-
-### AI-Dominance Tools
-
-These tools provide enhanced capabilities for AI agents managing multi-repo workflows.
-
-#### meta_query_repos
-Query repositories by state using a DSL.
-
-**Parameters:**
-- `query` (required): Query string
-
-**Query Syntax:**
-- `dirty:true` - Projects with uncommitted changes
-- `branch:main` - Projects on specific branch
-- `tag:backend` - Projects with tag
-- `ahead:true` - Projects ahead of remote
-- `behind:true` - Projects behind remote
-
-Combine with AND (in any case): `dirty:true AND tag:backend AND branch:main`. There is no `OR` or `NOT`, and a value holds no spaces: anything else in a query, or a condition with no value (`tag:`), is an error naming it.
-
-**Example:**
-```json
-{"name": "meta_query_repos", "arguments": {"query": "dirty:true AND tag:backend"}}
-```
-
-#### meta_workspace_state
-Get a summary of workspace state.
-
-**Parameters:** None
-
-**Returns:**
 ```json
 {
   "total_projects": 10,
   "dirty_projects": 2,
   "clean_projects": 8,
+  "unknown_projects": 0,
   "ahead_of_remote": 1,
   "behind_remote": 0,
   "projects_by_branch": {"main": 8, "feature/x": 2},
-  "projects_by_tag": {"backend": 5, "frontend": 3}
+  "projects_by_tag": {"backend": 5, "frontend": 3},
+  "projects_by_build_system": {"cargo": 4, "npm": 6}
 }
 ```
 
-#### meta_analyze_impact
-Analyze what would be affected if a project changes (dependency tracking).
+`meta_analyze_impact` (`project`) gives what depends on a project, from `depends_on` and `provides` in `.meta.yaml`:
 
-**Parameters:**
-- `project` (required): Project to analyze
-
-**Returns:**
 ```json
 {
   "project": "shared-utils",
@@ -310,45 +148,25 @@ Analyze what would be affected if a project changes (dependency tracking).
 }
 ```
 
-#### meta_execution_order
-Get topologically sorted build/test order based on dependencies.
+`meta_execution_order` (`tag`) orders the projects so that dependencies come before their dependents; a dependency cycle is an error:
 
-**Parameters:**
-- `tag` (optional): Filter by tag
-
-**Returns:**
 ```json
 {
   "execution_order": ["shared-utils", "auth-service", "api-service", "web-app"],
-  "count": 4
+  "count": 4,
+  "tag_filter": null
 }
 ```
 
-#### meta_batch_execute
-Execute command across repos with optional atomic mode (auto-rollback on failure).
+`meta_batch_execute` (`command`, `tag`, `atomic`) runs `command` (the program and its arguments, one per item, with no shell) in each project, one at a time in `.meta.yaml` order, and reports each one's `success`, `exit_code`, `stdout` and `stderr`. With `atomic: true` it first refuses to run unless every project is the root of a clean git repository. On the first failure it stops and puts each project it reached back on its branch and commit from before; their uncommitted changes and untracked files are saved in a git stash. `rollback.status` is `success` when every one was put back; `rollback.restored` names each one's stash and the commits it replaced, and `rollback.failed` each one it couldn't put back, with git's reason. The rollback is git only: ignored files, submodules, other refs and anything the command did outside the repositories (a push, `npm publish`) are not undone. An atomic batch that failed anywhere is an error as a whole.
 
-**Parameters:**
-- `command` (required): The program and its arguments to run in each project, one per item, with no shell
-- `tag` (optional): Filter by tag
-- `atomic` (optional): Enable atomic mode with rollback on failure
-
-**Example:**
 ```json
-{
-  "name": "meta_batch_execute",
-  "arguments": {
-    "command": ["npm", "test"],
-    "tag": "frontend",
-    "atomic": true
-  }
-}
+{"name": "meta_batch_execute", "arguments": {"command": ["npm", "test"], "tag": "frontend", "atomic": true}}
 ```
 
----
+## Dependencies in .meta.yaml
 
-## Extended .meta.yaml Configuration
-
-For dependency tracking features, extend your `.meta.yaml` with `provides` and `depends_on`:
+`meta_analyze_impact` and `meta_execution_order` read `depends_on` and `provides` from the extended project entries. A `depends_on` names a project, or something a project `provides`:
 
 ```yaml
 projects:
@@ -356,44 +174,35 @@ projects:
     repo: git@github.com:org/shared-utils.git
     tags: [lib]
     provides: [utils-v2]
-    depends_on: []
 
   auth-service:
     repo: git@github.com:org/auth-service.git
     tags: [backend]
     provides: [auth-api]
-    depends_on:
-      - shared-utils
+    depends_on: [shared-utils]
 
   api-service:
     repo: git@github.com:org/api-service.git
     tags: [backend]
     provides: [api-v2]
-    depends_on:
-      - auth-service
-      - utils-v2  # Can reference provided items
+    depends_on: [auth-service, utils-v2]
 
   web-app:
     repo: git@github.com:org/web-app.git
     tags: [frontend]
-    depends_on:
-      - api-v2
+    depends_on: [api-v2]
 ```
 
----
+## Errors
 
-## Error Handling
-
-All tools return structured responses. Errors include:
-- `-32700`: Parse error (a line that isn't JSON)
-- `-32600`: Invalid request
-- `-32601`: Method not found
-- `-32603`: Internal error
-
-A tool that fails answers with its result's `isError: true`; its text gives the error and what caused it.
+A message the server can't take gets a JSON-RPC error: `-32700` for a line that isn't JSON, `-32600` for an invalid request, `-32601` for an unknown method, `-32603` for an internal error. A tool that fails answers with its result's `isError: true`; its text gives the error and what caused it.
 
 ## Ping and cancellation
 
 `ping` is answered with `{}`. Tool calls run one at a time, in the order they arrive; `initialize`, `ping` and `tools/list` are answered meanwhile.
 
-`notifications/cancelled` stops a call: one still waiting never runs, and the program a running one started is stopped with what remains in its process group (on Unix its process group gets SIGTERM, then SIGKILL after 2 seconds; on Windows only the program itself is killed). What the call already did stays done. When the client stops reading the server's output, the server ends once it finds that out: if that is while answering something else, the running call is cancelled the same way; calls still waiting are dropped, each with a `request N not started` line on stderr, and a tool's reply it can't send goes to stderr. On Unix, a signal that ends the server (SIGTERM, SIGINT, SIGHUP, even when started ignoring them, as `nohup` does) first stops the running call's programs the same way, and starts no call still waiting (each gets a `request N not started` line on stderr); the server ends once that call has (an atomic batch's rollback included) and the reply to a call that already ended is written. A second signal ends it at once. The git status reads of `meta_git_branch`, `meta_query_repos` and `meta_workspace_state` are not stopped: those calls end when their reads do. On Unix a tool's programs run in a process group of their own, so one that asks on the terminal (an ssh passphrase or host-key prompt) waits there until the call is cancelled: use an ssh agent and known hosts. A cancelled call gets no reply; what it returned goes to the server's stderr, so an atomic batch's rollback (with its stash) is still on record.
+`notifications/cancelled` stops a call: one still waiting never runs, and the program a running one started is stopped with what remains in its process group (on Unix its process group gets SIGTERM, then SIGKILL after 2 seconds; on Windows only the program itself is killed). What the call already did stays done. A cancelled call gets no reply; what it returned goes to the server's stderr, so an atomic batch's rollback (with its stash) is still on record. The git status reads of `meta_git_branch`, `meta_query_repos` and `meta_workspace_state` are not stopped: those calls end when their reads do.
+
+When the client stops reading the server's output, the server ends once it finds that out: if that is while answering something else, the running call is cancelled the same way; calls still waiting are dropped, each with a `request N not started` line on stderr, and a tool's reply it can't send goes to stderr. On Unix, a signal that ends the server (SIGTERM, SIGINT, SIGHUP, even when started ignoring them, as `nohup` does) first stops the running call's programs the same way and starts no call still waiting; the server ends once that call has (an atomic batch's rollback included) and its reply is written. A second signal ends it at once.
+
+On Unix a tool's programs run in a process group of their own, so one that asks on the terminal (an ssh passphrase or host-key prompt) waits there until the call is cancelled: use an ssh agent and known hosts.

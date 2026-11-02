@@ -21,22 +21,6 @@ build-plugins:
 	cp target/release/meta-project .meta/plugins/meta-project
 	cp target/release/meta-cargo .meta/plugins/meta-cargo
 
-# Copy the agent skills from meta_cli (their source) into this repo's
-# .meta/skills/ (linked from .claude/skills/ and .agents/skills/) and the
-# Claude plugin. tests/init.bats checks they match.
-skills:
-	set -e; \
-	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
-	for dir in meta_cli/.claude/skills/meta-*/; do \
-		name=$$(basename "$$dir"); \
-		mkdir "$$tmp/$$name"; \
-		cp "$$dir/SKILL.md" "$$tmp/$$name/SKILL.md"; \
-	done; \
-	rm -rf .meta/skills/meta-*/ claude-plugin/skills/meta-*/; \
-	mkdir -p .meta/skills; \
-	cp -R "$$tmp"/meta-* .meta/skills/; \
-	cp -R "$$tmp"/meta-* claude-plugin/skills/
-
 # Crates whose binaries `make install` and `make uninstall` handle: the
 # binaries release.yml ships
 BIN_CRATES := meta_cli meta_git_cli meta_project_cli meta_rust_cli meta_mcp loop_cli

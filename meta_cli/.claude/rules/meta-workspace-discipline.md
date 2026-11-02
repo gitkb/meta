@@ -6,7 +6,7 @@ You are working in a **meta-repo** — multiple independent git repositories man
 
 1. **Use `meta git` for cross-repo operations** — NOT raw `git`
    - `meta git status` shows all repos at once
-   - `meta git commit -m "msg"` commits in all dirty repos
+   - `meta git commit -m "msg"` commits what is staged, in each repo that has staged changes
 
 2. **Use `meta exec` for cross-repo commands** — NOT `cd <repo> && cmd`
    - `meta exec -- npm install` runs in all repos

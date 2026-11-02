@@ -783,3 +783,17 @@ fn a_refused_command_is_a_failed_result_and_never_runs() {
         assert!(!temp_dir.path().join("ran").exists());
     }
 }
+
+#[test]
+fn one_argument_with_a_space_that_names_no_program_is_told_apart() {
+    let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+    let said = not_started(&["git status".to_string()], &missing);
+    assert!(
+        said.ends_with("separate words: git status, not 'git status'"),
+        "{said}"
+    );
+    // a missing program of one word, or a word it can't run, gets no tip
+    assert!(!not_started(&["gti".to_string()], &missing).contains("separate"));
+    let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+    assert!(!not_started(&["a b".to_string()], &denied).contains("separate"));
+}

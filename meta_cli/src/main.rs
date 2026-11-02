@@ -403,7 +403,7 @@ fn run_cli() -> Result<()> {
         Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins),
         // it reads the nearest workspace only, so -r would go unheard
         Some(Commands::Context(_)) if cli.recursive || cli.depth.is_some() => anyhow::bail!(
-            "meta context shows the nearest workspace only; it does not take --recursive or --depth"
+            "`meta context` shows the nearest workspace only; it does not take --recursive or --depth"
         ),
         Some(Commands::Context(args)) => meta_cli::context::handle_context(
             cli.json || args.json,
@@ -426,7 +426,7 @@ fn run_cli() -> Result<()> {
                 None => None,
             };
             let Some(plugin) = plugin else {
-                return Err(unrecognized_command_error(args));
+                return Err(unrecognized_command_error(args, &subprocess_plugins));
             };
             plugin_command(&cli, args, &plugin)
         }
@@ -444,7 +444,7 @@ fn is_root_help(error: &clap::Error) -> bool {
 }
 
 /// `meta help [COMMAND...]`: meta's help, a built-in command's, or the
-/// plugin command's, as `meta COMMAND... --help` prints it.
+/// plugin command's, as `meta <command> --help` prints it.
 fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Result<()> {
     let Some(first) = words.first() else {
         return Ok(out!("{}", help_with_plugins(plugins))?);
@@ -467,7 +467,7 @@ fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Resul
         return Ok(out!("{}", found.render_help())?);
     }
     let Some(plugin) = plugins.find(first)? else {
-        return Err(unrecognized_command_error(words));
+        return Err(unrecognized_command_error(words, plugins));
     };
     // The command's words only: what follows `--` is its arguments, and
     // help never runs the command
@@ -988,19 +988,41 @@ fn handle_plugin_command(
 
 // === Helpers ===
 
-/// The usage error for a command meta doesn't know, with a suggestion and
-/// meta's help.
-fn unrecognized_command_error(command_args: &[String]) -> anyhow::Error {
+/// The usage error for a command meta doesn't know, with meta's help and a
+/// suggestion: the command its first word is a typo of, else running it in
+/// each repo.
+fn unrecognized_command_error(
+    command_args: &[String],
+    plugins: &SubprocessPluginManager,
+) -> anyhow::Error {
     let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
-    let command_str = escape(&loop_lib::display_command(command_args)).into_owned();
-    // Listing the plugins' commands would start every plugin; a typo
-    // starts none
+    let cli = Cli::command();
+    // Plugins by their file names: a typo starts none
+    let words = plugins.words();
+    let known = cli
+        .get_subcommands()
+        .map(|sub| sub.get_name())
+        .chain(words.iter().map(String::as_str));
+    let suggestion = match meta_core::args::nearest(first_cmd, known) {
+        Some(word) => {
+            let fixed: Vec<String> = std::iter::once(word.to_string())
+                .chain(command_args.iter().skip(1).cloned())
+                .collect();
+            format!(
+                "A command with a similar name exists:\n    meta {}",
+                escape(&loop_lib::display_command(&fixed))
+            )
+        }
+        None => {
+            let command_str = escape(&loop_lib::display_command(command_args)).into_owned();
+            format!("To run '{command_str}' across all repos:\n    meta exec -- {command_str}")
+        }
+    };
     meta_core::exit::Usage(format!(
-        "unrecognized command '{}'\n\n\
-         To run '{command_str}' across all repos:\n    meta exec -- {command_str}\n\n\
+        "unrecognized command '{}'\n\n{suggestion}\n\n\
          Plugins add more commands: meta --help lists them.\n\n{}",
         escape(first_cmd),
-        Cli::command().render_help().to_string().trim_end()
+        cli.clone().render_help().to_string().trim_end()
     ))
     .into()
 }

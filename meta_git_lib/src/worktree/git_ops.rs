@@ -199,13 +199,7 @@ pub fn git_diff_stat(
     worktree_path: &Path,
     base_ref: &str,
 ) -> Result<(usize, usize, usize, Vec<String>)> {
-    // `merge-base` exits 1 only when there is no common ancestor. Only then
-    // use a two-dot diff; a bad ref or a failed read is still an error.
-    let range = if lookup(worktree_path, ["merge-base", base_ref, "HEAD"])?.is_some() {
-        format!("{base_ref}...HEAD")
-    } else {
-        format!("{base_ref}..HEAD")
-    };
+    let range = diff_range(worktree_path, base_ref)?;
     let numstat_text = run(worktree_path, ["diff", "--numstat", &range, "--"])?;
 
     let mut files_changed = 0;
@@ -249,6 +243,25 @@ pub fn git_diff_stat(
     }
 
     Ok((files_changed, insertions, deletions, files))
+}
+
+/// The patch [`git_diff_stat`] counts.
+pub fn git_diff_patch(worktree_path: &Path, base_ref: &str) -> Result<String> {
+    let range = diff_range(worktree_path, base_ref)?;
+    run(worktree_path, ["diff", "--no-color", &range, "--"])
+}
+
+/// What HEAD changed since it left `base_ref`: `merge-base` exits 1 only when
+/// there is no common ancestor, and only then is it a two-dot diff; a bad
+/// ref or a failed read is still an error.
+fn diff_range(worktree_path: &Path, base_ref: &str) -> Result<String> {
+    Ok(
+        if lookup(worktree_path, ["merge-base", base_ref, "HEAD"])?.is_some() {
+            format!("{base_ref}...HEAD")
+        } else {
+            format!("{base_ref}..HEAD")
+        },
+    )
 }
 
 /// Unregister and delete the checked worktrees of a set, deepest first

@@ -220,6 +220,12 @@ impl SubprocessPluginManager {
         Ok(Some(self.loaded(word.to_string(), path, info)))
     }
 
+    /// The word of every plugin file, read from the file names: none is
+    /// started.
+    pub fn words(&self) -> Vec<String> {
+        self.files().into_keys().collect()
+    }
+
     /// Every plugin, sorted by word. Each one is started to ask for its info;
     /// one that doesn't give it is warned about and left out, except a
     /// program on PATH that isn't a plugin.

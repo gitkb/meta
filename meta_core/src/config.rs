@@ -13,28 +13,79 @@ use std::path::{Path, PathBuf};
 
 /// Represents a project entry in the .meta.yaml.
 /// Can be either a simple git URL string or an extended object with additional fields.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum ProjectEntry {
     /// Simple format: just a git URL string
     Simple(GitUrl),
     /// Extended format: object with repo, path, tags, and dependency info
     Extended {
         /// Git remote URL (optional for local-only projects).
-        #[serde(default)]
         repo: Option<GitUrl>,
-        #[serde(default)]
         path: Option<String>,
-        #[serde(default)]
         tags: Vec<String>,
-        #[serde(default)]
         provides: Vec<String>,
-        #[serde(default)]
         depends_on: Vec<String>,
         /// If true, this directory contains a nested .meta.yaml
-        #[serde(default)]
         meta: bool,
     },
+}
+
+/// The fields of [`ProjectEntry::Extended`]; others are left to other tools.
+#[derive(Deserialize)]
+struct ExtendedEntry {
+    #[serde(default)]
+    repo: Option<GitUrl>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    provides: Vec<String>,
+    #[serde(default)]
+    depends_on: Vec<String>,
+    #[serde(default)]
+    meta: bool,
+}
+
+/// A URL or a mapping, and an error that says so (and what was wrong in the
+/// mapping) for anything else: an untagged enum's would only say no form
+/// matched.
+impl<'de> Deserialize<'de> for ProjectEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EntryVisitor;
+        impl<'de> serde::de::Visitor<'de> for EntryVisitor {
+            type Value = ProjectEntry;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str(
+                    "a repo URL, or a mapping of repo, path, tags (a list), provides (a list), \
+                     depends_on (a list) and meta (true or false)",
+                )
+            }
+
+            fn visit_str<E: serde::de::Error>(self, url: &str) -> Result<Self::Value, E> {
+                GitUrl::deserialize(serde::de::value::StrDeserializer::new(url))
+                    .map(ProjectEntry::Simple)
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                let entry =
+                    ExtendedEntry::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                Ok(ProjectEntry::Extended {
+                    repo: entry.repo,
+                    path: entry.path,
+                    tags: entry.tags,
+                    provides: entry.provides,
+                    depends_on: entry.depends_on,
+                    meta: entry.meta,
+                })
+            }
+        }
+        deserializer.deserialize_any(EntryVisitor)
+    }
 }
 
 /// Parsed project info after normalization
@@ -1541,6 +1592,28 @@ mod tests {
         );
         // keys other tools put on a project are theirs
         assert!(load("projects:\n  a:\n    repo: x\n    branch: main\n").is_ok());
+        // a project of the wrong shape is named, with the shape it needs
+        for (yaml, says) in [
+            (
+                "projects:\n  api:\n",
+                "projects.api: invalid type: unit value, expected a repo URL, or a mapping",
+            ),
+            (
+                "projects:\n  api: 3\n",
+                "projects.api: invalid type: integer `3`, expected a repo URL, or a mapping",
+            ),
+            (
+                "projects:\n  api:\n    tags: backend\n",
+                "projects.api.tags: invalid type: string \"backend\", expected a sequence",
+            ),
+            (
+                "projects:\n  api:\n    meta: maybe\n",
+                "projects.api.meta: invalid type: string \"maybe\", expected a boolean",
+            ),
+        ] {
+            let err = format!("{:#}", load(yaml).unwrap_err());
+            assert!(err.contains(says) && err.contains(".meta.yaml"), "{err}");
+        }
     }
 
     // ============================================================================

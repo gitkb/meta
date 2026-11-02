@@ -19,7 +19,7 @@ Multi-repo workspaces amplify the impact of destructive commands.
 
 3. **Target precisely** — avoid blanket operations
    ```
-   meta --include api-service exec -- git reset --hard
+   meta --include api-service exec -- cargo clean
    ```
 
 ## Blocked by `agent guard`

@@ -14,15 +14,14 @@ Most multi-repo tools solve the *cloning* problem. Meta solves the *working* pro
 
 - [Why Meta](#why-meta)
 - [Quick Start](#quick-start)
+- [Start a Workspace](#start-a-workspace)
 - [How It Works](#how-it-works)
 - [Installation](#installation)
 - [Configuration](#configuration)
-- [Commands](#commands)
 - [Filtering](#filtering)
 - [Plugins](#plugins)
 - [AI Integration](#ai-integration)
 - [Architecture](#architecture)
-- [CLI Reference](#cli-reference)
 - [Documentation](#documentation)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
@@ -56,29 +55,44 @@ Most multi-repo tools solve the *cloning* problem. Meta solves the *working* pro
    ```bash
    meta git status
    meta git pull
-   meta exec npm install
-   meta exec cargo test
+   meta exec -- npm install
+   meta exec -- cargo test
    ```
 
-3. **Filter by tags:**
+3. **Filter by tags** (meta's options go before the command):
 
    ```bash
    meta --tag backend git pull
    meta --tag frontend,shared exec -- npm test
    ```
 
-4. **Query repo state:**
-
-   ```bash
-   meta query "dirty:true AND tag:backend"
-   ```
-
-5. **Commit before risky changes:**
+4. **Commit before risky changes:**
 
    ```bash
    meta git add -A && meta git commit -m "wip: before refactor"
    meta --dry-run exec -- <command>  # preview before running
    ```
+
+`meta --help` lists every command, the ones plugins add included; `meta help <command>` (`meta help git worktree create`) shows one.
+
+---
+
+## Start a Workspace
+
+With no meta repo yet, make one: a git repo holding a `.meta.yaml` that lists the others.
+
+```bash
+mkdir my-workspace && cd my-workspace && git init
+cat > .meta.yaml <<'EOF'
+projects:
+  api: git@github.com:org/api.git
+  web: git@github.com:org/web.git
+EOF
+printf 'api/\nweb/\n' > .gitignore   # the child repos keep their own history
+meta git update                      # clones api and web
+```
+
+Commit `.meta.yaml` and `.gitignore` and push the workspace repo; others then get everything with `meta git clone <url>`.
 
 ---
 
@@ -128,10 +142,8 @@ its published `.sha256` and check it before installing anything; a
 download error, a missing checksum file or a mismatch stops the install.
 `install.sh` needs `curl`, `tar` and `sha256sum` or `shasum`.
 
-Set `VERSION` for a specific release, `INSTALL_DIR` for the target
-directory, or `META_DOWNLOAD_URL` to install from a mirror of
-`https://github.com/gitkb/meta/releases`. The variables go on `bash`, not
-on `curl`:
+`VERSION`, `INSTALL_DIR` and `META_DOWNLOAD_URL` (see
+[Environment Variables](#environment-variables)) go on `bash`, not on `curl`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | VERSION=0.2.22 bash
@@ -219,7 +231,7 @@ projects:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `repo` | Yes | Git repository URL |
+| `repo` | No | Git repository URL (without one the project is local-only: `meta git update` doesn't clone it) |
 | `path` | No | Custom clone path (defaults to project name) |
 | `tags` | No | Array of tags for filtering |
 | `meta` | No | Set `true` if this project contains a nested `.meta.yaml` |
@@ -249,6 +261,18 @@ YAML anchors and merge keys (`<<: *defaults`) work as YAML defines them.
 
 You can mix simple and extended formats in the same file.
 
+### Environment Variables
+
+| Variable | Effect |
+|----------|--------|
+| `META_DATA_DIR` | meta's own folder, `~/.meta` by default: installed plugins, the registry config |
+| `META_WORKTREES` | Where worktree sets go, instead of `worktrees_dir` or `.worktrees` |
+| `META_PLATFORM` | The platform `meta plugin install` downloads for (`linux-x64`, `darwin-arm64`, ...) |
+| `RUST_LOG` | Debug logging on stderr: `RUST_LOG=debug meta git status` |
+| `GIT_EDITOR`, `VISUAL`, `EDITOR` | The editor `meta git commit --edit` opens (the one git would, `core.editor` included) |
+| `NO_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE` | Colour off, off (`0`), or on even into a pipe (`1`); see [Advanced Usage](docs/advanced_usage.md#colour) |
+| `VERSION`, `INSTALL_DIR`, `META_DOWNLOAD_URL` | For the install scripts: the release (default `latest`), the target folder (`~/.local/bin`; `%USERPROFILE%\.meta\bin` on Windows), a mirror of `https://github.com/gitkb/meta/releases` |
+
 ### Nested Meta Repos
 
 Meta repos can contain other meta repos, enabling hierarchical organization of large codebases:
@@ -268,7 +292,7 @@ When `meta: true` is set, commands with `--recursive` will descend into the nest
 
 ```bash
 # Clone everything, including nested meta repos
-meta git clone https://github.com/org/top-level.git
+meta git clone -r https://github.com/org/top-level.git
 
 # Pull what's cloned and clone what's missing, nested meta repos included
 meta git update -r
@@ -297,41 +321,6 @@ projects:
 ```
 
 This enables impact analysis ("what breaks if I change shared-utils?"), topological build ordering, and transitive dependency resolution.
-
----
-
-## Commands
-
-### Core
-
-| Command | Description |
-|---------|-------------|
-| `meta exec -- <command>` | Run any command across all repositories (no shell; `sh -c '...'` for one) |
-| `meta git status` | Git status for all repos |
-| `meta git pull` | Pull latest changes |
-| `meta git push` | Push commits |
-| `meta query "<expr>"` | Query repos by state |
-
-### Git Plugin
-
-| Command | Description |
-|---------|-------------|
-| `meta git clone <url>` | Clone meta repo + all child repos |
-| `meta git update` | Fast-forward each cloned repo (`git pull --ff-only`) and clone each missing one; the workspace repo is pulled first, so projects added upstream are cloned too. A repo that can't fast-forward is named and the command exits 1; one on no branch or without an upstream is named and left alone. `-r` for nested meta repos |
-| `meta git setup-ssh` | Configure SSH multiplexing |
-| `meta git commit --edit` | Per-repo commit messages via editor |
-| `meta git commit -m "msg"` | Same message across all repos |
-
-### Plugin Management
-
-| Command | Description |
-|---------|-------------|
-| `meta plugin list` | List installed plugins |
-| `meta plugin search <query>` | Search plugin registry |
-| `meta plugin install <name>` | Install a plugin |
-| `meta plugin uninstall <name>` | Remove a plugin |
-
-Add `--local` to install, list, uninstall or update the plugins of this meta repo only (`.meta/plugins/` next to the nearest meta config).
 
 ---
 
@@ -364,7 +353,7 @@ meta -r --tag cli-tools exec -- cargo build               # nested projects by t
 
 Meta runs every command as a program with its arguments, never through a shell. Each argument meta receives reaches the program unchanged, so quotes, spaces, `$()`, `;`, globs and `%` stay literal (`meta git log --format='%h %s'` works, and text pasted into a commit message can't run commands). Your own shell still parses the line before meta runs, so `"$(...)"` in double quotes runs there: pass untrusted text in single quotes. When you want a shell, ask for one: `meta exec -- sh -c 'npm ci && npm test'`. `meta git commit`, `clone`, `update` and `worktree` are meta's own commands with their own options; for git's native behavior, `meta exec -- git ...`. Every other `meta git` command, `status` included, passes its arguments to git.
 
-Meta's own options go before the command: `meta --dry-run git update`, `meta --json git worktree list`. Everything after the command word belongs to the command, so `meta git pull --tag v1` gives `--tag v1` to git, and `meta exec --dry-run -- rm x` is refused with a tip to write `meta --dry-run exec -- rm x`. The commands that print data take their own `--json` too (`meta context --json`, `meta plugin list --json`, `meta git worktree list --json`, `meta project list --json`).
+Meta's own options go before the command: `meta --dry-run git update`, `meta --json git worktree list`. Everything after the command word belongs to the command, so `meta git pull --tag v1` gives `--tag v1` to git, and `--dry-run` after `meta exec` is refused with a tip to write `meta --dry-run exec -- rm x`. The commands that print data take their own `--json` too (`meta context --json`, `meta plugin list --json`, `meta git worktree list --json`, `meta project list --json`).
 
 ### Recursive Processing
 
@@ -372,16 +361,6 @@ Meta's own options go before the command: `meta --dry-run git update`, `meta --j
 meta --recursive git status
 meta --recursive --depth 2 git pull
 ```
-
-### Query DSL
-
-```bash
-meta query "dirty:true"
-meta query "dirty:true AND tag:backend AND branch:main"
-meta query "ahead:true"
-```
-
-**Conditions:** `dirty`, `branch`, `tag`, `ahead`, `behind` — combined with `AND`.
 
 ---
 
@@ -399,9 +378,17 @@ A plugin named `meta-<word>` serves `meta <word> ...`, and the first file found 
 
 | Plugin | Description |
 |--------|-------------|
-| `git` | Clone, status, update, commit, SSH multiplexing |
-| `project` | Project health checks and sync |
+| `git` | `clone`, `update`, `commit` and `worktree` sets; any other `meta git <command>` runs git in each repo |
+| `project` | `list`, `check` (is every project cloned from its remote?), `dependents` |
 | `cargo` | `meta cargo <cargo args>`: any cargo command in each repo that has a `Cargo.toml` |
+
+`meta plugin search` and `meta plugin install <name>` read the plugin registry, `gitkb/meta-plugins` by default. To use others, list them in `~/.meta/config.yaml` (in `META_DATA_DIR` if set); `install` takes a plugin from the first one that has it:
+
+```yaml
+registries:
+  - https://raw.githubusercontent.com/gitkb/meta-plugins/main
+  - https://plugins.example.com
+```
 
 ### Writing Plugins
 
@@ -438,7 +425,7 @@ Meta is designed for AI agents from day one. Three integration points:
 }
 ```
 
-**Tools include:** project listing, git operations (status/pull/push/commit/diff/branch), build/test, code search, file tree discovery, query DSL, impact analysis, and batch execution.
+**Tools include:** project listing, git operations (status/pull/push/commit/diff/branch), build/test, code search, file tree discovery, a query language for repo state (`dirty:true AND tag:backend`), impact analysis, and batch execution.
 
 See [docs/mcp_server.md](docs/mcp_server.md) for full documentation.
 
@@ -448,16 +435,19 @@ See [docs/mcp_server.md](docs/mcp_server.md) for full documentation.
 meta init claude
 ```
 
-Installs purpose-built skills that teach Claude Code how to work with multi-repo codebases — using `meta git` instead of `git`, committing or stashing before risky changes, filtering by tags, and understanding plugin interception. It writes only inside the workspace, in the folder with its `.meta.yaml` (`meta --dry-run init claude` shows what it would write), and prints the `claude plugin` commands that install the same skills for all your projects. See [docs/claude_code_skills.md](docs/claude_code_skills.md).
+Installs purpose-built skills that teach Claude Code how to work with multi-repo codebases — using `meta git` instead of `git`, committing or stashing before risky changes, filtering by tags, and understanding plugin interception. It writes only inside the workspace, in the folder with its `.meta.yaml`: the skills go in `.meta/skills/` and are linked into `.claude/skills/`, `.agents/skills/` and the skills folder of each other agent whose folder exists, such as `.cursor/` (`meta --dry-run init claude` shows what it would write). It also prints the `claude plugin` commands that install the same skills for all your projects. See [docs/claude_code_skills.md](docs/claude_code_skills.md).
 
 ### JSON Output
 
-Every command supports `--json` for structured, machine-readable output:
+`meta --json` before a command prints its result, or its error, as JSON on stdout (help and `meta init claude` stay text):
 
 ```bash
 meta --json git status
-meta query "dirty:true" --json
+meta --json exec -- git rev-parse HEAD
+meta project list --json
 ```
+
+See [Advanced Usage](docs/advanced_usage.md#json-output-mode) for the format.
 
 ---
 
@@ -498,42 +488,6 @@ Configure with `.looprc`. See [docs/loop.md](docs/loop.md) for details.
 
 ---
 
-## CLI Reference
-
-```
-Usage: meta [OPTIONS] [COMMAND]
-
-Commands:
-  context  Show workspace context summary
-  exec     Run a command in each selected repo, as typed (no shell, no plugin)
-  help     Print help for meta or for a command (meta help git worktree create)
-  init     Initialize meta integrations
-  plugin   Manage plugins
-
-Options:
-  -h, --help                          Print help, with the commands plugins add
-      --add-aliases-to-global-looprc  Add shell aliases to the global .looprc file
-  -c, --config <FILE>                 Read FILE instead of .meta.yaml, looked for in the current directory and the ones above it
-  -e, --exclude <EXCLUDE>             Skip these repos: each value is a repo's .meta.yaml name or its whole path from the workspace root (. for the root), never part of one
-  -i, --include <INCLUDE>             Run in these repos (and in those --tag selects): each value is a repo's .meta.yaml name or its whole path from the workspace root (. for the root), never part of one
-      --json                          Output results in JSON format
-  -s, --silent                        Enable silent mode
-  -v, --verbose                       Enable verbose output
-  -t, --tag <TAGS>                    Run in the repos with any of these tags, comma-separated (the root has none: add it with -i .)
-  -r, --recursive                     Recursively process nested meta repos
-      --depth <N>                     Maximum depth for recursive processing (default: unlimited)
-      --dry-run                       Show what would change, and change nothing (commands that can't preview refuse it)
-      --parallel                      Run commands in parallel
-      --sequential                    Run commands sequentially (overrides config default)
-      --primary                       Inside a worktree set, act on the workspace it was made from instead
-      --strict                        Convert warnings to errors for all-or-nothing behavior (CI/automation)
-  -V, --version                       Print version
-
-meta's options go before the command (meta --dry-run git update); what follows the command belongs to it.
-```
-
----
-
 ## Documentation
 
 - **[Architecture Overview](docs/architecture_overview.md)** — System design
@@ -557,7 +511,7 @@ meta's options go before the command (meta --dry-run git update); what follows t
 - [x] MCP server for AI agents (26 tools)
 - [x] Multi-commit support (`meta git commit --edit`)
 - [x] Plugin help system
-- [x] Query DSL for advanced filtering
+- [x] Query DSL for agents (MCP `meta_query_repos`)
 - [x] Dependency tracking and impact analysis
 - [x] Claude Code skills integration
 - [x] Windows support (PowerShell installer)

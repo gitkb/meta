@@ -67,15 +67,11 @@ curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | bash
 
 ### Q: Why does meta not find my repos?
 
-**A:** Check your meta config, `.meta.yaml`:
-
-1. Ensure it's in the repository root
-2. Verify YAML syntax
-3. Check project paths are relative to the meta file location
+**A:** meta reads the `.meta.yaml` in the current directory or the nearest one above it, and stops with an error naming the file and the project when an entry is wrong. A relative `path` is relative to that file's folder. To see what it found:
 
 ```bash
-# Validate YAML
-cat .meta.yaml | python3 -c "import yaml,sys; yaml.safe_load(sys.stdin)"
+meta project list     # the projects it reads
+meta project check    # the ones missing, not a repository, or cloned from another remote
 ```
 
 ### Q: How do I add a new project?
@@ -115,7 +111,7 @@ projects:
 **A:** Use filtering options:
 
 ```bash
-# By tag (plugin commands)
+# By tag
 meta --tag backend git status
 
 # By repo: its .meta.yaml name or its path from the workspace root
@@ -127,12 +123,7 @@ meta --exclude legacy-service exec -- npm install
 
 ### Q: Commands are running slowly. How can I speed them up?
 
-**A:** Use parallel execution:
-
-```bash
-meta --parallel git status
-meta --parallel exec -- npm install
-```
+**A:** `meta exec` and `meta git` already run in all repos at once, unless `.meta.yaml` sets `defaults: {parallel: false}` (then `--parallel` overrides it). Run in fewer repos with `--tag` or `--include`.
 
 ### Q: How do I see what would happen without executing?
 
@@ -164,19 +155,13 @@ meta --json git status | jq '.results[] | select(.success == false)'
 
 1. Clones the parent repo
 2. Reads its meta config
-3. Queues and clones all child repos
+3. Clones each repo it lists; the repos of nested meta repos (`meta: true`) only with `meta git clone -r <url>`
 
-If child repos aren't cloning, the meta config may be missing or malformed.
+If child repos aren't cloning, the meta config may be missing or malformed. `meta git update` in the clone clones whatever is still missing.
 
 ### Q: Git operations are slow over SSH?
 
-**A:** Set up SSH multiplexing:
-
-```bash
-meta git setup-ssh
-```
-
-This configures connection reuse for faster parallel operations.
+**A:** Nothing to set up: for parallel clones, pulls and other remote git commands meta shares one SSH connection per host, and when it can't open one it runs them one at a time. Load your key into `ssh-agent` so git doesn't ask for its passphrase.
 
 ### Q: How do I create the same branch in all repos?
 
@@ -202,13 +187,7 @@ This opens the editor git uses (`GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR`)
 
 ### Q: How do I add a new plugin?
 
-**A:** Install it with `meta plugin install <name>` (add `--local` for this workspace only), or place an executable named `meta-<name>` in one of these locations:
-
-1. `.meta/plugins/` next to the nearest meta config at or above the current directory, then next to each parent meta config that lists that directory as a project (the same workspace), nearest first. A parent that doesn't list it is another workspace and is not read. Inside a worktree set meta made, a checkout's own `.meta/plugins/` comes first, then those of the checkout it stands for (the one it was made from) and its workspace. `meta plugin install <name> --local` installs into the nearest one.
-2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
-3. Executables named `meta-*` on PATH.
-
-A plugin named `meta-<word>` serves `meta <word> ...`, and the first file found with that name wins. For a command meta starts only that file; if it doesn't answer `--meta-plugin-info` with its info within 5 seconds, the command fails naming it. `meta`, `meta help`, `meta --help` and `meta plugin list` start every plugin; there a plugins folder meta can't read, and a plugin that doesn't answer within 5 seconds, are skipped with a warning naming them. So is a file in `.meta/plugins` or `~/.meta/plugins` that can't be started, isn't executable, or answers with anything but its info; a `meta-*` program on PATH that can't be started or isn't a plugin is just left out, as it may be any program. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
+**A:** Install it with `meta plugin install <name>` (add `--local` for this workspace only), or place an executable named `meta-<name>` where meta looks for plugins (see [Plugins](../README.md#plugins)):
 
 ```bash
 # Example: install by hand for every workspace
@@ -223,7 +202,7 @@ chmod +x ~/.meta/plugins/meta-docker
 1. **Executable permission**: `chmod +x meta-plugin`
 2. **Naming**: Must start with `meta-`
 3. **Location**: One of the discovery paths
-4. **Debug**: `META_DEBUG=1 meta plugin list`
+4. **Warnings**: `meta plugin list` names each file in `.meta/plugins` or `~/.meta/plugins` it skipped, and why; a `meta-*` program on PATH that isn't a plugin is left out silently
 
 ### Q: How do I see available plugins?
 
@@ -317,10 +296,8 @@ git switch -c recovered <sha>
 
 **A:**
 
-1. **Use parallel mode**: `--parallel`
-2. **Set up SSH multiplexing**: `meta git setup-ssh`
-3. **Filter to relevant repos**: `--tag`, `--include`
-4. **Use shallow clones for initial setup**: `meta git clone <url> --depth 1`
+1. **Filter to relevant repos**: `--tag`, `--include`
+2. **Use shallow clones for initial setup**: `meta git clone <url> --depth 1`
 
 ### Q: Parallel operations are failing?
 
@@ -330,7 +307,7 @@ git switch -c recovered <sha>
 - Interactive commands
 - Commands that need sequential output
 
-Try sequential execution for these cases.
+Run these with `meta --sequential …`.
 
 ---
 
@@ -341,8 +318,10 @@ Try sequential execution for these cases.
 **A:**
 
 ```bash
-META_DEBUG=1 meta git status
+RUST_LOG=debug meta git status
 ```
+
+`RUST_LOG=meta_git_cli=debug` limits it to the git plugin.
 
 ### Q: How do I see what meta is doing?
 
@@ -354,11 +333,7 @@ meta --verbose git status
 
 ### Q: How do I check which config file is being used?
 
-**A:**
-
-```bash
-META_DEBUG=1 meta project list 2>&1 | grep -i config
-```
+**A:** The nearest `.meta.yaml` at or above the current directory (`--config <name>` looks for another name the same way). `meta project list --json` prints its folder as `root`.
 
 ---
 
@@ -378,8 +353,8 @@ META_DEBUG=1 meta project list 2>&1 | grep -i config
 
 ```bash
 meta --help
-meta git --help
-meta project --help
+meta help git
+meta help git worktree create
 ```
 
 ---

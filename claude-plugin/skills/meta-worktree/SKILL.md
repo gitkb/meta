@@ -122,7 +122,8 @@ meta git worktree list auth-fix
 meta --json git worktree list
 meta git worktree list --metadata-only # membership paths only, no Git status
 meta git worktree status auth-fix      # per-repo branch and dirty state
-meta git worktree diff auth-fix --base main   # committed changes only, as a stat summary
+meta git worktree diff auth-fix --base main   # committed changes: a summary, then the patch
+meta git worktree diff auth-fix --stat        # the summary only
 ```
 
 `list` and `status` take `--recursive` to include repos nested beneath other
@@ -234,41 +235,6 @@ can't delete something, the error says what was left behind. A failing hook
 fails the command too, but only after the set was made (or removed): that is
 not rolled back, so remove the set yourself if you don't want it.
 
-## Command Reference
+## Reference
 
-| Command | Description |
-|---------|-------------|
-| `create <name> [<commit-ish>]` | Create a new worktree set |
-| `add <name>` | Add repo(s) to an existing set |
-| `list [<name>]` | List sets (the current one inside a set) |
-| `status <name>` | Per-repo status |
-| `diff <name>` | Committed changes vs a base branch |
-| `exec <name> -- <cmd>` | Run a command in the set's repos |
-| `remove <name>` | Remove a set |
-| `prune` | Remove expired or orphaned sets |
-
-### Create Options
-
-| Option | Description |
-|--------|-------------|
-| `[<commit-ish>]` | Start from a tag, SHA or branch (positional) |
-| `--repo <alias>[:<branch>]` | Add specific repo(s): a project's `.meta.yaml` name, else its path from the workspace (a nested one too) |
-| `--all` | Add all repos at this meta level (one not cloned is skipped with a warning) |
-| `--no-deps` | Skip automatic root and dependency selection (a repo nested inside another project's path still gets that parent project) |
-| `-r, --recursive` | Resolve across nested meta repos (root-relative aliases) |
-| `--branch <name>` | Override the branch name |
-| `--from-pr <owner/repo#N>` | Start a child repo from a PR's head branch |
-| `--dry-run` | Preview without creating anything |
-| `--ephemeral` | The next `prune` removes it |
-| `--ttl <duration>` | Make `prune` remove it after this long |
-| `--meta <key=value>` | Record custom metadata |
-| `--strict` | Fail instead of skipping a repo (missing ref, not cloned); a failing hook fails the command after the set is made (it stays) |
-
-### Exec Options
-
-| Option | Description |
-|--------|-------------|
-| `--include <repos>` | Only these repos, by name or path (comma-separated) |
-| `--exclude <repos>` | Skip these repos, by name or path (comma-separated) |
-| `--parallel` | Run concurrently |
-| `--ephemeral` | Create, run, then remove (takes `--repo`/`--all`, `--branch`, `--from-pr`, `--meta`, a commit-ish) |
+Every subcommand and option: `meta help git worktree` and `meta help git worktree <command>`.

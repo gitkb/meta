@@ -81,7 +81,7 @@ pub(crate) fn handle_create(
     if wt_dir.exists() {
         let lease = wt_dir.canonicalize().ok().and_then(|set| lease::find(&set));
         anyhow::bail!(
-            "Worktree '{name}' already exists at {}{}. Use 'meta worktree remove {name}' first.",
+            "Worktree '{name}' already exists at {}{}. Use 'meta git worktree remove {name}' first.",
             escape_path(&wt_dir),
             match lease {
                 Some(found) if found.live => format!(" ({})", found.doing()),

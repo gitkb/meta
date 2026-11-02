@@ -1,10 +1,10 @@
 use anyhow::Result;
 use colored::*;
-use meta_core::display::escape;
-use meta_core::outln;
+use meta_core::display::{escape, escape_lines};
+use meta_core::{out, outln};
 use rayon::prelude::*;
 
-use meta_git_lib::worktree::git_ops::git_diff_stat;
+use meta_git_lib::worktree::git_ops::{git_diff_patch, git_diff_stat};
 use meta_git_lib::worktree::helpers::discover_and_validate_worktree;
 use meta_git_lib::worktree::types::*;
 
@@ -74,7 +74,6 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
         };
         outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else {
-        // Human mode: always show stat summary
         outln!("{} vs {}:", name.bold(), escape(base_ref))?;
         for d in &diff_entries {
             if let Some(error) = &d.error {
@@ -106,6 +105,17 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
             )?;
         } else if failed == 0 {
             outln!("  No changes vs {}", escape(base_ref))?;
+        }
+        // the patch follows the summary, unless the summary is all that was asked for
+        if !args.stat {
+            for (d, r) in diff_entries.iter().zip(&repos) {
+                if d.files_changed.unwrap_or(0) == 0 {
+                    continue;
+                }
+                outln!("\n{}", format!("── {} ──", escape(&d.alias)).bold())?;
+                // file contents: escaped like any other text from the repo
+                out!("{}", escape_lines(&git_diff_patch(&r.path, base_ref)?))?;
+            }
         }
     }
 

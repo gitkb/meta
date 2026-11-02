@@ -44,7 +44,7 @@ projects:
 ```
 
 **Simple format**: `name: git-url` - clones to `./name`
-**Extended format**: Object with `repo`, optional `path`, optional `tags`
+**Extended format**: a mapping; every key is optional (`repo`, `path`, `tags`, `provides`, `depends_on`, `meta: true` for a nested meta repo)
 
 ## Discovering What's Here
 
@@ -84,17 +84,6 @@ meta --recursive git status
 ```
 
 The global `--depth N` flag limits recursion depth. For `meta git clone`, `--depth` is the shallow-clone depth; use `--meta-depth N` there.
-
-## Key Commands Quick Reference
-
-| Command | What It Does |
-|---------|--------------|
-| `meta git status` | Git status in every repo |
-| `meta git clone <url>` | Clone meta repo + all children |
-| `meta exec -- <cmd>` | Run command in every repo |
-| `meta project list` | List all child projects |
-| `meta git worktree create <task> --repo <alias>` | Isolated worktree set for a change (see `meta-worktree`) |
-| `meta init claude` | Install these skills |
 
 ## MCP Tools for Workspace Discovery
 

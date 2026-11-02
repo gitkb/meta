@@ -19,12 +19,12 @@ use std::os::unix::fs::symlink as symlink_dir;
 #[cfg(windows)]
 use std::os::windows::fs::symlink_dir;
 
-/// Embeds `.claude/skills/<name>/SKILL.md`, installed at the same path
+/// Embeds `claude-plugin/skills/<name>/SKILL.md`, the skills' one source
 macro_rules! skill {
     ($name:literal) => {
         (
             $name,
-            include_str!(concat!("../.claude/skills/", $name, "/SKILL.md")),
+            include_str!(concat!("../../claude-plugin/skills/", $name, "/SKILL.md")),
         )
     };
 }

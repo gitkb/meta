@@ -50,7 +50,7 @@ pub struct PluginInfo {
 }
 
 /// Help information for a plugin's commands.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PluginHelp {
     /// Usage string (e.g., "meta git <command> [args...]")
     pub usage: String,

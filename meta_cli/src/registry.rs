@@ -450,22 +450,23 @@ impl RegistryClient {
 }
 
 /// Where releases are, and GitHub's API: `META_GITHUB_URL` (a GitHub
-/// Enterprise server, whose API is under `/api/v3`), else (unset or empty)
-/// github.com
+/// Enterprise server, whose API is under `/api/v3`); unset, empty or
+/// github.com itself, github.com
 fn github() -> Result<(String, String)> {
     github_at(&std::env::var("META_GITHUB_URL").unwrap_or_default())
 }
 
-/// A URL holding credentials is refused: what meta and ureq log of a URL
-/// they request would print them
+/// Only `http(s)://` and never an `@`: no parser then finds a user or
+/// password in it, so nothing meta or ureq logs of it can print one
 fn github_at(url: &str) -> Result<(String, String)> {
-    if meta_core::git::GitUrl::from(url).has_credentials() {
+    let web = url.starts_with("https://") || url.starts_with("http://");
+    if url.contains('@') || !(web || url.is_empty()) {
         anyhow::bail!(
-            "META_GITHUB_URL holds credentials, which meta would print; give it the server alone"
+            "META_GITHUB_URL takes a server's http(s):// address alone, with no user or password"
         );
     }
     Ok(match url.trim_end_matches('/') {
-        "" | "https://github.com" => (
+        url if url.is_empty() || url.eq_ignore_ascii_case("https://github.com") => (
             "https://github.com".to_string(),
             "https://api.github.com".to_string(),
         ),
@@ -1293,7 +1294,12 @@ mod tests {
 
     #[test]
     fn github_is_github_com_unless_another_server_is_named() {
-        for public in ["", "https://github.com", "https://github.com/"] {
+        for public in [
+            "",
+            "https://github.com",
+            "https://github.com/",
+            "https://GitHub.com",
+        ] {
             let (web, api) = github_at(public).unwrap();
             assert_eq!(
                 (web.as_str(), api.as_str()),
@@ -1305,8 +1311,16 @@ mod tests {
             (web.as_str(), api.as_str()),
             ("https://ghe.example", "https://ghe.example/api/v3")
         );
-        let refused = github_at("https://alice:s3cret@ghe.example").unwrap_err();
-        assert!(!format!("{refused:#}").contains("s3cret"), "{refused:#}");
+        for refused in [
+            "https://alice:s3cret@ghe.example",
+            "http:/alice:s3cret@ghe.example",
+            "https://s3cret@ghe.example",
+            "ghe.example",
+            "ftp://ghe.example",
+        ] {
+            let error = github_at(refused).unwrap_err();
+            assert!(!format!("{error:#}").contains("s3cret"), "{error:#}");
+        }
     }
 
     #[test]

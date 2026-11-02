@@ -22,6 +22,7 @@ rustix = { version = "1", features = ["process", "termios"] }
 signal-hook = { version = "0.4", features = ["extended-siginfo"] }
 
 [dev-dependencies]
+meta_test_support = { path = "../meta_test_support" }
 tempfile = "3.3"
 
 [lints]

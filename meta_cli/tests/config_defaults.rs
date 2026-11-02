@@ -1,9 +1,7 @@
 //! `defaults` come from the config meta runs with, wherever it was found.
 
-#![expect(
-    clippy::disallowed_methods,
-    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
-)]
+#[cfg(unix)]
+use meta_test_support::Sandbox;
 
 /// `defaults: {parallel: false}` holds when meta runs below the config, and
 /// when `--config` names it over a `.meta.yaml` that runs in parallel: two
@@ -31,19 +29,20 @@ fn sequential_default_holds_wherever_the_config_is() {
             true,
         ),
     ] {
-        let tmp = tempfile::tempdir().unwrap();
-        let tmp = tmp.path().canonicalize().unwrap();
+        let sandbox = Sandbox::new();
+        let tmp = sandbox.work();
         let workspace = tmp.join("workspace");
         for project in ["a", "b"] {
             std::fs::create_dir_all(workspace.join(project)).unwrap();
-            meta_core::git::run(&workspace.join(project), ["init", "-q"]).unwrap();
+            sandbox.git(&workspace.join(project), &["init", "-q"]);
         }
         std::fs::write(workspace.join(".meta.yaml"), default_config).unwrap();
         if let Some(name) = chosen {
             std::fs::write(workspace.join(name), &sequential).unwrap();
         }
         let lock = tmp.join("lock");
-        let out = std::process::Command::new(env!("CARGO_BIN_EXE_meta"))
+        let out = sandbox
+            .command(env!("CARGO_BIN_EXE_meta"))
             .args(args)
             .args([
                 "--",
@@ -55,10 +54,6 @@ fn sequential_default_holds_wherever_the_config_is() {
             .arg(&lock)
             .current_dir(workspace.join(run_in))
             .env("RAYON_NUM_THREADS", "2")
-            .env("HOME", &tmp)
-            .env("XDG_CONFIG_HOME", tmp.join("xdg"))
-            .env("GIT_CONFIG_GLOBAL", tmp.join("no-gitconfig"))
-            .env("META_DATA_DIR", tmp.join("meta-data"))
             .output()
             .unwrap();
         assert_eq!(

@@ -1,12 +1,13 @@
 //! Plugin scope and metadata probing must not break unrelated commands.
 
 #![expect(
-    clippy::disallowed_methods,
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
+// Unix only: the plugins here are shell scripts
 #![cfg(unix)]
 
+use meta_test_support::Sandbox;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 use rustix::process::{geteuid, kill_process, test_kill_process, Pid, Signal};
 
 struct Fixture {
-    _temp: tempfile::TempDir,
+    sandbox: Sandbox,
     home: PathBuf,
     cwd: PathBuf,
     data: PathBuf,
@@ -25,13 +26,11 @@ struct Fixture {
 
 impl Fixture {
     fn new(workspace: bool) -> Self {
-        let temp = tempfile::tempdir().unwrap();
-        // meta reports resolved paths (macOS's temp dir is behind a link)
-        let base = temp.path().canonicalize().unwrap();
-        let home = base.join("home");
-        let cwd = home.join("workspace");
-        let data = base.join("data");
-        let bin = base.join("bin");
+        let sandbox = Sandbox::new();
+        let home = sandbox.home();
+        let cwd = sandbox.work().join("workspace");
+        let data = sandbox.meta_data();
+        let bin = sandbox.work().join("bin");
         for dir in [&cwd, &data, &bin] {
             fs::create_dir_all(dir).unwrap();
         }
@@ -39,7 +38,7 @@ impl Fixture {
             fs::write(cwd.join(".meta.yaml"), "projects: {}\n").unwrap();
         }
         Self {
-            _temp: temp,
+            sandbox,
             home,
             cwd,
             data,
@@ -48,14 +47,9 @@ impl Fixture {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_meta"));
+        let mut cmd = self.sandbox.command(env!("CARGO_BIN_EXE_meta"));
         cmd.args(args)
             .current_dir(&self.cwd)
-            .env("HOME", &self.home)
-            .env("XDG_CONFIG_HOME", self.home.join("xdg"))
-            .env("XDG_DATA_HOME", self.home.join("xdg/data"))
-            .env("GIT_CONFIG_GLOBAL", self.home.join("gitconfig"))
-            .env("META_DATA_DIR", &self.data)
             .env("PATH", format!("{}:/usr/bin:/bin", self.bin.display()));
         cmd
     }
@@ -82,7 +76,10 @@ fn plugin(path: &Path, name: &str, version: &str) {
 
 #[test]
 fn bare_home_meta_directory_is_neither_workspace_nor_project_plugin_source() {
-    let f = Fixture::new(false);
+    let mut f = Fixture::new(false);
+    // below the home, so the walk up passes ~/.meta
+    f.cwd = f.home.join("sub");
+    fs::create_dir(&f.cwd).unwrap();
     plugin(&f.home.join(".meta/plugins/meta-fake"), "fake", "1.0");
     let help = f.run(&["--help"]);
     assert!(help.status.success());
@@ -108,7 +105,11 @@ fn bare_home_meta_directory_is_neither_workspace_nor_project_plugin_source() {
 #[test]
 fn discovery_stops_at_nearest_workspace_and_uses_global_data_dir() {
     let f = Fixture::new(true);
-    plugin(&f.home.join(".meta/plugins/meta-ancestor"), "ancestor", "1");
+    plugin(
+        &f.sandbox.work().join(".meta/plugins/meta-ancestor"),
+        "ancestor",
+        "1",
+    );
     plugin(&f.cwd.join(".meta/plugins/meta-local"), "local", "2");
     plugin(&f.data.join("plugins/meta-global"), "global", "3");
     plugin(&f.bin.join("meta-system"), "system", "4");
@@ -133,9 +134,13 @@ fn discovery_stops_at_nearest_workspace_and_uses_global_data_dir() {
 #[test]
 fn nested_meta_dir_reads_its_workspace_plugins_but_not_an_unlisting_parent() {
     let f = Fixture::new(true);
-    plugin(&f.home.join(".meta/plugins/meta-parent"), "parent", "1");
+    plugin(
+        &f.sandbox.work().join(".meta/plugins/meta-parent"),
+        "parent",
+        "1",
+    );
     let listed = |yaml: &str| {
-        fs::write(f.home.join(".meta.yaml"), yaml).unwrap();
+        fs::write(f.sandbox.work().join(".meta.yaml"), yaml).unwrap();
         let output = f.run(&["plugin", "list", "--json"]);
         assert!(output.status.success());
         String::from_utf8_lossy(&output.stdout).contains("parent")
@@ -190,7 +195,7 @@ fn a_worktree_set_checkout_reads_its_own_and_its_origins_plugins() {
 #[test]
 fn explicit_config_does_not_redirect_plugin_scope() {
     let f = Fixture::new(true);
-    let other = f.home.join("other");
+    let other = f.sandbox.work().join("other");
     fs::create_dir(&other).unwrap();
     fs::write(other.join(".meta.yaml"), "projects: {}").unwrap();
     plugin(&other.join(".meta/plugins/meta-foreign"), "foreign", "1");
@@ -314,12 +319,12 @@ fn local_install_gitignores_untracked_plugin_files() {
 #[test]
 fn orphan_hint_names_actual_parent_config() {
     let f = Fixture::new(true);
-    fs::write(f.home.join(".meta.yaml"), "projects: {}").unwrap();
+    fs::write(f.sandbox.work().join(".meta.yaml"), "projects: {}").unwrap();
     let output = f.run(&["--help"]);
     assert!(output.status.success());
     let err = String::from_utf8_lossy(&output.stderr);
     // meta names the parent by its resolved path (/private/var on macOS)
-    let parent_config = f.home.canonicalize().unwrap().join(".meta.yaml");
+    let parent_config = f.sandbox.work().join(".meta.yaml");
     assert!(
         err.contains(&format!(
             "To include it, add to {}:",

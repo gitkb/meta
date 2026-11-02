@@ -1,59 +1,30 @@
 //! Commands that delete or report must check what they act on.
 
 #![expect(
-    clippy::disallowed_methods,
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
+use meta_test_support::Sandbox;
 use serde_json::{json, Value};
 use std::{
     fs,
     io::Write,
     path::Path,
-    process::{Command, Output, Stdio},
+    process::{Output, Stdio},
 };
 
-/// Run a Git fixture command and surface diagnostics on failure.
-fn git(path: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-/// A bare repo at `path` with one commit on `main`.
-fn upstream(path: &Path) {
-    let seed = path.with_extension("seed");
-    fs::create_dir_all(&seed).unwrap();
-    git(&seed, &["init", "-q", "-b", "main"]);
-    fs::write(seed.join("README"), "hello\n").unwrap();
-    git(&seed, &["add", "README"]);
-    git(&seed, &["commit", "-qm", "init"]);
-    git(
-        &seed,
-        &["clone", "-q", "--bare", ".", path.to_str().unwrap()],
-    );
-}
-
 /// A meta project at `root/ws` (itself a repo) with the given projects cloned.
-fn workspace(root: &Path, projects: &[&str]) -> std::path::PathBuf {
+fn workspace(sandbox: &Sandbox, projects: &[&str]) -> std::path::PathBuf {
+    let root = sandbox.work();
     let ws = root.join("ws");
     fs::create_dir_all(&ws).unwrap();
-    git(&ws, &["init", "-q", "-b", "main"]);
+    sandbox.git(&ws, &["init", "-q", "-b", "main"]);
     let mut config = serde_json::Map::new();
     for name in projects {
         let url = root.join("up").join(format!("{name}.git"));
-        upstream(&url);
-        git(&ws, &["clone", "-q", url.to_str().unwrap(), name]);
+        sandbox.bare(&url);
+        sandbox.git(&ws, &["clone", "-q", url.to_str().unwrap(), name]);
         config.insert(name.to_string(), json!(url));
     }
     fs::write(
@@ -66,19 +37,19 @@ fn workspace(root: &Path, projects: &[&str]) -> std::path::PathBuf {
         format!("{}\n.worktrees/\n", projects.join("\n")),
     )
     .unwrap();
-    git(&ws, &["add", "."]);
-    git(&ws, &["commit", "-qm", "meta"]);
+    sandbox.git(&ws, &["add", "."]);
+    sandbox.git(&ws, &["commit", "-qm", "meta"]);
     ws
 }
 
-/// Invoke the plugin protocol in `cwd` with an isolated meta data dir under `root/data`.
-fn meta_git(root: &Path, cwd: &Path, command: &str, args: &[&str], options: Value) -> Output {
-    meta_git_in(root, cwd, command, args, options, None)
+/// Invoke the plugin protocol in `cwd` in the sandbox environment.
+fn meta_git(sandbox: &Sandbox, cwd: &Path, command: &str, args: &[&str], options: Value) -> Output {
+    meta_git_in(sandbox, cwd, command, args, options, None)
 }
 
 /// [`meta_git`], with `META_WORKTREES` set to `worktrees` if given.
 fn meta_git_in(
-    root: &Path,
+    sandbox: &Sandbox,
     cwd: &Path,
     command: &str,
     args: &[&str],
@@ -86,7 +57,8 @@ fn meta_git_in(
     worktrees: Option<&Path>,
 ) -> Output {
     let request = json!({"command": command, "args": args, "cwd": cwd, "options": options});
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_meta-git"));
+    let root = sandbox.work();
+    let mut cmd = sandbox.command(env!("CARGO_BIN_EXE_meta-git"));
     if root.join("bin").is_dir() {
         let path = std::env::var_os("PATH").unwrap_or_default();
         let paths = std::iter::once(root.join("bin")).chain(std::env::split_paths(&path));
@@ -95,8 +67,6 @@ fn meta_git_in(
     let mut child = cmd
         .arg("--meta-plugin-exec")
         .current_dir(cwd)
-        .env("META_DATA_DIR", root.join("data"))
-        .env_remove("META_WORKTREES")
         .envs(worktrees.map(|dir| ("META_WORKTREES", dir)))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -112,9 +82,9 @@ fn meta_git_in(
     child.wait_with_output().unwrap()
 }
 
-fn worktree(root: &Path, ws: &Path, args: &[&str]) -> Output {
+fn worktree(sandbox: &Sandbox, ws: &Path, args: &[&str]) -> Output {
     let (sub, rest) = args.split_first().unwrap();
-    meta_git(root, ws, &format!("git worktree {sub}"), rest, json!({}))
+    meta_git(sandbox, ws, &format!("git worktree {sub}"), rest, json!({}))
 }
 
 fn stderr(out: &Output) -> String {
@@ -123,10 +93,10 @@ fn stderr(out: &Output) -> String {
 
 #[test]
 fn unreadable_members_are_unknown_in_status_and_list() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["r1", "r2"]);
-    let out = worktree(root, &ws, &["create", "w", "--all"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["r1", "r2"]);
+    let out = worktree(&sandbox, &ws, &["create", "w", "--all"]);
     assert!(out.status.success(), "{}", stderr(&out));
     fs::write(
         ws.join(".worktrees/w/r1/.git"),
@@ -137,7 +107,7 @@ fn unreadable_members_are_unknown_in_status_and_list() {
     let mut observations = Vec::new();
     for (command, args) in [("status", vec!["w"]), ("list", vec![])] {
         let out = meta_git(
-            root,
+            &sandbox,
             &ws,
             &format!("git worktree {command}"),
             &args,
@@ -166,15 +136,14 @@ fn unreadable_members_are_unknown_in_status_and_list() {
 
 #[test]
 fn status_names_a_missing_member_and_fails() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["r1", "r2"]);
-    let out = worktree(root, &ws, &["create", "w", "--all"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["r1", "r2"]);
+    let out = worktree(&sandbox, &ws, &["create", "w", "--all"]);
     assert!(out.status.success(), "{}", stderr(&out));
     fs::remove_dir_all(ws.join(".worktrees/w/r2")).unwrap();
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree status",
         &["w"],
@@ -184,7 +153,7 @@ fn status_names_a_missing_member_and_fails() {
     assert_eq!(value["missing"], json!(["r2"]), "{value}");
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
 
-    let out = worktree(root, &ws, &["status", "w"]);
+    let out = worktree(&sandbox, &ws, &["status", "w"]);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
         text.lines()
@@ -196,16 +165,15 @@ fn status_names_a_missing_member_and_fails() {
 
 #[test]
 fn text_list_warns_about_an_unreadable_set_and_lists_healthy_sets() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["r1"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["r1"]);
     for name in ["broken", "healthy"] {
-        let out = worktree(root, &ws, &["create", name, "--all"]);
+        let out = worktree(&sandbox, &ws, &["create", name, "--all"]);
         assert!(out.status.success(), "{}", stderr(&out));
     }
     fs::write(ws.join(".worktrees/broken/.git"), "garbage\n").unwrap();
 
-    let out = worktree(root, &ws, &["list"]);
+    let out = worktree(&sandbox, &ws, &["list"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.lines().any(|line| line.contains("healthy")), "{text}");
@@ -220,15 +188,14 @@ fn text_list_warns_about_an_unreadable_set_and_lists_healthy_sets() {
 
 #[test]
 fn create_all_warns_about_broken_git_entries_and_creates_healthy_members() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["r1", "r2", "r3"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["r1", "r2", "r3"]);
     fs::remove_dir_all(ws.join("r1/.git")).unwrap();
     fs::write(ws.join("r1/.git"), "gitdir: /nonexistent\n").unwrap();
     fs::remove_dir_all(ws.join("r2/.git")).unwrap();
     fs::create_dir(ws.join("r2/.git")).unwrap();
 
-    let out = worktree(root, &ws, &["create", "w", "--all"]);
+    let out = worktree(&sandbox, &ws, &["create", "w", "--all"]);
     let error = stderr(&out);
     assert_eq!(out.status.code(), Some(0), "{error}");
     for name in ["r1", "r2"] {
@@ -241,7 +208,7 @@ fn create_all_warns_about_broken_git_entries_and_creates_healthy_members() {
         assert!(!ws.join(".worktrees/w").join(name).exists());
     }
     assert!(ws.join(".worktrees/w/r3/.git").is_file());
-    git(
+    sandbox.git(
         &ws.join(".worktrees/w/r3"),
         &["rev-parse", "--verify", "HEAD"],
     );
@@ -249,12 +216,11 @@ fn create_all_warns_about_broken_git_entries_and_creates_healthy_members() {
 
 #[test]
 fn diff_reports_a_missing_base_and_keeps_other_repos_including_binary_files() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a", "b"]);
-    git(&ws.join("a"), &["branch", "only-a"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a", "b"]);
+    sandbox.git(&ws.join("a"), &["branch", "only-a"]);
     let out = worktree(
-        root,
+        &sandbox,
         &ws,
         &["create", "t", "--repo", "a", "--repo", "b", "--no-deps"],
     );
@@ -262,11 +228,11 @@ fn diff_reports_a_missing_base_and_keeps_other_repos_including_binary_files() {
     let a = ws.join(".worktrees/t/a");
     fs::write(a.join("added"), "new line\n").unwrap();
     fs::write(a.join("binary"), b"\0\xff\x01").unwrap();
-    git(&a, &["add", "added", "binary"]);
-    git(&a, &["commit", "-qm", "change"]);
+    sandbox.git(&a, &["add", "added", "binary"]);
+    sandbox.git(&a, &["commit", "-qm", "change"]);
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree diff",
         &["t", "--base", "only-a"],
@@ -287,7 +253,7 @@ fn diff_reports_a_missing_base_and_keeps_other_repos_including_binary_files() {
     assert!(bad["files_changed"].is_null(), "{value}");
     assert_eq!(value["totals"]["repos_changed"], 1, "{value}");
     assert_eq!(value["totals"]["files_changed"], 2, "{value}");
-    let out = worktree(root, &ws, &["diff", "t", "--base", "only-a"]);
+    let out = worktree(&sandbox, &ws, &["diff", "t", "--base", "only-a"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -303,12 +269,12 @@ fn diff_reports_a_missing_base_and_keeps_other_repos_including_binary_files() {
     assert!(!text.contains("No changes"), "{text}");
 
     // No observed changes still doesn't mean clean when one repo failed.
-    git(&a, &["branch", "-f", "only-a", "HEAD"]);
-    let out = worktree(root, &ws, &["diff", "t", "--base", "only-a"]);
+    sandbox.git(&a, &["branch", "-f", "only-a", "HEAD"]);
+    let out = worktree(&sandbox, &ws, &["diff", "t", "--base", "only-a"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(!String::from_utf8_lossy(&out.stdout).contains("No changes"));
-    git(&ws.join("b"), &["branch", "only-a"]);
-    let out = worktree(root, &ws, &["diff", "t", "--base", "only-a"]);
+    sandbox.git(&ws.join("b"), &["branch", "only-a"]);
+    let out = worktree(&sandbox, &ws, &["diff", "t", "--base", "only-a"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(String::from_utf8_lossy(&out.stdout).contains("No changes"));
 }
@@ -318,10 +284,10 @@ fn diff_reports_a_missing_base_and_keeps_other_repos_including_binary_files() {
 fn diff_reports_failed_commands_and_malformed_numstat_instead_of_zero_counts() {
     use std::os::unix::fs::PermissionsExt;
 
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
-    let out = worktree(root, &ws, &["create", "t", "--repo", "a", "--no-deps"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a"]);
+    let out = worktree(&sandbox, &ws, &["create", "t", "--repo", "a", "--no-deps"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let path = std::env::var("PATH").unwrap();
     let quote = meta_core::display::shell_quote;
@@ -344,7 +310,7 @@ fn diff_reports_failed_commands_and_malformed_numstat_instead_of_zero_counts() {
         )).unwrap();
         fs::set_permissions(bin.join("git"), fs::Permissions::from_mode(0o700)).unwrap();
         let out = meta_git(
-            root,
+            &sandbox,
             &ws,
             "git worktree diff",
             &["t", "--base", "main"],
@@ -364,14 +330,13 @@ fn diff_reports_failed_commands_and_malformed_numstat_instead_of_zero_counts() {
 
 #[test]
 fn remove_refuses_directories_meta_did_not_create() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a"]);
 
     // A plain directory where a worktree would be.
     fs::create_dir_all(ws.join(".worktrees/notawt")).unwrap();
     fs::write(ws.join(".worktrees/notawt/data"), "keep").unwrap();
-    let out = worktree(root, &ws, &["remove", "notawt", "--force"]);
+    let out = worktree(&sandbox, &ws, &["remove", "notawt", "--force"]);
     assert!(!out.status.success());
     assert!(stderr(&out).contains("no record"), "{}", stderr(&out));
     assert!(
@@ -382,7 +347,7 @@ fn remove_refuses_directories_meta_did_not_create() {
     assert!(ws.join(".worktrees/notawt/data").exists());
 
     // A worktree made with git, not meta, carries no record of meta making it.
-    git(
+    sandbox.git(
         &ws.join("a"),
         &[
             "worktree",
@@ -393,7 +358,7 @@ fn remove_refuses_directories_meta_did_not_create() {
             "../.worktrees/byhand",
         ],
     );
-    let out = worktree(root, &ws, &["remove", "byhand", "--force"]);
+    let out = worktree(&sandbox, &ws, &["remove", "byhand", "--force"]);
     assert!(!out.status.success());
     assert!(stderr(&out).contains("no record"), "{}", stderr(&out));
     assert!(
@@ -407,7 +372,7 @@ fn remove_refuses_directories_meta_did_not_create() {
     // Such a config is refused, so the primary checkout is never deleted.
     let config = json!({"worktrees_dir": ".", "projects": {"a": "unused"}});
     fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
-    let out = worktree(root, &ws, &["remove", "a", "--force"]);
+    let out = worktree(&sandbox, &ws, &["remove", "a", "--force"]);
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains("Invalid worktrees_dir"),
@@ -425,7 +390,7 @@ fn remove_refuses_directories_meta_did_not_create() {
     )
     .unwrap();
     let out = meta_git_in(
-        root,
+        &sandbox,
         &ws,
         "git worktree remove",
         &["a", "--force"],
@@ -443,20 +408,20 @@ fn remove_refuses_directories_meta_did_not_create() {
 
 #[test]
 fn remove_checks_repos_nested_in_other_repos() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
     // ws -> sub (a nested meta repo) -> leaf
     let up = root.join("up");
     for name in ["sub", "leaf"] {
-        upstream(&up.join(format!("{name}.git")));
+        sandbox.bare(&up.join(format!("{name}.git")));
     }
-    let ws = workspace(root, &[]);
-    git(
+    let ws = workspace(&sandbox, &[]);
+    sandbox.git(
         &ws,
         &["clone", "-q", up.join("sub.git").to_str().unwrap(), "sub"],
     );
     let sub = ws.join("sub");
-    git(
+    sandbox.git(
         &sub,
         &["clone", "-q", up.join("leaf.git").to_str().unwrap(), "leaf"],
     );
@@ -467,15 +432,15 @@ fn remove_checks_repos_nested_in_other_repos() {
     )
     .unwrap();
     fs::write(sub.join(".gitignore"), "leaf/\n").unwrap();
-    git(&sub, &["add", "."]);
-    git(&sub, &["commit", "-qm", "meta"]);
+    sandbox.git(&sub, &["add", "."]);
+    sandbox.git(&sub, &["commit", "-qm", "meta"]);
     let config = json!({"projects": {"sub": {"repo": up.join("sub.git"), "meta": true}}});
     fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
     fs::write(ws.join(".gitignore"), "sub/\n.worktrees/\n").unwrap();
-    git(&ws, &["commit", "-qam", "sub"]);
+    sandbox.git(&ws, &["commit", "-qam", "sub"]);
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree create",
         &["t1", "--repo", "sub/leaf"],
@@ -485,7 +450,7 @@ fn remove_checks_repos_nested_in_other_repos() {
     let work = ws.join(".worktrees/t1/sub/leaf/NEW_WORK.txt");
     fs::write(&work, "precious").unwrap();
 
-    let out = worktree(root, &ws, &["remove", "t1"]);
+    let out = worktree(&sandbox, &ws, &["remove", "t1"]);
     assert!(!out.status.success());
     let message = stderr(&out).replace('\\', "/");
     assert!(
@@ -496,48 +461,38 @@ fn remove_checks_repos_nested_in_other_repos() {
 
     // --force discards the work, but never deletes what git still has registered.
     let leaf_wt = ws.join(".worktrees/t1/sub/leaf");
-    git(
+    sandbox.git(
         &sub.join("leaf"),
         &["worktree", "lock", leaf_wt.to_str().unwrap()],
     );
-    let out = worktree(root, &ws, &["remove", "t1", "--force"]);
+    let out = worktree(&sandbox, &ws, &["remove", "t1", "--force"]);
     assert!(!out.status.success());
     assert!(stderr(&out).contains("locked"), "{}", stderr(&out));
     assert!(work.exists());
-    git(
+    sandbox.git(
         &sub.join("leaf"),
         &["worktree", "unlock", leaf_wt.to_str().unwrap()],
     );
 
     fs::remove_file(&work).unwrap();
-    let out = worktree(root, &ws, &["remove", "t1"]);
+    let out = worktree(&sandbox, &ws, &["remove", "t1"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!ws.join(".worktrees/t1").exists());
     // The nested repo's worktree was unregistered, not just deleted.
-    let list = Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .current_dir(sub.join("leaf"))
-        .output()
-        .unwrap();
-    assert_eq!(
-        String::from_utf8_lossy(&list.stdout)
-            .matches("worktree ")
-            .count(),
-        1
-    );
+    let list = sandbox.git(&sub.join("leaf"), &["worktree", "list", "--porcelain"]);
+    assert_eq!(list.matches("worktree ").count(), 1);
 }
 
 // A read-only directory needs Unix permissions.
 #[cfg(unix)]
 #[test]
 fn prune_keeps_worktrees_that_hold_work() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a"]);
 
     // A root-only worktree is not "orphaned": "." is never in the project list.
     let out = worktree(
-        root,
+        &sandbox,
         &ws,
         &["create", "rootonly", "--repo", ".", "--no-deps"],
     );
@@ -545,7 +500,7 @@ fn prune_keeps_worktrees_that_hold_work() {
     fs::write(ws.join(".worktrees/rootonly/NOTES.md"), "notes").unwrap();
     // An expired worktree with uncommitted work is kept too.
     let out = worktree(
-        root,
+        &sandbox,
         &ws,
         &[
             "create",
@@ -563,14 +518,14 @@ fn prune_keeps_worktrees_that_hold_work() {
     // removing one fails.
     for name in ["clean", "locked", "stuck"] {
         let out = worktree(
-            root,
+            &sandbox,
             &ws,
             &["create", name, "--repo", "a", "--no-deps", "--ttl", "0"],
         );
         assert!(out.status.success(), "{}", stderr(&out));
     }
     let locked = ws.join(".worktrees/locked/a");
-    git(
+    sandbox.git(
         &ws.join("a"),
         &["worktree", "lock", locked.to_str().unwrap()],
     );
@@ -583,7 +538,7 @@ fn prune_keeps_worktrees_that_hold_work() {
     mode(0o555);
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -619,19 +574,18 @@ fn prune_keeps_worktrees_that_hold_work() {
 #[cfg(unix)]
 #[test]
 fn hook_with_large_stderr_output_does_not_hang_create() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a"]);
     // More than any pipe buffer (64 KiB by default, 1 MiB at most).
     let hook = "head -c 4000000 /dev/zero >&2";
     let config = json!({"projects": {"a": "unused"}, "worktree": {"hooks": {"post-create": hook}}});
     fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let (root_path, ws_path) = (root.to_path_buf(), ws.clone());
+    let ws_path = ws.clone();
     std::thread::spawn(move || {
         let _ = tx.send(worktree(
-            &root_path,
+            &sandbox,
             &ws_path,
             &["create", "w", "--repo", "a", "--no-deps"],
         ));
@@ -646,16 +600,15 @@ fn hook_with_large_stderr_output_does_not_hang_create() {
 
 #[test]
 fn a_failing_hook_is_a_warning_naming_it_and_an_error_under_strict() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a"]);
     let hooks = json!({"post-create": "exit 3", "post-destroy": "exit 4"});
     let config = json!({"projects": {"a": "unused"}, "worktree": {"hooks": hooks}});
     fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
     let run = |args: &[&str], strict: bool| {
         let (sub, rest) = args.split_first().unwrap();
         let command = format!("git worktree {sub}");
-        meta_git(root, &ws, &command, rest, json!({"strict": strict}))
+        meta_git(&sandbox, &ws, &command, rest, json!({"strict": strict}))
     };
 
     let out = run(&["create", "w", "--repo", "a", "--no-deps"], false);
@@ -696,18 +649,17 @@ fn a_failing_hook_is_a_warning_naming_it_and_an_error_under_strict() {
 
 #[test]
 fn a_corrupt_record_is_an_error_naming_it() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a"]);
     // with the root, whose checkout holds the set's config
-    let out = worktree(root, &ws, &["create", "w", "--repo", "a"]);
+    let out = worktree(&sandbox, &ws, &["create", "w", "--repo", "a"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let record = ws.join(".git/worktrees/w/meta-worktree.json");
     fs::write(&record, "{not json").unwrap();
 
     // inside the set, meta can't tell which checkout it stands for
     let set = ws.join(".worktrees/w");
-    let out = worktree(root, &set, &["create", "x", "--repo", "a", "--no-deps"]);
+    let out = worktree(&sandbox, &set, &["create", "x", "--repo", "a", "--no-deps"]);
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains("Cannot parse") && stderr(&out).contains("meta-worktree.json"),
@@ -719,9 +671,9 @@ fn a_corrupt_record_is_an_error_naming_it() {
 
 #[test]
 fn a_name_with_a_slash_names_its_project_not_a_place() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["actual-api", "b"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["actual-api", "b"]);
     let url = |name: &str| root.join("up").join(format!("{name}.git"));
     let config = json!({"projects": {
         "group/api": {"repo": url("actual-api"), "path": "actual-api"},
@@ -732,7 +684,7 @@ fn a_name_with_a_slash_names_its_project_not_a_place() {
     for (set, args) in [("c", &["--no-deps"][..]), ("d", &[]), ("r", &["-r"])] {
         let mut create = vec!["create", set, "--repo", "group/api"];
         create.extend_from_slice(args);
-        let out = worktree(root, &ws, &create);
+        let out = worktree(&sandbox, &ws, &create);
         assert!(out.status.success(), "{args:?}: {}", stderr(&out));
         assert!(ws
             .join(".worktrees")
@@ -740,18 +692,18 @@ fn a_name_with_a_slash_names_its_project_not_a_place() {
             .join("actual-api/README")
             .exists());
     }
-    let out = worktree(root, &ws, &["create", "e", "--repo", "b", "--no-deps"]);
+    let out = worktree(&sandbox, &ws, &["create", "e", "--repo", "b", "--no-deps"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    let out = worktree(root, &ws, &["add", "e", "--repo", "group/api"]);
+    let out = worktree(&sandbox, &ws, &["add", "e", "--repo", "group/api"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(ws.join(".worktrees/e/actual-api/README").exists());
 }
 
 #[test]
 fn with_recursive_all_every_place_is_a_place_whatever_it_names() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["bar", "baz"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["bar", "baz"]);
     let url = |name: &str| root.join("up").join(format!("{name}.git"));
     // the project named `bar` is at `baz`; another is at `bar`
     let config = json!({"projects": {
@@ -759,17 +711,14 @@ fn with_recursive_all_every_place_is_a_place_whatever_it_names() {
         "bar": {"repo": url("baz"), "path": "baz"},
     }});
     fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
-    let out = worktree(root, &ws, &["create", "x", "--all", "-r"]);
+    let out = worktree(&sandbox, &ws, &["create", "x", "--all", "-r"]);
     assert!(out.status.success(), "{}", stderr(&out));
     // each place holds the checkout of its own repository
     for place in ["bar", "baz"] {
-        let origin = Command::new("git")
-            .arg("-C")
-            .arg(ws.join(".worktrees/x").join(place))
-            .args(["remote", "get-url", "origin"])
-            .output()
-            .unwrap();
-        let origin = String::from_utf8_lossy(&origin.stdout);
+        let origin = sandbox.git(
+            &ws.join(".worktrees/x").join(place),
+            &["remote", "get-url", "origin"],
+        );
         assert!(
             origin.trim().ends_with(&format!("{place}.git")),
             "{place}: {origin}"
@@ -779,15 +728,15 @@ fn with_recursive_all_every_place_is_a_place_whatever_it_names() {
 
 #[test]
 fn one_repo_named_twice_is_refused_only_on_two_branches() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a"]);
     let url = root.join("up/a.git");
     let config = json!({"projects": {"p": {"repo": url, "path": "a"}}});
     fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
     // by name, on the set's branch, and by path, on that branch by name
     let out = worktree(
-        root,
+        &sandbox,
         &ws,
         &[
             "create",
@@ -801,7 +750,7 @@ fn one_repo_named_twice_is_refused_only_on_two_branches() {
     );
     assert!(out.status.success(), "{}", stderr(&out));
     let out = worktree(
-        root,
+        &sandbox,
         &ws,
         &[
             "create",
@@ -819,11 +768,10 @@ fn one_repo_named_twice_is_refused_only_on_two_branches() {
 
 #[test]
 fn an_ephemeral_exec_of_all_keeps_a_branch_given_for_one_repo() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a", "b"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a", "b"]);
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree exec",
         &[
@@ -843,7 +791,7 @@ fn an_ephemeral_exec_of_all_keeps_a_branch_given_for_one_repo() {
     assert!(plan.contains("branch: run"), "{plan}");
     // and one repo on two branches is refused, as without --all
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree exec",
         &[
@@ -865,19 +813,19 @@ fn an_ephemeral_exec_of_all_keeps_a_branch_given_for_one_repo() {
 
 #[test]
 fn a_root_git_cannot_use_is_no_reason_to_fail_a_create_without_it() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a"]);
     fs::remove_dir_all(ws.join(".git")).unwrap();
     fs::write(
         ws.join(".git"),
         format!("gitdir: {}\n", root.join("gone").display()),
     )
     .unwrap();
-    let out = worktree(root, &ws, &["create", "n", "--repo", "a", "--no-deps"]);
+    let out = worktree(&sandbox, &ws, &["create", "n", "--repo", "a", "--no-deps"]);
     assert!(out.status.success(), "{}", stderr(&out));
     // --all names the root it skips
-    let out = worktree(root, &ws, &["create", "l", "--all"]);
+    let out = worktree(&sandbox, &ws, &["create", "l", "--all"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stderr(&out).contains("'.' at"), "{}", stderr(&out));
     for set in ["n", "l"] {
@@ -887,9 +835,9 @@ fn a_root_git_cannot_use_is_no_reason_to_fail_a_create_without_it() {
 
 #[test]
 fn an_ephemeral_exec_removes_the_set_it_made_wherever_the_config_moves_sets() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a"]);
     // the command moves the workspace's worktrees elsewhere meanwhile
     let mut config: Value =
         serde_json::from_str(&fs::read_to_string(ws.join(".meta.yaml")).unwrap()).unwrap();
@@ -901,7 +849,7 @@ fn an_ephemeral_exec_removes_the_set_it_made_wherever_the_config_moves_sets() {
         ws.join(".meta.yaml").display()
     );
     let out = worktree(
-        root,
+        &sandbox,
         &ws,
         &[
             "exec",
@@ -921,12 +869,11 @@ fn an_ephemeral_exec_removes_the_set_it_made_wherever_the_config_moves_sets() {
 
 #[test]
 fn a_commit_ish_no_repo_has_creates_nothing() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a"]);
 
     let out = worktree(
-        root,
+        &sandbox,
         &ws,
         &["create", "r1", "--repo", "a", "--no-deps", "no-such-ref"],
     );
@@ -944,19 +891,19 @@ fn a_commit_ish_no_repo_has_creates_nothing() {
 fn from_pr_applies_only_to_the_exact_repo() {
     use std::os::unix::fs::PermissionsExt;
 
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
     // Remotes end in org/api and org/api-legacy, as GitHub URLs would.
     let up = root.join("up/org");
     let ws = root.join("ws");
     fs::create_dir_all(&ws).unwrap();
-    git(&ws, &["init", "-q", "-b", "main"]);
+    sandbox.git(&ws, &["init", "-q", "-b", "main"]);
     for (alias, repo) in [("legacy", "api-legacy"), ("service", "api")] {
         let url = up.join(format!("{repo}.git"));
-        upstream(&url);
-        git(&ws, &["clone", "-q", url.to_str().unwrap(), alias]);
+        sandbox.bare(&url);
+        sandbox.git(&ws, &["clone", "-q", url.to_str().unwrap(), alias]);
     }
-    git(
+    sandbox.git(
         &ws.join("service"),
         &["push", "-q", "origin", "main:feature-x"],
     );
@@ -964,15 +911,15 @@ fn from_pr_applies_only_to_the_exact_repo() {
         json!({"projects": {"legacy": up.join("api-legacy.git"), "service": up.join("api.git")}});
     fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
     fs::write(ws.join(".gitignore"), "legacy\nservice\n.worktrees/\n").unwrap();
-    git(&ws, &["add", "."]);
-    git(&ws, &["commit", "-qm", "meta"]);
+    sandbox.git(&ws, &["add", "."]);
+    sandbox.git(&ws, &["commit", "-qm", "meta"]);
     // A stand-in `gh` that reports the PR's head branch.
     fs::create_dir(root.join("bin")).unwrap();
     fs::write(root.join("bin/gh"), "#!/bin/sh\necho feature-x\n").unwrap();
     fs::set_permissions(root.join("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree create",
         &["pr1", "--from-pr", "org/api#5", "--all"],
@@ -993,7 +940,7 @@ fn from_pr_applies_only_to_the_exact_repo() {
 
     // A PR whose repo isn't selected is an error, not a silent no-op.
     let out = worktree(
-        root,
+        &sandbox,
         &ws,
         &[
             "create",
@@ -1016,18 +963,18 @@ fn from_pr_applies_only_to_the_exact_repo() {
 
 #[test]
 fn update_reports_failed_clones_and_exits_nonzero() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
     let ws = root.join("ws");
     fs::create_dir_all(&ws).unwrap();
-    upstream(&root.join("good.git"));
+    sandbox.bare(&root.join("good.git"));
     let config = json!({"projects": {
         "good": root.join("good.git"),
         "missing": root.join("does-not-exist.git"),
     }});
     fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
 
-    let out = meta_git(root, &ws, "git update", &[], json!({}));
+    let out = meta_git(&sandbox, &ws, "git update", &[], json!({}));
     assert!(!out.status.success());
     let message = stderr(&out);
     assert!(
@@ -1040,38 +987,30 @@ fn update_reports_failed_clones_and_exits_nonzero() {
 
 #[test]
 fn failed_create_rolls_back_what_it_created() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a", "b"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a", "b"]);
     // a only has `origin/t`, so creating `t` makes a local tracking branch.
-    git(&ws.join("a"), &["push", "-q", "origin", "main:t"]);
-    git(&ws.join("a"), &["fetch", "-q"]);
+    sandbox.git(&ws.join("a"), &["push", "-q", "origin", "main:t"]);
+    sandbox.git(&ws.join("a"), &["fetch", "-q"]);
     // b's branch `t` is checked out elsewhere, so creating `t` fails at b.
-    git(&ws.join("b"), &["branch", "t"]);
+    sandbox.git(&ws.join("b"), &["branch", "t"]);
     let elsewhere = root.join("elsewhere");
-    git(
+    sandbox.git(
         &ws.join("b"),
         &["worktree", "add", "-q", elsewhere.to_str().unwrap(), "t"],
     );
 
     let args = ["create", "t", "--repo", "a", "--repo", "b", "--no-deps"];
-    let out = worktree(root, &ws, &args);
+    let out = worktree(&sandbox, &ws, &args);
     assert!(!out.status.success());
     assert!(!ws.join(".worktrees/t").exists(), "{}", stderr(&out));
-    let list = Command::new("git")
-        .args(["worktree", "list", "--porcelain"])
-        .current_dir(ws.join("a"))
-        .output()
-        .unwrap();
-    assert_eq!(
-        String::from_utf8_lossy(&list.stdout)
-            .matches("worktree ")
-            .count(),
-        1
-    );
+    let list = sandbox.git(&ws.join("a"), &["worktree", "list", "--porcelain"]);
+    assert_eq!(list.matches("worktree ").count(), 1);
 
     // The branch this call created in a is gone too.
-    let branch = Command::new("git")
+    let branch = sandbox
+        .command("git")
         .args(["rev-parse", "--verify", "--quiet", "refs/heads/t"])
         .current_dir(ws.join("a"))
         .output()
@@ -1079,7 +1018,7 @@ fn failed_create_rolls_back_what_it_created() {
     assert!(!branch.status.success());
 
     // Nothing is stranded: the same command from a ref can be run again.
-    git(&ws.join("a"), &["tag", "v1"]);
+    sandbox.git(&ws.join("a"), &["tag", "v1"]);
     let args = [
         "create",
         "t",
@@ -1091,11 +1030,11 @@ fn failed_create_rolls_back_what_it_created() {
         "--no-deps",
         "--strict",
     ];
-    let out = worktree(root, &ws, &args);
+    let out = worktree(&sandbox, &ws, &args);
     assert!(!out.status.success(), "b has no v1, so --strict fails");
     assert!(!ws.join(".worktrees/t").exists(), "{}", stderr(&out));
     let out = worktree(
-        root,
+        &sandbox,
         &ws,
         &["create", "t", "v1", "--repo", "a", "--no-deps"],
     );
@@ -1104,13 +1043,12 @@ fn failed_create_rolls_back_what_it_created() {
 
 #[test]
 fn commit_ish_create_fails_on_anything_but_a_missing_ref() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a", "b"]);
-    git(&ws.join("a"), &["tag", "v1"]);
-    git(&ws.join("b"), &["tag", "v1"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a", "b"]);
+    sandbox.git(&ws.join("a"), &["tag", "v1"]);
+    sandbox.git(&ws.join("b"), &["tag", "v1"]);
     // b has the ref, but its branch `t` already exists, so `-b t` fails there.
-    git(&ws.join("b"), &["branch", "t"]);
+    sandbox.git(&ws.join("b"), &["branch", "t"]);
 
     let args = [
         "create",
@@ -1122,13 +1060,14 @@ fn commit_ish_create_fails_on_anything_but_a_missing_ref() {
         "b",
         "--no-deps",
     ];
-    let out = worktree(root, &ws, &args);
+    let out = worktree(&sandbox, &ws, &args);
     assert!(
         !out.status.success(),
         "a real failure is not a skipped repo"
     );
     assert!(!ws.join(".worktrees/t").exists(), "{}", stderr(&out));
-    let branch = Command::new("git")
+    let branch = sandbox
+        .command("git")
         .args(["rev-parse", "--verify", "--quiet", "refs/heads/t"])
         .current_dir(ws.join("a"))
         .output()
@@ -1138,11 +1077,10 @@ fn commit_ish_create_fails_on_anything_but_a_missing_ref() {
 
 #[test]
 fn commit_ish_create_fails_when_a_repo_cannot_be_read() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a", "b"]);
-    git(&ws.join("a"), &["tag", "v1"]);
-    git(&ws.join("b"), &["tag", "v1"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a", "b"]);
+    sandbox.git(&ws.join("a"), &["tag", "v1"]);
+    sandbox.git(&ws.join("b"), &["tag", "v1"]);
     let config = ws.join("b/.git/config");
     let mut broken = fs::read_to_string(&config).unwrap();
     broken.push_str("[broken\n");
@@ -1158,7 +1096,7 @@ fn commit_ish_create_fails_when_a_repo_cannot_be_read() {
         "b",
         "--no-deps",
     ];
-    let out = worktree(root, &ws, &args);
+    let out = worktree(&sandbox, &ws, &args);
     assert!(
         !out.status.success(),
         "an unreadable repo is not a missing ref"
@@ -1169,16 +1107,19 @@ fn commit_ish_create_fails_when_a_repo_cannot_be_read() {
 
 #[test]
 fn a_set_holding_another_recorded_set_is_not_deleted() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
-    let out = worktree(root, &ws, &["create", "outer", "--repo", ".", "--no-deps"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a"]);
+    let out = worktree(
+        &sandbox,
+        &ws,
+        &["create", "outer", "--repo", ".", "--no-deps"],
+    );
     assert!(out.status.success(), "{}", stderr(&out));
     // A set placed inside the outer one (from inside a set, sets go where
     // the workspace keeps them, so the place is given)
     let outer = ws.join(".worktrees/outer");
     let out = meta_git_in(
-        root,
+        &sandbox,
         &outer,
         "git worktree create",
         &["inner", "--repo", ".", "--no-deps"],
@@ -1188,7 +1129,7 @@ fn a_set_holding_another_recorded_set_is_not_deleted() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(outer.join(".worktrees/inner").exists());
 
-    let out = worktree(root, &ws, &["remove", "outer", "--force"]);
+    let out = worktree(&sandbox, &ws, &["remove", "outer", "--force"]);
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains("another worktree set"),
@@ -1201,11 +1142,11 @@ fn a_set_holding_another_recorded_set_is_not_deleted() {
 #[cfg(unix)]
 #[test]
 fn prune_leaves_a_dangling_link_at_a_set_path() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a"]);
     let out = worktree(
-        root,
+        &sandbox,
         &ws,
         &["create", "gone", "--repo", "a", "--no-deps", "--ttl", "0"],
     );
@@ -1218,7 +1159,7 @@ fn prune_leaves_a_dangling_link_at_a_set_path() {
     assert_eq!(check, ws.canonicalize().unwrap().join(".worktrees/gone"));
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1236,9 +1177,8 @@ fn prune_leaves_a_dangling_link_at_a_set_path() {
 #[cfg(unix)]
 #[test]
 fn remove_works_when_the_worktrees_dir_is_a_link() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a"]);
     // worktrees_dir must stay inside the workspace; a link there still
     // resolves to another path than the one written
     fs::create_dir(ws.join("real")).unwrap();
@@ -1246,9 +1186,9 @@ fn remove_works_when_the_worktrees_dir_is_a_link() {
     let config = json!({"worktrees_dir": "link", "projects": {"a": "unused"}});
     fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
 
-    let out = worktree(root, &ws, &["create", "t", "--repo", "a", "--no-deps"]);
+    let out = worktree(&sandbox, &ws, &["create", "t", "--repo", "a", "--no-deps"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    let out = worktree(root, &ws, &["remove", "t"]);
+    let out = worktree(&sandbox, &ws, &["remove", "t"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!ws.join("link/t").exists());
     // git deleted the worktree's admin directory, and its record with it
@@ -1261,11 +1201,10 @@ fn remove_works_when_the_worktrees_dir_is_a_link() {
 fn prune_keeps_a_worktree_it_cannot_inspect() {
     use std::os::unix::fs::PermissionsExt;
 
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a"]);
     let out = worktree(
-        root,
+        &sandbox,
         &ws,
         &["create", "x", "--repo", "a", "--no-deps", "--ttl", "0"],
     );
@@ -1279,7 +1218,7 @@ fn prune_keeps_a_worktree_it_cannot_inspect() {
     }
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1305,11 +1244,9 @@ fn prune_keeps_a_worktree_it_cannot_inspect() {
 fn rollback_keeps_a_branch_a_checkout_hook_committed_on() {
     use std::os::unix::fs::PermissionsExt;
 
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a", "b"]);
-    // Use this repo's hooks dir whatever the global git config says.
-    git(&ws.join("a"), &["config", "core.hooksPath", ".git/hooks"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a", "b"]);
     fs::create_dir_all(ws.join("a/.git/hooks")).unwrap();
     let hook = ws.join("a/.git/hooks/post-checkout");
     fs::write(
@@ -1318,41 +1255,36 @@ fn rollback_keeps_a_branch_a_checkout_hook_committed_on() {
     )
     .unwrap();
     fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
-    git(&ws.join("b"), &["branch", "t"]);
+    sandbox.git(&ws.join("b"), &["branch", "t"]);
     let elsewhere = root.join("elsewhere");
-    git(
+    sandbox.git(
         &ws.join("b"),
         &["worktree", "add", "-q", elsewhere.to_str().unwrap(), "t"],
     );
 
     let args = ["create", "t", "--repo", "a", "--repo", "b", "--no-deps"];
-    let out = worktree(root, &ws, &args);
+    let out = worktree(&sandbox, &ws, &args);
     assert!(!out.status.success());
     assert!(stderr(&out).contains("kept branches"), "{}", stderr(&out));
     // The hook's commit is still on a's branch t.
-    let log = Command::new("git")
-        .args(["log", "-1", "--format=%s", "refs/heads/t"])
-        .current_dir(ws.join("a"))
-        .output()
-        .unwrap();
-    assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "hook");
+    let log = sandbox.git(&ws.join("a"), &["log", "-1", "--format=%s", "refs/heads/t"]);
+    assert_eq!(log.trim(), "hook");
 }
 
 #[test]
 fn records_live_beside_git_and_no_store_is_written() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a", "b"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a", "b"]);
     let args = ["create", "t", "--repo", "a", "--no-deps", "--ttl", "1h"];
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree create",
         &[&args[1..], &["--meta", "k=v"]].concat(),
         json!({}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(!root.join("data/worktree.json").exists());
+    assert!(!sandbox.meta_data().join("worktree.json").exists());
     let read = |repo: &str| -> Value {
         let path = ws
             .join(repo)
@@ -1368,12 +1300,12 @@ fn records_live_beside_git_and_no_store_is_written() {
     assert_eq!(record["custom"], json!({"k": "v"}), "{record}");
 
     // A repo added later joins the same record
-    let out = worktree(root, &ws, &["add", "t", "--repo", "b"]);
+    let out = worktree(&sandbox, &ws, &["add", "t", "--repo", "b"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(read("b"), record);
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree list",
         &[],
@@ -1392,7 +1324,7 @@ fn records_live_beside_git_and_no_store_is_written() {
     // entries stay for `git worktree prune`
     fs::remove_dir_all(ws.join(".worktrees/t")).unwrap();
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1410,7 +1342,7 @@ fn records_live_beside_git_and_no_store_is_written() {
         assert!(admin.is_dir() && !admin.join("meta-worktree.json").exists());
     }
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1422,15 +1354,14 @@ fn records_live_beside_git_and_no_store_is_written() {
 
 #[test]
 fn prune_keeps_and_reports_a_record_it_cannot_read() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
-    let out = worktree(root, &ws, &["create", "t", "--repo", "a", "--no-deps"]);
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox, &["a"]);
+    let out = worktree(&sandbox, &ws, &["create", "t", "--repo", "a", "--no-deps"]);
     assert!(out.status.success(), "{}", stderr(&out));
     fs::write(ws.join("a/.git/worktrees/a/meta-worktree.json"), "not json").unwrap();
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1441,7 +1372,7 @@ fn prune_keeps_and_reports_a_record_it_cannot_read() {
     let reason = report["kept"][0]["reason"].as_str().unwrap_or_default();
     assert!(reason.contains("can't be read"), "{report}");
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1449,7 +1380,7 @@ fn prune_keeps_and_reports_a_record_it_cannot_read() {
     );
     assert!(!out.status.success(), "strict prune fails on a kept set");
 
-    let out = worktree(root, &ws, &["remove", "t", "--force"]);
+    let out = worktree(&sandbox, &ws, &["remove", "t", "--force"]);
     assert!(!out.status.success());
     assert!(stderr(&out).contains("can't be used"), "{}", stderr(&out));
     assert!(ws.join(".worktrees/t/a/README").exists());
@@ -1457,14 +1388,14 @@ fn prune_keeps_and_reports_a_record_it_cannot_read() {
 
 #[test]
 fn a_stale_record_does_not_expire_a_set_made_again_at_its_path() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a", "b"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a", "b"]);
     let elsewhere = root.join("elsewhere");
     let create = |repo: &str, ttl: &[&str]| {
         let args = [&["t", "--repo", repo, "--no-deps"][..], ttl].concat();
         meta_git_in(
-            root,
+            &sandbox,
             &ws,
             "git worktree create",
             &args,
@@ -1482,7 +1413,7 @@ fn a_stale_record_does_not_expire_a_set_made_again_at_its_path() {
     assert!(out.status.success(), "{}", stderr(&out));
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1499,12 +1430,12 @@ fn a_stale_record_does_not_expire_a_set_made_again_at_its_path() {
 fn prune_reports_a_repository_whose_worktrees_it_cannot_list() {
     use std::os::unix::fs::PermissionsExt;
 
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a"]);
     let elsewhere = root.join("elsewhere");
     let out = meta_git_in(
-        root,
+        &sandbox,
         &ws,
         "git worktree create",
         &["t", "--repo", "a", "--no-deps", "--ttl", "0"],
@@ -1521,14 +1452,14 @@ fn prune_reports_a_repository_whose_worktrees_it_cannot_list() {
         return;
     }
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
         json!({"json_output": true}),
     );
     let strict = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1547,12 +1478,12 @@ fn prune_reports_a_repository_whose_worktrees_it_cannot_list() {
 
 #[test]
 fn prune_reports_repositories_it_could_not_search() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a"]);
     let elsewhere = root.join("elsewhere");
     let out = meta_git_in(
-        root,
+        &sandbox,
         &ws,
         "git worktree create",
         &["t", "--repo", "a", "--no-deps", "--ttl", "0"],
@@ -1568,7 +1499,7 @@ fn prune_reports_repositories_it_could_not_search() {
     fs::write(ws.join("g/.meta.yaml"), "not json").unwrap();
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1578,7 +1509,7 @@ fn prune_reports_repositories_it_could_not_search() {
     let report: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["kept"][0]["name"], "ws", "{report}");
     let strict = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1593,10 +1524,10 @@ fn prune_reports_repositories_it_could_not_search() {
 
 #[test]
 fn prune_finds_sets_of_a_separate_git_dir_repository() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &[]);
-    git(
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &[]);
+    sandbox.git(
         &ws,
         &[
             "init",
@@ -1606,7 +1537,7 @@ fn prune_finds_sets_of_a_separate_git_dir_repository() {
             "s",
         ],
     );
-    git(
+    sandbox.git(
         &ws.join("s"),
         &["commit", "-q", "--allow-empty", "-m", "init"],
     );
@@ -1617,7 +1548,7 @@ fn prune_finds_sets_of_a_separate_git_dir_repository() {
     .unwrap();
     let elsewhere = root.join("elsewhere");
     let out = meta_git_in(
-        root,
+        &sandbox,
         &ws,
         "git worktree create",
         &["t", "--repo", "s", "--no-deps", "--ttl", "0"],
@@ -1627,7 +1558,7 @@ fn prune_finds_sets_of_a_separate_git_dir_repository() {
     assert!(out.status.success(), "{}", stderr(&out));
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1641,14 +1572,14 @@ fn prune_finds_sets_of_a_separate_git_dir_repository() {
 
 #[test]
 fn prune_leaves_a_moved_set_and_stale_records_alone() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a", "b"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a", "b"]);
     let elsewhere = root.join("elsewhere");
     let create = |name: &str, repo: &str| {
         let args = [name, "--repo", repo, "--no-deps", "--ttl", "0"];
         meta_git_in(
-            root,
+            &sandbox,
             &ws,
             "git worktree create",
             &args,
@@ -1660,7 +1591,7 @@ fn prune_leaves_a_moved_set_and_stale_records_alone() {
     let out = create("staged", "a");
     assert!(out.status.success(), "{}", stderr(&out));
     fs::rename(elsewhere.join("staged"), elsewhere.join("installed")).unwrap();
-    git(
+    sandbox.git(
         &ws.join("a"),
         &[
             "worktree",
@@ -1673,7 +1604,7 @@ fn prune_leaves_a_moved_set_and_stale_records_alone() {
     assert!(out.status.success(), "{}", stderr(&out));
     fs::remove_dir_all(elsewhere.join("reused")).unwrap();
     fs::create_dir(elsewhere.join("reused")).unwrap();
-    git(
+    sandbox.git(
         &ws.join("a"),
         &[
             "worktree",
@@ -1686,7 +1617,7 @@ fn prune_leaves_a_moved_set_and_stale_records_alone() {
     );
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1700,7 +1631,7 @@ fn prune_leaves_a_moved_set_and_stale_records_alone() {
     assert!(elsewhere.join("installed/a/README").exists());
     assert!(ws.join("a/.git/worktrees/a/meta-worktree.json").exists());
     let out = meta_git_in(
-        root,
+        &sandbox,
         &ws,
         "git worktree remove",
         &["installed"],
@@ -1721,14 +1652,14 @@ fn prune_leaves_a_moved_set_and_stale_records_alone() {
 fn prune_reports_a_linked_checkout_whose_git_metadata_it_cannot_read() {
     use std::os::unix::fs::PermissionsExt;
 
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &[]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &[]);
     // Project `a` is itself a linked worktree of a repository elsewhere
     let url = root.join("up/a.git");
-    upstream(&url);
-    git(root, &["clone", "-q", url.to_str().unwrap(), "main-a"]);
-    git(
+    sandbox.bare(&url);
+    sandbox.git(root, &["clone", "-q", url.to_str().unwrap(), "main-a"]);
+    sandbox.git(
         &root.join("main-a"),
         &[
             "worktree",
@@ -1746,7 +1677,7 @@ fn prune_reports_a_linked_checkout_whose_git_metadata_it_cannot_read() {
     .unwrap();
     let elsewhere = root.join("elsewhere");
     let out = meta_git_in(
-        root,
+        &sandbox,
         &ws,
         "git worktree create",
         &["t", "--repo", "a", "--no-deps", "--ttl", "0"],
@@ -1763,14 +1694,14 @@ fn prune_reports_a_linked_checkout_whose_git_metadata_it_cannot_read() {
         return;
     }
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
         json!({"json_output": true}),
     );
     let strict = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1789,12 +1720,12 @@ fn prune_reports_a_linked_checkout_whose_git_metadata_it_cannot_read() {
 
 #[test]
 fn prune_finds_sets_of_a_bare_repository() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &[]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &[]);
     let url = root.join("up/b.git");
-    upstream(&url);
-    git(&ws, &["clone", "-q", "--bare", url.to_str().unwrap(), "b"]);
+    sandbox.bare(&url);
+    sandbox.git(&ws, &["clone", "-q", "--bare", url.to_str().unwrap(), "b"]);
     fs::write(
         ws.join(".meta.yaml"),
         json!({"projects": {"b": "unused"}}).to_string(),
@@ -1802,7 +1733,7 @@ fn prune_finds_sets_of_a_bare_repository() {
     .unwrap();
     let elsewhere = root.join("elsewhere");
     let out = meta_git_in(
-        root,
+        &sandbox,
         &ws,
         "git worktree create",
         &["t", "--repo", "b", "--no-deps", "--ttl", "0"],
@@ -1812,7 +1743,7 @@ fn prune_finds_sets_of_a_bare_repository() {
     assert!(out.status.success(), "{}", stderr(&out));
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1826,15 +1757,15 @@ fn prune_finds_sets_of_a_bare_repository() {
 
 #[test]
 fn prune_leaves_a_gone_set_alone_while_one_of_its_worktrees_lives_on() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a", "b"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a", "b"]);
     let args = ["create", "t", "--repo", "a", "--repo", "b", "--no-deps"];
-    let out = worktree(root, &ws, &args);
+    let out = worktree(&sandbox, &ws, &args);
     assert!(out.status.success(), "{}", stderr(&out));
     // One worktree moved out of the set, then the set deleted by hand
     let moved = root.join("moved-a");
-    git(
+    sandbox.git(
         &ws.join("a"),
         &[
             "worktree",
@@ -1846,7 +1777,7 @@ fn prune_leaves_a_gone_set_alone_while_one_of_its_worktrees_lives_on() {
     fs::remove_dir_all(ws.join(".worktrees/t")).unwrap();
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1862,14 +1793,14 @@ fn prune_leaves_a_gone_set_alone_while_one_of_its_worktrees_lives_on() {
 #[cfg(unix)]
 #[test]
 fn prune_finds_sets_of_a_repository_whose_git_dir_is_a_link() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["a"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["a"]);
     fs::rename(ws.join("a/.git"), root.join("a.git")).unwrap();
     std::os::unix::fs::symlink(root.join("a.git"), ws.join("a/.git")).unwrap();
     let elsewhere = root.join("elsewhere");
     let out = meta_git_in(
-        root,
+        &sandbox,
         &ws,
         "git worktree create",
         &["t", "--repo", "a", "--no-deps", "--ttl", "0"],
@@ -1879,7 +1810,7 @@ fn prune_finds_sets_of_a_repository_whose_git_dir_is_a_link() {
     assert!(out.status.success(), "{}", stderr(&out));
 
     let out = meta_git(
-        root,
+        &sandbox,
         &ws,
         "git worktree prune",
         &[],
@@ -1894,12 +1825,12 @@ fn prune_finds_sets_of_a_repository_whose_git_dir_is_a_link() {
 
 #[test]
 fn a_project_outside_the_workspace_gets_a_worktree_at_its_name() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
-    let ws = workspace(root, &["r1"]);
+    let sandbox = Sandbox::new();
+    let root = &sandbox.work();
+    let ws = workspace(&sandbox, &["r1"]);
     let url = root.join("up/sib.git");
-    upstream(&url);
-    git(root, &["clone", "-q", url.to_str().unwrap(), "sib"]);
+    sandbox.bare(&url);
+    sandbox.git(root, &["clone", "-q", url.to_str().unwrap(), "sib"]);
     fs::write(
         ws.join(".meta.yaml"),
         json!({"projects": {"r1": root.join("up/r1.git"), "sib": {"repo": url, "path": "../sib"}}})
@@ -1907,18 +1838,18 @@ fn a_project_outside_the_workspace_gets_a_worktree_at_its_name() {
     )
     .unwrap();
 
-    let out = worktree(root, &ws, &["create", "w", "--all"]);
+    let out = worktree(&sandbox, &ws, &["create", "w", "--all"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(ws.join(".worktrees/w/sib/.git").is_file());
     assert!(!ws.join(".worktrees/sib").exists());
 
     // its work is kept as any member's is
     fs::write(ws.join(".worktrees/w/sib/new.txt"), "work").unwrap();
-    let out = worktree(root, &ws, &["remove", "w"]);
+    let out = worktree(&sandbox, &ws, &["remove", "w"]);
     assert!(!out.status.success());
     assert!(stderr(&out).contains("sib"), "{}", stderr(&out));
     fs::remove_file(ws.join(".worktrees/w/sib/new.txt")).unwrap();
-    let out = worktree(root, &ws, &["remove", "w"]);
+    let out = worktree(&sandbox, &ws, &["remove", "w"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!ws.join(".worktrees/w").exists());
 }

@@ -121,8 +121,8 @@ endif
 #   make bats JOBS=1             - Run all tests (serial)
 #   make bats FILE="cloud"       - Run worktree_cloud.bats
 #   make bats FILTER="prune"     - Run tests with "prune" in name
+# tests/setup_suite.bash builds the workspace first
 bats:
-	cargo build --workspace
 	bats $(BATS_FLAGS) $(if $(FILE),$(wildcard tests/*$(FILE)*.bats),tests/)
 
 integration-test:

@@ -5,35 +5,37 @@
 //! FIFO) while another runs.
 
 #![expect(
-    clippy::disallowed_methods,
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
+// Unix only: the commands held mid-way are shell scripts that block on a pipe
 #![cfg(unix)]
 
+use meta_test_support::{mkfifo, Sandbox};
 use serde_json::json;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Output, Stdio};
 use std::time::{Duration, Instant};
 
-struct Sandbox {
+struct Race {
+    sandbox: Sandbox,
     root: PathBuf,
     ws: PathBuf,
 }
 
-impl Sandbox {
+impl Race {
     /// A workspace (not itself a repository) with repos `backend` and
     /// `frontend`, each with one commit.
-    fn new(root: &Path) -> Sandbox {
+    fn new() -> Self {
+        let sandbox = Sandbox::new();
+        let root = sandbox.work();
         let ws = root.join("ws");
         for repo in ["backend", "frontend"] {
             let dir = ws.join(repo);
-            fs::create_dir_all(&dir).unwrap();
-            git(&dir, &["init", "-q", "-b", "main"]);
-            git(&dir, &["commit", "-q", "--allow-empty", "-m", "initial"]);
+            sandbox.repo(&dir);
         }
         fs::write(
             ws.join(".meta.yaml"),
@@ -41,10 +43,7 @@ impl Sandbox {
         )
         .unwrap();
         fs::create_dir_all(root.join("bin")).unwrap();
-        Sandbox {
-            root: root.to_path_buf(),
-            ws,
-        }
+        Race { sandbox, root, ws }
     }
 
     /// `meta git worktree <args>`, started.
@@ -54,16 +53,12 @@ impl Sandbox {
             "cwd": self.ws, "options": {}});
         let path = std::env::var_os("PATH").unwrap_or_default();
         let paths = std::iter::once(self.root.join("bin")).chain(std::env::split_paths(&path));
-        let mut child = Command::new(env!("CARGO_BIN_EXE_meta-git"))
+        let mut child = self
+            .sandbox
+            .command(env!("CARGO_BIN_EXE_meta-git"))
             .arg("--meta-plugin-exec")
             .current_dir(&self.ws)
             .env("PATH", std::env::join_paths(paths).unwrap())
-            .env("HOME", &self.root)
-            .env("XDG_CONFIG_HOME", self.root.join("xdg"))
-            .env("GIT_CONFIG_GLOBAL", self.root.join("gitconfig"))
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("META_DATA_DIR", self.root.join("data"))
-            .env_remove("META_WORKTREES")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -114,19 +109,6 @@ impl Sandbox {
     }
 }
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-        .args(args)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
-
 fn text(out: &Output) -> String {
     format!(
         "{}{}",
@@ -141,17 +123,16 @@ fn text(out: &Output) -> String {
 /// half set back.
 #[test]
 fn a_late_create_leaves_a_half_set_removable() {
-    let temp = tempfile::tempdir().unwrap();
-    let sb = Sandbox::new(&temp.path().canonicalize().unwrap());
+    let sb = Race::new();
     // backend's origin names org/repo, for --from-pr
     let origin = sb.root.join("origin/org/repo.git");
     fs::create_dir_all(origin.parent().unwrap()).unwrap();
     let backend = sb.ws.join("backend");
-    git(
+    sb.sandbox.git(
         &backend,
         &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
     );
-    git(
+    sb.sandbox.git(
         &backend,
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
@@ -159,7 +140,7 @@ fn a_late_create_leaves_a_half_set_removable() {
     let hooks = sb.root.join("hooks");
     fs::create_dir_all(&hooks).unwrap();
     sb.holding(&hooks, "post-checkout", "");
-    git(
+    sb.sandbox.git(
         &sb.ws.join("frontend"),
         &["config", "core.hooksPath", hooks.to_str().unwrap()],
     );
@@ -212,9 +193,8 @@ fn prune_leaves_an_ephemeral_run_started_after_a_repository_was_added_during_it(
 /// prune reads the leases, then (held on a record read through a FIFO)
 /// `meanwhile` runs and an ephemeral run makes a set at a path whose old
 /// ephemeral set was deleted by hand. prune must leave the running set alone.
-fn prune_held_while_an_ephemeral_run_starts(meanwhile: impl FnOnce(&Sandbox)) {
-    let temp = tempfile::tempdir().unwrap();
-    let sb = Sandbox::new(&temp.path().canonicalize().unwrap());
+fn prune_held_while_an_ephemeral_run_starts(meanwhile: impl FnOnce(&Race)) {
+    let sb = Race::new();
     assert!(sb
         .run(&["create", "aaa", "--repo", "backend", "--no-deps"])
         .status
@@ -230,16 +210,19 @@ fn prune_held_while_an_ephemeral_run_starts(meanwhile: impl FnOnce(&Sandbox)) {
     assert!(made.status.success(), "{}", text(&made));
     fs::remove_dir_all(sb.ws.join(".worktrees/zzz")).unwrap();
 
-    let admin = PathBuf::from(git(
-        &sb.ws.join(".worktrees/aaa/backend"),
-        &["rev-parse", "--absolute-git-dir"],
-    ));
+    let admin = PathBuf::from(
+        sb.sandbox
+            .git(
+                &sb.ws.join(".worktrees/aaa/backend"),
+                &["rev-parse", "--absolute-git-dir"],
+            )
+            .trim(),
+    );
     let record = admin.join("meta-worktree.json");
     let saved = fs::read(&record).unwrap();
     let fifo = |path: &Path| {
         fs::remove_file(path).unwrap();
-        let made = Command::new("mkfifo").arg(path).status().unwrap();
-        assert!(made.success());
+        assert!(mkfifo(path), "this race needs a FIFO");
     };
     // a writer that waits for prune to open the FIFO for reading
     let writer = |path: PathBuf| {
@@ -290,8 +273,7 @@ fn prune_held_while_an_ephemeral_run_starts(meanwhile: impl FnOnce(&Sandbox)) {
 /// added. prune must still see a running ephemeral set's lease.
 #[test]
 fn prune_leaves_an_ephemeral_run_after_a_repository_is_added() {
-    let temp = tempfile::tempdir().unwrap();
-    let sb = Sandbox::new(&temp.path().canonicalize().unwrap());
+    let sb = Race::new();
     sb.holding(&sb.root, "command", "");
     let run = sb.start(&[
         "exec",
@@ -306,8 +288,9 @@ fn prune_leaves_an_ephemeral_run_after_a_repository_is_added() {
 
     let first = sb.ws.join("aaa");
     fs::create_dir_all(&first).unwrap();
-    git(&first, &["init", "-q", "-b", "main"]);
-    git(&first, &["commit", "-q", "--allow-empty", "-m", "initial"]);
+    sb.sandbox.git(&first, &["init", "-q", "-b", "main"]);
+    sb.sandbox
+        .git(&first, &["commit", "-q", "--allow-empty", "-m", "initial"]);
     fs::write(
         sb.ws.join(".meta.yaml"),
         "projects:\n  aaa:\n    path: aaa\n  backend:\n    path: backend\n  frontend:\n    path: frontend\n",
@@ -327,11 +310,12 @@ fn prune_leaves_an_ephemeral_run_after_a_repository_is_added() {
 }
 
 /// A repository `aaa` (sorting before the others), listed in the workspace.
-fn add_a_first_repository(sb: &Sandbox) {
+fn add_a_first_repository(sb: &Race) {
     let first = sb.ws.join("aaa");
     fs::create_dir_all(&first).unwrap();
-    git(&first, &["init", "-q", "-b", "main"]);
-    git(&first, &["commit", "-q", "--allow-empty", "-m", "initial"]);
+    sb.sandbox.git(&first, &["init", "-q", "-b", "main"]);
+    sb.sandbox
+        .git(&first, &["commit", "-q", "--allow-empty", "-m", "initial"]);
     fs::write(
         sb.ws.join(".meta.yaml"),
         "projects:\n  aaa:\n    path: aaa\n  backend:\n    path: backend\n  frontend:\n    path: frontend\n",
@@ -344,8 +328,7 @@ fn add_a_first_repository(sb: &Sandbox) {
 /// run left must not make prune remove the new set.
 #[test]
 fn a_lease_left_by_a_stopped_run_does_not_expire_a_set_made_again() {
-    let temp = tempfile::tempdir().unwrap();
-    let sb = Sandbox::new(&temp.path().canonicalize().unwrap());
+    let sb = Race::new();
     sb.holding(&sb.root, "command", "");
     let mut run = sb.start(&[
         "exec",
@@ -383,8 +366,7 @@ fn a_lease_left_by_a_stopped_run_does_not_expire_a_set_made_again() {
 /// not take a missing lease for a run that ended.
 #[test]
 fn prune_leaves_an_ephemeral_run_whose_lease_was_deleted() {
-    let temp = tempfile::tempdir().unwrap();
-    let sb = Sandbox::new(&temp.path().canonicalize().unwrap());
+    let sb = Race::new();
     sb.holding(&sb.root, "command", "");
     let run = sb.start(&[
         "exec",

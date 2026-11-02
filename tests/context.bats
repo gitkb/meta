@@ -5,43 +5,9 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 # Integration tests for `meta context`
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-
-    if [ ! -f "$META_BIN" ]; then
-        cargo build --workspace --quiet
-    fi
-
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-
-    # Create .meta.yaml with two projects
-    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
-{
-    "projects": {
-        "backend": "git@github.com:org/backend.git",
-        "frontend": "git@github.com:org/frontend.git"
-    }
-}
-EOF
-
-    # Initialize git repos with at least one commit
-    for repo in backend frontend; do
-        mkdir -p "$TEST_DIR/$repo"
-        git -C "$TEST_DIR/$repo" init --quiet
-        git -C "$TEST_DIR/$repo" config user.email "test@test.com"
-        git -C "$TEST_DIR/$repo" config user.name "Test"
-        echo "# $repo" > "$TEST_DIR/$repo/README.md"
-        git -C "$TEST_DIR/$repo" add README.md
-        git -C "$TEST_DIR/$repo" commit --quiet -m "init $repo"
-    done
-
+    sandbox
+    make_workspace backend frontend
     cd "$TEST_DIR"
-}
-
-teardown() {
-    cd /
-    rm -rf "$TEST_DIR"
 }
 
 # ============ Default (markdown) output ============
@@ -63,8 +29,7 @@ teardown() {
 @test "context shows branch info" {
     run "$META_BIN" context
     [ "$status" -eq 0 ]
-    # Both repos should be on main or master
-    [[ "$output" == *"main"* ]] || [[ "$output" == *"master"* ]]
+    [ "$(grep -c '| main |' <<<"$output")" -eq 2 ]
 }
 
 @test "context shows clean status for clean repos" {
@@ -221,8 +186,8 @@ assert 'backend' in data['dependencies'], 'backend not in dependencies'
     cd "$empty_dir"
     run "$META_BIN" context
     rm -rf "$empty_dir"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"meta"* ]] || [[ "$output" == *"config"* ]] || [[ "$output" == *"workspace"* ]]
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Not a meta workspace"* ]]
 }
 
 @test "context shows only the projects --tag or --include select" {
@@ -286,9 +251,29 @@ assert repos["frontend"]["dirty"], repos["frontend"]
 assert "extra" in repos, repos
 ' <<<"$output"
     git -C frontend switch --quiet -c topic
-    run "$META_BIN" context
-    [[ "$output" == *"| frontend | topic | 1 modified, no upstream |"* ]]
+    run "$META_BIN" context --json
+    [ "$(jq -r '.repos[] | select(.name == "frontend") | "\(.branch) \(.modified_count) \(.upstream)"' <<<"$output")" = "topic 1 null" ]
     [ -z "$(ls -A "$META_DATA_DIR")" ]
+}
+
+@test "context counts commits ahead and behind the upstream, each on its own side" {
+    git init --quiet --bare "$TEST_DIR/backend.git"
+    git -C backend remote add origin "$TEST_DIR/backend.git"
+    git -C backend push --quiet -u origin main
+    ahead_behind() {
+        run "$META_BIN" context --json
+        [ "$status" -eq 0 ]
+        jq -r '.repos[] | select(.name == "backend") | "\(.ahead) \(.behind)"' <<<"$output"
+    }
+    [ "$(ahead_behind)" = "0 0" ]
+    # two commits here, one there
+    git -C backend commit --quiet --allow-empty -m one
+    git -C backend commit --quiet --allow-empty -m two
+    git clone --quiet "$TEST_DIR/backend.git" "$TEST_DIR/mate"
+    git -C "$TEST_DIR/mate" commit --quiet --allow-empty -m theirs
+    git -C "$TEST_DIR/mate" push --quiet
+    git -C backend fetch --quiet
+    [ "$(ahead_behind)" = "2 1" ]
 }
 
 # ============ What git says about each repo ============
@@ -314,10 +299,6 @@ assert "extra" in repos, repos
     # frontend: its upstream deleted and pruned
     git -C frontend push --quiet origin --delete frontend
     git -C frontend fetch --quiet --prune
-    run "$META_BIN" context
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"| backend | (rebasing main) | rebase in progress, 1 modified, 1 untracked |"* ]]
-    [[ "$output" == *"| frontend | main | clean, upstream gone |"* ]]
     run "$META_BIN" context --json
     [ "$status" -eq 0 ]
     python3 -c '
@@ -333,9 +314,6 @@ assert (f["upstream"], f["upstream_gone"], f["detached"]) == ("origin/frontend",
     git -C backend rebase --abort
     git -C backend switch --quiet --detach HEAD
     git -C frontend switch --quiet -c local
-    run "$META_BIN" context
-    [[ "$output" =~ "| backend | (detached "[0-9a-f]{7}") | 1 untracked |" ]]
-    [[ "$output" == *"| frontend | local | clean, no upstream |"* ]]
     run "$META_BIN" context --json
     python3 -c '
 import json, sys

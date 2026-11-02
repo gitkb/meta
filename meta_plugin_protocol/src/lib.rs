@@ -507,6 +507,252 @@ mod tests {
         );
     }
 
+    fn parse<T: serde::de::DeserializeOwned>(json: &str) -> serde_json::Result<T> {
+        serde_json::from_str(json)
+    }
+
+    /// `value` as JSON and back
+    fn round_trip<T: Serialize + serde::de::DeserializeOwned>(value: &T) -> T {
+        serde_json::from_str(&serde_json::to_string(value).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn each_required_field_is_required() {
+        assert!(parse::<PluginInfo>(r#"{"version":"1","commands":[]}"#).is_err());
+        assert!(parse::<PluginInfo>(r#"{"name":"x","commands":[]}"#).is_err());
+        assert!(parse::<PluginInfo>(r#"{"name":"x","version":"1"}"#).is_err());
+        assert!(parse::<PluginHelp>("{}").is_err());
+        assert!(parse::<PluginRequest>(r#"{"args":[]}"#).is_err());
+        assert!(parse::<PlanResponse>(r#"{"commands":[]}"#).is_err());
+        assert!(parse::<PlanResponse>(r#"{"plan":[]}"#).is_err());
+        assert!(parse::<ExecutionPlan>(r#"{"parallel":true}"#).is_err());
+        assert!(parse::<PlannedCommand>(r#"{"argv":["x"]}"#).is_err());
+        assert!(parse::<PlannedCommand>(r#"{"dir":"x"}"#).is_err());
+    }
+
+    #[test]
+    fn a_request_with_only_a_command_gets_the_defaults() {
+        let request: PluginRequest = parse(r#"{"command":"git status"}"#).unwrap();
+        assert_eq!(request.command, "git status");
+        assert!(request.args.is_empty() && request.projects.is_empty());
+        assert_eq!(request.cwd, PathBuf::new());
+        let options = request.options;
+        assert!(!options.filtered() && options.depth.is_none());
+        assert!(![
+            options.json_output,
+            options.verbose,
+            options.parallel,
+            options.dry_run,
+            options.silent,
+            options.recursive,
+            options.strict
+        ]
+        .contains(&true));
+    }
+
+    #[test]
+    fn a_plan_with_only_commands_has_no_controls_and_sends_none() {
+        let response: PlanResponse =
+            parse(r#"{"plan":{"commands":[{"dir":"a","argv":["git","status"]}]}}"#).unwrap();
+        let plan = &response.plan;
+        assert!(plan.pre_commands.is_empty() && plan.post_commands.is_empty());
+        assert_eq!(
+            (plan.parallel, plan.max_parallel, plan.spawn_stagger_ms),
+            (None, None, None)
+        );
+        assert!(plan.commands.iter().all(|c| c.env.is_none()));
+        let sent = serde_json::to_value(&response).unwrap();
+        let fields: Vec<&String> = sent["plan"].as_object().unwrap().keys().collect();
+        assert_eq!(fields, ["commands"]);
+        let command: Vec<&String> = sent["plan"]["commands"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect();
+        assert_eq!(command, ["argv", "dir"]);
+    }
+
+    #[test]
+    fn an_empty_plan_is_a_plan_of_no_commands() {
+        for written in [
+            serde_json::json!({"plan": {"commands": []}}),
+            serde_json::json!({"plan": {"commands": [], "parallel": true}}),
+        ] {
+            let response: PlanResponse = serde_json::from_value(written.clone()).unwrap();
+            assert!(response.plan.commands.is_empty());
+            assert_eq!(serde_json::to_value(&response).unwrap(), written);
+        }
+    }
+
+    #[test]
+    fn dir_and_argv_arrive_exactly_as_sent() {
+        let argv: Vec<String> = [
+            "git",
+            "commit",
+            "-m",
+            "it's \"quoted\" $HOME `x` ; rm -rf /",
+            "",
+            "two  spaces",
+            "ünïcödé ✓",
+            "line\nbreak",
+        ]
+        .map(String::from)
+        .to_vec();
+        for dir in ["a b/c", "/abs/path", "../up", "."] {
+            let sent = PlannedCommand {
+                dir: dir.to_string(),
+                argv: argv.clone(),
+                env: None,
+            };
+            let got = round_trip(&sent);
+            assert_eq!((got.dir.as_str(), &got.argv), (dir, &argv));
+        }
+    }
+
+    #[test]
+    fn every_plan_control_arrives_as_a_plugin_writes_it() {
+        let written = serde_json::json!({"plan": {
+            "pre_commands": [{"dir": "pre", "argv": ["true"]}],
+            "commands": [
+                {"dir": "a", "argv": ["true"]},
+                {"dir": "b", "argv": ["true"], "env": {"GIT_PAGER": "cat"}},
+            ],
+            "post_commands": [{"dir": "post", "argv": ["true"]}],
+            "parallel": false,
+            "max_parallel": 3,
+            "spawn_stagger_ms": 25,
+        }});
+        let plan = serde_json::from_value::<PlanResponse>(written.clone())
+            .unwrap()
+            .plan;
+        let dirs = |c: &[PlannedCommand]| c.iter().map(|c| c.dir.clone()).collect::<Vec<_>>();
+        assert_eq!(dirs(&plan.pre_commands), ["pre"]);
+        assert_eq!(dirs(&plan.commands), ["a", "b"]);
+        assert_eq!(dirs(&plan.post_commands), ["post"]);
+        assert_eq!(
+            (plan.parallel, plan.max_parallel, plan.spawn_stagger_ms),
+            (Some(false), Some(3), Some(25))
+        );
+        let env = plan.commands[1].env.as_ref().unwrap();
+        assert_eq!(env.get("GIT_PAGER").map(String::as_str), Some("cat"));
+        // and a plugin built on this crate writes the same keys
+        let rewritten = serde_json::to_value(PlanResponse { plan }).unwrap();
+        assert_eq!(rewritten, written);
+    }
+
+    #[test]
+    fn every_request_option_arrives_as_sent() {
+        let sent = PluginRequest {
+            command: "git status".to_string(),
+            args: vec!["--short".to_string(), "".to_string()],
+            projects: vec!["a".to_string(), "b c".to_string()],
+            cwd: PathBuf::from("/work space"),
+            options: PluginRequestOptions {
+                json_output: true,
+                verbose: true,
+                parallel: true,
+                dry_run: true,
+                silent: true,
+                recursive: true,
+                depth: Some(2),
+                include_filters: Some(vec!["a".to_string()]),
+                exclude_filters: Some(vec!["b".to_string()]),
+                tag_filters: Some(vec!["t".to_string()]),
+                strict: true,
+            },
+        };
+        // the keys as a plugin reads them
+        let wire = serde_json::to_value(&sent).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "command": "git status",
+                "args": ["--short", ""],
+                "projects": ["a", "b c"],
+                "cwd": "/work space",
+                "options": {
+                    "json_output": true, "verbose": true, "parallel": true,
+                    "dry_run": true, "silent": true, "recursive": true, "depth": 2,
+                    "include_filters": ["a"], "exclude_filters": ["b"],
+                    "tag_filters": ["t"], "strict": true,
+                },
+            })
+        );
+        let got = round_trip(&sent);
+        assert_eq!(
+            (got.command, got.args, got.projects),
+            (sent.command, sent.args, sent.projects)
+        );
+        assert_eq!(got.cwd, sent.cwd);
+        let (o, s) = (got.options, sent.options);
+        assert_eq!(
+            [
+                o.json_output,
+                o.verbose,
+                o.parallel,
+                o.dry_run,
+                o.silent,
+                o.recursive,
+                o.strict
+            ],
+            [true; 7]
+        );
+        assert_eq!(o.depth, s.depth);
+        assert!(o.mode().is_preview());
+        assert_eq!(
+            (o.include_filters, o.exclude_filters, o.tag_filters),
+            (s.include_filters, s.exclude_filters, s.tag_filters)
+        );
+    }
+
+    #[test]
+    fn plugin_info_and_help_default_what_is_left_out() {
+        let info: PluginInfo =
+            parse(r#"{"name":"git","version":"1.0","commands":["git status"],"help":{"usage":"meta git"}}"#)
+                .unwrap();
+        assert_eq!((info.name.as_str(), info.version.as_str()), ("git", "1.0"));
+        assert_eq!(info.commands, ["git status"]);
+        assert!(info.description.is_none());
+        let help = info.help.unwrap();
+        assert_eq!(help.usage, "meta git");
+        assert!(help.commands.is_empty() && help.command_sections.is_empty());
+        assert!(help.examples.is_empty() && help.note.is_none());
+        let written = serde_json::json!({
+            "name": "git", "version": "1.0", "commands": ["git status"],
+            "description": "Git across repos",
+            "help": {
+                "usage": "meta git <command>",
+                "commands": {"status": "Show status"},
+                "command_sections": {"Worktrees": {"worktree create": "Make a set"}},
+                "examples": ["meta git status"],
+                "note": "Raw git: meta exec -- git",
+            },
+        });
+        let info: PluginInfo = serde_json::from_value(written.clone()).unwrap();
+        let help = info.help.as_ref().unwrap();
+        assert_eq!(info.description.as_deref(), Some("Git across repos"));
+        assert_eq!(help.commands["status"], "Show status");
+        assert_eq!(
+            help.command_sections["Worktrees"]["worktree create"],
+            "Make a set"
+        );
+        assert_eq!((help.examples.len(), help.note.is_some()), (1, true));
+        assert_eq!(serde_json::to_value(&info).unwrap(), written);
+        // the order of the help's commands is kept
+        let mut commands = IndexMap::new();
+        for name in ["z", "a", "m"] {
+            commands.insert(name.to_string(), format!("does {name}"));
+        }
+        let help = round_trip(&PluginHelp {
+            usage: "u".to_string(),
+            commands,
+            command_sections: IndexMap::new(),
+            examples: vec![],
+            note: None,
+        });
+        assert_eq!(help.commands.keys().collect::<Vec<_>>(), ["z", "a", "m"]);
+    }
+
     #[test]
     fn help_keeps_each_plugin_value_on_its_line() {
         let forged = "x\u{1b}[2J\nFORGED".to_string();

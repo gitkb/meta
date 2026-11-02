@@ -7,39 +7,8 @@ load "${BATS_TEST_DIRNAME}/helpers/terminal.bash"
 # Tests use local git repos (no network IO required)
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    # Build binaries if not already built
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-    META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
-
-    if [ ! -f "$META_BIN" ] || [ ! -f "$META_GIT_BIN" ]; then
-        cargo build --workspace --quiet
-    fi
-
-    # Create a temp directory for each test
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    mkdir -p "$TEST_DIR/.meta/plugins"
-    cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
-    chmod +x "$TEST_DIR/.meta/plugins/meta-git"
-
-    # Create project directories as git repos with initial commits
-    for repo in frontend backend shared; do
-        mkdir -p "$TEST_DIR/$repo"
-        git -C "$TEST_DIR/$repo" init --quiet
-        git -C "$TEST_DIR/$repo" config user.email "test@test.com"
-        git -C "$TEST_DIR/$repo" config user.name "Test"
-        echo "# $repo" > "$TEST_DIR/$repo/README.md"
-        git -C "$TEST_DIR/$repo" add README.md
-        git -C "$TEST_DIR/$repo" commit --quiet -m "Initial commit for $repo"
-    done
-
-    # Initialize the root as a git repo too
-    git -C "$TEST_DIR" init --quiet
-    git -C "$TEST_DIR" config user.email "test@test.com"
-    git -C "$TEST_DIR" config user.name "Test"
-
-    # Default .meta.yaml
+    sandbox
+    # JSON: tests add projects to it with sed
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
@@ -49,15 +18,8 @@ setup() {
     }
 }
 EOF
-
-    git -C "$TEST_DIR" add .meta.yaml
-    git -C "$TEST_DIR" commit --quiet -m "Initial meta commit"
-
+    make_workspace --root-repo --plugins git frontend backend shared
     cd "$TEST_DIR"
-}
-
-teardown() {
-    rm -rf "$TEST_DIR"
 }
 
 # ============ meta git status ============
@@ -163,7 +125,7 @@ teardown() {
     json_has '.success == true and (.output | contains("No staged changes"))'
 
     # a report, then a failure: the report stays the only document
-    cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" .meta/plugins/
+    cp "$META_BIN_DIR/meta-project" .meta/plugins/
     json_run "$META_BIN" --json project check
     [ "$status" -eq 1 ]
     json_has '.problems | length > 0'
@@ -510,9 +472,10 @@ within() {
     # a remote that doesn't exist: the clone fails without the network
     sed -i.bak "s|git@github.com:org/shared.git|file://$TEST_DIR/nowhere.git|" "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git update
-    # It should detect that shared is missing and try to clone it
-    # (will fail since the URL is fake, but should detect the missing repo)
-    [[ "$output" == *"shared"* ]] || [[ "$output" == *"missing"* ]] || [[ "$output" == *"clone"* ]] || [[ "$output" == *"orphan"* ]]
+    # it tries to clone shared from there, and says it failed
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"shared"*"nowhere.git"* || "$output" == *"nowhere.git"*"shared"* ]]
+    [ ! -e "$TEST_DIR/shared" ]
 }
 
 @test "meta git update says what an unlisted repository holds, and never how to delete it" {
@@ -599,42 +562,6 @@ within() {
     rm -rf "$remotes"
 }
 
-@test "meta git clone from local path works" {
-    # Create a "remote" bare repo that IS a meta repo
-    REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git init --bare --quiet "$REMOTE_DIR"
-    git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
-
-    # Create a temp working copy to push initial meta content
-    WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
-    cd "$WORK_DIR/meta-repo"
-    git config user.email "test@test.com"
-    git config user.name "Test"
-    git checkout -b main --quiet 2>/dev/null || true
-    cat > .meta.yaml <<'EOF'
-{
-    "projects": {
-        "child": "file:///dev/null"
-    }
-}
-EOF
-    git add .meta.yaml
-    git commit --quiet -m "Add .meta.yaml"
-    git push --quiet -u origin main
-
-    # Now test cloning
-    CLONE_TARGET="$(cd "$(mktemp -d)" && pwd -P)"
-    rm -rf "$CLONE_TARGET"
-
-    cd "$TEST_DIR"
-    run "$META_BIN" git clone "$REMOTE_DIR" "$CLONE_TARGET"
-    [ "$status" -eq 0 ] || true  # May fail on child clone (fake URL), but meta repo should clone
-
-    # Clean up
-    rm -rf "$REMOTE_DIR" "$WORK_DIR" "$CLONE_TARGET"
-}
-
 @test "meta git clone with custom directory name for meta repo" {
     # Custom directory only applies to the meta repo itself
     # Child repos clone to paths according to .meta.yaml files
@@ -648,9 +575,6 @@ EOF
     WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
     cd "$WORK_DIR/meta-repo"
-    git config user.email "test@test.com"
-    git config user.name "Test"
-    git checkout -b main --quiet 2>/dev/null || true
     cat > .meta.yaml <<'EOF'
 {
     "projects": {}
@@ -690,9 +614,6 @@ EOF
     WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
     cd "$WORK_DIR/meta-repo"
-    git config user.email "test@test.com"
-    git config user.name "Test"
-    git checkout -b main --quiet 2>/dev/null || true
     echo '{"projects": {}}' > .meta.yaml
     git add .meta.yaml
     git commit --quiet -m "Init"
@@ -721,10 +642,7 @@ EOF
     WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
     cd "$WORK_DIR/meta-repo"
-    git config user.email "test@test.com"
-    git config user.name "Test"
     # Set default branch name explicitly
-    git checkout -b main --quiet 2>/dev/null || true
     echo '{"projects": {}}' > .meta.yaml
     git add .meta.yaml
     git commit --quiet -m "Commit 1"
@@ -767,7 +685,9 @@ EOF
     run "$META_BIN" --dry-run git status
     [ "$status" -eq 0 ]
     # Dry run should show what would be executed
-    [[ "$output" == *"git status"* ]] || [[ "$output" == *"Would run"* ]] || [[ "$output" == *"DRY"* ]] || [[ "$output" == *"plan"* ]]
+    # one planned command per repo, and git never ran
+    [ "$(grep -c 'git status' <<<"$output")" -ge 4 ]
+    [[ "$output" != *"On branch"* ]]
 }
 
 # ============ Edge cases ============
@@ -807,8 +727,6 @@ EOF
     # Create a nested .meta.yaml inside frontend with a sub-component
     mkdir -p "$TEST_DIR/frontend/sub-lib"
     git -C "$TEST_DIR/frontend/sub-lib" init --quiet
-    git -C "$TEST_DIR/frontend/sub-lib" config user.email "test@test.com"
-    git -C "$TEST_DIR/frontend/sub-lib" config user.name "Test"
     echo "# sub-lib" > "$TEST_DIR/frontend/sub-lib/README.md"
     git -C "$TEST_DIR/frontend/sub-lib" add README.md
     git -C "$TEST_DIR/frontend/sub-lib" commit --quiet -m "Init sub-lib"
@@ -831,16 +749,12 @@ EOF
     # Create two levels of nesting
     mkdir -p "$TEST_DIR/frontend/sub-lib"
     git -C "$TEST_DIR/frontend/sub-lib" init --quiet
-    git -C "$TEST_DIR/frontend/sub-lib" config user.email "test@test.com"
-    git -C "$TEST_DIR/frontend/sub-lib" config user.name "Test"
     echo "# sub-lib" > "$TEST_DIR/frontend/sub-lib/README.md"
     git -C "$TEST_DIR/frontend/sub-lib" add README.md
     git -C "$TEST_DIR/frontend/sub-lib" commit --quiet -m "Init sub-lib"
 
     mkdir -p "$TEST_DIR/frontend/sub-lib/deep"
     git -C "$TEST_DIR/frontend/sub-lib/deep" init --quiet
-    git -C "$TEST_DIR/frontend/sub-lib/deep" config user.email "test@test.com"
-    git -C "$TEST_DIR/frontend/sub-lib/deep" config user.name "Test"
     echo "# deep" > "$TEST_DIR/frontend/sub-lib/deep/README.md"
     git -C "$TEST_DIR/frontend/sub-lib/deep" add README.md
     git -C "$TEST_DIR/frontend/sub-lib/deep" commit --quiet -m "Init deep"
@@ -872,8 +786,6 @@ EOF
 
     for repo in "$TEST_DIR/frontend/sub-lib" "$TEST_DIR/frontend/sub-lib/deep"; do
         git -C "$repo" init --quiet
-        git -C "$repo" config user.email "test@test.com"
-        git -C "$repo" config user.name "Test"
         echo "# $(basename $repo)" > "$repo/README.md"
         git -C "$repo" add README.md
         git -C "$repo" commit --quiet -m "Init $(basename $repo)"
@@ -905,8 +817,6 @@ EOF
     # Create nested repo with staged change
     mkdir -p "$TEST_DIR/frontend/sub-lib"
     git -C "$TEST_DIR/frontend/sub-lib" init --quiet
-    git -C "$TEST_DIR/frontend/sub-lib" config user.email "test@test.com"
-    git -C "$TEST_DIR/frontend/sub-lib" config user.name "Test"
     echo "initial" > "$TEST_DIR/frontend/sub-lib/file.txt"
     git -C "$TEST_DIR/frontend/sub-lib" add file.txt
     git -C "$TEST_DIR/frontend/sub-lib" commit --quiet -m "Init"
@@ -979,10 +889,7 @@ create_meta_bare_repo() {
     git clone --quiet "$bare_dir" "$work_dir/checkout"
     (
         cd "$work_dir/checkout"
-        git config user.email "test@test.com"
-        git config user.name "Test"
-        git checkout -b main --quiet 2>/dev/null || true
-        echo "$meta_content" > .meta.yaml
+            echo "$meta_content" > .meta.yaml
         git add .meta.yaml
         git commit --quiet -m "Add meta config"
         git push --quiet -u origin main
@@ -1138,7 +1045,7 @@ create_meta_bare_repo() {
 }
 
 @test "meta-mcp meta_git_add stages a hostile file name as one path" {
-    META_MCP_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-mcp"
+    META_MCP_BIN="$META_BIN_DIR/meta-mcp"
     echo x > "$TEST_DIR/frontend/my file.txt; touch PWNED4"
     echo x > "$TEST_DIR/frontend/unrelated.txt"
     run env PATH="$(dirname "$META_BIN"):$PATH" "$META_MCP_BIN" <<'EOF'
@@ -1180,7 +1087,7 @@ EOF
 }
 
 @test "--help and -h after -- reach git as file names" {
-    META_MCP_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-mcp"
+    META_MCP_BIN="$META_BIN_DIR/meta-mcp"
     echo x > "$TEST_DIR/frontend/--help"
     echo x > "$TEST_DIR/frontend/-h"
     run "$META_BIN" --include frontend git add -- --help

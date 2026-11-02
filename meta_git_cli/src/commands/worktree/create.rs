@@ -863,39 +863,20 @@ fn nested_dep_graph(
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "tests start the programs they test with"
-)]
 mod tests {
     use super::*;
-    use std::process::Command;
-
-    fn git(dir: &std::path::Path, args: &[&str]) {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
 
     #[test]
     fn roll_back_deletes_a_set_whose_records_were_not_all_written() {
-        let tmp = tempfile::tempdir().unwrap();
-        let set = tmp.path().join("set");
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
+        let set = tmp.join("set");
         for (repo, wt) in [("root", set.clone()), ("leaf", set.join("leaf"))] {
-            let source = tmp.path().join(repo);
+            let source = tmp.join(repo);
             std::fs::create_dir(&source).unwrap();
-            git(&source, &["init", "-q"]);
-            git(&source, &["commit", "-q", "--allow-empty", "-m", "init"]);
-            git(
+            sandbox.git(&source, &["init", "-q"]);
+            sandbox.git(&source, &["commit", "-q", "--allow-empty", "-m", "init"]);
+            sandbox.git(
                 &source,
                 &["worktree", "add", "-q", "-b", repo, wt.to_str().unwrap()],
             );
@@ -903,7 +884,7 @@ mod tests {
         // The root was recorded; the leaf's record write failed
         let set_record = SetRecord {
             set: set.canonicalize().unwrap(),
-            project: tmp.path().to_path_buf(),
+            project: tmp.to_path_buf(),
             created_at: Utc::now().to_rfc3339(),
             ephemeral: false,
             ttl_seconds: None,
@@ -922,22 +903,23 @@ mod tests {
 
     #[test]
     fn journal_keeps_only_branches_this_call_created() {
-        let tmp = tempfile::tempdir().unwrap();
-        git(tmp.path(), &["init", "-q"]);
-        git(tmp.path(), &["commit", "-q", "--allow-empty", "-m", "init"]);
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
+        sandbox.git(&tmp, &["init", "-q"]);
+        sandbox.git(&tmp, &["commit", "-q", "--allow-empty", "-m", "init"]);
         let mut journal = Vec::new();
 
         // Our add created the branch: journaled.
-        let created = journal_new_branch(tmp.path(), "ours", &mut journal, || {
-            git(tmp.path(), &["branch", "ours"]);
+        let created = journal_new_branch(&tmp, "ours", &mut journal, || {
+            sandbox.git(&tmp, &["branch", "ours"]);
             Ok(Some("start".to_string()))
         });
         assert!(created.unwrap());
         assert_eq!(journal.len(), 1);
 
         // Another process created the branch while our add failed: kept and named.
-        let err = journal_new_branch(tmp.path(), "theirs", &mut journal, || {
-            git(tmp.path(), &["branch", "theirs"]);
+        let err = journal_new_branch(&tmp, "theirs", &mut journal, || {
+            sandbox.git(&tmp, &["branch", "theirs"]);
             anyhow::bail!("branch already exists")
         })
         .unwrap_err();

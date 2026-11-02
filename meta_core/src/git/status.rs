@@ -377,51 +377,26 @@ impl RepoStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::run;
+    use meta_test_support::{path, Sandbox};
 
-    fn repo() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        run(dir.path(), ["init", "-q", "-b", "main"]).unwrap();
-        dir
+    fn commit(sandbox: &Sandbox, dir: &Path, file: &str) {
+        commit_text(sandbox, dir, file, file);
     }
 
-    fn commit(dir: &Path, file: &str) {
-        commit_text(dir, file, file);
-    }
-
-    fn commit_text(dir: &Path, file: &str, text: &str) {
+    fn commit_text(sandbox: &Sandbox, dir: &Path, file: &str, text: &str) {
         std::fs::write(dir.join(file), text).unwrap();
-        run(dir, ["add", file]).unwrap();
-        as_t(dir, &["commit", "-qm", text]).unwrap();
-    }
-
-    /// git, committing as `t`
-    fn as_t(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
-        let id = [
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "commit.gpgsign=false",
-        ];
-        run(dir, id.iter().chain(args))
+        sandbox.git(dir, &["add", file]);
+        sandbox.git(dir, &["commit", "-qm", text]);
     }
 
     /// `main` and `side` each change `f` from `base`, so bringing one onto
     /// the other stops on a conflict
-    fn conflicting() -> tempfile::TempDir {
-        let dir = repo();
-        make_conflicting(dir.path());
-        dir
-    }
-
-    fn make_conflicting(dir: &Path) {
-        commit_text(dir, "f", "base");
-        run(dir, ["switch", "-qc", "side"]).unwrap();
-        commit_text(dir, "f", "side");
-        run(dir, ["switch", "-q", "main"]).unwrap();
-        commit_text(dir, "f", "main");
+    fn make_conflicting(sandbox: &Sandbox, dir: &Path) {
+        commit_text(sandbox, dir, "f", "base");
+        sandbox.git(dir, &["switch", "-qc", "side"]);
+        commit_text(sandbox, dir, "f", "side");
+        sandbox.git(dir, &["switch", "-q", "main"]);
+        commit_text(sandbox, dir, "f", "main");
     }
 
     fn operation(dir: &Path) -> Option<Operation> {
@@ -430,27 +405,22 @@ mod tests {
 
     #[test]
     fn reads_branch_changes_and_upstream() {
-        let upstream = repo();
-        commit(upstream.path(), "a");
-        let dir = tempfile::tempdir().unwrap();
-        let clone = dir.path().join("clone");
-        run(
-            dir.path(),
-            [
-                "clone".as_ref(),
-                "-q".as_ref(),
-                upstream.path().as_os_str(),
-                clone.as_os_str(),
-            ],
-        )
-        .unwrap();
-        commit(&clone, "b");
-        commit(upstream.path(), "c");
-        run(&clone, ["fetch", "-q"]).unwrap();
-        run(&clone, ["config", "status.aheadBehind", "false"]).unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let upstream = sandbox.repo(&sandbox.work().join("upstream"));
+        commit(&sandbox, &upstream, "a");
+        let dir = sandbox.work();
+        let clone = dir.join("clone");
+        sandbox.git(
+            dir.as_path(),
+            &["clone", "-q", &path(&upstream), &path(&clone)],
+        );
+        commit(&sandbox, &clone, "b");
+        commit(&sandbox, &upstream, "c");
+        sandbox.git(&clone, &["fetch", "-q"]);
+        sandbox.git(&clone, &["config", "status.aheadBehind", "false"]);
         std::fs::write(clone.join("a"), "changed").unwrap();
         std::fs::write(clone.join("new file"), "").unwrap();
-        run(&clone, ["mv", "b", "b renamed"]).unwrap();
+        sandbox.git(&clone, &["mv", "b", "b renamed"]);
 
         let status = RepoStatus::read(&clone).unwrap();
         assert_eq!(status.branch.as_deref(), Some("main"));
@@ -466,8 +436,9 @@ mod tests {
 
     #[test]
     fn each_kind_of_change_is_told_apart() {
-        let dir = repo();
-        commit(dir.path(), "a");
+        let sandbox = meta_test_support::isolated!();
+        let dir = sandbox.repo(&sandbox.work().join("repo"));
+        commit(&sandbox, dir.as_path(), "a");
         let status = |dir: &Path| RepoStatus::read(dir).unwrap();
         let kinds = |s: &RepoStatus| {
             (
@@ -478,36 +449,33 @@ mod tests {
             )
         };
 
-        std::fs::write(dir.path().join("new"), "").unwrap();
+        std::fs::write(dir.join("new"), "").unwrap();
         // what a config hides is still there
-        run(dir.path(), ["config", "status.showUntrackedFiles", "no"]).unwrap();
-        run(dir.path(), ["config", "status.aheadBehind", "false"]).unwrap();
-        assert_eq!(kinds(&status(dir.path())), (false, false, true, true));
-        std::fs::remove_file(dir.path().join("new")).unwrap();
+        sandbox.git(
+            dir.as_path(),
+            &["config", "status.showUntrackedFiles", "no"],
+        );
+        sandbox.git(dir.as_path(), &["config", "status.aheadBehind", "false"]);
+        assert_eq!(kinds(&status(dir.as_path())), (false, false, true, true));
+        std::fs::remove_file(dir.join("new")).unwrap();
 
-        std::fs::write(dir.path().join("a"), "changed").unwrap();
-        assert_eq!(kinds(&status(dir.path())), (false, true, false, true));
-        run(dir.path(), ["add", "a"]).unwrap();
-        assert_eq!(kinds(&status(dir.path())), (true, false, false, true));
+        std::fs::write(dir.join("a"), "changed").unwrap();
+        assert_eq!(kinds(&status(dir.as_path())), (false, true, false, true));
+        sandbox.git(dir.as_path(), &["add", "a"]);
+        assert_eq!(kinds(&status(dir.as_path())), (true, false, false, true));
     }
 
     #[test]
     fn a_bare_repository_has_a_branch_commit_and_upstream() {
-        let upstream = repo();
-        commit(upstream.path(), "a");
-        let dir = tempfile::tempdir().unwrap();
-        let bare = dir.path().join("bare.git");
-        run(
-            dir.path(),
-            [
-                "clone".as_ref(),
-                "-q".as_ref(),
-                "--bare".as_ref(),
-                upstream.path().as_os_str(),
-                bare.as_os_str(),
-            ],
-        )
-        .unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let upstream = sandbox.repo(&sandbox.work().join("upstream"));
+        commit(&sandbox, &upstream, "a");
+        let dir = sandbox.work();
+        let bare = dir.join("bare.git");
+        sandbox.git(
+            dir.as_path(),
+            &["clone", "-q", "--bare", &path(&upstream), &path(&bare)],
+        );
         for args in [
             &[
                 "config",
@@ -517,10 +485,10 @@ mod tests {
             &["config", "branch.main.remote", "origin"],
             &["config", "branch.main.merge", "refs/heads/main"],
         ] {
-            run(&bare, args).unwrap();
+            sandbox.git(&bare, args);
         }
-        commit(upstream.path(), "b");
-        run(&bare, ["fetch", "-q"]).unwrap();
+        commit(&sandbox, &upstream, "b");
+        sandbox.git(&bare, &["fetch", "-q"]);
 
         let status = RepoStatus::read(&bare).unwrap();
         assert_eq!(status.branch.as_deref(), Some("main"));
@@ -529,32 +497,34 @@ mod tests {
         assert_eq!(status.ahead_behind, Some((0, 1)));
         assert!(!status.is_dirty());
         // an upstream that isn't there is named, and gone
-        run(&bare, ["config", "branch.main.merge", "refs/heads/gone"]).unwrap();
+        sandbox.git(&bare, &["config", "branch.main.merge", "refs/heads/gone"]);
         let status = RepoStatus::read(&bare).unwrap();
         assert_eq!(status.upstream.as_deref(), Some("origin/gone"));
         assert!(status.upstream_gone());
         // what isn't a repository is still an error, even inside one
-        assert!(RepoStatus::read(dir.path()).is_err());
-        let inside = upstream.path().join("not-cloned");
+        assert!(RepoStatus::read(dir.as_path()).is_err());
+        let inside = upstream.join("not-cloned");
         std::fs::create_dir(&inside).unwrap();
         assert!(RepoStatus::read(&inside).is_err());
         // and so is a checkout whose config says it is bare: it may hold
         // changes git can't report
-        let checkout = repo();
-        commit(checkout.path(), "a");
-        std::fs::write(checkout.path().join("dirty"), "").unwrap();
-        run(checkout.path(), ["config", "core.bare", "true"]).unwrap();
-        assert!(RepoStatus::read(checkout.path()).is_err());
+        let checkout = sandbox.repo(&sandbox.work().join("checkout"));
+        commit(&sandbox, &checkout, "a");
+        std::fs::write(checkout.join("dirty"), "").unwrap();
+        sandbox.git(&checkout, &["config", "core.bare", "true"]);
+        assert!(RepoStatus::read(&checkout).is_err());
         // whose refs can still be shown
-        let refs = RepoStatus::refs(checkout.path()).unwrap().unwrap();
+        let refs = RepoStatus::refs(&checkout).unwrap().unwrap();
         assert_eq!(refs.branch.as_deref(), Some("main"));
         assert!(RepoStatus::refs(&inside).unwrap().is_none());
     }
 
     #[test]
     fn a_new_repo_has_no_commit_or_upstream() {
-        let dir = repo();
-        let status = RepoStatus::read(dir.path()).unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let dir = sandbox.work();
+        sandbox.git(&dir, &["init", "-q", "-b", "main"]);
+        let status = RepoStatus::read(dir.as_path()).unwrap();
         assert_eq!(status.branch.as_deref(), Some("main"));
         assert_eq!((&status.oid, status.ahead_behind), (&None, None));
         assert!(!status.is_dirty());
@@ -562,16 +532,19 @@ mod tests {
 
     #[test]
     fn detached_head_has_no_branch() {
-        let dir = repo();
-        commit(dir.path(), "a");
-        run(dir.path(), ["checkout", "-q", "--detach"]).unwrap();
-        assert_eq!(RepoStatus::read(dir.path()).unwrap().branch, None);
+        let sandbox = meta_test_support::isolated!();
+        let dir = sandbox.repo(&sandbox.work().join("repo"));
+        commit(&sandbox, dir.as_path(), "a");
+        sandbox.git(dir.as_path(), &["checkout", "-q", "--detach"]);
+        assert_eq!(RepoStatus::read(dir.as_path()).unwrap().branch, None);
     }
 
     #[test]
     fn each_stopped_operation_is_named() {
-        let dir = conflicting();
-        let dir = dir.path();
+        let sandbox = meta_test_support::isolated!();
+        let dir = sandbox.repo(&sandbox.work().join("main-conflict"));
+        make_conflicting(&sandbox, &dir);
+        let dir = dir.as_path();
         assert_eq!(operation(dir), None);
         for (args, stopped, abort) in [
             (&["merge", "side"][..], Operation::Merge, "merge"),
@@ -587,15 +560,33 @@ mod tests {
                 "revert",
             ),
         ] {
-            assert!(as_t(dir, args).is_err(), "{args:?} stopped");
+            assert!(
+                !sandbox
+                    .command("git")
+                    .current_dir(dir)
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success(),
+                "{args:?} stopped"
+            );
             assert_eq!(operation(dir), Some(stopped), "{args:?}");
-            as_t(dir, &[abort, "--abort"]).unwrap();
+            sandbox.git(dir, &[abort, "--abort"]);
         }
 
-        let dir = conflicting();
-        let dir = dir.path();
-        run(dir, ["switch", "-q", "side"]).unwrap();
-        assert!(as_t(dir, &["rebase", "main"]).is_err());
+        let dir = sandbox.repo(&sandbox.work().join("side-conflict"));
+        make_conflicting(&sandbox, &dir);
+        let dir = dir.as_path();
+        sandbox.git(dir, &["switch", "-q", "side"]);
+        assert!(!sandbox
+            .command("git")
+            .current_dir(dir)
+            .args(["rebase", "main"])
+            .output()
+            .unwrap()
+            .status
+            .success());
         assert_eq!(RepoStatus::read(dir).unwrap().branch, None);
         assert_eq!(
             operation(dir),
@@ -603,112 +594,151 @@ mod tests {
                 branch: Some("side".to_string())
             })
         );
-        as_t(dir, &["rebase", "--abort"]).unwrap();
+        sandbox.git(dir, &["rebase", "--abort"]);
 
-        let patch = run(dir, ["format-patch", "-1", "--stdout", "side"]).unwrap();
+        let patch = sandbox.git(dir, &["format-patch", "-1", "--stdout", "side"]);
         std::fs::write(dir.join("side.patch"), patch + "\n").unwrap();
-        run(dir, ["switch", "-q", "main"]).unwrap();
-        assert!(as_t(dir, &["am", "side.patch"]).is_err());
+        sandbox.git(dir, &["switch", "-q", "main"]);
+        assert!(!sandbox
+            .command("git")
+            .current_dir(dir)
+            .args(["am", "side.patch"])
+            .output()
+            .unwrap()
+            .status
+            .success());
         assert_eq!(operation(dir), Some(Operation::Am));
-        as_t(dir, &["am", "--abort"]).unwrap();
+        sandbox.git(dir, &["am", "--abort"]);
 
-        run(dir, ["bisect", "start"]).unwrap();
+        sandbox.git(dir, &["bisect", "start"]);
         assert_eq!(operation(dir), Some(Operation::Bisect));
-        run(dir, ["bisect", "reset"]).unwrap();
+        sandbox.git(dir, &["bisect", "reset"]);
         assert_eq!(operation(dir), None);
         // a branch or tag named like git's state is no operation, and
         // hides none
-        run(dir, ["tag", "MERGE_HEAD", "side"]).unwrap();
-        run(dir, ["branch", "REVERT_HEAD"]).unwrap();
+        sandbox.git(dir, &["tag", "MERGE_HEAD", "side"]);
+        sandbox.git(dir, &["branch", "REVERT_HEAD"]);
         assert_eq!(operation(dir), None);
-        assert!(as_t(dir, &["cherry-pick", "side"]).is_err());
+        assert!(!sandbox
+            .command("git")
+            .current_dir(dir)
+            .args(["cherry-pick", "side"])
+            .output()
+            .unwrap()
+            .status
+            .success());
         assert_eq!(operation(dir), Some(Operation::CherryPick));
-        as_t(dir, &["cherry-pick", "--abort"]).unwrap();
-        assert!(as_t(dir, &["merge", "side"]).is_err());
+        sandbox.git(dir, &["cherry-pick", "--abort"]);
+        assert!(!sandbox
+            .command("git")
+            .current_dir(dir)
+            .args(["merge", "side"])
+            .output()
+            .unwrap()
+            .status
+            .success());
         assert_eq!(operation(dir), Some(Operation::Merge));
     }
 
     #[test]
     fn a_cherry_pick_sequence_stays_named_after_its_stopped_pick_is_committed() {
-        let dir = conflicting();
-        let dir = dir.path();
-        run(dir, ["switch", "-q", "side"]).unwrap();
-        commit(dir, "g");
-        run(dir, ["switch", "-q", "main"]).unwrap();
-        assert!(as_t(dir, &["cherry-pick", "main..side"]).is_err());
+        let sandbox = meta_test_support::isolated!();
+        let dir = sandbox.repo(&sandbox.work().join("repo"));
+        make_conflicting(&sandbox, &dir);
+        let dir = dir.as_path();
+        sandbox.git(dir, &["switch", "-q", "side"]);
+        commit(&sandbox, dir, "g");
+        sandbox.git(dir, &["switch", "-q", "main"]);
+        assert!(!sandbox
+            .command("git")
+            .current_dir(dir)
+            .args(["cherry-pick", "main..side"])
+            .output()
+            .unwrap()
+            .status
+            .success());
         std::fs::write(dir.join("f"), "resolved").unwrap();
-        run(dir, ["add", "f"]).unwrap();
+        sandbox.git(dir, &["add", "f"]);
         // committing by hand ends the pick, not the sequence
-        as_t(dir, &["commit", "-qm", "resolved"]).unwrap();
+        sandbox.git(dir, &["commit", "-qm", "resolved"]);
         assert_eq!(operation(dir), Some(Operation::CherryPick));
     }
 
     #[test]
     fn a_stopped_cherry_pick_is_found_in_a_reftable_repository() {
-        let dir = tempfile::tempdir().unwrap();
-        // git before 2.45 has no reftable: nothing to check there
-        if run(
-            dir.path(),
-            ["init", "-q", "-b", "main", "--ref-format=reftable"],
-        )
-        .is_err()
-        {
+        let sandbox = meta_test_support::isolated!();
+        let dir = sandbox.work();
+        if !meta_test_support::git_has_reftable() {
             return;
         }
-        make_conflicting(dir.path());
-        assert!(as_t(dir.path(), &["cherry-pick", "side"]).is_err());
-        assert!(!dir.path().join(".git/CHERRY_PICK_HEAD").exists());
+        sandbox.git(
+            dir.as_path(),
+            &["init", "-q", "-b", "main", "--ref-format=reftable"],
+        );
+        make_conflicting(&sandbox, dir.as_path());
+        assert!(!sandbox
+            .command("git")
+            .current_dir(dir.as_path())
+            .args(["cherry-pick", "side"])
+            .output()
+            .unwrap()
+            .status
+            .success());
+        assert!(!dir.join(".git/CHERRY_PICK_HEAD").exists());
         // read by its name, never as a revision a tag also answers
-        run(dir.path(), ["tag", "REVERT_HEAD"]).unwrap();
-        assert_eq!(operation(dir.path()), Some(Operation::CherryPick));
-        as_t(dir.path(), &["cherry-pick", "--abort"]).unwrap();
-        assert_eq!(operation(dir.path()), None);
+        sandbox.git(dir.as_path(), &["tag", "REVERT_HEAD"]);
+        assert_eq!(operation(dir.as_path()), Some(Operation::CherryPick));
+        sandbox.git(dir.as_path(), &["cherry-pick", "--abort"]);
+        assert_eq!(operation(dir.as_path()), None);
     }
 
     #[test]
     fn an_operation_belongs_to_the_worktree_it_stopped_in() {
-        let dir = conflicting();
-        let linked = dir.path().join("linked");
-        run(
-            dir.path(),
-            ["worktree", "add", "-q", "-b", "other", "linked"],
-        )
-        .unwrap();
-        assert!(as_t(&linked, &["merge", "side"]).is_err());
+        let sandbox = meta_test_support::isolated!();
+        let dir = sandbox.repo(&sandbox.work().join("repo"));
+        make_conflicting(&sandbox, &dir);
+        let linked = dir.join("linked");
+        sandbox.git(
+            dir.as_path(),
+            &["worktree", "add", "-q", "-b", "other", "linked"],
+        );
+        assert!(!sandbox
+            .command("git")
+            .current_dir(&linked)
+            .args(["merge", "side"])
+            .output()
+            .unwrap()
+            .status
+            .success());
         assert_eq!(operation(&linked), Some(Operation::Merge));
-        assert_eq!(operation(dir.path()), None);
+        assert_eq!(operation(dir.as_path()), None);
     }
 
     #[test]
     fn an_upstream_is_gone_only_when_its_branch_is() {
-        let upstream = repo();
-        commit(upstream.path(), "a");
-        run(upstream.path(), ["branch", "topic"]).unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let clone = dir.path().join("clone");
-        run(
-            dir.path(),
-            [
-                "clone".as_ref(),
-                "-q".as_ref(),
-                upstream.path().as_os_str(),
-                clone.as_os_str(),
-            ],
-        )
-        .unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let upstream = sandbox.repo(&sandbox.work().join("upstream"));
+        commit(&sandbox, &upstream, "a");
+        sandbox.git(&upstream, &["branch", "topic"]);
+        let dir = sandbox.work();
+        let clone = dir.join("clone");
+        sandbox.git(
+            dir.as_path(),
+            &["clone", "-q", &path(&upstream), &path(&clone)],
+        );
         let read = || RepoStatus::read(&clone).unwrap();
         assert!(!read().upstream_gone());
-        run(&clone, ["switch", "-q", "topic"]).unwrap();
-        run(upstream.path(), ["branch", "-qD", "topic"]).unwrap();
-        run(&clone, ["fetch", "-q", "--prune"]).unwrap();
+        sandbox.git(&clone, &["switch", "-q", "topic"]);
+        sandbox.git(&upstream, &["branch", "-qD", "topic"]);
+        sandbox.git(&clone, &["fetch", "-q", "--prune"]);
         let status = read();
         assert_eq!(status.upstream.as_deref(), Some("origin/topic"));
         assert!(status.upstream_gone());
         // a branch with no commit yet has no counts either, and its
         // upstream is there
-        run(&clone, ["switch", "-q", "--orphan", "fresh"]).unwrap();
-        run(&clone, ["config", "branch.fresh.remote", "origin"]).unwrap();
-        run(&clone, ["config", "branch.fresh.merge", "refs/heads/main"]).unwrap();
+        sandbox.git(&clone, &["switch", "-q", "--orphan", "fresh"]);
+        sandbox.git(&clone, &["config", "branch.fresh.remote", "origin"]);
+        sandbox.git(&clone, &["config", "branch.fresh.merge", "refs/heads/main"]);
         let status = read();
         assert_eq!(status.upstream.as_deref(), Some("origin/main"));
         assert!(!status.upstream_gone());

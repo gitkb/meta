@@ -224,76 +224,42 @@ pub fn linked(checkout: &Path) -> anyhow::Result<Linked> {
 }
 
 #[cfg(test)]
-#[cfg_attr(
-    unix,
-    expect(
-        clippy::disallowed_methods,
-        reason = "tests start the programs they test with"
-    )
-)]
 mod tests {
     use super::*;
-    use crate::git::run;
+    use meta_test_support::{path, Sandbox};
 
     /// A repository with one commit at `dir/repo` and a linked worktree of
     /// it at `dir/wt`.
-    fn repo_and_worktree(dir: &Path) -> (PathBuf, PathBuf) {
-        let repo = dir.join("repo");
-        std::fs::create_dir(&repo).unwrap();
-        run(&repo, ["init", "-q"]).unwrap();
-        run(
-            &repo,
-            [
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@example.com",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "-q",
-                "--allow-empty",
-                "-m",
-                "a",
-            ],
-        )
-        .unwrap();
-        let wt = dir.join("wt");
-        run(
-            &repo,
-            [
-                "worktree".as_ref(),
-                "add".as_ref(),
-                "-q".as_ref(),
-                wt.as_os_str(),
-            ],
-        )
-        .unwrap();
+    fn repo_and_worktree(sandbox: &Sandbox) -> (PathBuf, PathBuf) {
+        let repo = sandbox.repo(&sandbox.work().join("repo"));
+        let wt = sandbox.work().join("wt");
+        sandbox.git(&repo, &["worktree", "add", "-q", &path(&wt)]);
         (repo, wt)
     }
 
     #[test]
     fn finds_the_common_dir_of_each_kind() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (repo, wt) = repo_and_worktree(tmp.path());
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
+        let (repo, wt) = repo_and_worktree(&sandbox);
         let canonical = |p: Option<PathBuf>| p.unwrap().canonicalize().unwrap();
         let git_dir = repo.join(".git").canonicalize().unwrap();
         assert_eq!(canonical(common_dir(&repo).unwrap()), git_dir);
         assert_eq!(canonical(common_dir(&wt).unwrap()), git_dir);
         assert_eq!(canonical(common_dir(&repo.join(".git")).unwrap()), git_dir);
-        assert_eq!(common_dir(tmp.path()).unwrap(), None);
-        assert_eq!(common_dir(&tmp.path().join("missing")).unwrap(), None);
+        assert_eq!(common_dir(&tmp).unwrap(), None);
+        assert_eq!(common_dir(&tmp.join("missing")).unwrap(), None);
         // a folder in a repository without its own is none: git isn't let
         // look above it
         let plain = repo.join("plain");
         std::fs::create_dir(&plain).unwrap();
         assert_eq!(common_dir(&plain).unwrap(), None);
         // a `.git` git can't use is no repository, and says why
-        let empty = tmp.path().join("empty");
+        let empty = tmp.join("empty");
         std::fs::create_dir_all(empty.join(".git")).unwrap();
         let err = common_dir(&empty).unwrap_err().to_string();
         assert!(err.contains("not a git directory"), "{err}");
-        let nowhere = tmp.path().join("nowhere");
+        let nowhere = tmp.join("nowhere");
         std::fs::create_dir(&nowhere).unwrap();
         std::fs::write(nowhere.join(".git"), "gitdir: /nonexistent/x\n").unwrap();
         assert!(common_dir(&nowhere).is_err());
@@ -306,14 +272,11 @@ mod tests {
         // a pipe named HEAD beside objects and refs is never opened
         #[cfg(unix)]
         {
-            let plain = tmp.path().join("fifo");
+            let plain = tmp.join("fifo");
             for dir in ["objects", "refs"] {
                 std::fs::create_dir_all(plain.join(dir)).unwrap();
             }
-            let fifo = std::process::Command::new("mkfifo")
-                .arg(plain.join("HEAD"))
-                .status();
-            if fifo.is_ok_and(|status| status.success()) {
+            if meta_test_support::mkfifo(&plain.join("HEAD")) {
                 let (send, receive) = std::sync::mpsc::channel();
                 let dir = plain.clone();
                 std::thread::spawn(move || send.send(common_dir(&dir).ok().flatten()));
@@ -321,15 +284,12 @@ mod tests {
                 assert_eq!(answer, Ok(None));
             }
             // nor where a checkout's .git, a link to one or a .git file leads
-            let real = tmp.path().join("fifo-git");
+            let real = tmp.join("fifo-git");
             for dir in ["objects", "refs"] {
                 std::fs::create_dir_all(real.join(dir)).unwrap();
             }
-            let made = std::process::Command::new("mkfifo")
-                .arg(real.join("HEAD"))
-                .status();
-            if made.is_ok_and(|status| status.success()) {
-                let checkouts = ["dir", "link", "file"].map(|kind| tmp.path().join(kind));
+            if meta_test_support::mkfifo(&real.join("HEAD")) {
+                let checkouts = ["dir", "link", "file"].map(|kind| tmp.join(kind));
                 for checkout in &checkouts {
                     std::fs::create_dir(checkout).unwrap();
                 }
@@ -356,22 +316,21 @@ mod tests {
 
     #[test]
     fn a_bare_repository_is_its_own_common_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let bare = tmp.path().join("bare.git");
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
+        let bare = tmp.join("bare.git");
         std::fs::create_dir(&bare).unwrap();
-        run(&bare, ["init", "-q", "--bare"]).unwrap();
+        sandbox.git(&bare, &["init", "-q", "--bare"]);
         assert_eq!(common_dir(&bare).unwrap(), Some(bare.clone()));
     }
 
     #[test]
     fn reads_gitdir_as_git_does() {
-        let tmp = tempfile::tempdir().unwrap();
-        let file = |content: &str| std::fs::write(tmp.path().join(".git"), content).unwrap();
+        let sandbox = Sandbox::new();
+        let tmp = sandbox.work();
+        let file = |content: &str| std::fs::write(tmp.join(".git"), content).unwrap();
         file("gitdir: elsewhere\r\n");
-        assert_eq!(
-            gitfile_target(tmp.path()).unwrap(),
-            Some(tmp.path().join("elsewhere"))
-        );
+        assert_eq!(gitfile_target(&tmp).unwrap(), Some(tmp.join("elsewhere")));
         // git rejects these too
         for bad in [
             "gitdir:elsewhere",
@@ -380,15 +339,16 @@ mod tests {
             "elsewhere",
         ] {
             file(bad);
-            assert!(gitfile_target(tmp.path()).is_err(), "{bad:?}");
+            assert!(gitfile_target(&tmp).is_err(), "{bad:?}");
         }
     }
 
     #[test]
     fn a_moved_worktree_is_not_linked() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (_, wt) = repo_and_worktree(tmp.path());
-        let moved = tmp.path().join("moved");
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
+        let (_, wt) = repo_and_worktree(&sandbox);
+        let moved = tmp.join("moved");
         std::fs::rename(&wt, &moved).unwrap();
         let err = linked(&moved).unwrap_err();
         assert!(

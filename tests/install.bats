@@ -2,12 +2,15 @@
 
 # install.sh and install.ps1 against a fake release served from a local HTTP server.
 
+load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+
 sha256() {
     if command -v sha256sum > /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi
 }
 
 setup() {
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
+    # its own HOME too: curl reads ~/.curlrc
+    sandbox
     RELEASES="$TEST_DIR/releases"
     INSTALL_DIR="$TEST_DIR/bin"
     mkdir -p "$RELEASES/latest/download" "$TEST_DIR/archive"
@@ -53,7 +56,6 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
 
 teardown() {
     kill "$SERVER_PID" 2>/dev/null || true
-    rm -rf "$TEST_DIR"
 }
 
 tamper() {

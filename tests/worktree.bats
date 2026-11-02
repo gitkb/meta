@@ -6,21 +6,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 # Tests: create, add, list, status, diff, exec, remove, configuration, edge cases
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-    META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
-
-    if [ ! -f "$META_BIN" ] || [ ! -f "$META_GIT_BIN" ]; then
-        cargo build --workspace --quiet
-    fi
-
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    mkdir -p "$TEST_DIR/.meta/plugins"
-    cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
-    chmod +x "$TEST_DIR/.meta/plugins/meta-git"
-
-    # Create .meta.yaml with two projects
+    sandbox
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
@@ -29,32 +15,8 @@ setup() {
     }
 }
 EOF
-
-    # Initialize git repos with at least one commit (required for worktrees)
-    # Use 'main' as the default branch for consistent test behavior
-    for repo in backend frontend; do
-        mkdir -p "$TEST_DIR/$repo"
-        git -C "$TEST_DIR/$repo" init --quiet --initial-branch=main
-        git -C "$TEST_DIR/$repo" config user.email "test@test.com"
-        git -C "$TEST_DIR/$repo" config user.name "Test"
-        echo "# $repo" > "$TEST_DIR/$repo/README.md"
-        git -C "$TEST_DIR/$repo" add README.md
-        git -C "$TEST_DIR/$repo" commit --quiet -m "init $repo"
-    done
-
-    # Initialize the meta repo itself (for . alias tests)
-    git -C "$TEST_DIR" init --quiet --initial-branch=main
-    git -C "$TEST_DIR" config user.email "test@test.com"
-    git -C "$TEST_DIR" config user.name "Test"
-    git -C "$TEST_DIR" add .meta.yaml
-    git -C "$TEST_DIR" commit --quiet -m "init meta"
-
+    make_workspace --root-repo --plugins git backend frontend
     cd "$TEST_DIR"
-}
-
-teardown() {
-    cd /
-    rm -rf "$TEST_DIR"
 }
 
 # Helper: Set up a nested meta repo structure
@@ -83,8 +45,6 @@ EOF
 
     # Initialize the nested git repo
     git -C "$TEST_DIR/vendor/$nested_name" init --quiet --initial-branch=main
-    git -C "$TEST_DIR/vendor/$nested_name" config user.email "test@test.com"
-    git -C "$TEST_DIR/vendor/$nested_name" config user.name "Test"
     echo "# $nested_name" > "$TEST_DIR/vendor/$nested_name/README.md"
     git -C "$TEST_DIR/vendor/$nested_name" add README.md
     git -C "$TEST_DIR/vendor/$nested_name" commit --quiet -m "init $nested_name"
@@ -381,8 +341,9 @@ assert any(w['name'] == 'list-json' for w in data['worktrees'])
     run "$META_BIN" git worktree list
     [ "$status" -eq 0 ]
     [[ "$output" == *"multi-list"* ]]
-    # Should mention both repos somehow
-    [[ "$output" == *"2"* ]] || [[ "$output" == *"backend"* ]]
+    # each repo, on the set's branch
+    grep -Eq 'backend +-> multi-list' <<<"$output"
+    grep -Eq 'frontend +-> multi-list' <<<"$output"
 }
 
 # ============ Status ============
@@ -392,7 +353,7 @@ assert any(w['name'] == 'list-json' for w in data['worktrees'])
     run "$META_BIN" git worktree status status-clean
     [ "$status" -eq 0 ]
     [[ "$output" == *"status-clean"* ]]
-    [[ "$output" == *"clean"* ]] || [[ "$output" != *"dirty"* ]]
+    grep -Eq 'backend +status-clean +clean$' <<<"$output"
 }
 
 @test "worktree status shows dirty state" {
@@ -400,7 +361,7 @@ assert any(w['name'] == 'list-json' for w in data['worktrees'])
     echo "change" >> ".worktrees/status-dirty/backend/README.md"
     run "$META_BIN" git worktree status status-dirty
     [ "$status" -eq 0 ]
-    [[ "$output" == *"modified"* ]] || [[ "$output" == *"dirty"* ]] || [[ "$output" == *"1"* ]]
+    grep -Eq 'backend +status-dirty +1 modified$' <<<"$output"
 }
 
 @test "worktree status --json includes modified files" {
@@ -432,7 +393,7 @@ assert repo['modified_count'] >= 1
         --author "Test <test@test.com>"
     run "$META_BIN" git worktree diff diff-test
     [ "$status" -eq 0 ]
-    [[ "$output" == *"README"* ]] || [[ "$output" == *"1 file"* ]] || [[ "$output" == *"backend"* ]]
+    grep -Eq 'backend +\+1 -0 \(1 files\)' <<<"$output"
 }
 
 @test "worktree diff --json returns structured output" {
@@ -464,7 +425,7 @@ assert d['totals']['files_changed'] >= 1
         --author "Test <test@test.com>"
     run "$META_BIN" git worktree diff diff-stat --stat
     [ "$status" -eq 0 ]
-    [[ "$output" == *"+"* ]] || [[ "$output" == *"file"* ]]
+    grep -Eq 'backend +\+1 -0' <<<"$output"
 }
 
 @test "worktree diff on nonexistent worktree fails" {
@@ -538,7 +499,8 @@ assert d['totals']['files_changed'] >= 1
 @test "worktree exec with no command shows error" {
     "$META_BIN" git worktree create exec-nocmd --repo backend
     run "$META_BIN" git worktree exec exec-nocmd --
-    [ "$status" -ne 0 ] || [[ "$output" == *"Usage"* ]] || [[ "$output" == *"command"* ]]
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Usage: meta git worktree exec"* ]]
 }
 
 # ============ Remove ============

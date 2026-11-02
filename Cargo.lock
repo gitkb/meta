@@ -831,8 +831,8 @@ dependencies = [
  "colored",
  "loop_lib",
  "meta_core",
+ "meta_test_support",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -844,6 +844,7 @@ dependencies = [
  "diff",
  "indicatif",
  "meta_core",
+ "meta_test_support",
  "rayon",
  "serde",
  "serde_json",
@@ -872,6 +873,7 @@ dependencies = [
  "loop_lib",
  "meta_core",
  "meta_plugin_protocol",
+ "meta_test_support",
  "rayon",
  "rustix",
  "serde",
@@ -893,13 +895,13 @@ dependencies = [
  "loop_lib",
  "meta",
  "meta_core",
+ "meta_test_support",
  "rustix",
  "schemars",
  "serde",
  "serde_json",
  "serde_path_to_error",
  "signal-hook",
- "tempfile",
 ]
 
 [[package]]
@@ -911,6 +913,7 @@ dependencies = [
  "colored",
  "console",
  "dirs",
+ "meta_test_support",
  "rustix",
  "serde",
  "serde_json",
@@ -937,6 +940,7 @@ dependencies = [
  "meta_core",
  "meta_git_lib",
  "meta_plugin_protocol",
+ "meta_test_support",
  "rayon",
  "rustix",
  "serde",
@@ -954,6 +958,7 @@ dependencies = [
  "log",
  "meta",
  "meta_core",
+ "meta_test_support",
  "same-file",
  "serde",
  "serde_json",
@@ -984,9 +989,9 @@ dependencies = [
  "meta_core",
  "meta_git_lib",
  "meta_plugin_protocol",
+ "meta_test_support",
  "serde",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -996,6 +1001,13 @@ dependencies = [
  "indexmap",
  "meta_core",
  "meta_plugin_protocol",
+ "tempfile",
+]
+
+[[package]]
+name = "meta_test_support"
+version = "0.2.22"
+dependencies = [
  "tempfile",
 ]
 

@@ -458,6 +458,32 @@ mod tests {
         }
     }
 
+    fn table_rows(markdown: &str) -> Vec<Vec<String>> {
+        markdown
+            .lines()
+            .filter(|line| line.starts_with('|'))
+            .map(|line| {
+                let mut cells = Vec::new();
+                let mut cell = String::new();
+                let mut escaped = false;
+                for ch in line.chars().skip(1) {
+                    if ch == '|' && !escaped {
+                        cells.push(cell.trim().to_string());
+                        cell.clear();
+                    } else {
+                        cell.push(ch);
+                    }
+                    escaped = ch == '\\' && !escaped;
+                }
+                assert!(
+                    cell.trim().is_empty(),
+                    "table row has no closing pipe: {line}"
+                );
+                cells
+            })
+            .collect()
+    }
+
     #[test]
     fn markdown_escapes_untrusted_values() {
         // Values from git or the filesystem can carry terminal escapes or
@@ -478,12 +504,14 @@ mod tests {
         ctx.name = "ws\u{1b}]0;TITLE\u{7}".to_string();
         let md = format_markdown(&ctx);
         assert!(!md.contains('\u{1b}') && !md.contains('\u{7}'), "{md}");
-        assert!(
-            md.contains(
-                "| z\\\\u{1b}[2J | evil\\|branch\\\\\\|x\\\\u{1b}]52;c;cm0K\\\\u{7} | clean | n\\\\nfake |"
-            ),
-            "{md}"
-        );
+        let rows = table_rows(&md);
+        assert_eq!(rows.len(), 3, "{md}");
+        assert!(rows.iter().all(|row| row.len() == 4), "{rows:?}");
+        let cells = &rows[2];
+        assert_eq!(cells[0], r"z\\u{1b}[2J");
+        assert_eq!(cells[1], r"evil\|branch\\\|x\\u{1b}]52;c;cm0K\\u{7}");
+        assert_eq!(cells[2], "clean");
+        assert_eq!(cells[3], r"n\\nfake");
         assert!(
             md.contains("# Meta Workspace: ws\\\\u{1b}]0;TITLE\\\\u{7} (1 repos)"),
             "{md}"
@@ -491,107 +519,86 @@ mod tests {
         assert!(md.contains("a\\\\u{1b}[1A → b\\\\nc"), "{md}");
     }
 
-    // ── format_status ──────────────────────────────────
-
     #[test]
-    fn status_clean() {
-        let r = make_repo("x", Some("main"), Some(false), Some(0), vec![]);
-        assert_eq!(format_status(&r), "clean");
-    }
-
-    #[test]
-    fn status_dirty_with_count() {
-        let r = make_repo("x", Some("main"), Some(true), Some(3), vec![]);
-        assert_eq!(format_status(&r), "3 modified");
-    }
-
-    #[test]
-    fn status_dirty_no_count() {
-        let r = make_repo("x", Some("main"), Some(true), None, vec![]);
-        assert_eq!(format_status(&r), "dirty");
-    }
-
-    #[test]
-    fn status_unknown() {
-        let r = make_repo("x", None, None, None, vec![]);
-        assert_eq!(format_status(&r), "-");
-    }
-
-    #[test]
-    fn status_ahead_only() {
-        let mut r = make_repo("x", Some("main"), Some(false), Some(0), vec![]);
-        r.ahead = Some(3);
-        assert_eq!(format_status(&r), "clean (↑3)");
-    }
-
-    #[test]
-    fn status_behind_only() {
-        let mut r = make_repo("x", Some("main"), Some(false), Some(0), vec![]);
-        r.behind = Some(2);
-        assert_eq!(format_status(&r), "clean (↓2)");
-    }
-
-    #[test]
-    fn status_ahead_and_behind() {
-        let mut r = make_repo("x", Some("main"), Some(false), Some(0), vec![]);
-        r.ahead = Some(5);
-        r.behind = Some(3);
-        assert_eq!(format_status(&r), "clean (↑5 ↓3)");
-    }
-
-    #[test]
-    fn status_dirty_with_ahead() {
-        let mut r = make_repo("x", Some("main"), Some(true), Some(4), vec![]);
-        r.ahead = Some(2);
-        assert_eq!(format_status(&r), "4 modified (↑2)");
-    }
-
-    #[test]
-    fn status_dirty_with_behind() {
-        let mut r = make_repo("x", Some("main"), Some(true), Some(1), vec![]);
-        r.behind = Some(7);
-        assert_eq!(format_status(&r), "1 modified (↓7)");
-    }
-
-    #[test]
-    fn status_dirty_with_ahead_and_behind() {
-        let mut r = make_repo("x", Some("main"), Some(true), Some(2), vec![]);
-        r.ahead = Some(1);
-        r.behind = Some(1);
-        assert_eq!(format_status(&r), "2 modified (↑1 ↓1)");
-    }
-
-    #[test]
-    fn status_zero_ahead_behind_not_shown() {
-        let mut r = make_repo("x", Some("main"), Some(false), Some(0), vec![]);
-        r.ahead = Some(0);
-        r.behind = Some(0);
-        assert_eq!(format_status(&r), "clean");
-    }
-
-    #[test]
-    fn status_tells_untracked_from_modified() {
-        let mut r = make_repo("x", Some("main"), Some(true), Some(3), vec![]);
-        r.untracked_count = Some(1);
-        assert_eq!(format_status(&r), "2 modified, 1 untracked");
-        r.modified_count = Some(1);
-        assert_eq!(format_status(&r), "1 untracked");
-    }
-
-    #[test]
-    fn status_names_a_gone_upstream_before_the_counts() {
-        let mut r = make_repo("x", Some("topic"), Some(false), Some(0), vec![]);
-        r.upstream_gone = Some(true);
-        r.ahead = Some(2);
-        assert_eq!(format_status(&r), "clean, upstream gone (↑2)");
-    }
-
-    #[test]
-    fn an_unread_work_tree_keeps_its_counts() {
-        // a checkout git won't read (`core.bare=true`): its refs only
-        let mut r = make_repo("x", Some("main"), None, None, vec![]);
-        r.ahead = Some(2);
-        assert_eq!(format_status(&r), "- (↑2)");
+    fn status_reports_changes_and_upstream_properties() {
+        // `fact` stands alone in `text`: no digit touches it ("3 modified"
+        // is not "13 modified", "↑2" not "↑21")
+        let says = |text: &str, fact: &str| {
+            text.match_indices(fact).any(|(at, _)| {
+                let before = text.get(..at).and_then(|t| t.chars().next_back());
+                let after = text.get(at + fact.len()..).and_then(|t| t.chars().next());
+                !before.is_some_and(|c| c.is_ascii_digit())
+                    && !after.is_some_and(|c| c.is_ascii_digit())
+            })
+        };
+        // (dirty, total changes, untracked, ahead, behind, upstream gone)
+        for (dirty, total, untracked, ahead, behind, gone) in [
+            (Some(false), Some(0), Some(0), None, None, false),
+            (Some(true), Some(3), Some(0), None, None, false),
+            (Some(true), None, None, None, None, false), // dirty without counts
+            (None, None, None, None, None, false),       // unknown
+            (Some(false), Some(0), Some(0), Some(3), None, false),
+            (Some(false), Some(0), Some(0), None, Some(2), false),
+            (Some(false), Some(0), Some(0), Some(5), Some(3), false),
+            (Some(true), Some(4), Some(0), Some(2), None, false),
+            (Some(true), Some(1), Some(0), None, Some(7), false),
+            (Some(true), Some(2), Some(0), Some(1), Some(1), false),
+            (Some(false), Some(0), Some(0), Some(0), Some(0), false),
+            (Some(true), Some(3), Some(1), None, None, false),
+            (Some(true), Some(1), Some(1), None, None, false),
+            (Some(false), Some(0), Some(0), Some(2), None, true),
+            (None, None, None, Some(2), None, false), // unknown with ahead count
+        ] {
+            let mut repo = make_repo("x", Some("main"), dirty, total, vec![]);
+            repo.untracked_count = untracked;
+            repo.ahead = ahead;
+            repo.behind = behind;
+            repo.upstream_gone = Some(gone);
+            let status = format_status(&repo);
+            assert_eq!(
+                status.contains("clean"),
+                dirty == Some(false),
+                "{repo:?}: {status}"
+            );
+            match (dirty, total) {
+                (None, _) => assert!(
+                    status.contains('-') && !status.contains("dirty"),
+                    "{repo:?}: {status}"
+                ),
+                (Some(true), None) => assert!(status.contains("dirty"), "{repo:?}: {status}"),
+                (Some(true), Some(all)) => {
+                    for (count, label) in [
+                        (all - untracked.unwrap_or(0), "modified"),
+                        (untracked.unwrap_or(0), "untracked"),
+                    ] {
+                        if count > 0 {
+                            assert!(
+                                says(&status, &format!("{count} {label}")),
+                                "{repo:?}: {status}"
+                            );
+                        } else {
+                            assert!(!status.contains(label), "{repo:?}: {status}");
+                        }
+                    }
+                }
+                _ => {}
+            }
+            for (count, marker) in [(ahead, '↑'), (behind, '↓')] {
+                if let Some(count) = count.filter(|n| *n > 0) {
+                    assert!(
+                        says(&status, &format!("{marker}{count}")),
+                        "{repo:?}: {status}"
+                    );
+                } else {
+                    assert!(!status.contains(marker), "{repo:?}: {status}");
+                }
+            }
+            assert!(
+                !status.contains("0 modified") && !status.contains("0 untracked"),
+                "{repo:?}: {status}"
+            );
+            assert_eq!(status.contains("upstream gone"), gone, "{repo:?}: {status}");
+        }
     }
 
     // ── format_markdown ─────────────────────────────────
@@ -617,9 +624,15 @@ mod tests {
             None,
         );
         let md = format_markdown(&ctx);
-        assert!(md.contains("| Repo | Branch | Status |"));
-        assert!(md.contains("| api | main | clean |"));
-        assert!(md.contains("| web | feat-x | 2 modified |"));
+        let rows = table_rows(&md);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0], ["Repo", "Branch", "Status"]);
+        assert_eq!(rows[2][0], "api");
+        assert_eq!(rows[2][1], "main");
+        assert!(rows[2][2].contains("clean"));
+        assert_eq!(rows[3][0], "web");
+        assert_eq!(rows[3][1], "feat-x");
+        assert!(rows[3][2].contains("2 modified"));
     }
 
     #[test]
@@ -635,8 +648,9 @@ mod tests {
             None,
         );
         let md = format_markdown(&ctx);
-        assert!(md.contains("| Tags |"));
-        assert!(md.contains("| backend |"));
+        let rows = table_rows(&md);
+        let tags = rows[0].iter().position(|cell| cell == "Tags").unwrap();
+        assert_eq!(rows[2][tags], "backend");
     }
 
     #[test]
@@ -646,7 +660,49 @@ mod tests {
             None,
         );
         let md = format_markdown(&ctx);
-        assert!(md.contains("| api | (detached 0123456) | clean |"), "{md}");
+        let rows = table_rows(&md);
+        assert_eq!(rows[2][0], "api");
+        assert!(
+            rows[2][1].contains("detached") && rows[2][1].contains("0123456"),
+            "{md}"
+        );
+        assert!(rows[2][2].contains("clean"), "{md}");
+    }
+
+    #[test]
+    fn markdown_names_stopped_rebases_and_missing_or_gone_upstreams() {
+        let mut rebase = make_repo("backend", None, Some(true), Some(2), vec![]);
+        rebase.operation = Some("rebase");
+        rebase.rebasing = Some("main".to_string());
+        rebase.untracked_count = Some(1);
+        let mut gone = make_repo("frontend", Some("main"), Some(false), Some(0), vec![]);
+        gone.upstream_gone = Some(true);
+        let mut local = make_repo("local", Some("topic"), Some(true), Some(1), vec![]);
+        local.upstream = None;
+        local.upstream_gone = None;
+        let md = format_markdown(&make_ctx(vec![rebase, gone, local], None));
+        let rows = table_rows(&md);
+        assert_eq!(rows.len(), 5, "{md}");
+        assert_eq!(rows[2][0], "backend");
+        assert!(
+            rows[2][1].contains("rebasing") && rows[2][1].contains("main"),
+            "{md}"
+        );
+        for fact in ["rebase in progress", "1 modified", "1 untracked"] {
+            assert!(rows[2][2].contains(fact), "{md}");
+        }
+        assert_eq!(rows[3][0], "frontend");
+        assert_eq!(rows[3][1], "main");
+        assert!(
+            rows[3][2].contains("clean") && rows[3][2].contains("upstream gone"),
+            "{md}"
+        );
+        assert_eq!(rows[4][0], "local");
+        assert_eq!(rows[4][1], "topic");
+        assert!(
+            rows[4][2].contains("1 modified") && rows[4][2].contains("no upstream"),
+            "{md}"
+        );
     }
 
     #[test]

@@ -7,23 +7,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 #         context detection, ephemeral exec, per-worktree records
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-    META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
-
-    if [ ! -f "$META_BIN" ] || [ ! -f "$META_GIT_BIN" ]; then
-        cargo build --workspace --quiet
-    fi
-
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    mkdir -p "$TEST_DIR/.meta/plugins"
-    cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
-    chmod +x "$TEST_DIR/.meta/plugins/meta-git"
-    META_DATA="$(cd "$(mktemp -d)" && pwd -P)"
-    export META_DATA_DIR="$META_DATA"
-
-    # Create .meta.yaml with two projects
+    sandbox
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
@@ -32,38 +16,13 @@ setup() {
     }
 }
 EOF
-
-    # Initialize git repos with at least one commit
-    for repo in backend frontend; do
-        mkdir -p "$TEST_DIR/$repo"
-        git -C "$TEST_DIR/$repo" init --quiet
-        git -C "$TEST_DIR/$repo" config user.email "test@test.com"
-        git -C "$TEST_DIR/$repo" config user.name "Test"
-        echo "# $repo" > "$TEST_DIR/$repo/README.md"
-        git -C "$TEST_DIR/$repo" add README.md
-        git -C "$TEST_DIR/$repo" commit --quiet -m "init $repo"
-    done
-
-    # Initialize meta repo
-    git -C "$TEST_DIR" init --quiet
-    git -C "$TEST_DIR" config user.email "test@test.com"
-    git -C "$TEST_DIR" config user.name "Test"
-    git -C "$TEST_DIR" add .meta.yaml
-    git -C "$TEST_DIR" commit --quiet -m "init meta"
-
+    make_workspace --root-repo --plugins git backend frontend
     cd "$TEST_DIR"
 }
 
 # The file where meta records the set a linked worktree checkout belongs to
 record_file() {
     echo "$(git -C "$1" rev-parse --absolute-git-dir)/meta-worktree.json"
-}
-
-teardown() {
-    cd /
-    rm -rf "$TEST_DIR"
-    rm -rf "$META_DATA"
-    unset META_DATA_DIR
 }
 
 # ============ --meta key=value ============
@@ -224,7 +183,7 @@ assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
     run "$META_BIN" git worktree create store-test --repo backend --no-deps
     [ "$status" -eq 0 ]
 
-    [ ! -e "$META_DATA/worktree.json" ]
+    [ ! -e "$META_DATA_DIR/worktree.json" ]
     REC="$(record_file .worktrees/store-test/backend)"
     [[ "$REC" == */backend/.git/worktrees/backend/meta-worktree.json ]]
     [ -f "$REC" ]
@@ -246,7 +205,7 @@ assert 'created_at' in entry
 
     # git deleted the worktree's admin directory, record and all
     [ ! -e "$TEST_DIR/backend/.git/worktrees/backend" ]
-    [ ! -e "$META_DATA/worktree.json" ]
+    [ ! -e "$META_DATA_DIR/worktree.json" ]
 }
 
 @test "worktree remove --json outputs structured result" {
@@ -638,8 +597,9 @@ assert 'removed' in payload
     # With --primary, should ignore worktree context
     run "$META_BIN" --primary exec -- pwd
     [ "$status" -eq 0 ]
-    # Output should NOT include the worktree path if --primary works
-    [[ "$output" != *"ctx-primary/backend"* ]] || [[ "$output" == *"$TEST_DIR/backend"* ]]
+    # the primary checkouts, never the set's
+    [[ "$output" != *"ctx-primary/backend"* ]]
+    grep -qx "$TEST_DIR/backend" <<<"$output"
 }
 
 # ============ Combined Flags ============
@@ -699,7 +659,7 @@ assert wt['ephemeral'] == True
     [ "$status" -eq 0 ]
     run "$META_BIN" git worktree remove no-store
     [ "$status" -eq 0 ]
-    [ ! -e "$META_DATA/worktree.json" ] && [ ! -e "$META_DATA/worktree.lock" ]
+    [ ! -e "$META_DATA_DIR/worktree.json" ] && [ ! -e "$META_DATA_DIR/worktree.lock" ]
 }
 
 @test "worktree prune with no sets" {

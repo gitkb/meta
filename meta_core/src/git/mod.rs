@@ -185,18 +185,12 @@ pub fn remote_url(dir: &Path) -> anyhow::Result<Option<GitUrl>> {
 }
 
 #[cfg(test)]
-#[cfg_attr(
-    unix,
-    expect(
-        clippy::disallowed_methods,
-        reason = "tests start the programs they test with"
-    )
-)]
 mod tests {
     use super::*;
 
     #[test]
     fn every_variable_git_reports_is_cleared() {
+        let _sandbox = meta_test_support::isolated!();
         let reported = run(Path::new("."), ["rev-parse", "--local-env-vars"]).unwrap();
         let kept = ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"];
         for name in reported.lines().filter(|name| !kept.contains(name)) {
@@ -206,20 +200,22 @@ mod tests {
 
     #[test]
     fn git_in_a_project_folder_never_reaches_the_repository_around_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = dir.path().join("ws");
+        let sandbox = meta_test_support::isolated!();
+        let dir = sandbox.work();
+        let workspace = dir.join("ws");
         std::fs::create_dir_all(workspace.join("plain")).unwrap();
-        run(&workspace, ["init", "-q"]).unwrap();
+        sandbox.git(&workspace, &["init", "-q", "-b", "main"]);
         let toplevel = ["rev-parse", "--show-toplevel"];
         assert!(run(&workspace.join("plain"), toplevel).is_err());
         // nor through a link to it from elsewhere, nor for any program the
         // folder runs that starts git (`sh -c 'git ...'`)
         #[cfg(unix)]
         {
-            let link = dir.path().join("link");
+            let link = dir.join("link");
             std::os::unix::fs::symlink(workspace.join("plain"), &link).unwrap();
             assert!(run(&link, toplevel).is_err());
-            let shell = std::process::Command::new("sh")
+            let shell = sandbox
+                .command("sh")
                 .args(["-c", "git rev-parse --show-toplevel"])
                 .current_dir(&link)
                 .envs(ceiling(&link))
@@ -228,20 +224,21 @@ mod tests {
             assert!(!shell.status.success(), "{shell:?}");
         }
         // a repository of its own still is one
-        run(&workspace.join("plain"), ["init", "-q"]).unwrap();
+        sandbox.git(&workspace.join("plain"), &["init", "-q", "-b", "main"]);
         assert!(run(&workspace.join("plain"), toplevel).is_ok());
     }
 
     #[test]
     fn a_path_list_separator_in_the_path_still_keeps_git_inside() {
+        let sandbox = meta_test_support::isolated!();
         let separator = if cfg!(windows) { ";" } else { ":" };
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = dir.path().join(format!("client{separator}acme"));
+        let dir = sandbox.work();
+        let workspace = dir.join(format!("client{separator}acme"));
         for folder in ["plain", "cloned/sub"] {
             std::fs::create_dir_all(workspace.join(folder)).unwrap();
         }
-        run(&workspace, ["init", "-q"]).unwrap();
-        run(&workspace.join("cloned"), ["init", "-q"]).unwrap();
+        sandbox.git(&workspace, &["init", "-q", "-b", "main"]);
+        sandbox.git(&workspace.join("cloned"), &["init", "-q", "-b", "main"]);
         let toplevel = ["rev-parse", "--show-toplevel"];
         // a clone is still its own repository, from any folder in it
         let real = |p: &Path| p.canonicalize().unwrap();
@@ -262,7 +259,8 @@ mod tests {
 
     #[test]
     fn remote_url_is_the_configured_one() {
-        let dir = tempfile::tempdir().unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let dir = sandbox.work();
         let configured = "https://example.invalid/org/repo.git";
         for args in [
             &["init", "-q"][..],
@@ -273,45 +271,47 @@ mod tests {
                 "https://example.invalid/",
             ],
         ] {
-            run(dir.path(), args).unwrap();
+            sandbox.git(&dir, args);
         }
         // what git would fetch from is rewritten; what is listed is not
         assert_ne!(
-            run(dir.path(), ["remote", "get-url", "origin"]).unwrap(),
+            run(dir.as_path(), ["remote", "get-url", "origin"]).unwrap(),
             configured
         );
-        assert_eq!(remote_url(dir.path()).unwrap(), Some(configured.into()));
+        assert_eq!(remote_url(dir.as_path()).unwrap(), Some(configured.into()));
         // the repository's config includes what it includes
-        run(dir.path(), ["remote", "remove", "origin"]).unwrap();
-        let included = dir.path().join(".git/remote.conf");
+        sandbox.git(dir.as_path(), &["remote", "remove", "origin"]);
+        let included = dir.join(".git/remote.conf");
         std::fs::write(
             &included,
             format!("[remote \"origin\"]\n\turl = {configured}\n"),
         )
         .unwrap();
-        run(dir.path(), ["config", "include.path", "remote.conf"]).unwrap();
-        assert_eq!(remote_url(dir.path()).unwrap(), Some(configured.into()));
-        run(dir.path(), ["config", "--unset", "include.path"]).unwrap();
+        sandbox.git(dir.as_path(), &["config", "include.path", "remote.conf"]);
+        assert_eq!(remote_url(dir.as_path()).unwrap(), Some(configured.into()));
+        sandbox.git(dir.as_path(), &["config", "--unset", "include.path"]);
         // and so does a worktree's own config
-        run(dir.path(), ["config", "extensions.worktreeConfig", "true"]).unwrap();
-        run(
-            dir.path(),
-            ["config", "--worktree", "remote.origin.url", configured],
-        )
-        .unwrap();
-        assert_eq!(remote_url(dir.path()).unwrap(), Some(configured.into()));
-        run(
-            dir.path(),
-            ["config", "--worktree", "--unset", "remote.origin.url"],
-        )
-        .unwrap();
-        assert_eq!(remote_url(dir.path()).unwrap(), None);
+        sandbox.git(
+            dir.as_path(),
+            &["config", "extensions.worktreeConfig", "true"],
+        );
+        sandbox.git(
+            dir.as_path(),
+            &["config", "--worktree", "remote.origin.url", configured],
+        );
+        assert_eq!(remote_url(dir.as_path()).unwrap(), Some(configured.into()));
+        sandbox.git(
+            dir.as_path(),
+            &["config", "--worktree", "--unset", "remote.origin.url"],
+        );
+        assert_eq!(remote_url(dir.as_path()).unwrap(), None);
     }
 
     #[test]
     fn run_names_the_failing_command() {
-        let dir = tempfile::tempdir().unwrap();
-        let err = run(dir.path(), ["rev-parse", "--verify", "nope"]).unwrap_err();
+        let sandbox = meta_test_support::isolated!();
+        let dir = sandbox.work();
+        let err = run(dir.as_path(), ["rev-parse", "--verify", "nope"]).unwrap_err();
         assert!(
             err.to_string()
                 .contains("git rev-parse --verify nope failed"),
@@ -319,9 +319,9 @@ mod tests {
         );
         // absent, as `--verify --quiet` says by exiting 1; a git failure
         // is still an error
-        run(dir.path(), ["init", "-q"]).unwrap();
-        let absent = lookup(dir.path(), ["rev-parse", "--verify", "--quiet", "nope"]);
+        sandbox.git(dir.as_path(), &["init", "-q"]);
+        let absent = lookup(dir.as_path(), ["rev-parse", "--verify", "--quiet", "nope"]);
         assert_eq!(absent.unwrap(), None);
-        assert!(lookup(&dir.path().join("missing"), ["rev-parse", "HEAD"]).is_err());
+        assert!(lookup(&dir.join("missing"), ["rev-parse", "HEAD"]).is_err());
     }
 }

@@ -7,19 +7,10 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 TOKEN=ghp_SECRETTOKEN123
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-    if [ ! -f "$META_BIN" ] || [ ! -f "$BATS_TEST_DIRNAME/../target/debug/meta-git" ]; then
-        cargo build --workspace --quiet
-    fi
-    export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.com
-    export GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=test@example.com
-
-    TEST_DIR="$(cd "$BATS_TEST_TMPDIR" && pwd -P)"
+    sandbox
     mkdir -p "$TEST_DIR/remotes" "$TEST_DIR/bin"
     for plugin in meta-git meta-project; do
-        cp "$BATS_TEST_DIRNAME/../target/debug/$plugin" "$TEST_DIR/bin/"
+        cp "$META_BIN_DIR/$plugin" "$TEST_DIR/bin/"
     done
     export PATH="$TEST_DIR/bin:$PATH"
 

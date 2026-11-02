@@ -450,15 +450,16 @@ impl RegistryClient {
 /// Enterprise server, whose API is under `/api/v3`), else (unset or empty)
 /// github.com
 fn github() -> (String, String) {
-    match std::env::var("META_GITHUB_URL") {
-        Ok(url) if !url.is_empty() => {
-            let url = url.trim_end_matches('/');
-            (url.to_string(), format!("{url}/api/v3"))
-        }
-        _ => (
+    github_at(&std::env::var("META_GITHUB_URL").unwrap_or_default())
+}
+
+fn github_at(url: &str) -> (String, String) {
+    match url.trim_end_matches('/') {
+        "" | "https://github.com" => (
             "https://github.com".to_string(),
             "https://api.github.com".to_string(),
         ),
+        url => (url.to_string(), format!("{url}/api/v3")),
     }
 }
 
@@ -1290,6 +1291,22 @@ mod tests {
         assert!(
             message.starts_with("Could not find release for o\\nFORGED/"),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn github_is_github_com_unless_another_server_is_named() {
+        for public in ["", "https://github.com", "https://github.com/"] {
+            let (web, api) = github_at(public);
+            assert_eq!(
+                (web.as_str(), api.as_str()),
+                ("https://github.com", "https://api.github.com")
+            );
+        }
+        let (web, api) = github_at("https://ghe.example/");
+        assert_eq!(
+            (web.as_str(), api.as_str()),
+            ("https://ghe.example", "https://ghe.example/api/v3")
         );
     }
 

@@ -17,10 +17,10 @@ use std::process::{ExitCode, ExitStatus};
 
 /// Exit status for output cut off by a closed stdout (128 + SIGPIPE): a
 /// failure it hid isn't success.
-pub const CLOSED_STDOUT: u8 = 141;
+pub const CLOSED_STDOUT: i32 = 141;
 
 /// Exit status for a command line that can't be run, as clap's.
-pub const USAGE: u8 = 2;
+pub const USAGE: i32 = 2;
 
 /// An ending that was already reported (by a child, by the summary of the
 /// commands that failed, by clap's help or usage error): the program ends
@@ -64,46 +64,61 @@ impl std::error::Error for Usage {}
 /// Run `main` with colour decided ([`out::color`]) and report how it went.
 pub fn run(main: impl FnOnce() -> anyhow::Result<()>) -> ExitCode {
     out::color();
-    ExitCode::from(code(main()))
+    let code = code(main());
+    // an ExitCode holds a byte; Windows passes on a plugin's 256 or -1
+    match u8::try_from(code) {
+        Ok(code) => ExitCode::from(code),
+        Err(_) => now(code),
+    }
+}
+
+/// The ending `error` carries, already reported: an [`ExitWith`] code, or
+/// [`CLOSED_STDOUT`] for a closed stdout.
+pub fn ending(error: &anyhow::Error) -> Option<i32> {
+    error.chain().find_map(|cause| {
+        if let Some(ExitWith(code)) = cause.downcast_ref() {
+            return Some(*code);
+        }
+        cause
+            .downcast_ref::<StdoutError>()
+            .filter(|e| e.0.kind() == std::io::ErrorKind::BrokenPipe)
+            .map(|_| CLOSED_STDOUT)
+    })
 }
 
 /// The exit code for `result`, with its error reported: as JSON on stdout
 /// with `--json` while stdout is still empty (one JSON document), else
-/// escaped on stderr. A code outside 0-255 (a negative Windows status)
-/// becomes 1.
-pub fn code(result: anyhow::Result<()>) -> u8 {
+/// escaped on stderr.
+pub fn code(result: anyhow::Result<()>) -> i32 {
     let Err(error) = result else {
         return 0;
     };
-    let mut code = 1;
-    for cause in error.chain() {
-        if let Some(StdoutError(e)) = cause.downcast_ref::<StdoutError>() {
-            if e.kind() == std::io::ErrorKind::BrokenPipe {
-                return CLOSED_STDOUT;
-            }
-        }
-        if let Some(ExitWith(n)) = cause.downcast_ref::<ExitWith>() {
-            return u8::try_from(*n).unwrap_or(1);
-        }
-        if cause.is::<Usage>() {
-            code = USAGE;
-        }
+    if let Some(code) = ending(&error) {
+        return code;
     }
+    let usage = error.chain().any(|cause| cause.is::<Usage>());
+    let code = if usage { USAGE } else { 1 };
     if out::json() && !out::wrote_stdout() {
         let report = serde_json::json!({ "success": false, "error": format!("{error:#}") });
-        if crate::outln!("{report}").is_ok() {
-            return code;
+        match crate::outln!("{report}") {
+            Ok(()) => return code,
+            Err(StdoutError(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                return CLOSED_STDOUT
+            }
+            // said on stderr instead
+            Err(_) => {}
         }
     }
-    if code == USAGE {
+    // escaped: an error can carry paths and names from git and the
+    // filesystem
+    if usage {
         crate::errln!(
             "{}: {}",
             "error".red().bold(),
-            escape_lines(&error.to_string())
+            escape_lines(&format!("{error:#}"))
         );
     } else {
-        // as Rust prints an error returned from main, but escaped: it can
-        // carry paths and names from git and the filesystem
+        // as Rust prints an error returned from main
         crate::errln!("Error: {}", escape_lines(&format!("{error:?}")));
     }
     code
@@ -117,4 +132,29 @@ pub fn now(code: i32) -> ! {
         reason = "the one place a program ends without returning from main"
     )]
     std::process::exit(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_ending_has_its_code() {
+        let closed = || StdoutError(std::io::ErrorKind::BrokenPipe.into());
+        assert_eq!(code(Ok(())), 0);
+        assert_eq!(code(Err(anyhow::anyhow!("failed"))), 1);
+        assert_eq!(code(Err(Usage("bad".into()).into())), USAGE);
+        // found under the context added on the way up
+        assert_eq!(
+            code(Err(anyhow::Error::new(closed()).context("writing"))),
+            CLOSED_STDOUT
+        );
+        assert_eq!(
+            code(Err(anyhow::Error::new(ExitWith(3)).context("plugin"))),
+            3
+        );
+        // Windows hands on a plugin's code past a byte
+        assert_eq!(code(Err(ExitWith(256).into())), 256);
+        assert_eq!(ending(&anyhow::anyhow!("failed")), None);
+    }
 }

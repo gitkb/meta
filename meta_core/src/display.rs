@@ -83,8 +83,9 @@ pub fn escape_lines(s: &str) -> Cow<'_, str> {
 /// Another program's output (git's stderr), escaped to follow `<message>:`:
 /// one line after a space; several each on a line of their own, indented
 /// under the message, so none can pass for a line of meta's own.
-pub fn program_output(s: &str) -> String {
-    let text = escape_lines(s.trim());
+pub fn program_output(output: &[u8]) -> String {
+    let output = String::from_utf8_lossy(output);
+    let text = escape_lines(output.trim());
     if !text.contains('\n') {
         return format!(" {text}");
     }
@@ -147,9 +148,9 @@ mod tests {
 
     #[test]
     fn program_output_follows_the_message_and_indents_its_lines() {
-        assert_eq!(program_output("fatal: no\n"), " fatal: no");
+        assert_eq!(program_output(b"fatal: no\n"), " fatal: no");
         assert_eq!(
-            program_output("Preparing\nfatal: '\u{1b}x\nFORGED' used\n"),
+            program_output("Preparing\nfatal: '\u{1b}x\nFORGED' used\n".as_bytes()),
             "\n  Preparing\n  fatal: '\\u{1b}x\n  FORGED' used"
         );
     }

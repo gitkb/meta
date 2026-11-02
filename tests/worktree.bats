@@ -161,6 +161,15 @@ EOF
     [ ! -e ".worktrees/tight" ]
 }
 
+@test "a warning keeps a name's line break escaped, so it can't forge a line" {
+    bad=$'bad\nwarning: FORGED'
+    mkdir -p ".worktrees/$bad/r"
+    echo "gitdir: /does-not-exist" > ".worktrees/$bad/r/.git"
+    run "$META_BIN" git worktree list --recursive --metadata-only
+    [[ "$output" == *'bad\nwarning: FORGED'* ]]
+    [[ "$output" != *$'\nwarning: FORGED'* ]]
+}
+
 @test "worktree prune names a set whose created_at it can't read, and fails on it with --strict" {
     run "$META_BIN" git worktree create aged --repo backend --no-deps --ttl 1h
     [ "$status" -eq 0 ]

@@ -160,7 +160,7 @@ where
             "git {} failed in {}:{}",
             escape(&shown()),
             escape_path(dir),
-            program_output(&String::from_utf8_lossy(&output.stderr))
+            program_output(&output.stderr)
         );
     }
     Ok(Some(

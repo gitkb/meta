@@ -66,10 +66,20 @@ pub struct DependencyGraph {
     duplicates: Vec<(String, String, String)>,
 }
 
+/// What a `depends_on` of `project` that names nothing says, escaped.
+pub fn unresolved_message(project: &str, dep: &str) -> String {
+    use meta_core::display::escape;
+    format!(
+        "'{}' depends on '{}', which no project is or provides",
+        escape(project),
+        escape(dep)
+    )
+}
+
 impl DependencyGraph {
     /// Build a dependency graph from a list of projects. What it can't
     /// resolve is kept for the caller to report: [`Self::unresolved`],
-    /// [`Self::duplicates`].
+    /// [`Self::warn_unresolved`].
     pub fn build(projects: Vec<ProjectDependencies>) -> Self {
         let mut graph = DependencyGraph {
             projects: HashMap::new(),
@@ -130,22 +140,23 @@ impl DependencyGraph {
         &self.unresolved
     }
 
-    /// Each item two projects provide: (item, the project the graph
-    /// uses, the other).
-    pub fn duplicates(&self) -> &[(String, String, String)] {
-        &self.duplicates
-    }
-
     /// Warn about what [`Self::build`] couldn't resolve.
     pub fn warn_unresolved(&self) {
         for (project, dep) in &self.unresolved {
-            meta_core::out::warn(format!(
-                "'{project}' depends on '{dep}', which no project is or provides"
-            ));
+            meta_core::out::warn(unresolved_message(project, dep));
         }
+        self.warn_duplicates();
+    }
+
+    /// Warn about each item two projects provide.
+    pub fn warn_duplicates(&self) {
+        use meta_core::display::escape;
         for (item, kept, other) in &self.duplicates {
+            let kept = escape(kept);
             meta_core::out::warn(format!(
-                "Both '{other}' and '{kept}' provide '{item}'; '{kept}' is used"
+                "Both '{}' and '{kept}' provide '{}'; '{kept}' is used",
+                escape(other),
+                escape(item)
             ));
         }
     }

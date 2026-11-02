@@ -823,6 +823,49 @@ EOF
     done
 }
 
+@test "a plugin killed by a signal ends meta by it; one that fails silently under --json leaves JSON" {
+    mkdir -p .meta/plugins
+    cat > .meta/plugins/meta-die <<'EOF'
+#!/bin/sh
+if [ "$1" = --meta-plugin-info ]; then
+    echo '{"name":"die","version":"1","commands":["die","die quiet"]}'
+elif cat | grep -q '"command":"die quiet"'; then
+    echo boom >&2; exit 3
+else
+    kill -TERM $$
+fi
+EOF
+    chmod +x .meta/plugins/meta-die
+    run "$META_BIN" die now
+    [ "$status" -eq 143 ]
+    run bash -c '"$1" --json die quiet 2>/dev/null' _ "$META_BIN"
+    [ "$status" -eq 3 ]
+    jq -e '.success == false and (.error | contains("plugin die failed"))' <<<"$output"
+}
+
+@test "a plugin's own argument that isn't UTF-8 is a usage error, not a panic" {
+    run "$META_GIT_BIN" $'\xff'
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Unknown flag"*"Use via: meta git"* ]]
+    [[ "$output" != *"panicked"* ]]
+    run "$META_GIT_BIN" --bogus
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Unknown flag: --bogus"*"Use via: meta git"* ]]
+}
+
+@test "an error meant for a closed stdout under --json exits 141 quietly" {
+    closed() { python3 -c 'import os, subprocess, sys
+r, w = os.pipe(); os.close(r)
+p = subprocess.run(sys.argv[1:], stdout=w, stderr=subprocess.PIPE)
+sys.stderr.buffer.write(p.stderr); sys.exit(p.returncode)' "$@"; }
+    run closed "$META_BIN" --json nosuchcmd
+    [ "$status" -eq 141 ]
+    [ -z "$output" ]
+    run closed "$META_BIN" --json --include nope exec -- true
+    [ "$status" -eq 141 ]
+    [ -z "$output" ]
+}
+
 @test "a hostile command name is escaped in meta's own lines" {
     E=$'bad\033[2J\nFORGED'
     for mode in --parallel --sequential --dry-run; do

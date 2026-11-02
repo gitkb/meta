@@ -45,12 +45,6 @@ macro_rules! errln {
     ($($arg:tt)*) => { $crate::out::stderr(format_args!("{}\n", format_args!($($arg)*))) };
 }
 
-/// `eprint!` that ignores a failed write.
-#[macro_export]
-macro_rules! err {
-    ($($arg:tt)*) => { $crate::out::stderr(format_args!($($arg)*)) };
-}
-
 /// Whether anything was written to stdout yet: with `--json`, an error
 /// after a report goes to stderr, so stdout holds one JSON document.
 static WROTE: AtomicBool = AtomicBool::new(false);
@@ -149,7 +143,8 @@ fn decide_color(
 /// or put in JSON), colour as meta does ([`color`]): with colour, the
 /// conventional variables that force it (`CLICOLOR_FORCE`, Node's
 /// `FORCE_COLOR`) are set, without it they are removed, since a user's own
-/// would win over the pipe.
+/// would win over the pipe. They reach what that program starts too (a
+/// plugin's hooks and git); one whose output meta parses removes them.
 pub fn pass_color(command: &mut std::process::Command) {
     const FORCE: [&str; 2] = ["CLICOLOR_FORCE", "FORCE_COLOR"];
     if color() {

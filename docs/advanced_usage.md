@@ -281,7 +281,7 @@ meta exec -- npm test || echo "Tests failed in at least one repo"
 | 0 | Done |
 | 1 | Something failed: a command in at least one repo (the summary names them), or meta itself (`Error: …` on stderr) |
 | 2 | The command line is wrong: an unknown command, option or value |
-| 141 | Its output was cut off: stdout closed early, as in `meta exec -- git log | head` |
+| 141 | Its output was cut off: stdout closed early, as in `meta exec -- git log \| head` |
 | 128 + n | Stopped by signal n (Ctrl-C: 130), or a plugin was |
 
 A plugin's own exit code passes through. `loop` and `meta-mcp` exit the same way.
@@ -326,7 +326,7 @@ meta --json exec -- git rev-parse HEAD
 A command a signal ended has `"exit_code": null` and the signal's number in
 `"signal"` (`9` for `SIGKILL`); `signal` is left out otherwise.
 
-With `--json`, stdout is always JSON. An error before any output is `{"success": false, "error": "…"}` (an unknown command exits 2, other errors 1); one after a report was printed goes to stderr, so the report stays the only document. A plugin's output that isn't JSON comes as `{"success": …, "output": "…"}`. Warnings stay on stderr.
+With `--json`, stdout holds only JSON: one document, or the documents a plugin writes. An error before any output is `{"success": false, "error": "…"}` (an unknown command exits 2, other errors 1); one after a report was printed goes to stderr, so the report stays the only document. A plugin's output that isn't JSON comes as `{"success": …, "output": "…"}`, and a plugin that fails without printing anything leaves `{"success": false, "error": "plugin … failed"}`. Warnings and `--verbose` lines go to stderr.
 
 ### Parsing with jq
 

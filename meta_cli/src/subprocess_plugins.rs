@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use meta_core::display::{escape, escape_path};
-use meta_core::{errln, outln};
+use meta_core::errln;
 use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -166,7 +166,10 @@ impl SubprocessPluginManager {
         // A config meta can't use leaves no project plugins; the command
         // itself reports it, and `--help` still prints
         let nearest = meta_core::config::nearest_meta_dir(&cwd).unwrap_or_else(|e| {
-            meta_core::out::warn(format!("{e:#} Skipping project plugins."));
+            meta_core::out::warn(format!(
+                "{} Skipping project plugins.",
+                escape(&format!("{e:#}"))
+            ));
             None
         });
         let project_dirs = nearest.map(|nearest| meta_core::config::workspace_meta_dirs(&nearest));
@@ -176,7 +179,10 @@ impl SubprocessPluginManager {
                     add(dir.join(".meta/plugins"), false);
                 }
             }
-            Err(e) => meta_core::out::warn(format!("{e:#} Skipping project plugins.")),
+            Err(e) => meta_core::out::warn(format!(
+                "{} Skipping project plugins.",
+                escape(&format!("{e:#}"))
+            )),
         }
 
         // ~/.meta/plugins/ (global installed). No home just means no global
@@ -371,11 +377,11 @@ impl SubprocessPlugin {
         })?;
 
         if request.options.verbose {
-            outln!(
+            errln!(
                 "Executing plugin {} for command '{}'",
                 escape(&self.word),
                 escape(&request.command)
-            )?;
+            );
         }
 
         // A plugin may answer without reading its request; then its output
@@ -400,6 +406,15 @@ impl SubprocessPlugin {
             // Plugin already printed its error to stderr. What it printed
             // before failing (say the worktrees it removed before a store
             // error) is shown too; then its exit code is propagated.
+            // a plugin that printed nothing (its error is on stderr) still
+            // leaves JSON on stdout
+            if request.options.json_output && output.stdout.trim_ascii().is_empty() {
+                let failed = serde_json::json!({
+                    "success": false,
+                    "error": format!("plugin {} failed", self.word),
+                });
+                meta_core::outln!("{failed}")?;
+            }
             relay(&output.stdout, request.options.json_output, false)?;
             return Err(meta_core::exit::ExitWith::of(output.status).into());
         }

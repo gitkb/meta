@@ -8,7 +8,7 @@ use meta_core::{errln, outln};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
-use meta_cli::dependency_graph::{DependencyGraph, ProjectDependencies};
+use meta_cli::dependency_graph::{unresolved_message, DependencyGraph, ProjectDependencies};
 use meta_core::duration::format_duration;
 use meta_core::set_record::{self as record, SetRecord};
 use meta_git_lib::worktree::git_ops::*;
@@ -685,11 +685,7 @@ fn plan_repos(
                         .collect(),
                 ),
             };
-            for (item, kept, other) in graph.duplicates() {
-                out::warn(format!(
-                    "Both '{other}' and '{kept}' provide '{item}'; '{kept}' is used"
-                ));
-            }
+            graph.warn_duplicates();
             // a dependency the set would need and can't have
             let mut needed: BTreeSet<&str> = BTreeSet::new();
             for key in asked_keys.iter().filter(|key| *key != ".") {
@@ -704,9 +700,7 @@ fn plan_repos(
                     };
                     out::warn_or_bail(
                         strict,
-                        format!(
-                            "'{project}' depends on '{dep}', which no project is or provides{hint}"
-                        ),
+                        format!("{}{hint}", unresolved_message(project, dep)),
                     )?;
                 }
             }

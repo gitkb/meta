@@ -219,16 +219,7 @@ impl McpServer {
                             self.calls.cancel_all();
                             let _ = writeln!(std::io::stderr(), "Error: {e:#}; the reply was:");
                             let _ = write_answer(&Mutex::new(std::io::stderr()), &answer);
-                            let closed = e.chain().any(|cause| {
-                                cause
-                                    .downcast_ref::<StdoutError>()
-                                    .is_some_and(|e| e.0.kind() == std::io::ErrorKind::BrokenPipe)
-                            });
-                            meta_core::exit::now(if closed {
-                                meta_core::exit::CLOSED_STDOUT.into()
-                            } else {
-                                1
-                            });
+                            meta_core::exit::now(meta_core::exit::ending(&e).unwrap_or(1));
                         }
                     });
                 }

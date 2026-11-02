@@ -154,7 +154,7 @@ fn ref_exists(dir: &Path, name: &str) -> anyhow::Result<bool> {
         _ => anyhow::bail!(
             "git show-ref --exists {name} failed in {}:{}",
             crate::display::escape_path(dir),
-            crate::display::program_output(&String::from_utf8_lossy(&output.stderr))
+            crate::display::program_output(&output.stderr)
         ),
     }
 }

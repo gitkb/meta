@@ -188,7 +188,7 @@ fn shell_aliases() -> Result<BTreeMap<String, String>> {
         output.status.success(),
         "`{} -i -c alias` failed:{}",
         escape(&shell),
-        program_output(&String::from_utf8_lossy(&output.stderr))
+        program_output(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout)
         .lines()

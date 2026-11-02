@@ -13,5 +13,5 @@ disallowed-methods = [
     { path = "str::split_at", reason = "panics off a char boundary; use split_at_checked or split_once" },
     { path = "std::vec::Vec::split_off", reason = "panics past the end" },
     { path = "std::vec::Vec::drain", reason = "panics on a range past the end; use std::mem::take" },
-    { path = "std::process::Command::new", reason = "a program in a repo starts through meta_core::git::git or meta_core::process::in_repo, which clear the repo's git env" },
+    { path = "std::process::Command::new", reason = "a program in a repo starts through meta_core::git::git or meta_core::git::in_repo, which clear the repo's git env" },
 ]

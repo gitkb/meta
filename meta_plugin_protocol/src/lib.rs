@@ -224,19 +224,10 @@ pub enum CommandResult {
 }
 
 /// An error as the plugin's result: with its causes (`{e:#}`), or as the
-/// ending it carries ([`meta_core::exit::ExitWith`], a closed stdout).
+/// ending it carries ([`meta_core::exit::ending`]).
 impl From<anyhow::Error> for CommandResult {
     fn from(e: anyhow::Error) -> Self {
-        let ended = e.chain().find_map(|cause| {
-            if let Some(meta_core::exit::ExitWith(code)) = cause.downcast_ref() {
-                return Some(*code);
-            }
-            cause
-                .downcast_ref::<meta_core::out::StdoutError>()
-                .filter(|closed| closed.0.kind() == std::io::ErrorKind::BrokenPipe)
-                .map(|_| meta_core::exit::CLOSED_STDOUT.into())
-        });
-        match ended {
+        match meta_core::exit::ending(&e) {
             Some(code) => CommandResult::Exit(code),
             None => CommandResult::Error(format!("{e:#}")),
         }
@@ -272,7 +263,7 @@ pub fn output_execution_plan_full(
     };
     let code = meta_core::exit::code(emit_json(&PlanResponse { plan }));
     if code != 0 {
-        meta_core::exit::now(code.into());
+        meta_core::exit::now(code);
     }
 }
 
@@ -422,24 +413,29 @@ pub fn run_plugin(plugin: PluginDefinition) {
     meta_core::out::color();
     let code = meta_core::exit::code(serve(&plugin));
     if code != 0 {
-        meta_core::exit::now(code.into());
+        meta_core::exit::now(code);
     }
 }
 
 fn serve(plugin: &PluginDefinition) -> anyhow::Result<()> {
     use meta_core::display::escape;
-    let usage = || {
+    let usage = |problem: String| {
         anyhow::Error::new(meta_core::exit::Usage(format!(
-            "This binary is a meta plugin. Use via: meta {}",
+            "{problem}This binary is a meta plugin. Use via: meta {}",
             escape(&plugin.info.name)
         )))
     };
-    let flag = std::env::args_os().nth(1).ok_or_else(usage)?;
+    let flag = std::env::args_os()
+        .nth(1)
+        .ok_or_else(|| usage(String::new()))?;
     match flag.to_str() {
         Some("--meta-plugin-info") => emit_json(&plugin.info),
         Some("--meta-plugin-exec") => execute(plugin),
         Some("--help" | "-h") => emit(&help_text(&plugin.info)),
-        _ => Err(usage().context(format!("Unknown flag: {}", escape(&flag.to_string_lossy())))),
+        _ => Err(usage(format!(
+            "Unknown flag: {}\n",
+            escape(&flag.to_string_lossy())
+        ))),
     }
 }
 
@@ -457,10 +453,16 @@ fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
         request.cwd = std::env::current_dir().context("Failed to get working directory")?;
     }
     match (plugin.execute)(request) {
-        CommandResult::Plan(commands, parallel) => {
-            output_execution_plan(commands, parallel);
-            Ok(())
-        }
+        CommandResult::Plan(commands, parallel) => emit_json(&PlanResponse {
+            plan: ExecutionPlan {
+                pre_commands: vec![],
+                commands,
+                post_commands: vec![],
+                parallel,
+                max_parallel: None,
+                spawn_stagger_ms: None,
+            },
+        }),
         CommandResult::FullPlan(plan) => emit_json(&PlanResponse { plan }),
         CommandResult::Message(msg) if msg.is_empty() => Ok(()),
         CommandResult::Message(msg) => emit(&format!("{msg}\n")),

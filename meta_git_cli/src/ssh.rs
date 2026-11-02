@@ -263,8 +263,10 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
     );
     for (project, expected, actual) in &mismatches {
         message.push_str(&format!(
-            "\n  {}\n    actual:   {actual}\n    expected: {expected}",
-            project.name
+            "\n  {}\n    actual:   {}\n    expected: {}",
+            escape(&project.name),
+            escape(&actual.to_string()),
+            escape(&expected.to_string())
         ));
         if actual.to_string() == expected.to_string() {
             message.push_str("\n    (they differ only in their hidden credentials)");

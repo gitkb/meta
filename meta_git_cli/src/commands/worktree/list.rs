@@ -274,7 +274,11 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
         outln!()?;
     }
     for warning in warnings {
-        meta_core::out::warn(format!("{}: {}", warning.name, warning.message));
+        meta_core::out::warn(format!(
+            "{}: {}",
+            escape(&warning.name),
+            escape(&warning.message)
+        ));
     }
     Ok(())
 }

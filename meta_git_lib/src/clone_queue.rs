@@ -302,7 +302,7 @@ impl CloneQueue {
             if let Ok(None) = config::find_meta_config_in(&task.target_path) {
                 meta_core::out::warn(format!(
                     "'{}' is declared with `meta: true` but no .meta.yaml was found inside it",
-                    task.name
+                    meta_core::display::escape(&task.name)
                 ));
             }
         }

@@ -453,7 +453,7 @@ fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Resul
                 Some(sub) => sub,
                 None => anyhow::bail!(
                     "meta {} has no command '{}'",
-                    escape(&words.iter().take(i).cloned().collect::<Vec<_>>().join(" ")),
+                    escape(&words.get(..i).unwrap_or_default().join(" ")),
                     escape(word)
                 ),
             };
@@ -525,10 +525,10 @@ fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin
 
     let target = target(cli, &start)?;
     if cli.verbose {
-        outln!(
+        errln!(
             "Executing command: {}",
             escape(&loop_lib::display_command(command_args))
-        )?;
+        );
     }
     match plugin {
         None => {

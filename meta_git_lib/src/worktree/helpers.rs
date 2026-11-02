@@ -213,6 +213,7 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
     )]
     let output = Command::new("gh")
         .env_remove("CLICOLOR_FORCE")
+        .env_remove("FORCE_COLOR")
         .args([
             "pr",
             "view",
@@ -228,12 +229,11 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
         .with_context(|| "Failed to run 'gh' CLI. Is it installed?")?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(
             "Failed to resolve PR #{} in {}:{}",
             pr_num,
             escape(repo_spec),
-            program_output(&stderr)
+            program_output(&output.stderr)
         );
     }
 

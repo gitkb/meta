@@ -5,43 +5,9 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 # Integration tests for `meta context`
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-
-    if [ ! -f "$META_BIN" ]; then
-        cargo build --workspace --quiet
-    fi
-
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-
-    # Create .meta.yaml with two projects
-    cat > "$TEST_DIR/.meta.yaml" <<'EOF'
-{
-    "projects": {
-        "backend": "git@github.com:org/backend.git",
-        "frontend": "git@github.com:org/frontend.git"
-    }
-}
-EOF
-
-    # Initialize git repos with at least one commit
-    for repo in backend frontend; do
-        mkdir -p "$TEST_DIR/$repo"
-        git -C "$TEST_DIR/$repo" init --quiet
-        git -C "$TEST_DIR/$repo" config user.email "test@test.com"
-        git -C "$TEST_DIR/$repo" config user.name "Test"
-        echo "# $repo" > "$TEST_DIR/$repo/README.md"
-        git -C "$TEST_DIR/$repo" add README.md
-        git -C "$TEST_DIR/$repo" commit --quiet -m "init $repo"
-    done
-
+    sandbox
+    make_workspace backend frontend
     cd "$TEST_DIR"
-}
-
-teardown() {
-    cd /
-    rm -rf "$TEST_DIR"
 }
 
 # ============ Default (markdown) output ============

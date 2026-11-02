@@ -64,7 +64,8 @@ impl Sandbox {
             let private = std::fs::Permissions::from_mode(0o700);
             std::fs::set_permissions(root.join("runtime"), private).unwrap();
         }
-        std::fs::write(root.join("gitconfig"), "").unwrap();
+        // whatever the machine's git defaults to, a new repo starts on main
+        std::fs::write(root.join("gitconfig"), "[init]\n\tdefaultBranch = main\n").unwrap();
         Sandbox {
             root,
             _dir: Some(dir),
@@ -278,7 +279,8 @@ mod tests {
         let sandbox = Sandbox::new();
         let repo = sandbox.repo(&sandbox.work().join("r"));
         let global = sandbox.git(&repo, &["config", "--global", "--show-origin", "--list"]);
-        assert!(global.is_empty(), "{global}");
+        assert_eq!(global.lines().count(), 1, "{global}");
+        assert!(global.contains("init.defaultbranch=main"), "{global}");
         sandbox.git(&repo, &["config", "--global", "x.y", "z"]);
         let written = std::fs::read_to_string(sandbox.root.join("gitconfig")).unwrap();
         assert!(written.contains("y = z"), "{written}");

@@ -185,9 +185,12 @@ pub fn remote_url(dir: &Path) -> anyhow::Result<Option<GitUrl>> {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "tests start the programs they test with"
+#[cfg_attr(
+    unix,
+    expect(
+        clippy::disallowed_methods,
+        reason = "tests start the programs they test with"
+    )
 )]
 mod tests {
     use super::*;

@@ -51,6 +51,9 @@ static WROTE: AtomicBool = AtomicBool::new(false);
 
 /// Write `args` to stdout (see [`out!`]).
 pub fn stdout(args: fmt::Arguments<'_>) -> Result<(), StdoutError> {
+    if args.as_str() == Some("") {
+        return Ok(());
+    }
     WROTE.store(true, Ordering::Relaxed);
     io::stdout().lock().write_fmt(args).map_err(StdoutError)
 }
@@ -58,6 +61,9 @@ pub fn stdout(args: fmt::Arguments<'_>) -> Result<(), StdoutError> {
 /// Write `bytes` to stdout as they are: a command's output, which need not
 /// be UTF-8.
 pub fn stdout_bytes(bytes: &[u8]) -> Result<(), StdoutError> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
     WROTE.store(true, Ordering::Relaxed);
     io::stdout().lock().write_all(bytes).map_err(StdoutError)
 }

@@ -366,7 +366,16 @@ fn run_cli() -> Result<()> {
         }
         Err(_) => meta_core::args::parse()?,
     };
-    meta_core::out::set_json(cli.json);
+    // meta's own --json, or the --json of a command meta answers itself
+    let command_json = match &cli.command {
+        Some(Commands::Context(args)) => args.json,
+        Some(Commands::Plugin(args)) => matches!(
+            args.command,
+            PluginCommands::Search { json: true, .. } | PluginCommands::List { json: true, .. }
+        ),
+        _ => false,
+    };
+    meta_core::out::set_json(cli.json || command_json);
 
     // Check for orphaned nested meta repo and warn the user
     check_and_warn_orphan();
@@ -396,16 +405,13 @@ fn run_cli() -> Result<()> {
         Some(Commands::Context(_)) if cli.recursive || cli.depth.is_some() => anyhow::bail!(
             "meta context shows the nearest workspace only; it does not take --recursive or --depth"
         ),
-        Some(Commands::Context(args)) => {
-            meta_core::out::set_json(cli.json || args.json);
-            meta_cli::context::handle_context(
-                cli.json || args.json,
-                args.no_status,
-                cli.verbose,
-                &cli.start_dir()?,
-                &cli.filters(),
-            )
-        }
+        Some(Commands::Context(args)) => meta_cli::context::handle_context(
+            cli.json || args.json,
+            args.no_status,
+            cli.verbose,
+            &cli.start_dir()?,
+            &cli.filters(),
+        ),
         Some(Commands::Init(InitArgs {
             command: InitCommands::Claude { force, update },
         })) => init::init_claude(*force, *update, cli.mode(), cli.verbose),

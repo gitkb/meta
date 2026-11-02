@@ -270,7 +270,13 @@ impl RegistryClient {
                     combined_index.plugins.extend(index.plugins);
                 }
                 Err(e) => {
-                    meta_core::out::warn(format!("Failed to fetch from {registry_url}: {e:#}"));
+                    // the error names the URL, which may hold a token:
+                    // RUST_LOG=debug shows it
+                    debug!("{e:#}");
+                    meta_core::out::warn(format!(
+                        "Failed to fetch the plugin index of registry {}",
+                        shown_url(registry_url)
+                    ));
                 }
             }
         }
@@ -323,8 +329,11 @@ impl RegistryClient {
             match self.fetch_json::<PluginMetadata>(&plugin_url) {
                 Ok(metadata) => return Ok(metadata),
                 Err(e) => {
+                    debug!("{e:#}");
                     meta_core::out::warn(format!(
-                        "Plugin {name} not found in {registry_url}: {e:#}"
+                        "Plugin {} not found in registry {}",
+                        escape(name),
+                        shown_url(registry_url)
                     ));
                 }
             }
@@ -516,6 +525,13 @@ pub struct GitHubShorthand {
     pub user: String,
     pub repo: String,
     pub version: Option<String>,
+}
+
+/// A registry URL as meta shows it: its credentials hidden (as for a
+/// repo's URL) and its query, which may carry a token, left out; escaped.
+fn shown_url(url: &str) -> String {
+    let url = url.split_once('?').map_or(url, |(base, _)| base);
+    escape(&meta_core::git::GitUrl::from(url).to_string()).into_owned()
 }
 
 impl GitHubShorthand {
@@ -1225,6 +1241,16 @@ impl PluginInstaller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_registry_url_is_shown_without_its_token() {
+        let shown = shown_url("https://user:ghp_secret@reg.example/path?token=abc");
+        assert!(
+            !shown.contains("ghp_secret") && !shown.contains("abc"),
+            "{shown}"
+        );
+        assert!(shown.contains("reg.example/path"), "{shown}");
+    }
 
     #[test]
     fn a_missing_releases_error_keeps_each_value_on_its_line() {

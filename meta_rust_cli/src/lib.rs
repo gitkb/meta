@@ -2,6 +2,7 @@
 //!
 //! Runs any cargo command across the Rust repos of a meta workspace.
 
+use meta_core::errln;
 pub use meta_plugin_protocol::{CommandResult, PlannedCommand, PluginRequestOptions};
 use std::path::Path;
 
@@ -35,7 +36,7 @@ pub fn execute_command(
     if !options.silent && !other_dirs.is_empty() {
         // meta_cli sends only the selected repos, so name them from the cwd
         let names: Vec<String> = other_dirs.iter().map(|dir| display(dir, cwd)).collect();
-        eprintln!("meta-cargo: skipping {} (no Cargo.toml)", names.join(", "));
+        errln!("meta-cargo: skipping {} (no Cargo.toml)", names.join(", "));
     }
 
     if rust_dirs.is_empty() {

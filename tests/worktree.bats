@@ -137,6 +137,102 @@ EOF
     [ -d ".worktrees/full-task/frontend" ]
 }
 
+@test "worktree exec keeps the user's own GIT_CONFIG_* settings, colour or not" {
+    run "$META_BIN" git worktree create cfg --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    for force in "" 1; do
+        CLICOLOR_FORCE=$force GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0="Env Name" \
+            run "$META_BIN" git worktree exec cfg -- git config user.name
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"Env Name"* ]]
+    done
+}
+
+@test "git's error over several lines keeps its line breaks" {
+    git -C backend switch --quiet -c feature/login
+    run "$META_BIN" git worktree create login --repo backend --no-deps --branch feature/login
+    [ "$status" -ne 0 ]
+    [[ "$output" == *$'\n  fatal: '*"already used by worktree"* ]]
+    [[ "$output" != *'\nfatal'* ]]
+}
+
+@test "worktree create warns about a depends_on that names no project, and fails on it with --strict" {
+    cat > .meta.yaml <<'EOF'
+projects:
+  backend: {repo: "git@github.com:org/backend.git", depends_on: [nosuch]}
+  frontend: "git@github.com:org/frontend.git"
+EOF
+    run "$META_BIN" git worktree create loose --repo backend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: 'backend' depends on 'nosuch', which no project is or provides"* ]]
+
+    run "$META_BIN" --strict git worktree create tight --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'backend' depends on 'nosuch'"*"(strict mode)"* ]]
+    [ ! -e ".worktrees/tight" ]
+
+    # two projects provide what one depends on: a warning, an error with --strict
+    printf '%s\n' 'projects:' \
+        '  backend: {repo: "git@github.com:org/backend.git", depends_on: [db]}' \
+        '  frontend: {repo: "git@github.com:org/frontend.git", provides: [db]}' \
+        '  shared: {repo: "git@github.com:org/shared.git", provides: [db]}' > .meta.yaml
+    mkdir -p shared && git -C shared init --quiet --initial-branch=main
+    git -C shared -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m init
+    run "$META_BIN" --dry-run git worktree create both --repo backend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: 'backend' depends on 'db', which 'frontend' and 'shared' provide; 'shared' is used"* ]]
+    run "$META_BIN" --strict --dry-run git worktree create both --repo backend
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'backend' depends on 'db', which 'frontend'"*"(strict mode)"* ]]
+    # a set that needs no db is none of its business
+    run "$META_BIN" --strict --dry-run git worktree create front --repo frontend
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"depends on 'db'"* ]]
+    # --all holds backend: its problems count too
+    run "$META_BIN" --strict --dry-run git worktree create every --all
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'backend' depends on 'db', which 'frontend'"*"(strict mode)"* ]]
+    # a project named db is what the name means, whoever provides one
+    printf '%s\n' 'projects:' \
+        '  backend: {repo: "git@github.com:org/backend.git", depends_on: [frontend]}' \
+        '  frontend: {repo: "git@github.com:org/frontend.git", provides: [frontend]}' \
+        '  shared: {repo: "git@github.com:org/shared.git", provides: [frontend]}' > .meta.yaml
+    run "$META_BIN" --strict --dry-run git worktree create named --repo backend
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"warning:"* ]]
+    # nor of meta context, which doesn't act on the graph
+    run "$META_BIN" context --no-status
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"warning:"* ]]
+}
+
+@test "a warning keeps a name's line break escaped, so it can't forge a line" {
+    bad=$'bad\nwarning: FORGED'
+    mkdir -p ".worktrees/$bad/r"
+    echo "gitdir: /does-not-exist" > ".worktrees/$bad/r/.git"
+    run "$META_BIN" git worktree list --recursive --metadata-only
+    [[ "$output" == *'bad\nwarning: FORGED'* ]]
+    [[ "$output" != *$'\nwarning: FORGED'* ]]
+}
+
+@test "worktree prune names a set whose created_at it can't read, and fails on it with --strict" {
+    run "$META_BIN" git worktree create aged --repo backend --no-deps --ttl 1h
+    [ "$status" -eq 0 ]
+    record="$(git -C .worktrees/aged/backend rev-parse --git-dir)/meta-worktree.json"
+    [ -f "$record" ]
+    sed -i.bak 's/"created_at": *"[^"]*"/"created_at": "not-a-date"/' "$record"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: Malformed created_at 'not-a-date'"* ]]
+    run "$META_BIN" git worktree list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: Malformed created_at"* ]]
+    run "$META_BIN" --strict git worktree prune
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Malformed created_at"*"(strict mode)"* ]]
+    [ -d ".worktrees/aged" ]
+}
+
 @test "worktree create --all skips a repo that is not cloned; --repo and add refuse it" {
     rm -rf frontend
     run "$META_BIN" git worktree create some --all
@@ -591,7 +687,7 @@ assert d['totals']['files_changed'] >= 1
 @test "unrecognized worktree command is escaped on one line" {
     cd "$TEST_DIR"
     run "$META_BIN" git worktree $'bad\033]0;TITLE\007\nFORGED'
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
     [[ "$output" != *$'\033'* ]]
     [[ "$output" != *$'\nFORGED'* ]]
     [[ "$output" == *"unrecognized subcommand 'bad"* ]]
@@ -676,7 +772,7 @@ assert d['totals']['files_changed'] >= 1
 @test "unrecognized worktree command shows help" {
     cd "$TEST_DIR"
     run "$META_BIN" git worktree blablabla
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
     # the error, once
     [ "$(grep -c "unrecognized subcommand 'blablabla'" <<<"$output")" -eq 1 ]
     # Must show ACTUAL help content (not just a reference to --help)
@@ -784,6 +880,15 @@ EOF
 }
 
 # ============ Nested Repo (meta-53) ============
+
+@test "a parent a nested repo needs is checked for its depends_on too" {
+    setup_nested_meta
+    sed -i.bak 's#"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}#"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true, "depends_on": ["missing"]}#' .meta.yaml
+    grep -q '"missing"' .meta.yaml
+    run "$META_BIN" --strict --dry-run git worktree create parent-check --recursive --repo vendor/nested-lib
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'vendor' depends on 'missing'"*"(strict mode)"* ]]
+}
 
 @test "worktree create with nested repo alias succeeds" {
     setup_nested_meta

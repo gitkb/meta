@@ -1,5 +1,13 @@
 //! The meta-mcp binary: its own flags, and the environment its tools run in.
 
+#![expect(
+    clippy::disallowed_methods,
+    clippy::indexing_slicing,
+    clippy::string_slice,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
@@ -695,7 +703,7 @@ fn a_server_whose_output_is_gone_ends() {
         status = server.try_wait().unwrap();
         status.is_some()
     });
-    assert_eq!(status.unwrap().code(), Some(1), "{status:?}");
+    assert_eq!(status.unwrap().code(), Some(141), "{status:?}");
     drop(stdin);
     // the reply it couldn't send is on record
     let mut stderr = String::new();
@@ -734,7 +742,7 @@ fn a_server_whose_output_is_gone_stops_its_running_tool() {
         status = server.try_wait().unwrap();
         status.is_some()
     });
-    assert_eq!(status.unwrap().code(), Some(1), "{status:?}");
+    assert_eq!(status.unwrap().code(), Some(141), "{status:?}");
     let sleep = std::fs::read_to_string(&pid).unwrap();
     wait_for("the tool's sleep to end", || gone(sleep.trim()));
     drop(stdin);
@@ -770,7 +778,7 @@ fn a_server_whose_output_is_gone_drops_its_waiting_calls() {
         status = server.try_wait().unwrap();
         status.is_some()
     });
-    assert_eq!(status.unwrap().code(), Some(1), "{status:?}");
+    assert_eq!(status.unwrap().code(), Some(141), "{status:?}");
     drop(stdin);
     let mut stderr = String::new();
     std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();

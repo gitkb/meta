@@ -621,9 +621,7 @@ impl McpServer {
 
     /// `meta` in the workspace root.
     fn meta(&self, workspace: &Workspace) -> Command {
-        let mut meta = Command::new("meta");
-        meta.current_dir(&workspace.dir);
-        meta
+        meta_core::git::in_repo("meta", &workspace.dir)
     }
 
     /// `meta --json` with `args`, in the projects `scope` selects (a project
@@ -670,13 +668,19 @@ impl McpServer {
                 text: stdout,
             }),
             Err(_) if output.status.success() => Ok(stdout.into()),
-            Err(_) => anyhow::bail!(
-                "{} failed ({}): {}{}",
-                escape(&what),
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim(),
-                stdout
-            ),
+            Err(_) => {
+                // with --json, meta's error is JSON on stdout
+                let error = serde_json::from_str::<serde_json::Value>(&stdout)
+                    .ok()
+                    .and_then(|v| v.get("error")?.as_str().map(str::to_string));
+                anyhow::bail!(
+                    "{} failed ({}): {}{}",
+                    escape(&what),
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim(),
+                    error.unwrap_or(stdout)
+                )
+            }
         }
     }
 
@@ -1044,10 +1048,8 @@ impl McpServer {
             let Some((program, program_args)) = command(&target.dir) else {
                 continue;
             };
-            let mut cmd = Command::new(program);
-            meta_core::git::clear_repo_env(&mut cmd)
-                .args(&program_args)
-                .current_dir(&target.dir);
+            let mut cmd = meta_core::git::in_repo(program, &target.dir);
+            cmd.args(&program_args);
             let line = format!("{program} {}", program_args.join(" "))
                 .trim_end()
                 .to_string();
@@ -1298,12 +1300,12 @@ impl McpServer {
 
     fn dependency_graph(&self) -> Result<dependency_graph::DependencyGraph> {
         let projects = self.workspace()?.projects;
-        dependency_graph::DependencyGraph::build(
+        Ok(dependency_graph::DependencyGraph::build(
             projects
                 .into_iter()
                 .map(ProjectDependencies::from)
                 .collect(),
-        )
+        ))
     }
 
     fn analyze_impact(&self, args: ProjectArgs) -> Result<String> {

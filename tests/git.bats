@@ -84,6 +84,92 @@ teardown() {
     [[ "$output" == *"modified"* ]] || [[ "$output" == *"Changes"* ]]
 }
 
+@test "meta git status keeps the user's own GIT_CONFIG_* settings" {
+    echo "change" >> "$TEST_DIR/frontend/README.md"
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=status.short GIT_CONFIG_VALUE_0=true \
+        run "$META_BIN" --include frontend git status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"README.md"* ]]
+    [[ "$output" != *"Changes not staged"* ]]
+    # with colour forced, git gets colour after the user's entry, not over it
+    CLICOLOR_FORCE=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=status.short GIT_CONFIG_VALUE_0=true \
+        run "$META_BIN" --include frontend git status
+    [[ "$output" == *$'\033['* ]]
+    [[ "$output" != *"Changes not staged"* ]]
+}
+
+@test "meta git status colours a terminal only, never a pipe or JSON" {
+    echo "change" >> "$TEST_DIR/frontend/README.md"
+    esc=$'\033['
+    red=$'\033[31mmodified'
+    run "$META_BIN" --include frontend git status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"modified"* ]]
+    [[ "$output" != *"$esc"* ]]
+
+    run "$META_BIN" --json --include frontend git status
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"$esc"* ]]
+    [[ "$output" != *'\u001b'* ]]
+
+    # forced colour reaches git; JSON and NO_COLOR win over it
+    CLICOLOR_FORCE=1 run "$META_BIN" --include frontend git status
+    [[ "$output" == *"$red"* ]]
+    CLICOLOR_FORCE=1 run "$META_BIN" --json --include frontend git status
+    [[ "$output" != *'\u001b'* ]]
+    NO_COLOR=1 CLICOLOR_FORCE=1 run "$META_BIN" --include frontend git status
+    [[ "$output" != *"$esc"* ]]
+
+    # on a terminal it is coloured, in both modes, unless TERM=dumb
+    for mode in --parallel --sequential; do
+        TERM=xterm run with_terminal "$META_BIN" $mode --include frontend git status
+        [[ "$output" == *"$red"* ]]
+        TERM=dumb run with_terminal "$META_BIN" $mode --include frontend git status
+        [[ "$output" == *"modified"* ]]
+        [[ "$output" != *"$red"* ]]
+    done
+
+    # stdout on a terminal, stderr in a file: the file gets no colour
+    TERM=xterm run with_terminal sh -c '"$1" nosuchcmd 2>"$2"' _ "$META_BIN" "$TEST_DIR/err"
+    grep -q 'error: unrecognized command' "$TEST_DIR/err"
+    ! grep -q "$esc" "$TEST_DIR/err"
+}
+
+@test "with --json, stdout is one JSON document whatever happens, and usage errors exit 2" {
+    # stdout alone; stderr in $TEST_DIR/stderr
+    json_run() { run bash -c 'err=$1; shift; "$@" 2>"$err"' _ "$TEST_DIR/stderr" "$@"; }
+    json_has() { jq -e "$1" >/dev/null <<<"$output"; }
+    json_run "$META_BIN" --json nosuchcmd
+    [ "$status" -eq 2 ]
+    json_has '.success == false and (.error | contains("unrecognized command"))'
+
+    json_run "$META_BIN" --json --include nope exec -- true
+    [ "$status" -eq 1 ]
+    json_has '.success == false and (.error | contains("--include"))'
+
+    json_run "$META_BIN" --json git commit --amend
+    [ "$status" -eq 2 ]
+    json_has '.success == false and (.error | contains("--amend"))'
+
+    # meta's --verbose lines, and a command's own --json
+    json_run "$META_BIN" --json --verbose --include frontend exec -- true
+    json_has '.success == true'
+    json_run "$META_BIN" --include nope context --json
+    json_has '.success == false'
+
+    # a plugin's text, wrapped
+    json_run "$META_BIN" --json git commit -m x
+    [ "$status" -eq 0 ]
+    json_has '.success == true and (.output | contains("No staged changes"))'
+
+    # a report, then a failure: the report stays the only document
+    cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" .meta/plugins/
+    json_run "$META_BIN" --json project check
+    [ "$status" -eq 1 ]
+    json_has '.problems | length > 0'
+    grep -q "not clones of their configured repository" "$TEST_DIR/stderr"
+}
+
 @test "meta git status shows clean repos" {
     run "$META_BIN" git status
     [ "$status" -eq 0 ]
@@ -482,6 +568,36 @@ within() {
 }
 
 # ============ meta git clone (local) ============
+
+@test "meta git clone numbers each repo once, after the header that announces the work" {
+    remotes="$(cd "$(mktemp -d)" && pwd -P)"
+    seed="$remotes/seed"
+    mkdir -p "$seed"
+    git -C "$seed" init --quiet --initial-branch=main
+    printf 'projects:\n' > "$seed/.meta.yaml"
+    for i in 1 2 3 4 5 6 7 8; do
+        git init --quiet --bare --initial-branch=main "$remotes/a$i.git"
+        git -C "$remotes" clone --quiet "$remotes/a$i.git" "w$i" 2>/dev/null
+        git -C "$remotes/w$i" -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m init
+        git -C "$remotes/w$i" push --quiet origin main
+        printf '  a%s: %s\n' "$i" "$remotes/a$i.git" >> "$seed/.meta.yaml"
+    done
+    git -C "$seed" add .meta.yaml
+    git -C "$seed" -c user.name=t -c user.email=t@t commit --quiet -m ws
+    git clone --quiet --bare "$seed" "$remotes/ws.git"
+    # from the workspace, whose .meta/plugins holds meta-git
+    run with_terminal "$META_BIN" git clone "$remotes/ws.git" "$remotes/ws"
+    [ "$status" -eq 0 ]
+    screen=$(printf '%s' "$output" | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr '\r' '\n')
+    # the number each repo finished with: 1..8, once each
+    numbers=$(grep -ao '\[[0-9]/8\] *Cloned a[0-9]' <<<"$screen" | sort -u | grep -o '^\[[0-9]' | sort | tr -d '[' | tr -d '\n')
+    [ "$numbers" = "12345678" ]
+    # the header comes before the first repo's progress
+    header=$(grep -an 'Cloning meta repository' <<<"$screen" | head -1 | cut -d: -f1)
+    first=$(grep -an 'Cloned a' <<<"$screen" | head -1 | cut -d: -f1)
+    [ -n "$header" ] && [ "$header" -lt "$first" ]
+    rm -rf "$remotes"
+}
 
 @test "meta git clone from local path works" {
     # Create a "remote" bare repo that IS a meta repo
@@ -1258,12 +1374,14 @@ YAML
 
 @test "meta git status passes its arguments to git, and git update refuses ones it doesn't take" {
     echo change >> "$TEST_DIR/frontend/README.md"
-    # git colours it: meta's git runs keep colour on
     run "$META_BIN" git status --short
     [ "$status" -eq 0 ]
-    [[ "$output" == *"M"*"README.md"* ]]
-    [[ "$output" == *$'\033['* ]]
+    [[ "$output" == *" M README.md"* ]]
     [[ "$output" != *"Changes not staged"* ]]
+    # into a pipe uncoloured; colour forced, git colours it
+    [[ "$output" != *$'\033['* ]]
+    CLICOLOR_FORCE=1 run "$META_BIN" git status --short
+    [[ "$output" == *$'\033['* ]]
     # meta's flag after the command is git's argument
     run "$META_BIN" git status --tag backend
     [ "$status" -ne 0 ]

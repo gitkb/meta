@@ -270,7 +270,13 @@ impl RegistryClient {
                     combined_index.plugins.extend(index.plugins);
                 }
                 Err(e) => {
-                    log::warn!("Failed to fetch from {}: {}", registry_url, e);
+                    // the error names the URL, which may hold a token:
+                    // RUST_LOG=debug shows it
+                    debug!("{e:#}");
+                    meta_core::out::warn(format!(
+                        "Failed to fetch the plugin index of registry {}",
+                        shown_url(registry_url)
+                    ));
                 }
             }
         }
@@ -322,9 +328,13 @@ impl RegistryClient {
 
             match self.fetch_json::<PluginMetadata>(&plugin_url) {
                 Ok(metadata) => return Ok(metadata),
-                Err(e) => {
-                    log::warn!("Plugin {} not found in {}: {}", name, registry_url, e);
-                }
+                // another registry may have it; with none, the error below
+                // says so
+                Err(e) => debug!(
+                    "Plugin {} not found in registry {}: {e:#}",
+                    escape(name),
+                    shown_url(registry_url)
+                ),
             }
         }
 
@@ -367,15 +377,13 @@ impl RegistryClient {
     /// for the latest release tag.
     pub fn get_latest_version(shorthand: &str) -> Result<String> {
         // Parse shorthand to extract user/repo
-        let parts: Vec<&str> = shorthand.split('@').collect();
-        let repo_path = parts[0];
-        let parts: Vec<&str> = repo_path.split('/').collect();
-
-        if parts.len() != 2 {
+        let repo_path = shorthand.split('@').next().unwrap_or_default();
+        let Some((user, repo)) = repo_path
+            .split_once('/')
+            .filter(|(_, repo)| !repo.contains('/'))
+        else {
             anyhow::bail!("Invalid GitHub shorthand: {}", escape(shorthand));
-        }
-
-        let (user, repo) = (parts[0], parts[1]);
+        };
         let api_url = format!(
             "https://api.github.com/repos/{}/{}/releases/latest",
             user, repo
@@ -402,8 +410,9 @@ impl RegistryClient {
         let json: serde_json::Value =
             serde_json::from_str(&body).with_context(|| "Failed to parse GitHub API response")?;
 
-        let tag_name = json["tag_name"]
-            .as_str()
+        let tag_name = json
+            .get("tag_name")
+            .and_then(serde_json::Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("No tag_name in release"))?;
 
         Ok(tag_name.to_string())
@@ -517,6 +526,13 @@ pub struct GitHubShorthand {
     pub version: Option<String>,
 }
 
+/// A registry URL as meta shows it: its credentials hidden (as for a
+/// repo's URL) and its query, which may carry a token, left out; escaped.
+fn shown_url(url: &str) -> String {
+    let url = url.split_once('?').map_or(url, |(base, _)| base);
+    escape(&meta_core::git::GitUrl::from(url).to_string()).into_owned()
+}
+
 impl GitHubShorthand {
     /// Parse a GitHub shorthand string (user/repo or user/repo@version)
     ///
@@ -527,13 +543,8 @@ impl GitHubShorthand {
             return None;
         }
 
-        let parts: Vec<&str> = input.splitn(2, '/').collect();
-        if parts.len() != 2 {
-            return None;
-        }
-
-        let user = parts[0].to_string();
-        let repo_and_version = parts[1];
+        let (user, repo_and_version) = input.split_once('/')?;
+        let user = user.to_string();
 
         // Reject if repo contains additional slashes
         if repo_and_version.matches('/').count() > 0 {
@@ -541,9 +552,8 @@ impl GitHubShorthand {
         }
 
         // Check for @version suffix
-        if let Some(at_pos) = repo_and_version.find('@') {
-            let repo = repo_and_version[..at_pos].to_string();
-            let version = repo_and_version[at_pos + 1..].to_string();
+        if let Some((repo, version)) = repo_and_version.split_once('@') {
+            let (repo, version) = (repo.to_string(), version.to_string());
 
             if user.is_empty() || repo.is_empty() || version.is_empty() {
                 return None;
@@ -779,7 +789,10 @@ impl PluginInstaller {
             self.record_installation(plugin_name, url.to_string(), None)?;
         }
 
-        let primary_plugin = installed.first().unwrap().clone();
+        let primary_plugin = installed
+            .first()
+            .context("The plugin archive installed no plugin")?
+            .clone();
         info!("Successfully installed: {}", installed.join(", "));
 
         Ok(primary_plugin)
@@ -835,7 +848,10 @@ impl PluginInstaller {
                         )?;
                     }
 
-                    let primary_plugin = installed.first().unwrap().clone();
+                    let primary_plugin = installed
+                        .first()
+                        .context("The plugin archive installed no plugin")?
+                        .clone();
                     info!("Successfully installed: {}", installed.join(", "));
                     return Ok(primary_plugin);
                 }
@@ -861,12 +877,9 @@ impl PluginInstaller {
         // Determine version component
         let version_paths = if let Some(version) = &shorthand.version {
             // Try both with and without 'v' prefix
-            if version.starts_with('v') {
+            if let Some(bare) = version.strip_prefix('v') {
                 // If version already has 'v', try with and without
-                vec![
-                    format!("download/{version}"),
-                    format!("download/{}", version.strip_prefix('v').unwrap()),
-                ]
+                vec![format!("download/{version}"), format!("download/{bare}")]
             } else {
                 // If version doesn't have 'v', try both
                 vec![
@@ -1103,7 +1116,7 @@ impl PluginInstaller {
                             version: match crate::subprocess_plugins::probe_plugin_info(&path) {
                                 Ok(info) => Some(info.version),
                                 Err(e) => {
-                                    eprintln!("Warning: {}", e.into_error());
+                                    meta_core::out::warn(e.into_error());
                                     None
                                 }
                             },
@@ -1227,6 +1240,16 @@ impl PluginInstaller {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_registry_url_is_shown_without_its_token() {
+        let shown = shown_url("https://user:ghp_secret@reg.example/path?token=abc");
+        assert!(
+            !shown.contains("ghp_secret") && !shown.contains("abc"),
+            "{shown}"
+        );
+        assert!(shown.contains("reg.example/path"), "{shown}");
+    }
 
     #[test]
     fn a_missing_releases_error_keeps_each_value_on_its_line() {
@@ -1560,7 +1583,7 @@ mod tests {
         let later_header = {
             let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&zip_data)).unwrap();
             let file = archive.by_index(1).unwrap();
-            file.header_start() as usize
+            usize::try_from(file.header_start()).unwrap()
         };
         zip_data[later_header..later_header + 4].copy_from_slice(b"BAD!");
 

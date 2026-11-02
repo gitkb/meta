@@ -6,11 +6,11 @@
 //! dependency on `~/.ssh/config`), let them share one connection through the
 //! `GIT_SSH_COMMAND` this module returns.
 
-use console::style;
 use log::debug;
 use meta_core::config::{ProjectInfo, Workspace};
 use meta_core::display::escape;
 use meta_core::display::shell_quote;
+use meta_core::errln;
 use meta_core::git::GitUrl;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -73,6 +73,10 @@ impl SshTarget {
 
     /// `ssh` with `args`, for this target, quiet.
     fn ssh(&self, args: &[&str]) -> Command {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ssh to a remote's host, in no repo"
+        )]
         let mut cmd = Command::new("ssh");
         cmd.args(args);
         if self.port != 22 {
@@ -116,13 +120,13 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
     }
 
     let Some(home) = dirs::home_dir() else {
-        warn("could not find the HOME directory for SSH sockets");
+        meta_core::out::warn("could not find the HOME directory for SSH sockets");
         return SshMasters::Failed;
     };
     let sockets_dir = match ensure_ssh_sockets_dir(&home) {
         Ok(dir) => dir,
         Err(e) => {
-            warn(format!("could not create the SSH sockets directory: {e}"));
+            meta_core::out::warn(format!("could not create the SSH sockets directory: {e}"));
             return SshMasters::Failed;
         }
     };
@@ -182,7 +186,7 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
             );
             any_succeeded = true;
         } else {
-            warn(format!(
+            meta_core::out::warn(format!(
                 "SSH master for {} (port {}) could not be started",
                 escape(&target.destination()),
                 target.port
@@ -201,11 +205,6 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
     } else {
         SshMasters::Failed
     }
-}
-
-/// Tell the user, on stderr, what meta couldn't set up.
-pub(crate) fn warn(message: impl std::fmt::Display) {
-    eprintln!("{} {message}", style("⚠").yellow().bold());
 }
 
 /// A `GIT_SSH_COMMAND` value that reuses established ControlMaster
@@ -257,22 +256,24 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
         return;
     }
 
-    eprintln!(
-        "{} Found {} remote URL mismatch{}:",
-        style("⚠").yellow().bold(),
+    let mut message = format!(
+        "Found {} remote URL mismatch{}:",
         mismatches.len(),
         if mismatches.len() == 1 { "" } else { "es" }
     );
     for (project, expected, actual) in &mismatches {
-        eprintln!("  {}", style(escape(&project.name)).bold());
-        eprintln!("    actual:   {}", style(actual).red());
-        eprintln!("    expected: {}", style(expected).green());
+        message.push_str(&format!(
+            "\n  {}\n    actual:   {}\n    expected: {}",
+            escape(&project.name),
+            escape(&actual.to_string()),
+            escape(&expected.to_string())
+        ));
         if actual.to_string() == expected.to_string() {
-            eprintln!("    (they differ only in their hidden credentials)");
+            message.push_str("\n    (they differ only in their hidden credentials)");
         }
     }
-    eprintln!();
-    eprintln!("  Fix manually with:");
+    meta_core::out::warn(message);
+    errln!("  Fix manually with:");
     for (project, expected, _) in &mismatches {
         // printed as a URL prints, escaped; hidden credentials would break
         // the command, so the reader fills those in
@@ -281,7 +282,7 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
         } else {
             shell_quote(&expected.to_string())
         };
-        eprintln!(
+        errln!(
             "    git -C {} remote set-url origin {url}",
             escape(&shell_quote(
                 &workspace.dir.join(&project.path).to_string_lossy()

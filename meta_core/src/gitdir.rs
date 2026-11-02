@@ -224,6 +224,13 @@ pub fn linked(checkout: &Path) -> anyhow::Result<Linked> {
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    unix,
+    expect(
+        clippy::disallowed_methods,
+        reason = "tests start the programs they test with"
+    )
+)]
 mod tests {
     use super::*;
     use crate::git::run;

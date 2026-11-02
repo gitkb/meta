@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result};
 use meta_core::display::{escape, escape_path};
+use meta_core::errln;
 use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -45,6 +46,10 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<PluginInfo, NoInfo> {
         ))
     };
     let deadline = Instant::now() + Duration::from_secs(5);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a plugin is meta's own program, not one in a repo"
+    )]
     let mut command = Command::new(path);
     command
         .arg("--meta-plugin-info")
@@ -115,17 +120,6 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<PluginInfo, NoInfo> {
     )))
 }
 
-/// Print a plugin's output. A closed stdout (`meta ... | head`) ends meta
-/// quietly, as it does for command output.
-pub(crate) fn print_output(text: &str) -> Result<()> {
-    use std::io::Write;
-    std::io::stdout()
-        .lock()
-        .write_all(text.as_bytes())
-        .map_err(loop_lib::StdoutError)?;
-    Ok(())
-}
-
 /// A plugin: the file `meta-<word>` that serves `meta <word>`, and what it
 /// answered to `--meta-plugin-info`
 #[derive(Debug, Clone)]
@@ -166,10 +160,10 @@ impl SubprocessPluginManager {
         // A config meta can't use leaves no project plugins; the command
         // itself reports it, and `--help` still prints
         let nearest = meta_core::config::nearest_meta_dir(&cwd).unwrap_or_else(|e| {
-            eprintln!(
-                "Warning: {} Skipping project plugins.",
+            meta_core::out::warn(format!(
+                "{} Skipping project plugins.",
                 escape(&format!("{e:#}"))
-            );
+            ));
             None
         });
         let project_dirs = nearest.map(|nearest| meta_core::config::workspace_meta_dirs(&nearest));
@@ -179,10 +173,10 @@ impl SubprocessPluginManager {
                     add(dir.join(".meta/plugins"), false);
                 }
             }
-            Err(e) => eprintln!(
-                "Warning: {} Skipping project plugins.",
+            Err(e) => meta_core::out::warn(format!(
+                "{} Skipping project plugins.",
                 escape(&format!("{e:#}"))
-            ),
+            )),
         }
 
         // ~/.meta/plugins/ (global installed). No home just means no global
@@ -236,7 +230,7 @@ impl SubprocessPluginManager {
                 Ok(info) => Some(self.loaded(word, path, info)),
                 Err(NoInfo::NotAPlugin(_)) if on_path => None,
                 Err(e) => {
-                    eprintln!("Warning: {}; skipping", e.into_error());
+                    meta_core::out::warn(format!("{}; skipping", e.into_error()));
                     None
                 }
             })
@@ -250,17 +244,17 @@ impl SubprocessPluginManager {
         let mut files = std::collections::BTreeMap::new();
         for (dir, on_path) in &self.dirs {
             if self.verbose {
-                println!("Scanning for subprocess plugins in: {}", escape_path(dir));
+                errln!("Scanning for subprocess plugins in: {}", escape_path(dir));
             }
             let entries = match std::fs::read_dir(dir) {
                 Ok(entries) => entries,
                 Err(e) if *on_path || e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => {
-                    eprintln!(
-                        "Warning: Cannot read plugins directory {}: {}; skipping",
+                    meta_core::out::warn(format!(
+                        "Cannot read plugins directory {}: {}; skipping",
                         escape_path(dir),
                         escape(&e.to_string())
-                    );
+                    ));
                     continue;
                 }
             };
@@ -269,11 +263,11 @@ impl SubprocessPluginManager {
                     Ok(entry) => entry,
                     Err(_) if *on_path => continue,
                     Err(e) => {
-                        eprintln!(
-                            "Warning: Cannot read plugins directory {}: {}; skipping entry",
+                        meta_core::out::warn(format!(
+                            "Cannot read plugins directory {}: {}; skipping entry",
                             escape_path(dir),
                             escape(&e.to_string())
-                        );
+                        ));
                         continue;
                     }
                 };
@@ -288,10 +282,10 @@ impl SubprocessPluginManager {
                 if is_executable(&path) {
                     files.entry(word.to_string()).or_insert((path, *on_path));
                 } else if !on_path && path.is_file() {
-                    eprintln!(
-                        "Warning: Plugin {} is not executable; skipping",
+                    meta_core::out::warn(format!(
+                        "Plugin {} is not executable; skipping",
                         escape_path(&path)
-                    );
+                    ));
                 }
             }
         }
@@ -300,7 +294,7 @@ impl SubprocessPluginManager {
 
     fn loaded(&self, word: String, path: PathBuf, info: PluginInfo) -> SubprocessPlugin {
         if self.verbose {
-            println!(
+            errln!(
                 "  Found plugin: {} v{} ({})",
                 escape(&word),
                 escape(&info.version),
@@ -377,7 +371,7 @@ impl SubprocessPlugin {
         })?;
 
         if request.options.verbose {
-            println!(
+            errln!(
                 "Executing plugin {} for command '{}'",
                 escape(&self.word),
                 escape(&request.command)
@@ -385,23 +379,30 @@ impl SubprocessPlugin {
         }
 
         // A plugin may answer without reading its request; then its output
-        // and exit status decide, not the pipe
-        let output = meta_core::children::spawn(
-            Command::new(&self.path)
-                .arg("--meta-plugin-exec")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped()) // Capture stdout to parse response
-                .stderr(Stdio::inherit()), // Let stderr pass through for error messages
-        )
-        .and_then(|child| child.exchange(request_json.as_bytes()))
-        .with_context(|| format!("Failed to execute plugin {}", escape_path(&self.path)))?;
+        // and exit status decide, not the pipe. Meta shows what it prints,
+        // so it colours as meta does.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a plugin is meta's own program, not one in a repo"
+        )]
+        let mut plugin = Command::new(&self.path);
+        plugin
+            .arg("--meta-plugin-exec")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped()) // Capture stdout to parse response
+            .stderr(Stdio::inherit()); // Let stderr pass through for error messages
+        meta_core::out::pass_color(&mut plugin);
+        let output = meta_core::children::spawn(&mut plugin)
+            .and_then(|child| child.exchange(request_json.as_bytes()))
+            .with_context(|| format!("Failed to execute plugin {}", escape_path(&self.path)))?;
 
         if !output.status.success() {
             // Plugin already printed its error to stderr. What it printed
             // before failing (say the worktrees it removed before a store
             // error) is shown too; then its exit code is propagated.
-            let _ = std::io::Write::write_all(&mut std::io::stdout(), &output.stdout);
-            std::process::exit(output.status.code().unwrap_or(1));
+            let json = request.options.json_output.then_some(self.word.as_str());
+            relay(&output.stdout, json, false)?;
+            return Err(meta_core::exit::ExitWith::of(output.status).into());
         }
 
         // Try to parse the response as JSON
@@ -412,9 +413,14 @@ impl SubprocessPlugin {
             return Ok(());
         }
 
-        // If stdout doesn't look like JSON, print it (legacy plugin output)
+        // If stdout doesn't look like JSON, print it (legacy plugin output),
+        // as the plugin wrote it
         if !stdout_str.trim().starts_with('{') {
-            return print_output(&stdout_str);
+            return relay(
+                &output.stdout,
+                request.options.json_output.then_some(""),
+                true,
+            );
         }
 
         // A plan meta cannot read must not pass for success: an older plugin
@@ -435,9 +441,45 @@ impl SubprocessPlugin {
                 escape_path(&self.path)
             ),
             // Not a plan - print output as-is
-            Err(_) => print_output(&stdout_str),
+            Err(_) => relay(
+                &output.stdout,
+                request.options.json_output.then_some(""),
+                true,
+            ),
         }
     }
+}
+
+/// Show what a plugin printed, as it wrote it. With `--json` (`json`: the
+/// plugin's word), text that is no JSON goes into
+/// `{"success": .., "output": ..}`, and a failed plugin that printed
+/// nothing (its error is on stderr) leaves `{"success": false, "error": ..}`,
+/// so stdout stays JSON.
+fn relay(stdout: &[u8], json: Option<&str>, success: bool) -> Result<()> {
+    let Some(word) = json else {
+        return Ok(meta_core::out::stdout_bytes(stdout)?);
+    };
+    if stdout.trim_ascii().is_empty() {
+        if !success {
+            let failed = serde_json::json!({
+                "success": false,
+                "error": format!("plugin {word} failed"),
+            });
+            meta_core::outln!("{failed}")?;
+        }
+        return Ok(());
+    }
+    let is_json = serde_json::Deserializer::from_slice(stdout)
+        .into_iter::<serde::de::IgnoredAny>()
+        .all(|value| value.is_ok());
+    if is_json {
+        return Ok(meta_core::out::stdout_bytes(stdout)?);
+    }
+    let wrapped = serde_json::json!({
+        "success": success,
+        "output": String::from_utf8_lossy(stdout),
+    });
+    Ok(meta_core::outln!("{wrapped}")?)
 }
 
 /// Execute an execution plan via loop_lib
@@ -475,7 +517,7 @@ fn execute_plan(
     if !plan.pre_commands.is_empty() {
         if !options.silent {
             use colored::Colorize;
-            eprintln!("{} Preparing connections...", "⟳".cyan());
+            errln!("{} Preparing connections...", "⟳".cyan());
         }
 
         for pre_cmd in &plan.pre_commands {
@@ -483,7 +525,7 @@ fn execute_plan(
             // The main commands will fail if setup was actually needed
             if let Err(e) = run_commands(&phase_config, &[job(pre_cmd)]) {
                 if options.verbose {
-                    eprintln!("Pre-command failed (continuing): {e}");
+                    errln!("Pre-command failed (continuing): {e}");
                 }
             }
         }
@@ -522,7 +564,7 @@ fn execute_plan(
     for post_cmd in &plan.post_commands {
         if let Err(e) = run_commands(&phase_config, &[job(post_cmd)]) {
             if options.verbose {
-                eprintln!("Post-command failed: {e}");
+                errln!("Post-command failed: {e}");
             }
         }
     }

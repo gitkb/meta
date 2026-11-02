@@ -75,8 +75,8 @@ pub fn execute_command(
             return match meta_plugin_protocol::parse_args(command, args) {
                 Ok(args) => finish(update::execute_git_update(args, options, cwd)),
                 // meta's own options aren't update's
-                Err(CommandResult::Error(e)) if e.starts_with("unexpected argument '-") => {
-                    CommandResult::Error(format!(
+                Err(CommandResult::Usage(e)) if e.starts_with("unexpected argument '-") => {
+                    CommandResult::Usage(format!(
                         "{e}\n\nmeta's own options (--dry-run, --depth, ...) go before the \
                          command, as in `meta --dry-run git update`"
                     ))
@@ -109,7 +109,7 @@ pub fn execute_command(
 }
 
 fn finish(result: anyhow::Result<CommandResult>) -> CommandResult {
-    result.unwrap_or_else(|e| CommandResult::Error(format!("{e:#}")))
+    result.unwrap_or_else(Into::into)
 }
 
 /// Check if a git command accesses remote repositories
@@ -250,7 +250,9 @@ fn execute_raw_git_command(
             ssh::SshMasters::OurSockets(dir) => (Some(ssh::git_ssh_command(&dir)), true),
             ssh::SshMasters::UserManaged => (None, true),
             ssh::SshMasters::Failed => {
-                ssh::warn("SSH multiplexing could not be set up: running one repository at a time");
+                meta_core::out::warn(
+                    "SSH multiplexing could not be set up: running one repository at a time",
+                );
                 (None, false)
             }
         };

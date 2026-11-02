@@ -28,5 +28,5 @@ isolate_user_env() {
     export META_DATA_DIR="$user_env/meta"
     export GIT_CONFIG_GLOBAL="$user_env/gitconfig"
     # Tests that want these set them themselves
-    unset META_WORKTREES RUST_LOG
+    unset META_WORKTREES RUST_LOG NO_COLOR CLICOLOR CLICOLOR_FORCE FORCE_COLOR
 }

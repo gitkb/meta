@@ -76,6 +76,8 @@ meta --strict git worktree prune
 - Missing refs when using a commit-ish (worktree create)
 - The root repo skipped because a commit-ish is missing there (worktree create)
 - Invalid `--meta` format values (worktree create)
+- A `depends_on` of the set that names no project, or that two projects provide (worktree create)
+- A failing hook (worktree create, remove and prune)
 - Failed directory removal (worktree prune)
 - Any set prune keeps: one holding work, a worktree meta has no record of, a worktree from another workspace, or a record it can't read (worktree prune)
 

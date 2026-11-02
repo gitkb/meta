@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use colored::*;
 use meta_core::display::{escape, escape_path};
+use meta_core::out;
+use meta_core::outln;
 use meta_core::ExecutionMode;
 
 use meta_git_lib::worktree::helpers::*;
@@ -98,7 +100,13 @@ pub(crate) fn remove_set(
         let unreadable: String = workspace
             .unreadable
             .iter()
-            .map(|(path, e)| format!("\n  {}: {}", escape_path(path), escape(&format!("{e:#}"))))
+            .map(|(path, e)| {
+                format!(
+                    "\n  {}: {}",
+                    escape_path(path),
+                    meta_core::display::escape_lines(&format!("{e:#}"))
+                )
+            })
             .collect();
         anyhow::bail!(
             "Refusing to remove worktree '{name}': it is not a set of this workspace ({}):\n  {}\n\
@@ -152,15 +160,14 @@ pub(crate) fn remove_set(
                  Commit and push it, or use --force to discard it."
             );
         }
-        eprintln!(
-            "{} {} work in worktree '{name}':\n  {found}",
-            "warning:".yellow().bold(),
+        out::warn(format!(
+            "{} work in worktree '{name}':\n  {found}",
             if preview {
                 "would discard"
             } else {
                 "discarding"
             }
-        );
+        ));
     }
 
     if !preview {
@@ -178,23 +185,23 @@ pub(crate) fn remove_set(
             repos_removed: check.members.len(),
             dry_run: preview,
         };
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else if preview {
-        println!(
+        outln!(
             "[DRY RUN] Would remove worktree '{}' at {}:",
             escape(name),
             escape_path(&wt_dir)
-        );
+        )?;
         for member in &check.members {
-            println!("  {}", escape_path(&member.path));
+            outln!("  {}", escape_path(&member.path))?;
         }
     } else {
-        println!("{} Removed worktree '{}'", "✓".green(), name.bold());
+        outln!("{} Removed worktree '{}'", "✓".green(), name.bold())?;
     }
     if preview {
         return Ok(());
     }
     // What was done is reported first: a failing hook doesn't undo it
     fire_post_destroy(name, &wt_dir, force, Some(&configs.owner))
-        .or_else(|e| super::warn_or_bail(strict, format!("{e:#}")))
+        .or_else(|e| out::warn_or_bail(strict, format!("{e:#}")))
 }

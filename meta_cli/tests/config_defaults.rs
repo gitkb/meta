@@ -1,5 +1,10 @@
 //! `defaults` come from the config meta runs with, wherever it was found.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
+
 /// `defaults: {parallel: false}` holds when meta runs below the config, and
 /// when `--config` names it over a `.meta.yaml` that runs in parallel: two
 /// repos holding one lock at once fail, as `--parallel` shows.

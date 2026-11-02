@@ -17,17 +17,19 @@ pub fn parse_duration(s: &str) -> anyhow::Result<u64> {
     let (num_str, multiplier) = if s.chars().all(|c| c.is_ascii_digit()) {
         (s, 1)
     } else {
-        let suffix_at = s.len() - s.chars().last().map_or(0, char::len_utf8);
-        let (num_str, suffix) = s.split_at(suffix_at);
+        // the last character is the suffix
+        let mut chars = s.chars();
+        let suffix = chars.next_back();
+        let num_str = chars.as_str();
         let multiplier = match suffix {
-            "s" => 1,
-            "m" => 60,
-            "h" => 3600,
-            "d" => 86400,
-            "w" => 604800,
+            Some('s') => 1,
+            Some('m') => 60,
+            Some('h') => 3600,
+            Some('d') => 86400,
+            Some('w') => 604800,
             _ => anyhow::bail!(
                 "Invalid duration suffix '{}'. Use s (seconds), m (minutes), h (hours), d (days), or w (weeks)",
-                escape(suffix)
+                escape(&suffix.map(String::from).unwrap_or_default())
             ),
         };
         (num_str, multiplier)
@@ -117,7 +119,7 @@ mod tests {
         ] {
             assert_eq!(format_duration(secs), text);
             if secs > 0 {
-                assert_eq!(parse_duration(text).unwrap(), secs as u64);
+                assert_eq!(parse_duration(text).unwrap(), secs.unsigned_abs());
             }
         }
     }

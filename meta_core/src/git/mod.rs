@@ -1,7 +1,7 @@
 //! Running git. Every git process meta starts comes from [`git`], so none
 //! inherits the variables that tie git to one repository.
 
-use crate::display::{escape, escape_path};
+use crate::display::{escape, escape_path, program_output};
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 #[cfg(windows)]
@@ -42,6 +42,22 @@ pub fn clear_repo_env(command: &mut Command) -> &mut Command {
     for key in REPO_ENV_VARS {
         command.env_remove(key);
     }
+    command
+}
+
+/// `program`, to run in the repository folder `dir` with [`REPO_ENV_VARS`]
+/// cleared: each folder is its own repository, so a `GIT_DIR` from a git
+/// hook around meta must not point the git the program starts at the
+/// hook's. Every program meta starts in a repo starts here (or through
+/// [`git`]).
+pub fn in_repo(program: impl AsRef<std::ffi::OsStr>, dir: &Path) -> Command {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the helper every program in a repo starts through"
+    )]
+    let mut command = Command::new(program);
+    command.current_dir(dir);
+    clear_repo_env(&mut command);
     command
 }
 
@@ -88,10 +104,8 @@ pub fn ceiling(dir: &Path) -> Option<(&'static str, OsString)> {
 /// status` never rewrites the index (meta's reads change nothing, previews
 /// included).
 pub fn git(dir: &Path) -> Command {
-    let mut command = Command::new("git");
-    command.current_dir(dir).env("GIT_OPTIONAL_LOCKS", "0");
-    clear_repo_env(&mut command);
-    command.envs(ceiling(dir));
+    let mut command = in_repo("git", dir);
+    command.env("GIT_OPTIONAL_LOCKS", "0").envs(ceiling(dir));
     command
 }
 
@@ -143,10 +157,10 @@ where
     }
     if !output.status.success() {
         anyhow::bail!(
-            "git {} failed in {}: {}",
+            "git {} failed in {}:{}",
             escape(&shown()),
             escape_path(dir),
-            escape(String::from_utf8_lossy(&output.stderr).trim())
+            program_output(&output.stderr)
         );
     }
     Ok(Some(
@@ -171,6 +185,13 @@ pub fn remote_url(dir: &Path) -> anyhow::Result<Option<GitUrl>> {
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    unix,
+    expect(
+        clippy::disallowed_methods,
+        reason = "tests start the programs they test with"
+    )
+)]
 mod tests {
     use super::*;
 

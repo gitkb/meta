@@ -1,19 +1,23 @@
 use anyhow::{Context, Result};
 use colored::*;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use meta_core::display::{escape, escape_path};
+use meta_core::display::{escape, escape_path, program_output};
+use meta_core::{errln, out, outln};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
+
+/// A write to command-output stdout failed (meta's one stdout error).
+pub use meta_core::out::StdoutError;
 
 /// What loop runs and how: the `.looprc` file (JSON), and what meta builds for
 /// the commands it runs. A key the file leaves out takes its default; a key
@@ -87,8 +91,9 @@ pub struct CommandResult {
     pub signal: Option<i32>,
     pub directory: PathBuf,
     pub command: String,
-    pub stdout: String,
-    pub stderr: String,
+    /// What the command wrote, as it wrote it (not necessarily UTF-8)
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
 }
 
 impl CommandResult {
@@ -161,8 +166,8 @@ pub fn aliases() -> Result<BTreeMap<String, String>> {
 }
 
 fn prompt_user(question: &str) -> Result<bool> {
-    print!("{question} [y/N]: ");
-    io::stdout().flush()?;
+    out!("{question} [y/N]: ")?;
+    meta_core::out::flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     Ok(input.trim().to_lowercase() == "y")
@@ -171,15 +176,19 @@ fn prompt_user(question: &str) -> Result<bool> {
 /// The aliases your interactive shell defines (`alias` in `$SHELL -i`).
 fn shell_aliases() -> Result<BTreeMap<String, String>> {
     let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the user's shell, in no repo: it lists their aliases"
+    )]
     let output = Command::new(&shell)
         .args(["-i", "-c", "alias"])
         .output()
         .with_context(|| format!("Failed to run {}", escape(&shell)))?;
     anyhow::ensure!(
         output.status.success(),
-        "`{} -i -c alias` failed: {}",
+        "`{} -i -c alias` failed:{}",
         escape(&shell),
-        escape(String::from_utf8_lossy(&output.stderr).trim())
+        program_output(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -205,7 +214,7 @@ fn shell_aliases() -> Result<BTreeMap<String, String>> {
 /// are; a file loop can't read is reported, not replaced.
 pub fn import_aliases(dry_run: bool) -> Result<()> {
     if dry_run {
-        println!("[DRY RUN] Would add your shell's aliases to ~/.looprc");
+        outln!("[DRY RUN] Would add your shell's aliases to ~/.looprc")?;
         return Ok(());
     }
     let path = global_looprc().context("HOME is not set")?;
@@ -240,25 +249,25 @@ pub fn import_aliases(dry_run: bool) -> Result<()> {
     doc.insert("aliases".to_string(), serde_json::to_value(&aliases)?);
     let new_content = serde_json::to_string_pretty(&doc)?;
 
-    println!("\nPreview of changes:");
+    outln!("\nPreview of changes:")?;
     match &existing {
         Some(old) => {
             for diff in diff::lines(old, &new_content) {
                 match diff {
-                    diff::Result::Left(l) => println!("{}", format!("-{l}").red()),
-                    diff::Result::Both(l, _) => println!(" {l}"),
-                    diff::Result::Right(r) => println!("{}", format!("+{r}").green()),
+                    diff::Result::Left(l) => outln!("{}", format!("-{l}").red())?,
+                    diff::Result::Both(l, _) => outln!(" {l}")?,
+                    diff::Result::Right(r) => outln!("{}", format!("+{r}").green())?,
                 }
             }
         }
-        None => println!("{}", new_content.green()),
+        None => outln!("{}", new_content.green())?,
     }
     if !prompt_user("Do you want to apply these changes?")? {
         return Err(cancelled());
     }
 
     meta_core::store::write_atomic(&path, &doc)?;
-    println!("Aliases have been added to {}", escape_path(&path));
+    outln!("Aliases have been added to {}", escape_path(&path))?;
     Ok(())
 }
 
@@ -352,11 +361,10 @@ fn build_command(
     let (program, args) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("No command given"))?;
-    let mut cmd = Command::new(program);
-    cmd.args(args).current_dir(dir);
     // Each directory is its own repository: a GIT_DIR from a git hook around
     // meta would point git in every one of them at the hook's
-    meta_core::git::clear_repo_env(&mut cmd);
+    let mut cmd = meta_core::git::in_repo(program, dir);
+    cmd.args(args);
     // Plugin-specified environment variables (e.g., GIT_PAGER=cat)
     if let Some(extra) = extra_env {
         cmd.envs(extra);
@@ -371,8 +379,8 @@ fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
         signal: None,
         directory: dir.to_path_buf(),
         command,
-        stdout: String::new(),
-        stderr,
+        stdout: Vec::new(),
+        stderr: stderr.into_bytes(),
     }
 }
 
@@ -397,25 +405,6 @@ fn dry_run_line(dir: &Path, command: &str) -> String {
     format!("Would execute in {dir_display}:\n  {}", escape(command))
 }
 
-/// A write to command-output stdout failed. Kept distinct from child stdin errors.
-#[derive(Debug)]
-pub struct StdoutError(pub io::Error);
-
-impl std::fmt::Display for StdoutError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Failed to write command output: {}", self.0)
-    }
-}
-
-impl std::error::Error for StdoutError {}
-
-macro_rules! command_print {
-    ($($arg:tt)*) => { write!(io::stdout().lock(), $($arg)*).map_err(StdoutError)? };
-}
-macro_rules! command_println {
-    ($($arg:tt)*) => { writeln!(io::stdout().lock(), $($arg)*).map_err(StdoutError)? };
-}
-
 fn execute_command_in_directory(
     dir: &Path,
     argv: &[String],
@@ -423,13 +412,16 @@ fn execute_command_in_directory(
     extra_env: Option<&HashMap<String, String>>,
 ) -> Result<CommandResult> {
     if !dir.exists() {
-        command_println!("\nNo directory found for {}", escape_path(dir));
-        command_println!(
-            "\x1b[31m\n✗ {}: No directory found. Command: {} (Exit code: {})\x1b[0m",
-            display_name(dir, config.root_dir.as_deref()),
-            escape(&display_command(argv)),
-            1
-        );
+        outln!("\nNo directory found for {}", escape_path(dir))?;
+        outln!(
+            "\n{}",
+            format!(
+                "✗ {}: No directory found. Command: {} (Exit code: 1)",
+                display_name(dir, config.root_dir.as_deref()),
+                escape(&display_command(argv)),
+            )
+            .red()
+        )?;
         return Ok(CommandResult {
             exit_code: Some(1),
             ..failed_result(dir, display_command(argv), String::new())
@@ -440,7 +432,7 @@ fn execute_command_in_directory(
         Ok(argv) => argv,
         Err(e) => {
             if !config.silent {
-                eprintln!("{e:#}");
+                errln!("{e:#}");
             }
             return Ok(failed_result(
                 dir,
@@ -453,7 +445,7 @@ fn execute_command_in_directory(
 
     // Dry run mode: print what would be executed without running it
     if config.dry_run {
-        command_println!("{} {}", "[DRY RUN]".cyan(), dry_run_line(dir, &command));
+        outln!("{} {}", "[DRY RUN]".cyan(), dry_run_line(dir, &command))?;
         return Ok(CommandResult {
             success: true,
             exit_code: Some(0),
@@ -464,12 +456,15 @@ fn execute_command_in_directory(
     }
 
     if config.verbose {
-        command_println!("Executing in directory: {}", escape_path(dir));
+        errln!("Executing in directory: {}", escape_path(dir));
     }
 
+    // Its name before what it prints (a prompt says which repo asks),
+    // flushed before it writes to the same terminal
+    let name = result_name(dir, config.root_dir.as_deref());
     if !config.silent {
-        command_println!();
-        io::stdout().flush().map_err(StdoutError)?;
+        outln!("\n{}", format!("{name}:").bold())?;
+        meta_core::out::flush()?;
     }
 
     let status = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
@@ -502,20 +497,16 @@ fn execute_command_in_directory(
         }
         Err(e) => {
             if !config.silent {
-                eprintln!("{e:#}");
+                errln!("{e:#}");
             }
             failed_result(dir, command, String::new())
         }
     };
 
-    if !config.silent {
-        let name = result_name(dir, config.root_dir.as_deref());
-        if result.success {
-            command_println!("\x1b[32m\n✓ {name}\x1b[0m");
-        } else {
-            command_println!("\x1b[31m\n✗ {name}: {}\x1b[0m", result.ending());
-        }
-        io::stdout().flush().map_err(StdoutError)?;
+    // A failure is said under what the command printed; the summary
+    // counts the rest
+    if !config.silent && !result.success {
+        outln!("{}", format!("✗ {name}: {}", result.ending()).red())?;
     }
 
     Ok(result)
@@ -547,7 +538,7 @@ fn execute_command_in_directory_capturing(
 
     // Dry run mode: return what would be executed without running it
     if config.dry_run {
-        let stdout = format!("[DRY RUN] {}", dry_run_line(dir, &command));
+        let stdout = format!("[DRY RUN] {}", dry_run_line(dir, &command)).into_bytes();
         return CommandResult {
             success: true,
             exit_code: Some(0),
@@ -563,19 +554,10 @@ fn execute_command_in_directory_capturing(
         Err(e) => return failed_result(dir, command, format!("{e:#}\n")),
     };
 
-    // Force color output when parent stdout is a TTY
-    // This is needed because piped stdout makes child processes think they're not in a terminal
-    // Note: Tool-specific color vars (e.g., git's GIT_CONFIG_*) should be set by the
-    // plugin that knows about that tool, not here. loop_lib is tool-agnostic.
-    if io::stdout().is_terminal() {
-        cmd_builder
-            .env("FORCE_COLOR", "1") // Node.js ecosystem
-            .env("CLICOLOR_FORCE", "1"); // BSD/macOS convention
-                                         // Preserve TERM if set, otherwise provide a reasonable default
-        if env::var("TERM").is_err() {
-            cmd_builder.env("TERM", "xterm-256color");
-        }
-    }
+    // Its output goes through a pipe to meta: it colours as meta does.
+    // Tool-specific settings (git's GIT_CONFIG_*) are the plugin's to set;
+    // loop_lib is tool-agnostic.
+    meta_core::out::pass_color(&mut cmd_builder);
 
     let output = meta_core::children::output(&mut cmd_builder);
 
@@ -588,8 +570,8 @@ fn execute_command_in_directory_capturing(
                 signal,
                 directory: dir.to_path_buf(),
                 command,
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                stdout: output.stdout,
+                stderr: output.stderr,
             }
         }
         Err(e) => failed_result(
@@ -784,11 +766,15 @@ fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Co
         .map(|job| match (&job.refused, config.json_output) {
             (Some(why), json) => {
                 if !json && !config.silent {
-                    command_println!(
-                        "\x1b[31m\n✗ {}: {why} (Exit code: 1)\x1b[0m",
-                        display_name(&job.dir, config.root_dir.as_deref()),
-                        why = escape(why)
-                    );
+                    outln!(
+                        "\n{}",
+                        format!(
+                            "✗ {}: {} (Exit code: 1)",
+                            display_name(&job.dir, config.root_dir.as_deref()),
+                            escape(why)
+                        )
+                        .red()
+                    )?;
                 }
                 Ok(refused_result(job, why))
             }
@@ -841,76 +827,85 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
                     success: r.success,
                     exit_code: r.exit_code,
                     signal: r.signal,
-                    stdout: r.stdout,
-                    stderr: r.stderr,
+                    stdout: String::from_utf8_lossy(&r.stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&r.stderr).into_owned(),
                 })
                 .collect(),
         };
-        command_println!("{}", serde_json::to_string_pretty(&output)?);
+        outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else if !config.silent {
         if config.dry_run {
-            command_println!(
+            outln!(
                 "\n{} Would run {} command(s) across {} directories",
                 "[DRY RUN]".cyan(),
                 total.to_string().yellow(),
                 total.to_string().yellow()
-            );
+            )?;
         } else if failed_count == 0 {
-            command_println!("{} commands complete", total.to_string().green());
+            outln!("{} commands complete", total.to_string().green())?;
         } else {
-            command_println!(
+            outln!(
                 "\nSummary: {} {} out of {} commands failed",
                 "✗".red(),
                 failed_count.to_string().red(),
                 total
-            );
+            )?;
             for result in results.iter().filter(|r| !r.success) {
                 // Without a root the basename is ambiguous, so keep the full path
                 let name = match config.root_dir.as_deref() {
                     Some(root) => result_name(&result.directory, Some(root)),
                     None => escape_path(&result.directory),
                 };
-                command_println!(
+                outln!(
                     "\n{} {}: {} ({}) ",
                     "✗".red(),
                     name,
                     escape(&result.command),
                     result.ending()
-                );
+                )?;
             }
-            command_println!();
+            outln!()?;
         }
     }
 
     // In a dry run only commands that cannot run (a missing directory, a
-    // broken alias) fail
+    // broken alias) fail. The summary or the JSON said which; silenced,
+    // the error says it.
     if failed_count > 0 {
-        return Err(anyhow::anyhow!("At least one command failed"));
+        if config.silent && !config.json_output {
+            anyhow::bail!("At least one command failed");
+        }
+        return Err(meta_core::exit::ExitWith(1).into());
     }
 
     Ok(())
 }
 
-/// The output parallel commands captured, each under its directory's name.
+/// The output parallel commands captured, each under its directory's name:
+/// what a command wrote to stdout on stdout, to stderr on stderr, as it
+/// wrote it.
 fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
-    let has_output = |r: &CommandResult| !r.stdout.trim().is_empty() || !r.stderr.trim().is_empty();
+    let has_output =
+        |r: &CommandResult| !r.stdout.trim_ascii().is_empty() || !r.stderr.trim_ascii().is_empty();
     if results.iter().any(has_output) {
-        command_println!();
+        outln!()?;
     }
     for result in results.iter().filter(|r| has_output(r)) {
         let dir_name = result_name(&result.directory, config.root_dir.as_deref());
         if result.success {
-            command_println!("{} {}:", "✓".green(), dir_name.green());
+            outln!("{} {}:", "✓".green(), dir_name.green())?;
         } else {
-            command_println!("{} {}:", "✗".red(), dir_name.red());
+            outln!("{} {}:", "✗".red(), dir_name.red())?;
         }
-        if !result.stdout.trim().is_empty() {
-            command_print!("{}", result.stdout);
+        if !result.stdout.trim_ascii().is_empty() {
+            meta_core::out::stdout_bytes(&result.stdout)?;
         }
-        if !result.stderr.trim().is_empty() {
-            command_print!("{}", result.stderr);
+        if !result.stderr.trim_ascii().is_empty() {
+            // after the name and the stdout above it, with 2>&1 too
+            meta_core::out::flush()?;
+            meta_core::out::stderr_bytes(&result.stderr);
         }
-        command_println!(); // Blank line after each repo's output
+        outln!()?; // Blank line after each repo's output
     }
     Ok(())
 }

@@ -276,6 +276,20 @@ Meta propagates exit codes from failed commands, making it suitable for CI/CD:
 meta exec -- npm test || echo "Tests failed in at least one repo"
 ```
 
+| Code | Meaning |
+|------|---------|
+| 0 | Done |
+| 1 | Something failed: a command in at least one repo (the summary names them), or meta itself (`Error: …` on stderr) |
+| 2 | The command line is wrong: an unknown command, or an option or value clap rejects |
+| 141 | Its output was cut off: stdout closed early, as in `meta exec -- git log \| head` |
+| 128 + n | Stopped by signal n (Ctrl-C: 130), or a plugin was |
+
+A plugin's own exit code passes through. `loop` and `meta-mcp` exit the same way.
+
+### Colour
+
+Output is coloured only on a terminal: never into a pipe, a file or `--json`. `NO_COLOR` turns colour off, whatever else is set. Otherwise `CLICOLOR_FORCE=1` turns it on even into a pipe (not under `--json`), and `TERM=dumb` or `CLICOLOR=0` turn it off. A command meta captures (in parallel mode, or for JSON) is told the same, through `CLICOLOR_FORCE`/`FORCE_COLOR`; git gets `color.ui=always` after your own `GIT_CONFIG_*` entries, never in place of them. Each command's stdout goes to meta's stdout and its stderr to meta's stderr.
+
 ---
 
 ## JSON Output Mode
@@ -311,6 +325,8 @@ meta --json exec -- git rev-parse HEAD
 
 A command a signal ended has `"exit_code": null` and the signal's number in
 `"signal"` (`9` for `SIGKILL`); `signal` is left out otherwise.
+
+With `--json`, a command with a JSON result prints only JSON on stdout: one document, or the documents a plugin writes (help and `meta init claude` have no JSON form). A command line clap can't parse is reported before meta knows about `--json`, so it is text on stderr (exit 2). After that, an error before any output is `{"success": false, "error": "…"}` (an unknown command exits 2, other errors 1); one after a report was printed goes to stderr, so the report stays the only document. A plugin's output that isn't JSON comes as `{"success": …, "output": "…"}`, and a plugin that fails without printing anything leaves `{"success": false, "error": "plugin … failed"}`. Warnings and `--verbose` lines go to stderr.
 
 ### Parsing with jq
 

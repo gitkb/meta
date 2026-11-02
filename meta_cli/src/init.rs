@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use colored::*;
 use meta_core::config;
 use meta_core::display::escape_path;
+use meta_core::outln;
 use meta_core::ExecutionMode;
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -121,7 +122,7 @@ impl Init {
 
     fn write_file(&self, path: &Path, content: &str) -> Result<()> {
         if self.mode.is_preview() {
-            println!("  would write {}", escape_path(path));
+            outln!("  would write {}", escape_path(path))?;
             return Ok(());
         }
         write_file(path, content, self.verbose)
@@ -136,7 +137,7 @@ impl Init {
 
     fn remove_owned(&self, link: &Path, marker: &str) -> Result<()> {
         if self.mode.is_preview() {
-            println!("  would replace {}", escape_path(link));
+            outln!("  would replace {}", escape_path(link))?;
             return Ok(());
         }
         remove_owned(link, marker)
@@ -153,22 +154,22 @@ impl Init {
         make_link: impl Fn(&Path, &Path) -> std::io::Result<()>,
     ) -> Result<bool> {
         if self.mode.is_preview() {
-            println!(
+            outln!(
                 "  would link {} -> {}",
                 escape_path(link),
                 escape_path(target)
-            );
+            )?;
             return Ok(false);
         }
         match make_link(target, link) {
             Ok(()) => {
                 if self.verbose {
-                    println!(
+                    outln!(
                         "{} {} -> {}",
                         "Linked".green(),
                         escape_path(link),
                         escape_path(target)
-                    );
+                    )?;
                 }
                 Ok(false)
             }
@@ -176,11 +177,11 @@ impl Init {
             // filesystems have none. Copy instead.
             Err(err) => {
                 copy_skill(source, link, marker)?;
-                println!(
+                outln!(
                     "{} {} (symlink failed: {err})",
                     "Copied".yellow(),
                     escape_path(link)
-                );
+                )?;
                 Ok(true)
             }
         }
@@ -201,10 +202,10 @@ fn install_claude_integration(force: bool, update: bool, init: &Init) -> Result<
     };
     let root = config.parent().unwrap_or(&current_dir);
     if root != current_dir {
-        println!(
+        outln!(
             "Installing in the workspace at {} (the nearest .meta.yaml)",
             escape_path(root)
-        );
+        )?;
     }
     install_claude_integration_to(root, force, update, init)
 }
@@ -221,7 +222,7 @@ fn install_claude_integration_to(
     let verbose = init.verbose;
     let preview = init.mode.is_preview();
     if preview {
-        println!("[DRY RUN] In {}:", escape_path(target_dir));
+        outln!("[DRY RUN] In {}:", escape_path(target_dir))?;
     }
 
     // Build and validate settings before writing any skills or rules.
@@ -253,7 +254,7 @@ fn install_claude_integration_to(
 
         if target_path.exists() && !overwrite_content {
             if verbose {
-                println!("{} {} (already exists)", "Skipped".yellow(), filename);
+                outln!("{} {} (already exists)", "Skipped".yellow(), filename)?;
             }
             skipped += 1;
             continue;
@@ -265,13 +266,13 @@ fn install_claude_integration_to(
 
     // --update leaves settings untouched; --force uses the same merge as default.
     if update {
-        println!("Skipped .claude/settings.json (--update preserves settings)");
+        outln!("Skipped .claude/settings.json (--update preserves settings)")?;
     } else if let Some(plan) = settings_plan {
         if let Some(content) = plan.content {
             init.write_settings(&settings_path, &content)?;
             installed += 1;
         }
-        println!("{} {}", plan.message, escape_path(&settings_path));
+        outln!("{} {}", plan.message, escape_path(&settings_path))?;
     }
     let present_hooks = fs::read_to_string(&settings_path)
         .ok()
@@ -282,83 +283,84 @@ fn install_claude_integration_to(
     // already in the settings stays
     let guard_skipped =
         !init.guard && !update && !present_hooks.iter().any(|key| key == "PreToolUse");
-    let guard_note = || {
-        println!(
+    let guard_note = || -> Result<()> {
+        outln!(
             "{} Skipped the PreToolUse hook `agent guard`: the agent CLI is not installed.",
             "•".yellow()
-        );
-        println!(
+        )?;
+        outln!(
             "  Install it from https://github.com/gitkb/agent, then run `meta init claude` again to add the hook."
-        );
+        )?;
+        Ok(())
     };
 
     if preview {
-        println!();
-        println!(
+        outln!()?;
+        outln!(
             "[DRY RUN] Would install {installed} file(s) and link {} skill folder(s); nothing was written.",
             skills.placed
-        );
+        )?;
         if guard_skipped {
-            guard_note();
+            guard_note()?;
         }
         return Ok(());
     }
 
     // Print summary
-    println!();
+    outln!()?;
     if installed > 0 {
-        println!("{} Installed {} file(s)", "✓".green(), installed);
+        outln!("{} Installed {} file(s)", "✓".green(), installed)?;
     }
     if skills.placed > 0 {
-        println!(
+        outln!(
             "{} Linked {} skill folder(s) into {}",
             "✓".green(),
             skills.placed,
             skills.agent_dirs.join(", ")
-        );
+        )?;
     }
     if skills.copied > 0 {
-        println!(
+        outln!(
             "{} Copied {} skill folder(s) because symlinks could not be created \
              (on Windows, enable Developer Mode and rerun with --update to get links)",
             "•".yellow(),
             skills.copied
-        );
+        )?;
     }
     // Only what --force or --update would refresh; every other skip has
     // its own line above
     if skipped > 0 {
-        println!(
+        outln!(
             "{} Skipped {} existing file(s) (use --force or --update to refresh skills and rules)",
             "•".yellow(),
             skipped
-        );
+        )?;
     }
 
     if installed > 0 {
-        println!();
-        println!("Claude Code is now configured for this meta repository:");
-        println!(
+        outln!()?;
+        outln!("Claude Code is now configured for this meta repository:")?;
+        outln!(
             "  Skills:  .meta/skills/ ({} skills), linked into {}",
             SKILLS.len(),
             skills.agent_dirs.join(", ")
-        );
-        println!("  Rules:   .claude/rules/ ({} rule files)", RULES.len());
+        )?;
+        outln!("  Rules:   .claude/rules/ ({} rule files)", RULES.len())?;
         if !present_hooks.is_empty() {
-            println!(
+            outln!(
                 "  Hooks:   .claude/settings.json ({})",
                 present_hooks.join(", ")
-            );
+            )?;
         }
     }
     if guard_skipped {
-        guard_note();
+        guard_note()?;
     }
 
-    println!();
-    println!("For global Claude plugin access, run:");
-    println!("  claude plugin marketplace add gitkb/claude-plugins");
-    println!("  claude plugin install meta@gitkb");
+    outln!()?;
+    outln!("For global Claude plugin access, run:")?;
+    outln!("  claude plugin marketplace add gitkb/claude-plugins")?;
+    outln!("  claude plugin install meta@gitkb")?;
 
     Ok(())
 }
@@ -441,11 +443,11 @@ fn install_skills_with(
         let rel = tool_dir.join(name).join("SKILL.md");
         let path = root.join(&rel);
         if path.exists() && !overwrite {
-            println!(
+            outln!(
                 "{} {} (already exists)",
                 "Skipped".yellow(),
                 escape_path(&path)
-            );
+            )?;
             report.skipped += 1;
             continue;
         }
@@ -482,22 +484,22 @@ fn install_skills_with(
                 SkillEntry::Missing => {}
                 SkillEntry::Linked => {
                     if verbose {
-                        println!("Skipped {} (already linked)", escape_path(&link));
+                        outln!("Skipped {} (already linked)", escape_path(&link))?;
                     }
                     continue;
                 }
                 SkillEntry::Owned if overwrite => init.remove_owned(&link, &marker)?,
                 SkillEntry::Owned => {
-                    println!("Skipped {} (already exists)", escape_path(&link));
+                    outln!("Skipped {} (already exists)", escape_path(&link))?;
                     report.skipped += 1;
                     continue;
                 }
                 SkillEntry::Foreign => {
-                    println!(
+                    outln!(
                         "{} {} (not created by {tool}, left alone)",
                         "Skipped".yellow(),
                         escape_path(&link)
-                    );
+                    )?;
                     continue;
                 }
             }
@@ -783,6 +785,10 @@ fn merge_hooks_into_settings(
 fn agent_cli_available() -> bool {
     use std::process::{Command, Stdio};
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a probe for the agent CLI, in no repo"
+    )]
     Command::new("agent")
         .arg("--version")
         .stdout(Stdio::null())
@@ -796,12 +802,12 @@ fn write_file(path: &Path, content: &str, verbose: bool) -> Result<()> {
     fs::write(path, content).with_context(|| format!("Failed to write {}", escape_path(path)))?;
 
     if verbose {
-        println!("{} {}", "Wrote".green(), escape_path(path));
+        outln!("{} {}", "Wrote".green(), escape_path(path))?;
     } else {
         // Show the parent too: every skill file is named SKILL.md.
         let name = |p: &Path| p.file_name().unwrap_or_default().to_owned();
         let shown = Path::new(&path.parent().map(name).unwrap_or_default()).join(name(path));
-        println!("  {} {}", "✓".green(), escape_path(&shown));
+        outln!("  {} {}", "✓".green(), escape_path(&shown))?;
     }
 
     Ok(())

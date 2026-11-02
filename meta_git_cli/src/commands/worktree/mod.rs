@@ -12,8 +12,7 @@ mod status;
 
 use anyhow::Result;
 use clap::Parser;
-use colored::*;
-use meta_core::display::{escape, escape_lines, escape_path};
+use meta_core::display::{escape, escape_path};
 use meta_core::ExecutionMode;
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::path::Path;
@@ -92,12 +91,13 @@ pub fn execute_worktree_command(
             // meta's --dry-run, or the worktree command's own
             ExecutionMode::from_dry_run(options.dry_run || parsed.dry_run),
             options.verbose,
-            options.json_output || parsed.json,
+            // meta's --json, or the command's own: its errors are JSON too
+            meta_core::out::set_json(options.json_output || parsed.json),
             options.strict,
             cwd,
         ) {
             Ok(()) => CommandResult::Message(String::new()),
-            Err(e) => CommandResult::Error(format!("{e:#}")),
+            Err(e) => e.into(),
         },
         Err(result) => result,
     }
@@ -134,21 +134,6 @@ fn handle_worktree_command(
     }
 }
 
-/// Emit a warning message, or bail with an error in strict mode.
-///
-/// In strict mode, returns Err to fail the command.
-/// In normal mode, prints a warning and returns Ok(()).
-///
-/// Use this for situations where an operation can continue despite a problem,
-/// but strict mode should treat it as a failure.
-pub(crate) fn warn_or_bail(strict: bool, message: impl std::fmt::Display) -> anyhow::Result<()> {
-    if strict {
-        anyhow::bail!("{message} (strict mode)")
-    }
-    warn(message);
-    Ok(())
-}
-
 /// Why the project `alias` at `source` has no repository to make a worktree
 /// of, if it has none (see [`meta_core::gitdir::Checkout`]).
 pub(crate) fn not_a_repository(alias: &str, source: &Path) -> Option<String> {
@@ -162,43 +147,4 @@ pub(crate) fn not_a_repository(alias: &str, source: &Path) -> Option<String> {
                 escape(&problem)
             )
         })
-}
-
-/// Print a warning; the message can carry paths and names from git and
-/// the filesystem.
-pub(crate) fn warn(message: impl std::fmt::Display) {
-    eprintln!(
-        "{} {}",
-        "warning:".yellow().bold(),
-        escape_lines(&message.to_string())
-    );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ── warn_or_bail tests ─────────────────────────────────
-
-    #[test]
-    fn warn_or_bail_returns_ok_in_normal_mode() {
-        let result = warn_or_bail(false, "test message");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn warn_or_bail_returns_err_in_strict_mode() {
-        let result = warn_or_bail(true, "test message");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("test message"));
-        assert!(err.to_string().contains("strict mode"));
-    }
-
-    #[test]
-    fn warn_or_bail_includes_message_in_error() {
-        let result = warn_or_bail(true, "specific error details");
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("specific error details"));
-    }
 }

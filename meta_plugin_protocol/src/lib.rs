@@ -212,10 +212,29 @@ pub enum CommandResult {
     FullPlan(ExecutionPlan),
     /// A message to display (no commands to execute)
     Message(String),
-    /// An error occurred
+    /// An error occurred: the plugin exits 1 (the host escapes the message)
     Error(String),
+    /// The command line was wrong: the plugin exits 2
+    Usage(String),
+    /// The plugin already reported how it ended (a summary, a JSON report):
+    /// it exits with this code and prints nothing more
+    Exit(i32),
     /// Show help text (optionally with an error message prefix)
     ShowHelp(Option<String>),
+}
+
+/// An error as the plugin's result: with its causes (`{e:#}`), or as the
+/// ending it carries ([`meta_core::exit::ending`]).
+impl From<anyhow::Error> for CommandResult {
+    fn from(e: anyhow::Error) -> Self {
+        match meta_core::exit::ending(&e) {
+            Some(code) => CommandResult::Exit(code),
+            None if e.chain().any(|cause| cause.is::<meta_core::exit::Usage>()) => {
+                CommandResult::Usage(format!("{e:#}"))
+            }
+            None => CommandResult::Error(format!("{e:#}")),
+        }
+    }
 }
 
 // ============================================================================
@@ -224,10 +243,34 @@ pub enum CommandResult {
 
 /// Serialize and print an execution plan to stdout.
 pub fn output_execution_plan(commands: Vec<PlannedCommand>, parallel: Option<bool>) {
-    output_execution_plan_full(vec![], commands, vec![], parallel, None, None);
+    end(emit_json(&simple_plan(commands, parallel)));
 }
 
-/// Serialize and print a full execution plan with pre/post commands to stdout.
+/// The plan for `commands`, with no setup or cleanup.
+fn simple_plan(commands: Vec<PlannedCommand>, parallel: Option<bool>) -> PlanResponse {
+    PlanResponse {
+        plan: ExecutionPlan {
+            pre_commands: vec![],
+            commands,
+            post_commands: vec![],
+            parallel,
+            max_parallel: None,
+            spawn_stagger_ms: None,
+        },
+    }
+}
+
+/// End the plugin as `result` says when it failed (see
+/// [`meta_core::exit`]); return when it succeeded.
+fn end(result: anyhow::Result<()>) {
+    let code = meta_core::exit::code(meta_core::exit::flushed(result));
+    if code != 0 {
+        meta_core::exit::now(code);
+    }
+}
+
+/// Serialize and print a full execution plan with pre/post commands to
+/// stdout. A plugin whose stdout meta no longer reads ends here, quietly.
 pub fn output_execution_plan_full(
     pre_commands: Vec<PlannedCommand>,
     commands: Vec<PlannedCommand>,
@@ -236,35 +279,27 @@ pub fn output_execution_plan_full(
     max_parallel: Option<usize>,
     spawn_stagger_ms: Option<u64>,
 ) {
-    let response = PlanResponse {
-        plan: ExecutionPlan {
-            pre_commands,
-            commands,
-            post_commands,
-            parallel,
-            max_parallel,
-            spawn_stagger_ms,
-        },
+    let plan = ExecutionPlan {
+        pre_commands,
+        commands,
+        post_commands,
+        parallel,
+        max_parallel,
+        spawn_stagger_ms,
     };
-    emit(&format!("{}\n", serde_json::to_string(&response).unwrap()));
+    end(emit_json(&PlanResponse { plan }));
 }
 
-/// Write `text` to stdout. meta reads a plugin's stdout until the plugin
-/// ends; once meta is gone, the plugin ends quietly instead of panicking.
-fn emit(text: &str) {
-    use std::io::Write;
-    let mut stdout = std::io::stdout().lock();
-    match stdout
-        .write_all(text.as_bytes())
-        .and_then(|()| stdout.flush())
-    {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(141),
-        Err(e) => {
-            eprintln!("Cannot write the plugin's output: {e}");
-            std::process::exit(1);
-        }
-    }
+/// Write `text` to stdout, flushed: meta reads a plugin's stdout until the
+/// plugin ends.
+fn emit(text: &str) -> anyhow::Result<()> {
+    meta_core::out::stdout_bytes(text.as_bytes())?;
+    Ok(meta_core::out::flush()?)
+}
+
+/// Write `value` to stdout as one line of JSON.
+fn emit_json(value: &impl Serialize) -> anyhow::Result<()> {
+    emit(&format!("{}\n", serde_json::to_string(value)?))
 }
 
 /// Read and parse a `PluginRequest` from stdin.
@@ -368,7 +403,7 @@ pub fn parse_args<P: clap::Parser>(command: &str, args: &[String]) -> Result<P, 
                     let error = message.split("\n\nUsage:").next().unwrap_or_default();
                     message = format!("{error}\n\n{}", help.trim_end());
                 }
-                CommandResult::Error(message)
+                CommandResult::Usage(message)
             }
         }
     })
@@ -390,94 +425,87 @@ pub struct PluginDefinition {
 /// This replaces the boilerplate main() function in each plugin binary.
 /// Plugins only need to define their `PluginInfo` and an execute function.
 ///
+/// Returns when the plugin succeeded; otherwise the plugin ends here, its
+/// error reported once and escaped (see [`meta_core::exit`]): 1 for an
+/// error, 2 for a wrong command line, 141 when meta stopped reading.
+///
 /// Initializes `env_logger` so plugins can use `log` macros with RUST_LOG.
 pub fn run_plugin(plugin: PluginDefinition) {
     // Initialize logger for subprocess - inherits RUST_LOG from parent
     env_logger::init();
+    meta_core::out::color();
+    end(serve(&plugin));
+}
 
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() < 2 {
-        eprintln!(
-            "This binary is a meta plugin. Use via: meta {}",
-            plugin.info.name
-        );
-        std::process::exit(1);
+fn serve(plugin: &PluginDefinition) -> anyhow::Result<()> {
+    use meta_core::display::escape;
+    let usage = |problem: String| {
+        anyhow::Error::new(meta_core::exit::Usage(format!(
+            "{problem}This binary is a meta plugin. Use via: meta {}",
+            escape(&plugin.info.name)
+        )))
+    };
+    let flag = std::env::args_os()
+        .nth(1)
+        .ok_or_else(|| usage(String::new()))?;
+    match flag.to_str() {
+        Some("--meta-plugin-info") => emit_json(&plugin.info),
+        Some("--meta-plugin-exec") => execute(plugin),
+        Some("--help" | "-h") => emit(&help_text(&plugin.info)),
+        _ => Err(usage(format!(
+            "Unknown flag: {}\n",
+            escape(&flag.to_string_lossy())
+        ))),
     }
+}
 
-    match args[1].as_str() {
-        "--meta-plugin-info" => {
-            let json = serde_json::to_string_pretty(&plugin.info).unwrap();
-            emit(&format!("{json}\n"));
-        }
-        "--meta-plugin-exec" => {
-            if let Err(e) = meta_core::children::own() {
-                eprintln!(
-                    "Warning: cannot pass signals on to the programs this plugin starts: {e}"
-                );
-            }
-            let mut request = match read_request_from_stdin() {
-                Ok(req) => req,
-                Err(e) => {
-                    eprintln!("Failed to parse plugin request: {e}");
-                    std::process::exit(1);
-                }
-            };
-            if request.cwd.as_os_str().is_empty() {
-                match std::env::current_dir() {
-                    Ok(cwd) => request.cwd = cwd,
-                    Err(e) => {
-                        eprintln!("Error: Failed to get working directory: {e}");
-                        std::process::exit(1);
-                    }
-                }
-            }
-
-            match (plugin.execute)(request) {
-                CommandResult::Plan(commands, parallel) => {
-                    output_execution_plan(commands, parallel);
-                }
-                CommandResult::FullPlan(plan) => {
-                    let response = PlanResponse { plan };
-                    emit(&format!("{}\n", serde_json::to_string(&response).unwrap()));
-                }
-                CommandResult::Message(msg) => {
-                    if !msg.is_empty() {
-                        emit(&format!("{msg}\n"));
-                    }
-                }
-                CommandResult::Error(e) => {
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                }
-                CommandResult::ShowHelp(maybe_error) => {
-                    if let Some(ref err) = maybe_error {
-                        eprintln!("error: {err}");
-                        eprintln!();
-                        // Print help to stderr when there's an error (so it's visible even if meta captures stdout)
-                        eprint!("{}", help_text(&plugin.info));
-                        std::process::exit(1);
-                    } else {
-                        emit(&help_text(&plugin.info));
-                        std::process::exit(0);
-                    }
-                }
-            }
-        }
-        "--help" | "-h" => {
-            emit(&help_text(&plugin.info));
-        }
-        _ => {
-            eprintln!("Unknown flag: {}. This binary is a meta plugin.", args[1]);
-            eprintln!("Use via: meta {}", plugin.info.name);
-            std::process::exit(1);
-        }
+/// `--meta-plugin-exec`: answer the request on stdin.
+fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
+    use anyhow::Context;
+    if let Err(e) = meta_core::children::own() {
+        meta_core::out::warn(format!(
+            "cannot pass signals on to the programs this plugin starts: {e}"
+        ));
+    }
+    let mut request = read_request_from_stdin().context("Failed to parse plugin request")?;
+    meta_core::out::set_json(request.options.json_output);
+    if request.cwd.as_os_str().is_empty() {
+        request.cwd = std::env::current_dir().context("Failed to get working directory")?;
+    }
+    match (plugin.execute)(request) {
+        CommandResult::Plan(commands, parallel) => emit_json(&simple_plan(commands, parallel)),
+        CommandResult::FullPlan(plan) => emit_json(&PlanResponse { plan }),
+        CommandResult::Message(msg) if msg.is_empty() => Ok(()),
+        CommandResult::Message(msg) => emit(&format!("{msg}\n")),
+        CommandResult::Error(e) => Err(anyhow::anyhow!(e)),
+        CommandResult::Usage(e) => Err(meta_core::exit::Usage(e).into()),
+        CommandResult::Exit(code) => Err(meta_core::exit::ExitWith(code).into()),
+        CommandResult::ShowHelp(None) => emit(&help_text(&plugin.info)),
+        // on stderr, so it's seen even though meta reads stdout
+        CommandResult::ShowHelp(Some(err)) => Err(meta_core::exit::Usage(format!(
+            "{err}\n\n{}",
+            help_text(&plugin.info).trim_end()
+        ))
+        .into()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_error_becomes_the_result_its_ending_says() {
+        use meta_core::exit::{ExitWith, Usage};
+        let result = |e: anyhow::Error| CommandResult::from(e.context("on the way up"));
+        assert!(
+            matches!(result(Usage("bad".into()).into()), CommandResult::Usage(m) if m.contains("bad"))
+        );
+        assert!(matches!(result(ExitWith(3).into()), CommandResult::Exit(3)));
+        assert!(
+            matches!(result(anyhow::anyhow!("failed")), CommandResult::Error(m) if m.contains("failed"))
+        );
+    }
 
     #[test]
     fn help_keeps_each_plugin_value_on_its_line() {

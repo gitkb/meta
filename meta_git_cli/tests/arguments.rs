@@ -1,6 +1,12 @@
 //! What the git plugin takes from a protocol request: the arguments of
 //! `meta git clone` and `meta git commit`, and the request's directory.
 
+#![expect(
+    clippy::disallowed_methods,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
+
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;

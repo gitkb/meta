@@ -2,10 +2,13 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::*;
 use meta_core::display::{escape, escape_path};
+use meta_core::out;
 use meta_core::ExecutionMode;
+use meta_core::{errln, outln};
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
-use meta_cli::dependency_graph::{DependencyGraph, ProjectDependencies};
+use meta_cli::dependency_graph::{DependencyGraph, DependencyProblem, ProjectDependencies};
 use meta_core::duration::format_duration;
 use meta_core::set_record::{self as record, SetRecord};
 use meta_git_lib::worktree::git_ops::*;
@@ -47,7 +50,7 @@ pub(crate) fn handle_create(
         if let Some((key, value)) = s.split_once('=') {
             custom_meta.insert(key.to_string(), value.to_string());
         } else {
-            super::warn_or_bail(
+            out::warn_or_bail(
                 strict,
                 format!(
                     "--meta value '{}' missing '=' separator (expected key=value), skipping",
@@ -115,7 +118,7 @@ pub(crate) fn handle_create(
         let mut kept = Vec::new();
         for repo in repos_to_create {
             match missing_ref(&repo.source, from_ref)? {
-                Some(r) => super::warn_or_bail(
+                Some(r) => out::warn_or_bail(
                     strict,
                     format!(
                         "Skipping '{}': ref '{}' not found",
@@ -155,7 +158,7 @@ pub(crate) fn handle_create(
             ttl_seconds,
             custom_meta: &custom_meta,
         };
-        print_create_dry_run(&plan);
+        print_create_dry_run(&plan)?;
         return Ok(None);
     }
 
@@ -246,7 +249,7 @@ pub(crate) fn handle_create(
         for repo in &repos_to_create {
             if let Some(r) = missing_ref(&repo.source, from_ref)? {
                 // skip repos where the commit-ish doesn't exist
-                super::warn_or_bail(
+                out::warn_or_bail(
                     strict,
                     format!(
                         "Skipping '{}': ref '{}' not found",
@@ -275,7 +278,7 @@ pub(crate) fn handle_create(
                 dest
             };
             if verbose {
-                eprintln!(
+                errln!(
                     "Creating worktree for '{}' at {} (branch: {})",
                     escape(&repo.project),
                     escape_path(&dest),
@@ -322,31 +325,35 @@ pub(crate) fn handle_create(
         custom: custom_meta,
     };
     if json {
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else {
-        println!(
+        outln!(
             "{} Created worktree '{}' at {}",
             "✓".green(),
             name.bold(),
             escape_path(&wt_dir)
-        );
+        )?;
         for r in &output.repos {
             let branch_note = if r.created_branch { " (new)" } else { "" };
-            println!(
+            outln!(
                 "  {} -> {}{}",
                 escape(&r.alias),
                 escape(&r.branch),
                 branch_note
-            );
+            )?;
         }
         if ephemeral {
-            println!("  {}", "[ephemeral]".dimmed());
+            outln!("  {}", "[ephemeral]".dimmed())?;
         }
         if let Some(ttl) = ttl_seconds {
-            println!(
+            outln!(
                 "  {}",
-                format!("[TTL: {}]", format_duration(ttl as i64)).dimmed()
-            );
+                format!(
+                    "[TTL: {}]",
+                    format_duration(i64::try_from(ttl).unwrap_or(i64::MAX))
+                )
+                .dimmed()
+            )?;
         }
     }
 
@@ -360,7 +367,7 @@ pub(crate) fn handle_create(
         &output.custom,
         Some(&configs.owner),
     )
-    .or_else(|e| super::warn_or_bail(strict, format!("{e:#}")));
+    .or_else(|e| out::warn_or_bail(strict, format!("{e:#}")));
     if let Err(e) = hook {
         // the set is made: an ephemeral one is the next prune's
         if ephemeral {
@@ -468,41 +475,44 @@ struct CreateDryRunPlan<'a> {
     custom_meta: &'a HashMap<String, String>,
 }
 
-fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
-    println!(
+fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
+    outln!(
         "[DRY RUN] Would create worktree set '{}' at {}",
         plan.name,
         escape_path(plan.wt_dir)
-    );
-    println!();
+    )?;
+    outln!()?;
 
     if let Some(from_ref) = plan.from_ref {
-        println!("Start ref: {}", escape(from_ref));
+        outln!("Start ref: {}", escape(from_ref))?;
     }
     if let Some(from_pr_spec) = plan.from_pr_spec {
-        println!(
+        outln!(
             "PR source: would resolve {} and fetch the matching head branch",
             escape(from_pr_spec)
-        );
+        )?;
     }
     if plan.ephemeral {
-        println!("Ephemeral: true");
+        outln!("Ephemeral: true")?;
     }
     if let Some(ttl) = plan.ttl_seconds {
-        println!("TTL: {}", format_duration(ttl as i64));
+        outln!(
+            "TTL: {}",
+            format_duration(i64::try_from(ttl).unwrap_or(i64::MAX))
+        )?;
     }
     if !plan.custom_meta.is_empty() {
-        println!(
+        outln!(
             "Metadata: {}",
             plan.custom_meta
                 .iter()
                 .map(|(k, v)| format!("{}={}", escape(k), escape(v)))
                 .collect::<Vec<_>>()
                 .join(", ")
-        );
+        )?;
     }
 
-    println!("Planned repo operations:");
+    outln!("Planned repo operations:")?;
     for PlannedRepo {
         project: alias,
         source,
@@ -525,22 +535,23 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) {
             cmd.push(' ');
             cmd.push_str(&shell_quote(from_ref));
         }
-        println!("  {}:", escape(alias));
-        println!("    source: {}", escape_path(source));
+        outln!("  {}:", escape(alias))?;
+        outln!("    source: {}", escape_path(source))?;
         if place != "."
             && source
                 .symlink_metadata()
                 .is_ok_and(|m| m.file_type().is_symlink())
         {
-            println!("    (a link: if the root checkout holds it, the repo goes where it leads)");
+            outln!("    (a link: if the root checkout holds it, the repo goes where it leads)")?;
         }
-        println!("    dest:   {}", escape_path(&dest));
-        println!("    branch: {}", escape(branch));
-        println!("    bash:   {}", escape(&cmd));
+        outln!("    dest:   {}", escape_path(&dest))?;
+        outln!("    branch: {}", escape(branch))?;
+        outln!("    bash:   {}", escape(&cmd))?;
     }
 
-    println!();
-    println!("No directories, branches, records, hooks, or git excludes were written.");
+    outln!()?;
+    outln!("No directories, branches, records, hooks, or git excludes were written.")?;
+    Ok(())
 }
 
 /// Why a repo is in a set being made. A project that isn't cloned is an
@@ -664,22 +675,13 @@ fn plan_repos(
             if meta_core::gitdir::common_dir(meta_dir)?.is_some() {
                 plan.add(index.find(".")?, branch(None), Why::Wanted, false)?;
             }
-            let graph = match index.tree() {
-                Some(tree) => nested_dep_graph(tree)?,
-                None => DependencyGraph::build(
-                    workspace
-                        .projects
-                        .iter()
-                        .map(|p| p.clone().into())
-                        .collect(),
-                )?,
-            };
+            let graph = dep_graph(index)?;
             for key in asked_keys.iter().filter(|key| *key != ".") {
                 let deps = graph.get_all_dependencies(key);
                 log::debug!("Resolved transitive dependencies for '{key}': {deps:?}");
                 for dep in deps {
                     if verbose {
-                        eprintln!(
+                        errln!(
                             "  Including '{}' (dependency of '{}')",
                             escape(dep),
                             escape(key)
@@ -723,7 +725,7 @@ fn plan_repos(
                 // A plain directory on the way is no parent; a repo that
                 // isn't a project is worth saying so
                 if meta_core::gitdir::common_dir(&meta_dir.join(&parent))?.is_some() {
-                    super::warn(format!(
+                    out::warn(format!(
                         "Intermediate parent '{}' for nested repo '{}' is not a project of the \
                          workspace, skipping",
                         escape(&parent),
@@ -739,6 +741,13 @@ fn plan_repos(
             };
             plan.add(found, branch(None), Why::Parent(project.clone()), false)?;
         }
+    }
+
+    // What resolving the depends_on of each project in the set ran into,
+    // however it got there (asked for, --all, a dependency, a parent)
+    if !args.no_deps {
+        let set = plan.repos.iter().map(|(repo, _)| repo.project.as_str());
+        report_problems(&dep_graph(index)?, set, index.tree().is_none(), strict)?;
     }
 
     // A project not cloned yet has no repository to make a worktree of
@@ -769,13 +778,52 @@ fn plan_repos(
         if strict {
             anyhow::bail!("{why} (strict mode)");
         }
-        super::warn(format!("{why}, skipping"));
+        out::warn(format!("{why}, skipping"));
     }
     repos.sort_by(|a, b| {
         let order = |r: &PlannedRepo| (r.place != ".", r.place.split('/').count());
         order(a).cmp(&order(b)).then_with(|| a.place.cmp(&b.place))
     });
     Ok(repos)
+}
+
+/// The workspace's dependency graph: of every place with --recursive, else
+/// of its own projects.
+fn dep_graph(index: &Index) -> Result<DependencyGraph> {
+    Ok(match index.tree() {
+        Some(tree) => nested_dep_graph(tree)?,
+        None => DependencyGraph::build(
+            index
+                .workspace
+                .projects
+                .iter()
+                .map(|p| p.clone().into())
+                .collect(),
+        ),
+    })
+}
+
+/// Report what resolving the `depends_on` of each project in `set` ran
+/// into: a warning, or with `strict` an error. `flat`: the graph has no
+/// nested projects.
+fn report_problems<'a>(
+    graph: &DependencyGraph,
+    set: impl IntoIterator<Item = &'a str>,
+    flat: bool,
+    strict: bool,
+) -> Result<()> {
+    // a project reached twice is reported once
+    let set: BTreeSet<&str> = set.into_iter().collect();
+    for project in set {
+        for problem in graph.problems_of(project) {
+            let hint = match problem {
+                DependencyProblem::Unresolved(_) if flat => " (nested projects count with -r)",
+                _ => "",
+            };
+            out::warn_or_bail(strict, format!("'{}' {problem}{hint}", escape(project)))?;
+        }
+    }
+    Ok(())
 }
 
 /// The dependency graph of the whole tree (`tree`, every project by its
@@ -809,10 +857,16 @@ fn nested_dep_graph(
             depends_on: info.depends_on.iter().map(|d| qualify(d)).collect(),
         });
     }
-    DependencyGraph::build(project_deps)
+    // in the order of the places, so a run picks the provider the last did
+    project_deps.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(DependencyGraph::build(project_deps))
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests start the programs they test with"
+)]
 mod tests {
     use super::*;
     use std::process::Command;

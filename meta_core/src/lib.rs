@@ -3,6 +3,7 @@
 //! Provides:
 //! - `data_dir` — Locate and create the `~/.meta/` data directory and namespaced files
 //! - `display` — Escaping untrusted text for human-readable output
+//! - `out` and `exit` — Everything printed, and how a program ends
 //! - `store` — Atomic JSON read/write
 
 use std::path::PathBuf;
@@ -13,9 +14,11 @@ pub mod config;
 pub mod data_dir;
 pub mod display;
 pub mod duration;
+pub mod exit;
 pub mod git;
 pub mod gitdir;
 pub mod mode;
+pub mod out;
 pub mod set_record;
 pub use mode::ExecutionMode;
 pub mod store;

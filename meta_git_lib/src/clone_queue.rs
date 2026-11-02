@@ -1,4 +1,4 @@
-use log::{debug, warn};
+use log::debug;
 use meta_core::config;
 use meta_core::display::escape_path;
 use meta_core::git::GitUrl;
@@ -300,10 +300,10 @@ impl CloneQueue {
         // Warn if the config declared meta: true but no nested .meta.yaml was found
         if task.is_meta && found.is_empty() && task.level > 0 && self.reads(task.level) {
             if let Ok(None) = config::find_meta_config_in(&task.target_path) {
-                warn!(
+                meta_core::out::warn(format!(
                     "'{}' is declared with `meta: true` but no .meta.yaml was found inside it",
-                    task.name
-                );
+                    meta_core::display::escape(&task.name)
+                ));
             }
         }
         found

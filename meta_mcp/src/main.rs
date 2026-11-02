@@ -8,6 +8,7 @@ mod run;
 mod tools;
 
 use anyhow::Result;
+use meta_core::out::StdoutError;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
@@ -56,8 +57,11 @@ struct JsonRpcResponse {
 
 /// Writes `response` as one line of JSON.
 fn write_line(output: &mut impl Write, response: &JsonRpcResponse) -> Result<()> {
-    serde_json::to_writer(&mut *output, response)?;
-    Ok(output.write_all(b"\n")?)
+    serde_json::to_writer(&mut *output, response)
+        .map_err(std::io::Error::from)
+        .and_then(|()| output.write_all(b"\n"))
+        .map_err(StdoutError)?;
+    Ok(())
 }
 
 /// JSON-RPC 2.0 ids are strings, numbers or null.
@@ -174,12 +178,12 @@ impl McpServer {
                     let mut stopping = false;
                     for signal in signals.forever() {
                         if stopping {
-                            std::process::exit(128 + signal);
+                            meta_core::exit::now(128 + signal);
                         }
                         stopping = true;
                         scope.spawn(move || {
                             self.calls.stop_running();
-                            std::process::exit(128 + signal);
+                            meta_core::exit::now(128 + signal);
                         });
                     }
                 });
@@ -210,12 +214,12 @@ impl McpServer {
                         // No more answers can go out, and the reader may wait
                         // for input that never comes: the server ends here,
                         // with the answer on stderr (an atomic batch's
-                        // rollback is in it)
+                        // rollback is in it), and 141 if stdout was closed
                         if let Err(e) = write_answer(&output, &answer) {
                             self.calls.cancel_all();
                             let _ = writeln!(std::io::stderr(), "Error: {e:#}; the reply was:");
                             let _ = write_answer(&Mutex::new(std::io::stderr()), &answer);
-                            std::process::exit(1);
+                            meta_core::exit::now(meta_core::exit::ending(&e).unwrap_or(1));
                         }
                     });
                 }
@@ -544,12 +548,12 @@ fn write_answer(output: &Mutex<impl Write>, answer: &Answer) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("Output failed"))?;
     match answer {
         Answer::One(response) => write_line(&mut *output, response)?,
-        Answer::Batch(responses) => {
-            serde_json::to_writer(&mut *output, responses)?;
-            output.write_all(b"\n")?;
-        }
+        Answer::Batch(responses) => serde_json::to_writer(&mut *output, responses)
+            .map_err(std::io::Error::from)
+            .and_then(|()| output.write_all(b"\n"))
+            .map_err(StdoutError)?,
     }
-    Ok(output.flush()?)
+    Ok(output.flush().map_err(StdoutError)?)
 }
 
 /// MCP server for meta: serves the Model Context Protocol on stdin and
@@ -558,9 +562,11 @@ fn write_answer(output: &Mutex<impl Write>, answer: &Answer) -> Result<()> {
 #[command(version)]
 struct Cli {}
 
-fn main() -> Result<()> {
-    meta_core::args::parse::<Cli>();
-    McpServer::new()?.run()
+fn main() -> std::process::ExitCode {
+    meta_core::exit::run(|| {
+        meta_core::args::parse::<Cli>()?;
+        McpServer::new()?.run()
+    })
 }
 
 #[cfg(test)]
@@ -612,7 +618,7 @@ mod tests {
     #[test]
     fn test_bad_input_gets_an_error_reply_and_serving_goes_on() {
         let initialize = br#"{"jsonrpc":"2.0","id":99,"method":"initialize","params":{}}"#;
-        let too_large = vec![b' '; MAX_LINE_BYTES as usize + 1];
+        let too_large = vec![b' '; usize::try_from(MAX_LINE_BYTES).unwrap() + 1];
         for (line, code, id) in [
             (
                 &br#"{"jsonrpc":"2.0","id":7,"method":"tools/list""#[..],

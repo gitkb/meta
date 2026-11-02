@@ -5,7 +5,6 @@ use crate::tools::{all_failed, BatchArgs, Reply, Scope};
 use crate::McpServer;
 use anyhow::{Context, Result};
 use meta_core::git::git;
-use std::process::Command;
 
 /// What a cancel does to a git command of the batch: the pre-check stops,
 /// the rollback finishes, in a process group of its own so that a signal to
@@ -80,10 +79,8 @@ impl McpServer {
 
             // In each project's own repository, whatever a git hook around
             // this server set
-            let mut command = Command::new(program);
-            meta_core::git::clear_repo_env(&mut command)
-                .args(program_args)
-                .current_dir(&project.dir);
+            let mut command = meta_core::git::in_repo(program, &project.dir);
+            command.args(program_args);
             match self.calls.output(&mut command) {
                 Ok(out) => {
                     let success = out.status.success();

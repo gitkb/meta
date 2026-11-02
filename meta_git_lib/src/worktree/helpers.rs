@@ -1,7 +1,7 @@
 //! Utility functions for worktree management.
 
 use anyhow::{Context, Result};
-use meta_core::display::{escape, escape_path};
+use meta_core::display::{escape, escape_path, program_output};
 use std::path::{Path, PathBuf};
 
 use meta_core::config::Workspace;
@@ -178,14 +178,13 @@ pub fn resolve_branch(
 
 /// The repo (`owner/repo`) and number of a `--from-pr` value `owner/repo#N`.
 pub fn parse_from_pr(from_pr: &str) -> Result<(String, u32)> {
-    let hash_pos = from_pr.rfind('#').ok_or_else(|| {
+    let (repo_spec, number) = from_pr.rsplit_once('#').ok_or_else(|| {
         anyhow::anyhow!(
             "Invalid --from-pr format: '{}'. Expected: owner/repo#N",
             escape(from_pr)
         )
     })?;
 
-    let repo_spec = &from_pr[..hash_pos];
     // Validate repo spec format: must be owner/repo
     if !repo_spec.contains('/') || repo_spec.starts_with('/') || repo_spec.ends_with('/') {
         anyhow::bail!(
@@ -193,7 +192,7 @@ pub fn parse_from_pr(from_pr: &str) -> Result<(String, u32)> {
             escape(repo_spec)
         );
     }
-    let pr_num: u32 = from_pr[hash_pos + 1..]
+    let pr_num: u32 = number
         .parse()
         .with_context(|| format!("Invalid PR number in '{}'", escape(from_pr)))?;
     Ok((repo_spec.to_string(), pr_num))
@@ -207,8 +206,14 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
     let (repo_spec, pr_num) = parse_from_pr(from_pr)?;
     let repo_spec = repo_spec.as_str();
 
-    // Resolve head branch via gh CLI
+    // Resolve head branch via gh CLI: its answer is read, never coloured
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "gh asks GitHub, in no repo of the workspace"
+    )]
     let output = Command::new("gh")
+        .env_remove("CLICOLOR_FORCE")
+        .env_remove("FORCE_COLOR")
         .args([
             "pr",
             "view",
@@ -224,12 +229,11 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
         .with_context(|| "Failed to run 'gh' CLI. Is it installed?")?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(
-            "Failed to resolve PR #{} in {}: {}",
+            "Failed to resolve PR #{} in {}:{}",
             pr_num,
             escape(repo_spec),
-            escape(stderr.trim())
+            program_output(&output.stderr)
         );
     }
 

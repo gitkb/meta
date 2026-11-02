@@ -1,5 +1,11 @@
 //! Commands that delete or report must check what they act on.
 
+#![expect(
+    clippy::disallowed_methods,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
+
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -207,7 +213,7 @@ fn text_list_warns_about_an_unreadable_set_and_lists_healthy_sets() {
     assert!(
         error
             .lines()
-            .any(|line| { line.starts_with("Warning: broken:") && line.contains("git") }),
+            .any(|line| { line.starts_with("warning: broken:") && line.contains("git") }),
         "{error}"
     );
 }

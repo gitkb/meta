@@ -1,6 +1,7 @@
 use anyhow::Result;
 use colored::*;
 use meta_core::display::escape;
+use meta_core::outln;
 use rayon::prelude::*;
 
 use meta_cli::worktree::WorktreeMemberInfo;
@@ -66,9 +67,9 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
             repos: statuses,
             missing: missing.clone(),
         };
-        println!("{}", serde_json::to_string_pretty(&output)?);
+        outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else {
-        println!("{}:", name.bold());
+        outln!("{}:", name.bold())?;
         for s in &statuses {
             let status_icon = match s.dirty {
                 Some(true) => "●".yellow().to_string(),
@@ -93,21 +94,21 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
                 Some(_) if details.is_empty() => "clean".to_string(),
                 Some(_) => details.join(", "),
             };
-            println!(
+            outln!(
                 "  {} {:12} {:20} {}",
                 status_icon,
                 escape(&s.alias),
                 escape(s.branch.as_deref().unwrap_or("-")),
                 detail_str
-            );
+            )?;
         }
         for alias in &missing {
-            println!(
+            outln!(
                 "  {} {:12} {:20} missing: its checkout is gone from the set",
                 "✗".red(),
                 escape(alias),
                 "-"
-            );
+            )?;
         }
     }
     anyhow::ensure!(

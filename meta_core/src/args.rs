@@ -1,6 +1,9 @@
 //! Command-line errors that never echo control characters.
 
 use crate::display::escape;
+use crate::exit::ExitWith;
+use crate::out;
+use crate::out::StdoutError;
 use std::ffi::OsStr;
 
 /// The error to show for `args` that `P` rejected. Clap quotes rejected
@@ -23,21 +26,30 @@ pub fn escaped_error<P: clap::Parser>(
     }
 }
 
-/// Parse `P` from this process's arguments, exiting on an error with
+/// Parse `P` from this process's arguments. An error is printed with
 /// [`escaped_error`] (help and version print as usual, and so does clap's
-/// invalid UTF-8 error, which doesn't echo the value).
-pub fn parse<P: clap::Parser>() -> P {
+/// invalid UTF-8 error, which doesn't echo the value) and returned as the
+/// [`ExitWith`] code clap gives it: 0 for help, 2 for a usage error.
+pub fn parse<P: clap::Parser>() -> anyhow::Result<P> {
     use clap::error::ErrorKind;
-    P::try_parse().unwrap_or_else(|e| match e.kind() {
+    let e = match P::try_parse() {
+        Ok(parsed) => return Ok(parsed),
+        Err(e) => e,
+    };
+    let e = match e.kind() {
         // a bare command group (`meta plugin`) answers with its help, as
         // asking for it does
         ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
-            print!("{}", e.render());
-            std::process::exit(0)
+            out!("{}", e.render())?;
+            return Err(ExitWith(0).into());
         }
-        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion | ErrorKind::InvalidUtf8 => e.exit(),
-        _ => with_option_tip::<P>(escaped_error::<P>(std::env::args_os())).exit(),
-    })
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion | ErrorKind::InvalidUtf8 => e,
+        _ => with_option_tip::<P>(escaped_error::<P>(std::env::args_os())),
+    };
+    match e.print() {
+        Err(io) if !e.use_stderr() => Err(StdoutError(io).into()),
+        _ => Err(ExitWith(e.exit_code()).into()),
+    }
 }
 
 /// `error`, for an option of `P`'s own given after a subcommand

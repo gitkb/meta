@@ -4,7 +4,6 @@
 //! Use RUST_LOG=meta_git_cli=debug for debug output.
 
 use indexmap::IndexMap;
-use meta_core::display::escape_lines;
 use meta_plugin_protocol::{
     run_plugin, CommandResult, PluginDefinition, PluginHelp, PluginInfo, PluginRequest,
 };
@@ -88,16 +87,7 @@ fn main() {
     });
 }
 
-/// Errors carry paths and names from git and the filesystem, so they are
-/// escaped before they reach the terminal.
 fn execute(request: PluginRequest) -> CommandResult {
-    match execute_request(request) {
-        CommandResult::Error(e) => CommandResult::Error(escape_lines(&e).into_owned()),
-        other => other,
-    }
-}
-
-fn execute_request(request: PluginRequest) -> CommandResult {
     meta_git_cli::execute_command(
         &request.command,
         &request.args,

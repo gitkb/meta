@@ -7,6 +7,7 @@ use meta_cli::worktree;
 use meta_core::config::{self, MetaTreeNode};
 use meta_core::display::{escape, escape_path};
 use meta_core::git::GitUrl;
+use meta_core::outln;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -196,7 +197,7 @@ pub fn execute_command(
             Ok(list) => handle_project_list(
                 cwd,
                 &ExecuteOptions {
-                    json_output: options.json_output || list.json,
+                    json_output: meta_core::out::set_json(options.json_output || list.json),
                     recursive: options.recursive || list.recursive,
                     depth: list.depth.or(options.depth),
                     selected: None,
@@ -207,16 +208,20 @@ pub fn execute_command(
         "project dependents" => match parse_args::<DependentsArgs>(command, args) {
             Ok(dependents) => handle_project_dependents(
                 &dependents.project,
-                options.json_output || dependents.json,
+                meta_core::out::set_json(options.json_output || dependents.json),
                 options.recursive || dependents.recursive,
                 cwd,
             ),
             Err(result) => result,
         },
         "project check" => match parse_args::<CheckArgs>(command, args) {
-            Ok(CheckArgs { json }) => {
-                check(options.json_output || json, options, provided_projects, cwd)
-            }
+            Ok(CheckArgs { json }) => check(
+                meta_core::out::set_json(options.json_output || json),
+                options,
+                provided_projects,
+                cwd,
+            )
+            .unwrap_or_else(Into::into),
             Err(result) => result,
         },
         // meta_cli sends an unclaimed `project <word>` as `project` plus args
@@ -274,27 +279,27 @@ fn check(
     options: &ExecuteOptions,
     provided_projects: &[String],
     cwd: &Path,
-) -> CommandResult {
-    let problems = match check_projects(options, provided_projects, cwd) {
-        Ok(problems) => problems,
-        Err(e) => return CommandResult::Error(format!("{e:#}")),
-    };
+) -> anyhow::Result<CommandResult> {
+    let problems = check_projects(options, provided_projects, cwd)?;
     if json {
-        match serde_json::to_string_pretty(&serde_json::json!({ "problems": problems })) {
-            Ok(out) if problems.is_empty() => return CommandResult::Message(out),
-            // the report on stdout, the failure in the exit code
-            Ok(out) => println!("{out}"),
-            Err(e) => return CommandResult::Error(format!("Failed to serialize JSON: {e}")),
+        let report = serde_json::to_string_pretty(&serde_json::json!({ "problems": problems }))
+            .map_err(|e| anyhow::anyhow!("Failed to serialize JSON: {e}"))?;
+        if problems.is_empty() {
+            return Ok(CommandResult::Message(report));
         }
+        // the report on stdout, the failure in the exit code
+        outln!("{report}")?;
     } else if problems.is_empty() {
-        return CommandResult::Message("All projects are cloned and present.".to_string());
+        return Ok(CommandResult::Message(
+            "All projects are cloned and present.".to_string(),
+        ));
     } else {
         for problem in &problems {
-            println!("✗ {}: {}", escape(&problem.path), escape(&problem.reason));
+            outln!("✗ {}: {}", escape(&problem.path), escape(&problem.reason))?;
         }
     }
     let missing = problems.iter().any(|p| p.state == "missing");
-    CommandResult::Error(format!(
+    Ok(CommandResult::Error(format!(
         "{} project(s) are not clones of their configured repository{}",
         problems.len(),
         if missing {
@@ -302,7 +307,7 @@ fn check(
         } else {
             ""
         }
-    ))
+    )))
 }
 
 /// What is wrong with the projects of the nearest config at or above cwd;
@@ -446,10 +451,10 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
                     .to_path_buf();
                 match config::find_root_meta_dir(&nearest_meta_dir) {
                     Ok(root) => root,
-                    Err(e) => return CommandResult::Error(format!("{e:#}")),
+                    Err(e) => return CommandResult::from(e),
                 }
             }
-            Err(e) => return CommandResult::Error(format!("{e:#}")),
+            Err(e) => return CommandResult::from(e),
             Ok(None) => {
                 return CommandResult::Error(format!("No .meta.yaml found in {}", escape_path(cwd)))
             }
@@ -460,7 +465,7 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
 
     let tree = match config::walk_meta_tree(&start_dir, max_depth) {
         Ok(t) => t,
-        Err(e) => return CommandResult::Error(format!("{e}")),
+        Err(e) => return CommandResult::from(e),
     };
 
     // The remote of the workspace whose projects these are, not of the
@@ -471,7 +476,7 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
             .and_then(|config| config.parent().map(Path::to_path_buf))
             .filter(|dir| matches!(meta_core::gitdir::common_dir(dir), Ok(Some(_))))
             .and_then(|dir| meta_core::git::remote_url(&dir).ok().flatten()),
-        Err(e) => return CommandResult::Error(format!("{e:#}")),
+        Err(e) => return CommandResult::from(e),
     };
     let project_nodes: Vec<ProjectTreeNode> = tree.iter().map(to_project_tree_node).collect();
     let abs_cwd = cwd
@@ -491,7 +496,7 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
             match config::find_meta_config(cwd, None) {
                 Ok(Some(config_path)) => config_path.parent().unwrap_or(cwd).to_path_buf(),
                 Ok(None) => start_dir.clone(),
-                Err(e) => return CommandResult::Error(format!("{e:#}")),
+                Err(e) => return CommandResult::from(e),
             }
         };
         let abs_root = root_dir
@@ -501,7 +506,7 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
             .to_string();
         let context = match worktree::detect_worktree_context(&abs_cwd) {
             Ok(context) => context,
-            Err(e) => return CommandResult::Error(format!("{e:#}")),
+            Err(e) => return CommandResult::from(e),
         };
         let linked_worktree = context.map(|(name, task_dir, _repos)| {
             let canonical_root = worktree::discover_worktree_repos(&task_dir)
@@ -629,7 +634,7 @@ fn handle_project_dependents(
     cwd: &Path,
 ) -> CommandResult {
     match dependents(project_name, recursive, cwd) {
-        Err(e) => CommandResult::Error(format!("{e:#}")),
+        Err(e) => CommandResult::from(e),
         Ok(dependents) if json => match serde_json::to_string(&dependents) {
             Ok(json) => CommandResult::Message(json),
             Err(e) => CommandResult::Error(format!("Failed to serialize JSON: {e}")),
@@ -673,7 +678,7 @@ fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result
     } else {
         projects.extend(workspace.projects.into_iter().map(Into::into));
     }
-    let graph = DependencyGraph::build(projects)?;
+    let graph = DependencyGraph::build(projects);
     let dependents = graph
         .dependents_of(project_name)
         .ok_or_else(|| anyhow::anyhow!("Unknown project or alias: {}", escape(project_name)))?;
@@ -685,6 +690,10 @@ fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result
 // ============================================================================
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "tests start the programs they test with"
+)]
 mod tests {
     use super::*;
     use meta_plugin_protocol::{ExecutionPlan, PlanResponse, PlannedCommand};
@@ -701,7 +710,7 @@ mod tests {
     /// The text of an `Error` result, or `None` for any other result.
     fn error(result: CommandResult) -> Option<String> {
         match result {
-            CommandResult::Error(msg) => Some(msg),
+            CommandResult::Error(msg) | CommandResult::Usage(msg) => Some(msg),
             _ => None,
         }
     }
@@ -889,7 +898,7 @@ mod tests {
             ("web", "wrong_remote")
         );
         assert!(matches!(
-            check(true, &ExecuteOptions::default(), &[], &root),
+            check(true, &ExecuteOptions::default(), &[], &root).unwrap(),
             CommandResult::Error(e) if e.contains("1 project(s)")
         ));
 

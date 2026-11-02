@@ -1,6 +1,12 @@
 //! meta's git: run from a git hook it acts on its workspace's repos, not
 //! the hook's; and what it reads from each kind of repository.
 
+#![expect(
+    clippy::disallowed_methods,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
+
 use meta_core::git::run;
 use std::path::Path;
 use std::process::{Command, Output};

@@ -304,6 +304,35 @@ teardown() {
     [[ "$output" == *"frontend"* ]]
 }
 
+@test "each repo's name comes before its output, and a sequential prompt reads the terminal's input" {
+    for mode in --parallel --sequential; do
+        run "$META_BIN" "$mode" --include api,worker exec -- sh -c 'echo "out-of-$(basename "$PWD")"'
+        [ "$status" -eq 0 ]
+        api_label=$(grep -n '^.*\./api:$' <<<"$output" | cut -d: -f1)
+        api_out=$(grep -n '^out-of-api$' <<<"$output" | cut -d: -f1)
+        worker_label=$(grep -n '^.*\./worker:$' <<<"$output" | cut -d: -f1)
+        [ -n "$api_label" ] && [ -n "$api_out" ] && [ -n "$worker_label" ]
+        [ "$api_label" -lt "$api_out" ]
+        [ "$api_out" -lt "$worker_label" ]
+    done
+    run bash -c 'printf "y\nn\n" | "$1" --sequential --include api,worker exec -- sh -c "read a; echo answer=\$a"' _ "$META_BIN"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"./api:"*"answer=y"*"./worker:"*"answer=n"* ]]
+}
+
+@test "a failed command's summary is the whole report, and meta exits 1" {
+    for mode in --parallel --sequential; do
+        run "$META_BIN" "$mode" --include api exec -- sh -c 'exit 3'
+        [ "$status" -eq 1 ]
+        [[ "$output" == *"1 out of 1 commands failed"* ]]
+        [[ "$output" != *"Error:"* ]]
+    done
+    # silenced, there is no summary: the error says it
+    run "$META_BIN" --silent --include api exec -- sh -c 'exit 3'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Error: At least one command failed"* ]]
+}
+
 @test "loop sequential mode runs commands in order" {
     # Run commands across all three projects
     run "$META_BIN" --include api,worker,frontend exec -- pwd
@@ -443,7 +472,7 @@ SCRIPT
 
 @test "unrecognized top-level command shows help" {
     run "$META_BIN" blablabla
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
     [[ "$output" == *"unrecognized command"* ]]
     [[ "$output" == *"blablabla"* ]]
     [[ "$output" == *"meta exec"* ]]
@@ -460,7 +489,7 @@ SCRIPT
     chmod +x "$TEST_DIR/.meta/plugins/meta-project"
 
     run "$META_BIN" project blablabla
-    [ "$status" -eq 1 ]
+    [ "$status" -eq 2 ]
     [[ "$output" == *"unrecognized command"* ]]
     [[ "$output" == *"project blablabla"* ]]
     # Should show plugin help with available commands
@@ -731,6 +760,20 @@ EOF
     [ -z "$(find "$TEST_DIR" -name ran)" ]
 }
 
+@test "exec keeps each command's stdout on stdout and stderr on stderr, bytes as written" {
+    for mode in --parallel --sequential; do
+        run bash -c '"$1" "$2" --include api exec -- sh -c "echo OUT; echo ERR >&2" 2>/dev/null' _ "$META_BIN" "$mode"
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"OUT"* ]]
+        [[ "$output" != *"ERR"* ]]
+        run bash -c '"$1" "$2" --include api exec -- sh -c "echo ERR >&2" 2>&1 >/dev/null' _ "$META_BIN" "$mode"
+        [[ "$output" == *"ERR"* ]]
+        # not UTF-8: passed on as it is
+        run bash -c '"$1" "$2" --include api exec -- printf "a\377b" | od -An -c' _ "$META_BIN" "$mode"
+        [[ "$output" == *"a 377   b"* ]]
+    done
+}
+
 @test "exec stdout broken pipe exits quietly without a panic" {
     for mode in --parallel --sequential; do
         run bash -c 'set -o pipefail; "$1" "$2" exec -- seq 1 20000 2>"$3" | head -1' _ "$META_BIN" "$mode" "$TEST_DIR/stderr"
@@ -745,6 +788,37 @@ EOF
         [[ "$status" -eq 0 || "$status" -eq 141 ]]
         [ ! -s "$TEST_DIR/stderr" ]
     done
+}
+
+@test "loop with no command prints clap's help: coloured on a terminal, plain into a pipe" {
+    load "${BATS_TEST_DIRNAME}/helpers/terminal.bash"
+    LOOP_BIN="$BATS_TEST_DIRNAME/../target/debug/loop"
+    TERM=xterm run with_terminal "$LOOP_BIN"
+    [[ "$output" == *$'\033['* ]]
+    run bash -c '"$1" | od -An -c | tail -1' _ "$LOOP_BIN"
+    [[ "$output" != *'\n  \n'* ]]
+    run "$LOOP_BIN"
+    [[ "$output" == *"Usage: loop"* ]]
+    [[ "$output" != *$'\033['* ]]
+}
+
+@test "loop's output to a closed stdout exits 141 quietly" {
+    LOOP_BIN="$BATS_TEST_DIRNAME/../target/debug/loop"
+    # stdout's read end closed before loop starts (not `head -c0`, which
+    # BSD head refuses)
+    closed() { python3 -c 'import os, subprocess, sys
+r, w = os.pipe(); os.close(r)
+p = subprocess.run(sys.argv[1:], stdout=w, stderr=subprocess.PIPE)
+sys.stderr.buffer.write(p.stderr); sys.exit(p.returncode)' "$@"; }
+    for args in "-i api echo hi" "--help"; do
+        run closed "$LOOP_BIN" $args
+        [ "$status" -eq 141 ]
+        [ -z "$output" ]
+    done
+    # -v's own lines are on stderr; nothing else is
+    run closed "$LOOP_BIN" -v -i api echo hi
+    [ "$status" -eq 141 ]
+    [[ "$output" != *"rror"* && "$output" != *"panicked"* ]]
 }
 
 @test "a failure cut off by a closed stdout isn't reported as success" {
@@ -769,6 +843,96 @@ EOF
         [[ "$status" -eq 0 || "$status" -eq 141 ]]
         [ ! -s "$TEST_DIR/stderr" ]
     done
+}
+
+@test "a plugin plan's setup and cleanup under --json --verbose leave stdout JSON" {
+    mkdir -p .meta/plugins
+    printf '%s\n' '#!/bin/sh' \
+        'if [ "$1" = --meta-plugin-info ]; then' \
+        '    echo '"'"'{"name":"plan","version":"1","commands":["plan"]}'"'"'' \
+        'else' \
+        '    echo '"'"'{"plan":{"pre_commands":[{"dir":".","argv":["true"]}],"commands":[{"dir":".","argv":["true"]}],"post_commands":[{"dir":".","argv":["true"]}]}}'"'"'' \
+        'fi' > .meta/plugins/meta-plan
+    chmod +x .meta/plugins/meta-plan
+    run bash -c '"$1" --json --verbose plan go 2>/dev/null' _ "$META_BIN"
+    [ "$status" -eq 0 ]
+    jq -e '.success == true' <<<"$output"
+}
+
+@test "a plugin killed by a signal ends meta by it; one that fails silently under --json leaves JSON" {
+    mkdir -p .meta/plugins
+    cat > .meta/plugins/meta-die <<'EOF'
+#!/bin/sh
+if [ "$1" = --meta-plugin-info ]; then
+    echo '{"name":"die","version":"1","commands":["die","die quiet"]}'
+elif cat | grep -q '"command":"die quiet"'; then
+    echo boom >&2; exit 3
+else
+    kill -TERM $$
+fi
+EOF
+    chmod +x .meta/plugins/meta-die
+    run "$META_BIN" die now
+    [ "$status" -eq 143 ]
+    run bash -c '"$1" --json die quiet 2>/dev/null' _ "$META_BIN"
+    [ "$status" -eq 3 ]
+    jq -e '.success == false and (.error | contains("plugin die failed"))' <<<"$output"
+}
+
+@test "a plugin's own argument that isn't UTF-8 is a usage error, not a panic" {
+    run "$META_GIT_BIN" $'\xff'
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Unknown flag"*"Use via: meta git"* ]]
+    [[ "$output" != *"panicked"* ]]
+    run "$META_GIT_BIN" --bogus
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Unknown flag: --bogus"*"Use via: meta git"* ]]
+}
+
+@test "an error meant for a closed stdout under --json exits 141 quietly" {
+    closed() { python3 -c 'import os, subprocess, sys
+r, w = os.pipe(); os.close(r)
+p = subprocess.run(sys.argv[1:], stdout=w, stderr=subprocess.PIPE)
+sys.stderr.buffer.write(p.stderr); sys.exit(p.returncode)' "$@"; }
+    run closed "$META_BIN" --json nosuchcmd
+    [ "$status" -eq 141 ]
+    [ -z "$output" ]
+    run closed "$META_BIN" --json --include nope exec -- true
+    [ "$status" -eq 141 ]
+    [ -z "$output" ]
+}
+
+@test "a last line without its newline to a closed stdout still exits 141" {
+    mkdir -p .meta/plugins
+    printf '%s\n' '#!/bin/sh' \
+        'if [ "$1" = --meta-plugin-info ]; then' \
+        '    echo '"'"'{"name":"frag","version":"1","commands":["frag"]}'"'"'' \
+        'elif grep -q fail; then printf fragment; exit 3' \
+        'else printf fragment; fi' > .meta/plugins/meta-frag
+    chmod +x .meta/plugins/meta-frag
+    # whether the plugin succeeded or failed
+    for how in now fail; do
+        run python3 -c 'import os, subprocess, sys
+r, w = os.pipe(); os.close(r)
+sys.exit(subprocess.run(sys.argv[1:], stdout=w).returncode)' "$META_BIN" frag "$how"
+        [ "$status" -eq 141 ]
+    done
+}
+
+@test "a command's own --json makes its errors JSON; a .looprc's json_output keeps colour out" {
+    run bash -c '"$1" git worktree status missing --json 2>/dev/null' _ "$META_BIN"
+    [ "$status" -eq 1 ]
+    jq -e '.success == false' <<<"$output"
+    echo '{"json_output": true}' > .looprc
+    # loop's --verbose lines go to stderr, so stdout stays JSON
+    run bash -c '"$1" -v -i api true 2>/dev/null' _ "$BATS_TEST_DIRNAME/../target/debug/loop"
+    jq -e '.success == true' <<<"$output"
+    # nor in -v's lines on stderr, printed after the .looprc is read
+    CLICOLOR_FORCE=1 run bash -c '"$1" -v -i api true 2>&1 >/dev/null' _ "$BATS_TEST_DIRNAME/../target/debug/loop"
+    [[ "$output" == *"Verbose mode enabled"* ]]
+    [[ "$output" != *$'\033['* ]]
+    CLICOLOR_FORCE=1 run "$BATS_TEST_DIRNAME/../target/debug/loop" -i api sh -c 'if [ -n "$CLICOLOR_FORCE" ]; then echo forced; else echo plain; fi'
+    jq -e '.results[0].stdout == "plain\n"' <<<"$output"
 }
 
 @test "a hostile command name is escaped in meta's own lines" {

@@ -1,4 +1,10 @@
 //! Plugin scope and metadata probing must not break unrelated commands.
+
+#![expect(
+    clippy::disallowed_methods,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
 #![cfg(unix)]
 
 use std::fs;
@@ -260,6 +266,8 @@ fn local_install_gitignores_untracked_plugin_files() {
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // macOS hands out the listener's non-blocking mode
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(2)))
                         .unwrap();
@@ -367,7 +375,7 @@ fn unreadable_plugin_directory_warns_and_help_still_runs() {
     assert!(output_local.status.success());
     let err = String::from_utf8_lossy(&output_local.stderr);
     assert!(
-        err.contains("Warning: Cannot read plugins directory"),
+        err.contains("warning: Cannot read plugins directory"),
         "{err}"
     );
     assert!(err.contains(path.to_str().unwrap()), "{err}");
@@ -624,7 +632,7 @@ fn unusable_files_in_plugin_folders_are_warned_about_but_not_on_path() {
     for path in &warned {
         assert!(
             err.lines()
-                .any(|line| line.starts_with("Warning:") && line.contains(path.to_str().unwrap())),
+                .any(|line| line.starts_with("warning:") && line.contains(path.to_str().unwrap())),
             "{}: {err}",
             path.display()
         );

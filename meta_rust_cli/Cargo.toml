@@ -16,6 +16,7 @@ name = "meta_rust_cli"
 path = "src/lib.rs"
 
 [dependencies]
+meta_core = { path = "../meta_core" }
 meta_plugin_protocol = { path = "../meta_plugin_protocol" }
 indexmap = "2"
 

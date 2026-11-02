@@ -1,10 +1,12 @@
 use anyhow::Context;
-use console::style;
+use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use meta_core::errln;
 use meta_core::git::GitUrl;
 use meta_git_lib::clone_queue::{CloneQueue, CloneTask, Outcome, Work};
 use std::ffi::OsString;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,6 +33,7 @@ pub(crate) fn clone_with_queue(
             .context("Bad progress template")?
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
         ssh_cmd,
+        started: AtomicUsize::new(0),
     };
     pool.scope(|scope| {
         for task in tasks {
@@ -46,6 +49,8 @@ struct Worker<'a> {
     mp: &'a MultiProgress,
     style: ProgressStyle,
     ssh_cmd: Option<&'a str>,
+    /// How many tasks have started, to number each once
+    started: AtomicUsize,
 }
 
 impl<'a> Worker<'a> {
@@ -63,10 +68,11 @@ impl<'a> Worker<'a> {
 
     /// Clone or pull one repository; the tasks its `.meta.yaml` adds.
     fn run(&self, task: &CloneTask) -> Vec<CloneTask> {
-        let (completed, total) = self.queue.get_counts();
+        let number = self.started.fetch_add(1, Ordering::SeqCst) + 1;
+        let (_, total) = self.queue.get_counts();
         let pb = self.mp.add(ProgressBar::new_spinner());
         pb.set_style(self.style.clone());
-        pb.set_prefix(format!("[{}/{}]", completed + 1, total));
+        pb.set_prefix(format!("[{number}/{total}]"));
         let (doing, done) = match task.work {
             Work::Clone(_) => ("Cloning", "Cloned"),
             Work::Pull => ("Pulling", "Pulled"),
@@ -80,7 +86,7 @@ impl<'a> Worker<'a> {
         {
             pb.finish_with_message(format!(
                 "{}",
-                style(format!("Not pulled {}: {why}", task.name)).yellow()
+                format!("Not pulled {}: {why}", task.name).yellow()
             ));
             return self.queue.mark_not_pulled(task, why);
         }
@@ -93,7 +99,7 @@ impl<'a> Worker<'a> {
                 };
                 pb.finish_with_message(format!(
                     "{}",
-                    style(format!("{done} {}{nested}", task.name)).green()
+                    format!("{done} {}{nested}", task.name).green()
                 ));
                 found
             }
@@ -106,7 +112,7 @@ impl<'a> Worker<'a> {
                 let why = "its upstream branch isn't on the remote".to_string();
                 pb.finish_with_message(format!(
                     "{}",
-                    style(format!("Not pulled {}: {why}", task.name)).yellow()
+                    format!("Not pulled {}: {why}", task.name).yellow()
                 ));
                 self.queue.mark_not_pulled(task, why)
             }
@@ -116,10 +122,7 @@ impl<'a> Worker<'a> {
                     Work::Clone(_) => "Failed to clone",
                     Work::Pull => "Could not pull",
                 };
-                pb.finish_with_message(format!(
-                    "{}",
-                    style(format!("{failed} {}", task.name)).red()
-                ));
+                pb.finish_with_message(format!("{}", format!("{failed} {}", task.name).red()));
                 found
             }
         }
@@ -144,43 +147,43 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     }
     for failure in &failures {
         match &failure.work {
-            Work::Clone(url) => eprintln!(
+            Work::Clone(url) => errln!(
                 "{} {} ({url})",
-                style("Failed to clone").red().bold(),
+                "Failed to clone".red().bold(),
                 meta_core::display::escape(&failure.name),
             ),
-            Work::Pull => eprintln!(
+            Work::Pull => errln!(
                 "{} {}",
-                style("Could not pull").red().bold(),
+                "Could not pull".red().bold(),
                 meta_core::display::escape(&failure.name),
             ),
         }
         // git's error names paths from the filesystem
         for line in failure.error.lines() {
-            eprintln!("    {}", meta_core::display::escape(line));
+            errln!("    {}", meta_core::display::escape(line));
         }
     }
     for (name, why) in &refused {
-        eprintln!(
+        errln!(
             "{} {}: not a git repository ({}); move it away and run 'meta git update' again",
-            style("Not cloned").red().bold(),
+            "Not cloned".red().bold(),
             meta_core::display::escape(name),
             meta_core::display::escape(why)
         );
     }
     let chain = |names: &Vec<String>| meta_core::display::escape(&names.join(" → ")).into_owned();
     for names in &cycles {
-        eprintln!(
+        errln!(
             "{} {}: it is a meta repo above it again; the meta repos list each other ({})",
-            style("Left out").red().bold(),
+            "Left out".red().bold(),
             meta_core::display::escape(names.last().map_or("", String::as_str)),
             chain(names)
         );
     }
     for line in &unreadable {
-        eprintln!(
+        errln!(
             "{} {}",
-            style("Cannot read nested .meta.yaml").red().bold(),
+            "Cannot read nested .meta.yaml".red().bold(),
             meta_core::display::escape_lines(line)
         );
     }
@@ -459,6 +462,9 @@ mod tests {
         let output = "x".repeat(10_000_000);
         let tail = StderrTail::spawn(Some(std::io::Cursor::new(output)), |_| {});
         let text = tail.text();
-        assert!(text.len() <= StderrTail::KEPT_LINES * (StderrTail::LINE_BYTES as usize + 1));
+        assert!(
+            text.len()
+                <= StderrTail::KEPT_LINES * (usize::try_from(StderrTail::LINE_BYTES).unwrap() + 1)
+        );
     }
 }

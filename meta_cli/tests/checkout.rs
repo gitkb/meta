@@ -1,6 +1,12 @@
 //! `meta exec` acts only in project folders that are repositories of their
 //! own, and names the others.
 
+#![expect(
+    clippy::disallowed_methods,
+    clippy::unwrap_used,
+    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
+)]
+
 use meta_core::git::run;
 use std::fs;
 use tempfile::tempdir;
@@ -54,8 +60,10 @@ fn exec_runs_only_in_projects_that_are_their_own_repository() {
         ("plain", "not a git repository (folder exists, no .git)"),
         ("missing", "not cloned (run 'meta git update')"),
     ];
+    // on stderr, as a command's own errors are
+    let stderr = String::from_utf8_lossy(&out.stderr);
     for (_, reason) in why {
-        assert!(stdout.contains(reason), "{stdout}");
+        assert!(stderr.contains(reason), "{stderr}");
     }
 
     // and each is a failed result in the JSON, never left out of it

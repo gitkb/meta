@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::*;
 use meta_core::display::{escape, escape_path};
+use meta_core::outln;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -105,7 +106,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
     let worktree_root = match (&location, std::env::var_os("META_WORKTREES")) {
         (Some((_, root)), None) => root
             .parent()
-            .expect("worktree location has a parent")
+            .context("The worktree set has no parent folder")?
             .to_path_buf(),
         _ => {
             let configs = Configs::find_optional(&cwd)?;
@@ -176,7 +177,10 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
             let (ephemeral, ttl_remaining_seconds, custom) = match record {
                 Some(record) => (
                     Some(record.ephemeral),
-                    ttl::remaining(&record, now),
+                    ttl::remaining(&record, now).unwrap_or_else(|e| {
+                        meta_core::out::warn(format!("{e:#}"));
+                        None
+                    }),
                     (!record.custom.is_empty()).then_some(record.custom),
                 ),
                 None => (None, None, None),
@@ -210,24 +214,24 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
     worktrees.sort_by(|a, b| a.name.cmp(&b.name));
     warnings.sort_by(|a, b| a.name.cmp(&b.name));
     if json {
-        println!(
+        outln!(
             "{}",
             serde_json::to_string_pretty(&ListOutput {
                 worktrees,
                 warnings
             })?
-        );
+        )?;
         return Ok(());
     }
     if worktrees.is_empty() {
-        println!(
+        outln!(
             "{}",
             if warnings.is_empty() {
                 "No worktrees found."
             } else {
                 "No readable worktree sets found."
             }
-        );
+        )?;
     }
     for entry in worktrees {
         let mut header = escape(&entry.name).bold().to_string();
@@ -246,11 +250,11 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
                 }
             ));
         }
-        println!("{header}");
+        outln!("{header}")?;
         for repo in entry.repos {
             match repo {
                 RepoEntry::Metadata(repo) => {
-                    println!("  {}  {}", escape(&repo.alias), escape_path(&repo.path))
+                    outln!("  {}  {}", escape(&repo.alias), escape_path(&repo.path))?
                 }
                 RepoEntry::Observed(repo) => {
                     let status = match repo.dirty {
@@ -258,23 +262,23 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
                         Some(false) => "clean".green().to_string(),
                         None => "unknown: git can't read it".red().to_string(),
                     };
-                    println!(
+                    outln!(
                         "  {:12} -> {:20} ({})",
                         escape(&repo.alias),
                         escape(repo.branch.as_deref().unwrap_or("-")),
                         status
-                    );
+                    )?;
                 }
             }
         }
-        println!();
+        outln!()?;
     }
     for warning in warnings {
-        eprintln!(
-            "Warning: {}: {}",
+        meta_core::out::warn(format!(
+            "{}: {}",
             escape(&warning.name),
             escape(&warning.message)
-        );
+        ));
     }
     Ok(())
 }

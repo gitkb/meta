@@ -1,10 +1,11 @@
 use crate::clone_worker::clone_with_queue;
 use crate::ssh;
 use anyhow::Context;
-use console::style;
+use colored::Colorize;
 use indicatif::MultiProgress;
 use meta_core::config;
 use meta_core::git::GitUrl;
+use meta_core::{errln, outln};
 use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::sync::Arc;
@@ -122,9 +123,9 @@ pub(crate) fn execute_git_clone(
     if options.mode().is_preview() {
         // Output what we know - just the meta repo clone command
         // (Child repos are in .meta.yaml file which hasn't been cloned yet)
-        println!("{} Would clone meta repository:", style("[DRY RUN]").cyan());
+        outln!("{} Would clone meta repository:", "[DRY RUN]".cyan())?;
         let shown = loop_lib::display_command(&clone_argv(url.to_string()));
-        println!("  {}", meta_core::display::escape(&shown));
+        outln!("  {}", meta_core::display::escape(&shown))?;
         return Ok(CommandResult::Message(String::new()));
     }
 
@@ -134,7 +135,9 @@ pub(crate) fn execute_git_clone(
         ssh::SshMasters::UserManaged | ssh::SshMasters::Failed => None,
     };
 
-    println!("Cloning meta repository: {url}");
+    // progress, on stderr beside the clones' own: meta shows a plugin's
+    // stdout only once it ends
+    errln!("Cloning meta repository: {url}");
     let mut clone_cmd = meta_core::git::git(cwd);
     clone_cmd.args(
         clone_argv(url.as_git_arg().to_string_lossy().into_owned())
@@ -194,14 +197,16 @@ pub(crate) fn execute_git_clone(
             }
             ssh::SshMasters::UserManaged => {} // parallel OK, no override needed
             ssh::SshMasters::Failed if ssh_cmd.is_none() => {
-                ssh::warn("SSH multiplexing could not be set up: cloning one repository at a time");
+                meta_core::out::warn(
+                    "SSH multiplexing could not be set up: cloning one repository at a time",
+                );
                 parallel = 1;
             }
             ssh::SshMasters::Failed => {} // initial host works
         }
     }
 
-    println!(
+    errln!(
         "Cloning {} child repositories{}",
         initial_count,
         if recursive { " (recursive mode)" } else { "" }
@@ -216,13 +221,13 @@ pub(crate) fn execute_git_clone(
 
     let (completed, total) = queue.get_counts();
     if total > initial_count {
-        println!(
+        outln!(
             "Meta-repo clone completed ({} repos cloned, {} discovered via nested .meta.yaml files)",
             completed,
             total - initial_count
-        );
+        )?;
     } else {
-        println!("Meta-repo clone completed ({completed} repos cloned)");
+        outln!("Meta-repo clone completed ({completed} repos cloned)")?;
     }
 
     Ok(CommandResult::Message(String::new()))

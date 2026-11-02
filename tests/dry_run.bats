@@ -9,17 +9,11 @@ load "${BATS_TEST_DIRNAME}/helpers/terminal.bash"
 # (editor, ssh, hook) ran. A command that can't preview refuses.
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    TARGET="$BATS_TEST_DIRNAME/../target/debug"
-    if [ ! -f "$TARGET/meta" ] || [ ! -f "$TARGET/meta-git" ]; then
-        cargo build --workspace --quiet
-    fi
+    # a temporary file a preview made would show in the snapshot too:
+    # sandbox's TMPDIR is under it
+    sandbox
     SANDBOX="$BATS_TEST_TMPDIR"
     CALLS="$SANDBOX/calls"
-    # a temporary file a preview made would show in the snapshot too
-    export TMPDIR="$SANDBOX/tmp"
-    mkdir -p "$TMPDIR"
 
     # Programs a preview must never start: each records that it ran
     STUBS="$SANDBOX/stubs"
@@ -28,10 +22,8 @@ setup() {
         printf '#!/bin/sh\necho "%s $*" >> "%s"\nexit 1\n' "$stub" "$CALLS" > "$STUBS/$stub"
         chmod +x "$STUBS/$stub"
     done
-    export PATH="$STUBS:$(cd "$TARGET" && pwd -P):$PATH"
+    export PATH="$STUBS:$META_BIN_DIR:$PATH"
     export GIT_EDITOR="$STUBS/editor" EDITOR="$STUBS/editor"
-    export GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.invalid
-    export GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=test@example.invalid
 
     # A workspace with two cloned repos and one not cloned yet (over ssh)
     mkdir -p "$SANDBOX/remotes"
@@ -72,10 +64,6 @@ EOF
     echo "unsaved" > .worktrees/dirty/backend/notes.txt
     echo change >> backend/README.md
     git -C backend add README.md
-}
-
-teardown() {
-    cd /
 }
 
 # Everything under the sandbox: each path's type, mode, link target and
@@ -316,7 +304,7 @@ preview() {
 @test "plugin uninstall refuses --dry-run" {
     # a local plugin, for uninstall to refuse to remove
     mkdir -p .meta/plugins
-    cp "$TARGET/meta-git" .meta/plugins/meta-git
+    cp "$META_BIN_DIR/meta-git" .meta/plugins/meta-git
     preview 1 plugin uninstall --local meta-git
     [[ "$output" == *"meta plugin uninstall has no preview"* ]]
     [ -x .meta/plugins/meta-git ]

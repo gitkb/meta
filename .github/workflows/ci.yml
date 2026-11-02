@@ -33,6 +33,11 @@ jobs:
         with:
           shared-key: "test-${{ matrix.os }}"
 
+      # The docs and hints tests run meta's plugins and the example plugin:
+      # cargo test builds a package's binaries only for its own tests
+      - name: Build binaries and examples
+        run: cargo build --workspace --bins --examples --locked
+
       - name: Run tests
         run: cargo test --workspace --locked
 

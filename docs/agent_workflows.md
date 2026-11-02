@@ -1,14 +1,6 @@
 # Agent Workflows with Meta
 
-This guide covers common patterns for AI agents working with multi-repository codebases using Meta's MCP tools.
-
-## Understanding Multi-Repo Context
-
-When working with meta repositories, agents need to:
-1. Understand the overall workspace structure
-2. Track state across multiple repos
-3. Execute operations safely with rollback capability
-4. Respect dependency ordering
+This guide covers common patterns for AI agents working with multi-repository codebases using Meta's MCP tools. [mcp_server.md](mcp_server.md) describes each tool, its arguments and its results, and the query language of `meta_query_repos`.
 
 ## Common Workflows
 
@@ -67,38 +59,29 @@ When making changes across repositories:
 
 ```
 1. meta_git_status → Check for uncommitted changes
-2. Commit them (meta_git_add, then meta_git_commit, which commits only staged changes)
+2. meta_git_add, then meta_git_commit → Commit them (meta_git_commit commits only what is staged)
 3. meta_query_repos → Find repos to modify
 4. Make changes
 5. meta_run_tests → Verify changes
-6. If tests fail: discard the batch's changes with git (`git restore --staged --worktree .`, then `git clean -nd` to list new files and remove those by name, since agent guard blocks `git clean -fd`; everything from before is committed). `git reflog` / `git switch` only go back to earlier commits; they don't discard uncommitted edits
+6. If tests fail: discard the changes with git (everything from before is committed)
 7. If tests pass: meta_git_add, then meta_git_commit → Commit changes
 ```
 
 **Example:**
 ```json
 // Check state, then commit pending work
-{"name": "meta_git_status", "arguments": {
-  "tag": "frontend"
-}}
-{"name": "meta_exec", "arguments": {
-  "command": ["sh", "-c", "git add -A && { git diff --cached --quiet || git commit -m 'wip: before dependency update'; }"],
-  "tag": "frontend"
-}}
+{"name": "meta_git_status", "arguments": {"tag": "frontend"}}
+{"name": "meta_git_add", "arguments": {"tag": "frontend"}}
+{"name": "meta_git_commit", "arguments": {"message": "wip: before dependency update", "tag": "frontend"}}
 
 // Find affected repos
-{"name": "meta_query_repos", "arguments": {
-  "query": "tag:frontend"
-}}
+{"name": "meta_query_repos", "arguments": {"query": "tag:frontend"}}
 
 // After making changes, run tests
-{"name": "meta_run_tests", "arguments": {
-  "tag": "frontend"
-}}
+{"name": "meta_run_tests", "arguments": {"tag": "frontend"}}
 
-// If failed, discard the changes (pending work was committed above);
-// then list new files with git clean -nd and remove them by name
-// (agent guard blocks git clean -fd)
+// If they failed, discard the changes; git clean -nd then lists
+// new files, to remove by name
 {"name": "meta_exec", "arguments": {
   "command": ["git", "restore", "--staged", "--worktree", "."],
   "tag": "frontend"
@@ -107,30 +90,24 @@ When making changes across repositories:
 
 ### 4. Dependency-Aware Builds
 
-When building projects with dependencies:
+`meta_build` and `meta_batch_execute` run projects in name order (`meta_build` the root first), not in dependency order. To build in dependency order:
 
 ```
-1. meta_analyze_impact → Understand what's affected
-2. meta_execution_order → Get correct build order
-3. meta_build → Build in correct order
+1. meta_analyze_impact → See what a change affects
+2. meta_execution_order → Get the order: dependencies before their dependents
+3. Build each project in that order
 ```
 
 **Example:**
 ```json
 // See impact of changing shared-utils
-{"name": "meta_analyze_impact", "arguments": {
-  "project": "shared-utils"
-}}
+{"name": "meta_analyze_impact", "arguments": {"project": "shared-utils"}}
 
 // Get build order
 {"name": "meta_execution_order", "arguments": {}}
-
-// Build with dependencies
-{"name": "meta_batch_execute", "arguments": {
-  "command": ["npm", "run", "build"],
-  "atomic": true
-}}
 ```
+
+Then build one project at a time in that order, for example from a shell with `meta --include shared-utils exec -- npm run build`, then the next.
 
 ### 5. Syncing Branches Across Repos
 
@@ -160,7 +137,7 @@ When synchronizing branches:
 
 ### 6. Atomic Operations with Rollback
 
-For operations that must succeed together:
+For local changes that must succeed together:
 
 ```json
 {"name": "meta_batch_execute", "arguments": {
@@ -170,28 +147,12 @@ For operations that must succeed together:
 }}
 ```
 
-If any repo fails:
-- The command stops, and each repo it reached is put back on its branch and commit from before
+Atomic mode runs only when every selected project is a clean git repository. If any repo fails:
+- The command stops, and each repo it reached is put back where it was (on its branch, or on the commit a detached HEAD was at); what the command left uncommitted is saved in a stash
 - `rollback.status` is `success` when every one of them was; otherwise `rollback.failed` lists each repo it couldn't fully put back, with git's reason. Such a repo may be partly restored: its uncommitted changes may already be in a stash, which the reason then names
 - `rollback.restored` names, for each repo put back, the stash holding its uncommitted changes and the commits it replaced
 
-## Query DSL Reference
-
-The query DSL allows precise filtering:
-
-| Query | Meaning |
-|-------|---------|
-| `dirty:true` | Repos with uncommitted changes |
-| `dirty:false` | Clean repos |
-| `branch:main` | Repos on main branch |
-| `tag:backend` | Repos with backend tag |
-| `ahead:true` | Repos ahead of remote |
-| `behind:true` | Repos behind remote |
-
-Combine with AND:
-```
-dirty:true AND tag:backend AND branch:main
-```
+The rollback restores local git state only. It can't undo what the command did elsewhere: a `git push`, an `npm publish`, a deploy. Don't use it as a safety net for those.
 
 ## Best Practices
 
@@ -214,29 +175,15 @@ Don't operate on all repos when you mean a subset:
 }}
 ```
 
-### 4. Use Atomic Mode for Critical Operations
-```json
-{"name": "meta_batch_execute", "arguments": {
-  "command": ["npm", "publish"],
-  "atomic": true
-}}
-```
-
-### 5. Respect Dependency Order
-Use `meta_execution_order` before building:
-```json
-{"name": "meta_execution_order", "arguments": {"tag": "backend"}}
-```
-
-### 6. Handle Failures Gracefully
-A tool's result has `isError: true` when the tool itself failed, or when every repository it acted in failed. A tool that acts in several repositories reports each one; when only some failed, `isError` is not set, so also check each repository's entry: `success: false` or an `error` field means that repository failed (`meta_git_diff` and `meta_search_code` entries carry only `error`). An atomic `meta_batch_execute` that failed anywhere is an error as a whole: it tried to roll back. Read `rollback.status` (`success` or `failed`), `rollback.failed` (the repositories it couldn't put back), and in `restored` each repository's stash and replaced commits, before retrying.
+### 4. Handle Failures Gracefully
+A tool's result has `isError: true` when the tool itself failed, or when every repository it acted in failed. When only some failed, `isError` is not set, so also check each repository's entry: `success: false` or an `error` field means that repository failed. An atomic `meta_batch_execute` that failed anywhere is an error as a whole: read its `rollback` before retrying.
 
 ## Error Recovery
 
 When operations fail:
 
 1. **Single repo failure**: Check error, fix issue, retry
-2. **Multiple repo failure**: In each affected repo, discard uncommitted batch edits with `git restore --staged --worktree .`, list new files with `git clean -nd` and remove those by name (this assumes earlier work was already committed or stashed before the batch), and go back to an earlier commit with `git reflog` and `git switch -c recovered <sha>` (the reflog only recovers commits; switching carries uncommitted edits along)
+2. **Multiple repo failure**: In each affected repo, discard uncommitted edits with `git restore --staged --worktree .`, list new files with `git clean -nd` and remove those by name (this assumes earlier work was committed or stashed first), and go back to an earlier commit with `git reflog` and `git switch -c recovered <sha>` (the reflog only recovers commits; switching carries uncommitted edits along)
 3. **Build order failure**: Use `meta_execution_order` to find dependencies
 4. **Git conflicts**: Manual intervention may be required
 
@@ -248,11 +195,8 @@ When operations fail:
 3. Find relevant code: meta_search_code
 4. Make changes across repos
 5. Check impact: meta_analyze_impact
-6. Get build order: meta_execution_order
-7. Build in order: meta_batch_execute
-8. Run tests: meta_run_tests
-9. If failed: discard the batch's edits (`git restore --staged --worktree .`; `git clean -nd` lists new files to remove by name) or go back to an earlier commit (git reflog / git switch), fix issues
-10. If passed: meta_git_add, meta_git_commit, meta_git_push
+6. Get build order: meta_execution_order, then build each project in that order
+7. Run tests: meta_run_tests
+8. If failed: discard the edits (`git restore --staged --worktree .`; `git clean -nd` lists new files to remove by name) or go back to an earlier commit (git reflog / git switch), fix issues
+9. If passed: meta_git_add, meta_git_commit, meta_git_push
 ```
-
-This workflow ensures safe, coordinated changes across multiple repositories with the ability to rollback if anything goes wrong.

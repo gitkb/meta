@@ -64,3 +64,6 @@ target
 /.worktrees/
 
 .env
+
+# what `meta init claude` installs when run in this repo
+/.meta/skills/

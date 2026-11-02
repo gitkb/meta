@@ -1252,7 +1252,7 @@ EOF
     # on a terminal, but in its background, it would stop on its first read
     GIT_EDITOR="$TEST_DIR/editor" run in_background "$META_BIN" git commit --edit
     [ "$status" -ne 0 ]
-    [[ "$output" == *"needs the terminal, but meta runs in its background"* ]]
+    [[ "$output" == *"needs the terminal, but the terminal's foreground is another program"* ]]
     [ ! -e "$LOG" ]
 }
 

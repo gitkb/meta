@@ -1,66 +1,32 @@
 # Contribution Guide
 
-Thank you for your interest in contributing to the `meta` CLI platform! This guide provides an overview of how to get involved and best practices for contributing.
-
-## Table of Contents
-
-- [How to Contribute](#how-to-contribute)
-- [Development Environment](#development-environment)
-- [Code Standards](#code-standards)
-- [Submitting Pull Requests](#submitting-pull-requests)
-- [Reporting Issues](#reporting-issues)
-- [Contributing Plugins](#contributing-plugins)
-- [Resources](#resources)
-- [See Also](#see-also)
-
----
-
-## How to Contribute
-
-- Read the main [CONTRIBUTING.md](../CONTRIBUTING.md) for canonical contribution rules.
-- Fork the repository and create a feature branch.
-- Make your changes with clear, descriptive commit messages.
-- Ensure your code passes all tests and lints.
+Thank you for your interest in contributing to `meta`! The commit and PR title rules are in the main [CONTRIBUTING.md](../CONTRIBUTING.md); this page covers the rest.
 
 ## Development Environment
 
-- Install Rust (see [Installation](../README.md#installation)).
-- Clone the repository and run:
-  ```bash
-  cargo build
-  cargo test
-  ```
-- Use the provided Makefile for common tasks.
+Build from source as the README's [From Source](../README.md#from-source) section says. All of meta's crates are in this one repo and Cargo workspace, so a change across crates is one commit and one PR.
 
-## Code Standards
+## Before Opening a PR
 
-- Follow Rust best practices and project conventions.
-- Write clear, maintainable code.
-- Add or update documentation as needed.
+Run what CI runs:
 
-## Submitting Pull Requests
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo build --workspace --bins --examples --locked   # the tests below run these
+cargo test --workspace --locked
+make bats    # the integration tests in tests/*.bats; needs bats
+```
 
-- Open a pull request with a clear description of your changes.
-- Reference related issues or discussions.
-- Ensure your PR passes CI checks.
+`cargo test -p meta --test docs` (part of `cargo test`) runs every `meta …` command the README, docs and skills show; when you change a command, update the docs it breaks. `make install-hooks` installs git hooks that check commit messages and, before a push, run the cargo checks above (not `make bats`, which you run yourself).
 
 ## Reporting Issues
 
-- Use [GitHub Issues](https://github.com/gitkb/meta/issues) for bugs, feature requests, and questions.
-- Provide detailed steps to reproduce issues.
-
-## Contributing Plugins
-
-- See the [Plugin Development Guide](plugin_development.md) for how to create and submit plugins.
-- Document your plugin and provide usage examples.
-
-## Resources
-
-- [Architecture Overview](architecture_overview.md)
-- [Advanced Usage Guide](advanced_usage.md)
-- [FAQ / Troubleshooting Guide](faq_troubleshooting.md)
+Use [GitHub Issues](https://github.com/gitkb/meta/issues) for bugs, feature requests, and questions, with steps to reproduce a bug.
 
 ## See Also
 
 - [Plugin Development Guide](plugin_development.md)
 - [Architecture Overview](architecture_overview.md)
+- [Claude Code Skills](claude_code_skills.md): editing the skills
+- [FAQ / Troubleshooting Guide](faq_troubleshooting.md)

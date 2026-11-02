@@ -1,89 +1,37 @@
 # loop – Command Line Utility
 
-**loop** is a command line utility for running commands in multiple repositories or directories, one at a time or in parallel. It is designed for monorepos and multi-package projects, making repetitive tasks like dependency management, testing, and code generation fast and easy. The utility consists of two main parts: [loop_cli](../loop_cli/README.md) (the CLI app) and [loop_lib](../loop_lib/src/lib.rs) (the Rust library for programmatic use).
-
----
-
-## Table of Contents
-
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [How It Works](#how-it-works)
-- [Usage](#usage)
-- [Architecture Summary](#architecture-summary)
-- [FAQ](#faq)
-- [Contribution Notes](#contribution-notes)
-- [Advanced Guides](#advanced-guides)
-- [Cross-References](#cross-references)
-
----
-
-## Overview
-
-**loop** lets you run a command in multiple repositories or directories at once. By default, it runs in the current directory and each directory in it, but you can use expressive options to control exactly where your command will run. You can also specify defaults in a `.looprc` config file. For developers, the [loop_lib](../loop_lib/src/lib.rs) library exposes these capabilities for programmatic use, including directory filtering and config parsing.
-
-## Key Features
-
-- Run any command in multiple directories, one at a time or in parallel (as a program with arguments, never through a shell; use `sh -c '...'` when you want one)
-- Defaults to the current directory and its child directories, with flexible inclusion/exclusion via CLI or config
-- Supports `.looprc` for persistent configuration
-- Verbose and silent output modes
-- Robust error handling and reporting
-- Designed for Unix-like environments
-
-## How It Works
-
-1. **Configuration**: Specify target directories and options in `.looprc` (JSON).
-2. **Execution**: Use the `loop` CLI utility to run commands.
-3. **Library**: App developers can use `loop_lib` to leverage loop's power programmatically, including directory filtering and config support.
+**loop** runs a command in several directories, one at a time or in parallel. It is the engine under `meta exec` and meta's plugins ([loop_lib](../loop_lib/src/lib.rs)), and a standalone CLI ([loop_cli](../loop_cli/README.md)) for any folder of packages or repos, with no `.meta.yaml`.
 
 ## Usage
 
-To run a command in all child repositories:
-```sh
-loop <your-command>
-```
+By default loop runs in the current directory and each directory in it, except `.git`, one at a time:
 
-Examples:
 ```sh
 loop git status
-loop npm install
 loop cargo test
+loop --include pkg1,pkg2 npm install
+loop --exclude legacy_pkg npm test
 ```
 
-- To include or exclude specific directories, use CLI options (see [loop_cli/README.md](../loop_cli/README.md)).
-- To set persistent defaults, create a `.looprc` file in your project root.
+The command runs as a program with its arguments, never through a shell: `loop echo '$HOME'` prints `$HOME`. For a shell, ask for one: `loop sh -c 'npm install && npm test'`.
 
-See [loop_cli/README.md](../loop_cli/README.md) for full CLI usage and [loop_lib/src/lib.rs](../loop_lib/src/lib.rs) for library integration.
+A failure in one directory never stops the others; loop lists the failures at the end and exits non-zero. Run `loop --help` for the options.
 
-## Architecture Summary
+## Configuration
 
-- **loop_cli**: CLI app, parses arguments, dispatches commands.
-- **loop_lib**: Rust library for directory expansion, command execution, config parsing; enables programmatic use of loop's features in other apps.
-- **.looprc**: JSON config file for directories and options.
+A `.looprc` (JSON) in the current directory, or the file `-c` names, sets defaults:
 
-See [Architecture Overview](loop_architecture_overview.md) for details.
+```json
+{
+  "directories": ["pkg1", "pkg2"],
+  "ignore": ["legacy_pkg"],
+  "parallel": true,
+  "max_parallel": 4
+}
+```
 
-## FAQ
+`parallel` runs in every directory at once (there is no command-line flag for it), `max_parallel` caps how many, and `spawn_stagger_ms` spaces out the starts. `ignore` (or `--exclude`) takes a directory's name (`node_modules`) or the end of its path (`vendor/old`), matched by whole names, so `.git` doesn't exclude `.github`; it applies to directories listed in `directories` or given with `--include` too. [loop_cli/README.md](../loop_cli/README.md#fields) lists every key, and where settings come from.
 
-See [FAQ / Troubleshooting](loop_faq_troubleshooting.md).
+## Contributing
 
-## Contribution Notes
-
-- Written in Rust; see [Cargo.toml](../loop_lib/Cargo.toml).
-- Contributions should follow the [contributing guidelines](contributing.md).
-- Add new features in `loop_lib/src/` (library) or CLI enhancements in `loop_cli/src/`.
-- Include tests for all changes.
-
-## Advanced Guides
-
-- [Advanced Usage](loop_advanced_usage.md)
-- [Architecture Overview](loop_architecture_overview.md)
-- [FAQ / Troubleshooting](loop_faq_troubleshooting.md)
-- [Visual Assets](loop_assets.md)
-
-## Cross-References
-
-- [loop_cli – CLI Usage](../loop_cli/README.md)
-- [loop_lib – Rust Library](../loop_lib/src/lib.rs)
-- [Meta Main Documentation](../README.md)
+loop's code is in `loop_lib/src/` (the library) and `loop_cli/src/` (the CLI); see the [contribution guide](contributing.md).

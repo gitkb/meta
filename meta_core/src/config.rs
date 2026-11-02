@@ -13,28 +13,104 @@ use std::path::{Path, PathBuf};
 
 /// Represents a project entry in the .meta.yaml.
 /// Can be either a simple git URL string or an extended object with additional fields.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum ProjectEntry {
     /// Simple format: just a git URL string
     Simple(GitUrl),
     /// Extended format: object with repo, path, tags, and dependency info
-    Extended {
-        /// Git remote URL (optional for local-only projects).
-        #[serde(default)]
-        repo: Option<GitUrl>,
-        #[serde(default)]
-        path: Option<String>,
-        #[serde(default)]
-        tags: Vec<String>,
-        #[serde(default)]
-        provides: Vec<String>,
-        #[serde(default)]
-        depends_on: Vec<String>,
-        /// If true, this directory contains a nested .meta.yaml
-        #[serde(default)]
-        meta: bool,
-    },
+    Extended(ExtendedEntry),
+}
+
+/// An extended project entry's fields; others are left to other tools. Each
+/// string is one YAML wrote as a string: YAML would read `false` or `123` as
+/// "false" or "123".
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExtendedEntry {
+    /// Git remote URL (optional for local-only projects).
+    #[serde(default, deserialize_with = "some_string")]
+    pub repo: Option<GitUrl>,
+    #[serde(default, deserialize_with = "some_string")]
+    pub path: Option<String>,
+    #[serde(default, deserialize_with = "strings")]
+    pub tags: Vec<String>,
+    #[serde(default, deserialize_with = "strings")]
+    pub provides: Vec<String>,
+    #[serde(default, deserialize_with = "strings")]
+    pub depends_on: Vec<String>,
+    /// If true, this directory contains a nested .meta.yaml
+    #[serde(default)]
+    pub meta: bool,
+}
+
+/// A YAML string, as `T`.
+fn some_string<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: From<String>,
+{
+    Ok(Option::<YamlString>::deserialize(deserializer)?.map(|s| T::from(s.0)))
+}
+
+/// A list of YAML strings.
+fn strings<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    Ok(Vec::<YamlString>::deserialize(deserializer)?
+        .into_iter()
+        .map(|s| s.0)
+        .collect())
+}
+
+/// A value YAML wrote as a string: one of another type is an error naming
+/// where it is.
+struct YamlString(String);
+
+impl<'de> Deserialize<'de> for YamlString {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct StringOnly;
+        impl serde::de::Visitor<'_> for StringOnly {
+            type Value = String;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<String, E> {
+                Ok(s.to_string())
+            }
+        }
+        deserializer.deserialize_any(StringOnly).map(YamlString)
+    }
+}
+
+/// A URL or a mapping, and an error that says so (and what was wrong in the
+/// mapping) for anything else: an untagged enum's would only say no form
+/// matched.
+impl<'de> Deserialize<'de> for ProjectEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EntryVisitor;
+        impl<'de> serde::de::Visitor<'de> for EntryVisitor {
+            type Value = ProjectEntry;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str(
+                    "a repo URL, or a mapping of repo, path, tags (a list), provides (a list), \
+                     depends_on (a list) and meta (true or false)",
+                )
+            }
+
+            fn visit_str<E: serde::de::Error>(self, url: &str) -> Result<Self::Value, E> {
+                Ok(ProjectEntry::Simple(GitUrl::from(url.to_string())))
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                ExtendedEntry::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(ProjectEntry::Extended)
+            }
+        }
+        deserializer.deserialize_any(EntryVisitor)
+    }
 }
 
 /// Parsed project info after normalization
@@ -537,14 +613,14 @@ impl Workspace {
                     }
                     // Extended object -> repo with additional fields
                     // meta: true indicates this project is also a meta-repo (has its own .meta.yaml)
-                    ProjectEntry::Extended {
+                    ProjectEntry::Extended(ExtendedEntry {
                         repo,
                         path,
                         tags,
                         provides,
                         depends_on,
                         meta,
-                    } => {
+                    }) => {
                         let resolved_path = path.unwrap_or_else(|| name.clone());
                         (repo, resolved_path, tags, provides, depends_on, meta)
                     }
@@ -1541,6 +1617,42 @@ mod tests {
         );
         // keys other tools put on a project are theirs
         assert!(load("projects:\n  a:\n    repo: x\n    branch: main\n").is_ok());
+        assert!(load("projects:\n  a:\n    path: \"123\"\n    tags: [\"1\"]\n").is_ok());
+        // a project of the wrong shape is named, with the shape it needs
+        for (yaml, says) in [
+            (
+                "projects:\n  api:\n",
+                "projects.api: invalid type: unit value, expected a repo URL, or a mapping",
+            ),
+            (
+                "projects:\n  api: 3\n",
+                "projects.api: invalid type: integer `3`, expected a repo URL, or a mapping",
+            ),
+            (
+                "projects:\n  api:\n    tags: backend\n",
+                "projects.api.tags: invalid type: string \"backend\", expected a sequence",
+            ),
+            (
+                "projects:\n  api:\n    meta: maybe\n",
+                "projects.api.meta: invalid type: string \"maybe\", expected a boolean",
+            ),
+            // YAML doesn't read a value of another type as a string
+            (
+                "projects:\n  api:\n    path: false\n",
+                "projects.api.path: invalid type: boolean `false`, expected a string",
+            ),
+            (
+                "projects:\n  api:\n    repo: 123\n",
+                "projects.api.repo: invalid type: integer `123`, expected a string",
+            ),
+            (
+                "projects:\n  api:\n    tags: [1]\n",
+                "projects.api.tags[0]: invalid type: integer `1`, expected a string",
+            ),
+        ] {
+            let err = format!("{:#}", load(yaml).unwrap_err());
+            assert!(err.contains(says) && err.contains(".meta.yaml"), "{err}");
+        }
     }
 
     // ============================================================================

@@ -224,21 +224,44 @@ pub fn execute_command(
             .unwrap_or_else(Into::into),
             Err(result) => result,
         },
-        // meta_cli sends an unclaimed `project <word>` as `project` plus args
-        _ if has_help_token(command, args) => CommandResult::Message(PROJECT_HELP.to_string()),
+        // meta_cli sends an unclaimed `project <word>` as `project` plus
+        // args: help for `project`, but not for a word it doesn't have
+        _ if args.first().is_none_or(|word| word.starts_with('-'))
+            && has_help_token(command, args) =>
+        {
+            CommandResult::Message(PROJECT_HELP.to_string())
+        }
         _ => {
             let typed: Vec<&str> = std::iter::once(command)
                 .chain(args.iter().map(String::as_str))
                 .collect();
+            let near = args
+                .first()
+                .and_then(|word| meta_core::args::nearest(word, SUBCOMMANDS.iter().copied()));
+            let suggestion = match near {
+                Some(word) => format!(
+                    "\n\nA command with a similar name exists:\n    meta project {}",
+                    escape(
+                        &shlex::try_join(
+                            std::iter::once(word).chain(args.iter().skip(1).map(String::as_str))
+                        )
+                        .unwrap_or_else(|_| args.join(" "))
+                    )
+                ),
+                None => String::new(),
+            };
             CommandResult::ShowHelp(Some(format!(
-                "unrecognized command '{}'. Use 'meta git update' to sync projects.",
+                "unrecognized command '{}'{suggestion}",
                 escape(&typed.join(" "))
             )))
         }
     }
 }
 
-const PROJECT_HELP: &str = "meta project - Inspect and validate meta workspace projects
+/// The words after `meta project` it answers.
+const SUBCOMMANDS: &[&str] = &["list", "ls", "check", "dependents"];
+
+const PROJECT_HELP: &str = "Inspect and validate meta workspace projects
 
 Usage: meta project <COMMAND>
 
@@ -750,6 +773,19 @@ mod tests {
     }
 
     #[test]
+    fn a_typo_of_a_project_command_names_the_command_and_gets_no_help() {
+        let temp_dir = TempDir::new().unwrap();
+        let options = ExecuteOptions::default();
+        let typo = ["lsit".to_string(), "--json".to_string()];
+        let result = execute_command("project", &typo, &options, &[], temp_dir.path());
+        assert!(matches!(result, CommandResult::ShowHelp(Some(msg))
+            if msg.ends_with("meta project list --json")));
+        let asked = ["lsit".to_string(), "--help".to_string()];
+        let result = execute_command("project", &asked, &options, &[], temp_dir.path());
+        assert!(matches!(result, CommandResult::ShowHelp(Some(_))));
+    }
+
+    #[test]
     fn test_project_check_all_present() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -915,21 +951,12 @@ mod tests {
     #[test]
     fn test_project_sync_removed() {
         let temp_dir = TempDir::new().unwrap();
-
-        // Create a .meta.yaml file
-        std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
-            r#"{"projects": {"missing-repo": "https://github.com/test/repo.git"}}"#,
-        )
-        .unwrap();
-
         let options = ExecuteOptions::default();
-        let result = execute_command("project sync", &[], &options, &[], temp_dir.path());
-
-        // sync command should now return an error directing users to meta git update
-        assert!(
-            matches!(result, CommandResult::ShowHelp(Some(msg)) if msg.contains("meta git update"))
-        );
+        let args = ["sync".to_string()];
+        let result = execute_command("project", &args, &options, &[], temp_dir.path());
+        // gone, not pointed elsewhere: its help lists what there is
+        assert!(matches!(result, CommandResult::ShowHelp(Some(msg))
+            if msg == "unrecognized command 'project sync'"));
     }
 
     #[test]

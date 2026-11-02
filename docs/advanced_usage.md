@@ -1,79 +1,18 @@
 # Advanced Usage Guide
 
-This guide covers advanced features of the `meta` CLI, including query DSL, safe batch changes, dependency tracking, and power-user workflows.
+This guide covers advanced features of the `meta` CLI, including safe batch changes, dependency tracking, and power-user workflows.
 
 ## Table of Contents
 
-- [Query DSL](#query-dsl)
 - [Safe Batch Changes](#safe-batch-changes)
 - [Dependency Tracking](#dependency-tracking)
 - [Filtering Commands](#filtering-commands)
 - [Scripting with Meta](#scripting-with-meta)
 - [JSON Output Mode](#json-output-mode)
 - [Parallel Execution](#parallel-execution)
-- [Environment Variables](#environment-variables)
 - [Advanced Plugin Usage](#advanced-plugin-usage)
+- [Listing Worktree Sets](#listing-worktree-sets)
 - [See Also](#see-also)
-
----
-
-## Query DSL
-
-Meta includes a powerful query language for filtering repositories by their git state.
-
-### Query Syntax
-
-```bash
-meta query "<condition>"
-meta query "<condition> AND <condition>"
-```
-
-### Available Conditions
-
-| Condition | Description | Example |
-|-----------|-------------|---------|
-| `dirty:true/false` | Has uncommitted changes | `dirty:true` |
-| `branch:<name>` | On specific branch | `branch:main` |
-| `tag:<name>` | Has specific tag | `tag:backend` |
-| `ahead:true/false` | Ahead of remote | `ahead:true` |
-| `behind:true/false` | Behind remote | `behind:true` |
-| `modified_in:<time>` | Modified within timeframe | `modified_in:24h` |
-| `language:<lang>` | Uses specific language/build system | `language:rust` |
-
-### Combining Conditions
-
-Use `AND` to combine multiple conditions:
-
-```bash
-# Find dirty backend repos on main branch
-meta query "dirty:true AND tag:backend AND branch:main"
-
-# Find repos that need pulling
-meta query "behind:true AND branch:main"
-
-# Find recently modified frontend repos
-meta query "modified_in:24h AND tag:frontend"
-```
-
-### Use Cases
-
-**Pre-commit checks:**
-```bash
-# See all repos with uncommitted changes
-meta query "dirty:true"
-```
-
-**Release preparation:**
-```bash
-# Ensure all repos are on main and clean
-meta query "branch:main AND dirty:false"
-```
-
-**Sync assessment:**
-```bash
-# Find repos that need attention
-meta query "ahead:true" && meta query "behind:true"
-```
 
 ---
 
@@ -170,67 +109,11 @@ projects:
       - utils-api
 ```
 
-### Impact Analysis
-
-See what's affected when a project changes:
-
-```bash
-# Via MCP tool
-meta_analyze_impact --project shared-utils
-
-# Returns:
-# - Direct dependents
-# - Transitive dependents
-# - Total affected count
-```
-
-### Execution Ordering
-
-Get topologically sorted build/test order:
-
-```bash
-# Via MCP tool
-meta_execution_order
-
-# Returns projects in correct dependency order
-```
-
-### Atomic Batch Execution
-
-Execute commands with automatic rollback on failure:
-
-```bash
-# Via MCP tool
-meta_batch_execute {"command": ["npm", "test"], "atomic": true}
-```
-
-If any repo fails, the command stops and each repo it reached is put back on its branch and commit from before; read `rollback.status`, and `rollback.failed` for any repo it couldn't fully put back (see [Agent Workflows](agent_workflows.md)).
+The [MCP server](mcp_server.md) reads them: `meta_analyze_impact` lists the projects a change to one affects, `meta_execution_order` puts projects in build order, and `meta_batch_execute` with `"atomic": true` runs a command across repos and, if any repo fails, stops and puts each repo it reached back where it was (on its branch, or on the commit a detached HEAD was at) (see [Agent Workflows](agent_workflows.md)). On the command line, `meta project dependents <project>` names the projects that depend on one.
 
 ---
 
 ## Filtering Commands
-
-### By Tag
-
-```bash
-# Single tag
-meta --tag backend git pull
-
-# Multiple tags (OR logic)
-meta --tag frontend,shared exec -- npm test
-```
-
-### By Directory
-
-```bash
-# Only these repos
-meta --include api-service,web-app git status
-
-# Skip a repo
-meta --exclude legacy-app exec -- npm install
-```
-
-A value names a whole repo: its `.meta.yaml` name or its path from the workspace root (`.` for the root repo), never part of a path, so `api` does not select `api-legacy`. A value that names no repo is an error, so a typo never runs a command in a repo you meant to skip. Inside a worktree set the same holds: a repo sits at its project's path, so it is named by its `.meta.yaml` name or that path, from the set's root. A value starting with `./` is a path only; use it when a name is ambiguous (a value that names several repos is an error too).
 
 ### Combined Filtering
 
@@ -241,7 +124,7 @@ meta --tag backend --include . git status
 meta --tag backend --exclude legacy exec -- cargo test
 ```
 
-**Filters:** `--include` and `--tag` each add repos: the ones `--include` names, and the ones with any of the `--tag` tags (with neither, every repo). `--exclude` then removes the repos it names. The root repo has no tags, so `--tag` alone never selects it; add it with `--include .`. A tag no project has is an error that lists the tags there are. With `--recursive`, a nested project is selected by its own tags, whatever its parent's.
+`--include` and `--tag` each add repos, and `--exclude` then removes some (see [Filtering](../README.md#filtering)). With `--recursive`, a nested project is selected by its own tags, whatever its parent's.
 
 ---
 
@@ -257,15 +140,11 @@ meta git pull && meta exec -- npm install && meta exec -- npm test
 ### Capturing Output
 
 ```bash
-# Get commit hashes
-meta exec -- git rev-parse HEAD | grep -v "^>"
-```
+# Each repo's commit
+meta --json exec -- git rev-parse HEAD | jq -j '.results[] | .directory + " " + (.stdout // "\n")'
 
-### Using with xargs
-
-```bash
-# List projects and process
-meta project list | xargs -I{} echo "Project: {}"
+# Project names, one per line
+meta project list --json | jq -r '.projects[].name'
 ```
 
 ### Exit Codes
@@ -308,7 +187,7 @@ meta --json exec -- git rev-parse HEAD
   "success": true,
   "results": [
     {
-      "directory": "./api",
+      "directory": "/work/ws/api",
       "command": "git rev-parse HEAD",
       "success": true,
       "exit_code": 0,
@@ -318,12 +197,13 @@ meta --json exec -- git rev-parse HEAD
   "summary": {
     "total": 5,
     "succeeded": 5,
-    "failed": 0
+    "failed": 0,
+    "dry_run": false
   }
 }
 ```
 
-A command a signal ended has `"exit_code": null` and the signal's number in
+A result has `"stderr"` when the command wrote any. A command a signal ended has `"exit_code": null` and the signal's number in
 `"signal"` (`9` for `SIGKILL`); `signal` is left out otherwise.
 
 With `--json`, a command with a JSON result prints only JSON on stdout: one document, or the documents a plugin writes (help and `meta init claude` have no JSON form). A command line clap can't parse is reported before meta knows about `--json`, so it is text on stderr (exit 2). After that, an error before any output is `{"success": false, "error": "…"}` (an unknown command exits 2, other errors 1); one after a report was printed goes to stderr, so the report stays the only document. A plugin's output that isn't JSON comes as `{"success": …, "output": "…"}`, and a plugin that fails without printing anything leaves `{"success": false, "error": "plugin … failed"}`. Warnings and `--verbose` lines go to stderr.
@@ -335,91 +215,30 @@ With `--json`, a command with a JSON result prints only JSON on stdout: one docu
 meta --json git status | jq '.results[] | select(.success) | .directory'
 
 # Count failures
-meta --json npm test | jq '.summary.failed'
+meta --json exec -- npm test | jq '.summary.failed'
 ```
 
 ---
 
 ## Parallel Execution
 
-By default, commands run sequentially with live output. Use `--parallel` for concurrent execution:
+`meta exec` and the `meta git` commands that run git as typed run in every repo at once by default (`defaults.parallel: true` in `.meta.yaml`). Each repo's output is captured and shown after all are done, the root first; on a terminal a spinner per repo shows progress. `--sequential`, or `defaults: {parallel: false}`, runs one repo after another with live output: use it for commands that ask for input, share state, or that you are debugging. `--parallel` wins over both. `meta git clone` and `meta git update` clone and pull several repos at once whatever these say (`meta git clone --parallel 8` sets how many) and show their own progress. `loop` runs sequentially by default.
 
 ```bash
-meta --parallel git status
-meta --parallel exec -- cargo test
+meta --sequential exec -- npm install
 ```
-
-### Parallel Mode Behavior
-
-- Uses thread pool for bounded concurrency
-- Shows progress spinners (if TTY)
-- Captures output, displays grouped after completion
-- Faster for I/O-bound operations
-
-### When to Use Parallel
-
-**Good for:**
-- `git fetch/pull/push`
-- `git status`
-- Read-only operations
-- Independent builds
-
-**Use sequential for:**
-- Operations with shared state
-- Commands with interactive output
-- Debugging (easier to read)
-
----
-
-## Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `META_DEBUG=1` | Enable debug output |
-| `META_CONFIG` | Custom config file path |
-| `META_SILENT=1` | Suppress output |
 
 ---
 
 ## Advanced Plugin Usage
 
-### Plugin Locations
-
-Plugins are discovered from:
-1. `.meta/plugins/` next to the nearest meta config at or above the current directory, then next to each parent meta config that lists that directory as a project (the same workspace), nearest first. A parent that doesn't list it is another workspace and is not read. Inside a worktree set meta made, a checkout's own `.meta/plugins/` comes first, then those of the checkout it stands for (the one it was made from) and its workspace. `meta plugin install <name> --local` installs into the nearest one.
-2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
-3. Executables named `meta-*` on PATH.
-
-A plugin named `meta-<word>` serves `meta <word> ...`, and the first file found with that name wins. For a command meta starts only that file; if it doesn't answer `--meta-plugin-info` with its info within 5 seconds, the command fails naming it. `meta`, `meta help`, `meta --help` and `meta plugin list` start every plugin; there a plugins folder meta can't read, and a plugin that doesn't answer within 5 seconds, are skipped with a warning naming them. So is a file in `.meta/plugins` or `~/.meta/plugins` that can't be started, isn't executable, or answers with anything but its info; a `meta-*` program on PATH that can't be started or isn't a plugin is just left out, as it may be any program. Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore` (`*`) so they stay out of git as untracked files.
-
-### Plugin Protocol
-
-Plugins receive requests via stdin and respond via stdout:
-
-**Request:**
-```json
-{
-  "command": "status",
-  "args": [],
-  "projects": ["/ws/api"],
-  "cwd": "/ws",
-  "options": {"tag_filters": ["backend"], "include_filters": null, "exclude_filters": null}
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "results": [...]
-}
-```
+Where meta finds plugins, and how they talk to it: [Plugins](../README.md#plugins) and the [Plugin Development Guide](plugin_development.md).
 
 ### Plugin Help
 
 ```bash
-meta git --help
-meta project --help
+meta help git
+meta git worktree create --help
 ```
 
 ### Installing Plugins
@@ -441,15 +260,7 @@ meta plugin list --local
 
 ---
 
-## See Also
-
-- [Plugin Development Guide](plugin_development.md)
-- [Architecture Overview](architecture_overview.md)
-- [MCP Server Documentation](mcp_server.md)
-- [FAQ / Troubleshooting](faq_troubleshooting.md)
-
-
-## Selecting a worktree set and choosing observation detail
+## Listing Worktree Sets
 
 `list` summarizes worktree sets; `status NAME` provides detailed Git state
 (modified files, untracked counts, and ahead/behind information).
@@ -465,16 +276,12 @@ meta git worktree list example --recursive
 meta git worktree list --recursive
 ```
 
-An explicit name overrides the enclosing set. Outside a worktree, an omitted
-name retains all-set listing. A selected set that is missing, empty or invalid
-returns an error rather than an empty successful result. All-set recursive
-listing continues to return readable sets and reports unavailable sets in
-`warnings` (stderr for human output).
+An explicit name overrides the enclosing set. `--recursive` includes
+repositories nested beneath other repositories of the set.
 
 ### Metadata-only listing
 
-Background consumers that collect their own Git facts should request topology
-without branch or dirty-state observation:
+Tools that collect their own git facts can ask for the set's members only:
 
 ```sh
 meta git worktree list example --recursive --metadata-only --json
@@ -483,7 +290,7 @@ meta git worktree list example --recursive --metadata-only --json
 meta git worktree list --recursive --metadata-only --json
 ```
 
-Both forms retain the list envelope, `worktrees`, with one selected set:
+Both print the usual `worktrees` list, with the one set:
 
 ```json
 {
@@ -500,29 +307,23 @@ Both forms retain the list envelope, `worktrees`, with one selected set:
 }
 ```
 
-Paths above are illustrative. Each repository has an alias, physical checkout
-path and canonical source path; branch, dirty-state and ahead/behind fields are
-absent. Set lifecycle metadata is included when available. Without
-`--metadata-only`, existing branch/dirty fields are retained. The flag controls
-observation detail independently of set selection and recursion; outside a
-worktree, no name lists metadata for all sets.
+Paths above are illustrative. Each repository has an alias, its checkout's
+path and the path of the checkout it was made from; branch, dirty-state and
+ahead/behind fields are left out. Without
+`--metadata-only`, a member git can't read has `"branch": null` and
+`"dirty": null` (unknown, never clean). `meta git worktree status` shows the
+same unknowns, and names members whose checkout is gone in `"missing"`,
+exiting 1.
 
-`--recursive` includes realized repositories nested beneath other repositories.
-Metadata-only without recursion retains legacy traversal boundaries. Recursive
-metadata discovery launches no Git probes and uses strict bounded traversal:
-invalid Git metadata, backlink mismatches and traversal failures are errors for
-a selected set. All-set listing (recursive or not, with or without
-`--metadata-only`) reports failed sets as warnings, in the text listing too, so
-consumers must check warnings before treating an aggregate inventory as
-complete. Without `--metadata-only`, a member git can't read has `"branch":
-null` and `"dirty": null` (unknown, never clean). `meta git worktree status`
-shows the same unknowns, and names members whose checkout is gone in
-`"missing"`, exiting 1.
+A selected set that is missing, empty or invalid is an error. Listing all sets
+reports the ones it can't read in `warnings` (on stderr in the text listing),
+so check them before treating the list as complete.
 
-Implicit worktree scoping uses metadata-only paths rather than branch probes
-before dispatch. Membership discovery errors stop dispatch instead of silently
-falling back to ordinary project configuration. Plugin list selection uses the
-protocol request directory, even when the plugin process starts elsewhere. Membership still traverses the realized tree with a finite
-entry budget. Poll sparingly, retain last-observed data as such, and back off on
-failure. These changes reduce workload; they do not establish a fix for a macOS
-kernel panic.
+---
+
+## See Also
+
+- [Plugin Development Guide](plugin_development.md)
+- [Architecture Overview](architecture_overview.md)
+- [MCP Server Documentation](mcp_server.md)
+- [FAQ / Troubleshooting](faq_troubleshooting.md)

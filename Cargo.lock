@@ -872,11 +872,14 @@ dependencies = [
  "loop_lib",
  "meta_core",
  "meta_plugin_protocol",
+ "proc-macro2",
  "rayon",
  "rustix",
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "shlex",
+ "syn 2.0.114",
  "tar",
  "tempfile",
  "ureq",
@@ -917,6 +920,7 @@ dependencies = [
  "serde_yaml_ng",
  "shlex",
  "signal-hook",
+ "strsim",
  "tempfile",
 ]
 
@@ -986,6 +990,7 @@ dependencies = [
  "meta_plugin_protocol",
  "serde",
  "serde_json",
+ "shlex",
  "tempfile",
 ]
 

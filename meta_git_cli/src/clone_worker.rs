@@ -225,7 +225,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
             }),
             (!cycles.is_empty()).then(|| {
                 format!(
-                    "meta repos list each other: {}",
+                    "the meta repos list each other: {}",
                     cycles.iter().map(chain).collect::<Vec<_>>().join("; ")
                 )
             }),

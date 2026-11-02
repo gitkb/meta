@@ -129,20 +129,7 @@ Suppress command output (only meta's final failure message remains):
 meta --silent exec -- npm install
 ```
 
-## Global Options Reference
-
-| Option | Description |
-|--------|-------------|
-| `--parallel` | Run commands concurrently (the default) |
-| `--sequential` | Run one repo at a time |
-| `--include <repos>` | These repos, and those `--tag` selects (`.meta.yaml` name or path from the root, `.` for the root) |
-| `--exclude <repos>` | Skip these repos (`.meta.yaml` name or path from the root) |
-| `--tag <tags>` | The repos with any of these tags (comma-separated; never the root) |
-| `--dry-run` | Preview without executing |
-| `--json` | Structured JSON output |
-| `--silent` | Suppress output |
-| `--verbose` | Show detailed execution info |
-| `--recursive` | Include nested meta repos |
+Every global option: `meta --help`.
 
 ## Practical Examples
 

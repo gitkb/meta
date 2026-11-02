@@ -240,7 +240,6 @@ fn build_dependency_map(projects: &[ProjectInfo]) -> Option<HashMap<String, Vec<
 
     let dep_projects: Vec<_> = projects.iter().map(|p| p.clone().into()).collect();
     let graph = DependencyGraph::build(dep_projects);
-    graph.warn_unresolved();
 
     let mut map = HashMap::new();
     for project in projects {

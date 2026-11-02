@@ -125,7 +125,7 @@ pub fn code(result: anyhow::Result<()>) -> i32 {
     if usage {
         crate::errln!(
             "{}: {}",
-            "error".red().bold(),
+            out::label("error", |l| l.red().bold()),
             escape_lines(&format!("{error:#}"))
         );
     } else {

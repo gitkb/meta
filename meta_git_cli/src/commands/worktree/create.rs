@@ -685,13 +685,14 @@ fn plan_repos(
                         .collect(),
                 ),
             };
-            graph.warn_duplicates(strict)?;
-            // a dependency the set would need and can't have
+            // a dependency the set would need and can't have, or that two
+            // projects provide
             let mut needed: BTreeSet<&str> = BTreeSet::new();
             for key in asked_keys.iter().filter(|key| *key != ".") {
                 needed.insert(key);
                 needed.extend(graph.get_all_dependencies(key));
             }
+            graph.warn_duplicates(&needed, strict)?;
             for (project, dep) in graph.unresolved() {
                 if needed.contains(project.as_str()) {
                     let hint = match index.tree() {

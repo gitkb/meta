@@ -679,7 +679,6 @@ fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result
         projects.extend(workspace.projects.into_iter().map(Into::into));
     }
     let graph = DependencyGraph::build(projects);
-    graph.warn_unresolved();
     let dependents = graph
         .dependents_of(project_name)
         .ok_or_else(|| anyhow::anyhow!("Unknown project or alias: {}", escape(project_name)))?;

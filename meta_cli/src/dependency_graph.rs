@@ -15,7 +15,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use meta_core::config::ProjectInfo;
 use meta_core::git::GitUrl;
@@ -79,7 +79,7 @@ pub fn unresolved_message(project: &str, dep: &str) -> String {
 impl DependencyGraph {
     /// Build a dependency graph from a list of projects. What it can't
     /// resolve is kept for the caller to report: [`Self::unresolved`],
-    /// [`Self::warn_unresolved`].
+    /// [`Self::warn_duplicates`].
     pub fn build(projects: Vec<ProjectDependencies>) -> Self {
         let mut graph = DependencyGraph {
             projects: HashMap::new(),
@@ -140,19 +140,19 @@ impl DependencyGraph {
         &self.unresolved
     }
 
-    /// Warn about what [`Self::build`] couldn't resolve.
-    pub fn warn_unresolved(&self) {
-        for (project, dep) in &self.unresolved {
-            meta_core::out::warn(unresolved_message(project, dep));
-        }
-        // nothing to fail: without strict, warn_or_bail only warns
-        let _ = self.warn_duplicates(false);
-    }
-
-    /// Warn about each item two projects provide, or with `strict` fail.
-    pub fn warn_duplicates(&self, strict: bool) -> Result<()> {
+    /// Warn about each item two projects provide that one of `needed`
+    /// depends on, or with `strict` fail.
+    pub fn warn_duplicates(&self, needed: &BTreeSet<&str>, strict: bool) -> Result<()> {
         use meta_core::display::escape;
         for (item, kept, other) in &self.duplicates {
+            let used = needed.iter().any(|name| {
+                self.projects
+                    .get(*name)
+                    .is_some_and(|p| p.depends_on.contains(item))
+            });
+            if !used {
+                continue;
+            }
             let kept = escape(kept);
             meta_core::out::warn_or_bail(
                 strict,

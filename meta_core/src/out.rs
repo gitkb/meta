@@ -105,9 +105,18 @@ pub fn stderr_bytes(bytes: &[u8]) {
 pub fn warn(message: impl fmt::Display) {
     errln!(
         "{} {}",
-        "warning:".yellow().bold(),
+        label("warning:", |l| l.yellow().bold()),
         escape_lines(&message.to_string())
     );
+}
+
+/// `text` for stderr, coloured by `paint` when colour is on and stderr is
+/// a terminal: stderr may be a file while stdout is the terminal.
+pub fn label(text: &str, paint: impl Fn(&str) -> colored::ColoredString) -> String {
+    match color() && io::stderr().is_terminal() {
+        true => paint(text).to_string(),
+        false => text.to_string(),
+    }
 }
 
 /// [`warn`], or with `--strict` (warnings are errors) the error

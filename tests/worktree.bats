@@ -184,6 +184,14 @@ EOF
     run "$META_BIN" --strict --dry-run git worktree create both --repo backend
     [ "$status" -ne 0 ]
     [[ "$output" == *"provide 'db'"*"(strict mode)"* ]]
+    # a set that needs no db is none of its business
+    run "$META_BIN" --strict --dry-run git worktree create front --repo frontend
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"provide 'db'"* ]]
+    # nor of meta context, which doesn't act on the graph
+    run "$META_BIN" context --no-status
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"warning:"* ]]
 }
 
 @test "a warning keeps a name's line break escaped, so it can't forge a line" {

@@ -123,6 +123,19 @@ fn a_typo_of_a_command_suggests_the_command_it_is_near() {
         // and that one runs
         assert!(workspace.meta(near).status.success(), "meta {near:?}");
     }
+    // meta's options before the command stay: a preview stays a preview
+    let out = workspace.meta(&["--dry-run", "--include", "api", "exce", "--", "rm", "x"]);
+    assert_eq!(
+        suggested(&out),
+        ["--dry-run", "--include", "api", "exec", "--", "rm", "x"],
+        "{}",
+        text(&out)
+    );
+    let out = workspace.meta(&["--include", "api", "query", "x"]);
+    assert_eq!(
+        suggested(&out),
+        ["--include", "api", "exec", "--", "query", "x"]
+    );
     // nothing near, a program on PATH (`cp` is near the `meta-mcp` file
     // beside meta), or a word whose file isn't a plugin (`meta-mcp`): run it
     // in each repo

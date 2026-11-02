@@ -13,6 +13,7 @@ Run what CI runs:
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo build --workspace --bins --examples --locked   # the tests below run these
 cargo test --workspace --locked
 make bats    # the integration tests in tests/*.bats; needs bats
 ```

@@ -1014,19 +1014,37 @@ fn unrecognized_command_error(
         })
         .flatten()
         .filter(|word| builtins.contains(word) || matches!(plugins.find(word), Ok(Some(_))));
+    // what the user typed before the command (meta's options, `help`) stays
+    let typed: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let before = typed
+        .get(..typed.len().saturating_sub(command_args.len()))
+        .unwrap_or_default();
+    let shown = |words: &[&str]| -> String {
+        let argv: Vec<String> = before
+            .iter()
+            .map(String::as_str)
+            .chain(words.iter().copied())
+            .map(String::from)
+            .collect();
+        escape(&loop_lib::display_command(&argv)).into_owned()
+    };
+    let rest: Vec<&str> = command_args.iter().skip(1).map(String::as_str).collect();
     let suggestion = match near {
-        Some(word) => {
-            let fixed: Vec<String> = std::iter::once(word.to_string())
-                .chain(command_args.iter().skip(1).cloned())
-                .collect();
-            format!(
-                "A command with a similar name exists:\n    meta {}",
-                escape(&loop_lib::display_command(&fixed))
-            )
-        }
+        Some(word) => format!(
+            "A command with a similar name exists:\n    meta {}",
+            shown(&[&[word][..], &rest].concat())
+        ),
         None => {
             let command_str = escape(&loop_lib::display_command(command_args)).into_owned();
-            format!("To run '{command_str}' across all repos:\n    meta exec -- {command_str}")
+            let mut exec = vec!["exec", "--"];
+            exec.extend(command_args.iter().map(String::as_str));
+            format!(
+                "To run '{command_str}' across all repos:\n    meta {}",
+                shown(&exec)
+            )
         }
     };
     meta_core::exit::Usage(format!(

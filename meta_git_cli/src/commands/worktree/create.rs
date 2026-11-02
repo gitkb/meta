@@ -860,6 +860,8 @@ fn nested_dep_graph(
             depends_on: info.depends_on.iter().map(|d| qualify(d)).collect(),
         });
     }
+    // in the order of the places, so a run picks the provider the last did
+    project_deps.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(DependencyGraph::build(project_deps))
 }
 

@@ -328,14 +328,13 @@ impl RegistryClient {
 
             match self.fetch_json::<PluginMetadata>(&plugin_url) {
                 Ok(metadata) => return Ok(metadata),
-                Err(e) => {
-                    debug!("{e:#}");
-                    meta_core::out::warn(format!(
-                        "Plugin {} not found in registry {}",
-                        escape(name),
-                        shown_url(registry_url)
-                    ));
-                }
+                // another registry may have it; with none, the error below
+                // says so
+                Err(e) => debug!(
+                    "Plugin {} not found in registry {}: {e:#}",
+                    escape(name),
+                    shown_url(registry_url)
+                ),
             }
         }
 

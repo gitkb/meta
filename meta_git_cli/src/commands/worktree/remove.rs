@@ -100,7 +100,13 @@ pub(crate) fn remove_set(
         let unreadable: String = workspace
             .unreadable
             .iter()
-            .map(|(path, e)| format!("\n  {}: {}", escape_path(path), escape(&format!("{e:#}"))))
+            .map(|(path, e)| {
+                format!(
+                    "\n  {}: {}",
+                    escape_path(path),
+                    meta_core::display::escape_lines(&format!("{e:#}"))
+                )
+            })
             .collect();
         anyhow::bail!(
             "Refusing to remove worktree '{name}': it is not a set of this workspace ({}):\n  {}\n\

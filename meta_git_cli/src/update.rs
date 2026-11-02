@@ -178,7 +178,7 @@ fn report_unlisted(queue: &CloneQueue, cwd: &Path) {
             ),
             Err(e) => format!(
                 "meta can't tell what it holds ({})",
-                escape(&format!("{e:#}"))
+                meta_core::display::escape_lines(&format!("{e:#}"))
             ),
         };
         meta_core::out::warn(format!("{shown} is not in .meta.yaml; {holds}"));

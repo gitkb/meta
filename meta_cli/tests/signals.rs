@@ -7,7 +7,10 @@
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
+// Unix only: signals and process groups
 #![cfg(unix)]
+
+use meta_test_support::Sandbox;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -24,7 +27,7 @@ echo "$!" >> "$ROOT/started"; wait"#;
 
 /// A workspace with repos `a` and `b`, and a plugin `meta-slow` on PATH
 /// whose command runs [`SLOW`] once.
-fn workspace(root: &Path) {
+fn workspace(sandbox: &Sandbox, root: &Path) {
     fs::write(
         root.join(".meta.yaml"),
         "projects:\n  a:\n    path: a\n  b:\n    path: b\n",
@@ -32,14 +35,7 @@ fn workspace(root: &Path) {
     .unwrap();
     for repo in [root.to_path_buf(), root.join("a"), root.join("b")] {
         fs::create_dir_all(&repo).unwrap();
-        let init = Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(&repo)
-            .env("GIT_CONFIG_GLOBAL", root.join("gitconfig"))
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .status()
-            .unwrap();
-        assert!(init.success());
+        sandbox.git(&repo, &["init", "-q", "-b", "main"]);
     }
     let bin = root.join("bin");
     fs::create_dir_all(&bin).unwrap();
@@ -55,22 +51,17 @@ fn workspace(root: &Path) {
 }
 
 /// meta, started as a job of its own (never a terminal's foreground job).
-fn start_meta(root: &Path, args: &[&str]) -> Child {
-    start(root, env!("CARGO_BIN_EXE_meta"), args)
+fn start_meta(sandbox: &Sandbox, root: &Path, args: &[&str]) -> Child {
+    start(sandbox, root, env!("CARGO_BIN_EXE_meta"), args)
 }
 
 /// `program`, started as [`start_meta`] starts meta.
-fn start(root: &Path, program: &str, args: &[&str]) -> Child {
-    Command::new(program)
+fn start(sandbox: &Sandbox, root: &Path, program: &str, args: &[&str]) -> Child {
+    sandbox
+        .command(program)
         .args(args)
         .current_dir(root)
         .env("ROOT", root)
-        .env("HOME", root)
-        .env("XDG_CONFIG_HOME", root.join("xdg"))
-        .env("XDG_DATA_HOME", root.join("xdg/data"))
-        .env("GIT_CONFIG_GLOBAL", root.join("gitconfig"))
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("META_DATA_DIR", root.join("data"))
         .env(
             "PATH",
             format!("{}:/usr/bin:/bin", root.join("bin").display()),
@@ -152,20 +143,24 @@ fn terminate(root: &Path, mut meta: Child) {
 
 #[test]
 fn terminating_meta_exec_stops_its_commands_and_theirs() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
-    let meta = start_meta(&root, &["--parallel", "exec", "--", "sh", "-c", SLOW]);
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    let meta = start_meta(
+        &sandbox,
+        &root,
+        &["--parallel", "exec", "--", "sh", "-c", SLOW],
+    );
     started(&root, 3);
     terminate(&root, meta);
 }
 
 #[test]
 fn terminating_meta_stops_the_plugin_and_what_it_started() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
-    let meta = start_meta(&root, &["slow", "now"]);
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    let meta = start_meta(&sandbox, &root, &["slow", "now"]);
     started(&root, 1);
     terminate(&root, meta);
 }
@@ -176,12 +171,13 @@ fn terminating_meta_stops_the_plugin_and_what_it_started() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_hangup_meta_was_started_ignoring_stops_nothing() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
     let quick = r#"echo "$PWD" >> "$ROOT/started"
 while [ ! -e "$ROOT/release" ] && [ -d "$ROOT" ]; do sleep 0.05; done; echo "$PWD" >> "$ROOT/late""#;
     let mut meta = start(
+        &sandbox,
         &root,
         "sh",
         &[
@@ -216,11 +212,12 @@ while [ ! -e "$ROOT/release" ] && [ -d "$ROOT" ]; do sleep 0.05; done; echo "$PW
 /// by TERM with nothing written afterwards.
 #[test]
 fn terminating_meta_ends_a_stopped_command() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
     let stopped = r#"echo "$$" >> "$ROOT/started"; kill -STOP "$$"; echo "$PWD" >> "$ROOT/late""#;
     let mut meta = start_meta(
+        &sandbox,
         &root,
         &["--include", "a", "exec", "--", "sh", "-c", stopped],
     );

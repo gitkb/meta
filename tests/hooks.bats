@@ -3,13 +3,7 @@
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-}
-
-teardown() {
-    rm -rf "$TEST_DIR"
+    sandbox
 }
 
 @test "pre-push clears repository-local Git environment without mutating caller config" {

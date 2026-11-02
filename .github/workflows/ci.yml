@@ -39,7 +39,7 @@ jobs:
         run: cargo build --workspace --bins --examples --locked
 
       - name: Run tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
 
   clippy:
     name: Clippy
@@ -128,7 +128,7 @@ jobs:
         shell: bash
 
       - name: Run integration tests
-        run: bats tests/*.bats
+        run: META_BIN_DIR="$PWD/target/debug" bats tests/*.bats
         shell: bash
 
   format:

@@ -20,6 +20,7 @@ indicatif = "0.17"
 shlex = "1.3"
 
 [dev-dependencies]
+meta_test_support = { path = "../meta_test_support" }
 tempfile = "3.3"
 
 [lints]

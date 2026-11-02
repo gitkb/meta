@@ -1476,7 +1476,7 @@ fn repo_command(path: &Path, action: RepoAction) -> Option<(&'static str, Vec<&'
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{call, git, init_repo, json, server, workspace};
+    use crate::test_support::{call, json, server, workspace};
     use serde_json::json;
 
     /// Each tool's arguments (the contract MCP clients rely on), and the
@@ -1627,7 +1627,8 @@ mod tests {
 
     #[test]
     fn a_wrong_type_is_an_error_naming_the_tool_the_argument_and_the_value() {
-        let (server, _tmp) = workspace();
+        let sandbox = meta_test_support::isolated!();
+        let (server, _tmp) = workspace(&sandbox);
         for (tool, arguments, named) in [
             ("meta_list_projects", json!({"tag": 123}), ["tag", "123"]),
             (
@@ -1659,13 +1660,14 @@ mod tests {
             }
         }
         // the batch never ran without its rollback
-        assert!(!_tmp.path().join("a/ran").exists());
+        assert!(!_tmp.join("a/ran").exists());
     }
 
     #[test]
     fn a_project_is_a_name_of_the_config_or_the_root() {
-        let (server, tmp) = server("projects:\n  a: {path: dir/a, tags: [x]}\n");
-        init_repo(&tmp.path().join("dir/a"));
+        let sandbox = meta_test_support::isolated!();
+        let (server, tmp) = server(&sandbox, "projects:\n  a: {path: dir/a, tags: [x]}\n");
+        sandbox.repo(&tmp.join("dir/a"));
         let path = |project: &str| {
             json(call(
                 &server,
@@ -1675,10 +1677,10 @@ mod tests {
                 .as_str()
                 .map(PathBuf::from)
         };
-        assert_eq!(path("a"), Some(tmp.path().join("dir/a")));
-        assert_eq!(path("."), Some(tmp.path().to_path_buf()));
+        assert_eq!(path("a"), Some(tmp.join("dir/a")));
+        assert_eq!(path("."), Some(tmp.clone()));
         // by its name, at its own path
-        std::fs::write(tmp.path().join("dir/a/README"), "changed").unwrap();
+        std::fs::write(tmp.join("dir/a/README"), "changed").unwrap();
         let diff = json(call(&server, "meta_git_diff", json!({"project": "a"})));
         assert_eq!(diff.as_array().unwrap().len(), 1, "{diff}");
         assert!(
@@ -1691,7 +1693,7 @@ mod tests {
             json!({"project": "."}),
         ));
         assert_eq!(impact["total_affected"], 0, "{impact}");
-        let outside = tmp.path().join("..").to_string_lossy().into_owned();
+        let outside = tmp.join("..").to_string_lossy().into_owned();
         // not a path, not an unknown name, in any tool that takes one
         for project in ["dir/a", "../x", outside.as_str(), "no-such"] {
             for tool in [
@@ -1729,20 +1731,19 @@ mod tests {
 
     #[test]
     fn multi_commit_commits_only_in_projects_of_the_workspace() {
-        let (server, tmp) = server("projects:\n  a: {path: dir/a}\n");
-        let a = tmp.path().join("dir/a");
-        init_repo(&a);
-        let outside = tempfile::tempdir().unwrap();
-        init_repo(outside.path());
-        for dir in [&a, &outside.path().to_path_buf()] {
+        let sandbox = meta_test_support::isolated!();
+        let (server, tmp) = server(&sandbox, "projects:\n  a: {path: dir/a}\n");
+        let a = tmp.join("dir/a");
+        sandbox.repo(&a);
+        let outside = sandbox.work().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        sandbox.repo(&outside);
+        for dir in [&a, &outside] {
             std::fs::write(dir.join("README"), "staged").unwrap();
-            git(dir, &["add", "README"]);
+            sandbox.git(dir, &["add", "README"]);
         }
-        let ws_relative = format!(
-            "../{}",
-            outside.path().file_name().unwrap().to_string_lossy()
-        );
-        let absolute = outside.path().to_string_lossy().into_owned();
+        let ws_relative = format!("../{}", outside.file_name().unwrap().to_string_lossy());
+        let absolute = outside.to_string_lossy().into_owned();
         for project in [ws_relative.as_str(), absolute.as_str()] {
             // refused before anything is committed, even the valid entry
             let commits = json!({"commits": [
@@ -1754,8 +1755,8 @@ mod tests {
                 .unwrap();
             assert!(err.to_string().contains("not found"), "{err}");
         }
-        assert_eq!(git(outside.path(), &["log", "--format=%s"]), "init\n");
-        assert_eq!(git(&a, &["log", "--format=%s"]), "init\n");
+        assert_eq!(sandbox.git(&outside, &["log", "--format=%s"]), "init\n");
+        assert_eq!(sandbox.git(&a, &["log", "--format=%s"]), "init\n");
 
         // by name, at the project's own path; the root has nothing staged,
         // and git's reason (on stdout) is its error
@@ -1763,11 +1764,11 @@ mod tests {
             {"project": "a", "message": "in a"},
             {"project": ".", "message": "in the root"}
         ]});
-        init_repo(tmp.path());
+        sandbox.repo(&tmp);
         let reply = call(&server, "meta_git_multi_commit", commits).unwrap();
         assert!(!reply.is_error, "{}", reply.text);
         let result: serde_json::Value = serde_json::from_str(&reply.text).unwrap();
-        assert_eq!(git(&a, &["log", "-1", "--format=%s"]), "in a\n");
+        assert_eq!(sandbox.git(&a, &["log", "-1", "--format=%s"]), "in a\n");
         assert_eq!(result["results"][0]["success"], true, "{result}");
         assert!(
             result["results"][1]["error"]
@@ -1786,12 +1787,13 @@ mod tests {
 
     #[test]
     fn git_branch_reports_unknown_when_a_projects_git_file_points_nowhere() {
-        let (server, tmp) = server("projects:\n  broken: {}\n");
-        init_repo(tmp.path());
-        std::fs::create_dir(tmp.path().join("broken")).unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let (server, tmp) = server(&sandbox, "projects:\n  broken: {}\n");
+        sandbox.repo(&tmp);
+        std::fs::create_dir(tmp.join("broken")).unwrap();
         std::fs::write(
-            tmp.path().join("broken/.git"),
-            format!("gitdir: {}\n", tmp.path().join("gone").display()),
+            tmp.join("broken/.git"),
+            format!("gitdir: {}\n", tmp.join("gone").display()),
         )
         .unwrap();
 
@@ -1820,13 +1822,14 @@ mod tests {
 
     #[test]
     fn git_acts_only_in_a_project_that_is_its_own_repository() {
+        let sandbox = meta_test_support::isolated!();
         // a plain folder, in a workspace root that is a repository with
         // work staged
-        let (server, tmp) = server("projects:\n  plain: {}\n");
-        init_repo(tmp.path());
-        std::fs::create_dir(tmp.path().join("plain")).unwrap();
-        std::fs::write(tmp.path().join("staged"), "root work").unwrap();
-        git(tmp.path(), &["add", "staged"]);
+        let (server, tmp) = server(&sandbox, "projects:\n  plain: {}\n");
+        sandbox.repo(&tmp);
+        std::fs::create_dir(tmp.join("plain")).unwrap();
+        std::fs::write(tmp.join("staged"), "root work").unwrap();
+        sandbox.git(&tmp, &["add", "staged"]);
         let commits = json!({"commits": [{"project": "plain", "message": "m"}]});
         let reply = call(&server, "meta_git_multi_commit", commits).unwrap();
         assert!(
@@ -1845,10 +1848,10 @@ mod tests {
             "{}",
             diff.text
         );
-        assert_eq!(git(tmp.path(), &["log", "--format=%s"]), "init\n");
+        assert_eq!(sandbox.git(&tmp, &["log", "--format=%s"]), "init\n");
 
         // a repository git won't open: its reason, not a guess
-        std::fs::write(tmp.path().join("plain/.git"), "gitdir: /nonexistent\n").unwrap();
+        std::fs::write(tmp.join("plain/.git"), "gitdir: /nonexistent\n").unwrap();
         let commits = json!({"commits": [{"project": "plain", "message": "m"}]});
         let reply = call(&server, "meta_git_multi_commit", commits).unwrap();
         // git's own words, which change between versions
@@ -1864,9 +1867,10 @@ mod tests {
         );
 
         // a plain folder in a workspace inside a bare repository
-        let bare = tempfile::tempdir().unwrap();
-        git(bare.path(), &["init", "-q", "--bare"]);
-        let ws = bare.path().join("ws");
+        let bare = sandbox.work().join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        sandbox.git(bare.as_path(), &["init", "-q", "--bare"]);
+        let ws = bare.join("ws");
         std::fs::create_dir_all(ws.join("plain")).unwrap();
         std::fs::write(ws.join(".meta.yaml"), "projects:\n  plain: {}\n").unwrap();
         let server = McpServer::in_dir(Some(ws));
@@ -1877,11 +1881,12 @@ mod tests {
         assert!(diff.is_error && refused, "{}", diff.text);
 
         // a workspace root that isn't a repository, inside one that is
-        let outer = tempfile::tempdir().unwrap();
-        init_repo(outer.path());
-        std::fs::write(outer.path().join("wip"), "outer work").unwrap();
-        git(outer.path(), &["add", "wip"]);
-        let ws = outer.path().join("ws");
+        let outer = sandbox.work().join("outer");
+        std::fs::create_dir_all(&outer).unwrap();
+        sandbox.repo(&outer);
+        std::fs::write(outer.join("wip"), "outer work").unwrap();
+        sandbox.git(&outer, &["add", "wip"]);
+        let ws = outer.join("ws");
         std::fs::create_dir(&ws).unwrap();
         std::fs::write(ws.join(".meta.yaml"), "projects: {}\n").unwrap();
         let server = McpServer::in_dir(Some(ws));
@@ -1891,13 +1896,14 @@ mod tests {
                 .unwrap()
                 .is_error
         );
-        assert_eq!(git(outer.path(), &["log", "--format=%s"]), "init\n");
+        assert_eq!(sandbox.git(&outer, &["log", "--format=%s"]), "init\n");
     }
 
     /// The check reads no path from git, so any folder name works.
     #[test]
     fn a_repository_with_any_name_is_its_own() {
-        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
         let mut names = vec![std::ffi::OsString::from("name")];
         // Windows drops a trailing space from a folder's name
         #[cfg(unix)]
@@ -1908,8 +1914,8 @@ mod tests {
             names.push(std::ffi::OsStr::from_bytes(b"byte \xff").to_os_string());
         }
         for name in names {
-            let ws = tmp.path().join(name);
-            init_repo(&ws);
+            let ws = tmp.join(name);
+            sandbox.repo(&ws);
             std::fs::write(ws.join(".meta.yaml"), "projects: {}\n").unwrap();
             std::fs::write(ws.join("README"), "changed").unwrap();
             let server = McpServer::in_dir(Some(ws.clone()));
@@ -1922,8 +1928,9 @@ mod tests {
     /// it never takes the workspace around it for its own.
     #[test]
     fn a_workspace_whose_config_is_gone_is_not_its_parents() {
-        let (_, tmp) = server("projects:\n  child: {meta: true}\n");
-        let child = tmp.path().join("child");
+        let sandbox = meta_test_support::isolated!();
+        let (_, tmp) = server(&sandbox, "projects:\n  child: {meta: true}\n");
+        let child = tmp.join("child");
         std::fs::create_dir(&child).unwrap();
         std::fs::write(child.join(".meta.yaml"), "projects: {}\n").unwrap();
         let server = McpServer::in_dir(Some(child.clone()));
@@ -1937,8 +1944,9 @@ mod tests {
 
     #[test]
     fn checkout_says_why_git_refused_the_branch() {
-        let (server, tmp) = server("projects: {}\n");
-        init_repo(tmp.path());
+        let sandbox = meta_test_support::isolated!();
+        let (server, tmp) = server(&sandbox, "projects: {}\n");
+        sandbox.repo(&tmp);
         let refused = |branch: &str| {
             let reply = call(&server, "meta_git_checkout", json!({"branch": branch}));
             format!("{:#}", reply.err().unwrap())
@@ -1947,7 +1955,7 @@ mod tests {
         // git repeats the name; a control character in it comes back escaped
         assert!(!refused("a\nb").contains('\n'));
         // a valid name, but a config git can't read: git's words, not a guess
-        std::fs::write(tmp.path().join(".git/config"), "[broken").unwrap();
+        std::fs::write(tmp.join(".git/config"), "[broken").unwrap();
         let err = refused("feature/demo");
         assert!(
             err.contains("fatal:") && !err.contains("not a valid branch name"),
@@ -1957,10 +1965,11 @@ mod tests {
 
     #[test]
     fn search_gives_at_most_fifty_matches_per_project_and_says_so() {
-        let (server, tmp) = server("projects:\n  a: {}\n  b: {}\n");
+        let sandbox = meta_test_support::isolated!();
+        let (server, tmp) = server(&sandbox, "projects:\n  a: {}\n  b: {}\n");
         for (project, lines) in [("a", 60), ("b", 50)] {
-            let dir = tmp.path().join(project);
-            init_repo(&dir);
+            let dir = tmp.join(project);
+            sandbox.repo(&dir);
             std::fs::write(dir.join("f"), "hit\n".repeat(lines)).unwrap();
         }
         let found = json(call(&server, "meta_search_code", json!({"pattern": "hit"})));
@@ -1981,10 +1990,11 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn build_uses_make_for_root_and_child_and_fails_only_when_all_do() {
-        let (server, tmp) = server(r#"{"projects":{"child":{"tags":["selected"]}}}"#);
-        let child = tmp.path().join("child");
+        let sandbox = meta_test_support::isolated!();
+        let (server, tmp) = server(&sandbox, r#"{"projects":{"child":{"tags":["selected"]}}}"#);
+        let child = tmp.join("child");
         std::fs::create_dir(&child).unwrap();
-        for path in [tmp.path(), child.as_path()] {
+        for path in [&tmp, child.as_path()] {
             std::fs::write(path.join("Makefile"), "all:\n\t@echo made > built\n").unwrap();
         }
         let results = json(call(
@@ -1998,7 +2008,7 @@ mod tests {
             .unwrap()
             .iter()
             .all(|r| r["command"] == "make" && r["success"] == true));
-        assert!(tmp.path().join("built").exists());
+        assert!(tmp.join("built").exists());
         assert!(child.join("built").exists());
 
         // one failed: its result says so, the others' still count
@@ -2008,7 +2018,7 @@ mod tests {
         assert!(!reply.is_error, "{}", reply.text);
         assert!(reply.text.contains("build-failed"), "{}", reply.text);
         // all failed: the call failed
-        std::fs::write(tmp.path().join("Makefile"), failing).unwrap();
+        std::fs::write(tmp.join("Makefile"), failing).unwrap();
         let reply = call(&server, "meta_build", json!({})).unwrap();
         assert!(reply.is_error, "{}", reply.text);
     }
@@ -2023,14 +2033,17 @@ mod tests {
 
     #[test]
     fn file_tree_lists_links_without_following_them() {
-        let (server, tmp) =
-            server("projects:\n  a: {tags: [x]}\n  b: {tags: [y]}\n  c: {tags: [z]}\n");
+        let sandbox = meta_test_support::isolated!();
+        let (server, tmp) = server(
+            &sandbox,
+            "projects:\n  a: {tags: [x]}\n  b: {tags: [y]}\n  c: {tags: [z]}\n",
+        );
         for project in ["a", "b", "c"] {
-            std::fs::create_dir_all(tmp.path().join(project).join("src")).unwrap();
+            std::fs::create_dir_all(tmp.join(project).join("src")).unwrap();
         }
         // a link back up the tree, which a walk that follows it never leaves
         // (Windows makes one only with Developer Mode)
-        let link = tmp.path().join("a/src/up");
+        let link = tmp.join("a/src/up");
         #[cfg(unix)]
         let linked = std::os::unix::fs::symlink("..", &link).is_ok();
         #[cfg(windows)]
@@ -2061,8 +2074,11 @@ mod tests {
 
     #[test]
     fn execution_order_selects_any_of_the_tags() {
-        let (server, _tmp) =
-            server("projects:\n  a: {tags: [x]}\n  b: {tags: [y]}\n  c: {tags: [z]}\n");
+        let sandbox = meta_test_support::isolated!();
+        let (server, _tmp) = server(
+            &sandbox,
+            "projects:\n  a: {tags: [x]}\n  b: {tags: [y]}\n  c: {tags: [z]}\n",
+        );
         let order = json(call(
             &server,
             "meta_execution_order",
@@ -2073,7 +2089,8 @@ mod tests {
 
     #[test]
     fn build_and_test_share_detection_and_keep_release() {
-        let tmp = tempfile::tempdir().unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
         for (file, program, build, test) in [
             ("Makefile", "make", vec![], vec!["test"]),
             (
@@ -2090,30 +2107,24 @@ mod tests {
                 vec!["test"],
             ),
         ] {
-            std::fs::write(tmp.path().join(file), "").unwrap();
+            std::fs::write(tmp.join(file), "").unwrap();
             assert_eq!(
-                repo_command(tmp.path(), RepoAction::Build { release: true }),
+                repo_command(&tmp, RepoAction::Build { release: true }),
                 Some((program, build))
             );
-            assert_eq!(
-                repo_command(tmp.path(), RepoAction::Test),
-                Some((program, test))
-            );
+            assert_eq!(repo_command(&tmp, RepoAction::Test), Some((program, test)));
         }
     }
 
     #[test]
     fn get_config_ignores_meta_directory_and_shows_a_broken_config() {
-        let (server, tmp) = server("projects: {}\n");
-        std::fs::create_dir_all(tmp.path().join(".meta/skills")).unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let (server, tmp) = server(&sandbox, "projects: {}\n");
+        std::fs::create_dir_all(tmp.join(".meta/skills")).unwrap();
         let result = call(&server, "meta_get_config", json!({})).unwrap().text;
         assert!(result.contains(".meta.yaml"));
         assert!(result.contains("projects: {}"));
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            "projects: {}\nunknown_top: 1\n",
-        )
-        .unwrap();
+        std::fs::write(tmp.join(".meta.yaml"), "projects: {}\nunknown_top: 1\n").unwrap();
         let reply = call(&server, "meta_get_config", json!({})).unwrap();
         assert!(
             !reply.is_error && reply.text.contains("unknown_top: 1"),

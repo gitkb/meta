@@ -1,0 +1,14 @@
+[package]
+name = "meta_test_support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "One sandbox for meta's tests: its own home, config and git"
+publish = false
+
+[dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

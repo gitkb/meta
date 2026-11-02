@@ -273,6 +273,8 @@ fn git_sees(argv: &[&str], aliases: &BTreeMap<String, String>) -> String {
 
 #[test]
 fn arguments_reach_the_program_as_given() {
+    // git, through loop, in this process: in a sandbox of its own
+    let _sandbox = meta_test_support::isolated!();
     let hostile = [
         "one arg",
         "$(touch PWNED)",
@@ -295,6 +297,8 @@ fn arguments_reach_the_program_as_given() {
 
 #[test]
 fn aliases_expand_into_words_not_shell() {
+    // git, through loop, in this process: in a sandbox of its own
+    let _sandbox = meta_test_support::isolated!();
     let aliases = BTreeMap::from([(
         "q".to_string(),
         "git rev-parse --sq-quote 'two words' ;".to_string(),
@@ -477,42 +481,90 @@ fn test_run_commands_parallel() {
     assert!(result.is_ok());
 }
 
-#[test]
-fn test_run_commands_with_different_commands() {
-    let temp_dir = TempDir::new().unwrap();
-    let dir1 = temp_dir.path().join("dir1");
-    let dir2 = temp_dir.path().join("dir2");
-    fs::create_dir(&dir1).unwrap();
-    fs::create_dir(&dir2).unwrap();
+/// `script` with `WHO` set for it, in `dir`
+fn command_with_who(dir: &Path, who: &str, script: &str) -> DirCommand {
+    DirCommand {
+        dir: dir.to_path_buf(),
+        argv: sh(script),
+        env: Some(HashMap::from([("WHO".to_string(), who.to_string())])),
+        refused: None,
+    }
+}
 
+#[test]
+fn each_command_runs_in_its_own_directory_with_its_own_env() {
+    // each its own program (its name in it) and its own env (WHO)
+    let script = |name: &str| {
+        if cfg!(windows) {
+            format!("echo {name}:%WHO%> here")
+        } else {
+            format!("echo {name}:$WHO > here")
+        }
+    };
+    for parallel in [false, true] {
+        let temp_dir = TempDir::new().unwrap();
+        let dirs: Vec<_> = ["one", "two", "three"]
+            .iter()
+            .map(|name| temp_dir.path().join(name))
+            .collect();
+        let commands: Vec<_> = dirs
+            .iter()
+            .map(|dir| {
+                fs::create_dir(dir).unwrap();
+                let who = dir.file_name().unwrap().to_str().unwrap();
+                command_with_who(dir, who, &script(who))
+            })
+            .collect();
+        let config = LoopConfig {
+            parallel,
+            silent: true,
+            ..Default::default()
+        };
+        run_commands(&config, &commands).unwrap();
+        for dir in &dirs {
+            let here = fs::read_to_string(dir.join("here")).unwrap();
+            let name = dir.file_name().unwrap().to_str().unwrap();
+            assert_eq!(here.trim(), format!("{name}:{name}"));
+        }
+    }
+}
+
+/// With `max_parallel` 2, never more than two commands run at once. Each
+/// command takes a slot, waits (up to 5 s) until two are taken, so two do
+/// run together, and counts the slots on taking one and before giving it
+/// back: a third running would be counted. Unix only: counting files in
+/// `cmd` is impractical, and the bound (the pool's size) is the same code
+/// everywhere.
+#[cfg(unix)]
+#[test]
+fn max_parallel_bounds_how_many_run_at_once() {
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path();
+    fs::create_dir(root.join("slots")).unwrap();
+    let script = "touch ../slots/$WHO; ls ../slots | wc -l >> ../seen; i=0; \
+        while [ \"$(ls ../slots | wc -l)\" -lt 2 ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done; \
+        sleep 0.1; ls ../slots | wc -l >> ../seen; rm ../slots/$WHO";
+    let commands: Vec<_> = (0..6)
+        .map(|n| {
+            let dir = root.join(format!("d{n}"));
+            fs::create_dir(&dir).unwrap();
+            command_with_who(&dir, &n.to_string(), script)
+        })
+        .collect();
     let config = LoopConfig {
-        parallel: false,
+        parallel: true,
         silent: true,
+        max_parallel: NonZeroUsize::new(2),
         ..Default::default()
     };
-
-    // Use simple echo commands with different arguments to verify
-    // that different commands can be executed in different directories
-    let commands = vec![
-        DirCommand {
-            dir: dir1.to_path_buf(),
-            argv: sh("echo command1"),
-            env: None,
-            refused: None,
-        },
-        DirCommand {
-            dir: dir2.to_path_buf(),
-            argv: sh("echo command2"),
-            env: None,
-            refused: None,
-        },
-    ];
-
-    let result = run_commands(&config, &commands);
-    assert!(
-        result.is_ok(),
-        "Different commands should execute in different directories"
-    );
+    run_commands(&config, &commands).unwrap();
+    let seen: Vec<usize> = fs::read_to_string(root.join("seen"))
+        .unwrap()
+        .lines()
+        .map(|n| n.trim().parse().unwrap())
+        .collect();
+    assert_eq!(seen.len(), 12);
+    assert_eq!(seen.iter().max(), Some(&2), "{seen:?}");
 }
 
 #[test]

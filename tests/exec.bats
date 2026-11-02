@@ -6,54 +6,16 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 # Tests: exec, --include, --exclude, --parallel, --dry-run, --tag
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-    META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
-
-    if [ ! -f "$META_BIN" ] || [ ! -f "$META_GIT_BIN" ]; then
-        cargo build --workspace --quiet
-    fi
-
-    # The physical path, as pwd prints it (macOS temp dirs sit behind a symlink)
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    mkdir -p "$TEST_DIR/.meta/plugins"
-    cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
-    chmod +x "$TEST_DIR/.meta/plugins/meta-git"
-
-    # Create the projects: repositories of their own (meta runs nothing in
-    # a plain folder)
-    for repo in api worker frontend; do
-        mkdir -p "$TEST_DIR/$repo"
-        git -C "$TEST_DIR/$repo" init --quiet
-        echo "# $repo" > "$TEST_DIR/$repo/README.md"
-    done
-
-    # Default .meta.yaml with tags
+    sandbox
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
-{
-    "projects": {
-        "api": {
-            "repo": "git@github.com:org/api.git",
-            "tags": ["backend", "rust"]
-        },
-        "worker": {
-            "repo": "git@github.com:org/worker.git",
-            "tags": ["backend", "rust"]
-        },
-        "frontend": {
-            "repo": "git@github.com:org/frontend.git",
-            "tags": ["ui", "typescript"]
-        }
-    }
-}
+projects:
+  api: {repo: git@github.com:org/api.git, tags: [backend, rust]}
+  worker: {repo: git@github.com:org/worker.git, tags: [backend, rust]}
+  frontend: {repo: git@github.com:org/frontend.git, tags: [ui, typescript]}
 EOF
-
+    # projects are repos of their own (meta runs nothing in a plain folder)
+    make_workspace --init-only --plugins git api worker frontend
     cd "$TEST_DIR"
-}
-
-teardown() {
-    rm -rf "$TEST_DIR"
 }
 
 # ============ Basic exec ============
@@ -67,9 +29,9 @@ teardown() {
 @test "meta exec runs in each project directory" {
     run "$META_BIN" exec -- pwd
     [ "$status" -eq 0 ]
-    [[ "$output" == *"api"* ]]
-    [[ "$output" == *"worker"* ]]
-    [[ "$output" == *"frontend"* ]]
+    [[ "$output" == *"$TEST_DIR/api"* ]]
+    [[ "$output" == *"$TEST_DIR/worker"* ]]
+    [[ "$output" == *"$TEST_DIR/frontend"* ]]
 }
 
 @test "meta exec runs in root directory too" {
@@ -87,8 +49,7 @@ teardown() {
 
 @test "meta exec handles command failure gracefully" {
     run "$META_BIN" exec -- false
-    # Should report failures but not crash
-    [ "$status" -ne 0 ] || [[ "$output" == *"fail"* ]] || [[ "$output" == *"error"* ]] || [[ "$output" == *"Error"* ]]
+    [ "$status" -eq 1 ]
 }
 
 # ============ --include ============
@@ -227,35 +188,27 @@ teardown() {
 }
 
 @test "meta --tag with --dry-run" {
-    run "$META_BIN" --tag ui --dry-run exec -- echo test
+    run "$META_BIN" --tag ui --dry-run exec -- touch ran
     [ "$status" -eq 0 ]
-    # Should mention the command without executing
-    [ ! -f "$TEST_DIR/frontend/test" ]
+    [[ "$output" == *"touch ran"* ]]
+    [ ! -e "$TEST_DIR/frontend/ran" ]
 }
 
 # ============ meta git pass-through (loop fallback) ============
 
 @test "meta git branch runs across repos via loop" {
-    # Initialize git repos so git commands work
     for repo in api worker frontend; do
-        git -C "$TEST_DIR/$repo" init --quiet
-        git -C "$TEST_DIR/$repo" config user.email "test@test.com"
-        git -C "$TEST_DIR/$repo" config user.name "Test"
         git -C "$TEST_DIR/$repo" add README.md
         git -C "$TEST_DIR/$repo" commit --quiet -m "init"
     done
 
     run "$META_BIN" --include api,worker,frontend exec -- git branch
     [ "$status" -eq 0 ]
-    # Should show branch info from repos
-    [[ "$output" == *"main"* ]] || [[ "$output" == *"master"* ]]
+    [ "$(grep -c '^\* main$' <<<"$output")" -eq 3 ]
 }
 
 @test "meta exec -- git log --oneline works" {
     for repo in api worker frontend; do
-        git -C "$TEST_DIR/$repo" init --quiet
-        git -C "$TEST_DIR/$repo" config user.email "test@test.com"
-        git -C "$TEST_DIR/$repo" config user.name "Test"
         git -C "$TEST_DIR/$repo" add README.md
         git -C "$TEST_DIR/$repo" commit --quiet -m "init $repo"
     done
@@ -267,24 +220,10 @@ teardown() {
 
 # ============ Edge cases ============
 
-@test "meta exec with no command after -- shows error or help" {
+@test "meta exec with no command after -- is a usage error" {
     run "$META_BIN" exec --
-    # Empty command should either error or show help
-    [ "$status" -ne 0 ] || [[ "$output" == *"Usage"* ]] || [[ "$output" == *"help"* ]] || [[ "$output" == "" ]]
-}
-
-@test "meta exec preserves exit codes from subcommands" {
-    # Run a command that exits non-zero in some dirs
-    echo "#!/bin/sh" > "$TEST_DIR/api/fail.sh"
-    echo "exit 1" >> "$TEST_DIR/api/fail.sh"
-    chmod +x "$TEST_DIR/api/fail.sh"
-
-    echo "#!/bin/sh" > "$TEST_DIR/worker/fail.sh"
-    echo "exit 0" >> "$TEST_DIR/worker/fail.sh"
-    chmod +x "$TEST_DIR/worker/fail.sh"
-
-    run "$META_BIN" --include worker exec -- sh -c "exit 0"
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"Usage: meta exec"* ]]
 }
 
 @test "meta exec with spaces in output works correctly" {
@@ -333,16 +272,6 @@ teardown() {
     [[ "$output" == *"Error: At least one command failed"* ]]
 }
 
-@test "loop sequential mode runs commands in order" {
-    # Run commands across all three projects
-    run "$META_BIN" --include api,worker,frontend exec -- pwd
-    [ "$status" -eq 0 ]
-    # All three directories should appear in output
-    [[ "$output" == *"api"* ]]
-    [[ "$output" == *"worker"* ]]
-    [[ "$output" == *"frontend"* ]]
-}
-
 @test "loop captures stdout from commands" {
     # Use a script file to avoid arg-joining issues with shell expressions
     cat > "$TEST_DIR/api/test.sh" <<'SCRIPT'
@@ -384,24 +313,6 @@ SCRIPT
     [[ "$output" == *"line1"* ]]
     [[ "$output" == *"line2"* ]]
     [[ "$output" == *"line3"* ]]
-}
-
-@test "loop skips directories in ignore list" {
-    # .git is in the default ignore list
-    mkdir -p "$TEST_DIR/.git/hooks"
-    echo "should not appear" > "$TEST_DIR/.git/hooks/marker"
-    run "$META_BIN" exec -- ls
-    [ "$status" -eq 0 ]
-    # .git directory should not be included as a project
-    [[ "$output" != *"hooks"* ]] || true
-}
-
-@test "loop with --json outputs structured results" {
-    run "$META_BIN" --json --include api exec -- echo json-test
-    [ "$status" -eq 0 ]
-    # JSON mode should produce parseable output
-    # (the exact format depends on loop_lib implementation)
-    [[ "$output" == *"json-test"* ]] || [[ "$output" == *"api"* ]]
 }
 
 @test "a command a signal ends has exit_code null and the signal in --json" {
@@ -463,6 +374,7 @@ SCRIPT
     chmod +x "$TEST_DIR/frontend/run.sh"
 
     run "$META_BIN" --include api,worker,frontend --parallel exec -- sh run.sh
+    [ "$status" -eq 1 ]
     # Even though api fails, worker and frontend should complete
     [[ "$output" == *"worker-ok"* ]]
     [[ "$output" == *"frontend-ok"* ]]
@@ -485,7 +397,7 @@ SCRIPT
 
 @test "unrecognized plugin subcommand shows plugin help" {
     # Copy meta-project plugin to test dir
-    cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/meta-project"
+    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/meta-project"
     chmod +x "$TEST_DIR/.meta/plugins/meta-project"
 
     run "$META_BIN" project blablabla
@@ -704,7 +616,7 @@ EOF
 }
 
 @test "meta-mcp meta_exec runs its argv with no shell" {
-    run env PATH="$(dirname "$META_BIN"):$PATH" "$BATS_TEST_DIRNAME/../target/debug/meta-mcp" <<'EOF'
+    run env PATH="$(dirname "$META_BIN"):$PATH" "$META_BIN_DIR/meta-mcp" <<'EOF'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"meta_exec","arguments":{"command":["printf","[%s]","one arg","$(touch PWNED5)"]}}}
 EOF
@@ -792,7 +704,7 @@ EOF
 
 @test "loop with no command prints clap's help: coloured on a terminal, plain into a pipe" {
     load "${BATS_TEST_DIRNAME}/helpers/terminal.bash"
-    LOOP_BIN="$BATS_TEST_DIRNAME/../target/debug/loop"
+    LOOP_BIN="$META_BIN_DIR/loop"
     TERM=xterm run with_terminal "$LOOP_BIN"
     [[ "$output" == *$'\033['* ]]
     run bash -c '"$1" | od -An -c | tail -1' _ "$LOOP_BIN"
@@ -803,7 +715,7 @@ EOF
 }
 
 @test "loop's output to a closed stdout exits 141 quietly" {
-    LOOP_BIN="$BATS_TEST_DIRNAME/../target/debug/loop"
+    LOOP_BIN="$META_BIN_DIR/loop"
     # stdout's read end closed before loop starts (not `head -c0`, which
     # BSD head refuses)
     closed() { python3 -c 'import os, subprocess, sys
@@ -925,13 +837,13 @@ sys.exit(subprocess.run(sys.argv[1:], stdout=w).returncode)' "$META_BIN" frag "$
     jq -e '.success == false' <<<"$output"
     echo '{"json_output": true}' > .looprc
     # loop's --verbose lines go to stderr, so stdout stays JSON
-    run bash -c '"$1" -v -i api true 2>/dev/null' _ "$BATS_TEST_DIRNAME/../target/debug/loop"
+    run bash -c '"$1" -v -i api true 2>/dev/null' _ "$META_BIN_DIR/loop"
     jq -e '.success == true' <<<"$output"
     # nor in -v's lines on stderr, printed after the .looprc is read
-    CLICOLOR_FORCE=1 run bash -c '"$1" -v -i api true 2>&1 >/dev/null' _ "$BATS_TEST_DIRNAME/../target/debug/loop"
+    CLICOLOR_FORCE=1 run bash -c '"$1" -v -i api true 2>&1 >/dev/null' _ "$META_BIN_DIR/loop"
     [[ "$output" == *"Verbose mode enabled"* ]]
     [[ "$output" != *$'\033['* ]]
-    CLICOLOR_FORCE=1 run "$BATS_TEST_DIRNAME/../target/debug/loop" -i api sh -c 'if [ -n "$CLICOLOR_FORCE" ]; then echo forced; else echo plain; fi'
+    CLICOLOR_FORCE=1 run "$META_BIN_DIR/loop" -i api sh -c 'if [ -n "$CLICOLOR_FORCE" ]; then echo forced; else echo plain; fi'
     jq -e '.results[0].stdout == "plain\n"' <<<"$output"
 }
 

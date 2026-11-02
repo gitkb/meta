@@ -292,22 +292,18 @@ fn stop(child: &mut Child, kill: bool) {
 }
 
 #[cfg(test)]
-#[cfg_attr(
-    unix,
-    expect(
-        clippy::disallowed_methods,
-        reason = "tests start the programs they test with"
-    )
-)]
 mod tests {
     use super::*;
     #[cfg(unix)]
     use crate::test_support::{gone, wait_for};
+    #[cfg(unix)]
+    use meta_test_support::Sandbox;
 
     /// The name of the program `pid` runs.
     #[cfg(unix)]
-    fn program(pid: &str) -> String {
-        let out = Command::new("ps")
+    fn program(sandbox: &Sandbox, pid: &str) -> String {
+        let out = sandbox
+            .command("ps")
             .args(["-o", "comm=", "-p", pid])
             .output()
             .unwrap();
@@ -328,12 +324,15 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn output_lines_stops_at_the_cap_and_says_so() {
+        let sandbox = Sandbox::new();
         let calls = Calls::default();
-        let mut seq = Command::new("seq");
+        let mut seq = sandbox.command("seq");
         let (out, truncated) = calls.output_lines(seq.args(["1", "100000"]), 3).unwrap();
         assert_eq!(out.stdout, b"1\n2\n3\n");
         assert!(truncated);
-        let (out, truncated) = calls.output_lines(Command::new("seq").arg("3"), 3).unwrap();
+        let (out, truncated) = calls
+            .output_lines(sandbox.command("seq").arg("3"), 3)
+            .unwrap();
         assert_eq!(out.stdout, b"1\n2\n3\n");
         assert!(!truncated && out.status.success());
     }
@@ -345,8 +344,9 @@ mod tests {
     #[cfg(unix)]
     fn cancel_stops_the_program_and_its_children() {
         let calls = Calls::default();
-        let dir = tempfile::tempdir().unwrap();
-        let pids = dir.path().join("pids");
+        let sandbox = Sandbox::new();
+        let dir = sandbox.work();
+        let pids = dir.join("pids");
         assert!(calls.start("1".to_string()));
         let started = std::time::Instant::now();
         std::thread::scope(|scope| {
@@ -354,15 +354,16 @@ mod tests {
                 let script = "(trap '' TERM; exec sleep 60) >/dev/null 2>&1 & \
                               echo $$ $! > pids.tmp && mv pids.tmp pids; wait";
                 calls.output(
-                    Command::new("sh")
+                    sandbox
+                        .command("sh")
                         .args(["-c", script])
-                        .current_dir(dir.path()),
+                        .current_dir(dir.as_path()),
                 )
             });
             // the child has set its trap: it is `sleep` now
             let child = || {
                 let pids = std::fs::read_to_string(&pids).ok()?;
-                Some(program(pids.split_whitespace().nth(1)?) == "sleep")
+                Some(program(&sandbox, pids.split_whitespace().nth(1)?) == "sleep")
             };
             wait_for("the child to ignore SIGTERM", || child() == Some(true));
             calls.cancel("1");
@@ -373,13 +374,13 @@ mod tests {
         for pid in std::fs::read_to_string(&pids).unwrap().split_whitespace() {
             wait_for(&format!("{pid} to end"), || gone(pid));
         }
-        let err = calls.output(&mut Command::new("true")).unwrap_err();
+        let err = calls.output(&mut sandbox.command("true")).unwrap_err();
         assert!(err.to_string().contains("cancelled"), "{err}");
         assert!(calls.finish(|cancelled| cancelled));
         // the next call runs
         assert!(calls.start("2".to_string()));
         assert!(calls
-            .output(&mut Command::new("true"))
+            .output(&mut sandbox.command("true"))
             .unwrap()
             .status
             .success());
@@ -392,17 +393,19 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn a_cancelled_call_does_not_wait_for_pipes_held_outside_its_group() {
         let calls = Calls::default();
-        let dir = tempfile::tempdir().unwrap();
-        let pid = dir.path().join("pid");
+        let sandbox = Sandbox::new();
+        let dir = sandbox.work();
+        let pid = dir.join("pid");
         assert!(calls.start("1".to_string()));
         let started = std::time::Instant::now();
         std::thread::scope(|scope| {
             let run = scope.spawn(|| {
                 let script = "setsid sleep 60 & echo $! > pid.tmp && mv pid.tmp pid; wait";
                 calls.output(
-                    Command::new("sh")
+                    sandbox
+                        .command("sh")
                         .args(["-c", script])
-                        .current_dir(dir.path()),
+                        .current_dir(dir.as_path()),
                 )
             });
             let escaped = || Some(leads_a_session(std::fs::read_to_string(&pid).ok()?.trim()));
@@ -412,7 +415,7 @@ mod tests {
         });
         let elapsed = started.elapsed();
         let escaped = std::fs::read_to_string(&pid).unwrap();
-        drop(Command::new("kill").arg(escaped.trim()).status());
+        drop(sandbox.command("kill").arg(escaped.trim()).status());
         assert!(elapsed < GRACE + Duration::from_secs(5), "{elapsed:?}");
     }
 
@@ -422,8 +425,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn a_cancelled_call_does_not_wait_for_a_zombie_in_its_group() {
         let calls = Calls::default();
-        let dir = tempfile::tempdir().unwrap();
-        let pid = dir.path().join("pid");
+        let sandbox = Sandbox::new();
+        let dir = sandbox.work();
+        let pid = dir.join("pid");
         assert!(calls.start("1".to_string()));
         let mut cancelled = None;
         std::thread::scope(|scope| {
@@ -431,9 +435,10 @@ mod tests {
                 let script = "(sleep 60 & exec setsid sleep 61) >/dev/null 2>&1 & \
                               echo $! > pid.tmp && mv pid.tmp pid; wait";
                 calls.output(
-                    Command::new("sh")
+                    sandbox
+                        .command("sh")
                         .args(["-c", script])
-                        .current_dir(dir.path()),
+                        .current_dir(dir.as_path()),
                 )
             });
             // the parent has left the group (it leads a session of its own),
@@ -446,7 +451,7 @@ mod tests {
         });
         let elapsed = cancelled.unwrap().elapsed();
         let parent = std::fs::read_to_string(&pid).unwrap();
-        drop(Command::new("kill").arg(parent.trim()).status());
+        drop(sandbox.command("kill").arg(parent.trim()).status());
         // it waited for the zombie, then gave up
         assert!(elapsed >= 2 * GRACE, "{elapsed:?}");
         assert!(elapsed < 2 * GRACE + Duration::from_secs(5), "{elapsed:?}");

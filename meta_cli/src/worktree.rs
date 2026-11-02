@@ -654,17 +654,14 @@ fn source_repo(checkout: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "tests start the programs they test with"
-)]
 mod recursive_tests {
     use super::*;
+    use meta_test_support::Sandbox;
 
     #[test]
     fn the_sets_own_nested_config_wins_over_the_workspaces() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (workspace, set) = (tmp.path().join("ws"), tmp.path().join("set"));
+        let sandbox = Sandbox::new();
+        let (workspace, set) = (sandbox.work().join("ws"), sandbox.work().join("set"));
         let config = |dir: &Path, projects: &str| {
             std::fs::create_dir_all(dir).unwrap();
             std::fs::write(
@@ -689,7 +686,7 @@ mod recursive_tests {
     }
 
     /// Create a real committed repository and linked worktree in the fixture.
-    fn member(root: &Path, alias: &str) {
+    fn member(sandbox: &Sandbox, root: &Path, alias: &str) {
         let sources = if alias == "." {
             root.parent().unwrap().join(".sources")
         } else {
@@ -700,22 +697,8 @@ mod recursive_tests {
             "repo{}",
             std::fs::read_dir(&sources).unwrap().count()
         ));
-        std::fs::create_dir(&source).unwrap();
-        git(&source, &["init", "-q"]);
-        git(
-            &source,
-            &[
-                "-c",
-                "user.name=Test",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "--allow-empty",
-                "-qm",
-                "initial",
-            ],
-        );
-        git(
+        sandbox.repo(&source);
+        sandbox.git(
             &source,
             &[
                 "worktree",
@@ -724,21 +707,6 @@ mod recursive_tests {
                 "topic",
                 root.join(alias).to_str().unwrap(),
             ],
-        );
-    }
-
-    /// Execute fixture Git commands with failures surfaced in test output.
-    fn git(path: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(path)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
         );
     }
 
@@ -753,10 +721,10 @@ mod recursive_tests {
     #[test]
     /// Nested members keep sorted distinct aliases and default boundaries.
     fn recursive_members_preserve_legacy_boundaries_and_sorted_full_aliases() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = &temp.path().join("set");
+        let sandbox = meta_test_support::isolated!();
+        let root = &sandbox.work().join("set");
         for alias in [".", "open-source", "open-source/atc", "other/atc"] {
-            member(root, alias);
+            member(&sandbox, root, alias);
         }
         std::fs::create_dir_all(root.join("configured-but-absent")).unwrap();
         assert_eq!(
@@ -771,10 +739,10 @@ mod recursive_tests {
 
     #[test]
     fn implicit_context_keeps_legacy_scope_without_collecting_branch_facts() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join(".worktrees/example");
+        let sandbox = meta_test_support::isolated!();
+        let root = sandbox.work().join(".worktrees/example");
         for alias in [".", "parent", "parent/nested"] {
-            member(&root, alias);
+            member(&sandbox, &root, alias);
         }
         let (name, observed_root, paths) = detect_worktree_context(&root.join("parent/nested"))
             .unwrap()
@@ -794,14 +762,14 @@ mod recursive_tests {
     #[test]
     /// Malformed nested Git files fail instead of silently omitting members.
     fn recursive_malformed_member_is_error_instead_of_partial_inventory() {
-        let temp = tempfile::tempdir().unwrap();
-        member(temp.path(), "parent");
-        let child = temp.path().join("parent/broken");
+        let sandbox = meta_test_support::isolated!();
+        member(&sandbox, &sandbox.work(), "parent");
+        let child = sandbox.work().join("parent/broken");
         std::fs::create_dir_all(&child).unwrap();
         std::fs::write(child.join(".git"), "invalid").unwrap();
-        assert!(discover_worktree_repos_recursive(temp.path()).is_err());
+        assert!(discover_worktree_repos_recursive(sandbox.work().as_path()).is_err());
         assert_eq!(
-            aliases(discover_worktree_repos(temp.path()).unwrap()),
+            aliases(discover_worktree_repos(sandbox.work().as_path()).unwrap()),
             ["parent"]
         );
     }
@@ -809,8 +777,8 @@ mod recursive_tests {
     #[test]
     /// Missing roots cannot be represented as complete empty inventories.
     fn recursive_missing_root_is_error() {
-        let temp = tempfile::tempdir().unwrap();
-        assert!(discover_worktree_repos_recursive(&temp.path().join("missing")).is_err());
+        let sandbox = meta_test_support::isolated!();
+        assert!(discover_worktree_repos_recursive(&sandbox.work().join("missing")).is_err());
     }
 
     #[cfg(unix)]
@@ -819,10 +787,10 @@ mod recursive_tests {
     /// member; others (an agent's own worktrees), a nested set and symlink
     /// cycles are not.
     fn recursive_finds_recorded_hidden_members_only() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
-        member(&root, "visible");
-        member(&root, ".deps/child");
+        let sandbox = meta_test_support::isolated!();
+        let root = sandbox.work();
+        member(&sandbox, &root, "visible");
+        member(&sandbox, &root, ".deps/child");
         let gitfile = std::fs::read_to_string(root.join(".deps/child/.git")).unwrap();
         let admin = Path::new(gitfile.trim().strip_prefix("gitdir: ").unwrap());
         std::fs::write(
@@ -831,8 +799,8 @@ mod recursive_tests {
                 .to_string(),
         )
         .unwrap();
-        member(&root, ".claude/worktrees/agent");
-        member(&root, ".worktrees/other");
+        member(&sandbox, &root, ".claude/worktrees/agent");
+        member(&sandbox, &root, ".worktrees/other");
         std::os::unix::fs::symlink(&root, root.join("visible/cycle")).unwrap();
         assert_eq!(
             aliases(discover_worktree_repos_recursive(&root).unwrap()),
@@ -842,10 +810,14 @@ mod recursive_tests {
     /// Relative Git links resolve against the checkout, independently of cwd.
     #[test]
     fn relative_gitdir_reports_absolute_source() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("set");
-        member(&root, ".");
-        let source = temp.path().join(".sources/repo0").canonicalize().unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let root = sandbox.work().join("set");
+        member(&sandbox, &root, ".");
+        let source = sandbox
+            .work()
+            .join(".sources/repo0")
+            .canonicalize()
+            .unwrap();
         let git_file = root.join(".git");
         let content = std::fs::read_to_string(&git_file).unwrap();
         let admin = Path::new(content.trim().strip_prefix("gitdir: ").unwrap());
@@ -869,10 +841,11 @@ mod recursive_tests {
     /// Dangling and incomplete admin links must not produce successful members.
     #[test]
     fn recursive_rejects_missing_worktree_metadata() {
+        let sandbox = meta_test_support::isolated!();
         for missing in ["HEAD", "commondir", "gitdir", "entire-admin"] {
-            let temp = tempfile::tempdir().unwrap();
-            member(temp.path(), "child");
-            let content = std::fs::read_to_string(temp.path().join("child/.git")).unwrap();
+            let root = sandbox.work().join(missing);
+            member(&sandbox, &root, "child");
+            let content = std::fs::read_to_string(root.join("child/.git")).unwrap();
             let admin = Path::new(content.trim().strip_prefix("gitdir: ").unwrap());
             if missing == "entire-admin" {
                 std::fs::remove_dir_all(admin).unwrap();
@@ -880,7 +853,7 @@ mod recursive_tests {
                 std::fs::remove_file(admin.join(missing)).unwrap();
             }
             assert!(
-                discover_worktree_repos_recursive(temp.path()).is_err(),
+                discover_worktree_repos_recursive(&root).is_err(),
                 "{missing}"
             );
         }

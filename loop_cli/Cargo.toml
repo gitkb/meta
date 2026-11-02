@@ -15,8 +15,8 @@ loop_lib = { path = "../loop_lib" }
 meta_core = { path = "../meta_core" }
 
 [dev-dependencies]
+meta_test_support = { path = "../meta_test_support" }
 serde_json = "1.0"
-tempfile = "3"
 
 [[bin]]
 name = "loop"

@@ -6,25 +6,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 # Tests: strict mode, prune with orphan detection, ahead/behind
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-    META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
-
-    if [ ! -f "$META_BIN" ] || [ ! -f "$META_GIT_BIN" ]; then
-        cargo build --workspace --quiet
-    fi
-
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    mkdir -p "$TEST_DIR/.meta/plugins"
-    cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
-    chmod +x "$TEST_DIR/.meta/plugins/meta-git"
-
-    # Isolate meta's data dir per test
-    META_DATA="$(cd "$(mktemp -d)" && pwd -P)"
-    export META_DATA_DIR="$META_DATA"
-
-    # Create .meta.yaml with three projects
+    sandbox
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
@@ -34,26 +16,7 @@ setup() {
     }
 }
 EOF
-
-    # Initialize git repos with at least one commit (required for worktrees)
-    # Use 'main' as the default branch for consistent test behavior
-    for repo in backend frontend common; do
-        mkdir -p "$TEST_DIR/$repo"
-        git -C "$TEST_DIR/$repo" init --quiet --initial-branch=main
-        git -C "$TEST_DIR/$repo" config user.email "test@test.com"
-        git -C "$TEST_DIR/$repo" config user.name "Test"
-        echo "# $repo" > "$TEST_DIR/$repo/README.md"
-        git -C "$TEST_DIR/$repo" add README.md
-        git -C "$TEST_DIR/$repo" commit --quiet -m "init $repo"
-    done
-
-    # Initialize the meta repo itself (for . alias tests)
-    git -C "$TEST_DIR" init --quiet --initial-branch=main
-    git -C "$TEST_DIR" config user.email "test@test.com"
-    git -C "$TEST_DIR" config user.name "Test"
-    git -C "$TEST_DIR" add .meta.yaml
-    git -C "$TEST_DIR" commit --quiet -m "init meta"
-
+    make_workspace --root-repo --plugins git backend frontend common
     cd "$TEST_DIR"
 }
 
@@ -63,7 +26,7 @@ record_file() {
 }
 
 # Another workspace at $1, with its own clone of backend
-make_workspace() {
+another_workspace() {
     mkdir -p "$1/.meta/plugins"
     cp "$META_GIT_BIN" "$1/.meta/plugins/meta-git"
     git -C "$1" init --quiet --initial-branch=main
@@ -71,14 +34,6 @@ make_workspace() {
     git -C "$1" add .meta.yaml
     git -C "$1" -c user.email=t@t -c user.name=t commit --quiet -m init
     git clone --quiet "$TEST_DIR/backend" "$1/backend"
-}
-
-teardown() {
-    cd /
-    rm -rf "$TEST_DIR"
-    rm -rf "${OTHER:-}"
-    rm -rf "$META_DATA"
-    unset META_DATA_DIR
 }
 
 # ============ Strict Mode (Phase 2) ============
@@ -198,8 +153,6 @@ teardown() {
     # Create a temporary project directory
     mkdir -p "$TEST_DIR/temp-project/temp-repo"
     git -C "$TEST_DIR/temp-project/temp-repo" init --quiet
-    git -C "$TEST_DIR/temp-project/temp-repo" config user.email "test@test.com"
-    git -C "$TEST_DIR/temp-project/temp-repo" config user.name "Test"
     echo "temp" > "$TEST_DIR/temp-project/temp-repo/README.md"
     git -C "$TEST_DIR/temp-project/temp-repo" add README.md
     git -C "$TEST_DIR/temp-project/temp-repo" commit --quiet -m "init"
@@ -315,77 +268,6 @@ EOF
 EOF
 }
 
-# ============ Ahead/Behind Tracking (Phase 3) ============
-
-@test "context shows ahead status after local commits" {
-    # Set up a tracking branch (simulate remote)
-    git -C backend checkout -b track-test 2>/dev/null
-    git -C backend branch --set-upstream-to=main track-test 2>/dev/null || true
-
-    # Make a local commit
-    echo "ahead test" >> backend/test.txt
-    git -C backend add test.txt
-    git -C backend commit --quiet -m "ahead test"
-
-    # Get context - should show ahead
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-backend = next((r for r in data['repos'] if r['name'] == 'backend'), None)
-# ahead/behind may not be present if no tracking branch configured properly
-# Just verify structure is valid
-assert backend is not None
-" || true  # Allow test to pass if tracking not properly set up in test env
-
-    # Cleanup
-    git -C backend checkout main 2>/dev/null || git -C backend checkout master 2>/dev/null
-}
-
-@test "context shows clean ahead/behind when in sync" {
-    # Get context for repos with no tracking branches
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-
-    # Verify structure is valid
-    echo "$output" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-assert 'repos' in data
-assert len(data['repos']) == 3
-for repo in data['repos']:
-    assert 'name' in repo
-    assert 'branch' in repo
-"
-}
-
-@test "context --json includes ahead/behind fields when available" {
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-
-    # Check that output is valid JSON with expected structure
-    echo "$output" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-assert 'repos' in data, 'missing repos field'
-for repo in data['repos']:
-    # ahead/behind may be null if no tracking branch
-    # Just verify the field can exist in the schema
-    assert 'name' in repo
-"
-}
-
-@test "context ahead/behind uses consolidated git commands" {
-    # This test verifies the feature works (implementation uses efficient git calls)
-    run "$META_BIN" context --json
-    [ "$status" -eq 0 ]
-
-    # Verify it completes in reasonable time (should be fast with consolidated commands)
-    # Just check it succeeds - performance is verified in unit tests
-    echo "$output" | python3 -c "import sys, json; json.load(sys.stdin)"
-}
-
 # ============ Integration: Strict Mode + Prune ============
 
 @test "strict mode worktree can be pruned like normal worktrees" {
@@ -489,11 +371,11 @@ EOF
 
 @test "a registry config that cannot be examined is refused, not replaced by the default registry" {
     [ "$(id -u)" -ne 0 ] || skip "root reads any directory"
-    printf 'registries:\n  - https://registry.invalid/private\n' > "$META_DATA/config.yaml"
-    chmod 600 "$META_DATA/config.yaml"
-    chmod 600 "$META_DATA"
+    printf 'registries:\n  - https://registry.invalid/private\n' > "$META_DATA_DIR/config.yaml"
+    chmod 600 "$META_DATA_DIR/config.yaml"
+    chmod 600 "$META_DATA_DIR"
     run "$META_BIN" plugin search anything
-    chmod 700 "$META_DATA"
+    chmod 700 "$META_DATA_DIR"
     [ "$status" -ne 0 ]
     [[ "$output" == *"config.yaml"* ]]
     [[ "$output" == *"Permission denied"* ]]
@@ -570,15 +452,15 @@ EOF
 @test "a umask 002 checkout and data dir are used, and their plugins load" {
     # Stock Ubuntu/Debian/Fedora: user private groups, umask 002, so
     # directories are 0775. meta trusts them like git or cargo would.
-    mkdir -p "$TEST_DIR/sub" "$META_DATA/plugins"
+    mkdir -p "$TEST_DIR/sub" "$META_DATA_DIR/plugins"
     # plugins that answer with their info, and say they were started
     printf '#!/bin/sh\ntouch "%s/ran-local"\necho '"'"'{"name":"local","version":"1","commands":["local"]}'"'"'\n' \
         "$TEST_DIR" > "$TEST_DIR/.meta/plugins/meta-local"
     printf '#!/bin/sh\ntouch "%s/ran-global"\necho '"'"'{"name":"global","version":"1","commands":["global"]}'"'"'\n' \
-        "$TEST_DIR" > "$META_DATA/plugins/meta-global"
+        "$TEST_DIR" > "$META_DATA_DIR/plugins/meta-global"
     chmod 775 "$TEST_DIR" "$TEST_DIR/.meta" "$TEST_DIR/.meta/plugins" "$TEST_DIR/sub" \
         "$TEST_DIR/.meta/plugins/meta-local" \
-        "$META_DATA" "$META_DATA/plugins" "$META_DATA/plugins/meta-global"
+        "$META_DATA_DIR" "$META_DATA_DIR/plugins" "$META_DATA_DIR/plugins/meta-global"
     cd "$TEST_DIR/sub"
     umask 002
     run "$META_BIN" git worktree list
@@ -594,7 +476,7 @@ EOF
     run "$META_BIN" git worktree create umask-002 --repo backend
     [ "$status" -eq 0 ]
     [ -f "$(record_file .worktrees/umask-002/backend)" ]
-    [ ! -e "$META_DATA/worktree.json" ]
+    [ ! -e "$META_DATA_DIR/worktree.json" ]
 }
 
 @test "a symlinked data dir is followed, and worktrees write nothing to it" {
@@ -602,11 +484,11 @@ EOF
     mkdir -p "$REAL/data/plugins"
     printf '#!/bin/sh\ntouch "%s/ran-linked"\n' "$TEST_DIR" > "$REAL/data/plugins/meta-linked"
     chmod +x "$REAL/data/plugins/meta-linked"
-    ln -s "$REAL/data" "$META_DATA/linked"
-    META_DATA_DIR="$META_DATA/linked" run "$META_BIN" git worktree create linked-store --repo backend
+    ln -s "$REAL/data" "$META_DATA_DIR/linked"
+    META_DATA_DIR="$META_DATA_DIR/linked" run "$META_BIN" git worktree create linked-store --repo backend
     [ "$status" -eq 0 ]
     # The global plugin under the link loads, so the link is followed
-    META_DATA_DIR="$META_DATA/linked" run "$META_BIN" linked
+    META_DATA_DIR="$META_DATA_DIR/linked" run "$META_BIN" linked
     [ -e "$TEST_DIR/ran-linked" ]
     [ -f "$(record_file .worktrees/linked-store/backend)" ]
     [ "$(ls -A "$REAL/data")" = "plugins" ]
@@ -824,7 +706,7 @@ EOF
 
 @test "a plain project check does not read a child's own .meta.yaml" {
     # The built project plugin, not one that happens to be on PATH
-    cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/"
+    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/"
     ln -s missing.json "$TEST_DIR/frontend/.meta.yaml"
     # each a clone of what the config lists
     for repo in backend frontend common; do
@@ -841,7 +723,7 @@ EOF
 }
 
 @test "meta git status and project check fail on a refused .meta.yaml" {
-    cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/meta-project"
+    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/meta-project"
     echo '{"projects": {"evil": {"repo": "u", "path": ".git/evil"}}}' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git status
     [ "$status" -ne 0 ]
@@ -1032,7 +914,7 @@ EOF2
 
 @test "prune and remove in one workspace leave another's sets in a shared worktree dir" {
     OTHER="$(cd "$(mktemp -d)" && pwd -P)"
-    make_workspace "$OTHER"
+    another_workspace "$OTHER"
     OTHER_ROOT="$(cd "$OTHER" && pwd -P)"
     export META_WORKTREES="$OTHER/shared"
     (cd "$OTHER" && "$META_BIN" git worktree create bexp --repo backend --ttl 0)
@@ -1060,7 +942,7 @@ EOF2
 
 @test "a set with worktrees from two workspaces is neither removed nor pruned" {
     OTHER="$(cd "$(mktemp -d)" && pwd -P)"
-    make_workspace "$OTHER"
+    another_workspace "$OTHER"
     export META_WORKTREES="$OTHER/shared"
     (cd "$OTHER" && "$META_BIN" git worktree create mix --repo backend --ttl 0)
     # This workspace's frontend joins the other workspace's set
@@ -1310,7 +1192,7 @@ EOF
 
 @test "a workspace nested in another, but not listed by it, can't prune or remove its sets" {
     "$META_BIN" git worktree create outer --repo backend --no-deps --ttl 0
-    make_workspace "$TEST_DIR/inner"
+    another_workspace "$TEST_DIR/inner"
     cd "$TEST_DIR/inner"
     export META_WORKTREES="$TEST_DIR/.worktrees"
 
@@ -2099,7 +1981,7 @@ set_projects() {
 }
 
 @test "meta -r project check with a filter reports a selected nested project that is missing" {
-    cp "$BATS_TEST_DIRNAME/../target/debug/meta-project" "$TEST_DIR/.meta/plugins/"
+    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/"
     mkdir -p "$TEST_DIR/tools"
     # cli is tagged and missing; other is missing too, but not selected
     printf 'projects:\n  cli:\n    repo: git@github.com:org/cli.git\n    tags: [rust]\n  other: git@github.com:org/other.git\n' > "$TEST_DIR/tools/.meta.yaml"

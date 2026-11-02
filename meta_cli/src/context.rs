@@ -677,7 +677,7 @@ mod tests {
         rebase.untracked_count = Some(1);
         let mut gone = make_repo("frontend", Some("main"), Some(false), Some(0), vec![]);
         gone.upstream_gone = Some(true);
-        let mut local = make_repo("local", Some("topic"), Some(false), Some(0), vec![]);
+        let mut local = make_repo("local", Some("topic"), Some(true), Some(1), vec![]);
         local.upstream = None;
         local.upstream_gone = None;
         let md = format_markdown(&make_ctx(vec![rebase, gone, local], None));
@@ -700,7 +700,7 @@ mod tests {
         assert_eq!(rows[4][0], "local");
         assert_eq!(rows[4][1], "topic");
         assert!(
-            rows[4][2].contains("clean") && rows[4][2].contains("no upstream"),
+            rows[4][2].contains("1 modified") && rows[4][2].contains("no upstream"),
             "{md}"
         );
     }

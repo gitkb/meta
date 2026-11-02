@@ -16,6 +16,7 @@
     clippy::unwrap_used,
     clippy::print_stdout,
     clippy::print_stderr,
+    clippy::panic,
     reason = "test support: a panic is a failed test, and tests start the programs they test"
 )]
 
@@ -260,15 +261,21 @@ pub fn git_has_reftable() -> bool {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .output()
         .unwrap();
+    assert!(out.status.success(), "git version: {out:?}");
     let version = String::from_utf8_lossy(&out.stdout);
-    // "git version 2.45.1", "git version 2.45.1.windows.1"
-    let mut numbers = version
+    // "git version 2.45.1", "git version 2.45.1.windows.1", "git version
+    // 2.39.5 (Apple Git-154)": a version this can't read fails the test
+    let numbers: Vec<u32> = version
         .split_whitespace()
         .nth(2)
         .unwrap_or_default()
         .split('.')
-        .map(|n| n.parse::<u32>().unwrap_or(0));
-    let (major, minor) = (numbers.next().unwrap_or(0), numbers.next().unwrap_or(0));
+        .take(2)
+        .map(|n| n.parse().unwrap())
+        .collect();
+    let [major, minor] = numbers[..] else {
+        panic!("can't read {version:?}")
+    };
     let has = (major, minor) >= (2, 45);
     if !has {
         eprintln!("skipped: {} has no reftable (2.45 on)", version.trim());

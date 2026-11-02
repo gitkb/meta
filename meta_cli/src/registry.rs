@@ -384,17 +384,20 @@ impl RegistryClient {
         else {
             anyhow::bail!("Invalid GitHub shorthand: {}", escape(shorthand));
         };
-        let api_url = format!("{}/repos/{user}/{repo}/releases/latest", github().1);
+        let api_url = format!("{}/repos/{user}/{repo}/releases/latest", github()?.1);
 
-        debug!("Checking latest version: {}", shown_url(&api_url));
+        debug!("Checking latest version: {}", api_url);
 
-        let response = get(&api_url).with_context(|| {
-            format!(
-                "Failed to fetch latest release for {}/{}",
-                escape(user),
-                escape(repo)
-            )
-        })?;
+        let response = ureq::get(&api_url)
+            .set("User-Agent", "meta-cli")
+            .call()
+            .with_context(|| {
+                format!(
+                    "Failed to fetch latest release for {}/{}",
+                    escape(user),
+                    escape(repo)
+                )
+            })?;
 
         let body = response
             .into_string()
@@ -449,18 +452,25 @@ impl RegistryClient {
 /// Where releases are, and GitHub's API: `META_GITHUB_URL` (a GitHub
 /// Enterprise server, whose API is under `/api/v3`), else (unset or empty)
 /// github.com
-fn github() -> (String, String) {
+fn github() -> Result<(String, String)> {
     github_at(&std::env::var("META_GITHUB_URL").unwrap_or_default())
 }
 
-fn github_at(url: &str) -> (String, String) {
-    match url.trim_end_matches('/') {
+/// A URL holding credentials is refused: what meta and ureq log of a URL
+/// they request would print them
+fn github_at(url: &str) -> Result<(String, String)> {
+    if meta_core::git::GitUrl::from(url).has_credentials() {
+        anyhow::bail!(
+            "META_GITHUB_URL holds credentials, which meta would print; give it the server alone"
+        );
+    }
+    Ok(match url.trim_end_matches('/') {
         "" | "https://github.com" => (
             "https://github.com".to_string(),
             "https://api.github.com".to_string(),
         ),
         url => (url.to_string(), format!("{url}/api/v3")),
-    }
+    })
 }
 
 /// Supported archive formats for plugin distribution
@@ -539,21 +549,6 @@ pub struct GitHubShorthand {
 
 /// A registry URL as meta shows it: its credentials hidden (as for a
 /// repo's URL) and its query, which may carry a token, left out; escaped.
-/// GET `url`. Its error names the URL as [`shown_url`] shows it, never
-/// ureq's way, which prints a password the URL holds.
-fn get(url: &str) -> Result<ureq::Response> {
-    ureq::get(url)
-        .set("User-Agent", "meta-cli")
-        .call()
-        .map_err(|e| {
-            let why = match e {
-                ureq::Error::Status(code, _) => format!("HTTP {code}"),
-                ureq::Error::Transport(t) => t.kind().to_string(),
-            };
-            anyhow::anyhow!("{}: {why}", shown_url(url))
-        })
-}
-
 fn shown_url(url: &str) -> String {
     let url = url.split_once('?').map_or(url, |(base, _)| base);
     escape(&meta_core::git::GitUrl::from(url).to_string()).into_owned()
@@ -745,7 +740,9 @@ impl PluginInstaller {
 
     /// Download bytes from a URL
     fn download(&self, url: &str) -> Result<Vec<u8>> {
-        let response = get(url).context("Failed to download")?;
+        let response = ureq::get(url)
+            .call()
+            .with_context(|| format!("Failed to download {}", escape(url)))?;
 
         let mut bytes = Vec::new();
         response
@@ -842,11 +839,11 @@ impl PluginInstaller {
         }
 
         // Try to download with various URL patterns
-        let urls = self.construct_github_urls(&github().0, shorthand, &platform);
+        let urls = self.construct_github_urls(&github()?.0, shorthand, &platform);
 
         let mut last_error = None;
         for url in &urls {
-            debug!("Trying: {}", shown_url(url));
+            debug!("Trying: {}", url);
 
             match self.download(url) {
                 Ok(bytes) => {
@@ -1297,17 +1294,19 @@ mod tests {
     #[test]
     fn github_is_github_com_unless_another_server_is_named() {
         for public in ["", "https://github.com", "https://github.com/"] {
-            let (web, api) = github_at(public);
+            let (web, api) = github_at(public).unwrap();
             assert_eq!(
                 (web.as_str(), api.as_str()),
                 ("https://github.com", "https://api.github.com")
             );
         }
-        let (web, api) = github_at("https://ghe.example/");
+        let (web, api) = github_at("https://ghe.example/").unwrap();
         assert_eq!(
             (web.as_str(), api.as_str()),
             ("https://ghe.example", "https://ghe.example/api/v3")
         );
+        let refused = github_at("https://alice:s3cret@ghe.example").unwrap_err();
+        assert!(!format!("{refused:#}").contains("s3cret"), "{refused:#}");
     }
 
     #[test]

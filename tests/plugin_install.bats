@@ -159,13 +159,15 @@ EOF
     [ ! -e "$PLUGINS_DIR/meta-nonexistent" ]
 }
 
-@test "a password in META_GITHUB_URL is never printed, not even in debug logs" {
-    # port 9 refuses at once
-    META_GITHUB_URL=http://alice:s3cret-token@127.0.0.1:9 RUST_LOG=debug \
+@test "META_GITHUB_URL with a password is refused, installs nothing and prints no password" {
+    serve
+    release gitkb/meta-x/releases/latest/download/meta-x-any.tar.gz 1.0.0 x
+    META_GITHUB_URL="http://alice:s3cret-token@${SERVER#http://}" RUST_LOG=debug \
         run "$META_BIN" plugin install gitkb/meta-x
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"127.0.0.1:9/gitkb/meta-x/releases"* ]]
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"META_GITHUB_URL holds credentials"* ]]
     [[ "$output" != *"s3cret-token"* ]]
+    [ ! -e "$PLUGINS_DIR/meta-x" ]
 }
 
 @test "plugin install fails on invalid GitHub shorthand" {

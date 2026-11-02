@@ -521,6 +521,16 @@ mod tests {
 
     #[test]
     fn status_reports_changes_and_upstream_properties() {
+        // `fact` stands alone in `text`: no digit touches it ("3 modified"
+        // is not "13 modified", "↑2" not "↑21")
+        let says = |text: &str, fact: &str| {
+            text.match_indices(fact).any(|(at, _)| {
+                let before = text.get(..at).and_then(|t| t.chars().next_back());
+                let after = text.get(at + fact.len()..).and_then(|t| t.chars().next());
+                !before.is_some_and(|c| c.is_ascii_digit())
+                    && !after.is_some_and(|c| c.is_ascii_digit())
+            })
+        };
         // (dirty, total changes, untracked, ahead, behind, upstream gone)
         for (dirty, total, untracked, ahead, behind, gone) in [
             (Some(false), Some(0), Some(0), None, None, false),
@@ -563,7 +573,7 @@ mod tests {
                     ] {
                         if count > 0 {
                             assert!(
-                                status.contains(&format!("{count} {label}")),
+                                says(&status, &format!("{count} {label}")),
                                 "{repo:?}: {status}"
                             );
                         } else {
@@ -576,7 +586,7 @@ mod tests {
             for (count, marker) in [(ahead, '↑'), (behind, '↓')] {
                 if let Some(count) = count.filter(|n| *n > 0) {
                     assert!(
-                        status.contains(&format!("{marker}{count}")),
+                        says(&status, &format!("{marker}{count}")),
                         "{repo:?}: {status}"
                     );
                 } else {

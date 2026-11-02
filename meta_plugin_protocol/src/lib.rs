@@ -573,6 +573,14 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_plan_is_a_plan_of_no_commands() {
+        let written = serde_json::json!({"plan": {"commands": []}});
+        let response: PlanResponse = serde_json::from_value(written.clone()).unwrap();
+        assert!(response.plan.commands.is_empty());
+        assert_eq!(serde_json::to_value(&response).unwrap(), written);
+    }
+
+    #[test]
     fn dir_and_argv_arrive_exactly_as_sent() {
         let argv: Vec<String> = [
             "git",
@@ -649,6 +657,23 @@ mod tests {
                 strict: true,
             },
         };
+        // the keys as a plugin reads them
+        let wire = serde_json::to_value(&sent).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "command": "git status",
+                "args": ["--short", ""],
+                "projects": ["a", "b c"],
+                "cwd": "/work space",
+                "options": {
+                    "json_output": true, "verbose": true, "parallel": true,
+                    "dry_run": true, "silent": true, "recursive": true, "depth": 2,
+                    "include_filters": ["a"], "exclude_filters": ["b"],
+                    "tag_filters": ["t"], "strict": true,
+                },
+            })
+        );
         let got = round_trip(&sent);
         assert_eq!(
             (got.command, got.args, got.projects),

@@ -152,8 +152,8 @@ EOF
     mkdir -p "$RELEASES/registry/plugins"
     echo 404 > "$RELEASES/registry/plugins/nonexistent.status"
     run "$META_BIN" plugin install nonexistent
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"nonexistent"* ]]
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Plugin 'nonexistent' not found in any registry"* ]]
     [ ! -e "$PLUGINS_DIR/meta-nonexistent" ]
 }
 

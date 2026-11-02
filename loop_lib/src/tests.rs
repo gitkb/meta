@@ -489,10 +489,13 @@ fn command_with_who(dir: &Path, who: &str, script: &str) -> DirCommand {
 
 #[test]
 fn each_command_runs_in_its_own_directory_with_its_own_env() {
-    let script = if cfg!(windows) {
-        "echo %WHO%> here"
-    } else {
-        "echo $WHO > here"
+    // each its own program (its name in it) and its own env (WHO)
+    let script = |name: &str| {
+        if cfg!(windows) {
+            format!("echo {name}:%WHO%> here")
+        } else {
+            format!("echo {name}:$WHO > here")
+        }
     };
     for parallel in [false, true] {
         let temp_dir = TempDir::new().unwrap();
@@ -505,7 +508,7 @@ fn each_command_runs_in_its_own_directory_with_its_own_env() {
             .map(|dir| {
                 fs::create_dir(dir).unwrap();
                 let who = dir.file_name().unwrap().to_str().unwrap();
-                command_with_who(dir, who, script)
+                command_with_who(dir, who, &script(who))
             })
             .collect();
         let config = LoopConfig {
@@ -516,7 +519,8 @@ fn each_command_runs_in_its_own_directory_with_its_own_env() {
         run_commands(&config, &commands).unwrap();
         for dir in &dirs {
             let here = fs::read_to_string(dir.join("here")).unwrap();
-            assert_eq!(here.trim(), dir.file_name().unwrap().to_str().unwrap());
+            let name = dir.file_name().unwrap().to_str().unwrap();
+            assert_eq!(here.trim(), format!("{name}:{name}"));
         }
     }
 }

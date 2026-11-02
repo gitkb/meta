@@ -792,15 +792,18 @@ EOF
 
 @test "loop's output to a closed stdout exits 141 quietly" {
     LOOP_BIN="$BATS_TEST_DIRNAME/../target/debug/loop"
-    for args in "-i api seq 1 200000" "-v -i api seq 1 200000"; do
-        run bash -c 'set -o pipefail; "$1" $2 2>"$3" | head -c0' _ "$LOOP_BIN" "$args" "$TEST_DIR/stderr"
+    # stdout's read end closed before loop starts (not `head -c0`, which
+    # BSD head refuses)
+    closed() { python3 -c 'import os, subprocess, sys
+r, w = os.pipe(); os.close(r)
+p = subprocess.run(sys.argv[1:], stdout=w, stderr=subprocess.PIPE)
+sys.stderr.buffer.write(p.stderr); sys.exit(p.returncode)' "$@"; }
+    for args in "-i api echo hi" "-v -i api echo hi" "--help"; do
+        run closed "$LOOP_BIN" $args
         [ "$status" -eq 141 ]
-        [ ! -s "$TEST_DIR/stderr" ]
+        # quietly: no error, no panic (-v's own lines are on stderr)
+        [[ "$output" != *"Error"* && "$output" != *"panicked"* ]]
     done
-    # its help may fit in the pipe before head closes it
-    run bash -c 'set -o pipefail; "$1" --help 2>"$2" | head -c0' _ "$LOOP_BIN" "$TEST_DIR/stderr"
-    [[ "$status" -eq 0 || "$status" -eq 141 ]]
-    [ ! -s "$TEST_DIR/stderr" ]
 }
 
 @test "a failure cut off by a closed stdout isn't reported as success" {

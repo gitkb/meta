@@ -65,7 +65,12 @@ pub fn stdout_bytes(bytes: &[u8]) -> Result<(), StdoutError> {
         return Ok(());
     }
     WROTE.store(true, Ordering::Relaxed);
-    io::stdout().lock().write_all(bytes).map_err(StdoutError)
+    let mut stdout = io::stdout().lock();
+    // a Windows console takes UTF-8 only: what isn't shows as �
+    if cfg!(windows) && stdout.is_terminal() {
+        return write!(stdout, "{}", String::from_utf8_lossy(bytes)).map_err(StdoutError);
+    }
+    stdout.write_all(bytes).map_err(StdoutError)
 }
 
 /// Whether this program wrote anything to stdout.
@@ -85,7 +90,13 @@ pub fn stderr(args: fmt::Arguments<'_>) {
 
 /// Write `bytes` to stderr as they are.
 pub fn stderr_bytes(bytes: &[u8]) {
-    let _ = io::stderr().lock().write_all(bytes);
+    let mut stderr = io::stderr().lock();
+    // a Windows console takes UTF-8 only: what isn't shows as �
+    let _ = if cfg!(windows) && stderr.is_terminal() {
+        write!(stderr, "{}", String::from_utf8_lossy(bytes))
+    } else {
+        stderr.write_all(bytes)
+    };
 }
 
 /// Tell the user about a problem the command goes on despite. The message
@@ -117,13 +128,20 @@ pub fn color() -> bool {
     let on = !json()
         && *FROM_ENV.get_or_init(|| {
             let var = |name| std::env::var_os(name).filter(|value| !value.is_empty());
-            decide_color(
+            let on = decide_color(
                 var("NO_COLOR"),
                 var("CLICOLOR_FORCE"),
                 var("CLICOLOR"),
                 var("TERM"),
                 io::stdout().is_terminal(),
-            )
+            );
+            // a Windows console reads colour codes in its virtual-terminal
+            // mode only (a pipe has none to set)
+            #[cfg(windows)]
+            if on {
+                let _ = colored::control::set_virtual_terminal(true);
+            }
+            on
         });
     colored::control::set_override(on);
     on

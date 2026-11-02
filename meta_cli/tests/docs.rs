@@ -122,9 +122,8 @@ fn spans(text: &str, quote: char, at: &str) -> Vec<Line> {
 
 /// Every `meta …` command a string in code names: its spans in backticks or
 /// single quotes, each of its indented lines that starts with one (an
-/// example in help), and the whole string when it is a command (meta's
-/// command word or an option second). A doc comment's spans only: its lines
-/// are prose.
+/// example in help), and the whole string when it is one line that starts
+/// with one. A doc comment's spans only: its lines are prose.
 fn string_lines(text: &str, at: &str, doc: bool) -> Vec<Line> {
     let mut lines = spans(text, '`', at);
     if doc {
@@ -137,22 +136,11 @@ fn string_lines(text: &str, at: &str, doc: bool) -> Vec<Line> {
             lines.extend(commands_of(command, at, false));
         }
     }
-    let second = text.split_whitespace().nth(1).unwrap_or("-");
-    if !text.contains('\n')
-        && is_meta(text)
-        && (second.starts_with('-') || COMMANDS.contains(&second))
-    {
+    if !text.contains('\n') && is_meta(text) {
         lines.extend(commands_of(text, at, false));
     }
     lines
 }
-
-/// meta's command words: its own (`meta --help`), its plugins' and the
-/// guide's example plugin's. A word missing here only makes a whole string
-/// starting with it go unchecked.
-const COMMANDS: &[&str] = &[
-    "context", "exec", "help", "init", "plugin", "git", "project", "cargo", "hello",
-];
 
 fn is_meta(command: &str) -> bool {
     command == "meta" || command.starts_with("meta ")
@@ -694,6 +682,11 @@ fn a_command_ends_where_the_shell_takes_over_and_its_blanks_are_filled_in() {
     assert_eq!(
         found(string_lines("meta git status", "x", false)),
         vec![(w(&["git", "status"]), false)]
+    );
+    // a command that doesn't exist is found, to be rejected
+    assert_eq!(
+        found(string_lines("meta worktree remove fix", "x", false)),
+        vec![(w(&["worktree", "remove", "fix"]), false)]
     );
     assert_eq!(
         found(string_lines(" meta runs `meta exec`", "x", true)),

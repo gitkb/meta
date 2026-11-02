@@ -37,11 +37,12 @@ pub(crate) fn info() -> PluginInfo {
 /// `--meta-plugin-exec`: a plan of one command per selected repo, which meta
 /// runs. `request.projects` holds the repos' directories, selection applied.
 pub(crate) fn execute(request: PluginRequest) -> CommandResult {
-    // `meta hello --help` reaches the plugin like any other arguments
+    // `meta hello world --help` reaches the plugin like any other arguments
     if has_help_token(&request.command, &request.args) {
         return CommandResult::ShowHelp(None);
     }
-    // a bare `meta hello` never gets here: meta prints the plugin's help
+    // a bare `meta hello` (or `meta hello --help`) never gets here: meta
+    // prints the plugin's help
     let [name] = request.args.as_slice() else {
         return CommandResult::Usage("meta hello takes one name".to_string());
     };

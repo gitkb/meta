@@ -39,7 +39,7 @@ The types are in [`meta_plugin_protocol`](../meta_plugin_protocol/src/lib.rs); a
 }
 ```
 
-`commands` start with the plugin's word. For `meta git worktree create x`, the longest listed command that matches the typed words whole (`git worktree create`) is the request's `command` and the rest (`["x"]`) its `args`; with none matching, `command` is the word alone. A bare `meta <word>` prints the plugin's help: `help.usage` (required), then `commands` or `command_sections`, `examples` and `note` (all optional). `meta <word> --help` reaches the plugin as an argument, so it answers it itself (`has_help_token`, then `CommandResult::ShowHelp`).
+`commands` start with the plugin's word. For `meta git worktree create x`, the longest listed command that matches the typed words whole (`git worktree create`) is the request's `command` and the rest (`["x"]`) its `args`; with none matching, `command` is the word alone. `meta <word>` and `meta <word> --help` print the plugin's help, from its info: `help.usage` (required), then `commands` or `command_sections`, `examples` and `note` (all optional). A `--help` after more words (`meta hello world --help`) reaches the plugin as an argument, so it answers it itself (`has_help_token`, then `CommandResult::ShowHelp`).
 
 **`meta-<word> --meta-plugin-exec`** reads a `PluginRequest` on stdin:
 

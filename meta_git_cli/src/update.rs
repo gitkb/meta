@@ -177,7 +177,7 @@ fn report_unlisted(queue: &CloneQueue, cwd: &Path) {
                 held.join("; ")
             ),
             Err(e) => format!(
-                "meta can't tell what it holds ({})",
+                "what it holds can't be told ({})",
                 meta_core::display::escape_lines(&format!("{e:#}"))
             ),
         };

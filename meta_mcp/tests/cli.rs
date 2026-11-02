@@ -1,59 +1,31 @@
 //! The meta-mcp binary: its own flags, and the environment its tools run in.
 
 #![expect(
-    clippy::disallowed_methods,
     clippy::indexing_slicing,
     clippy::string_slice,
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
+use meta_test_support::Sandbox;
+#[cfg(unix)]
+use meta_test_support::{gone, wait_for};
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
-
-/// `command` in `dir` with no user configuration: none of git's, none of
-/// meta's.
-fn isolated(mut command: Command, dir: &Path) -> Command {
-    command
-        .current_dir(dir)
-        .env("HOME", dir)
-        .env("XDG_CONFIG_HOME", dir.join("xdg"))
-        .env("XDG_DATA_HOME", dir.join("xdg-data"))
-        .env("GIT_CONFIG_GLOBAL", dir.join("no-gitconfig"))
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("META_DATA_DIR", dir.join("meta-data"));
-    command
-}
-
-/// Waits until `done` holds, failing the test after 20 seconds.
-#[cfg(unix)]
-fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while !done() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "waited too long for {what}"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-}
-
-/// git `args` in `dir`, with no user configuration.
-fn git(dir: &Path, args: &[&str]) {
-    let mut git = isolated(meta_core::git::git(dir), dir);
-    let status = git
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success(), "git {args:?}");
-}
+use std::process::{Output, Stdio};
 
 /// meta-mcp in `dir` with `args`, fed `input` on stdin, in an environment
 /// with no user configuration.
-fn meta_mcp(dir: &Path, args: &[&str], input: &str, env: &[(&str, &Path)]) -> Output {
-    let mut child = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), dir)
+fn meta_mcp(
+    sandbox: &Sandbox,
+    dir: &Path,
+    args: &[&str],
+    input: &str,
+    env: &[(&str, &Path)],
+) -> Output {
+    let mut child = sandbox
+        .command(env!("CARGO_BIN_EXE_meta-mcp"))
+        .current_dir(dir)
         .args(args)
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
@@ -72,8 +44,9 @@ fn meta_mcp(dir: &Path, args: &[&str], input: &str, env: &[(&str, &Path)]) -> Ou
 
 #[test]
 fn answers_help_and_version() {
-    let tmp = tempfile::tempdir().unwrap();
-    let out = meta_mcp(tmp.path(), &["--version"], "", &[]);
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    let out = meta_mcp(&sandbox, &tmp, &["--version"], "", &[]);
     assert!(out.status.success());
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).trim(),
@@ -81,7 +54,7 @@ fn answers_help_and_version() {
     );
 
     // an unknown argument is refused without echoing control characters
-    let out = meta_mcp(tmp.path(), &["--bad\x1b]0;x\x07\nFORGED"], "", &[]);
+    let out = meta_mcp(&sandbox, &tmp, &["--bad\x1b]0;x\x07\nFORGED"], "", &[]);
     assert!(!out.status.success());
     let shown = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -89,12 +62,13 @@ fn answers_help_and_version() {
         "{shown}"
     );
 
-    let out = meta_mcp(tmp.path(), &["--help"], "", &[]);
+    let out = meta_mcp(&sandbox, &tmp, &["--help"], "", &[]);
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("Usage: meta-mcp"));
 
     let out = meta_mcp(
-        tmp.path(),
+        &sandbox,
+        &tmp,
         &[],
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
         &[],
@@ -112,12 +86,13 @@ fn answers_help_and_version() {
 #[test]
 #[cfg(unix)]
 fn build_test_and_clean_run_in_each_projects_own_repository() {
-    let tmp = tempfile::tempdir().unwrap();
-    let tmp = tmp.path().canonicalize().unwrap();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    let tmp = tmp.canonicalize().unwrap();
     let workspace = tmp.join("workspace");
     let project = workspace.join("a");
     std::fs::create_dir_all(&project).unwrap();
-    git(&project, &["init", "-q"]);
+    sandbox.git(&project, &["init", "-q"]);
     std::fs::write(
         workspace.join(".meta.yaml"),
         "projects:\n  a:\n    path: a\n",
@@ -130,7 +105,7 @@ fn build_test_and_clean_run_in_each_projects_own_repository() {
     .unwrap();
     let hook = tmp.join("hook");
     std::fs::create_dir(&hook).unwrap();
-    git(&hook, &["init", "-q"]);
+    sandbox.git(&hook, &["init", "-q"]);
 
     for (tool, target) in [
         ("meta_build", "all"),
@@ -140,6 +115,7 @@ fn build_test_and_clean_run_in_each_projects_own_repository() {
         let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": tool, "arguments": {}}});
         let out = meta_mcp(
+            &sandbox,
             &workspace,
             &[],
             &request.to_string(),
@@ -156,10 +132,15 @@ fn build_test_and_clean_run_in_each_projects_own_repository() {
 }
 
 /// One tool call's text, as JSON.
-fn call(dir: &Path, tool: &str, arguments: serde_json::Value) -> serde_json::Value {
+fn call(
+    sandbox: &Sandbox,
+    dir: &Path,
+    tool: &str,
+    arguments: serde_json::Value,
+) -> serde_json::Value {
     let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": tool, "arguments": arguments}});
-    let out = meta_mcp(dir, &[], &request.to_string(), &[]);
+    let out = meta_mcp(sandbox, dir, &[], &request.to_string(), &[]);
     let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let text = reply["result"]["content"][0]["text"]
         .as_str()
@@ -171,8 +152,9 @@ fn call(dir: &Path, tool: &str, arguments: serde_json::Value) -> serde_json::Val
 
 #[test]
 fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
-    let tmp = tempfile::tempdir().unwrap();
-    let ws = tmp.path();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    let ws = &tmp;
     let write = |path: &str, content: &str| {
         let path = ws.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -180,7 +162,7 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
     };
     let repo = |path: &str| {
         std::fs::create_dir_all(ws.join(path)).unwrap();
-        git(&ws.join(path), &["init", "-q"]);
+        sandbox.git(&ws.join(path), &["init", "-q"]);
     };
     // the workspace's repository ignores its projects, as workspaces do
     repo(".");
@@ -216,7 +198,7 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
         ("color.grep", "always"),
         ("core.quotePath", "true"),
     ] {
-        git(&ws.join("a"), &["config", key, value]);
+        sandbox.git(&ws.join("a"), &["config", key, value]);
     }
     write("a/\u{540d}.rs", "--flag\n");
     write("a/.gitignore", "target/\n");
@@ -232,6 +214,7 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
     write("plain/x.rs", "--flag\n");
 
     let found = call(
+        &sandbox,
         ws,
         "meta_search_code",
         serde_json::json!({"pattern": "--flag"}),
@@ -269,6 +252,7 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
     // a config that can't be read is reported whatever the tags: the
     // projects it hides may have them
     let filtered = call(
+        &sandbox,
         ws,
         "meta_search_code",
         serde_json::json!({"pattern": "--flag", "tag": "outer"}),
@@ -301,6 +285,7 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
         // root reads it anyway
         if std::fs::read(&secret).is_err() {
             let found = call(
+                &sandbox,
                 ws,
                 "meta_search_code",
                 serde_json::json!({"pattern": "--flag"}),
@@ -327,6 +312,7 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
         std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
     let found = call(
+        &sandbox,
         ws,
         "meta_search_code",
         serde_json::json!({"pattern": "--flag", "file_pattern": "*.rs"}),
@@ -345,7 +331,12 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
         "{found}"
     );
     // a search git refuses is reported, not taken for no match
-    let found = call(ws, "meta_search_code", serde_json::json!({"pattern": "("}));
+    let found = call(
+        &sandbox,
+        ws,
+        "meta_search_code",
+        serde_json::json!({"pattern": "("}),
+    );
     assert_eq!(found.as_array().unwrap().len(), 10, "{found}");
     assert!(
         found[0]["error"].as_str().is_some_and(|e| !e.is_empty()),
@@ -359,12 +350,14 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
 #[test]
 #[cfg(unix)]
 fn search_reports_a_plain_project_it_cannot_fence_off() {
-    let tmp = tempfile::tempdir().unwrap();
-    let ws = tmp.path().join("a:b");
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    let ws = tmp.join("a:b");
     std::fs::create_dir_all(ws.join("plain")).unwrap();
     std::fs::write(ws.join("plain/x.rs"), "--flag\n").unwrap();
     std::fs::write(ws.join(".meta.yaml"), "projects:\n  plain: {}\n").unwrap();
     let found = call(
+        &sandbox,
         &ws,
         "meta_search_code",
         serde_json::json!({"pattern": "--flag"}),
@@ -382,8 +375,9 @@ fn search_reports_a_plain_project_it_cannot_fence_off() {
 #[test]
 #[cfg(unix)]
 fn search_leaves_a_linked_nested_project_to_itself() {
-    let tmp = tempfile::tempdir().unwrap();
-    let ws = tmp.path();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    let ws = &tmp;
     std::fs::create_dir_all(ws.join("pm/real")).unwrap();
     std::fs::write(ws.join("pm/real/z.rs"), "--flag\n").unwrap();
     std::os::unix::fs::symlink("real", ws.join("pm/alias")).unwrap();
@@ -394,6 +388,7 @@ fn search_leaves_a_linked_nested_project_to_itself() {
     )
     .unwrap();
     let found = call(
+        &sandbox,
         ws,
         "meta_search_code",
         serde_json::json!({"pattern": "--flag"}),
@@ -403,6 +398,7 @@ fn search_leaves_a_linked_nested_project_to_itself() {
         serde_json::json!([{"project": "pm/alias", "matches": ["z.rs:1:--flag"]}])
     );
     let found = call(
+        &sandbox,
         ws,
         "meta_search_code",
         serde_json::json!({"pattern": "--flag", "tag": "outer"}),
@@ -416,16 +412,18 @@ fn search_leaves_a_linked_nested_project_to_itself() {
 #[test]
 #[cfg(unix)]
 fn search_fences_off_a_linked_plain_project_by_its_real_path() {
-    let tmp = tempfile::tempdir().unwrap();
-    let ws = tmp.path();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    let ws = &tmp;
     let nested = ws.join("nested");
     std::fs::create_dir_all(nested.join("plain")).unwrap();
-    git(&nested, &["init", "-q"]);
+    sandbox.git(&nested, &["init", "-q"]);
     std::fs::write(nested.join(".gitignore"), "plain/\n").unwrap();
     std::fs::write(nested.join("plain/x.rs"), "--flag\n").unwrap();
     std::os::unix::fs::symlink("nested/plain", ws.join("alias")).unwrap();
     std::fs::write(ws.join(".meta.yaml"), "projects:\n  alias: {}\n").unwrap();
     let found = call(
+        &sandbox,
         ws,
         "meta_search_code",
         serde_json::json!({"pattern": "--flag"}),
@@ -440,12 +438,14 @@ fn search_fences_off_a_linked_plain_project_by_its_real_path() {
 #[test]
 #[cfg(windows)]
 fn search_reports_a_plain_project_it_cannot_fence_off() {
-    let tmp = tempfile::tempdir().unwrap();
-    let ws = tmp.path().join("a;b");
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    let ws = tmp.join("a;b");
     std::fs::create_dir_all(ws.join("plain")).unwrap();
     std::fs::write(ws.join("plain/x.rs"), "--flag\n").unwrap();
     std::fs::write(ws.join(".meta.yaml"), "projects:\n  plain: {}\n").unwrap();
     let found = call(
+        &sandbox,
         &ws,
         "meta_search_code",
         serde_json::json!({"pattern": "--flag"}),
@@ -463,12 +463,15 @@ fn search_reports_a_plain_project_it_cannot_fence_off() {
 #[test]
 #[cfg(unix)]
 fn a_running_call_can_be_cancelled_and_others_are_answered_meanwhile() {
+    let sandbox = Sandbox::new();
     use std::io::{BufRead, BufReader};
-    let tmp = tempfile::tempdir().unwrap();
-    let ws = tmp.path();
+    let tmp = sandbox.work();
+    let ws = &tmp;
     std::fs::create_dir(ws.join("a")).unwrap();
     std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
-    let mut child = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), ws)
+    let mut child = sandbox
+        .command(env!("CARGO_BIN_EXE_meta-mcp"))
+        .current_dir(ws)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -509,18 +512,19 @@ fn a_running_call_can_be_cancelled_and_others_are_answered_meanwhile() {
 #[test]
 #[cfg(unix)]
 fn a_command_too_long_to_start_says_why() {
+    let sandbox = Sandbox::new();
     use std::os::unix::fs::PermissionsExt;
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
+    let tmp = sandbox.work();
+    std::fs::write(tmp.join(".meta.yaml"), "projects: {}\n").unwrap();
     // a `meta` to find, so starting it fails for its arguments' size alone
-    let bin = tmp.path().join("bin");
+    let bin = tmp.join("bin");
     std::fs::create_dir(&bin).unwrap();
     std::fs::write(bin.join("meta"), "#!/bin/sh\n").unwrap();
     std::fs::set_permissions(bin.join("meta"), std::fs::Permissions::from_mode(0o755)).unwrap();
     let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "meta_exec",
             "arguments": {"command": ["echo", "y".repeat(3_000_000)]}}});
-    let out = meta_mcp(tmp.path(), &[], &request.to_string(), &[("PATH", &bin)]);
+    let out = meta_mcp(&sandbox, &tmp, &[], &request.to_string(), &[("PATH", &bin)]);
     let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(reply["result"]["isError"], true, "{reply}");
     let text = reply["result"]["content"][0]["text"].as_str().unwrap();
@@ -532,48 +536,19 @@ fn a_command_too_long_to_start_says_why() {
 }
 
 /// Whether the process `pid` is gone.
-#[cfg(unix)]
-fn gone(pid: &str) -> bool {
-    !Command::new("kill")
-        .args(["-0", pid])
-        .status()
-        .unwrap()
-        .success()
-}
-
-/// A repo at `dir` with one commit, `before`, and an identity of its own.
-#[cfg(unix)]
-fn repo_with_a_commit(dir: &Path) {
-    std::fs::create_dir(dir).unwrap();
-    for args in [
-        &["init", "-q"][..],
-        &["config", "user.name", "t"],
-        &["config", "user.email", "t@example.com"],
-        &["commit", "-q", "--allow-empty", "-m", "before"],
-    ] {
-        git(dir, args);
-    }
-}
-
-/// The subject of the last commit in `dir`.
-#[cfg(unix)]
-fn last_commit(dir: &Path) -> String {
-    let mut log = isolated(meta_core::git::git(dir), dir);
-    let out = log.args(["log", "-1", "--format=%s"]).output().unwrap();
-    String::from_utf8(out.stdout).unwrap()
-}
-
 /// meta-mcp in `ws`, leading a process group of its own, with `calls` sent;
 /// stdout dropped, stderr kept. Its stdin comes back too: while it is open
 /// the server isn't told to end, only signalled.
 #[cfg(unix)]
 fn server_in_its_group(
+    sandbox: &Sandbox,
     ws: &Path,
     calls: &[serde_json::Value],
 ) -> (std::process::Child, std::process::ChildStdin) {
     use std::os::unix::process::CommandExt;
-    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), ws);
+    let mut server = sandbox.command(env!("CARGO_BIN_EXE_meta-mcp"));
     server
+        .current_dir(ws)
         .process_group(0)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -589,9 +564,12 @@ fn server_in_its_group(
 /// SIGTERM to the server's whole process group; its stderr once it has
 /// exited, as a signal ends it (128 + 15).
 #[cfg(unix)]
-fn stop_group(mut server: std::process::Child) -> String {
+fn stop_group(sandbox: &Sandbox, mut server: std::process::Child) -> String {
     let group = format!("-{}", server.id());
-    let kill = Command::new("kill").args(["-TERM", "--", &group]).status();
+    let kill = sandbox
+        .command("kill")
+        .args(["-TERM", "--", &group])
+        .status();
     assert!(kill.unwrap().success());
     let mut status = None;
     wait_for("the server to exit", || {
@@ -619,10 +597,11 @@ fn batch(id: u32, script: &str, atomic: bool) -> serde_json::Value {
 #[test]
 #[cfg(unix)]
 fn stopping_the_server_stops_its_running_tool() {
-    let tmp = tempfile::tempdir().unwrap();
-    let ws = tmp.path();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    let ws = &tmp;
     let a = ws.join("a");
-    repo_with_a_commit(&a);
+    sandbox.repo(&a);
     std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
     let script = |file: &str| {
         format!(
@@ -634,15 +613,15 @@ fn stopping_the_server_stops_its_running_tool() {
         batch(1, &script("pid"), true),
         batch(2, &script("waiting"), false),
     ];
-    let (server, _stdin) = server_in_its_group(ws, &calls);
+    let (server, _stdin) = server_in_its_group(&sandbox, ws, &calls);
     let pid = ws.join("pid");
     wait_for("the tool to start", || pid.exists());
-    assert_eq!(last_commit(&a), "during\n");
-    let stderr = stop_group(server);
+    assert_eq!(sandbox.git(&a, &["log", "-1", "--format=%s"]), "during\n");
+    let stderr = stop_group(&sandbox, server);
     let sleep = std::fs::read_to_string(&pid).unwrap();
     wait_for("the tool's sleep to end", || gone(sleep.trim()));
     assert!(!ws.join("waiting").exists(), "the waiting call started");
-    assert_eq!(last_commit(&a), "before\n");
+    assert_eq!(sandbox.git(&a, &["log", "-1", "--format=%s"]), "init\n");
     assert!(
         stderr.contains("request 1 was cancelled") && stderr.contains("rollback"),
         "{stderr}"
@@ -655,11 +634,12 @@ fn stopping_the_server_stops_its_running_tool() {
 #[test]
 #[cfg(unix)]
 fn stopping_the_server_lets_a_rollback_finish() {
+    let sandbox = Sandbox::new();
     use std::os::unix::fs::PermissionsExt;
-    let tmp = tempfile::tempdir().unwrap();
-    let ws = tmp.path();
+    let tmp = sandbox.work();
+    let ws = &tmp;
     let a = ws.join("a");
-    repo_with_a_commit(&a);
+    sandbox.repo(&a);
     std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
     // the rollback's git asks this hook, which holds it longer than a
     // cancelled program is given (2 s grace, 4 s at most)
@@ -669,12 +649,12 @@ fn stopping_the_server_lets_a_rollback_finish() {
     std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
     let command = "git commit -q --allow-empty -m during && \
                    git config core.fsmonitor ../hook && exit 1";
-    let (server, _stdin) = server_in_its_group(ws, &[batch(1, command, true)]);
+    let (server, _stdin) = server_in_its_group(&sandbox, ws, &[batch(1, command, true)]);
     wait_for("the rollback to reach the hook", || {
         ws.join("in-hook").exists()
     });
-    let stderr = stop_group(server);
-    assert_eq!(last_commit(&a), "before\n");
+    let stderr = stop_group(&sandbox, server);
+    assert_eq!(sandbox.git(&a, &["log", "-1", "--format=%s"]), "init\n");
     assert!(stderr.contains(r#"\"status\": \"success\""#), "{stderr}");
 }
 
@@ -683,9 +663,12 @@ fn stopping_the_server_lets_a_rollback_finish() {
 #[test]
 #[cfg(unix)]
 fn a_server_whose_output_is_gone_ends() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join(".meta.yaml"), "projects: {}\n").unwrap();
-    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), tmp.path())
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    std::fs::write(tmp.join(".meta.yaml"), "projects: {}\n").unwrap();
+    let mut server = sandbox
+        .command(env!("CARGO_BIN_EXE_meta-mcp"))
+        .current_dir(&tmp)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -719,11 +702,14 @@ fn a_server_whose_output_is_gone_ends() {
 #[test]
 #[cfg(unix)]
 fn a_server_whose_output_is_gone_stops_its_running_tool() {
-    let tmp = tempfile::tempdir().unwrap();
-    let ws = tmp.path();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    let ws = &tmp;
     std::fs::create_dir(ws.join("a")).unwrap();
     std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
-    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), ws)
+    let mut server = sandbox
+        .command(env!("CARGO_BIN_EXE_meta-mcp"))
+        .current_dir(ws)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -753,11 +739,14 @@ fn a_server_whose_output_is_gone_stops_its_running_tool() {
 #[test]
 #[cfg(unix)]
 fn a_server_whose_output_is_gone_drops_its_waiting_calls() {
-    let tmp = tempfile::tempdir().unwrap();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
     // a project for the first call to sleep in
-    std::fs::create_dir(tmp.path().join("a")).unwrap();
-    std::fs::write(tmp.path().join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
-    let mut server = isolated(Command::new(env!("CARGO_BIN_EXE_meta-mcp")), tmp.path())
+    std::fs::create_dir(tmp.join("a")).unwrap();
+    std::fs::write(tmp.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
+    let mut server = sandbox
+        .command(env!("CARGO_BIN_EXE_meta-mcp"))
+        .current_dir(&tmp)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -788,11 +777,12 @@ fn a_server_whose_output_is_gone_drops_its_waiting_calls() {
 #[cfg(unix)]
 #[test]
 fn a_project_outside_the_workspace_is_selected_by_its_name() {
+    let sandbox = Sandbox::new();
     use std::os::unix::fs::PermissionsExt;
-    let tmp = tempfile::tempdir().unwrap();
-    let ws = tmp.path().join("ws");
+    let tmp = sandbox.work();
+    let ws = tmp.join("ws");
     std::fs::create_dir(&ws).unwrap();
-    let outside = tmp.path().join("sib");
+    let outside = tmp.join("sib");
     std::fs::write(
         ws.join(".meta.yaml"),
         format!(
@@ -802,9 +792,9 @@ fn a_project_outside_the_workspace_is_selected_by_its_name() {
     )
     .unwrap();
     // a `meta` that writes down what it was asked to select
-    let bin = tmp.path().join("bin");
+    let bin = tmp.join("bin");
     std::fs::create_dir(&bin).unwrap();
-    let log = tmp.path().join("args");
+    let log = tmp.join("args");
     std::fs::write(
         bin.join("meta"),
         format!(
@@ -816,7 +806,7 @@ fn a_project_outside_the_workspace_is_selected_by_its_name() {
     std::fs::set_permissions(bin.join("meta"), std::fs::Permissions::from_mode(0o755)).unwrap();
     let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "meta_git_status", "arguments": {"project": "sib"}}});
-    meta_mcp(&ws, &[], &request.to_string(), &[("PATH", &bin)]);
+    meta_mcp(&sandbox, &ws, &[], &request.to_string(), &[("PATH", &bin)]);
     let args = std::fs::read_to_string(&log).unwrap();
     let args: Vec<&str> = args.lines().collect();
     let include = args.iter().position(|a| *a == "--include").unwrap();

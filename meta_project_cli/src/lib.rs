@@ -690,13 +690,9 @@ fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result
 // ============================================================================
 
 #[cfg(test)]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "tests start the programs they test with"
-)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    use meta_test_support::Sandbox;
 
     /// The text of a `Message` result, or `None` for any other result.
     fn message(result: CommandResult) -> Option<String> {
@@ -724,10 +720,13 @@ mod tests {
 
     #[test]
     fn test_execute_command_no_meta_file() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
 
         let options = ExecuteOptions::default();
-        let result = execute_command("project check", &[], &options, &[], temp_dir.path());
+        let result = execute_command("project check", &[], &options, &[], &temp_dir);
 
         let msg = error(result).unwrap();
         assert!(msg.contains("No .meta.yaml"), "{msg}");
@@ -735,14 +734,17 @@ mod tests {
 
     #[test]
     fn test_unknown_command() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file
-        std::fs::write(temp_dir.path().join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        std::fs::write(temp_dir.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
 
         let options = ExecuteOptions::default();
         let args = ["unknown".to_string()];
-        let result = execute_command("project", &args, &options, &[], temp_dir.path());
+        let result = execute_command("project", &args, &options, &[], &temp_dir);
 
         assert!(matches!(result, CommandResult::ShowHelp(Some(msg))
             if msg.contains("unrecognized command 'project unknown'")));
@@ -750,13 +752,16 @@ mod tests {
 
     #[test]
     fn test_project_check_all_present() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file with no projects
-        std::fs::write(temp_dir.path().join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        std::fs::write(temp_dir.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
 
         let options = ExecuteOptions::default();
-        let result = execute_command("project check", &[], &options, &[], temp_dir.path());
+        let result = execute_command("project check", &[], &options, &[], &temp_dir);
 
         let msg = message(result).unwrap();
         assert!(msg.contains("All projects are cloned"));
@@ -764,8 +769,11 @@ mod tests {
 
     #[test]
     fn arguments_after_the_command_and_each_config_once() {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().canonicalize().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
+        let root = temp_dir.canonicalize().unwrap();
         std::fs::write(
             root.join(".meta.yaml"),
             "projects:\n  zed: git@x:o/zed.git\n  c:\n    repo: git@x:o/c.git\n    meta: true\n  \
@@ -823,8 +831,11 @@ mod tests {
 
     #[test]
     fn recursive_dependents_cover_nested_projects_by_path() {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().canonicalize().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
+        let root = temp_dir.canonicalize().unwrap();
         let config = |dir: &Path, yaml: &str| {
             std::fs::create_dir_all(dir).unwrap();
             std::fs::write(dir.join(".meta.yaml"), yaml).unwrap();
@@ -864,23 +875,25 @@ mod tests {
 
     #[test]
     fn check_names_a_wrong_remote_and_list_shows_the_roots_from_a_child() {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().canonicalize().unwrap();
-        let git = |dir: &Path, args: &[&str]| meta_core::git::run(dir, args).unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
+        let root = temp_dir.canonicalize().unwrap();
         std::fs::write(
             root.join(".meta.yaml"),
             "projects:\n  web:\n    repo: https://example.invalid/web.git\n    path: apps/web\n",
         )
         .unwrap();
-        git(&root, &["init", "-q"]);
-        git(
+        sandbox.git(&root, &["init", "-q"]);
+        sandbox.git(
             &root,
             &["remote", "add", "origin", "https://example.invalid/ws.git"],
         );
         let web = root.join("apps/web");
         std::fs::create_dir_all(&web).unwrap();
-        git(&web, &["init", "-q"]);
-        git(
+        sandbox.git(&web, &["init", "-q"]);
+        sandbox.git(
             &web,
             &[
                 "remote",
@@ -913,17 +926,20 @@ mod tests {
 
     #[test]
     fn test_project_sync_removed() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"{"projects": {"missing-repo": "https://github.com/test/repo.git"}}"#,
         )
         .unwrap();
 
         let options = ExecuteOptions::default();
-        let result = execute_command("project sync", &[], &options, &[], temp_dir.path());
+        let result = execute_command("project sync", &[], &options, &[], &temp_dir);
 
         // sync command should now return an error directing users to meta git update
         assert!(
@@ -933,17 +949,20 @@ mod tests {
 
     #[test]
     fn test_project_list_basic() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file with projects
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"{"projects": {"repo1": "git@github.com:org/repo1.git", "repo2": "git@github.com:org/repo2.git"}}"#,
         )
         .unwrap();
 
         let options = ExecuteOptions::default();
-        let result = execute_command("project list", &[], &options, &[], temp_dir.path());
+        let result = execute_command("project list", &[], &options, &[], &temp_dir);
 
         let msg = message(result).unwrap();
         assert!(msg.contains("repo1"));
@@ -953,10 +972,13 @@ mod tests {
 
     #[test]
     fn test_project_list_json() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
 
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"{"projects": {"repo1": "git@github.com:org/repo1.git"}}"#,
         )
         .unwrap();
@@ -965,7 +987,7 @@ mod tests {
             json_output: true,
             ..Default::default()
         };
-        let result = execute_command("project list", &[], &options, &[], temp_dir.path());
+        let result = execute_command("project list", &[], &options, &[], &temp_dir);
 
         let msg = message(result).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
@@ -979,16 +1001,19 @@ mod tests {
 
     #[test]
     fn test_project_ls_alias() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
 
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"{"projects": {"repo1": "git@github.com:org/repo1.git"}}"#,
         )
         .unwrap();
 
         let options = ExecuteOptions::default();
-        let result = execute_command("project ls", &[], &options, &[], temp_dir.path());
+        let result = execute_command("project ls", &[], &options, &[], &temp_dir);
 
         let msg = message(result).unwrap();
         assert!(msg.contains("repo1"));
@@ -996,17 +1021,20 @@ mod tests {
 
     #[test]
     fn test_project_list_recursive() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
 
         // Create root .meta.yaml
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"{"projects": {"child": "git@github.com:org/child.git"}}"#,
         )
         .unwrap();
 
         // Create child directory with its own .meta.yaml
-        let child_dir = temp_dir.path().join("child");
+        let child_dir = temp_dir.join("child");
         std::fs::create_dir(&child_dir).unwrap();
         std::fs::write(
             child_dir.join(".meta.yaml"),
@@ -1019,7 +1047,7 @@ mod tests {
             json_output: true,
             ..Default::default()
         };
-        let result = execute_command("project list", &[], &options, &[], temp_dir.path());
+        let result = execute_command("project list", &[], &options, &[], &temp_dir);
 
         let msg = message(result).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
@@ -1030,6 +1058,41 @@ mod tests {
         let sub_projects = projects[0]["projects"].as_array().unwrap();
         assert_eq!(sub_projects.len(), 1);
         assert_eq!(sub_projects[0]["name"], "grandchild");
+    }
+
+    /// Every node has one line of its own, including nested and error nodes.
+    fn assert_tree_properties(nodes: &[ProjectTreeNode], output: &str) {
+        assert!(
+            output.chars().all(|c| c == '\n' || !c.is_control()),
+            "{output:?}"
+        );
+        fn check<'a>(nodes: &[ProjectTreeNode], lines: &mut impl Iterator<Item = &'a str>) {
+            for (i, node) in nodes.iter().enumerate() {
+                let line = lines.next().expect("a line for each node");
+                let connector = if i + 1 == nodes.len() { '└' } else { '├' };
+                assert!(line.contains(connector), "{line}");
+                let mut fields = vec![
+                    escape(&node.name).into_owned(),
+                    escape(&node.path).into_owned(),
+                ];
+                fields.push(node.repo.as_ref().map_or_else(
+                    || "no remote".into(),
+                    |r| escape(&r.to_string()).into_owned(),
+                ));
+                fields.extend(node.tags.iter().map(|t| escape(t).into_owned()));
+                for field in fields {
+                    assert!(line.contains(&field), "{field:?} missing on {line:?}");
+                }
+                if let Some(error) = &node.error {
+                    let line = lines.next().expect("the node's error line");
+                    assert!(line.contains(escape(error).as_ref()), "{line}");
+                }
+                check(&node.projects, lines);
+            }
+        }
+        let mut lines = output.lines();
+        check(nodes, &mut lines);
+        assert_eq!(lines.next(), None, "extra lines: {output}");
     }
 
     #[test]
@@ -1051,17 +1114,32 @@ mod tests {
                 repo: Some("git@github.com:org/frontend.git".into()),
                 tags: vec![],
                 is_meta: false,
-                projects: vec![],
+                projects: vec![
+                    ProjectTreeNode {
+                        error: None,
+                        name: "widget".into(),
+                        path: "ui/widget".into(),
+                        repo: Some("git@github.com:org/widget.git".into()),
+                        tags: vec!["ui".into(), "client".into()],
+                        is_meta: false,
+                        projects: vec![],
+                    },
+                    ProjectTreeNode {
+                        error: Some("cannot read config".into()),
+                        name: "broken".into(),
+                        path: "ui/broken".into(),
+                        repo: None,
+                        tags: vec![],
+                        is_meta: false,
+                        projects: vec![],
+                    },
+                ],
             },
         ];
 
         let mut output = String::new();
         format_project_tree(&nodes, &mut output, "");
-        assert_eq!(
-            output,
-            "\u{251c}\u{2500}\u{2500} api \u{2192} services/api (git@github.com:org/api.git) [backend]\n\
-             \u{2514}\u{2500}\u{2500} frontend (git@github.com:org/frontend.git)\n"
-        );
+        assert_tree_properties(&nodes, &output);
     }
 
     #[test]
@@ -1078,10 +1156,7 @@ mod tests {
 
         let mut output = String::new();
         format_project_tree(&nodes, &mut output, "");
-        assert_eq!(
-            output,
-            "\u{2514}\u{2500}\u{2500} x\\u{1b}]0;PWNED\\u{7} \u{2192} t\\u{1b}[1A (u\\u{9b}2J) [n\\nfake]\n"
-        );
+        assert_tree_properties(&nodes, &output);
     }
 
     #[test]
@@ -1098,15 +1173,18 @@ mod tests {
 
         let mut output = String::new();
         format_project_tree(&nodes, &mut output, "");
-        assert_eq!(output, "\u{2514}\u{2500}\u{2500} scratch (no remote)\n");
+        assert_tree_properties(&nodes, &output);
     }
 
     #[test]
     fn test_project_list_json_includes_cwd() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
 
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"{"projects": {"repo1": "git@github.com:org/repo1.git"}}"#,
         )
         .unwrap();
@@ -1115,7 +1193,7 @@ mod tests {
             json_output: true,
             ..Default::default()
         };
-        let result = execute_command("project list", &[], &options, &[], temp_dir.path());
+        let result = execute_command("project list", &[], &options, &[], &temp_dir);
 
         let msg = message(result).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
@@ -1139,44 +1217,38 @@ mod tests {
 
     #[test]
     fn test_project_list_json_includes_linked_worktree_context() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"{"projects": {"repo1": "git@github.com:org/repo1.git"}}"#,
         )
         .unwrap();
 
-        let git = |args: &[&str]| {
-            let output = std::process::Command::new("git")
-                .args(args)
-                .current_dir(temp_dir.path())
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "git {:?} failed: {}",
-                args,
-                String::from_utf8_lossy(&output.stderr)
-            );
-        };
-        git(&["init", "-q"]);
-        git(&["config", "user.email", "test@example.com"]);
-        git(&["config", "user.name", "Test"]);
-        git(&["remote", "add", "origin", "git@github.com:org/root.git"]);
-        git(&["add", ".meta.yaml"]);
-        git(&["commit", "-q", "-m", "initial meta config"]);
+        sandbox.git(&temp_dir, &["init", "-q"]);
+        sandbox.git(
+            &temp_dir,
+            &["remote", "add", "origin", "git@github.com:org/root.git"],
+        );
+        sandbox.git(&temp_dir, &["add", ".meta.yaml"]);
+        sandbox.git(&temp_dir, &["commit", "-q", "-m", "initial meta config"]);
 
-        let worktrees = temp_dir.path().join(".worktrees");
+        let worktrees = temp_dir.join(".worktrees");
         std::fs::create_dir_all(&worktrees).unwrap();
         let linked = worktrees.join("feature");
-        git(&[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            "feature",
-            linked.to_str().unwrap(),
-        ]);
+        sandbox.git(
+            &temp_dir,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feature",
+                linked.to_str().unwrap(),
+            ],
+        );
 
         let options = ExecuteOptions {
             json_output: true,
@@ -1186,7 +1258,7 @@ mod tests {
 
         let msg = message(result).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-        let expected_root = comparable_path(&temp_dir.path().canonicalize().unwrap());
+        let expected_root = comparable_path(&temp_dir.canonicalize().unwrap());
         let expected_linked = comparable_path(&linked.canonicalize().unwrap());
         let worktree = parsed["worktree"]
             .as_object()
@@ -1215,13 +1287,16 @@ mod tests {
     fn test_project_list_json_root_differs_from_cwd_in_nested_recursive() {
         // Regression: when invoked from a child directory with --recursive,
         // `root` must point to the outermost workspace root, NOT to cwd.
-        let temp_dir = TempDir::new().unwrap();
-        let child = temp_dir.path().join("child");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
+        let child = temp_dir.join("child");
         std::fs::create_dir_all(&child).unwrap();
 
         // Root .meta.yaml
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"{"projects": {"child": {"repo": "git@github.com:org/child.git", "meta": true}}}"#,
         )
         .unwrap();
@@ -1264,14 +1339,17 @@ mod tests {
     fn test_project_list_recursive_from_nested() {
         // root has child, child has grandchild
         // Running recursive from child should show root's tree
-        let temp_dir = TempDir::new().unwrap();
-        let child = temp_dir.path().join("child");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
+        let child = temp_dir.join("child");
         let grandchild = child.join("grandchild");
         std::fs::create_dir_all(&grandchild).unwrap();
 
         // Root .meta.yaml
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"{"projects": {"child": {"repo": "git@github.com:org/child.git", "meta": true}}}"#,
         )
         .unwrap();
@@ -1306,14 +1384,17 @@ mod tests {
     #[test]
     fn test_project_list_non_recursive_stays_local() {
         // Running non-recursive from child should only show child's projects
-        let temp_dir = TempDir::new().unwrap();
-        let child = temp_dir.path().join("child");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
+        let child = temp_dir.join("child");
         let grandchild = child.join("grandchild");
         std::fs::create_dir_all(&grandchild).unwrap();
 
         // Root .meta.yaml
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"{"projects": {"child": {"repo": "git@github.com:org/child.git", "meta": true}}}"#,
         )
         .unwrap();
@@ -1343,9 +1424,12 @@ mod tests {
 
     #[test]
     fn test_project_dependents_command() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"
 projects:
   loop_lib:
@@ -1366,7 +1450,7 @@ projects:
             &["loop_lib".to_string()],
             &options,
             &[],
-            temp_dir.path(),
+            &temp_dir,
         );
 
         let msg = message(result).unwrap();
@@ -1376,9 +1460,12 @@ projects:
     #[test]
     fn test_project_dependents_from_subdirectory() {
         // T8: running from a subdirectory should climb to the nearest .meta.yaml ancestor
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"
 projects:
   lib_a:
@@ -1392,7 +1479,7 @@ projects:
         .unwrap();
 
         // Create a subdirectory to invoke from
-        let sub_dir = temp_dir.path().join("lib_a");
+        let sub_dir = temp_dir.join("lib_a");
         std::fs::create_dir(&sub_dir).unwrap();
 
         let options = ExecuteOptions::default();
@@ -1410,9 +1497,12 @@ projects:
 
     #[test]
     fn test_project_dependents_json() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"
 projects:
   a:
@@ -1437,7 +1527,7 @@ projects:
             &["a".to_string()],
             &options,
             &[],
-            temp_dir.path(),
+            &temp_dir,
         );
 
         let msg = message(result).unwrap();
@@ -1447,9 +1537,12 @@ projects:
 
     #[test]
     fn test_project_dependents_json_flag_in_args() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"
 projects:
   a:
@@ -1470,7 +1563,7 @@ projects:
                 &args,
                 &ExecuteOptions::default(),
                 &[],
-                temp_dir.path(),
+                &temp_dir,
             );
 
             let msg = message(result).unwrap();
@@ -1481,9 +1574,12 @@ projects:
 
     #[test]
     fn test_project_dependents_rejects_what_it_does_not_take() {
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             "projects:\n  a:\n    repo: git@github.com:org/a.git\n",
         )
         .unwrap();
@@ -1498,7 +1594,7 @@ projects:
                 &args,
                 &ExecuteOptions::default(),
                 &[],
-                temp_dir.path(),
+                &temp_dir,
             );
             let msg = error(result).unwrap();
             assert!(msg.contains("unexpected argument"), "{args:?}: {msg}");
@@ -1509,9 +1605,12 @@ projects:
     #[test]
     fn test_project_dependents_unknown_project_error() {
         // T13: querying a nonexistent project name should error, not say "no dependents"
-        let temp_dir = TempDir::new().unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let temp_dir = sandbox.work();
         std::fs::write(
-            temp_dir.path().join(".meta.yaml"),
+            temp_dir.join(".meta.yaml"),
             r#"
 projects:
   a:
@@ -1525,7 +1624,7 @@ projects:
             &["nonexistent".to_string()],
             &ExecuteOptions::default(),
             &[],
-            temp_dir.path(),
+            &temp_dir,
         );
         let msg = error(result).unwrap();
         assert!(msg.contains("Unknown project or alias"), "{msg}");

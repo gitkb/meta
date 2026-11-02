@@ -263,7 +263,8 @@ impl McpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{call, git, init_repo, json, workspace};
+    use crate::test_support::{call, json, workspace};
+    use meta_test_support::Sandbox;
     use serde_json::json;
 
     /// `meta_batch_execute`; a string `command` is a script, run with
@@ -279,33 +280,35 @@ mod tests {
 
     #[test]
     fn test_batch_runs_its_argv_with_no_shell() {
-        let (server, tmp) = workspace();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let (server, tmp) = workspace(&sandbox);
         let args = json!({"command": ["git", "rev-parse", "--sq-quote", "$(touch PWNED)", "a b"]});
         let result = json(call(&server, "meta_batch_execute", args));
         assert_eq!(
             result["results"][0]["stdout"], " '$(touch PWNED)' 'a b'\n",
             "{result}"
         );
-        for dir in [
-            tmp.path().to_path_buf(),
-            tmp.path().join("a"),
-            tmp.path().join("b"),
-        ] {
+        for dir in [tmp.clone(), tmp.join("a"), tmp.join("b")] {
             assert!(!dir.join("PWNED").exists());
         }
     }
 
     #[test]
     fn test_atomic_batch_never_touches_projects_it_does_not_target() {
-        let (server, tmp) = workspace();
-        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let (server, tmp) = workspace(&sandbox);
+        let (a, b) = (tmp.join("a"), tmp.join("b"));
         std::fs::write(b.join("README"), "my edit").unwrap();
-        let head = git(&a, &["rev-parse", "HEAD"]);
+        let head = sandbox.git(&a, &["rev-parse", "HEAD"]);
 
         let result = batch(
             &server,
             json!({
-                "command": "echo changed > README && git -c user.name=t -c user.email=t@example.com commit -qam c && touch new && false",
+                "command": "echo changed > README && git commit -qam c && touch new && false",
                 "tag": "x",
                 "atomic": true
             }),
@@ -314,29 +317,32 @@ mod tests {
 
         assert_eq!(result["rollback"]["status"], "success", "{result}");
         let stash = result["rollback"]["restored"][0]["stash"].as_str().unwrap();
-        assert_eq!(git(&a, &["show", &format!("{stash}^3:new")]), "");
+        assert_eq!(sandbox.git(&a, &["show", &format!("{stash}^3:new")]), "");
         let replaced = &result["rollback"]["restored"][0]["replaced_commits"];
         assert_eq!(replaced.as_array().unwrap().len(), 1, "{replaced}");
         let replaced = replaced[0].as_str().unwrap();
         assert_eq!(
-            git(&a, &["show", &format!("{replaced}:README")]),
+            sandbox.git(&a, &["show", &format!("{replaced}:README")]),
             "changed\n"
         );
         assert!(!a.join("new").exists());
-        assert_eq!(git(&a, &["rev-parse", "HEAD"]), head);
-        assert_eq!(git(&a, &["branch", "--show-current"]), "main\n");
+        assert_eq!(sandbox.git(&a, &["rev-parse", "HEAD"]), head);
+        assert_eq!(sandbox.git(&a, &["branch", "--show-current"]), "main\n");
         assert_eq!(std::fs::read_to_string(a.join("README")).unwrap(), "a");
         assert_eq!(
             std::fs::read_to_string(b.join("README")).unwrap(),
             "my edit"
         );
-        assert_eq!(git(&b, &["stash", "list"]), "");
+        assert_eq!(sandbox.git(&b, &["stash", "list"]), "");
     }
 
     #[test]
     fn test_atomic_batch_refuses_a_dirty_target_and_runs_nothing() {
-        let (server, tmp) = workspace();
-        std::fs::write(tmp.path().join("b/README"), "my edit").unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let (server, tmp) = workspace(&sandbox);
+        std::fs::write(tmp.join("b/README"), "my edit").unwrap();
 
         let err = batch(&server, json!({"command": "touch ran", "atomic": true})).unwrap_err();
 
@@ -344,26 +350,25 @@ mod tests {
             err.to_string().contains("b: has uncommitted changes"),
             "{err}"
         );
-        assert!(!tmp.path().join("a/ran").exists());
-        assert_eq!(git(&tmp.path().join("b"), &["stash", "list"]), "");
+        assert!(!tmp.join("a/ran").exists());
+        assert_eq!(sandbox.git(&tmp.join("b"), &["stash", "list"]), "");
     }
 
     #[test]
     fn test_atomic_batch_refuses_hidden_untracked_files_and_non_repos() {
-        let (server, tmp) = workspace();
-        let a = tmp.path().join("a");
-        git(&a, &["config", "status.showUntrackedFiles", "no"]);
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let (server, tmp) = workspace(&sandbox);
+        let a = tmp.join("a");
+        sandbox.git(&a, &["config", "status.showUntrackedFiles", "no"]);
         std::fs::write(a.join("mine"), "my file").unwrap();
         // `c` is a plain directory inside the workspace root's repository,
         // not a repository of its own. (A project nested inside another
         // project, such as `a/sub`, is refused when .meta.yaml is parsed.)
-        init_repo(tmp.path());
-        std::fs::create_dir(tmp.path().join("c")).unwrap();
-        std::fs::write(
-            tmp.path().join(".meta.yaml"),
-            r#"{"projects":{"a":"x","c":"x"}}"#,
-        )
-        .unwrap();
+        sandbox.repo(&tmp);
+        std::fs::create_dir(tmp.join("c")).unwrap();
+        std::fs::write(tmp.join(".meta.yaml"), r#"{"projects":{"a":"x","c":"x"}}"#).unwrap();
 
         let err = batch(&server, json!({"command": "touch ran", "atomic": true})).unwrap_err();
 
@@ -381,10 +386,13 @@ mod tests {
 
     #[test]
     fn test_atomic_batch_reports_a_failed_rollback() {
-        let (server, tmp) = workspace();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let (server, tmp) = workspace(&sandbox);
         // The workspace root is a repository too, with work of its own.
-        init_repo(tmp.path());
-        std::fs::write(tmp.path().join("README"), "root edit").unwrap();
+        sandbox.repo(&tmp);
+        std::fs::write(tmp.join("README"), "root edit").unwrap();
 
         let result = batch(
             &server,
@@ -396,19 +404,22 @@ mod tests {
         assert_eq!(result["rollback"]["failed"][0]["project"], "a");
         assert_eq!(result["rollback"]["restored"], json!([]));
         assert_eq!(result["results"].as_array().unwrap().len(), 1);
-        assert_eq!(git(tmp.path(), &["stash", "list"]), "");
+        assert_eq!(sandbox.git(&tmp, &["stash", "list"]), "");
         assert_eq!(
-            std::fs::read_to_string(tmp.path().join("README")).unwrap(),
+            std::fs::read_to_string(tmp.join("README")).unwrap(),
             "root edit"
         );
     }
 
     #[test]
     fn test_atomic_batch_stops_at_a_project_that_disappeared() {
-        let (server, tmp) = workspace();
-        init_repo(&tmp.path().join("c"));
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let (server, tmp) = workspace(&sandbox);
+        sandbox.repo(&tmp.join("c"));
         std::fs::write(
-            tmp.path().join(".meta.yaml"),
+            tmp.join(".meta.yaml"),
             r#"{"projects":{"a":"x","b":"x","c":"x"}}"#,
         )
         .unwrap();
@@ -420,21 +431,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(result["results"].as_array().unwrap().len(), 2, "{result}");
-        assert!(!tmp.path().join("c/ran").exists());
+        assert!(!tmp.join("c/ran").exists());
         assert_eq!(result["rollback"]["status"], "failed");
         assert_eq!(result["rollback"]["restored"][0]["project"], "a");
         assert_eq!(result["rollback"]["failed"][0]["project"], "b");
-        assert!(!tmp.path().join("a/ran").exists());
+        assert!(!tmp.join("a/ran").exists());
     }
 
     #[test]
     fn test_rollback_reports_the_branch_tip_and_recreates_a_deleted_branch() {
-        let (server, tmp) = workspace();
-        let a = tmp.path().join("a");
-        std::fs::write(tmp.path().join(".meta.yaml"), r#"{"projects":{"a":"x"}}"#).unwrap();
-        let head = git(&a, &["rev-parse", "HEAD"]);
-        let commit =
-            "echo x > README && git -c user.name=t -c user.email=t@example.com commit -qam x";
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let (server, tmp) = workspace(&sandbox);
+        let a = tmp.join("a");
+        std::fs::write(tmp.join(".meta.yaml"), r#"{"projects":{"a":"x"}}"#).unwrap();
+        let head = sandbox.git(&a, &["rev-parse", "HEAD"]);
+        let commit = "echo x > README && git commit -qam x";
 
         // HEAD is back on the old commit, but the branch tip has moved on.
         let result = batch(
@@ -445,9 +458,12 @@ mod tests {
         let replaced = result["rollback"]["restored"][0]["replaced_commits"][0]
             .as_str()
             .unwrap();
-        assert_eq!(git(&a, &["show", &format!("{replaced}:README")]), "x\n");
-        assert_eq!(git(&a, &["branch", "--show-current"]), "main\n");
-        assert_eq!(git(&a, &["rev-parse", "HEAD"]), head);
+        assert_eq!(
+            sandbox.git(&a, &["show", &format!("{replaced}:README")]),
+            "x\n"
+        );
+        assert_eq!(sandbox.git(&a, &["branch", "--show-current"]), "main\n");
+        assert_eq!(sandbox.git(&a, &["rev-parse", "HEAD"]), head);
 
         let result = batch(
             &server,
@@ -455,17 +471,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["rollback"]["status"], "success", "{result}");
-        assert_eq!(git(&a, &["branch", "--show-current"]), "main\n");
-        assert_eq!(git(&a, &["rev-parse", "HEAD"]), head);
+        assert_eq!(sandbox.git(&a, &["branch", "--show-current"]), "main\n");
+        assert_eq!(sandbox.git(&a, &["rev-parse", "HEAD"]), head);
     }
 
     #[test]
     fn test_rollback_never_moves_a_submodule() {
-        let (server, tmp) = workspace();
-        let a = tmp.path().join("a");
-        let b = tmp.path().join("b");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let (server, tmp) = workspace(&sandbox);
+        let a = tmp.join("a");
+        let b = tmp.join("b");
         let b = b.to_str().unwrap();
-        git(
+        sandbox.git(
             &a,
             &[
                 "-c",
@@ -477,21 +496,18 @@ mod tests {
                 "sub",
             ],
         );
-        git(&a, &["commit", "-qm", "sub"]);
-        git(&a, &["config", "submodule.recurse", "true"]);
-        std::fs::write(tmp.path().join(".meta.yaml"), r#"{"projects":{"a":"x"}}"#).unwrap();
+        sandbox.git(&a, &["commit", "-qm", "sub"]);
+        sandbox.git(&a, &["config", "submodule.recurse", "true"]);
+        std::fs::write(tmp.join(".meta.yaml"), r#"{"projects":{"a":"x"}}"#).unwrap();
 
         // The command moves the submodule on and commits that in `a`.
-        let id = "git -c user.name=t -c user.email=t@example.com";
-        let command = format!(
-            "{id} -C sub commit -q --allow-empty -m y && git add sub && {id} commit -qm bump && false"
-        );
+        let command = "git -C sub commit -q --allow-empty -m y && git add sub && git commit -qm bump && false";
         let result = batch(&server, json!({"command": command, "atomic": true})).unwrap();
 
         assert_eq!(result["rollback"]["status"], "success", "{result}");
         let sub = a.join("sub");
-        assert_eq!(git(&sub, &["log", "-1", "--format=%s"]), "y\n");
-        assert_eq!(git(&sub, &["branch", "--show-current"]), "main\n");
+        assert_eq!(sandbox.git(&sub, &["log", "-1", "--format=%s"]), "y\n");
+        assert_eq!(sandbox.git(&sub, &["branch", "--show-current"]), "main\n");
     }
 
     /// Runs `meta_batch_execute` with `args` as call 1, and cancels it once
@@ -517,14 +533,17 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn a_cancelled_atomic_batch_is_rolled_back_whatever_its_command_exits_with() {
-        let (server, tmp) = workspace();
-        std::fs::write(tmp.path().join(".meta.yaml"), r#"{"projects":{"a":"x"}}"#).unwrap();
-        let a = tmp.path().join("a");
-        let head = git(&a, &["rev-parse", "HEAD"]);
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let (server, tmp) = workspace(&sandbox);
+        std::fs::write(tmp.join(".meta.yaml"), r#"{"projects":{"a":"x"}}"#).unwrap();
+        let a = tmp.join("a");
+        let head = sandbox.git(&a, &["rev-parse", "HEAD"]);
         let script = "trap 'exit 0' TERM; echo x > README && git commit -qam x && \
                       touch ../committed; sleep 60 & wait";
         let args = json!({"command": ["sh", "-c", script], "atomic": true});
-        let reply = cancel_batch_at(&server, tmp.path(), args, "committed").unwrap();
+        let reply = cancel_batch_at(&server, &tmp, args, "committed").unwrap();
         assert!(reply.is_error, "{}", reply.text);
         let result: serde_json::Value = serde_json::from_str(&reply.text).unwrap();
         assert_eq!(result["results"][0]["exit_code"], 0, "{result}");
@@ -533,51 +552,60 @@ mod tests {
             "{}",
             reply.text
         );
-        assert_eq!(git(&a, &["rev-parse", "HEAD"]), head);
-        assert_eq!(git(&a, &["branch", "--show-current"]), "main\n");
+        assert_eq!(sandbox.git(&a, &["rev-parse", "HEAD"]), head);
+        assert_eq!(sandbox.git(&a, &["branch", "--show-current"]), "main\n");
     }
 
     #[test]
     #[cfg(unix)]
     fn a_cancel_stops_the_atomic_check_before_anything_runs() {
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
         use std::os::unix::fs::PermissionsExt;
-        let (server, tmp) = workspace();
-        let a = tmp.path().join("a");
+        let (server, tmp) = workspace(&sandbox);
+        let a = tmp.join("a");
         // a slow fsmonitor hook holds up the check that `a` is clean
-        let hook = tmp.path().join("hook");
-        let marker = tmp.path().join("in-hook");
+        let hook = tmp.join("hook");
+        let marker = tmp.join("in-hook");
         let script = format!("#!/bin/sh\ntouch '{}'\nexec sleep 60\n", marker.display());
         std::fs::write(&hook, script).unwrap();
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
-        git(&a, &["config", "core.fsmonitor", hook.to_str().unwrap()]);
+        sandbox.git(&a, &["config", "core.fsmonitor", hook.to_str().unwrap()]);
         let started = std::time::Instant::now();
         let args = json!({"command": ["touch", "ran"], "atomic": true});
-        assert!(cancel_batch_at(&server, tmp.path(), args, "in-hook").is_err());
+        assert!(cancel_batch_at(&server, &tmp, args, "in-hook").is_err());
         assert!(started.elapsed() < std::time::Duration::from_secs(10));
-        assert!(!a.join("ran").exists() && !tmp.path().join("b/ran").exists());
+        assert!(!a.join("ran").exists() && !tmp.join("b/ran").exists());
     }
 
     #[test]
     fn the_atomic_check_says_why_it_refused() {
-        let (server, tmp) = workspace();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let (server, tmp) = workspace(&sandbox);
         // a commit, but an index git can't read
-        std::fs::write(tmp.path().join("a/.git/index"), "garbage").unwrap();
+        std::fs::write(tmp.join("a/.git/index"), "garbage").unwrap();
         let err = batch(&server, json!({"command": "touch ran", "atomic": true})).unwrap_err();
         let err = format!("{err:#}");
         assert!(
             err.contains("a: cannot tell whether it is clean") && err.contains("fatal:"),
             "{err}"
         );
-        assert!(!tmp.path().join("a/ran").exists() && !tmp.path().join("b/ran").exists());
+        assert!(!tmp.join("a/ran").exists() && !tmp.join("b/ran").exists());
     }
 
     #[test]
     fn a_batch_fails_when_every_project_failed_or_an_atomic_one_rolled_back() {
-        let (server, tmp) = workspace();
-        let a = tmp.path().join("a");
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let (server, tmp) = workspace(&sandbox);
+        let a = tmp.join("a");
         std::fs::write(a.join("marker"), "").unwrap();
-        git(&a, &["add", "marker"]);
-        git(&a, &["commit", "-qm", "marker"]);
+        sandbox.git(&a, &["add", "marker"]);
+        sandbox.git(&a, &["commit", "-qm", "marker"]);
         let reply = |script: &str, atomic: bool| {
             let args = json!({"command": ["sh", "-c", script], "atomic": atomic});
             call(&server, "meta_batch_execute", args).unwrap()

@@ -249,6 +249,30 @@ pub fn git_has_reftable() -> bool {
     has
 }
 
+/// Waits until `done` holds, failing the test after 20 seconds.
+#[cfg(unix)]
+pub fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !done() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "waited too long for {what}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Whether the process `pid` is gone: not running, and reaped.
+#[cfg(unix)]
+pub fn gone(pid: &str) -> bool {
+    !Command::new("kill")
+        .args(["-0", pid])
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
 /// Makes a named pipe at `path`; false, saying why, where there's no
 /// `mkfifo` to make one. Fails the test if `mkfifo` is there and fails.
 #[cfg(unix)]

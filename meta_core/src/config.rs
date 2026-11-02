@@ -2655,6 +2655,8 @@ mod tests {
 
     #[test]
     fn a_set_checkout_a_branch_link_put_elsewhere_stands_for_its_own_repo() {
+        // runs git through the code it tests
+        let _sandbox = meta_test_support::isolated!();
         // app is at `link`; the root's branch in the set links it to
         // `alternate`, which in the workspace is another repository
         let tmp = tempfile::tempdir().unwrap();
@@ -2698,6 +2700,8 @@ mod tests {
 
     #[test]
     fn a_second_checkout_of_a_projects_repo_is_not_its_source() {
+        // runs git through the code it tests
+        let _sandbox = meta_test_support::isolated!();
         // app is at `real`; `alternate` is a hand-made `git worktree add` of
         // the same repository, no project; a branch link put the set's
         // checkout of app at `<set>/alternate`

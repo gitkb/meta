@@ -844,6 +844,7 @@ dependencies = [
  "diff",
  "indicatif",
  "meta_core",
+ "meta_test_support",
  "rayon",
  "serde",
  "serde_json",

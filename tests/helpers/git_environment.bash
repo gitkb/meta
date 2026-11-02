@@ -40,15 +40,16 @@ isolate_user_env() {
 # the real path).
 # The binaries under test are in META_BIN_DIR (setup_suite.bash).
 sandbox() {
-    clear_git_local_env || return 1
+    # isolated before git first runs: the user's git config could be broken
     isolate_user_env
+    export GIT_CONFIG_NOSYSTEM=1
+    clear_git_local_env || return 1
     mkdir -p "$BATS_TEST_TMPDIR/user-env/runtime" "$BATS_TEST_TMPDIR/tmp" "$BATS_TEST_TMPDIR/ws"
     chmod 700 "$BATS_TEST_TMPDIR/user-env/runtime"
     # whatever the machine's git defaults to, a new repo starts on main
     git config --file "$GIT_CONFIG_GLOBAL" init.defaultBranch main
     export XDG_RUNTIME_DIR="$BATS_TEST_TMPDIR/user-env/runtime"
     export TMPDIR="$BATS_TEST_TMPDIR/tmp"
-    export GIT_CONFIG_NOSYSTEM=1
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com
     export GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
     TEST_DIR="$(cd "$BATS_TEST_TMPDIR/ws" && pwd -P)"

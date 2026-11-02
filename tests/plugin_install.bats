@@ -157,6 +157,15 @@ EOF
     [ ! -e "$PLUGINS_DIR/meta-nonexistent" ]
 }
 
+@test "a password in META_GITHUB_URL is never printed, not even in debug logs" {
+    # port 9 refuses at once
+    META_GITHUB_URL=http://alice:s3cret-token@127.0.0.1:9 RUST_LOG=debug \
+        run "$META_BIN" plugin install gitkb/meta-x
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"127.0.0.1:9/gitkb/meta-x/releases"* ]]
+    [[ "$output" != *"s3cret-token"* ]]
+}
+
 @test "plugin install fails on invalid GitHub shorthand" {
     run "$META_BIN" plugin install invalid/format/too/many/slashes
     [ "$status" -ne 0 ]

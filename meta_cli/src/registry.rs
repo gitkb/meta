@@ -386,18 +386,15 @@ impl RegistryClient {
         };
         let api_url = format!("{}/repos/{user}/{repo}/releases/latest", github().1);
 
-        debug!("Checking latest version: {}", api_url);
+        debug!("Checking latest version: {}", shown_url(&api_url));
 
-        let response = ureq::get(&api_url)
-            .set("User-Agent", "meta-cli")
-            .call()
-            .with_context(|| {
-                format!(
-                    "Failed to fetch latest release for {}/{}",
-                    escape(user),
-                    escape(repo)
-                )
-            })?;
+        let response = get(&api_url).with_context(|| {
+            format!(
+                "Failed to fetch latest release for {}/{}",
+                escape(user),
+                escape(repo)
+            )
+        })?;
 
         let body = response
             .into_string()
@@ -541,6 +538,21 @@ pub struct GitHubShorthand {
 
 /// A registry URL as meta shows it: its credentials hidden (as for a
 /// repo's URL) and its query, which may carry a token, left out; escaped.
+/// GET `url`. Its error names the URL as [`shown_url`] shows it, never
+/// ureq's way, which prints a password the URL holds.
+fn get(url: &str) -> Result<ureq::Response> {
+    ureq::get(url)
+        .set("User-Agent", "meta-cli")
+        .call()
+        .map_err(|e| {
+            let why = match e {
+                ureq::Error::Status(code, _) => format!("HTTP {code}"),
+                ureq::Error::Transport(t) => t.kind().to_string(),
+            };
+            anyhow::anyhow!("{}: {why}", shown_url(url))
+        })
+}
+
 fn shown_url(url: &str) -> String {
     let url = url.split_once('?').map_or(url, |(base, _)| base);
     escape(&meta_core::git::GitUrl::from(url).to_string()).into_owned()
@@ -732,9 +744,7 @@ impl PluginInstaller {
 
     /// Download bytes from a URL
     fn download(&self, url: &str) -> Result<Vec<u8>> {
-        let response = ureq::get(url)
-            .call()
-            .with_context(|| format!("Failed to download {}", escape(url)))?;
+        let response = get(url).context("Failed to download")?;
 
         let mut bytes = Vec::new();
         response
@@ -835,7 +845,7 @@ impl PluginInstaller {
 
         let mut last_error = None;
         for url in &urls {
-            debug!("Trying: {}", url);
+            debug!("Trying: {}", shown_url(url));
 
             match self.download(url) {
                 Ok(bytes) => {

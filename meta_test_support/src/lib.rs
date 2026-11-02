@@ -217,8 +217,12 @@ const UNSET: [&str; 11] = [
 fn repo_env() -> &'static [String] {
     static NAMES: OnceLock<Vec<String>> = OnceLock::new();
     NAMES.get_or_init(|| {
+        // with no config of the user's: none is needed, and it could be broken
+        let none = if cfg!(windows) { "NUL" } else { "/dev/null" };
         let out = Command::new("git")
             .args(["rev-parse", "--local-env-vars"])
+            .env("GIT_CONFIG_GLOBAL", none)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
             .output()
             .unwrap();
         assert!(
@@ -247,7 +251,11 @@ macro_rules! isolated {
 
 /// Whether git can make reftable repos (2.45 on); says why not when not.
 pub fn git_has_reftable() -> bool {
-    let out = Command::new("git").arg("version").output().unwrap();
+    let out = Command::new("git")
+        .arg("version")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
     let version = String::from_utf8_lossy(&out.stdout);
     // "git version 2.45.1", "git version 2.45.1.windows.1"
     let mut numbers = version

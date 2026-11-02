@@ -6,21 +6,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 # Tests: create, add, list, status, diff, exec, remove, configuration, edge cases
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-    META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
-
-    if [ ! -f "$META_BIN" ] || [ ! -f "$META_GIT_BIN" ]; then
-        cargo build --workspace --quiet
-    fi
-
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    mkdir -p "$TEST_DIR/.meta/plugins"
-    cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
-    chmod +x "$TEST_DIR/.meta/plugins/meta-git"
-
-    # Create .meta.yaml with two projects
+    sandbox
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
@@ -29,28 +15,8 @@ setup() {
     }
 }
 EOF
-
-    # Initialize git repos with at least one commit (required for worktrees)
-    # Use 'main' as the default branch for consistent test behavior
-    for repo in backend frontend; do
-        mkdir -p "$TEST_DIR/$repo"
-        git -C "$TEST_DIR/$repo" init --quiet --initial-branch=main
-        echo "# $repo" > "$TEST_DIR/$repo/README.md"
-        git -C "$TEST_DIR/$repo" add README.md
-        git -C "$TEST_DIR/$repo" commit --quiet -m "init $repo"
-    done
-
-    # Initialize the meta repo itself (for . alias tests)
-    git -C "$TEST_DIR" init --quiet --initial-branch=main
-    git -C "$TEST_DIR" add .meta.yaml
-    git -C "$TEST_DIR" commit --quiet -m "init meta"
-
+    make_workspace --root-repo --plugins git backend frontend
     cd "$TEST_DIR"
-}
-
-teardown() {
-    cd /
-    rm -rf "$TEST_DIR"
 }
 
 # Helper: Set up a nested meta repo structure

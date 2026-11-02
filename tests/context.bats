@@ -257,6 +257,26 @@ assert "extra" in repos, repos
     [ -z "$(ls -A "$META_DATA_DIR")" ]
 }
 
+@test "context counts commits ahead and behind the upstream, each on its own side" {
+    git init --quiet --bare "$TEST_DIR/backend.git"
+    git -C backend remote add origin "$TEST_DIR/backend.git"
+    git -C backend push --quiet -u origin main
+    ahead_behind() {
+        run "$META_BIN" context --json
+        [ "$status" -eq 0 ]
+        jq -r '.repos[] | select(.name == "backend") | "\(.ahead) \(.behind)"' <<<"$output"
+    }
+    [ "$(ahead_behind)" = "0 0" ]
+    # two commits here, one there
+    git -C backend commit --quiet --allow-empty -m one
+    git -C backend commit --quiet --allow-empty -m two
+    git clone --quiet "$TEST_DIR/backend.git" "$TEST_DIR/mate"
+    git -C "$TEST_DIR/mate" commit --quiet --allow-empty -m theirs
+    git -C "$TEST_DIR/mate" push --quiet
+    git -C backend fetch --quiet
+    [ "$(ahead_behind)" = "2 1" ]
+}
+
 # ============ What git says about each repo ============
 
 @test "context names stopped rebases, detached heads, missing and gone upstreams, and untracked files" {

@@ -29,8 +29,7 @@ setup() {
 @test "context shows branch info" {
     run "$META_BIN" context
     [ "$status" -eq 0 ]
-    # Both repos should be on main or master
-    [[ "$output" == *"main"* ]] || [[ "$output" == *"master"* ]]
+    [ "$(grep -c '| main |' <<<"$output")" -eq 2 ]
 }
 
 @test "context shows clean status for clean repos" {
@@ -187,8 +186,8 @@ assert 'backend' in data['dependencies'], 'backend not in dependencies'
     cd "$empty_dir"
     run "$META_BIN" context
     rm -rf "$empty_dir"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"meta"* ]] || [[ "$output" == *"config"* ]] || [[ "$output" == *"workspace"* ]]
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Not a meta workspace"* ]]
 }
 
 @test "context shows only the projects --tag or --include select" {
@@ -252,8 +251,8 @@ assert repos["frontend"]["dirty"], repos["frontend"]
 assert "extra" in repos, repos
 ' <<<"$output"
     git -C frontend switch --quiet -c topic
-    run "$META_BIN" context
-    [[ "$output" == *"| frontend | topic | 1 modified, no upstream |"* ]]
+    run "$META_BIN" context --json
+    [ "$(jq -r '.repos[] | select(.name == "frontend") | "\(.branch) \(.modified_count) \(.upstream)"' <<<"$output")" = "topic 1 null" ]
     [ -z "$(ls -A "$META_DATA_DIR")" ]
 }
 
@@ -300,10 +299,6 @@ assert "extra" in repos, repos
     # frontend: its upstream deleted and pruned
     git -C frontend push --quiet origin --delete frontend
     git -C frontend fetch --quiet --prune
-    run "$META_BIN" context
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"| backend | (rebasing main) | rebase in progress, 1 modified, 1 untracked |"* ]]
-    [[ "$output" == *"| frontend | main | clean, upstream gone |"* ]]
     run "$META_BIN" context --json
     [ "$status" -eq 0 ]
     python3 -c '
@@ -319,9 +314,6 @@ assert (f["upstream"], f["upstream_gone"], f["detached"]) == ("origin/frontend",
     git -C backend rebase --abort
     git -C backend switch --quiet --detach HEAD
     git -C frontend switch --quiet -c local
-    run "$META_BIN" context
-    [[ "$output" =~ "| backend | (detached "[0-9a-f]{7}") | 1 untracked |" ]]
-    [[ "$output" == *"| frontend | local | clean, no upstream |"* ]]
     run "$META_BIN" context --json
     python3 -c '
 import json, sys

@@ -96,7 +96,7 @@ Tools that act in several repositories report each one: its directory or name, w
 | `meta_build` | `release`, `tag` | `cargo build` (`--release`), `npm run build`, `go build ./...` or `make`, the same way, in the workspace root and then each selected project |
 | `meta_clean` | `tag` | `cargo clean`, `go clean` or `make clean`; npm projects are skipped |
 
-They run one project at a time, in `.meta.yaml` order, and skip a project with none of those files. `meta_build` always includes the root, even with a `tag`, and doesn't follow `meta_execution_order`: for dependency order, build each project in the order that tool gives.
+They run one project at a time, in project-name order (`meta_build` the root first), and skip a project with none of those files. `meta_build` always includes the root, even with a `tag`, and doesn't follow `meta_execution_order`: for dependency order, build each project in the order that tool gives.
 
 ### Discovery
 
@@ -158,7 +158,7 @@ Join conditions with AND (in any case): `dirty:true AND tag:backend AND branch:m
 }
 ```
 
-`meta_batch_execute` (`command`, `tag`, `atomic`) runs `command` (the program and its arguments, one per item, with no shell) in each project, one at a time in `.meta.yaml` order, and reports each one's `success`, `exit_code`, `stdout` and `stderr`. With `atomic: true` it first refuses to run unless every project is the root of a clean git repository. On the first failure it stops and puts each project it reached back on its branch and commit from before; their uncommitted changes and untracked files are saved in a git stash. `rollback.status` is `success` when every one was put back; `rollback.restored` names each one's stash and the commits it replaced, and `rollback.failed` each one it couldn't put back, with git's reason. The rollback is git only: ignored files, submodules, other refs and anything the command did outside the repositories (a push, `npm publish`) are not undone. An atomic batch that failed anywhere is an error as a whole.
+`meta_batch_execute` (`command`, `tag`, `atomic`) runs `command` (the program and its arguments, one per item, with no shell) in each project, one at a time in project-name order, and reports each one's `success`, `exit_code`, `stdout` and `stderr`. With `atomic: true` it first refuses to run unless every project is the root of a clean git repository. On the first failure it stops and puts each project it reached back on its branch and commit from before; their uncommitted changes and untracked files are saved in a git stash. `rollback.status` is `success` when every one was put back; `rollback.restored` names each one's stash and the commits it replaced, and `rollback.failed` each one it couldn't put back, with git's reason. The rollback is git only: ignored files, submodules, other refs and anything the command did outside the repositories (a push, `npm publish`) are not undone. An atomic batch that failed anywhere is an error as a whole.
 
 ```json
 {"name": "meta_batch_execute", "arguments": {"command": ["npm", "test"], "tag": "frontend", "atomic": true}}

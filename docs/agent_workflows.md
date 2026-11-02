@@ -90,7 +90,7 @@ When making changes across repositories:
 
 ### 4. Dependency-Aware Builds
 
-`meta_build` and `meta_batch_execute` run in `.meta.yaml` order, not in dependency order. To build in dependency order:
+`meta_build` and `meta_batch_execute` run projects in name order (`meta_build` the root first), not in dependency order. To build in dependency order:
 
 ```
 1. meta_analyze_impact → See what a change affects

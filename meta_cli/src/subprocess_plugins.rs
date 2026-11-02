@@ -596,7 +596,6 @@ fn resolved(dir: &Path) -> PathBuf {
     dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf())
 }
 
-/// Check if a file is executable
 /// Whether `program` names an executable file in a PATH directory.
 pub fn on_path(program: &str) -> bool {
     let file = format!("{program}{}", std::env::consts::EXE_SUFFIX);
@@ -607,6 +606,7 @@ pub fn on_path(program: &str) -> bool {
         })
 }
 
+/// Check if a file is executable
 #[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;

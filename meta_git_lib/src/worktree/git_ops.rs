@@ -245,10 +245,21 @@ pub fn git_diff_stat(
     Ok((files_changed, insertions, deletions, files))
 }
 
-/// The patch [`git_diff_stat`] counts.
+/// The patch [`git_diff_stat`] counts: git's own, whatever external diff or
+/// text conversion the user set.
 pub fn git_diff_patch(worktree_path: &Path, base_ref: &str) -> Result<String> {
     let range = diff_range(worktree_path, base_ref)?;
-    run(worktree_path, ["diff", "--no-color", &range, "--"])
+    run(
+        worktree_path,
+        [
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            &range,
+            "--",
+        ],
+    )
 }
 
 /// What HEAD changed since it left `base_ref`: `merge-base` exits 1 only when

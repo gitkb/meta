@@ -1022,12 +1022,11 @@ fn unrecognized_command_error(
     let before = typed
         .get(..typed.len().saturating_sub(command_args.len()))
         .unwrap_or_default();
-    let shown = |words: &[&str]| -> String {
+    let shown = |before: &[String], words: &[&str]| -> String {
         let argv: Vec<String> = before
             .iter()
-            .map(String::as_str)
-            .chain(words.iter().copied())
-            .map(String::from)
+            .cloned()
+            .chain(words.iter().map(|word| word.to_string()))
             .collect();
         escape(&loop_lib::display_command(&argv)).into_owned()
     };
@@ -1035,15 +1034,20 @@ fn unrecognized_command_error(
     let suggestion = match near {
         Some(word) => format!(
             "A command with a similar name exists:\n    meta {}",
-            shown(&[&[word][..], &rest].concat())
+            shown(before, &[&[word][..], &rest].concat())
         ),
         None => {
             let command_str = escape(&loop_lib::display_command(command_args)).into_owned();
+            // `meta help printf`: printf runs with `meta exec`, not `meta help exec`
+            let options = match before.split_last() {
+                Some((last, options)) if last == "help" => options,
+                _ => before,
+            };
             let mut exec = vec!["exec", "--"];
             exec.extend(command_args.iter().map(String::as_str));
             format!(
                 "To run '{command_str}' across all repos:\n    meta {}",
-                shown(&exec)
+                shown(options, &exec)
             )
         }
     };

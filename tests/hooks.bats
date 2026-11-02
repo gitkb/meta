@@ -47,7 +47,7 @@ EOF
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"$workspace"* ]]
-    [ "$(wc -l <"$calls" | tr -d ' ')" -eq 3 ]
+    [ "$(wc -l <"$calls" | tr -d ' ')" -eq 4 ]  # fmt, clippy, build, test
     cmp -s "$config_before" "$workspace/.git/config"
 }
 

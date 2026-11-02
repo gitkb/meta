@@ -21,23 +21,64 @@ pub enum ProjectEntry {
     Extended(ExtendedEntry),
 }
 
-/// An extended project entry's fields; others are left to other tools.
+/// An extended project entry's fields; others are left to other tools. Each
+/// string is one YAML wrote as a string: YAML would read `false` or `123` as
+/// "false" or "123".
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExtendedEntry {
     /// Git remote URL (optional for local-only projects).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "some_string")]
     pub repo: Option<GitUrl>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "some_string")]
     pub path: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "strings")]
     pub tags: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "strings")]
     pub provides: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "strings")]
     pub depends_on: Vec<String>,
     /// If true, this directory contains a nested .meta.yaml
     #[serde(default)]
     pub meta: bool,
+}
+
+/// A YAML string, as `T`.
+fn some_string<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: From<String>,
+{
+    Ok(Option::<YamlString>::deserialize(deserializer)?.map(|s| T::from(s.0)))
+}
+
+/// A list of YAML strings.
+fn strings<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    Ok(Vec::<YamlString>::deserialize(deserializer)?
+        .into_iter()
+        .map(|s| s.0)
+        .collect())
+}
+
+/// A value YAML wrote as a string: one of another type is an error naming
+/// where it is.
+struct YamlString(String);
+
+impl<'de> Deserialize<'de> for YamlString {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct StringOnly;
+        impl serde::de::Visitor<'_> for StringOnly {
+            type Value = String;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<String, E> {
+                Ok(s.to_string())
+            }
+        }
+        deserializer.deserialize_any(StringOnly).map(YamlString)
+    }
 }
 
 /// A URL or a mapping, and an error that says so (and what was wrong in the
@@ -1577,6 +1618,7 @@ mod tests {
         );
         // keys other tools put on a project are theirs
         assert!(load("projects:\n  a:\n    repo: x\n    branch: main\n").is_ok());
+        assert!(load("projects:\n  a:\n    path: \"123\"\n    tags: [\"1\"]\n").is_ok());
         // a project of the wrong shape is named, with the shape it needs
         for (yaml, says) in [
             (
@@ -1594,6 +1636,19 @@ mod tests {
             (
                 "projects:\n  api:\n    meta: maybe\n",
                 "projects.api.meta: invalid type: string \"maybe\", expected a boolean",
+            ),
+            // YAML doesn't read a value of another type as a string
+            (
+                "projects:\n  api:\n    path: false\n",
+                "projects.api.path: invalid type: boolean `false`, expected a string",
+            ),
+            (
+                "projects:\n  api:\n    repo: 123\n",
+                "projects.api.repo: invalid type: integer `123`, expected a string",
+            ),
+            (
+                "projects:\n  api:\n    tags: [1]\n",
+                "projects.api.tags[0]: invalid type: integer `1`, expected a string",
             ),
         ] {
             let err = format!("{:#}", load(yaml).unwrap_err());

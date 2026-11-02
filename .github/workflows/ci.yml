@@ -34,7 +34,7 @@ jobs:
           shared-key: "test-${{ matrix.os }}"
 
       - name: Run tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
 
   clippy:
     name: Clippy

@@ -38,9 +38,11 @@ fn exec_runs_only_in_projects_that_are_their_own_repository() {
         .lines()
         .filter_map(|line| std::path::Path::new(line).canonicalize().ok())
         .collect();
-    assert!(printed.contains(&root.join("cloned")), "{stdout}");
+    let real = |p: std::path::PathBuf| p.canonicalize().unwrap();
+    assert!(printed.contains(&real(root.join("cloned"))), "{stdout}");
+    let root_real = real(root.clone());
     assert_eq!(
-        printed.iter().filter(|p| **p == root).count(),
+        printed.iter().filter(|p| **p == root_real).count(),
         1,
         "{stdout}"
     );

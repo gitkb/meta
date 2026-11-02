@@ -790,6 +790,18 @@ EOF
     done
 }
 
+@test "loop with no command prints clap's help: coloured on a terminal, plain into a pipe" {
+    load "${BATS_TEST_DIRNAME}/helpers/terminal.bash"
+    LOOP_BIN="$BATS_TEST_DIRNAME/../target/debug/loop"
+    TERM=xterm run with_terminal "$LOOP_BIN"
+    [[ "$output" == *$'\033['* ]]
+    run bash -c '"$1" | od -An -c | tail -1' _ "$LOOP_BIN"
+    [[ "$output" != *'\n  \n'* ]]
+    run "$LOOP_BIN"
+    [[ "$output" == *"Usage: loop"* ]]
+    [[ "$output" != *$'\033['* ]]
+}
+
 @test "loop's output to a closed stdout exits 141 quietly" {
     LOOP_BIN="$BATS_TEST_DIRNAME/../target/debug/loop"
     # stdout's read end closed before loop starts (not `head -c0`, which

@@ -288,7 +288,7 @@ A plugin's own exit code passes through. `loop` and `meta-mcp` exit the same way
 
 ### Colour
 
-Output is coloured only on a terminal: never into a pipe, a file or `--json`. `NO_COLOR` turns colour off, `CLICOLOR_FORCE=1` turns it on anyway (not under `--json`), and `TERM=dumb` or `CLICOLOR=0` turn it off. A command meta captures (in parallel mode, or for JSON) is told the same, through `CLICOLOR_FORCE`/`FORCE_COLOR`; git gets `color.ui=always` after your own `GIT_CONFIG_*` entries, never in place of them. Each command's stdout goes to meta's stdout and its stderr to meta's stderr.
+Output is coloured only on a terminal: never into a pipe, a file or `--json`. `NO_COLOR` turns colour off, whatever else is set. Otherwise `CLICOLOR_FORCE=1` turns it on even into a pipe (not under `--json`), and `TERM=dumb` or `CLICOLOR=0` turn it off. A command meta captures (in parallel mode, or for JSON) is told the same, through `CLICOLOR_FORCE`/`FORCE_COLOR`; git gets `color.ui=always` after your own `GIT_CONFIG_*` entries, never in place of them. Each command's stdout goes to meta's stdout and its stderr to meta's stderr.
 
 ---
 

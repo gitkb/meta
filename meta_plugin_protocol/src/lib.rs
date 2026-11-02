@@ -243,7 +243,30 @@ impl From<anyhow::Error> for CommandResult {
 
 /// Serialize and print an execution plan to stdout.
 pub fn output_execution_plan(commands: Vec<PlannedCommand>, parallel: Option<bool>) {
-    output_execution_plan_full(vec![], commands, vec![], parallel, None, None);
+    end(emit_json(&simple_plan(commands, parallel)));
+}
+
+/// The plan for `commands`, with no setup or cleanup.
+fn simple_plan(commands: Vec<PlannedCommand>, parallel: Option<bool>) -> PlanResponse {
+    PlanResponse {
+        plan: ExecutionPlan {
+            pre_commands: vec![],
+            commands,
+            post_commands: vec![],
+            parallel,
+            max_parallel: None,
+            spawn_stagger_ms: None,
+        },
+    }
+}
+
+/// End the plugin as `result` says when it failed (see
+/// [`meta_core::exit`]); return when it succeeded.
+fn end(result: anyhow::Result<()>) {
+    let code = meta_core::exit::code(meta_core::exit::flushed(result));
+    if code != 0 {
+        meta_core::exit::now(code);
+    }
 }
 
 /// Serialize and print a full execution plan with pre/post commands to
@@ -264,10 +287,7 @@ pub fn output_execution_plan_full(
         max_parallel,
         spawn_stagger_ms,
     };
-    let code = meta_core::exit::code(emit_json(&PlanResponse { plan }));
-    if code != 0 {
-        meta_core::exit::now(code);
-    }
+    end(emit_json(&PlanResponse { plan }));
 }
 
 /// Write `text` to stdout, flushed: meta reads a plugin's stdout until the
@@ -414,10 +434,7 @@ pub fn run_plugin(plugin: PluginDefinition) {
     // Initialize logger for subprocess - inherits RUST_LOG from parent
     env_logger::init();
     meta_core::out::color();
-    let code = meta_core::exit::code(meta_core::exit::flushed(serve(&plugin)));
-    if code != 0 {
-        meta_core::exit::now(code);
-    }
+    end(serve(&plugin));
 }
 
 fn serve(plugin: &PluginDefinition) -> anyhow::Result<()> {
@@ -456,16 +473,7 @@ fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
         request.cwd = std::env::current_dir().context("Failed to get working directory")?;
     }
     match (plugin.execute)(request) {
-        CommandResult::Plan(commands, parallel) => emit_json(&PlanResponse {
-            plan: ExecutionPlan {
-                pre_commands: vec![],
-                commands,
-                post_commands: vec![],
-                parallel,
-                max_parallel: None,
-                spawn_stagger_ms: None,
-            },
-        }),
+        CommandResult::Plan(commands, parallel) => emit_json(&simple_plan(commands, parallel)),
         CommandResult::FullPlan(plan) => emit_json(&PlanResponse { plan }),
         CommandResult::Message(msg) if msg.is_empty() => Ok(()),
         CommandResult::Message(msg) => emit(&format!("{msg}\n")),

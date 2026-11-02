@@ -19,18 +19,17 @@ pub fn parse_duration(s: &str) -> anyhow::Result<u64> {
     } else {
         // the last character is the suffix
         let mut chars = s.chars();
-        chars.next_back();
+        let suffix = chars.next_back();
         let num_str = chars.as_str();
-        let suffix = s.strip_prefix(num_str).unwrap_or_default();
         let multiplier = match suffix {
-            "s" => 1,
-            "m" => 60,
-            "h" => 3600,
-            "d" => 86400,
-            "w" => 604800,
+            Some('s') => 1,
+            Some('m') => 60,
+            Some('h') => 3600,
+            Some('d') => 86400,
+            Some('w') => 604800,
             _ => anyhow::bail!(
                 "Invalid duration suffix '{}'. Use s (seconds), m (minutes), h (hours), d (days), or w (weeks)",
-                escape(suffix)
+                escape(&suffix.map(String::from).unwrap_or_default())
             ),
         };
         (num_str, multiplier)

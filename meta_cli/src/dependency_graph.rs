@@ -53,8 +53,8 @@ impl From<ProjectInfo> for ProjectDependencies {
 pub struct DependencyGraph {
     /// Map from project name to project info
     projects: HashMap<String, ProjectDependencies>,
-    /// Map from provided item to project name that provides it
-    providers: HashMap<String, String>,
+    /// Map from provided item to the projects that provide it, in order
+    providers: HashMap<String, Vec<String>>,
     /// Adjacency list: project -> projects it depends on
     dependencies: HashMap<String, Vec<String>>,
     /// Reverse adjacency list: project -> projects that depend on it
@@ -111,16 +111,16 @@ impl DependencyGraph {
             problems: HashMap::new(),
         };
 
-        // First pass: register all projects and their provides (the last
-        // project providing an item is the one used)
-        let mut offered: HashMap<&str, Vec<&str>> = HashMap::new();
+        // First pass: register all projects and who provides what (the
+        // last project providing an item is the one used)
         for project in &projects {
             graph.projects.insert(project.name.clone(), project.clone());
             for provided in &project.provides {
                 graph
                     .providers
-                    .insert(provided.clone(), project.name.clone());
-                offered.entry(provided).or_default().push(&project.name);
+                    .entry(provided.clone())
+                    .or_default()
+                    .push(project.name.clone());
             }
         }
 
@@ -130,17 +130,17 @@ impl DependencyGraph {
                 // A project's name, or else what a project provides
                 let resolved = if graph.projects.contains_key(dep) {
                     dep.clone()
-                } else if let Some(provider) = graph.providers.get(dep).cloned() {
-                    let other = offered
-                        .get(dep.as_str())
-                        .and_then(|all| all.iter().find(|other| **other != provider));
-                    if let Some(other) = other {
+                } else if let Some(all) = graph.providers.get(dep).cloned() {
+                    let Some(provider) = all.last().cloned() else {
+                        continue;
+                    };
+                    if let Some(other) = all.iter().find(|other| **other != provider) {
                         graph.problem(
                             &project.name,
                             DependencyProblem::Ambiguous {
                                 item: dep.clone(),
                                 used: provider.clone(),
-                                other: other.to_string(),
+                                other: other.clone(),
                             },
                         );
                     }

@@ -665,7 +665,7 @@ fn plan_repos(
             }
         };
         if !args.no_deps {
-            report_problems(&dep_graph(index)?, set, index, strict)?;
+            report_problems(&dep_graph(index)?, set, index.tree().is_none(), strict)?;
         }
     } else {
         let mut asked_keys = Vec::new();
@@ -681,14 +681,16 @@ fn plan_repos(
                 plan.add(index.find(".")?, branch(None), Why::Wanted, false)?;
             }
             let graph = dep_graph(index)?;
-            let mut needed: BTreeSet<&str> = BTreeSet::new();
-            for key in asked_keys.iter().filter(|key| *key != ".") {
-                needed.insert(key);
-                needed.extend(graph.get_all_dependencies(key));
-            }
-            report_problems(&graph, needed, index, strict)?;
-            for key in asked_keys.iter().filter(|key| *key != ".") {
-                let deps = graph.get_all_dependencies(key);
+            let wanted: Vec<(&String, Vec<&str>)> = asked_keys
+                .iter()
+                .filter(|key| *key != ".")
+                .map(|key| (key, graph.get_all_dependencies(key)))
+                .collect();
+            let needed = wanted
+                .iter()
+                .flat_map(|(key, deps)| std::iter::once(key.as_str()).chain(deps.iter().copied()));
+            report_problems(&graph, needed, index.tree().is_none(), strict)?;
+            for (key, deps) in wanted {
                 log::debug!("Resolved transitive dependencies for '{key}': {deps:?}");
                 for dep in deps {
                     if verbose {
@@ -808,19 +810,20 @@ fn dep_graph(index: &Index) -> Result<DependencyGraph> {
 }
 
 /// Report what resolving the `depends_on` of each project in `set` ran
-/// into: a warning, or with `strict` an error.
+/// into: a warning, or with `strict` an error. `flat`: the graph has no
+/// nested projects.
 fn report_problems<'a>(
     graph: &DependencyGraph,
     set: impl IntoIterator<Item = &'a str>,
-    index: &Index,
+    flat: bool,
     strict: bool,
 ) -> Result<()> {
+    // a project reached twice is reported once
+    let set: BTreeSet<&str> = set.into_iter().collect();
     for project in set {
         for problem in graph.problems_of(project) {
             let hint = match problem {
-                DependencyProblem::Unresolved(_) if index.tree().is_none() => {
-                    " (nested projects count with -r)"
-                }
+                DependencyProblem::Unresolved(_) if flat => " (nested projects count with -r)",
                 _ => "",
             };
             out::warn_or_bail(strict, format!("'{}' {problem}{hint}", escape(project)))?;

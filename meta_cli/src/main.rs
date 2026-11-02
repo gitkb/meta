@@ -4,7 +4,7 @@ use meta_cli::repo_filter::{Filters, Scope};
 use meta_core::config::{self, find_meta_config, Workspace};
 use meta_core::display::{escape, escape_lines, escape_path};
 use meta_core::ExecutionMode;
-use meta_core::{errln, outln};
+use meta_core::{errln, out, outln};
 use std::path::{Path, PathBuf};
 
 mod init;
@@ -362,7 +362,7 @@ fn run_cli() -> Result<()> {
         Err(e) if is_root_help(&e) => {
             check_and_warn_orphan();
             let plugins = SubprocessPluginManager::new(false)?;
-            return subprocess_plugins::print_output(&help_with_plugins(&plugins));
+            return Ok(out!("{}", help_with_plugins(&plugins))?);
         }
         Err(_) => meta_core::args::parse()?,
     };
@@ -399,7 +399,7 @@ fn run_cli() -> Result<()> {
     }
 
     match &cli.command {
-        None => subprocess_plugins::print_output(&help_with_plugins(&subprocess_plugins)),
+        None => Ok(out!("{}", help_with_plugins(&subprocess_plugins))?),
         Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins),
         // it reads the nearest workspace only, so -r would go unheard
         Some(Commands::Context(_)) if cli.recursive || cli.depth.is_some() => anyhow::bail!(
@@ -447,7 +447,7 @@ fn is_root_help(error: &clap::Error) -> bool {
 /// plugin command's, as `meta COMMAND... --help` prints it.
 fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Result<()> {
     let Some(first) = words.first() else {
-        return subprocess_plugins::print_output(&help_with_plugins(plugins));
+        return Ok(out!("{}", help_with_plugins(plugins))?);
     };
     let mut cmd = Cli::command();
     // built, so the subcommands carry their names and meta's help settings
@@ -464,7 +464,7 @@ fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Resul
                 ),
             };
         }
-        return subprocess_plugins::print_output(&found.render_help().to_string());
+        return Ok(out!("{}", found.render_help())?);
     }
     let Some(plugin) = plugins.find(first)? else {
         return Err(unrecognized_command_error(words));
@@ -494,7 +494,7 @@ fn plugin_command(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Resu
         args.len() == 2 && matches!(args.get(1).map(String::as_str), Some("--help" | "-h"));
     if args.len() == 1 || namespace_help {
         let help = meta_plugin_protocol::help_text(&plugin.info);
-        return subprocess_plugins::print_output(&format!("{help}\n"));
+        return Ok(outln!("{help}")?);
     }
     if wants_help {
         let options = cli.request_options(cli.parallel);

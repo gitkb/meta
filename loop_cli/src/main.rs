@@ -5,7 +5,7 @@ use loop_lib::{
     display_command, expand_directories, import_aliases, parse_config, parse_config_if_present,
     run, should_ignore, with_global_aliases,
 };
-use meta_core::{errln, outln};
+use meta_core::errln;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -80,7 +80,9 @@ fn run_loop() -> Result<()> {
     };
 
     if cli.command.is_empty() {
-        outln!("{}", Cli::command().render_help())?;
+        Cli::command()
+            .print_help()
+            .map_err(meta_core::out::StdoutError)?;
         return Ok(());
     }
 

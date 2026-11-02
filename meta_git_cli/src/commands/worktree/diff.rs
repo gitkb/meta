@@ -1,7 +1,7 @@
 use anyhow::Result;
 use colored::*;
 use meta_core::display::{escape, escape_lines};
-use meta_core::{out, outln};
+use meta_core::outln;
 use rayon::prelude::*;
 
 use meta_git_lib::worktree::git_ops::{git_diff_patch, git_diff_stat};
@@ -114,7 +114,7 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
                 }
                 outln!("\n{}", format!("── {} ──", escape(&d.alias)).bold())?;
                 // file contents: escaped like any other text from the repo
-                out!("{}", escape_lines(&git_diff_patch(&r.path, base_ref)?))?;
+                outln!("{}", escape_lines(&git_diff_patch(&r.path, base_ref)?))?;
             }
         }
     }

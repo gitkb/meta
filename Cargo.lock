@@ -990,6 +990,7 @@ dependencies = [
  "meta_plugin_protocol",
  "serde",
  "serde_json",
+ "shlex",
  "tempfile",
 ]
 

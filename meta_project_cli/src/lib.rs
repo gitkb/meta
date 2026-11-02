@@ -242,10 +242,10 @@ pub fn execute_command(
                 Some(word) => format!(
                     "\n\nA command with a similar name exists:\n    meta project {}",
                     escape(
-                        &std::iter::once(word)
-                            .chain(args.iter().skip(1).map(String::as_str))
-                            .collect::<Vec<_>>()
-                            .join(" ")
+                        &shlex::try_join(
+                            std::iter::once(word).chain(args.iter().skip(1).map(String::as_str))
+                        )
+                        .unwrap_or_else(|_| args.join(" "))
                     )
                 ),
                 None => String::new(),

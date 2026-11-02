@@ -123,9 +123,15 @@ fn a_typo_of_a_command_suggests_the_command_it_is_near() {
         // and that one runs
         assert!(workspace.meta(near).status.success(), "meta {near:?}");
     }
-    // nothing near: run it in each repo
-    let out = workspace.meta(&["query", "x"]);
-    assert_eq!(suggested(&out), ["exec", "--", "query", "x"]);
+    // nothing near, a program on PATH (`cp` is near the `meta-mcp` file
+    // beside meta), or a word whose file isn't a plugin (`meta-mcp`): run it
+    // in each repo
+    for words in [&["query", "x"][..], &["cp", "a", "b"], &["mcpq", "x"]] {
+        let out = workspace.meta(words);
+        let mut exec = vec!["exec", "--"];
+        exec.extend(words);
+        assert_eq!(suggested(&out), exec, "{}", text(&out));
+    }
 }
 
 #[test]

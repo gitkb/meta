@@ -75,7 +75,7 @@ run:
 # The docs and hints tests run the plugins and the example plugin, which
 # nextest builds only for their own packages' tests
 test:
-	cargo build --workspace --examples
+	cargo build --workspace --bins --examples
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo nextest run --workspace
 
 test-meta-git-clone: rm-meta

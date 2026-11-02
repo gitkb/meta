@@ -597,6 +597,16 @@ fn resolved(dir: &Path) -> PathBuf {
 }
 
 /// Check if a file is executable
+/// Whether `program` names an executable file in a PATH directory.
+pub fn on_path(program: &str) -> bool {
+    let file = format!("{program}{}", std::env::consts::EXE_SUFFIX);
+    // a word with a separator is a path, not a program PATH finds
+    Path::new(&file).file_name() == Some(file.as_ref())
+        && std::env::var_os("PATH").is_some_and(|path| {
+            std::env::split_paths(&path).any(|dir| is_executable(&dir.join(&file)))
+        })
+}
+
 #[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;

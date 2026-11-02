@@ -261,12 +261,23 @@ const FILL: &str = "api";
 /// clap's help).
 fn code_lines(root: &Path) -> Vec<Line> {
     let mut lines = Vec::new();
-    let mut crates: Vec<PathBuf> = fs::read_dir(root)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|dir| dir.join("Cargo.toml").is_file() && dir.join("src").is_dir())
+    // the workspace's members: a cloned repo the workspace excludes isn't its code
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let members = manifest
+        .split_once("members = [")
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(members, _)| members)
+        .unwrap();
+    let crates: Vec<PathBuf> = members
+        .split(',')
+        .map(|member| member.trim().trim_matches('"'))
+        .filter(|member| !member.is_empty())
+        .map(|member| root.join(member))
         .collect();
-    crates.sort();
+    assert!(
+        crates.iter().all(|dir| dir.join("src").is_dir()),
+        "{crates:?}"
+    );
     for dir in crates {
         rust_files(&dir.join("src"), &mut |file| {
             let at = file.strip_prefix(root).unwrap().display().to_string();
@@ -563,7 +574,7 @@ fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
     ] {
         assert!(
             bin.join(plugin).is_file(),
-            "{plugin} is not in {}: build the workspace first (cargo build --workspace --examples)",
+            "{plugin} is not in {}: build the workspace first (cargo build --workspace --bins --examples)",
             bin.display()
         );
     }

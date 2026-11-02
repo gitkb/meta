@@ -585,7 +585,11 @@ fn not_started(argv: &[String], error: &std::io::Error) -> String {
     let command = display_command(argv);
     let mut said = format!("Failed to run {}: {error}", escape(&command));
     if let [one] = argv {
-        if error.kind() == std::io::ErrorKind::NotFound && one.contains(char::is_whitespace) {
+        // a path with a space in it is one word
+        if error.kind() == std::io::ErrorKind::NotFound
+            && one.contains(char::is_whitespace)
+            && !one.contains(std::path::is_separator)
+        {
             let words: Vec<String> = one.split_whitespace().map(String::from).collect();
             said.push_str(&format!(
                 "\n  a program and its arguments are separate words: {}, not {}",

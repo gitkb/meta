@@ -990,20 +990,31 @@ fn handle_plugin_command(
 
 /// The usage error for a command meta doesn't know, with meta's help and a
 /// suggestion: the command its first word is a typo of, else running it in
-/// each repo.
+/// each repo. A program on PATH (`cp`) is no typo, and a
+/// plugin word is suggested only once its file answers as a plugin: the file
+/// the suggestion would start.
 fn unrecognized_command_error(
     command_args: &[String],
     plugins: &SubprocessPluginManager,
 ) -> anyhow::Error {
     let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
     let cli = Cli::command();
-    // Plugins by their file names: a typo starts none
+    let builtins: Vec<&str> = cli.get_subcommands().map(|sub| sub.get_name()).collect();
+    // Plugins by their file names: none is started to list them
     let words = plugins.words();
-    let known = cli
-        .get_subcommands()
-        .map(|sub| sub.get_name())
-        .chain(words.iter().map(String::as_str));
-    let suggestion = match meta_core::args::nearest(first_cmd, known) {
+    let near = (!subprocess_plugins::on_path(first_cmd))
+        .then(|| {
+            meta_core::args::nearest(
+                first_cmd,
+                builtins
+                    .iter()
+                    .copied()
+                    .chain(words.iter().map(String::as_str)),
+            )
+        })
+        .flatten()
+        .filter(|word| builtins.contains(word) || matches!(plugins.find(word), Ok(Some(_))));
+    let suggestion = match near {
         Some(word) => {
             let fixed: Vec<String> = std::iter::once(word.to_string())
                 .chain(command_args.iter().skip(1).cloned())

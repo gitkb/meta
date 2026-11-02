@@ -140,15 +140,17 @@ pub fn color() -> bool {
             let terminal = io::stdout().is_terminal();
             let force = var("CLICOLOR_FORCE");
             let forced = force.as_ref().is_some_and(|force| force != "0");
-            // forced colour is the user's call; otherwise a terminal must
-            // read it
-            decide_color(
+            let on = decide_color(
                 var("NO_COLOR"),
                 force,
                 var("CLICOLOR"),
                 var("TERM"),
                 terminal,
-            ) && (forced || !terminal || console_reads_colour())
+            );
+            // a terminal is asked (and on Windows put in virtual-terminal
+            // mode) whenever colour would be on; forced colour stays on
+            // whatever it answers
+            on && (!terminal || console_reads_colour() || forced)
         });
     colored::control::set_override(on);
     on

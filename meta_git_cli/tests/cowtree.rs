@@ -181,7 +181,9 @@ fn without_a_v1_git_cowtree_git_makes_every_worktree() {
     // one that speaks another schema, and one whose `version` fails
     for (schema, exit, repo) in [("git-cowtree.v2", 0, "b"), ("git-cowtree.v1", 5, "c")] {
         let log = fake_cowtree(&sandbox, schema, exit);
-        fs::remove_file(&log).ok();
+        if log.exists() {
+            fs::remove_file(&log).unwrap();
+        }
         outputs.push(worktree_json(&sandbox, &ws, &["add", "t", "--repo", repo]));
         assert_eq!(
             calls(&log),

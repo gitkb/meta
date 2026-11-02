@@ -7,10 +7,10 @@ repository.workspace = true
 description = "Shared infrastructure for ~/.meta/ directory management and atomic JSON store"
 
 [dependencies]
-anstyle-query = "1"
 anyhow = "1.0"
 clap = "4.3"
 colored = "2"
+console = "0.15"
 shlex = "1.3"
 dirs = "5"
 serde = { version = "1.0", features = ["derive"] }

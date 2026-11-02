@@ -906,10 +906,10 @@ dependencies = [
 name = "meta_core"
 version = "0.2.22"
 dependencies = [
- "anstyle-query",
  "anyhow",
  "clap",
  "colored",
+ "console",
  "dirs",
  "rustix",
  "serde",

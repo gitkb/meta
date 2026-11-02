@@ -25,8 +25,8 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 /// The identity commits in a sandbox are made as.
-pub const NAME: &str = "t";
-pub const EMAIL: &str = "t@example.com";
+const NAME: &str = "t";
+const EMAIL: &str = "t@example.com";
 
 /// A home, config and meta data dir of a test's own, removed when dropped.
 pub struct Sandbox {
@@ -124,7 +124,7 @@ impl Sandbox {
     }
 
     /// What every program a test starts sees instead of the user's.
-    pub fn env(&self) -> Vec<(&'static str, PathBuf)> {
+    fn env(&self) -> Vec<(&'static str, PathBuf)> {
         vec![
             ("HOME", self.home()),
             ("XDG_CONFIG_HOME", self.root.join("config")),

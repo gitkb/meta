@@ -487,6 +487,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_error_becomes_the_result_its_ending_says() {
+        use meta_core::exit::{ExitWith, Usage};
+        let result = |e: anyhow::Error| CommandResult::from(e.context("on the way up"));
+        assert!(
+            matches!(result(Usage("bad".into()).into()), CommandResult::Usage(m) if m.contains("bad"))
+        );
+        assert!(matches!(result(ExitWith(3).into()), CommandResult::Exit(3)));
+        assert!(
+            matches!(result(anyhow::anyhow!("failed")), CommandResult::Error(m) if m.contains("failed"))
+        );
+    }
+
+    #[test]
     fn help_keeps_each_plugin_value_on_its_line() {
         let forged = "x\u{1b}[2J\nFORGED".to_string();
         let mut commands = IndexMap::new();

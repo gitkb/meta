@@ -128,6 +128,11 @@ teardown() {
         [[ "$output" == *"modified"* ]]
         [[ "$output" != *"$red"* ]]
     done
+
+    # stdout on a terminal, stderr in a file: the file gets no colour
+    TERM=xterm run with_terminal sh -c '"$1" nosuchcmd 2>"$2"' _ "$META_BIN" "$TEST_DIR/err"
+    grep -q 'error: unrecognized command' "$TEST_DIR/err"
+    ! grep -q "$esc" "$TEST_DIR/err"
 }
 
 @test "with --json, stdout is one JSON document whatever happens, and usage errors exit 2" {

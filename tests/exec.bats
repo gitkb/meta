@@ -798,12 +798,15 @@ EOF
 r, w = os.pipe(); os.close(r)
 p = subprocess.run(sys.argv[1:], stdout=w, stderr=subprocess.PIPE)
 sys.stderr.buffer.write(p.stderr); sys.exit(p.returncode)' "$@"; }
-    for args in "-i api echo hi" "-v -i api echo hi" "--help"; do
+    for args in "-i api echo hi" "--help"; do
         run closed "$LOOP_BIN" $args
         [ "$status" -eq 141 ]
-        # quietly: no error, no panic (-v's own lines are on stderr)
-        [[ "$output" != *"Error"* && "$output" != *"panicked"* ]]
+        [ -z "$output" ]
     done
+    # -v's own lines are on stderr; nothing else is
+    run closed "$LOOP_BIN" -v -i api echo hi
+    [ "$status" -eq 141 ]
+    [[ "$output" != *"rror"* && "$output" != *"panicked"* ]]
 }
 
 @test "a failure cut off by a closed stdout isn't reported as success" {
@@ -828,6 +831,20 @@ EOF
         [[ "$status" -eq 0 || "$status" -eq 141 ]]
         [ ! -s "$TEST_DIR/stderr" ]
     done
+}
+
+@test "a plugin plan's setup and cleanup under --json --verbose leave stdout JSON" {
+    mkdir -p .meta/plugins
+    printf '%s\n' '#!/bin/sh' \
+        'if [ "$1" = --meta-plugin-info ]; then' \
+        '    echo '"'"'{"name":"plan","version":"1","commands":["plan"]}'"'"'' \
+        'else' \
+        '    echo '"'"'{"plan":{"pre_commands":[{"dir":".","argv":["true"]}],"commands":[{"dir":".","argv":["true"]}],"post_commands":[{"dir":".","argv":["true"]}]}}'"'"'' \
+        'fi' > .meta/plugins/meta-plan
+    chmod +x .meta/plugins/meta-plan
+    run bash -c '"$1" --json --verbose plan go 2>/dev/null' _ "$META_BIN"
+    [ "$status" -eq 0 ]
+    jq -e '.success == true' <<<"$output"
 }
 
 @test "a plugin killed by a signal ends meta by it; one that fails silently under --json leaves JSON" {

@@ -2,22 +2,22 @@
 //! `meta <word> ...`, and only it is started for that command.
 
 #![expect(
-    clippy::disallowed_methods,
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 // Unix only: the plugins here are shell scripts
 #![cfg(unix)]
 
+use meta_test_support::Sandbox;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use tempfile::tempdir;
 
 /// A workspace with repos `a` and `b`, a plugin `meta-touchy` on PATH that
 /// claims `touch` and logs each request it receives instead of running it,
 /// and a plugin `meta-spy` that logs every time it is started.
-fn workspace(root: &Path) {
+fn workspace(sandbox: &Sandbox, root: &Path) {
     fs::write(
         root.join(".meta.yaml"),
         r#"{"projects":{"a":"https://example.invalid/a.git","b":"https://example.invalid/b.git"}}"#,
@@ -26,7 +26,7 @@ fn workspace(root: &Path) {
     // projects are repositories: meta runs nothing in a plain folder
     for project in ["a", "b"] {
         fs::create_dir_all(root.join(project)).unwrap();
-        meta_core::git::run(&root.join(project), ["init", "-q"]).unwrap();
+        sandbox.git(&root.join(project), &["init", "-q"]);
     }
     let bin = root.join("bin");
     fs::create_dir_all(&bin).unwrap();
@@ -66,8 +66,8 @@ fn spy_starts(root: &Path) -> String {
     fs::read_to_string(root.join("spy.log")).unwrap_or_default()
 }
 
-fn meta(root: &Path, args: &[&str]) {
-    let output = run_meta(root, args);
+fn meta(sandbox: &Sandbox, root: &Path, args: &[&str]) {
+    let output = run_meta(sandbox, root, args);
     assert!(
         output.status.success(),
         "meta {args:?} failed: {}",
@@ -75,15 +75,11 @@ fn meta(root: &Path, args: &[&str]) {
     );
 }
 
-fn run_meta(root: &Path, args: &[&str]) -> std::process::Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_meta"))
+fn run_meta(sandbox: &Sandbox, root: &Path, args: &[&str]) -> std::process::Output {
+    sandbox
+        .command(env!("CARGO_BIN_EXE_meta"))
         .args(args)
         .current_dir(root)
-        .env("HOME", root)
-        .env("XDG_CONFIG_HOME", root.join("xdg"))
-        .env("XDG_DATA_HOME", root.join("xdg/data"))
-        .env("GIT_CONFIG_GLOBAL", root.join("gitconfig"))
-        .env("META_DATA_DIR", root.join("data"))
         // Only this workspace's plugins: none installed on the caller's PATH
         .env(
             "PATH",
@@ -95,11 +91,11 @@ fn run_meta(root: &Path, args: &[&str]) -> std::process::Output {
 
 #[test]
 fn exec_runs_a_plugin_claimed_command_verbatim() {
-    let temp = tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
 
-    meta(&root, &["exec", "--", "touch", "ran"]);
+    meta(&sandbox, &root, &["exec", "--", "touch", "ran"]);
 
     for repo in [&root, &root.join("a"), &root.join("b")] {
         assert!(repo.join("ran").exists(), "not run in {}", repo.display());
@@ -112,11 +108,11 @@ fn exec_runs_a_plugin_claimed_command_verbatim() {
 
 #[test]
 fn a_plugin_serves_the_word_in_its_file_name_only() {
-    let temp = tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
 
-    meta(&root, &["touchy", "ran"]);
+    meta(&sandbox, &root, &["touchy", "ran"]);
 
     let request = fs::read_to_string(root.join("plugin.log")).unwrap();
     assert!(request.contains(r#""command":"touchy""#), "{request}");
@@ -128,7 +124,7 @@ fn a_plugin_serves_the_word_in_its_file_name_only() {
 
     // `touch` is claimed by meta-touchy, but no file is named meta-touch
     fs::remove_file(root.join("plugin.log")).unwrap();
-    let output = run_meta(&root, &["touch", "ran"]);
+    let output = run_meta(&sandbox, &root, &["touch", "ran"]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unrecognized command 'touch'"), "{stderr}");
@@ -137,29 +133,29 @@ fn a_plugin_serves_the_word_in_its_file_name_only() {
 
 #[test]
 fn only_the_plugin_a_command_names_is_started() {
-    let temp = tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
 
-    meta(&root, &["touchy", "ran"]);
+    meta(&sandbox, &root, &["touchy", "ran"]);
     // meta-touchy prints nothing for --help: its info stands in
-    let help = run_meta(&root, &["touchy", "--help"]);
+    let help = run_meta(&sandbox, &root, &["touchy", "--help"]);
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("Commands:\n  touch"));
-    meta(&root, &["exec", "--", "true"]);
-    meta(&root, &["context"]);
-    let typo = run_meta(&root, &["touhcy"]);
+    meta(&sandbox, &root, &["exec", "--", "true"]);
+    meta(&sandbox, &root, &["context"]);
+    let typo = run_meta(&sandbox, &root, &["touhcy"]);
     assert!(!typo.status.success());
     let stderr = String::from_utf8_lossy(&typo.stderr);
     assert!(stderr.contains("meta --help lists them"), "{stderr}");
     assert_eq!(spy_starts(&root), "", "an unrelated plugin was started");
 
     // Help and the plugin list ask every plugin, and name each by its file
-    let help = run_meta(&root, &["--help"]);
+    let help = run_meta(&sandbox, &root, &["--help"]);
     let help = String::from_utf8_lossy(&help.stdout);
     assert!(help.contains("plugin: spy v1.0.0"), "{help}");
     assert!(help.contains("plugin: touchy v1.0.0"), "{help}");
-    let list = run_meta(&root, &["plugin", "list", "--json"]);
+    let list = run_meta(&sandbox, &root, &["plugin", "list", "--json"]);
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let names: Vec<_> = list
         .as_array()
@@ -179,9 +175,9 @@ fn only_the_plugin_a_command_names_is_started() {
 
 #[test]
 fn a_workspace_plugin_comes_before_one_on_path() {
-    let temp = tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
     let local = root.join(".meta/plugins/meta-touchy");
     fs::create_dir_all(local.parent().unwrap()).unwrap();
     script(
@@ -194,7 +190,7 @@ exit 0"#,
         ),
     );
 
-    meta(&root, &["touchy", "ran"]);
+    meta(&sandbox, &root, &["touchy", "ran"]);
 
     assert!(
         root.join("local.log").exists(),
@@ -205,13 +201,13 @@ exit 0"#,
 
 #[test]
 fn a_called_plugin_that_does_not_answer_fails_naming_it() {
-    let temp = tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
     script(&root.join("bin/meta-slow"), "exec sleep 60");
 
     let started = std::time::Instant::now();
-    let output = run_meta(&root, &["slow", "x"]);
+    let output = run_meta(&sandbox, &root, &["slow", "x"]);
 
     assert!(started.elapsed() < std::time::Duration::from_secs(8));
     assert!(!output.status.success());
@@ -226,9 +222,9 @@ fn a_called_plugin_that_does_not_answer_fails_naming_it() {
 
 #[test]
 fn a_plan_meta_cannot_read_fails_and_names_the_plugin() {
-    let temp = tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
     // An older plugin that still plans `cmd` strings instead of `argv`
     let plugin = root.join("bin").join("meta-oldplan");
     fs::write(
@@ -243,7 +239,7 @@ esac
     .unwrap();
     fs::set_permissions(&plugin, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let output = run_meta(&root, &["oldplan", "run"]);
+    let output = run_meta(&sandbox, &root, &["oldplan", "run"]);
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -256,9 +252,9 @@ esac
 
 #[test]
 fn a_plan_with_max_parallel_zero_is_refused_before_any_of_it_runs() {
-    let temp = tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
     let plugin = root.join("bin").join("meta-zero");
     fs::write(
         &plugin,
@@ -272,7 +268,7 @@ esac
     .unwrap();
     fs::set_permissions(&plugin, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let output = run_meta(&root, &["zero", "run"]);
+    let output = run_meta(&sandbox, &root, &["zero", "run"]);
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "max_parallel 0 ran unlimited");
@@ -281,20 +277,52 @@ esac
 }
 
 #[test]
+fn a_planned_commands_env_reaches_the_command_meta_runs() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    let plan = serde_json::json!({"plan": {"commands": [{
+        "dir": root.join("a"),
+        "argv": ["sh", "-c", "printf '%s' \"$X\" > from-plan.txt"],
+        "env": {"X": "from-plan"}
+    }]}});
+    script(
+        &root.join("bin/meta-envplan"),
+        &format!(
+            r#"case "$1" in
+  --meta-plugin-info) echo '{{"name":"envplan","version":"1","commands":["envplan"]}}' ;;
+  --meta-plugin-exec) cat >/dev/null; cat <<'PLAN'
+{plan}
+PLAN
+    ;;
+esac"#
+        ),
+    );
+
+    meta(&sandbox, &root, &["envplan", "run"]);
+
+    assert_eq!(
+        fs::read_to_string(root.join("a/from-plan.txt")).unwrap(),
+        "from-plan"
+    );
+    assert!(!root.join("from-plan.txt").exists());
+}
+
+#[test]
 fn a_broken_looprc_stops_only_what_runs_through_loop() {
-    let temp = tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
-    workspace(&root);
-    // HOME is root too: ~/.looprc and ./.looprc are this file
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    // A malformed workspace .looprc must stop commands using loop.
     fs::write(root.join(".looprc"), r#"{"bogus": 1}"#).unwrap();
 
     // the plugin answers without a plan: loop never runs
-    meta(&root, &["touchy", "ran"]);
+    meta(&sandbox, &root, &["touchy", "ran"]);
     assert!(fs::read_to_string(root.join("plugin.log"))
         .unwrap()
         .contains("touchy"));
 
-    let output = run_meta(&root, &["exec", "--", "true"]);
+    let output = run_meta(&sandbox, &root, &["exec", "--", "true"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success());
     assert!(
@@ -310,23 +338,19 @@ fn a_broken_looprc_stops_only_what_runs_through_loop() {
 fn a_directory_name_that_is_not_utf8_runs_in_that_directory() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
-    let temp = tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
     let raw = root.join(OsStr::from_bytes(b"ws\xff"));
     let twin = root.join("ws\u{fffd}");
     for ws in [&raw, &twin] {
         fs::create_dir_all(ws.join("a")).unwrap();
-        meta_core::git::run(&ws.join("a"), ["init", "-q"]).unwrap();
+        sandbox.git(&ws.join("a"), &["init", "-q"]);
         fs::write(ws.join(".meta.yaml"), "projects:\n  a: git@x:o/a.git\n").unwrap();
     }
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_meta"))
+    let out = sandbox
+        .command(env!("CARGO_BIN_EXE_meta"))
         .args(["exec", "--", "touch", "here"])
         .current_dir(&raw)
-        .env("HOME", &root)
-        .env("XDG_CONFIG_HOME", root.join("xdg"))
-        .env("XDG_DATA_HOME", root.join("xdg/data"))
-        .env("GIT_CONFIG_GLOBAL", root.join("gitconfig"))
-        .env("META_DATA_DIR", root.join("data"))
         .output()
         .unwrap();
     assert!(

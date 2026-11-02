@@ -872,6 +872,7 @@ dependencies = [
  "loop_lib",
  "meta_core",
  "meta_plugin_protocol",
+ "meta_test_support",
  "rayon",
  "rustix",
  "serde",

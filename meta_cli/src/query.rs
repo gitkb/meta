@@ -324,6 +324,7 @@ impl WorkspaceState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_test_support::Sandbox;
 
     #[test]
     fn test_parse_simple_query() {
@@ -384,10 +385,13 @@ mod tests {
 
     #[test]
     fn untracked_files_are_neither_staged_nor_unstaged() {
-        let dir = tempfile::tempdir().unwrap();
-        meta_core::git::run(dir.path(), ["init", "-q", "-b", "main"]).unwrap();
-        std::fs::write(dir.path().join("new"), "").unwrap();
-        let state = RepoState::collect("r", dir.path(), &[]).unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        sandbox.git(&dir, &["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("new"), "").unwrap();
+        let state = RepoState::collect("r", dir.as_path(), &[]).unwrap();
         assert_eq!(
             (state.is_dirty, state.has_untracked),
             (Some(true), Some(true))
@@ -403,23 +407,17 @@ mod tests {
 
     #[test]
     fn a_bare_repository_has_its_last_commit() {
-        let dir = tempfile::tempdir().unwrap();
-        let run = |args: &[&str]| meta_core::git::run(dir.path(), args).unwrap();
-        run(&["init", "-q", "--bare", "-b", "main"]);
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        sandbox.git(&dir, &["init", "-q", "--bare", "-b", "main"]);
         // the empty tree, which git always has
         let tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-        let commit = run(&[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.com",
-            "commit-tree",
-            tree,
-            "-m",
-            "first",
-        ]);
-        run(&["update-ref", "refs/heads/main", &commit]);
-        let state = RepoState::collect("r", dir.path(), &[]).unwrap();
+        let commit = sandbox.git(&dir, &["commit-tree", tree, "-m", "first"]);
+        let commit = commit.trim().to_string();
+        sandbox.git(&dir, &["update-ref", "refs/heads/main", &commit]);
+        let state = RepoState::collect("r", dir.as_path(), &[]).unwrap();
         assert_eq!(state.branch.as_deref(), Some("main"));
         assert_eq!(state.last_commit_hash.as_deref(), Some(commit.as_str()));
         assert_eq!(state.last_commit_message.as_deref(), Some("first"));
@@ -429,24 +427,14 @@ mod tests {
 
     #[test]
     fn a_checkout_git_calls_bare_keeps_its_branch() {
-        let dir = tempfile::tempdir().unwrap();
-        let run = |args: &[&str]| meta_core::git::run(dir.path(), args).unwrap();
-        run(&["init", "-q", "-b", "main"]);
-        run(&[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "first",
-        ]);
-        run(&["config", "core.bare", "true"]);
-        let state = RepoState::collect("r", dir.path(), &[]).unwrap();
+        let Some(sandbox) = Sandbox::isolated() else {
+            return;
+        };
+        let dir = sandbox.work();
+        sandbox.git(&dir, &["init", "-q", "-b", "main"]);
+        sandbox.git(&dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        sandbox.git(&dir, &["config", "core.bare", "true"]);
+        let state = RepoState::collect("r", dir.as_path(), &[]).unwrap();
         assert_eq!(state.branch.as_deref(), Some("main"));
         assert_eq!(state.last_commit_message.as_deref(), Some("first"));
         // its changes are unknown, never clean

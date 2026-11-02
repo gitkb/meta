@@ -1,41 +1,30 @@
 //! `meta exec` acts only in project folders that are repositories of their
 //! own, and names the others.
 
-#![expect(
-    clippy::disallowed_methods,
-    clippy::unwrap_used,
-    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
-)]
-
-use meta_core::git::run;
+use meta_test_support::Sandbox;
 use std::fs;
-use tempfile::tempdir;
 
 #[test]
 fn exec_runs_only_in_projects_that_are_their_own_repository() {
-    let tmp = tempdir().unwrap();
-    let root = tmp.path().canonicalize().unwrap();
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
     fs::write(
         root.join(".meta.yaml"),
         "projects:\n  cloned: u1\n  empty: u2\n  plain: u3\n  missing: u4\n",
     )
     .unwrap();
-    run(&root, ["init", "-q"]).unwrap();
+    sandbox.git(&root, &["init", "-q"]);
     for project in ["cloned", "empty", "plain"] {
         fs::create_dir(root.join(project)).unwrap();
     }
-    run(&root.join("cloned"), ["init", "-q"]).unwrap();
+    sandbox.git(&root.join("cloned"), &["init", "-q"]);
     fs::write(root.join("plain/notes.txt"), "mine").unwrap();
 
     let meta = |args: &[&str]| {
-        std::process::Command::new(env!("CARGO_BIN_EXE_meta"))
+        sandbox
+            .command(env!("CARGO_BIN_EXE_meta"))
             .args(args)
             .current_dir(&root)
-            .env("HOME", &root)
-            .env("XDG_CONFIG_HOME", root.join("xdg"))
-            .env("XDG_DATA_HOME", root.join("xdg-data"))
-            .env("GIT_CONFIG_GLOBAL", root.join("gitconfig"))
-            .env("META_DATA_DIR", root.join("data"))
             .output()
             .unwrap()
     };
@@ -87,43 +76,31 @@ fn exec_runs_only_in_projects_that_are_their_own_repository() {
     }
 }
 
-/// `meta args` in `dir`, with no user configuration.
-fn meta_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
-    std::process::Command::new(env!("CARGO_BIN_EXE_meta"))
-        .args(args)
-        .current_dir(dir)
-        .env("HOME", dir)
-        .env("XDG_CONFIG_HOME", dir.join("xdg"))
-        .env("XDG_DATA_HOME", dir.join("xdg-data"))
-        .env("GIT_CONFIG_GLOBAL", dir.join("gitconfig"))
-        .env("META_DATA_DIR", dir.join("data"))
-        .output()
-        .unwrap()
-}
-
 #[cfg(unix)]
 #[test]
 fn git_a_command_starts_never_reaches_the_repository_around_the_workspace() {
     // a workspace that is no repository, in one that is (a dotfiles repo in
     // HOME, say), with a project outside it
-    let tmp = tempdir().unwrap();
-    let outer = tmp.path().canonicalize().unwrap();
-    run(&outer, ["init", "-q"]).unwrap();
+    let sandbox = Sandbox::new();
+    let outer = sandbox.work();
+    sandbox.git(&outer, &["init", "-q"]);
     let ws = outer.join("ws");
     fs::create_dir_all(ws.join("api")).unwrap();
-    run(&ws.join("api"), ["init", "-q"]).unwrap();
+    sandbox.git(&ws.join("api"), &["init", "-q"]);
     fs::create_dir(outer.join("sib")).unwrap();
-    run(&outer.join("sib"), ["init", "-q"]).unwrap();
+    sandbox.git(&outer.join("sib"), &["init", "-q"]);
     fs::write(
         ws.join(".meta.yaml"),
         "projects:\n  api: u1\n  sib:\n    repo: u2\n    path: ../sib\n",
     )
     .unwrap();
 
-    let out = meta_in(
-        &ws,
-        &["exec", "--", "sh", "-c", "git rev-parse --show-toplevel"],
-    );
+    let out = sandbox
+        .command(env!("CARGO_BIN_EXE_meta"))
+        .current_dir(&ws)
+        .args(["exec", "--", "sh", "-c", "git rev-parse --show-toplevel"])
+        .output()
+        .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     // the root fails on its own; the projects answer for themselves
     assert!(!out.status.success(), "{stdout}");
@@ -140,14 +117,15 @@ fn git_a_command_starts_never_reaches_the_repository_around_the_workspace() {
 
 #[test]
 fn a_silent_run_prints_nothing_for_a_refused_project() {
-    let tmp = tempdir().unwrap();
-    let root = tmp.path().canonicalize().unwrap();
-    run(&root, ["init", "-q"]).unwrap();
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    sandbox.git(&root, &["init", "-q"]);
     fs::create_dir(root.join("plain")).unwrap();
     fs::write(root.join(".meta.yaml"), "projects:\n  plain: u\n").unwrap();
-    let out = meta_in(
-        &root,
-        &[
+    let out = sandbox
+        .command(env!("CARGO_BIN_EXE_meta"))
+        .current_dir(&root)
+        .args([
             "--silent",
             "--sequential",
             "-i",
@@ -156,12 +134,44 @@ fn a_silent_run_prints_nothing_for_a_refused_project() {
             "--",
             "git",
             "status",
-        ],
-    );
+        ])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     assert!(
         out.stdout.is_empty(),
         "{}",
         String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// A malformed selected worktree must fail before ordinary config fallback or exec.
+#[cfg(unix)]
+#[test]
+fn malformed_worktree_membership_is_reported_before_dispatch() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    let worktree = root.join(".worktrees/broken");
+    fs::create_dir_all(&worktree).unwrap();
+    fs::write(root.join(".meta.yaml"), r#"{"projects":{}}"#).unwrap();
+    fs::write(worktree.join(".meta.yaml"), r#"{"projects":{}}"#).unwrap();
+    fs::write(worktree.join(".git"), "malformed metadata").unwrap();
+    let marker = root.join("unexpected-dispatch");
+    let output = sandbox
+        .command(env!("CARGO_BIN_EXE_meta"))
+        .args(["exec", "--", "/usr/bin/touch", marker.to_str().unwrap()])
+        .current_dir(&worktree)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Invalid .git file format"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !marker.exists(),
+        "invalid worktree dispatched through ordinary config fallback"
     );
 }

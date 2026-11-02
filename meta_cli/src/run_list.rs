@@ -34,11 +34,13 @@ pub fn in_repos(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_test_support::Sandbox;
 
     #[test]
     fn project_commands_get_the_ceiling_and_others_are_left_alone() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().to_path_buf();
+        let tmp_sandbox = Sandbox::new();
+        let tmp = tmp_sandbox.work();
+        let root = tmp.clone();
         let plain = root.join("plain");
         std::fs::create_dir(&plain).unwrap();
         let command = |dir: &Path| DirCommand {

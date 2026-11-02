@@ -197,7 +197,7 @@ pub fn execute_command(
             Ok(list) => handle_project_list(
                 cwd,
                 &ExecuteOptions {
-                    json_output: options.json_output || list.json,
+                    json_output: meta_core::out::set_json(options.json_output || list.json),
                     recursive: options.recursive || list.recursive,
                     depth: list.depth.or(options.depth),
                     selected: None,
@@ -208,17 +208,20 @@ pub fn execute_command(
         "project dependents" => match parse_args::<DependentsArgs>(command, args) {
             Ok(dependents) => handle_project_dependents(
                 &dependents.project,
-                options.json_output || dependents.json,
+                meta_core::out::set_json(options.json_output || dependents.json),
                 options.recursive || dependents.recursive,
                 cwd,
             ),
             Err(result) => result,
         },
         "project check" => match parse_args::<CheckArgs>(command, args) {
-            Ok(CheckArgs { json }) => {
-                check(options.json_output || json, options, provided_projects, cwd)
-                    .unwrap_or_else(Into::into)
-            }
+            Ok(CheckArgs { json }) => check(
+                meta_core::out::set_json(options.json_output || json),
+                options,
+                provided_projects,
+                cwd,
+            )
+            .unwrap_or_else(Into::into),
             Err(result) => result,
         },
         // meta_cli sends an unclaimed `project <word>` as `project` plus args

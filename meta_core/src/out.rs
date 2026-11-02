@@ -170,10 +170,11 @@ pub fn pass_color(command: &mut std::process::Command) {
 static JSON: AtomicBool = AtomicBool::new(false);
 
 /// Output is JSON (`--json`), for programs that read it: no colour, and
-/// errors are JSON on stdout.
-pub fn set_json(json: bool) {
+/// errors are JSON on stdout. Returns `json`.
+pub fn set_json(json: bool) -> bool {
     JSON.store(json, Ordering::Relaxed);
     color();
+    json
 }
 
 /// Whether output is JSON (see [`set_json`]).

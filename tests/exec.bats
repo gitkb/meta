@@ -866,6 +866,28 @@ sys.stderr.buffer.write(p.stderr); sys.exit(p.returncode)' "$@"; }
     [ -z "$output" ]
 }
 
+@test "a last line without its newline to a closed stdout still exits 141" {
+    mkdir -p .meta/plugins
+    printf '%s\n' '#!/bin/sh' \
+        'if [ "$1" = --meta-plugin-info ]; then' \
+        '    echo '"'"'{"name":"frag","version":"1","commands":["frag"]}'"'"'' \
+        'else printf fragment; fi' > .meta/plugins/meta-frag
+    chmod +x .meta/plugins/meta-frag
+    run python3 -c 'import os, subprocess, sys
+r, w = os.pipe(); os.close(r)
+sys.exit(subprocess.run(sys.argv[1:], stdout=w).returncode)' "$META_BIN" frag now
+    [ "$status" -eq 141 ]
+}
+
+@test "a command's own --json makes its errors JSON; a .looprc's json_output keeps colour out" {
+    run bash -c '"$1" git worktree status missing --json 2>/dev/null' _ "$META_BIN"
+    [ "$status" -eq 1 ]
+    jq -e '.success == false' <<<"$output"
+    echo '{"json_output": true}' > .looprc
+    CLICOLOR_FORCE=1 run "$BATS_TEST_DIRNAME/../target/debug/loop" -i api sh -c 'if [ -n "$CLICOLOR_FORCE" ]; then echo forced; else echo plain; fi'
+    jq -e '.results[0].stdout == "plain\n"' <<<"$output"
+}
+
 @test "a hostile command name is escaped in meta's own lines" {
     E=$'bad\033[2J\nFORGED'
     for mode in --parallel --sequential --dry-run; do

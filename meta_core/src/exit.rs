@@ -64,7 +64,9 @@ impl std::error::Error for Usage {}
 /// Run `main` with colour decided ([`out::color`]) and report how it went.
 pub fn run(main: impl FnOnce() -> anyhow::Result<()>) -> ExitCode {
     out::color();
-    let code = code(main());
+    // what is still buffered (a last line without its newline) goes out
+    // here, where a closed stdout can still be told
+    let code = code(main().and_then(|()| Ok(out::flush()?)));
     // an ExitCode holds a byte; Windows passes on a plugin's 256 or -1
     match u8::try_from(code) {
         Ok(code) => ExitCode::from(code),

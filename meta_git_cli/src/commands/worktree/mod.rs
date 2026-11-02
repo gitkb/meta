@@ -91,7 +91,8 @@ pub fn execute_worktree_command(
             // meta's --dry-run, or the worktree command's own
             ExecutionMode::from_dry_run(options.dry_run || parsed.dry_run),
             options.verbose,
-            options.json_output || parsed.json,
+            // meta's --json, or the command's own: its errors are JSON too
+            meta_core::out::set_json(options.json_output || parsed.json),
             options.strict,
             cwd,
         ) {

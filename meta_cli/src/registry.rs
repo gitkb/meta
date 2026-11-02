@@ -450,14 +450,15 @@ impl RegistryClient {
 }
 
 /// Where releases are, and GitHub's API: `META_GITHUB_URL` (a GitHub
-/// Enterprise server, whose API is under `/api/v3`), else github.com
+/// Enterprise server, whose API is under `/api/v3`), else (unset or empty)
+/// github.com
 fn github() -> (String, String) {
     match std::env::var("META_GITHUB_URL") {
-        Ok(url) => {
+        Ok(url) if !url.is_empty() => {
             let url = url.trim_end_matches('/');
             (url.to_string(), format!("{url}/api/v3"))
         }
-        Err(_) => (
+        _ => (
             "https://github.com".to_string(),
             "https://api.github.com".to_string(),
         ),
@@ -1254,7 +1255,6 @@ impl PluginInstaller {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::Sandbox;
 
     #[test]
     fn a_registry_url_is_shown_without_its_token() {
@@ -1379,10 +1379,9 @@ mod tests {
     fn test_plugins_dir_and_manifest_are_private_whatever_the_umask() {
         // meta creates its own dirs 0700 and files 0600, whatever the umask
         use std::os::unix::fs::PermissionsExt;
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.join("plugins"),
+            plugins_dir: dir.path().join("plugins"),
             scope: InstallScope::Local,
         };
         installer.save_manifest(&PluginManifest::default()).unwrap();
@@ -1394,27 +1393,25 @@ mod tests {
 
     #[test]
     fn test_plugin_installer_uninstall() {
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
-        std::fs::write(dir.join("meta-test"), "fake binary").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("meta-test"), "fake binary").unwrap();
 
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
         // Uninstall should succeed
         installer.uninstall("test").unwrap();
-        assert!(!dir.join("meta-test").exists());
+        assert!(!dir.path().join("meta-test").exists());
     }
 
     #[test]
     fn test_plugin_installer_uninstall_not_installed() {
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
 
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
@@ -1450,10 +1447,9 @@ mod tests {
         use flate2::Compression;
         use std::io::Write;
 
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
@@ -1478,7 +1474,7 @@ mod tests {
 
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0], "meta-test");
-        assert!(dir.join("meta-test").exists());
+        assert!(dir.path().join("meta-test").exists());
     }
 
     #[test]
@@ -1487,10 +1483,9 @@ mod tests {
         use flate2::Compression;
         use std::io::Write;
 
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
@@ -1517,9 +1512,9 @@ mod tests {
         // Only meta-plugin should be extracted
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0], "meta-plugin");
-        assert!(dir.join("meta-plugin").exists());
-        assert!(!dir.join("readme.txt").exists());
-        assert!(!dir.join("other-binary").exists());
+        assert!(dir.path().join("meta-plugin").exists());
+        assert!(!dir.path().join("readme.txt").exists());
+        assert!(!dir.path().join("other-binary").exists());
     }
 
     #[test]
@@ -1527,10 +1522,9 @@ mod tests {
         use std::io::Write;
         use zip::write::SimpleFileOptions;
 
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
@@ -1548,7 +1542,7 @@ mod tests {
 
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0], "meta-test");
-        assert!(dir.join("meta-test").exists());
+        assert!(dir.path().join("meta-test").exists());
     }
 
     #[test]
@@ -1556,10 +1550,9 @@ mod tests {
         use std::io::Write;
         use zip::write::SimpleFileOptions;
 
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
@@ -1581,9 +1574,9 @@ mod tests {
         // Only meta-plugin should be extracted
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0], "meta-plugin");
-        assert!(dir.join("meta-plugin").exists());
-        assert!(!dir.join("readme.txt").exists());
-        assert!(!dir.join("other-binary").exists());
+        assert!(dir.path().join("meta-plugin").exists());
+        assert!(!dir.path().join("readme.txt").exists());
+        assert!(!dir.path().join("other-binary").exists());
     }
 
     #[test]
@@ -1617,14 +1610,13 @@ mod tests {
             .to_string();
 
         for existing_plugin in [false, true] {
-            let dir_sandbox = Sandbox::new();
-            let dir = dir_sandbox.work();
-            let plugin_path = dir.join("meta-test");
+            let dir = tempfile::tempdir().unwrap();
+            let plugin_path = dir.path().join("meta-test");
             if existing_plugin {
                 std::fs::write(&plugin_path, b"original plugin").unwrap();
             }
             let installer = PluginInstaller {
-                plugins_dir: dir.clone(),
+                plugins_dir: dir.path().to_path_buf(),
                 scope: InstallScope::Global,
             };
 
@@ -1662,9 +1654,8 @@ mod tests {
             }
 
             for existing_plugin in [false, true] {
-                let dir_sandbox = Sandbox::new();
-                let dir = dir_sandbox.work();
-                let plugins_dir = dir.join("plugins");
+                let dir = tempfile::tempdir().unwrap();
+                let plugins_dir = dir.path().join("plugins");
                 // Make traversal possible instead of relying on a missing parent directory.
                 std::fs::create_dir_all(plugins_dir.join("meta-dir")).unwrap();
                 let plugin_path = plugins_dir.join("meta-test");
@@ -1681,7 +1672,7 @@ mod tests {
                     error.to_string().contains("top-level filename"),
                     "unexpected error for {invalid_name:?}: {error}"
                 );
-                assert!(!dir.join("escaped").exists());
+                assert!(!dir.path().join("escaped").exists());
                 assert_eq!(
                     std::fs::read_dir(plugins_dir.join("meta-dir"))
                         .unwrap()
@@ -1757,9 +1748,8 @@ mod tests {
     #[test]
     fn an_entry_that_is_not_a_file_or_directory_installs_nothing() {
         use tar::EntryType::{Fifo, Link, Regular, Symlink};
-        let outside_sandbox = Sandbox::new();
-        let outside = outside_sandbox.work();
-        let victim = victim(outside.as_path());
+        let outside = tempfile::tempdir().unwrap();
+        let victim = victim(outside.path());
         let target = victim.to_str().unwrap();
         // A valid plugin comes first, so nothing written shows the whole
         // archive was checked before writing
@@ -1787,26 +1777,24 @@ mod tests {
             ),
         ];
         for (entry, url, bytes) in archives {
-            let dir_sandbox = Sandbox::new();
-            let dir = dir_sandbox.work();
+            let dir = tempfile::tempdir().unwrap();
             let installer = PluginInstaller {
-                plugins_dir: dir.clone(),
+                plugins_dir: dir.path().to_path_buf(),
                 scope: InstallScope::Global,
             };
             let err = format!("{:#}", installer.extract_archive(url, &bytes).unwrap_err());
             assert!(err.contains(entry), "{url} {entry}: {err}");
             assert!(err.contains("not a regular file"), "{err}");
-            let written: Vec<_> = std::fs::read_dir(dir.as_path()).unwrap().collect();
+            let written: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
             assert!(written.is_empty(), "{url} {entry}: wrote {written:?}");
             assert_eq!(mode(&victim), 0o644, "{url} {entry}");
             assert_eq!(std::fs::read_to_string(&victim).unwrap(), "victim");
         }
 
         // A link that installs no plugin is left alone
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
         let bytes = tar_gz(&[good, ("lib/libx.so", Symlink, "libx.so.1")]);
@@ -1817,9 +1805,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn installing_over_a_link_replaces_the_link_not_its_target() {
-        let outside_sandbox = Sandbox::new();
-        let outside = outside_sandbox.work();
-        let victim = victim(outside.as_path());
+        let outside = tempfile::tempdir().unwrap();
+        let victim = victim(outside.path());
         let archives = [
             (
                 "p.tar.gz",
@@ -1829,13 +1816,12 @@ mod tests {
         ];
         for (url, bytes) in archives {
             for hard in [false, true] {
-                let dir_sandbox = Sandbox::new();
-                let dir = dir_sandbox.work();
+                let dir = tempfile::tempdir().unwrap();
                 let installer = PluginInstaller {
-                    plugins_dir: dir.clone(),
+                    plugins_dir: dir.path().to_path_buf(),
                     scope: InstallScope::Global,
                 };
-                let dest = dir.join("meta-x");
+                let dest = dir.path().join("meta-x");
                 if hard {
                     std::fs::hard_link(&victim, &dest).unwrap();
                 } else {
@@ -1855,10 +1841,9 @@ mod tests {
 
     #[test]
     fn test_extract_archive_unsupported_format() {
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
@@ -1933,10 +1918,9 @@ mod tests {
 
     #[test]
     fn test_construct_github_urls() {
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
@@ -1962,10 +1946,9 @@ mod tests {
 
     #[test]
     fn test_construct_github_urls_latest() {
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
@@ -1979,10 +1962,9 @@ mod tests {
 
     #[test]
     fn test_construct_github_urls_deduplicates_plugin_names() {
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
@@ -2092,15 +2074,14 @@ mod tests {
     fn test_validation_cleanup_removes_invalid_plugin() {
         use std::io::Write;
 
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
         // Create a fake invalid plugin (not executable/doesn't respond to --meta-plugin-info)
-        let plugin_path = dir.join("meta-invalid");
+        let plugin_path = dir.path().join("meta-invalid");
         let mut file = std::fs::File::create(&plugin_path).unwrap();
         file.write_all(b"not a real plugin").unwrap();
         drop(file);
@@ -2116,9 +2097,8 @@ mod tests {
 
     #[test]
     fn test_plugin_manifest_save_and_load() {
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
-        let manifest_path = dir.join(".manifest.json");
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join(".manifest.json");
 
         let mut manifest = PluginManifest::default();
         manifest.add_plugin(
@@ -2172,9 +2152,8 @@ mod tests {
 
     #[test]
     fn test_plugin_manifest_load_nonexistent() {
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
-        let manifest_path = dir.join("nonexistent.json");
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("nonexistent.json");
 
         // Loading non-existent manifest should return empty manifest
         let manifest = PluginManifest::load(&manifest_path).unwrap();
@@ -2199,10 +2178,9 @@ mod tests {
 
     #[test]
     fn test_list_plugins_detailed_empty() {
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
@@ -2213,15 +2191,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_list_plugins_detailed_uses_binary_version_and_manifest_provenance() {
-        let dir_sandbox = Sandbox::new();
-        let dir = dir_sandbox.work();
+        let dir = tempfile::tempdir().unwrap();
         let installer = PluginInstaller {
-            plugins_dir: dir.clone(),
+            plugins_dir: dir.path().to_path_buf(),
             scope: InstallScope::Global,
         };
 
         // Create plugin file
-        std::fs::create_dir_all(dir.as_path()).unwrap();
+        std::fs::create_dir_all(dir.path()).unwrap();
         installer
             .write_plugin(
                 "meta-test",
@@ -2254,13 +2231,12 @@ mod tests {
 
     #[test]
     fn test_find_workspace_root_rejects_bare_meta_directory() {
-        let temp_sandbox = Sandbox::new();
-        let temp = temp_sandbox.work();
-        let meta_dir = temp.join(".meta");
+        let temp = tempfile::tempdir().unwrap();
+        let meta_dir = temp.path().join(".meta");
         std::fs::create_dir(&meta_dir).unwrap();
 
         // Create subdirectory to test walking up
-        let subdir = temp.join("sub").join("dir");
+        let subdir = temp.path().join("sub").join("dir");
         std::fs::create_dir_all(&subdir).unwrap();
 
         let result = PluginInstaller::find_workspace_root_from(&subdir);
@@ -2272,27 +2248,25 @@ mod tests {
 
     #[test]
     fn test_find_workspace_root_with_yaml() {
-        let temp_sandbox = Sandbox::new();
-        let temp = temp_sandbox.work();
-        std::fs::write(temp.join(".meta.yaml"), "projects: {}").unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join(".meta.yaml"), "projects: {}").unwrap();
 
-        let result = PluginInstaller::find_workspace_root_from(temp.as_path());
+        let result = PluginInstaller::find_workspace_root_from(temp.path());
 
         assert!(result.is_ok());
         // Canonicalize paths for comparison (handles /var vs /private/var on macOS)
         assert_eq!(
             result.unwrap().canonicalize().unwrap(),
-            temp.as_path().canonicalize().unwrap()
+            temp.path().canonicalize().unwrap()
         );
     }
 
     #[test]
     fn test_find_workspace_root_fails_outside_workspace() {
-        let temp_sandbox = Sandbox::new();
-        let temp = temp_sandbox.work();
+        let temp = tempfile::tempdir().unwrap();
 
         let result =
-            PluginInstaller::find_workspace_root_from(temp.as_path().ancestors().last().unwrap());
+            PluginInstaller::find_workspace_root_from(temp.path().ancestors().last().unwrap());
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -2303,39 +2277,37 @@ mod tests {
 
     #[test]
     fn test_find_workspace_root_with_config_and_meta_directory() {
-        let temp_sandbox = Sandbox::new();
-        let temp = temp_sandbox.work();
+        let temp = tempfile::tempdir().unwrap();
 
         // A config file establishes a workspace alongside its .meta/ directory.
-        let meta_dir = temp.join(".meta");
+        let meta_dir = temp.path().join(".meta");
         std::fs::create_dir(&meta_dir).unwrap();
-        std::fs::write(temp.join(".meta.yaml"), "projects: {}").unwrap();
+        std::fs::write(temp.path().join(".meta.yaml"), "projects: {}").unwrap();
 
-        let result = PluginInstaller::find_workspace_root_from(temp.as_path());
+        let result = PluginInstaller::find_workspace_root_from(temp.path());
 
         // Should successfully find the workspace root
         assert!(result.is_ok());
         // Canonicalize paths for comparison (handles /var vs /private/var on macOS)
         assert_eq!(
             result.unwrap().canonicalize().unwrap(),
-            temp.as_path().canonicalize().unwrap()
+            temp.path().canonicalize().unwrap()
         );
     }
 
     #[test]
     fn test_new_local_creates_installer_with_correct_path() {
-        let temp_sandbox = Sandbox::new();
-        let temp = temp_sandbox.work();
-        let meta_dir = temp.join(".meta");
+        let temp = tempfile::tempdir().unwrap();
+        let meta_dir = temp.path().join(".meta");
         std::fs::create_dir(&meta_dir).unwrap();
 
-        std::fs::write(temp.join(".meta.yaml"), "projects: {}").unwrap();
+        std::fs::write(temp.path().join(".meta.yaml"), "projects: {}").unwrap();
 
         // Create plugins dir so we can canonicalize it
-        let plugins_dir = temp.join(LOCAL_PLUGINS_DIR);
+        let plugins_dir = temp.path().join(LOCAL_PLUGINS_DIR);
         std::fs::create_dir_all(&plugins_dir).unwrap();
 
-        let result = PluginInstaller::new_local_from(temp.as_path());
+        let result = PluginInstaller::new_local_from(temp.path());
 
         assert!(result.is_ok());
         let installer = result.unwrap();
@@ -2349,10 +2321,9 @@ mod tests {
 
     #[test]
     fn test_new_local_fails_outside_workspace() {
-        let temp_sandbox = Sandbox::new();
-        let temp = temp_sandbox.work();
+        let temp = tempfile::tempdir().unwrap();
 
-        let result = PluginInstaller::new_local_from(temp.as_path().ancestors().last().unwrap());
+        let result = PluginInstaller::new_local_from(temp.path().ancestors().last().unwrap());
 
         assert!(result.is_err());
         assert!(result
@@ -2363,10 +2334,9 @@ mod tests {
 
     #[test]
     fn local_plugins_gitignore_is_created_and_existing_file_is_kept() {
-        let temp_sandbox = Sandbox::new();
-        let temp = temp_sandbox.work();
-        std::fs::write(temp.join(".meta.yaml"), "projects: {}").unwrap();
-        let installer = PluginInstaller::new_local_from(temp.as_path()).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join(".meta.yaml"), "projects: {}").unwrap();
+        let installer = PluginInstaller::new_local_from(temp.path()).unwrap();
         installer.ensure_plugins_dir().unwrap();
         let path = installer.plugins_dir.join(".gitignore");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "*\n");

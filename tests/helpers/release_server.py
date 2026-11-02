@@ -1,4 +1,4 @@
-"""Serve a fake release directory for tests/install.bats.
+"""Serve a fake release directory (tests/install.bats, tests/plugin_install.bats).
 
 Usage: release_server.py <dir> <port-file>
 

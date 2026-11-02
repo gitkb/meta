@@ -34,9 +34,9 @@ isolate_user_env() {
 # Every test's setup starts here: a home, config, git config, meta data dir
 # and temp dir of the test's own (all under $BATS_TEST_TMPDIR, so nothing
 # outlives the test), no system git config, new repos on main, and a commit
-# identity. TEST_DIR
-# is an empty folder for the test's workspace, as its physical path (macOS
-# temp dirs sit behind a symlink, and meta and git print the real path).
+# identity. TEST_DIR is an empty folder for the test's workspace, as its
+# physical path (macOS temp dirs sit behind a symlink, and meta and git print
+# the real path).
 # The binaries under test are in META_BIN_DIR (setup_suite.bash).
 sandbox() {
     clear_git_local_env || return 1

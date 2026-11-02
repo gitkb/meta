@@ -719,7 +719,7 @@ mod tests {
 
     #[test]
     fn test_execute_command_no_meta_file() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_test_support::Sandbox::new();
         let temp_dir = sandbox.work();
 
         let options = ExecuteOptions::default();
@@ -731,7 +731,7 @@ mod tests {
 
     #[test]
     fn test_unknown_command() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_test_support::Sandbox::new();
         let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file
@@ -747,7 +747,7 @@ mod tests {
 
     #[test]
     fn test_project_check_all_present() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_test_support::Sandbox::new();
         let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file with no projects
@@ -913,7 +913,7 @@ mod tests {
 
     #[test]
     fn test_project_sync_removed() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_test_support::Sandbox::new();
         let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file
@@ -1533,7 +1533,7 @@ projects:
 
     #[test]
     fn test_project_dependents_rejects_what_it_does_not_take() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_test_support::Sandbox::new();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1562,7 +1562,7 @@ projects:
     #[test]
     fn test_project_dependents_unknown_project_error() {
         // T13: querying a nonexistent project name should error, not say "no dependents"
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_test_support::Sandbox::new();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),

@@ -575,7 +575,6 @@ within() {
     WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
     cd "$WORK_DIR/meta-repo"
-    git checkout -b main --quiet 2>/dev/null || true
     cat > .meta.yaml <<'EOF'
 {
     "projects": {}
@@ -615,7 +614,6 @@ EOF
     WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
     cd "$WORK_DIR/meta-repo"
-    git checkout -b main --quiet 2>/dev/null || true
     echo '{"projects": {}}' > .meta.yaml
     git add .meta.yaml
     git commit --quiet -m "Init"
@@ -645,7 +643,6 @@ EOF
     git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
     cd "$WORK_DIR/meta-repo"
     # Set default branch name explicitly
-    git checkout -b main --quiet 2>/dev/null || true
     echo '{"projects": {}}' > .meta.yaml
     git add .meta.yaml
     git commit --quiet -m "Commit 1"
@@ -892,8 +889,7 @@ create_meta_bare_repo() {
     git clone --quiet "$bare_dir" "$work_dir/checkout"
     (
         cd "$work_dir/checkout"
-        git checkout -b main --quiet 2>/dev/null || true
-        echo "$meta_content" > .meta.yaml
+            echo "$meta_content" > .meta.yaml
         git add .meta.yaml
         git commit --quiet -m "Add meta config"
         git push --quiet -u origin main

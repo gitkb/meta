@@ -348,7 +348,6 @@ fn normalize(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::Sandbox;
 
     fn project(name: &str, path: &str, tags: &[&str]) -> ProjectInfo {
         ProjectInfo {
@@ -390,8 +389,7 @@ mod tests {
 
     #[test]
     fn values_name_whole_repos_never_parts_of_paths() {
-        let sandbox = Sandbox::new();
-        let root = sandbox.work().join("ws/a");
+        let root = std::env::temp_dir().join("ws").join("a");
         let projects = [
             project("api", "api", &[]),
             project("api-legacy", "api-legacy", &[]),
@@ -436,8 +434,7 @@ mod tests {
 
     #[test]
     fn tags_select_tagged_repos_never_the_root_and_include_adds_to_them() {
-        let sandbox = Sandbox::new();
-        let root = sandbox.work().join("ws/a");
+        let root = std::env::temp_dir().join("ws").join("a");
         let projects = [
             project("api", "api", &["backend"]),
             project("worker", "worker", &["backend", "jobs"]),
@@ -502,8 +499,7 @@ mod tests {
 
     #[test]
     fn nested_projects_match_on_their_own_tags_and_names() {
-        let sandbox = Sandbox::new();
-        let root = sandbox.work().join("ws/a");
+        let root = std::env::temp_dir().join("ws").join("a");
         let node = |info: ProjectInfo, children| MetaTreeNode {
             info,
             is_meta: true,
@@ -527,8 +523,7 @@ mod tests {
 
     #[test]
     fn errors_name_the_config_they_read() {
-        let sandbox = Sandbox::new();
-        let root = sandbox.work().join("ws/a");
+        let root = std::env::temp_dir().join("ws").join("a");
         let config = root.join("infra").join(".meta.yaml");
         let repos = Scope::workspace(&root, None, &[project("tf", "tf", &[])], &[]).repos;
         let err = picked(&root, &repos, &filters(&["api"], &[], None), Some(&config))
@@ -540,9 +535,8 @@ mod tests {
 
     #[test]
     fn repos_are_directories_not_spellings() {
-        let temp_sandbox = Sandbox::new();
-        let temp = temp_sandbox.work();
-        let root = temp.join("ws");
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("ws");
         for dir in ["api", "libs", "child"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
@@ -591,9 +585,8 @@ mod tests {
 
     #[test]
     fn absolute_paths_and_ambiguous_names() {
-        let sandbox = Sandbox::new();
-        let root = sandbox.work().join("ws/a");
-        let outside = sandbox.work().join("elsewhere");
+        let root = std::env::temp_dir().join("ws").join("a");
+        let outside = std::env::temp_dir().join("elsewhere");
         let absolute = |dir: &Path| dir.display().to_string();
         let projects = [
             project("core-lib", &absolute(&root.join("libs/core")), &[]),

@@ -68,9 +68,11 @@ from the meta config, so relative references between repos keep working.
 
 When git-cowtree is installed, meta makes each worktree with it, so its files
 (and the main checkout's ignored `target/` and `node_modules/`) are copy-on-write
-clones that take almost no disk. Where the filesystem can't clone files, meta
-uses `git worktree add` for that repo and says why: each repo's entry reports
-`backend` (`reflink` or `git`) and `fallback_reason`. Without git-cowtree, meta
+clones that take almost no disk; a commit that needs git's checkout conversions
+(line endings, filters) is still checked out by git. Where the filesystem can't
+clone files, meta uses `git worktree add` for that repo and says why. Each repo's
+entry reports `backend` (`reflink` for clones, `git` when git checked the files
+out) and `fallback_reason` when git-cowtree declined. Without git-cowtree, meta
 uses `git worktree add` as before.
 
 `--from-pr` uses the PR's head branch name and fetches it from the child repo

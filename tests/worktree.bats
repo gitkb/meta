@@ -180,14 +180,26 @@ EOF
     git -C shared -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m init
     run "$META_BIN" --dry-run git worktree create both --repo backend
     [ "$status" -eq 0 ]
-    [[ "$output" == *"warning: Both '"*"provide 'db'"* ]]
+    [[ "$output" == *"warning: 'backend' depends on 'db', which both 'frontend' and 'shared' provide; 'shared' is used"* ]]
     run "$META_BIN" --strict --dry-run git worktree create both --repo backend
     [ "$status" -ne 0 ]
-    [[ "$output" == *"provide 'db'"*"(strict mode)"* ]]
+    [[ "$output" == *"'backend' depends on 'db', which both"*"(strict mode)"* ]]
     # a set that needs no db is none of its business
     run "$META_BIN" --strict --dry-run git worktree create front --repo frontend
     [ "$status" -eq 0 ]
-    [[ "$output" != *"provide 'db'"* ]]
+    [[ "$output" != *"depends on 'db'"* ]]
+    # --all holds backend: its problems count too
+    run "$META_BIN" --strict --dry-run git worktree create every --all
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'backend' depends on 'db', which both"*"(strict mode)"* ]]
+    # a project named db is what the name means, whoever provides one
+    printf '%s\n' 'projects:' \
+        '  backend: {repo: "git@github.com:org/backend.git", depends_on: [frontend]}' \
+        '  frontend: {repo: "git@github.com:org/frontend.git", provides: [frontend]}' \
+        '  shared: {repo: "git@github.com:org/shared.git", provides: [frontend]}' > .meta.yaml
+    run "$META_BIN" --strict --dry-run git worktree create named --repo backend
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"warning:"* ]]
     # nor of meta context, which doesn't act on the graph
     run "$META_BIN" context --no-status
     [ "$status" -eq 0 ]

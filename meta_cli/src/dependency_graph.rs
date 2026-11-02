@@ -15,7 +15,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use meta_core::config::ProjectInfo;
 use meta_core::git::GitUrl;
@@ -59,64 +59,94 @@ pub struct DependencyGraph {
     dependencies: HashMap<String, Vec<String>>,
     /// Reverse adjacency list: project -> projects that depend on it
     dependents: HashMap<String, Vec<String>>,
-    /// Each `depends_on` that names neither a project nor what one provides:
-    /// (project, the name)
-    unresolved: Vec<(String, String)>,
-    /// Each item two projects provide: (item, the project kept, the other)
-    duplicates: Vec<(String, String, String)>,
+    /// What resolving each project's `depends_on` ran into, by project
+    problems: HashMap<String, Vec<DependencyProblem>>,
 }
 
-/// What a `depends_on` of `project` that names nothing says, escaped.
-pub fn unresolved_message(project: &str, dep: &str) -> String {
-    use meta_core::display::escape;
-    format!(
-        "'{}' depends on '{}', which no project is or provides",
-        escape(project),
-        escape(dep)
-    )
+/// A `depends_on` the graph couldn't follow as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencyProblem {
+    /// It names neither a project nor what one provides
+    Unresolved(String),
+    /// It names what several projects provide: `used` is followed
+    Ambiguous {
+        item: String,
+        used: String,
+        other: String,
+    },
+}
+
+impl std::fmt::Display for DependencyProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use meta_core::display::escape;
+        match self {
+            Self::Unresolved(dep) => {
+                write!(
+                    f,
+                    "depends on '{}', which no project is or provides",
+                    escape(dep)
+                )
+            }
+            Self::Ambiguous { item, used, other } => write!(
+                f,
+                "depends on '{}', which both '{}' and '{}' provide; '{}' is used",
+                escape(item),
+                escape(other),
+                escape(used),
+                escape(used)
+            ),
+        }
+    }
 }
 
 impl DependencyGraph {
-    /// Build a dependency graph from a list of projects. What it can't
-    /// resolve is kept for the caller to report: [`Self::unresolved`],
-    /// [`Self::warn_duplicates`].
+    /// Build a dependency graph from a list of projects. What resolving a
+    /// `depends_on` ran into is kept for the caller: [`Self::problems_of`].
     pub fn build(projects: Vec<ProjectDependencies>) -> Self {
         let mut graph = DependencyGraph {
             projects: HashMap::new(),
             providers: HashMap::new(),
             dependencies: HashMap::new(),
             dependents: HashMap::new(),
-            unresolved: Vec::new(),
-            duplicates: Vec::new(),
+            problems: HashMap::new(),
         };
 
-        // First pass: register all projects and their provides
+        // First pass: register all projects and their provides (the last
+        // project providing an item is the one used)
+        let mut offered: HashMap<&str, Vec<&str>> = HashMap::new();
         for project in &projects {
             graph.projects.insert(project.name.clone(), project.clone());
-
-            // Register provided items
             for provided in &project.provides {
-                if let Some(existing) = graph
+                graph
                     .providers
-                    .insert(provided.clone(), project.name.clone())
-                {
-                    graph
-                        .duplicates
-                        .push((provided.clone(), project.name.clone(), existing));
-                }
+                    .insert(provided.clone(), project.name.clone());
+                offered.entry(provided).or_default().push(&project.name);
             }
         }
 
         // Second pass: resolve dependencies
         for project in &projects {
             for dep in &project.depends_on {
-                // A project's name, or what a project provides
+                // A project's name, or else what a project provides
                 let resolved = if graph.projects.contains_key(dep) {
                     dep.clone()
-                } else if let Some(provider) = graph.providers.get(dep) {
-                    provider.clone()
+                } else if let Some(provider) = graph.providers.get(dep).cloned() {
+                    let other = offered
+                        .get(dep.as_str())
+                        .and_then(|all| all.iter().find(|other| **other != provider));
+                    if let Some(other) = other {
+                        graph.problem(
+                            &project.name,
+                            DependencyProblem::Ambiguous {
+                                item: dep.clone(),
+                                used: provider.clone(),
+                                other: other.to_string(),
+                            },
+                        );
+                    }
+                    provider
                 } else {
-                    graph.unresolved.push((project.name.clone(), dep.clone()));
+                    graph.problem(&project.name, DependencyProblem::Unresolved(dep.clone()));
                     continue;
                 };
                 graph
@@ -135,35 +165,16 @@ impl DependencyGraph {
         graph
     }
 
-    /// Each `depends_on` the graph couldn't resolve: (project, the name).
-    pub fn unresolved(&self) -> &[(String, String)] {
-        &self.unresolved
+    fn problem(&mut self, project: &str, problem: DependencyProblem) {
+        self.problems
+            .entry(project.to_string())
+            .or_default()
+            .push(problem);
     }
 
-    /// Warn about each item two projects provide that one of `needed`
-    /// depends on, or with `strict` fail.
-    pub fn warn_duplicates(&self, needed: &BTreeSet<&str>, strict: bool) -> Result<()> {
-        use meta_core::display::escape;
-        for (item, kept, other) in &self.duplicates {
-            let used = needed.iter().any(|name| {
-                self.projects
-                    .get(*name)
-                    .is_some_and(|p| p.depends_on.contains(item))
-            });
-            if !used {
-                continue;
-            }
-            let kept = escape(kept);
-            meta_core::out::warn_or_bail(
-                strict,
-                format!(
-                    "Both '{}' and '{kept}' provide '{}'; '{kept}' is used",
-                    escape(other),
-                    escape(item)
-                ),
-            )?;
-        }
-        Ok(())
+    /// What resolving `project`'s `depends_on` ran into.
+    pub fn problems_of(&self, project: &str) -> &[DependencyProblem] {
+        self.problems.get(project).map_or(&[], Vec::as_slice)
     }
 
     /// Get direct dependencies of a project
@@ -352,6 +363,40 @@ pub struct ImpactAnalysis {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_resolver_records_what_each_depends_on_ran_into() {
+        let project = |name: &str, provides: &[&str], depends_on: &[&str]| ProjectDependencies {
+            name: name.to_string(),
+            path: name.to_string(),
+            repo: None,
+            tags: vec![],
+            provides: provides.iter().map(|s| s.to_string()).collect(),
+            depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
+        };
+        let graph = DependencyGraph::build(vec![
+            project("app", &[], &["db", "lib", "nosuch"]),
+            project("lib", &["lib"], &[]),
+            project("db1", &["db", "lib"], &[]),
+            project("db2", &["db"], &[]),
+            project("quiet", &["db"], &[]),
+        ]);
+        // a project's name wins over what others provide; three providers
+        // of db: the last is used
+        assert_eq!(
+            graph.problems_of("app"),
+            [
+                DependencyProblem::Ambiguous {
+                    item: "db".to_string(),
+                    used: "quiet".to_string(),
+                    other: "db1".to_string()
+                },
+                DependencyProblem::Unresolved("nosuch".to_string()),
+            ]
+        );
+        // nothing depends on db through the others
+        assert!(graph.problems_of("db1").is_empty());
+    }
 
     fn create_test_projects() -> Vec<ProjectDependencies> {
         vec![

@@ -8,7 +8,7 @@ use meta_core::{errln, outln};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
-use meta_cli::dependency_graph::{unresolved_message, DependencyGraph, ProjectDependencies};
+use meta_cli::dependency_graph::{DependencyGraph, DependencyProblem, ProjectDependencies};
 use meta_core::duration::format_duration;
 use meta_core::set_record::{self as record, SetRecord};
 use meta_git_lib::worktree::git_ops::*;
@@ -648,19 +648,24 @@ fn plan_repos(
         if !matches!(meta_core::gitdir::common_dir(meta_dir), Ok(None)) {
             all(index.find(".")?)?;
         }
-        match index.tree() {
+        let set: Vec<&str> = match index.tree() {
             Some(tree) => {
-                let mut places: Vec<&String> = tree.keys().collect();
-                places.sort();
-                for place in places {
+                let mut places: Vec<&str> = tree.keys().map(String::as_str).collect();
+                places.sort_unstable();
+                for place in &places {
                     all(index.place(place)?)?;
                 }
+                places
             }
             None => {
                 for project in &workspace.projects {
                     all(index.find(&project.name)?)?;
                 }
+                workspace.projects.iter().map(|p| p.name.as_str()).collect()
             }
+        };
+        if !args.no_deps {
+            report_problems(&dep_graph(index)?, set, index, strict)?;
         }
     } else {
         let mut asked_keys = Vec::new();
@@ -675,36 +680,13 @@ fn plan_repos(
             if meta_core::gitdir::common_dir(meta_dir)?.is_some() {
                 plan.add(index.find(".")?, branch(None), Why::Wanted, false)?;
             }
-            let graph = match index.tree() {
-                Some(tree) => nested_dep_graph(tree)?,
-                None => DependencyGraph::build(
-                    workspace
-                        .projects
-                        .iter()
-                        .map(|p| p.clone().into())
-                        .collect(),
-                ),
-            };
-            // a dependency the set would need and can't have, or that two
-            // projects provide
+            let graph = dep_graph(index)?;
             let mut needed: BTreeSet<&str> = BTreeSet::new();
             for key in asked_keys.iter().filter(|key| *key != ".") {
                 needed.insert(key);
                 needed.extend(graph.get_all_dependencies(key));
             }
-            graph.warn_duplicates(&needed, strict)?;
-            for (project, dep) in graph.unresolved() {
-                if needed.contains(project.as_str()) {
-                    let hint = match index.tree() {
-                        None => " (nested projects count with -r)",
-                        Some(_) => "",
-                    };
-                    out::warn_or_bail(
-                        strict,
-                        format!("{}{hint}", unresolved_message(project, dep)),
-                    )?;
-                }
-            }
+            report_problems(&graph, needed, index, strict)?;
             for key in asked_keys.iter().filter(|key| *key != ".") {
                 let deps = graph.get_all_dependencies(key);
                 log::debug!("Resolved transitive dependencies for '{key}': {deps:?}");
@@ -807,6 +789,44 @@ fn plan_repos(
         order(a).cmp(&order(b)).then_with(|| a.place.cmp(&b.place))
     });
     Ok(repos)
+}
+
+/// The workspace's dependency graph: of every place with --recursive, else
+/// of its own projects.
+fn dep_graph(index: &Index) -> Result<DependencyGraph> {
+    Ok(match index.tree() {
+        Some(tree) => nested_dep_graph(tree)?,
+        None => DependencyGraph::build(
+            index
+                .workspace
+                .projects
+                .iter()
+                .map(|p| p.clone().into())
+                .collect(),
+        ),
+    })
+}
+
+/// Report what resolving the `depends_on` of each project in `set` ran
+/// into: a warning, or with `strict` an error.
+fn report_problems<'a>(
+    graph: &DependencyGraph,
+    set: impl IntoIterator<Item = &'a str>,
+    index: &Index,
+    strict: bool,
+) -> Result<()> {
+    for project in set {
+        for problem in graph.problems_of(project) {
+            let hint = match problem {
+                DependencyProblem::Unresolved(_) if index.tree().is_none() => {
+                    " (nested projects count with -r)"
+                }
+                _ => "",
+            };
+            out::warn_or_bail(strict, format!("'{}' {problem}{hint}", escape(project)))?;
+        }
+    }
+    Ok(())
 }
 
 /// The dependency graph of the whole tree (`tree`, every project by its

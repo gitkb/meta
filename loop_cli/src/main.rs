@@ -78,6 +78,9 @@ fn run_loop() -> Result<()> {
             (path.clone(), parse_config_if_present(&path)?)
         }
     };
+    // a .looprc's JSON output, before anything is printed: no colour in it,
+    // errors as JSON
+    meta_core::out::set_json(config.json_output);
 
     if cli.command.is_empty() {
         Cli::command()
@@ -107,8 +110,6 @@ fn run_loop() -> Result<()> {
         config.ignore.extend(exclude);
     }
     config.verbose |= cli.verbose;
-    // a .looprc's JSON output: no colour in it, errors as JSON
-    meta_core::out::set_json(config.json_output);
     config.silent |= cli.silent;
     config.aliases = with_global_aliases(config.aliases)?;
 

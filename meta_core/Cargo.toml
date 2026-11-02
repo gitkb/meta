@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Shared infrastructure for ~/.meta/ directory management and atomic JSON store"
 
 [dependencies]
+anstyle-query = "1"
 anyhow = "1.0"
 clap = "4.3"
 colored = "2"

@@ -927,6 +927,10 @@ sys.exit(subprocess.run(sys.argv[1:], stdout=w).returncode)' "$META_BIN" frag "$
     # loop's --verbose lines go to stderr, so stdout stays JSON
     run bash -c '"$1" -v -i api true 2>/dev/null' _ "$BATS_TEST_DIRNAME/../target/debug/loop"
     jq -e '.success == true' <<<"$output"
+    # nor in -v's lines on stderr, printed after the .looprc is read
+    CLICOLOR_FORCE=1 run bash -c '"$1" -v -i api true 2>&1 >/dev/null' _ "$BATS_TEST_DIRNAME/../target/debug/loop"
+    [[ "$output" == *"Verbose mode enabled"* ]]
+    [[ "$output" != *$'\033['* ]]
     CLICOLOR_FORCE=1 run "$BATS_TEST_DIRNAME/../target/debug/loop" -i api sh -c 'if [ -n "$CLICOLOR_FORCE" ]; then echo forced; else echo plain; fi'
     jq -e '.results[0].stdout == "plain\n"' <<<"$output"
 }

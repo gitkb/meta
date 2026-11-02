@@ -137,23 +137,24 @@ pub fn color() -> bool {
     let on = !json()
         && *FROM_ENV.get_or_init(|| {
             let var = |name| std::env::var_os(name).filter(|value| !value.is_empty());
-            let on = decide_color(
+            let terminal = io::stdout().is_terminal();
+            decide_color(
                 var("NO_COLOR"),
                 var("CLICOLOR_FORCE"),
                 var("CLICOLOR"),
                 var("TERM"),
-                io::stdout().is_terminal(),
-            );
-            // a Windows console reads colour codes in its virtual-terminal
-            // mode only (a pipe has none to set)
-            #[cfg(windows)]
-            if on {
-                let _ = colored::control::set_virtual_terminal(true);
-            }
-            on
+                terminal,
+            ) && (!terminal || console_reads_colour())
         });
     colored::control::set_override(on);
     on
+}
+
+/// Whether the terminal reads colour codes: a Windows console only in its
+/// virtual-terminal mode, which this turns on and reports whether it took
+/// (on stdout and stderr); elsewhere, always.
+fn console_reads_colour() -> bool {
+    anstyle_query::windows::enable_ansi_colors().unwrap_or(true)
 }
 
 fn decide_color(

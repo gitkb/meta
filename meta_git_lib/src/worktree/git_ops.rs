@@ -1,12 +1,15 @@
 //! Git operations for worktree management.
 
+use super::types::Backend;
 use anyhow::{Context, Result};
-use meta_core::display::{escape, escape_path};
+use meta_core::display::{escape, escape_path, program_output};
 use meta_core::errln;
-use meta_core::git::{lookup, run, RepoStatus};
+use meta_core::git::{ceiling, in_repo, lookup, run, RepoStatus};
 use meta_core::gitdir::{common_dir, Checkout};
+use serde::Deserialize;
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// An error if the checkout at `repo_path` has `core.bare=true` in its
 /// config: git would make no worktree of it.
@@ -101,20 +104,33 @@ pub fn worktree_start(
     Ok(WorktreeStart::Head { commit })
 }
 
+/// What [`git_worktree_add`] made.
+#[derive(Debug)]
+pub struct Added {
+    /// The commit the branch was created at (`-b` refuses an existing
+    /// branch, so success proves this call made it), or None for an
+    /// existing branch
+    pub new_branch_at: Option<String>,
+    pub backend: Backend,
+    /// Why git made it although git-cowtree is installed: git-cowtree's
+    /// own reason for declining
+    pub fallback_reason: Option<String>,
+}
+
 /// Make a worktree of `repo_path` at `worktree_dest` on `branch` (see
-/// [`worktree_start`]). The commit the branch was created at (`-b` refuses
-/// an existing branch, so success proves this call made it), or None for
-/// an existing branch.
+/// [`worktree_start`]): with git-cowtree when it is installed, so its files
+/// are copy-on-write clones, else, or where git-cowtree declines, with
+/// `git worktree add`. Both get the same arguments.
 pub fn git_worktree_add(
     repo_path: &Path,
     worktree_dest: &Path,
     branch: &str,
     from_ref: Option<&str>,
-) -> Result<Option<String>> {
+) -> Result<Added> {
     let start = worktree_start(repo_path, branch, from_ref)?;
     leftover_entry(repo_path, worktree_dest)?;
     let remote_ref = format!("origin/{branch}");
-    let mut args: Vec<&OsStr> = vec!["worktree".as_ref(), "add".as_ref()];
+    let mut args: Vec<&OsStr> = Vec::new();
     if matches!(start, WorktreeStart::Remote { .. }) {
         args.push("--track".as_ref());
     }
@@ -128,8 +144,128 @@ pub fn git_worktree_add(
         WorktreeStart::Remote { .. } => args.push(remote_ref.as_ref()),
         WorktreeStart::Head { .. } => {}
     }
-    run(repo_path, args)?;
-    Ok(start.new_branch_at())
+    let git_add = || {
+        run(
+            repo_path,
+            ["worktree".as_ref(), "add".as_ref()].iter().chain(&args),
+        )
+    };
+    let (backend, fallback_reason) = match cowtree_installed(repo_path) {
+        true => match cowtree_add(repo_path, &args)? {
+            Ok(backend) => (backend, None),
+            Err(reason) => {
+                git_add()?;
+                (Backend::Git, Some(reason))
+            }
+        },
+        false => {
+            git_add()?;
+            (Backend::Git, None)
+        }
+    };
+    Ok(Added {
+        new_branch_at: start.new_branch_at(),
+        backend,
+        fallback_reason,
+    })
+}
+
+/// The git-cowtree contract meta speaks.
+const COWTREE_SCHEMA: &str = "git-cowtree.v1";
+
+/// Whether a git-cowtree speaking [`COWTREE_SCHEMA`] is on `PATH`, asked
+/// once per process (one meta command). One that isn't found, fails, or
+/// speaks another schema is as if absent.
+fn cowtree_installed(dir: &Path) -> bool {
+    static INSTALLED: OnceLock<bool> = OnceLock::new();
+    *INSTALLED.get_or_init(|| {
+        meta_core::children::output(in_repo("git-cowtree", dir).args(["--json", "version"]))
+            .ok()
+            .filter(|out| out.status.success())
+            .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
+            .is_some_and(|reply| {
+                reply.get("schema").and_then(serde_json::Value::as_str) == Some(COWTREE_SCHEMA)
+            })
+    })
+}
+
+/// What `git-cowtree --json` prints: a result, or an error.
+#[derive(Deserialize)]
+struct CowtreeReply {
+    backend: Option<Backend>,
+    error: Option<CowtreeError>,
+}
+
+#[derive(Deserialize)]
+struct CowtreeError {
+    kind: String,
+    message: String,
+    path: Option<PathBuf>,
+}
+
+/// `git-cowtree --json add <args>` in `repo_path`: the backend that made the
+/// worktree, or git-cowtree's reason for declining (exit 3, `unsupported`:
+/// nothing was changed, so git may make it). Any other failure is an error,
+/// never retried with git, and the caller undoes its own work as for a
+/// failed `git worktree add`. That includes `hook_failed` (the worktree
+/// exists and its `post-checkout` hook failed, as git leaves it) and
+/// `rollback_failed` (a worktree may be left at the error's path).
+fn cowtree_add(repo_path: &Path, args: &[&OsStr]) -> Result<std::result::Result<Backend, String>> {
+    let shown = || {
+        args.iter()
+            .map(|a| a.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let output = meta_core::children::output(
+        in_repo("git-cowtree", repo_path)
+            .envs(ceiling(repo_path))
+            .args(["--json", "add"])
+            .args(args),
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "Cannot run git-cowtree add {} in {}: {e}",
+            escape(&shown()),
+            escape_path(repo_path)
+        )
+    })?;
+    let reply = serde_json::from_slice::<CowtreeReply>(&output.stdout).ok();
+    let stderr = match output.stderr.trim_ascii() {
+        [] => String::new(),
+        text => program_output(text),
+    };
+    match (output.status.code(), reply) {
+        (
+            Some(0),
+            Some(CowtreeReply {
+                backend: Some(backend),
+                ..
+            }),
+        ) => Ok(Ok(backend)),
+        (Some(3), Some(CowtreeReply { error: Some(e), .. })) if e.kind == "unsupported" => {
+            Ok(Err(e.message))
+        }
+        (_, Some(CowtreeReply { error: Some(e), .. })) => anyhow::bail!(
+            "git-cowtree add {} failed in {}: {}: {}{}{}",
+            escape(&shown()),
+            escape_path(repo_path),
+            escape(&e.kind),
+            escape(&e.message),
+            e.path
+                .map(|path| format!(" (at {})", escape_path(&path)))
+                .unwrap_or_default(),
+            stderr
+        ),
+        _ => anyhow::bail!(
+            "git-cowtree add {} in {} ended with {} and printed what meta can't read:{}{}",
+            escape(&shown()),
+            escape_path(repo_path),
+            output.status,
+            program_output(&output.stdout),
+            stderr
+        ),
+    }
 }
 
 /// Fail, saying what to do, if git still has an entry for a worktree of

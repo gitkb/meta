@@ -376,6 +376,8 @@ Plugins are standalone executables that extend meta: a program named `meta-<word
 | `project` | `list`, `check` (is every project cloned from its remote?), `dependents` |
 | `cargo` | `meta cargo <cargo args>`: any cargo command in each repo that has a `Cargo.toml` |
 
+When git-cowtree is installed (on `PATH`, speaking its `git-cowtree.v1` contract), `meta git worktree create` and `add` make each worktree with it: the files are copy-on-write clones of the repository's, which take almost no disk, and ignored `target/` and `node_modules/` folders are cloned from the main checkout too. Where it can't (a filesystem without such clones, such as ext4 or tmpfs), meta makes that worktree with `git worktree add` and says why; each repo's entry in the JSON output reports `backend` (`reflink` or `git`) and, when git-cowtree declined, `fallback_reason`. Any other git-cowtree failure fails the create, which is rolled back as usual. Without git-cowtree, meta uses `git worktree add`; removal is always `git worktree remove`.
+
 `meta plugin search` and `meta plugin install <name>` read the plugin registry, `gitkb/meta-plugins` by default. To use others, list them in `~/.meta/config.yaml` (in `META_DATA_DIR` if set); `install` takes a plugin from the first one that has it:
 
 ```yaml

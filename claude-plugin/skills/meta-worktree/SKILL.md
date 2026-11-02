@@ -66,6 +66,13 @@ Add a repo to an existing set with `meta git worktree add auth-fix --repo anothe
 A set lays its repos out as the workspace does: each repo sits at its `path`
 from the meta config, so relative references between repos keep working.
 
+When git-cowtree is installed, meta makes each worktree with it, so its files
+(and the main checkout's ignored `target/` and `node_modules/`) are copy-on-write
+clones that take almost no disk. Where the filesystem can't clone files, meta
+uses `git worktree add` for that repo and says why: each repo's entry reports
+`backend` (`reflink` or `git`) and `fallback_reason`. Without git-cowtree,
+nothing changes.
+
 `--from-pr` uses the PR's head branch name and fetches it from the child repo
 whose `origin` matches; it does not check out a fork's branch or pin the head
 SHA. It never applies to the root repo. When no selected repo matches, or the

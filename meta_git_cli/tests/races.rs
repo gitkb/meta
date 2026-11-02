@@ -42,7 +42,6 @@ impl Race {
             "projects:\n  backend:\n    path: backend\n  frontend:\n    path: frontend\n",
         )
         .unwrap();
-        fs::create_dir_all(root.join("bin")).unwrap();
         Race { sandbox, root, ws }
     }
 
@@ -51,14 +50,11 @@ impl Race {
         let (sub, rest) = args.split_first().unwrap();
         let request = json!({"command": format!("git worktree {sub}"), "args": rest,
             "cwd": self.ws, "options": {}});
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        let paths = std::iter::once(self.root.join("bin")).chain(std::env::split_paths(&path));
         let mut child = self
             .sandbox
             .command(env!("CARGO_BIN_EXE_meta-git"))
             .arg("--meta-plugin-exec")
             .current_dir(&self.ws)
-            .env("PATH", std::env::join_paths(paths).unwrap())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -136,7 +132,7 @@ fn a_late_create_leaves_a_half_set_removable() {
         &backend,
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
-    sb.holding(&sb.root.join("bin"), "gh", "main");
+    sb.holding(&sb.sandbox.bin(), "gh", "main");
     let hooks = sb.root.join("hooks");
     fs::create_dir_all(&hooks).unwrap();
     sb.holding(&hooks, "post-checkout", "");

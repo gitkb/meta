@@ -57,14 +57,8 @@ fn meta_git_in(
     worktrees: Option<&Path>,
 ) -> Output {
     let request = json!({"command": command, "args": args, "cwd": cwd, "options": options});
-    let root = sandbox.work();
-    let mut cmd = sandbox.command(env!("CARGO_BIN_EXE_meta-git"));
-    if root.join("bin").is_dir() {
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        let paths = std::iter::once(root.join("bin")).chain(std::env::split_paths(&path));
-        cmd.env("PATH", std::env::join_paths(paths).unwrap());
-    }
-    let mut child = cmd
+    let mut child = sandbox
+        .command(env!("CARGO_BIN_EXE_meta-git"))
         .arg("--meta-plugin-exec")
         .current_dir(cwd)
         .envs(worktrees.map(|dir| ("META_WORKTREES", dir)))
@@ -285,14 +279,12 @@ fn diff_reports_failed_commands_and_malformed_numstat_instead_of_zero_counts() {
     use std::os::unix::fs::PermissionsExt;
 
     let sandbox = Sandbox::new();
-    let root = &sandbox.work();
     let ws = workspace(&sandbox, &["a"]);
     let out = worktree(&sandbox, &ws, &["create", "t", "--repo", "a", "--no-deps"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let path = std::env::var("PATH").unwrap();
     let quote = meta_core::display::shell_quote;
-    let bin = root.join("bin");
-    fs::create_dir(&bin).unwrap();
+    let bin = sandbox.bin();
     for numstat in [
         Some("bad\t0\tREADME"),
         Some("1\tbad\tREADME"),
@@ -914,9 +906,9 @@ fn from_pr_applies_only_to_the_exact_repo() {
     sandbox.git(&ws, &["add", "."]);
     sandbox.git(&ws, &["commit", "-qm", "meta"]);
     // A stand-in `gh` that reports the PR's head branch.
-    fs::create_dir(root.join("bin")).unwrap();
-    fs::write(root.join("bin/gh"), "#!/bin/sh\necho feature-x\n").unwrap();
-    fs::set_permissions(root.join("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+    let gh = sandbox.bin().join("gh");
+    fs::write(&gh, "#!/bin/sh\necho feature-x\n").unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
 
     let out = meta_git(
         &sandbox,

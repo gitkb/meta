@@ -1,6 +1,6 @@
 //! Types for worktree management.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ==================== Domain Types ====================
@@ -59,6 +59,32 @@ pub struct CreateRepoEntry {
     pub path: String,
     pub branch: String,
     pub created_branch: bool,
+    /// What made the worktree's files; absent from a dry run, which makes
+    /// none
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<Backend>,
+    /// Why git made them although git-cowtree is installed: git-cowtree's
+    /// reason for declining
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+}
+
+/// What made a worktree's files: git-cowtree's copy-on-write clones
+/// (`reflink`), or git's checkout (`git`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    Reflink,
+    Git,
+}
+
+impl Backend {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Reflink => "reflink",
+            Self::Git => "git",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

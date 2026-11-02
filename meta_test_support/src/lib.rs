@@ -56,7 +56,9 @@ impl Sandbox {
         } else {
             dir.path().canonicalize().unwrap()
         };
-        for sub in ["home", "config", "data", "runtime", "meta", "tmp", "work"] {
+        for sub in [
+            "home", "config", "data", "runtime", "meta", "tmp", "work", "bin",
+        ] {
             std::fs::create_dir(root.join(sub)).unwrap();
         }
         #[cfg(unix)]
@@ -64,6 +66,13 @@ impl Sandbox {
             use std::os::unix::fs::PermissionsExt;
             let private = std::fs::Permissions::from_mode(0o700);
             std::fs::set_permissions(root.join("runtime"), private).unwrap();
+            // a git-cowtree installed on the machine stays out of the tests:
+            // this one, first on PATH, fails as a missing program does, so
+            // meta takes it for absent. A test of meta with git-cowtree
+            // writes its own over it.
+            let stub = root.join("bin/git-cowtree");
+            std::fs::write(&stub, "#!/bin/sh\nexit 127\n").unwrap();
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         // whatever the machine's git defaults to, a new repo starts on main
         std::fs::write(root.join("gitconfig"), "[init]\n\tdefaultBranch = main\n").unwrap();
@@ -119,6 +128,11 @@ impl Sandbox {
         self.root.join("home")
     }
 
+    /// A folder first on `PATH`, for the programs a test stands in for.
+    pub fn bin(&self) -> PathBuf {
+        self.root.join("bin")
+    }
+
     /// The sandbox's meta data dir (`META_DATA_DIR`).
     pub fn meta_data(&self) -> PathBuf {
         self.root.join("meta")
@@ -126,7 +140,10 @@ impl Sandbox {
 
     /// What every program a test starts sees instead of the user's.
     fn env(&self) -> Vec<(&'static str, PathBuf)> {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let path = std::iter::once(self.bin()).chain(std::env::split_paths(&path));
         vec![
+            ("PATH", std::env::join_paths(path).unwrap().into()),
             ("HOME", self.home()),
             ("XDG_CONFIG_HOME", self.root.join("config")),
             ("XDG_DATA_HOME", self.root.join("data")),

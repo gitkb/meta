@@ -131,6 +131,8 @@ pub(crate) fn handle_add(
                 path: wt_dir.join(place).display().to_string(),
                 created_branch: start.new_branch_at().is_some(),
                 branch,
+                backend: None,
+                fallback_reason: None,
             });
         }
         if json {
@@ -195,8 +197,8 @@ pub(crate) fn handle_add(
         }
 
         // A failed add stops here; what was added is reported
-        let created_branch = match git_worktree_add(&source, &dest, &branch, None) {
-            Ok(created) => created.is_some(),
+        let worktree = match git_worktree_add(&source, &dest, &branch, None) {
+            Ok(worktree) => worktree,
             Err(e) => {
                 failed = Some(e);
                 break;
@@ -218,7 +220,9 @@ pub(crate) fn handle_add(
             alias: spec.alias.clone(),
             path: dest.display().to_string(),
             branch,
-            created_branch,
+            created_branch: worktree.new_branch_at.is_some(),
+            backend: Some(worktree.backend),
+            fallback_reason: worktree.fallback_reason,
         });
     }
 
@@ -233,12 +237,13 @@ pub(crate) fn handle_add(
         for r in &added {
             let branch_note = if r.created_branch { " (new)" } else { "" };
             outln!(
-                "{} Added '{}' to worktree '{}' (branch: {}{})",
+                "{} Added '{}' to worktree '{}' (branch: {}{}){}",
                 "✓".green(),
                 escape(&r.alias),
                 name,
                 escape(&r.branch),
-                branch_note
+                branch_note,
+                super::backend_note(r)
             )?;
         }
     }

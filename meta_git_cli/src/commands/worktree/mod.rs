@@ -148,3 +148,15 @@ pub(crate) fn not_a_repository(alias: &str, source: &Path) -> Option<String> {
             )
         })
 }
+
+/// How a made worktree's line says what made its files: nothing for git's
+/// checkout, the default; `[reflink]` for git-cowtree's clones; and why git
+/// made them when git-cowtree declined.
+pub(crate) fn backend_note(repo: &meta_git_lib::worktree::types::CreateRepoEntry) -> String {
+    use meta_git_lib::worktree::types::Backend;
+    match (repo.backend, &repo.fallback_reason) {
+        (_, Some(reason)) => format!(" [git: git-cowtree declined: {}]", escape(reason)),
+        (Some(Backend::Reflink), None) => " [reflink]".to_string(),
+        (Some(Backend::Git) | None, None) => String::new(),
+    }
+}

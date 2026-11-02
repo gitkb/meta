@@ -19,6 +19,7 @@ use meta_git_lib::worktree::plan::{Found, Index, PlannedRepo};
 use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
 use meta_git_lib::worktree::types::{CreateOutput, CreateRepoEntry};
 
+use super::backend_note;
 use super::cli_types::CreateArgs;
 use meta_core::display::shell_quote;
 
@@ -286,16 +287,17 @@ pub(crate) fn handle_create(
                 );
             }
             // Any failure other than a missing ref is a failed create.
-            let created_branch =
-                journal_new_branch(&repo.source, &repo.branch, &mut new_branches, || {
-                    git_worktree_add(&repo.source, &dest, &repo.branch, from_ref)
-                })?;
+            let added = journal_new_branch(&repo.source, &repo.branch, &mut new_branches, || {
+                git_worktree_add(&repo.source, &dest, &repo.branch, from_ref)
+            })?;
             mark(&dest)?;
             created_repos.push(CreateRepoEntry {
                 alias: repo.project.clone(),
                 path: dest.display().to_string(),
                 branch: repo.branch.clone(),
-                created_branch,
+                created_branch: added.new_branch_at.is_some(),
+                backend: Some(added.backend),
+                fallback_reason: added.fallback_reason,
             });
         }
 
@@ -336,10 +338,11 @@ pub(crate) fn handle_create(
         for r in &output.repos {
             let branch_note = if r.created_branch { " (new)" } else { "" };
             outln!(
-                "  {} -> {}{}",
+                "  {} -> {}{}{}",
                 escape(&r.alias),
                 escape(&r.branch),
-                branch_note
+                branch_note,
+                backend_note(r)
             )?;
         }
         if ephemeral {
@@ -387,25 +390,26 @@ fn missing_ref<'a>(repo: &std::path::Path, from_ref: Option<&'a str>) -> Result<
     }
 }
 
-/// Run a `git worktree add` and note the branch it created, with the commit
-/// it was created at, so a rollback deletes only branches this call made and
-/// only while they still point there (a post-checkout hook may have committed
-/// on one). A branch that appears although the add failed may belong to
+/// Add a worktree and note the branch it created, with the commit it was
+/// created at, so a rollback deletes only branches this call made and only
+/// while they still point there (a post-checkout hook may have committed on
+/// one). A branch that appears although the add failed may belong to
 /// someone else: it is kept and named in the error.
 fn journal_new_branch(
     repo: &std::path::Path,
     branch: &str,
     journal: &mut Vec<(std::path::PathBuf, String, String)>,
-    add: impl FnOnce() -> Result<Option<String>>,
-) -> Result<bool> {
+    add: impl FnOnce() -> Result<Added>,
+) -> Result<Added> {
     let branch_ref = format!("refs/heads/{branch}");
     let existed = git_rev_parse(repo, &branch_ref)?.is_some();
     match add() {
-        Ok(Some(start)) => {
-            journal.push((repo.to_path_buf(), branch.to_string(), start));
-            Ok(true)
+        Ok(added) => {
+            if let Some(start) = &added.new_branch_at {
+                journal.push((repo.to_path_buf(), branch.to_string(), start.clone()));
+            }
+            Ok(added)
         }
-        Ok(None) => Ok(false),
         Err(e) if !existed && matches!(git_rev_parse(repo, &branch_ref), Ok(Some(_))) => Err(e
             .context(format!(
                 "branch '{branch}' now exists in {} and was kept: meta can't tell whether this \
@@ -865,6 +869,7 @@ fn nested_dep_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_git_lib::worktree::types::Backend;
 
     #[test]
     fn roll_back_deletes_a_set_whose_records_were_not_all_written() {
@@ -910,11 +915,15 @@ mod tests {
         let mut journal = Vec::new();
 
         // Our add created the branch: journaled.
-        let created = journal_new_branch(&tmp, "ours", &mut journal, || {
+        let added = journal_new_branch(&tmp, "ours", &mut journal, || {
             sandbox.git(&tmp, &["branch", "ours"]);
-            Ok(Some("start".to_string()))
+            Ok(Added {
+                new_branch_at: Some("start".to_string()),
+                backend: Backend::Git,
+                fallback_reason: None,
+            })
         });
-        assert!(created.unwrap());
+        assert!(added.unwrap().new_branch_at.is_some());
         assert_eq!(journal.len(), 1);
 
         // Another process created the branch while our add failed: kept and named.

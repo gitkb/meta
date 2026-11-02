@@ -10,6 +10,7 @@ members = [
     "meta_plugin_protocol",
     "meta_rust_cli",
     "meta_project_cli",
+    "meta_test_support",
 ]
 exclude = ["agent"]
 resolver = "2"

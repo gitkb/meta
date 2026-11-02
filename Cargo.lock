@@ -1000,6 +1000,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "meta_test_support"
+version = "0.2.22"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

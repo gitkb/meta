@@ -79,7 +79,8 @@ pub struct CreateArgs {
     /// By default, worktree create includes the root repo and resolves
     /// dependencies via provides/depends_on from .meta.yaml.
     /// Use --no-deps to include only the named repos (and, for a repo nested
-    /// inside another project's path, that parent project).
+    /// inside another project's path, that parent project), and to leave
+    /// their depends_on unchecked (with --all too).
     #[arg(long)]
     pub no_deps: bool,
 

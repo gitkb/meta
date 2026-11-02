@@ -72,7 +72,7 @@ pub enum DependencyProblem {
     Ambiguous {
         item: String,
         used: String,
-        other: String,
+        others: Vec<String>,
     },
 }
 
@@ -87,14 +87,18 @@ impl std::fmt::Display for DependencyProblem {
                     escape(dep)
                 )
             }
-            Self::Ambiguous { item, used, other } => write!(
-                f,
-                "depends on '{}', which both '{}' and '{}' provide; '{}' is used",
-                escape(item),
-                escape(other),
-                escape(used),
-                escape(used)
-            ),
+            Self::Ambiguous { item, used, others } => {
+                let others: Vec<String> =
+                    others.iter().map(|o| format!("'{}'", escape(o))).collect();
+                write!(
+                    f,
+                    "depends on '{}', which {} and '{}' provide; '{}' is used",
+                    escape(item),
+                    others.join(", "),
+                    escape(used),
+                    escape(used)
+                )
+            }
         }
     }
 }
@@ -134,13 +138,18 @@ impl DependencyGraph {
                     let Some(provider) = all.last().cloned() else {
                         continue;
                     };
-                    if let Some(other) = all.iter().find(|other| **other != provider) {
+                    let others: Vec<String> = all
+                        .iter()
+                        .filter(|other| **other != provider)
+                        .cloned()
+                        .collect();
+                    if !others.is_empty() {
                         graph.problem(
                             &project.name,
                             DependencyProblem::Ambiguous {
                                 item: dep.clone(),
                                 used: provider.clone(),
-                                other: other.clone(),
+                                others,
                             },
                         );
                     }
@@ -389,7 +398,7 @@ mod tests {
                 DependencyProblem::Ambiguous {
                     item: "db".to_string(),
                     used: "quiet".to_string(),
-                    other: "db1".to_string()
+                    others: vec!["db1".to_string(), "db2".to_string()]
                 },
                 DependencyProblem::Unresolved("nosuch".to_string()),
             ]

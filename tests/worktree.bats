@@ -180,10 +180,10 @@ EOF
     git -C shared -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m init
     run "$META_BIN" --dry-run git worktree create both --repo backend
     [ "$status" -eq 0 ]
-    [[ "$output" == *"warning: 'backend' depends on 'db', which both 'frontend' and 'shared' provide; 'shared' is used"* ]]
+    [[ "$output" == *"warning: 'backend' depends on 'db', which 'frontend' and 'shared' provide; 'shared' is used"* ]]
     run "$META_BIN" --strict --dry-run git worktree create both --repo backend
     [ "$status" -ne 0 ]
-    [[ "$output" == *"'backend' depends on 'db', which both"*"(strict mode)"* ]]
+    [[ "$output" == *"'backend' depends on 'db', which 'frontend'"*"(strict mode)"* ]]
     # a set that needs no db is none of its business
     run "$META_BIN" --strict --dry-run git worktree create front --repo frontend
     [ "$status" -eq 0 ]
@@ -191,7 +191,7 @@ EOF
     # --all holds backend: its problems count too
     run "$META_BIN" --strict --dry-run git worktree create every --all
     [ "$status" -ne 0 ]
-    [[ "$output" == *"'backend' depends on 'db', which both"*"(strict mode)"* ]]
+    [[ "$output" == *"'backend' depends on 'db', which 'frontend'"*"(strict mode)"* ]]
     # a project named db is what the name means, whoever provides one
     printf '%s\n' 'projects:' \
         '  backend: {repo: "git@github.com:org/backend.git", depends_on: [frontend]}' \

@@ -94,24 +94,22 @@ teardown() {
     [ ! -e "$STUB_DIR/claude-calls" ]
 }
 
-@test "skill copies in this repo match meta_cli" {
+@test "init claude installs the skills of claude-plugin/skills, their one source" {
     local root="$BATS_TEST_DIRNAME/.."
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
     local count=0
-    for src in "$root"/meta_cli/.claude/skills/meta-*/SKILL.md; do
+    for src in "$root"/claude-plugin/skills/meta-*/SKILL.md; do
         local name
         name="$(basename "$(dirname "$src")")"
-        for copy in "$root/.meta/skills/$name/SKILL.md" "$root/claude-plugin/skills/$name/SKILL.md"; do
-            cmp "$src" "$copy" || { echo "$copy differs from meta_cli: run 'make skills'"; return 1; }
-        done
-        for agent in .claude .agents; do
-            [ "$(readlink "$root/$agent/skills/$name")" = "../../.meta/skills/$name" ]
-        done
+        cmp "$src" ".meta/skills/$name/SKILL.md"
+        # this repo's own agents read the same files
+        [ "$(readlink "$root/.claude/skills/$name")" = "../../claude-plugin/skills/$name" ]
+        [ "$(readlink "$root/.agents/skills/$name")" = "../../claude-plugin/skills/$name" ]
         count=$((count + 1))
     done
     [ "$count" -eq 6 ]
-    # No copies or links of skills meta_cli no longer has
-    [ "$(ls -d "$root"/.meta/skills/meta-*/ "$root"/claude-plugin/skills/meta-*/ | wc -l)" -eq 12 ]
-    [ "$(ls -d "$root"/.claude/skills/meta-* "$root"/.agents/skills/meta-* | wc -l)" -eq 12 ]
+    [ "$(ls -d .meta/skills/meta-*/ | wc -l)" -eq 6 ]
 }
 
 @test "init claude creates all rule files" {

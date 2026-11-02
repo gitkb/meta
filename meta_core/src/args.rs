@@ -53,7 +53,7 @@ pub fn parse<P: clap::Parser>() -> anyhow::Result<P> {
 }
 
 /// `error`, for an option of `P`'s own given after a subcommand
-/// (`meta exec --dry-run -- rm x`), with the tip that it goes before the
+/// (`--dry-run` after `meta exec`), with the tip that it goes before the
 /// subcommand in place of clap's, which would pass it to the command.
 fn with_option_tip<P: clap::Parser>(mut error: clap::Error) -> clap::Error {
     use clap::error::{ContextKind, ContextValue, ErrorKind};
@@ -90,4 +90,58 @@ fn with_option_tip<P: clap::Parser>(mut error: clap::Error) -> clap::Error {
         ContextValue::StyledStrs(vec![tip.into()]),
     );
     error
+}
+
+/// The one word of `candidates` that `typed` is a typo of: the nearest by
+/// edits (a swap of two letters counts as one), at most one edit away for a
+/// word under five letters and two for a longer one. `None` when no word is
+/// that near, or two are equally near.
+pub fn nearest<'a>(typed: &str, candidates: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    let limit = if typed.chars().count() < 5 { 1 } else { 2 };
+    let mut best: Option<(usize, &str)> = None;
+    let mut tied = false;
+    for candidate in candidates {
+        let distance = strsim::osa_distance(typed, candidate);
+        if distance == 0 || distance > limit {
+            continue;
+        }
+        match best {
+            Some((nearest, word)) if distance == nearest && word != candidate => tied = true,
+            Some((nearest, _)) if distance >= nearest => {}
+            _ => {
+                best = Some((distance, candidate));
+                tied = false;
+            }
+        }
+    }
+    best.filter(|_| !tied).map(|(_, word)| word)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nearest;
+
+    const COMMANDS: &[&str] = &[
+        "context", "exec", "git", "help", "init", "plugin", "project",
+    ];
+
+    #[test]
+    fn a_typo_names_the_one_command_it_is_near() {
+        assert_eq!(nearest("gti", COMMANDS.iter().copied()), Some("git"));
+        assert_eq!(nearest("exce", COMMANDS.iter().copied()), Some("exec"));
+        assert_eq!(nearest("projet", COMMANDS.iter().copied()), Some("project"));
+        assert_eq!(
+            nearest("lsit", ["list", "check", "dependents"]),
+            Some("list")
+        );
+    }
+
+    #[test]
+    fn a_word_near_nothing_or_near_two_names_none() {
+        assert_eq!(nearest("query", COMMANDS.iter().copied()), None);
+        assert_eq!(nearest("npm", COMMANDS.iter().copied()), None);
+        // the word itself is no typo
+        assert_eq!(nearest("git", COMMANDS.iter().copied()), None);
+        assert_eq!(nearest("ab", ["ax", "ay"]), None);
+    }
 }

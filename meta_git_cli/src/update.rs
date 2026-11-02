@@ -53,7 +53,7 @@ pub(crate) fn execute_git_update(
             || meta_cli::worktree::holds_meta_checkout(&set_dir)
         {
             anyhow::bail!(
-                "meta git update brings the workspace up to date, not worktree set '{}'; \
+                "`meta git update` brings the workspace up to date, not worktree set '{}'; \
                  run it in the workspace, or 'meta git pull' in the set",
                 escape(&set)
             );
@@ -177,7 +177,7 @@ fn report_unlisted(queue: &CloneQueue, cwd: &Path) {
                 held.join("; ")
             ),
             Err(e) => format!(
-                "meta can't tell what it holds ({})",
+                "what it holds can't be told ({})",
                 meta_core::display::escape_lines(&format!("{e:#}"))
             ),
         };

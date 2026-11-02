@@ -196,7 +196,7 @@ Exit code is non-zero if any command failed.
 Loop is the execution engine underlying `meta`. When you run:
 
 ```bash
-meta npm install
+meta exec -- npm install
 ```
 
 Meta processes configuration, applies filters, and delegates execution to loop_lib.

@@ -480,7 +480,7 @@ fn execute_command_in_directory(
                 Stdio::inherit()
             }),
         )
-        .with_context(|| format!("Failed to run {}", escape(&command)))
+        .map_err(|e| anyhow::anyhow!(not_started(&argv, &e)))
     });
     let result = match status {
         Ok(status) => {
@@ -574,12 +574,33 @@ fn execute_command_in_directory_capturing(
                 stderr: output.stderr,
             }
         }
-        Err(e) => failed_result(
-            dir,
-            command.clone(),
-            format!("Failed to run {}: {e}\n", escape(&command)),
-        ),
+        Err(e) => failed_result(dir, command, format!("{}\n", not_started(&argv, &e))),
     }
+}
+
+/// Why `argv` didn't start; for one argument with a space in it that names
+/// no program (`"git status"`), also that a program and its arguments are
+/// separate words.
+fn not_started(argv: &[String], error: &std::io::Error) -> String {
+    let command = display_command(argv);
+    let mut said = format!("Failed to run {}: {error}", escape(&command));
+    if let [one] = argv {
+        // a path with a space in it is one word
+        if error.kind() == std::io::ErrorKind::NotFound
+            && one.contains(char::is_whitespace)
+            && !one.contains(std::path::is_separator)
+        {
+            // read as a shell would (`git commit -m "a b"` is four words)
+            if let Some(words) = shlex::split(one) {
+                said.push_str(&format!(
+                    "\n  a program and its arguments are separate words: {}, not {}",
+                    escape(&display_command(&words)),
+                    escape(&command)
+                ));
+            }
+        }
+    }
+    said
 }
 
 /// Each of `directories` and the directories in it, in name order, without

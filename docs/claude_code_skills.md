@@ -35,116 +35,18 @@ Commit `.meta/skills/` and the links so everyone working in the repo gets the sk
 
 **What meta replaces.** `meta init claude --update` (or `--force`) overwrites meta's own files: `.meta/skills/<name>/SKILL.md` and its rule files `.claude/rules/meta-workspace-discipline.md` and `meta-destructive-commands.md`. In the agent skills folders (`.claude/skills/`, `.agents/skills/`, ...) it only replaces what meta wrote there: a marked copy, or a Git link placeholder holding exactly meta's link target. Other regular files, folders and links there are left alone and reported as skipped, in every mode. Links on the way are followed and kept: a linked `.claude/rules` folder or rule file gets the rules where it leads, a linked `.claude/settings.json` is merged atomically at its target and stays a link (`--update` still leaves settings alone), and a linked agent skills folder (say `.claude/skills` stowed from dotfiles) gets meta's links, made to point back at the workspace's skills. A linked folder that leads nowhere is an error naming it, as for `mkdir -p`.
 
-The skill text lives in `meta_cli/.claude/skills/` and is embedded in the `meta` binary. This repo's `.meta/skills/` (linked from `.claude/skills/` and `.agents/skills/`) and `claude-plugin/skills/` are copies: edit meta_cli, then run `make skills` and commit the copies in the same PR (`tests/init.bats` fails when they differ). Bump `claude-plugin/.claude-plugin/plugin.json`'s version when the plugin's skills change, so plugin users get the update.
+**Editing the skills.** Each skill has one source, `claude-plugin/skills/<name>/SKILL.md`, which is embedded in the `meta` binary and is also what the Claude Code plugin ships. In this repo, `.claude/skills/meta-*` and `.agents/skills/meta-*` are committed links to `../../claude-plugin/skills/<name>`, so agents working on meta load the text you edit (`tests/init.bats` checks the links and that `meta init claude` installs that text). On Windows, a contributor needs Developer Mode and `git config core.symlinks true` before checking out, or those links arrive as small files holding their target path. When skill text changes, bump the version in `claude-plugin/.claude-plugin/plugin.json` so plugin users get the update.
 
 ## Available Skills
 
-### meta-workspace - Understanding Meta Repos
-
-**Purpose:** Teaches Claude about meta repository structure and why multi-repo commands matter.
-
-**Key concepts covered:**
-- The `.meta.yaml` file structure
-- Simple vs extended project formats
-- Tag-based filtering
-- Nested meta repos and recursive operations
-- Why `meta git` is better than `git` in workspaces
-
-**When Claude should reference this skill:**
-- When first entering a meta repository
-- When asked about project structure
-- When confused about repo relationships
-
-### meta-git - Git Operations
-
-**Purpose:** Multi-repo git operations with special attention to safe batch changes.
-
-**Key concepts covered:**
-- `meta git clone` and its queue-based recursive cloning
-- `meta git update` for syncing workspaces
-- Committing or stashing before batch changes, and recovering with `git reflog`
-- Safe workflow patterns (status → commit/stash → work → commit)
-
-**When Claude should reference this skill:**
-- Before any multi-repo git operation
-- When making batch changes across repos
-- When needing to undo workspace-wide changes
-
-### meta-exec - Execution Model
-
-**Purpose:** How commands run across repos, filtering options, and output modes.
-
-**Key concepts covered:**
-- `meta exec -- <cmd>` syntax for running arbitrary commands
-- Plugin commands work directly (e.g., `meta git status`)
-- Bare commands like `meta npm install` are **not supported**—use `meta exec -- npm install`
-- Parallel vs sequential execution
-- `--include`, `--exclude`, `--tag` filtering
-- `--dry-run` for previewing operations
-- JSON output mode for scripting
-- How filters combine (`--include` and `--tag` add repos, `--exclude` removes them)
-
-**When Claude should reference this skill:**
-- When running arbitrary commands across repos
-- When needing to filter target repositories
-- When building scripts that use meta
-
-### meta-plugins - Plugin System
-
-**Purpose:** How plugins intercept commands and extend meta's behavior.
-
-**Key concepts covered:**
-- Plugin discovery locations
-- Command routing: `meta exec --` runs commands as typed; other commands go to a plugin or error (no automatic fallback for bare commands)
-- Built-in plugins (git, project, rust)
-- Plugin management commands
-- Why some commands behave "magically" (e.g., `meta git clone`)
-- Understanding "unrecognized command" errors—use `meta exec --` for non-plugin commands
-
-**When Claude should reference this skill:**
-- When a command behaves unexpectedly
-- When extending meta with custom behavior
-- When troubleshooting command routing
-
-### meta-worktree - Isolated Worktree Sets
-
-**Purpose:** Create, use and remove multi-repo git worktree sets with `meta git worktree`.
-
-**Key concepts covered:**
-- Every change gets its own set; read-only work may stay in the primary checkout
-- `create` with `--repo`, `--recursive`, `--no-deps`, a commit-ish or `--from-pr` (child repos only), plus a root-PR recipe
-- `list`, `status`, `diff`, `exec`, `remove`, `prune`, TTLs and `--strict`
-- Context detection inside `.worktrees/<name>/` and its limits
-
-**When Claude should reference this skill:**
-- Before changing code in a meta workspace
-- When continuing a PR or testing a tag or SHA in isolation
-
-### meta-safety - Multi-Repo Safety
-
-**Purpose:** Precision operations and dependency awareness across repos.
-
-**Key concepts covered:**
-- Session start: `meta project list --recursive --json`, `meta git status`
-- Filtering with `--include`/`--exclude` (whole repos: `.meta.yaml` name or path from the root) and `--tag`
-- Dependency order via the MCP tool `meta_execution_order`
-- Global and worktree `--strict` mode
-
-**When Claude should reference this skill:**
-- Before batch changes or commits across repos
-- Before modifying a repo other repos depend on
-
-## Skill Design Philosophy
-
-These skills were designed with specific principles:
-
-1. **Pedagogical, not encyclopedic** - Skills teach workflows and decision-making, not just command lists
-
-2. **Context-aware** - Skills explain WHEN to use techniques, not just HOW
-
-3. **Safety-first** - Committing first and dry-run are emphasized for batch operations
-
-4. **AI-optimized** - Written for how AI agents process instructions, with clear patterns and examples
+| Skill | What it teaches |
+|-------|-----------------|
+| `meta-workspace` | The `.meta.yaml` format, tags, nested meta repos, and why `meta git` beats `git` in a workspace; for a first look at a meta repo |
+| `meta-git` | `meta git clone` and `update`, committing or stashing before batch changes, recovering with `git reflog` |
+| `meta-exec` | `meta exec -- <cmd>` (as typed, no shell), parallel and sequential runs, `--include`/`--exclude`/`--tag`, `--dry-run`, JSON output |
+| `meta-plugins` | Plugin discovery, how commands are routed to plugins, the built-in git, project and cargo plugins, installing plugins |
+| `meta-worktree` | Creating, using and removing multi-repo worktree sets with `meta git worktree`; for any change, a PR, or testing a tag or SHA |
+| `meta-safety` | Session start, precise filtering, dependency order (the MCP tool `meta_execution_order`), `--strict` |
 
 ## Creating Custom Skills
 
@@ -168,26 +70,9 @@ Instructions for Claude...
 3. **Highlight safety patterns** - Commit or stash first, dry-run, filtered operations
 4. **Keep it scannable** - Use tables, code blocks, and clear headers
 
-## Best Practices for AI Agents
+## MCP Server
 
-1. **Use tags** - Filter operations by tag to avoid affecting unrelated projects
-2. **Check status first** - Run `meta git status` before bulk operations
-3. **Use atomic mode** - For risky operations, use atomic mode for auto-rollback
-4. **Leverage queries** - Use query DSL to find specific repos by state
-5. **Commit or stash first** - Before major changes, commit or stash uncommitted work so git can recover it
-
-## Integration with MCP Server
-
-While skills provide guidance for CLI usage, Claude can also use the Meta MCP server for programmatic access. The MCP server exposes 26 tools:
-
-| Skill Domain | Related MCP Tools |
-|--------------|-------------------|
-| meta-workspace | `meta_list_projects`, `meta_get_config`, `meta_workspace_state` |
-| meta-git | `meta_git_*` |
-| meta-exec | `meta_exec`, `meta_batch_execute`, `meta_query_repos` |
-| meta-plugins | `meta_list_plugins` |
-
-See [mcp_server.md](mcp_server.md) for full MCP documentation.
+Skills guide the CLI; the [MCP server](mcp_server.md) gives agents the same workspace as structured tools.
 
 ## Updating Skills
 
@@ -195,5 +80,3 @@ Skills are embedded in the `meta` binary and updated with each release. To get t
 
 1. Update meta: `brew upgrade meta-cli` or reinstall
 2. Refresh skills: `meta init claude --update`
-
-`--update` overwrites the skill and rule files with the latest versions, replaces meta's marked copies and link placeholders with links, and leaves `settings.json` alone; `--force` does the same and also merges meta's hooks into `settings.json`, never replacing it.

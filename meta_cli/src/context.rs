@@ -221,7 +221,7 @@ fn key_commands() -> Vec<CommandRef> {
         },
         CommandRef {
             command: "meta git commit -m \"msg\"".to_string(),
-            description: "commit in all dirty repos".to_string(),
+            description: "commit what is staged, in each repo".to_string(),
         },
         CommandRef {
             command: "meta --include X,Y exec -- <cmd>".to_string(),

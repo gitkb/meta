@@ -220,6 +220,12 @@ impl SubprocessPluginManager {
         Ok(Some(self.loaded(word.to_string(), path, info)))
     }
 
+    /// The word of every plugin file, read from the file names: none is
+    /// started.
+    pub fn words(&self) -> Vec<String> {
+        self.files().into_keys().collect()
+    }
+
     /// Every plugin, sorted by word. Each one is started to ask for its info;
     /// one that doesn't give it is warned about and left out, except a
     /// program on PATH that isn't a plugin.
@@ -588,6 +594,16 @@ fn plugin_word(file_name: &str) -> Option<&str> {
 /// (`/bin` linked to `/usr/bin`) is scanned once.
 fn resolved(dir: &Path) -> PathBuf {
     dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf())
+}
+
+/// Whether `program` names an executable file in a PATH directory.
+pub fn on_path(program: &str) -> bool {
+    let file = format!("{program}{}", std::env::consts::EXE_SUFFIX);
+    // a word with a separator is a path, not a program PATH finds
+    Path::new(&file).file_name() == Some(file.as_ref())
+        && std::env::var_os("PATH").is_some_and(|path| {
+            std::env::split_paths(&path).any(|dir| is_executable(&dir.join(&file)))
+        })
 }
 
 /// Check if a file is executable

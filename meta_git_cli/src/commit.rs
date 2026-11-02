@@ -336,7 +336,7 @@ impl Terminal {
             let foreground = rustix::termios::tcgetpgrp(&tty)
                 .map_err(|e| format!("its foreground can't be read ({e})"))?;
             if foreground != rustix::process::getpgrp() {
-                return Err("meta runs in its background".to_string());
+                return Err("the terminal's foreground is another program".to_string());
             }
             (tty.try_clone().map_err(|e| e.to_string())?, tty)
         };

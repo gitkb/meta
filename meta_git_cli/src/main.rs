@@ -16,7 +16,7 @@ fn main() {
     let mut adapted = IndexMap::new();
     adapted.insert(
         "clone".to_string(),
-        "Clone a meta repo and all child repos recursively".to_string(),
+        "Clone a meta repo and the repos its .meta.yaml lists (-r: nested ones too)".to_string(),
     );
     adapted.insert(
         "commit".to_string(),
@@ -78,7 +78,7 @@ fn main() {
                     "meta git worktree create feature-x --repo api --repo web".to_string(),
                 ],
                 note: Some(
-                    "For git commands not listed above, use: meta exec -- git <command>"
+                    "Any other git command (meta git pull, meta git log) runs as typed in each repo"
                         .to_string(),
                 ),
             }),

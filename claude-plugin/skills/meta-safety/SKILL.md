@@ -98,16 +98,7 @@ meta --strict git worktree prune
 
 If cleanup fails, meta prints the error and exits non-zero even when the command itself succeeded, and the set may be left in place. Check with `meta git worktree list` and remove it with `meta git worktree remove <name>`.
 
-### Worktree-specific --strict
-
-`meta git worktree create` also has a local `--strict` flag:
-
-```bash
-# Local --strict on worktree create only
-meta git worktree create feature-test v2.0.0 --all --strict
-```
-
-Both flags work together - if either global `--strict` or local `--strict` is set, strict mode is enabled.
+`meta git worktree create` also takes `--strict` itself (`meta git worktree create feature-test v2.0.0 --all --strict`); either one turns strict mode on.
 
 ## Efficiency Tips
 

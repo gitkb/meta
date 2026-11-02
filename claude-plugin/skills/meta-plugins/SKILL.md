@@ -14,12 +14,12 @@ When you run `meta <word> ...`, meta looks for a file with that name and
 starts only it:
 
 1. **`meta-<word>` found** → that plugin executes with special logic
-2. **None** → unrecognized command (use `meta exec` for arbitrary commands)
+2. **None** → an error that suggests the nearest command (for `gti status`, `meta git status`), else `meta exec -- <words>`
 
 Example:
 - `meta git status` → git plugin runs `git status` in every repo at this meta level (`--recursive` for nested ones)
 - `meta git clone <url>` → git plugin clones parent + all children from `.meta.yaml`
-- `meta npm install` → unrecognized, shows help; use `meta exec npm install`
+- npm has no plugin: run it with `meta exec -- npm install`
 
 ## Built-in Plugins
 
@@ -29,7 +29,7 @@ Handles all `meta git *` commands with special cases:
 
 | Command | Behavior |
 |---------|----------|
-| `meta git clone <url>` | Clone parent, read `.meta.yaml`, clone all children |
+| `meta git clone <url>` | Clone parent, read `.meta.yaml`, clone its children (`-r`: nested meta repos' too) |
 | `meta git update` | Fast-forward cloned repos (`git pull --ff-only`) and clone missing ones; `-r` for nested meta repos |
 | `meta git worktree *` | Isolated multi-repo worktree sets (see the `meta-worktree` skill) |
 | `meta git <other>` | Pass through to every repo at this meta level |

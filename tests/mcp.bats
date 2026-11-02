@@ -23,8 +23,6 @@ setup() {
     for repo in "$WS" "$WS/r1" "$WS/second"; do
         mkdir -p "$repo"
         git -C "$repo" init --quiet -b main
-        git -C "$repo" config user.email "test@test.com"
-        git -C "$repo" config user.name "Test"
         echo "# $repo" > "$repo/README"
         git -C "$repo" add README
         git -C "$repo" commit --quiet -m init

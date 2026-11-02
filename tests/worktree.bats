@@ -35,8 +35,6 @@ EOF
     for repo in backend frontend; do
         mkdir -p "$TEST_DIR/$repo"
         git -C "$TEST_DIR/$repo" init --quiet --initial-branch=main
-        git -C "$TEST_DIR/$repo" config user.email "test@test.com"
-        git -C "$TEST_DIR/$repo" config user.name "Test"
         echo "# $repo" > "$TEST_DIR/$repo/README.md"
         git -C "$TEST_DIR/$repo" add README.md
         git -C "$TEST_DIR/$repo" commit --quiet -m "init $repo"
@@ -44,8 +42,6 @@ EOF
 
     # Initialize the meta repo itself (for . alias tests)
     git -C "$TEST_DIR" init --quiet --initial-branch=main
-    git -C "$TEST_DIR" config user.email "test@test.com"
-    git -C "$TEST_DIR" config user.name "Test"
     git -C "$TEST_DIR" add .meta.yaml
     git -C "$TEST_DIR" commit --quiet -m "init meta"
 
@@ -83,8 +79,6 @@ EOF
 
     # Initialize the nested git repo
     git -C "$TEST_DIR/vendor/$nested_name" init --quiet --initial-branch=main
-    git -C "$TEST_DIR/vendor/$nested_name" config user.email "test@test.com"
-    git -C "$TEST_DIR/vendor/$nested_name" config user.name "Test"
     echo "# $nested_name" > "$TEST_DIR/vendor/$nested_name/README.md"
     git -C "$TEST_DIR/vendor/$nested_name" add README.md
     git -C "$TEST_DIR/vendor/$nested_name" commit --quiet -m "init $nested_name"

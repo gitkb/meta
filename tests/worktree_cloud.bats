@@ -37,8 +37,6 @@ EOF
     for repo in backend frontend; do
         mkdir -p "$TEST_DIR/$repo"
         git -C "$TEST_DIR/$repo" init --quiet
-        git -C "$TEST_DIR/$repo" config user.email "test@test.com"
-        git -C "$TEST_DIR/$repo" config user.name "Test"
         echo "# $repo" > "$TEST_DIR/$repo/README.md"
         git -C "$TEST_DIR/$repo" add README.md
         git -C "$TEST_DIR/$repo" commit --quiet -m "init $repo"
@@ -46,8 +44,6 @@ EOF
 
     # Initialize meta repo
     git -C "$TEST_DIR" init --quiet
-    git -C "$TEST_DIR" config user.email "test@test.com"
-    git -C "$TEST_DIR" config user.name "Test"
     git -C "$TEST_DIR" add .meta.yaml
     git -C "$TEST_DIR" commit --quiet -m "init meta"
 

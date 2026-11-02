@@ -1369,6 +1369,9 @@ mod tests {
         let walk = |depth| flatten_meta_tree(&walk_meta_tree(dir.path(), depth).unwrap());
 
         assert_eq!(walk(Some(0)), ["child"]);
+        // a meta repo the limit stops at is still one
+        let stopped = walk_meta_tree(dir.path(), Some(0)).unwrap();
+        assert!(stopped[0].is_meta && stopped[0].children.is_empty());
         assert_eq!(walk(Some(1)), ["child", "child/grandchild"]);
         assert_eq!(
             walk(None),

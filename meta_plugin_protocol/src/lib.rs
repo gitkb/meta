@@ -574,10 +574,14 @@ mod tests {
 
     #[test]
     fn an_empty_plan_is_a_plan_of_no_commands() {
-        let written = serde_json::json!({"plan": {"commands": []}});
-        let response: PlanResponse = serde_json::from_value(written.clone()).unwrap();
-        assert!(response.plan.commands.is_empty());
-        assert_eq!(serde_json::to_value(&response).unwrap(), written);
+        for written in [
+            serde_json::json!({"plan": {"commands": []}}),
+            serde_json::json!({"plan": {"commands": [], "parallel": true}}),
+        ] {
+            let response: PlanResponse = serde_json::from_value(written.clone()).unwrap();
+            assert!(response.plan.commands.is_empty());
+            assert_eq!(serde_json::to_value(&response).unwrap(), written);
+        }
     }
 
     #[test]

@@ -29,6 +29,7 @@ isolate_user_env() {
     export GIT_CONFIG_GLOBAL="$user_env/gitconfig"
     # Tests that want these set them themselves
     unset META_WORKTREES RUST_LOG NO_COLOR CLICOLOR CLICOLOR_FORCE FORCE_COLOR
+    unset META_GITHUB_URL META_PLATFORM GIT_TEMPLATE_DIR GIT_SSH_COMMAND GIT_EDITOR
 }
 
 # Every test's setup starts here: a home, config, git config, meta data dir

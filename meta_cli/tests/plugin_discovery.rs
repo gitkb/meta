@@ -77,7 +77,9 @@ fn plugin(path: &Path, name: &str, version: &str) {
 #[test]
 fn bare_home_meta_directory_is_neither_workspace_nor_project_plugin_source() {
     let mut f = Fixture::new(false);
-    f.cwd = f.home.clone();
+    // below the home, so the walk up passes ~/.meta
+    f.cwd = f.home.join("sub");
+    fs::create_dir(&f.cwd).unwrap();
     plugin(&f.home.join(".meta/plugins/meta-fake"), "fake", "1.0");
     let help = f.run(&["--help"]);
     assert!(help.status.success());

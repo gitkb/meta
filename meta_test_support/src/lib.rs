@@ -101,7 +101,7 @@ impl Sandbox {
         assert!(out.status.success(), "{test} failed in its sandbox");
         // libtest exits 0 when the name matches no test
         assert!(
-            output.contains("1 passed"),
+            output.contains("test result: ok. 1 passed;"),
             "{test} didn't run in its sandbox"
         );
         None
@@ -198,8 +198,13 @@ impl Sandbox {
 }
 
 /// Settings of the user's shell a test would otherwise pick up.
-const UNSET: [&str; 6] = [
+const UNSET: [&str; 11] = [
     "META_WORKTREES",
+    "META_GITHUB_URL",
+    "META_PLATFORM",
+    "GIT_TEMPLATE_DIR",
+    "GIT_SSH_COMMAND",
+    "GIT_EDITOR",
     "RUST_LOG",
     "NO_COLOR",
     "CLICOLOR",

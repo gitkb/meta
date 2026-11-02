@@ -1043,11 +1043,18 @@ mod tests {
             output.chars().all(|c| c == '\n' || !c.is_control()),
             "{output:?}"
         );
-        fn check<'a>(nodes: &[ProjectTreeNode], lines: &mut impl Iterator<Item = &'a str>) {
+        // each level one step further in; the path only where it isn't the name
+        fn check<'a>(
+            nodes: &[ProjectTreeNode],
+            depth: usize,
+            lines: &mut impl Iterator<Item = &'a str>,
+        ) {
             for (i, node) in nodes.iter().enumerate() {
                 let line = lines.next().expect("a line for each node");
                 let connector = if i + 1 == nodes.len() { '└' } else { '├' };
-                assert!(line.contains(connector), "{line}");
+                let at = line.chars().position(|c| c == connector);
+                assert_eq!(at, Some(depth * 4), "{line}");
+                assert_eq!(line.contains('→'), node.path != node.name, "{line}");
                 let mut fields = vec![
                     escape(&node.name).into_owned(),
                     escape(&node.path).into_owned(),
@@ -1064,11 +1071,11 @@ mod tests {
                     let line = lines.next().expect("the node's error line");
                     assert!(line.contains(escape(error).as_ref()), "{line}");
                 }
-                check(&node.projects, lines);
+                check(&node.projects, depth + 1, lines);
             }
         }
         let mut lines = output.lines();
-        check(nodes, &mut lines);
+        check(nodes, 0, &mut lines);
         assert_eq!(lines.next(), None, "extra lines: {output}");
     }
 

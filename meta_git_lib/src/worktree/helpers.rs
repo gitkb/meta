@@ -416,22 +416,28 @@ mod tests {
 
     #[test]
     fn repo_matches_spec_requires_the_exact_repo() {
-        let tmp = tempfile::tempdir().unwrap();
-        let run = |args: &[&str]| meta_core::git::run(tmp.path(), args).unwrap();
-        run(&["init", "-q"]);
-        run(&[
-            "remote",
-            "add",
-            "origin",
-            "git@github.com:Org/api-legacy.git",
-        ]);
-        assert!(!repo_matches_spec(tmp.path(), "org/api"));
-        assert!(!repo_matches_spec(tmp.path(), "api-legacy"));
-        assert!(repo_matches_spec(tmp.path(), "org/api-legacy"));
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
+        sandbox.git(&tmp, &["init", "-q"]);
+        sandbox.git(
+            &tmp,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:Org/api-legacy.git",
+            ],
+        );
+        assert!(!repo_matches_spec(&tmp, "org/api"));
+        assert!(!repo_matches_spec(&tmp, "api-legacy"));
+        assert!(repo_matches_spec(&tmp, "org/api-legacy"));
         // through an alias, as git fetches it
-        run(&["remote", "set-url", "origin", "gh:api.git"]);
-        run(&["config", "url.git@github.com:org/.insteadOf", "gh:"]);
-        assert!(repo_matches_spec(tmp.path(), "org/api"));
+        sandbox.git(&tmp, &["remote", "set-url", "origin", "gh:api.git"]);
+        sandbox.git(
+            &tmp,
+            &["config", "url.git@github.com:org/.insteadOf", "gh:"],
+        );
+        assert!(repo_matches_spec(&tmp, "org/api"));
     }
 
     // ── resolve_branch ──────────────────────────────────────
@@ -465,30 +471,32 @@ mod tests {
 
     #[test]
     fn worktrees_go_to_info_exclude_not_gitignore() {
-        let tmp = tempfile::tempdir().unwrap();
-        meta_core::git::run(tmp.path(), ["init", "-q"]).unwrap();
-        std::fs::create_dir(tmp.path().join(".worktrees")).unwrap();
-        std::fs::write(tmp.path().join(".worktrees/f"), "").unwrap();
-        exclude_worktrees(tmp.path(), &tmp.path().join(".worktrees")).unwrap();
-        exclude_worktrees(tmp.path(), &tmp.path().join(".worktrees")).unwrap();
-        assert_eq!(exclude_of(tmp.path()).matches("/.worktrees").count(), 1);
-        assert!(!tmp.path().join(".gitignore").exists());
-        let status = meta_core::git::run(tmp.path(), ["status", "--porcelain"]).unwrap();
-        assert_eq!(status, "");
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
+        sandbox.git(&tmp, &["init", "-q"]);
+        std::fs::create_dir(tmp.join(".worktrees")).unwrap();
+        std::fs::write(tmp.join(".worktrees/f"), "").unwrap();
+        exclude_worktrees(&tmp, &tmp.join(".worktrees")).unwrap();
+        exclude_worktrees(&tmp, &tmp.join(".worktrees")).unwrap();
+        assert_eq!(exclude_of(&tmp).matches("/.worktrees").count(), 1);
+        assert!(!tmp.join(".gitignore").exists());
+        let status = sandbox.git(&tmp, &["status", "--porcelain"]);
+        assert!(status.is_empty());
     }
 
     #[test]
     fn a_gitignore_is_left_as_it_is() {
-        let tmp = tempfile::tempdir().unwrap();
-        meta_core::git::run(tmp.path(), ["init", "-q"]).unwrap();
-        std::fs::write(tmp.path().join(".gitignore"), "node_modules/").unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
+        sandbox.git(&tmp, &["init", "-q"]);
+        std::fs::write(tmp.join(".gitignore"), "node_modules/").unwrap();
         // an exclude file without a last newline keeps its last line
-        std::fs::write(tmp.path().join(".git/info/exclude"), "*.log").unwrap();
-        std::fs::create_dir(tmp.path().join(".worktrees")).unwrap();
-        exclude_worktrees(tmp.path(), &tmp.path().join(".worktrees")).unwrap();
-        assert_eq!(exclude_of(tmp.path()), "*.log\n/.worktrees\n");
+        std::fs::write(tmp.join(".git/info/exclude"), "*.log").unwrap();
+        std::fs::create_dir(tmp.join(".worktrees")).unwrap();
+        exclude_worktrees(&tmp, &tmp.join(".worktrees")).unwrap();
+        assert_eq!(exclude_of(&tmp), "*.log\n/.worktrees\n");
         assert_eq!(
-            std::fs::read_to_string(tmp.path().join(".gitignore")).unwrap(),
+            std::fs::read_to_string(tmp.join(".gitignore")).unwrap(),
             "node_modules/"
         );
     }
@@ -496,26 +504,28 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_worktrees_link_is_excluded_by_its_name() {
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path().join("ws");
-        std::fs::create_dir_all(tmp.path().join("elsewhere")).unwrap();
-        meta_core::git::run(tmp.path(), ["init", "-q", "ws"]).unwrap();
-        std::os::unix::fs::symlink(tmp.path().join("elsewhere"), repo.join(".worktrees")).unwrap();
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
+        let repo = tmp.join("ws");
+        std::fs::create_dir_all(tmp.join("elsewhere")).unwrap();
+        sandbox.git(&tmp, &["init", "-q", "ws"]);
+        std::os::unix::fs::symlink(tmp.join("elsewhere"), repo.join(".worktrees")).unwrap();
         exclude_worktrees(&repo, &repo.join(".worktrees")).unwrap();
         assert!(exclude_of(&repo).lines().any(|l| l == "/.worktrees"));
-        let status = meta_core::git::run(&repo, ["status", "--porcelain"]).unwrap();
-        assert_eq!(status, "");
+        let status = sandbox.git(&repo, &["status", "--porcelain"]);
+        assert!(status.is_empty());
     }
 
     #[test]
     fn worktrees_outside_or_without_a_repository_need_nothing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let ws = tmp.path().join("ws");
+        let sandbox = meta_test_support::isolated!();
+        let tmp = sandbox.work();
+        let ws = tmp.join("ws");
         std::fs::create_dir(&ws).unwrap();
         exclude_worktrees(&ws, &ws.join(".worktrees")).unwrap();
         assert!(!ws.join(".git").exists());
-        meta_core::git::run(&ws, ["init", "-q"]).unwrap();
-        exclude_worktrees(&ws, &tmp.path().join("sets")).unwrap();
+        sandbox.git(&ws, &["init", "-q"]);
+        exclude_worktrees(&ws, &tmp.join("sets")).unwrap();
         assert!(!exclude_of(&ws).contains("sets"));
     }
 }

@@ -27,7 +27,7 @@ rustix = { version = "1", features = ["process"] }
 signal-hook = "0.4"
 
 [dev-dependencies]
-tempfile = "3"
+meta_test_support = { path = "../meta_test_support" }
 
 [lints]
 workspace = true

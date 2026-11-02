@@ -20,6 +20,7 @@ serde_json = "1.0"
 same-file = "1"
 
 [dev-dependencies]
+meta_test_support = { path = "../meta_test_support" }
 tempfile = "3.3"
 
 [lints]

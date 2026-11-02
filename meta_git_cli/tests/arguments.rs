@@ -2,22 +2,23 @@
 //! `meta git clone` and `meta git commit`, and the request's directory.
 
 #![expect(
-    clippy::disallowed_methods,
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
+use meta_test_support::Sandbox;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
-fn meta_git(cwd: &Path, command: &str, args: &[&str], options: Value) -> Output {
-    meta_git_from(cwd, cwd, command, args, options)
+fn meta_git(sandbox: &Sandbox, cwd: &Path, command: &str, args: &[&str], options: Value) -> Output {
+    meta_git_from(sandbox, cwd, cwd, command, args, options)
 }
 
 /// [`meta_git`], with the plugin process started in `process_dir`.
 fn meta_git_from(
+    sandbox: &Sandbox,
     process_dir: &Path,
     cwd: &Path,
     command: &str,
@@ -25,14 +26,10 @@ fn meta_git_from(
     options: Value,
 ) -> Output {
     let request = json!({"command": command, "args": args, "cwd": cwd, "options": options});
-    let mut child = Command::new(env!("CARGO_BIN_EXE_meta-git"))
+    let mut child = sandbox
+        .command(env!("CARGO_BIN_EXE_meta-git"))
         .arg("--meta-plugin-exec")
         .current_dir(process_dir)
-        .env_remove("META_WORKTREES")
-        .env("HOME", cwd)
-        .env("XDG_CONFIG_HOME", cwd.join("xdg"))
-        .env("GIT_CONFIG_GLOBAL", cwd.join("no-gitconfig"))
-        .env("META_DATA_DIR", cwd.join("meta-data"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -53,11 +50,13 @@ fn text(out: &Output) -> String {
 
 #[test]
 fn clone_never_passes_a_url_to_git_as_an_option() {
-    let tmp = tempfile::tempdir().unwrap();
-    let marker = tmp.path().join("marker");
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    let marker = tmp.join("marker");
     let upload_pack = format!("--upload-pack=touch {}; false", marker.display());
     let out = meta_git(
-        tmp.path(),
+        &sandbox,
+        &tmp,
         "git clone",
         &["--", &upload_pack, "file:///nonexistent/source.git"],
         json!({}),
@@ -68,35 +67,43 @@ fn clone_never_passes_a_url_to_git_as_an_option() {
 
 #[test]
 fn clone_and_commit_refuse_what_they_do_not_take() {
-    let tmp = tempfile::tempdir().unwrap();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
     for (command, args, problem) in [
         ("git clone", &["--parallel", "0", "u"][..], "invalid value"),
         ("git clone", &["--meta-depth", "x", "u"], "invalid value"),
         ("git clone", &["u", "--branch", "b"], "unexpected argument"),
         ("git commit", &["--amend"], "unexpected argument"),
     ] {
-        let out = meta_git(tmp.path(), command, args, json!({}));
+        let out = meta_git(&sandbox, &tmp, command, args, json!({}));
         assert!(!out.status.success(), "{args:?}: {}", text(&out));
         assert!(text(&out).contains(problem), "{args:?}: {}", text(&out));
     }
     // nothing was cloned
-    assert!(!tmp.path().join("u").exists());
+    assert!(!tmp.join("u").exists());
 }
 
 #[test]
 fn clone_into_an_existing_folder_says_so_before_git_runs() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir(tmp.path().join("ws")).unwrap();
-    std::fs::write(tmp.path().join("ws/.meta.yaml"), "projects: {}\n").unwrap();
-    std::fs::create_dir(tmp.path().join("other")).unwrap();
-    std::fs::write(tmp.path().join("other/notes"), "").unwrap();
-    std::fs::create_dir(tmp.path().join("empty")).unwrap();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
+    std::fs::create_dir(tmp.join("ws")).unwrap();
+    std::fs::write(tmp.join("ws/.meta.yaml"), "projects: {}\n").unwrap();
+    std::fs::create_dir(tmp.join("other")).unwrap();
+    std::fs::write(tmp.join("other/notes"), "").unwrap();
+    std::fs::create_dir(tmp.join("empty")).unwrap();
     for (dir, said) in [
         ("ws", "meta git update"),
         ("other", "not an empty directory"),
     ] {
         for options in [json!({}), json!({"dry_run": true})] {
-            let out = meta_git(tmp.path(), "git clone", &["file:///gone.git", dir], options);
+            let out = meta_git(
+                &sandbox,
+                &tmp,
+                "git clone",
+                &["file:///gone.git", dir],
+                options,
+            );
             assert!(!out.status.success(), "{}", text(&out));
             assert!(text(&out).contains(said), "{}", text(&out));
             // before git, and before saying it clones
@@ -106,7 +113,8 @@ fn clone_into_an_existing_folder_says_so_before_git_runs() {
     }
     // git takes an empty directory
     let out = meta_git(
-        tmp.path(),
+        &sandbox,
+        &tmp,
         "git clone",
         &["file:///gone.git", "empty"],
         json!({}),
@@ -116,7 +124,8 @@ fn clone_into_an_existing_folder_says_so_before_git_runs() {
 
 #[test]
 fn clone_and_commit_have_their_own_help() {
-    let tmp = tempfile::tempdir().unwrap();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
     // meta sends a help request without its repos, so `-m --help` is help
     // too, never a commit of every repo
     for (command, args) in [
@@ -124,7 +133,7 @@ fn clone_and_commit_have_their_own_help() {
         ("git commit", &["--help"]),
         ("git commit", &["-m", "--help"]),
     ] {
-        let out = meta_git(tmp.path(), command, args, json!({}));
+        let out = meta_git(&sandbox, &tmp, command, args, json!({}));
         assert!(out.status.success(), "{}", text(&out));
         assert!(
             text(&out).contains(&format!("Usage: meta {command}")),
@@ -136,10 +145,12 @@ fn clone_and_commit_have_their_own_help() {
 
 #[test]
 fn clone_depth_comes_from_meta_unless_given() {
-    let tmp = tempfile::tempdir().unwrap();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
     let dry_run = |args: &[&str]| {
         let out = meta_git(
-            tmp.path(),
+            &sandbox,
+            &tmp,
             "git clone",
             args,
             json!({"dry_run": true, "depth": 3}),
@@ -155,30 +166,29 @@ fn clone_depth_comes_from_meta_unless_given() {
     assert!(dry_run(&["git@host:a:b.git"]).contains("-- git@host:a:b.git b\n"));
     #[cfg(unix)]
     {
-        std::fs::write(tmp.path().join("h:ws.bundle"), "").unwrap();
+        std::fs::write(tmp.join("h:ws.bundle"), "").unwrap();
         assert!(dry_run(&["h:ws.bundle"]).contains("-- h:ws.bundle ws\n"));
     }
     // a bundle file clones into its name without `.bundle`, as git does,
     // and keeps a `.git` (from another folder: git won't clone onto it)
-    std::fs::create_dir(tmp.path().join("src")).unwrap();
+    std::fs::create_dir(tmp.join("src")).unwrap();
     for (bundle, dir) in [("src/ws.bundle", "ws"), ("src/other.git", "other.git")] {
-        std::fs::write(tmp.path().join(bundle), "").unwrap();
+        std::fs::write(tmp.join(bundle), "").unwrap();
         assert!(
             dry_run(&[bundle]).contains(&format!("-- {bundle} {dir}")),
             "{bundle}"
         );
     }
     // a linked worktree's `.git` file is no bundle: its checkout's name
-    std::fs::create_dir(tmp.path().join("src/wt")).unwrap();
-    std::fs::write(tmp.path().join("src/wt/.git"), "gitdir: elsewhere\n").unwrap();
+    std::fs::create_dir(tmp.join("src/wt")).unwrap();
+    std::fs::write(tmp.join("src/wt/.git"), "gitdir: elsewhere\n").unwrap();
     assert!(dry_run(&["src/wt/.git"]).contains("-- src/wt/.git wt"));
 }
 
 #[test]
 fn worktree_list_finds_the_workspace_of_the_requests_directory() {
-    // not canonicalized: git refuses Windows' `\\?\` form
-    let tmp = tempfile::tempdir().unwrap();
-    let tmp = tmp.path();
+    let sandbox = Sandbox::new();
+    let tmp = sandbox.work();
     let workspace = tmp.join("workspace");
     let repo = workspace.join("a");
     std::fs::create_dir_all(&repo).unwrap();
@@ -187,32 +197,24 @@ fn worktree_list_finds_the_workspace_of_the_requests_directory() {
         "projects:\n  a:\n    path: a\n",
     )
     .unwrap();
-    // through meta's own git, so no git variable around the test reaches it
-    let git = |args: &[&str]| {
-        let out = meta_core::git::git(&repo)
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-            .args(["-c", "commit.gpgsign=false"])
-            .args(args)
-            .env("GIT_CONFIG_GLOBAL", tmp.join("no-gitconfig"))
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "{}", text(&out));
-    };
-    git(&["init", "-q"]);
-    git(&["commit", "-q", "--allow-empty", "-m", "a"]);
+    sandbox.repo(&repo);
     let set_member = workspace.join(".worktrees/s/a");
-    git(&[
-        "worktree",
-        "add",
-        "-q",
-        "-b",
-        "s",
-        &set_member.to_string_lossy(),
-    ]);
+    sandbox.git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "s",
+            &set_member.to_string_lossy(),
+        ],
+    );
     let elsewhere = tmp.join("elsewhere");
     std::fs::create_dir(&elsewhere).unwrap();
 
     let out = meta_git_from(
+        &sandbox,
         &elsewhere,
         &workspace,
         "git worktree list",
@@ -228,15 +230,12 @@ fn worktree_list_finds_the_workspace_of_the_requests_directory() {
 /// quietly, without a panic.
 #[test]
 fn a_closed_stdout_ends_the_plugin_without_a_panic() {
-    let temp = tempfile::tempdir().unwrap();
+    let sandbox = Sandbox::new();
     let (reader, writer) = std::io::pipe().unwrap();
     drop(reader);
-    let out = Command::new(env!("CARGO_BIN_EXE_meta-git"))
+    let out = sandbox
+        .command(env!("CARGO_BIN_EXE_meta-git"))
         .arg("--meta-plugin-info")
-        .env("HOME", temp.path())
-        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
-        .env("GIT_CONFIG_GLOBAL", temp.path().join("no-gitconfig"))
-        .env("META_DATA_DIR", temp.path().join("meta-data"))
         .stdout(writer)
         .stderr(Stdio::piped())
         .output()

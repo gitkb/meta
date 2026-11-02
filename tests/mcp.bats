@@ -5,26 +5,18 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 # meta-mcp's tools that run meta, with the real binaries
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-    META_MCP_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-mcp"
-    if [ ! -f "$META_BIN" ] || [ ! -f "$META_MCP_BIN" ]; then
-        cargo build --workspace --quiet
-    fi
+    sandbox
+    META_MCP_BIN="$META_BIN_DIR/meta-mcp"
     # meta-mcp runs the meta, and meta the plugins, found here
-    export PATH="$(dirname "$META_BIN"):$PATH"
+    export PATH="$META_BIN_DIR:$PATH"
 
     # A workspace repo with r1 (tag odd, pushed to a bare remote) and r2
     # (tag even, at a path other than its name)
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
     WS="$TEST_DIR/ws"
     git init --quiet --bare "$TEST_DIR/r1.git"
     for repo in "$WS" "$WS/r1" "$WS/second"; do
         mkdir -p "$repo"
         git -C "$repo" init --quiet -b main
-        git -C "$repo" config user.email "test@test.com"
-        git -C "$repo" config user.name "Test"
         echo "# $repo" > "$repo/README"
         git -C "$repo" add README
         git -C "$repo" commit --quiet -m init
@@ -40,10 +32,6 @@ EOF
     git -C "$WS" add .meta.yaml .gitignore
     git -C "$WS" commit --quiet -m ws
     cd "$WS"
-}
-
-teardown() {
-    rm -rf "$TEST_DIR"
 }
 
 # call TOOL ARGUMENTS: "isError=<true|null>", then the tool's text

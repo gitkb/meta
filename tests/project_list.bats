@@ -5,23 +5,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 # Integration tests for `meta project list` / `meta project ls`
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    # Build binaries if not already built
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-    META_PROJECT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-project"
-
-    if [ ! -f "$META_BIN" ] || [ ! -f "$META_PROJECT_BIN" ]; then
-        cargo build --workspace --quiet
-    fi
-
-    # Create a temp directory for each test
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    mkdir -p "$TEST_DIR/.meta/plugins"
-    cp "$META_PROJECT_BIN" "$TEST_DIR/.meta/plugins/meta-project"
-    chmod +x "$TEST_DIR/.meta/plugins/meta-project"
-
-    # Default .meta.yaml
+    sandbox
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {
     "projects": {
@@ -31,18 +15,8 @@ setup() {
     }
 }
 EOF
-
-    # Create the projects, each a repository of its own
-    for repo in frontend backend shared; do
-        mkdir -p "$TEST_DIR/$repo"
-        git -C "$TEST_DIR/$repo" init --quiet
-    done
-
+    make_workspace --init-only --plugins project frontend backend shared
     cd "$TEST_DIR"
-}
-
-teardown() {
-    rm -rf "$TEST_DIR"
 }
 
 @test "meta project list shows all projects" {
@@ -166,7 +140,8 @@ assert 'api' in backend['tags']
 @test "meta project list with no .meta.yaml file shows error" {
     rm "$TEST_DIR/.meta.yaml"
     run "$META_BIN" project list
-    [ "$status" -ne 0 ] || [[ "$output" == *"No .meta.yaml"* ]] || [[ "$output" == *"error"* ]]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *".meta.yaml"* ]]
 }
 
 @test "meta project list with YAML config" {

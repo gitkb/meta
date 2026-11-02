@@ -694,7 +694,8 @@ mod tests {
 
     #[test]
     fn a_call_cancelled_before_it_starts_never_runs_or_answers() {
-        let (server, tmp) = test_support::workspace();
+        let sandbox = meta_test_support::isolated!();
+        let (server, tmp) = test_support::workspace(&sandbox);
         let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "meta_batch_execute", "arguments": {"command": ["touch", "ran"]}}});
         let cancel = json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
@@ -705,7 +706,7 @@ mod tests {
         server.serve(input.as_bytes(), &mut output).unwrap();
         let replies: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(replies, json!([{"jsonrpc": "2.0", "id": 3, "result": {}}]));
-        assert!(!tmp.path().join("a/ran").exists());
+        assert!(!tmp.join("a/ran").exists());
     }
 
     /// A stopping server waits until the reply to a call that ended is
@@ -713,6 +714,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn a_stopping_server_writes_the_reply_of_a_call_that_ended() {
+        let sandbox = meta_test_support::isolated!();
         use std::sync::atomic::{AtomicBool, Ordering};
         /// Output whose first write waits until it is let through.
         struct Gate<'a> {
@@ -733,7 +735,7 @@ mod tests {
                 Ok(())
             }
         }
-        let (server, _tmp) = test_support::server("projects: {}\n");
+        let (server, _tmp) = test_support::server(&sandbox, "projects: {}\n");
         let (writing, open) = (AtomicBool::new(false), AtomicBool::new(false));
         let (stopped, written) = (AtomicBool::new(false), Mutex::new(Vec::new()));
         let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -763,7 +765,8 @@ mod tests {
 
     #[test]
     fn a_malformed_cancellation_in_a_batch_cancels_nothing() {
-        let (server, tmp) = test_support::workspace();
+        let sandbox = meta_test_support::isolated!();
+        let (server, tmp) = test_support::workspace(&sandbox);
         let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "meta_batch_execute", "arguments": {"command": ["git", "init", "-q", "ran"]}}});
         let bad_version = json!({"jsonrpc": "1.0", "method": "notifications/cancelled",
@@ -781,12 +784,13 @@ mod tests {
         assert_eq!(replies[0]["error"]["code"], -32601, "{replies}");
         assert_eq!(replies[1]["id"], 2, "{replies}");
         assert_eq!(replies[2]["error"]["code"], -32600, "{replies}");
-        assert!(tmp.path().join("a/ran").exists());
+        assert!(tmp.join("a/ran").exists());
     }
 
     #[test]
     fn a_tool_error_keeps_its_cause() {
-        let (server, _tmp) = test_support::server("unknown_top: 1\n");
+        let sandbox = meta_test_support::isolated!();
+        let (server, _tmp) = test_support::server(&sandbox, "unknown_top: 1\n");
         let result = server
             .handle_call_tool(&json!({"name": "meta_list_projects"}))
             .unwrap();

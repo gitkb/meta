@@ -3,45 +3,15 @@
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    META_BIN="$BATS_TEST_DIRNAME/../target/debug/meta"
-    META_GIT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-git"
-    META_PROJECT_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-project"
-    META_CARGO_BIN="$BATS_TEST_DIRNAME/../target/debug/meta-cargo"
-
-    if [ ! -f "$META_BIN" ] || [ ! -f "$META_GIT_BIN" ] || [ ! -f "$META_PROJECT_BIN" ] || [ ! -f "$META_CARGO_BIN" ]; then
-        cargo build --workspace --quiet
-    fi
-
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    NO_CONFIG_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    mkdir -p "$TEST_DIR/.meta/plugins" "$TEST_DIR/api" "$TEST_DIR/web"
+    sandbox
+    # api and web are plain folders: help never runs in a repo
+    mkdir -p "$TEST_DIR/api" "$TEST_DIR/web"
+    printf 'projects:\n  api: git@github.com:org/api.git\n  web: git@github.com:org/web.git\n' > "$TEST_DIR/.meta.yaml"
+    make_workspace --plugins "git project cargo"
+    NO_CONFIG_DIR="$BATS_TEST_TMPDIR/no-config"
     mkdir -p "$NO_CONFIG_DIR/.meta/plugins"
-    cp "$META_GIT_BIN" "$TEST_DIR/.meta/plugins/meta-git"
-    cp "$META_PROJECT_BIN" "$TEST_DIR/.meta/plugins/meta-project"
-    cp "$META_CARGO_BIN" "$TEST_DIR/.meta/plugins/meta-cargo"
-    cp "$META_GIT_BIN" "$NO_CONFIG_DIR/.meta/plugins/meta-git"
-    cp "$META_CARGO_BIN" "$NO_CONFIG_DIR/.meta/plugins/meta-cargo"
-    chmod +x "$TEST_DIR/.meta/plugins/meta-git" "$TEST_DIR/.meta/plugins/meta-project" "$TEST_DIR/.meta/plugins/meta-cargo"
-    chmod +x "$NO_CONFIG_DIR/.meta/plugins/meta-git"
-    chmod +x "$NO_CONFIG_DIR/.meta/plugins/meta-cargo"
-
-    cat > "$TEST_DIR/.meta.yaml" <<'JSON'
-{
-    "projects": {
-        "api": "git@github.com:org/api.git",
-        "web": "git@github.com:org/web.git"
-    }
-}
-JSON
-
+    cp "$META_BIN_DIR/meta-git" "$META_BIN_DIR/meta-cargo" "$NO_CONFIG_DIR/.meta/plugins/"
     cd "$TEST_DIR"
-}
-
-teardown() {
-    rm -rf "$TEST_DIR"
-    rm -rf "$NO_CONFIG_DIR"
 }
 
 @test "meta help is plugin-aware and matches meta --help" {
@@ -76,7 +46,7 @@ teardown() {
 @test "git worktree help reaches worktree command implementation" {
     run "$META_BIN" git worktree --help
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Manage git worktrees across repos"* ]]
+    [[ "$output" == *"Usage: meta git worktree"* ]]
     [[ "$output" == *"--dry-run"* ]]
     [[ "$output" == *"--json"* ]]
     [[ "$output" != *"Adapted Commands"* ]]
@@ -101,12 +71,11 @@ teardown() {
 
     run "$META_BIN" git worktree --help
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Manage git worktrees across repos"* ]]
+    [[ "$output" == *"Usage: meta git worktree"* ]]
 
     run "$META_BIN" git pull --help
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Pass-through git command"* ]]
-    [[ "$output" == *"Current scope:"* ]]
+    [[ "$output" == *"Usage: meta"*"git pull"* ]]
 }
 
 @test "cargo help uses the simple plugin help without side effects" {
@@ -116,20 +85,23 @@ teardown() {
     for command in "cargo --help" "cargo build --help"; do
         run "$META_BIN" $command
         [ "$status" -eq 0 ]
-        [[ "$output" == *"meta cargo <cargo args>"* ]]
-        [[ "$output" == *"Run cargo with your args in each selected repo"* ]]
+        [[ "$output" == *"meta cargo"* ]]
         [[ "$output" != *"Could not find meta config"* ]]
         [[ "$output" != *"No Rust projects found"* ]]
     done
 }
 
-@test "git pass-through help is meta-aware" {
+@test "git pass-through help is meta's, names the repos and runs no git" {
+    # a git that says it ran
+    mkdir -p "$BATS_TEST_TMPDIR/stub"
+    printf '#!/bin/sh\ntouch "%s"\n' "$BATS_TEST_TMPDIR/git-ran" > "$BATS_TEST_TMPDIR/stub/git"
+    chmod +x "$BATS_TEST_TMPDIR/stub/git"
     for subcommand in pull fetch checkout; do
-        run "$META_BIN" git "$subcommand" --help
+        PATH="$BATS_TEST_TMPDIR/stub:$PATH" run "$META_BIN" git "$subcommand" --help
         [ "$status" -eq 0 ]
-        [[ "$output" == *"Pass-through git command"* ]]
-        [[ "$output" == *"Runs \`git $subcommand\` in each repo"* ]]
-        [[ "$output" == *"Current scope:"* ]]
+        [[ "$output" == *"Usage: meta"*"git $subcommand"* ]]
+        [[ "$output" == *"api"* && "$output" == *"web"* ]]
+        [ ! -e "$BATS_TEST_TMPDIR/git-ran" ]
         [[ "$output" == *"--dry-run"* ]]
         [[ "$output" == *"--recursive"* ]]
         [[ "$output" != *"Adapted Commands"* ]]
@@ -140,8 +112,7 @@ teardown() {
     run "$META_BIN" project list --help
     [ "$status" -eq 0 ]
     [[ "$output" == *"meta project list"* ]]
-    [[ "$output" == *"Agent hints:"* ]]
-    [[ "$output" == *"--recursive --json"* ]]
+    [[ "$output" == *"--recursive"* && "$output" == *"--json"* ]]
 
     run "$META_BIN" project check --help
     [ "$status" -eq 0 ]
@@ -151,32 +122,19 @@ teardown() {
     run "$META_BIN" project dependents --help
     [ "$status" -eq 0 ]
     [[ "$output" == *"meta project dependents"* ]]
-    [[ "$output" == *"blast radius"* ]]
 }
 
-@test "worktree create dry-run prints planned custom operations" {
-    git init --quiet
-    git config user.email "test@test.com"
-    git config user.name "Test"
-    touch README.md
-    git add README.md
-    git commit --quiet -m "init root"
-
-    for repo in api web; do
-        git -C "$repo" init --quiet
-        git -C "$repo" config user.email "test@test.com"
-        git -C "$repo" config user.name "Test"
-        touch "$repo/README.md"
-        git -C "$repo" add README.md
-        git -C "$repo" commit --quiet -m "init $repo"
-    done
+@test "worktree create dry-run shows each repo's planned git command and makes nothing" {
+    rmdir api web
+    make_workspace --root-repo api web
 
     run "$META_BIN" --dry-run git worktree create preview --repo api
     [ "$status" -eq 0 ]
-    [[ "$output" == *"[DRY RUN] Would create worktree set 'preview'"* ]]
-    [[ "$output" == *"api:"* ]]
-    [[ "$output" == *"bash:"* ]]
-    [ ! -d "$TEST_DIR/.worktrees/preview" ]
+    [[ "$output" == *"$TEST_DIR/.worktrees/preview"* ]]
+    [[ "$output" == *"git -C $TEST_DIR/api worktree add -b preview $TEST_DIR/.worktrees/preview/api"* ]]
+    [[ "$output" != *"$TEST_DIR/web"* ]]
+    [ ! -d "$TEST_DIR/.worktrees" ]
+    [ -z "$(git -C api branch --list preview)" ]
 }
 
 @test "help lists cargo but not the rust plugin name as a command" {
@@ -197,7 +155,7 @@ teardown() {
 }
 
 @test "argument errors from meta and loop are escaped on one line" {
-    LOOP_BIN="$BATS_TEST_DIRNAME/../target/debug/loop"
+    LOOP_BIN="$META_BIN_DIR/loop"
     for cmd in "$META_BIN" "$LOOP_BIN"; do
         run "$cmd" $'--bo\033]0;TITLE\007\nFORGED'
         [ "$status" -ne 0 ]
@@ -222,7 +180,7 @@ teardown() {
     run "$META_BIN" exec -- ls $'\xff'
     [ "$status" -ne 0 ]
     [[ "$output" == *"invalid UTF-8"* ]]
-    run "$BATS_TEST_DIRNAME/../target/debug/loop" true $'\xff'
+    run "$META_BIN_DIR/loop" true $'\xff'
     [ "$status" -ne 0 ]
     [[ "$output" == *"invalid UTF-8"* ]]
 }

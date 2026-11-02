@@ -881,6 +881,15 @@ EOF
 
 # ============ Nested Repo (meta-53) ============
 
+@test "a parent a nested repo needs is checked for its depends_on too" {
+    setup_nested_meta
+    sed -i.bak 's#"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}#"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true, "depends_on": ["missing"]}#' .meta.yaml
+    grep -q '"missing"' .meta.yaml
+    run "$META_BIN" --strict --dry-run git worktree create parent-check --recursive --repo vendor/nested-lib
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'vendor' depends on 'missing'"*"(strict mode)"* ]]
+}
+
 @test "worktree create with nested repo alias succeeds" {
     setup_nested_meta
 

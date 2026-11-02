@@ -648,24 +648,19 @@ fn plan_repos(
         if !matches!(meta_core::gitdir::common_dir(meta_dir), Ok(None)) {
             all(index.find(".")?)?;
         }
-        let set: Vec<&str> = match index.tree() {
+        match index.tree() {
             Some(tree) => {
-                let mut places: Vec<&str> = tree.keys().map(String::as_str).collect();
-                places.sort_unstable();
-                for place in &places {
+                let mut places: Vec<&String> = tree.keys().collect();
+                places.sort();
+                for place in places {
                     all(index.place(place)?)?;
                 }
-                places
             }
             None => {
                 for project in &workspace.projects {
                     all(index.find(&project.name)?)?;
                 }
-                workspace.projects.iter().map(|p| p.name.as_str()).collect()
             }
-        };
-        if !args.no_deps {
-            report_problems(&dep_graph(index)?, set, index.tree().is_none(), strict)?;
         }
     } else {
         let mut asked_keys = Vec::new();
@@ -681,16 +676,8 @@ fn plan_repos(
                 plan.add(index.find(".")?, branch(None), Why::Wanted, false)?;
             }
             let graph = dep_graph(index)?;
-            let wanted: Vec<(&String, Vec<&str>)> = asked_keys
-                .iter()
-                .filter(|key| *key != ".")
-                .map(|key| (key, graph.get_all_dependencies(key)))
-                .collect();
-            let needed = wanted
-                .iter()
-                .flat_map(|(key, deps)| std::iter::once(key.as_str()).chain(deps.iter().copied()));
-            report_problems(&graph, needed, index.tree().is_none(), strict)?;
-            for (key, deps) in wanted {
+            for key in asked_keys.iter().filter(|key| *key != ".") {
+                let deps = graph.get_all_dependencies(key);
                 log::debug!("Resolved transitive dependencies for '{key}': {deps:?}");
                 for dep in deps {
                     if verbose {
@@ -754,6 +741,13 @@ fn plan_repos(
             };
             plan.add(found, branch(None), Why::Parent(project.clone()), false)?;
         }
+    }
+
+    // What resolving the depends_on of each project in the set ran into,
+    // however it got there (asked for, --all, a dependency, a parent)
+    if !args.no_deps {
+        let set = plan.repos.iter().map(|(repo, _)| repo.project.as_str());
+        report_problems(&dep_graph(index)?, set, index.tree().is_none(), strict)?;
     }
 
     // A project not cloned yet has no repository to make a worktree of

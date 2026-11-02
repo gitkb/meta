@@ -229,6 +229,9 @@ impl From<anyhow::Error> for CommandResult {
     fn from(e: anyhow::Error) -> Self {
         match meta_core::exit::ending(&e) {
             Some(code) => CommandResult::Exit(code),
+            None if e.chain().any(|cause| cause.is::<meta_core::exit::Usage>()) => {
+                CommandResult::Usage(format!("{e:#}"))
+            }
             None => CommandResult::Error(format!("{e:#}")),
         }
     }

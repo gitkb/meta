@@ -188,7 +188,11 @@ impl Sandbox {
 
     /// A bare repo at `dir` whose `main` has one commit, to clone from.
     pub fn bare(&self, dir: &Path) -> PathBuf {
-        let seed = self.root.join("seeds").join(dir.file_name().unwrap());
+        // one seed per bare repo, wherever two of them share a name
+        let seed = self
+            .root
+            .join("seeds")
+            .join(dir.strip_prefix(&self.root).unwrap_or(dir));
         self.repo(&seed);
         let parent = dir.parent().unwrap();
         std::fs::create_dir_all(parent).unwrap();

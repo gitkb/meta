@@ -9,9 +9,11 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 setup() {
     sandbox
     PLUGINS_DIR="$META_DATA_DIR/plugins"
-    # a registry that refuses at once (port 9), unless a test serves one
+    # a registry and a GitHub that refuse at once (port 9), unless a test
+    # serves them
     mkdir -p "$META_DATA_DIR"
     printf 'registries:\n  - http://127.0.0.1:9\n' > "$META_DATA_DIR/config.yaml"
+    export META_GITHUB_URL=http://127.0.0.1:9
     cd "$TEST_DIR"
 }
 
@@ -251,19 +253,13 @@ EOF
 }
 
 @test "plugin search escapes text from the registry index" {
-    mkdir -p "$BATS_TEST_TMPDIR/reg/plugins"
-    cat > "$BATS_TEST_TMPDIR/reg/plugins/index.json" <<'EOF'
+    serve
+    mkdir -p "$RELEASES/registry/plugins"
+    cat > "$RELEASES/registry/plugins/index.json" <<'EOF'
 {"plugins": {"evil": {"name": "evil\u001b]0;T\u0007", "description": "d\u001b[2J",
   "version": "1\u001b[31m", "author": "a\u001b]52;c;eA==\u0007"}}}
 EOF
-    python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$BATS_TEST_TMPDIR/reg" > "$BATS_TEST_TMPDIR/srv.log" 2>&1 &
-    SRV=$!
-    for _ in $(seq 50); do grep -q 'port [0-9]' "$BATS_TEST_TMPDIR/srv.log" && break; sleep 0.1; done
-    PORT="$(grep -o 'port [0-9]*' "$BATS_TEST_TMPDIR/srv.log" | head -1 | cut -d' ' -f2)"
-    mkdir -p "$META_DATA_DIR"
-    printf 'registries:\n  - http://127.0.0.1:%s\n' "$PORT" > "$META_DATA_DIR/config.yaml"
     run "$META_BIN" plugin search evil
-    kill "$SRV"
     [ "$status" -eq 0 ]
     [[ "$output" == *'evil\u{1b}]0;T\u{7}'* ]]
     [[ "$output" == *'d\u{1b}[2J'* ]]

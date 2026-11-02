@@ -111,6 +111,7 @@ pub struct Added {
     /// branch, so success proves this call made it), or None for an
     /// existing branch
     pub new_branch_at: Option<String>,
+    /// What made its files
     pub backend: Backend,
     /// Why git made it although git-cowtree is installed: git-cowtree's
     /// own reason for declining
@@ -144,28 +145,26 @@ pub fn git_worktree_add(
         WorktreeStart::Remote { .. } => args.push(remote_ref.as_ref()),
         WorktreeStart::Head { .. } => {}
     }
-    let git_add = || {
-        run(
-            repo_path,
-            ["worktree".as_ref(), "add".as_ref()].iter().chain(&args),
-        )
-    };
-    let (backend, fallback_reason) = match cowtree_installed(repo_path) {
+    let fallback_reason = match cowtree_installed(repo_path) {
         true => match cowtree_add(repo_path, &args)? {
-            Ok(backend) => (backend, None),
-            Err(reason) => {
-                git_add()?;
-                (Backend::Git, Some(reason))
+            CowtreeAdd::Made(backend) => {
+                return Ok(Added {
+                    new_branch_at: start.new_branch_at(),
+                    backend,
+                    fallback_reason: None,
+                })
             }
+            CowtreeAdd::Declined(reason) => Some(reason),
         },
-        false => {
-            git_add()?;
-            (Backend::Git, None)
-        }
+        false => None,
     };
+    run(
+        repo_path,
+        ["worktree".as_ref(), "add".as_ref()].iter().chain(&args),
+    )?;
     Ok(Added {
         new_branch_at: start.new_branch_at(),
-        backend,
+        backend: Backend::Git,
         fallback_reason,
     })
 }
@@ -177,15 +176,17 @@ const COWTREE_SCHEMA: &str = "git-cowtree.v1";
 /// once per process (one meta command). One that isn't found, fails, or
 /// speaks another schema is as if absent.
 fn cowtree_installed(dir: &Path) -> bool {
+    #[derive(Deserialize)]
+    struct Version {
+        schema: String,
+    }
     static INSTALLED: OnceLock<bool> = OnceLock::new();
     *INSTALLED.get_or_init(|| {
         meta_core::children::output(in_repo("git-cowtree", dir).args(["--json", "version"]))
             .ok()
             .filter(|out| out.status.success())
-            .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
-            .is_some_and(|reply| {
-                reply.get("schema").and_then(serde_json::Value::as_str) == Some(COWTREE_SCHEMA)
-            })
+            .and_then(|out| serde_json::from_slice::<Version>(&out.stdout).ok())
+            .is_some_and(|version| version.schema == COWTREE_SCHEMA)
     })
 }
 
@@ -203,14 +204,21 @@ struct CowtreeError {
     path: Option<PathBuf>,
 }
 
-/// `git-cowtree --json add <args>` in `repo_path`: the backend that made the
-/// worktree, or git-cowtree's reason for declining (exit 3, `unsupported`:
-/// nothing was changed, so git may make it). Any other failure is an error,
-/// never retried with git, and the caller undoes its own work as for a
-/// failed `git worktree add`. That includes `hook_failed` (the worktree
+/// What a `git-cowtree add` did, when it didn't fail.
+enum CowtreeAdd {
+    /// Made the worktree; its files by this backend
+    Made(Backend),
+    /// Declined (exit 3, `unsupported`), with its reason: nothing was
+    /// changed, so git may make it
+    Declined(String),
+}
+
+/// `git-cowtree --json add <args>` in `repo_path` (see [`CowtreeAdd`]). Any
+/// failure is an error, never retried with git, and the caller undoes its
+/// own work as for a failed `git worktree add`. That includes `hook_failed` (the worktree
 /// exists and its `post-checkout` hook failed, as git leaves it) and
 /// `rollback_failed` (a worktree may be left at the error's path).
-fn cowtree_add(repo_path: &Path, args: &[&OsStr]) -> Result<std::result::Result<Backend, String>> {
+fn cowtree_add(repo_path: &Path, args: &[&OsStr]) -> Result<CowtreeAdd> {
     let shown = || {
         args.iter()
             .map(|a| a.to_string_lossy())
@@ -242,9 +250,9 @@ fn cowtree_add(repo_path: &Path, args: &[&OsStr]) -> Result<std::result::Result<
                 backend: Some(backend),
                 ..
             }),
-        ) => Ok(Ok(backend)),
+        ) => Ok(CowtreeAdd::Made(backend)),
         (Some(3), Some(CowtreeReply { error: Some(e), .. })) if e.kind == "unsupported" => {
-            Ok(Err(e.message))
+            Ok(CowtreeAdd::Declined(e.message))
         }
         (_, Some(CowtreeReply { error: Some(e), .. })) => anyhow::bail!(
             "git-cowtree add {} failed in {}: {}: {}{}{}",

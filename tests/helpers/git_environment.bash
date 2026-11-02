@@ -46,6 +46,12 @@ sandbox() {
     clear_git_local_env || return 1
     mkdir -p "$BATS_TEST_TMPDIR/user-env/runtime" "$BATS_TEST_TMPDIR/tmp" "$BATS_TEST_TMPDIR/ws"
     chmod 700 "$BATS_TEST_TMPDIR/user-env/runtime"
+    # a git-cowtree installed on the machine stays out: this one fails as a
+    # missing program does, so meta takes git-cowtree for absent
+    mkdir -p "$BATS_TEST_TMPDIR/stub"
+    printf '#!/bin/sh\nexit 127\n' > "$BATS_TEST_TMPDIR/stub/git-cowtree"
+    chmod 755 "$BATS_TEST_TMPDIR/stub/git-cowtree"
+    export PATH="$BATS_TEST_TMPDIR/stub:$PATH"
     # whatever the machine's git defaults to, a new repo starts on main
     git config --file "$GIT_CONFIG_GLOBAL" init.defaultBranch main
     export XDG_RUNTIME_DIR="$BATS_TEST_TMPDIR/user-env/runtime"

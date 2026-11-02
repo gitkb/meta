@@ -39,19 +39,21 @@ fn workspace(sandbox: &Sandbox) -> PathBuf {
 }
 
 /// A stand-in git-cowtree on the sandbox's PATH whose `version` names
-/// `schema`. Its `add` does in each repo what `behave` set for it (the
-/// repo folder's name), `reflink` by default: `reflink` or `git` makes the
-/// worktree with git and says that backend; `hook` makes it and fails with
-/// `hook_failed`; any other mode fails as the mode says, changing nothing.
-/// Every call is logged; returns the log.
-fn fake_cowtree(sandbox: &Sandbox, schema: &str) -> PathBuf {
+/// `schema` and exits `version_exit`. Its `add` does in each repo what
+/// `behave` set for it (the repo folder's name), `reflink` by default:
+/// `reflink` or `git` makes the worktree with git and says that backend;
+/// `hook` makes it and fails with `hook_failed`; `rollback_failed` makes it,
+/// locks it as an interrupted add does, and fails naming it; any other mode
+/// fails as the mode says, changing nothing. Every call is logged; returns
+/// the log.
+fn fake_cowtree(sandbox: &Sandbox, schema: &str, version_exit: u8) -> PathBuf {
     let log = sandbox.work().join("cowtree.log");
     let modes = sandbox.work().join("modes");
     fs::create_dir_all(&modes).unwrap();
     let script = format!(
         r#"#!/bin/sh
 printf '%s\n' "$*" >> '{log}'
-if [ "$2" = version ]; then echo '{{"schema":"{schema}","version":"0.1.0"}}'; exit 0; fi
+if [ "$2" = version ]; then echo '{{"schema":"{schema}","version":"0.1.0"}}'; exit {version_exit}; fi
 shift 2
 mode=$(cat '{modes}'/"$(basename "$PWD")" 2>/dev/null || echo reflink)
 fail() {{ printf '{{"schema":"git-cowtree.v1","error":{{"kind":"%s","message":"%s","path":null}}}}\n' "$1" "$2"; exit "$3"; }}
@@ -63,6 +65,12 @@ case $mode in
 esac
 git worktree add -q "$@" >&2 || fail git_failed 'git refused' 5
 [ "$mode" = hook ] && fail hook_failed 'the post-checkout hook failed' 5
+if [ "$mode" = rollback_failed ]; then
+  # the tests' adds are `-b <branch> <dest>`
+  git worktree lock --reason "git-cowtree:$$" "$3"
+  printf '{{"schema":"git-cowtree.v1","error":{{"kind":"rollback_failed","message":"could not remove it","path":"%s"}}}}\n' "$3"
+  exit 5
+fi
 printf '{{"schema":"git-cowtree.v1","backend":"%s"}}\n' "$mode"
 "#,
         log = log.display(),
@@ -165,23 +173,35 @@ fn without_a_v1_git_cowtree_git_makes_every_worktree() {
     let sandbox = Sandbox::new();
     let ws = workspace(&sandbox);
     // the sandbox's stand-in for none installed, and none speaking v1
-    let created = worktree_json(&sandbox, &ws, &["create", "t", "--repo", "a"]);
-    let log = fake_cowtree(&sandbox, "git-cowtree.v2");
-    let added = worktree_json(&sandbox, &ws, &["add", "t", "--repo", "b"]);
+    let mut outputs = vec![worktree_json(
+        &sandbox,
+        &ws,
+        &["create", "t", "--repo", "a"],
+    )];
+    // one that speaks another schema, and one whose `version` fails
+    for (schema, exit, repo) in [("git-cowtree.v2", 0, "b"), ("git-cowtree.v1", 5, "c")] {
+        let log = fake_cowtree(&sandbox, schema, exit);
+        fs::remove_file(&log).ok();
+        outputs.push(worktree_json(&sandbox, &ws, &["add", "t", "--repo", repo]));
+        assert_eq!(
+            calls(&log),
+            ["--json version"],
+            "{schema}: asked, never used"
+        );
+        assert!(ws.join(".worktrees/t").join(repo).join("README").exists());
+    }
 
-    for entry in backends(&created).into_iter().chain(backends(&added)) {
+    for entry in outputs.iter().flat_map(backends) {
         assert_eq!(entry.1, json!("git"), "{entry:?}");
         assert!(entry.2.is_null(), "{entry:?}");
     }
-    assert_eq!(calls(&log), ["--json version"], "asked, never used");
-    assert!(ws.join(".worktrees/t/b/README").exists());
 }
 
 #[test]
 fn git_cowtree_makes_each_worktree_from_gits_arguments_and_declines_to_git() {
     let sandbox = Sandbox::new();
     let ws = workspace(&sandbox);
-    let log = fake_cowtree(&sandbox, "git-cowtree.v1");
+    let log = fake_cowtree(&sandbox, "git-cowtree.v1", 0);
     behave(&sandbox, "b", "git");
     behave(&sandbox, "c", "unsupported");
 
@@ -248,7 +268,7 @@ fn any_other_git_cowtree_failure_rolls_the_create_back_and_never_retries_git() {
     for mode in ["git_failed", "hook", "io_error_3", "unsupported_5"] {
         let sandbox = Sandbox::new();
         let ws = workspace(&sandbox);
-        let log = fake_cowtree(&sandbox, "git-cowtree.v1");
+        let log = fake_cowtree(&sandbox, "git-cowtree.v1", 0);
         behave(&sandbox, "b", mode);
 
         let args = ["create", "t", "--repo", "a", "--repo", "b"];
@@ -270,4 +290,32 @@ fn any_other_git_cowtree_failure_rolls_the_create_back_and_never_retries_git() {
             "{mode}: no add is tried twice"
         );
     }
+}
+
+#[test]
+fn a_worktree_git_cowtree_could_not_undo_is_named_and_never_reused() {
+    let sandbox = Sandbox::new();
+    let ws = workspace(&sandbox);
+    let log = fake_cowtree(&sandbox, "git-cowtree.v1", 0);
+    behave(&sandbox, "b", "rollback_failed");
+
+    let args = ["create", "t", "--repo", "a", "--repo", "b"];
+    let out = worktree(&sandbox, &ws, &args, json!({}));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    let left = ws.join(".worktrees/t/b");
+    assert!(stderr.contains("rollback_failed"), "{stderr}");
+    assert!(stderr.contains(&left.display().to_string()), "{stderr}");
+    // git still has it, locked: meta deletes nothing of the set and says so
+    assert!(left.join("README").exists(), "{stderr}");
+    assert!(stderr.contains("left in place"), "{stderr}");
+    assert_eq!(
+        calls(&log).iter().filter(|c| c.contains(" add ")).count(),
+        3,
+        "git never retried b's add"
+    );
+    // the path isn't reused until someone has looked at it
+    let out = worktree(&sandbox, &ws, &args, json!({}));
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("already exists"));
 }

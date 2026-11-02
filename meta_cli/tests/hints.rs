@@ -23,9 +23,10 @@ impl Workspace {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let base = temp.path().canonicalize().unwrap();
-        for dir in ["home", "config", "data", "meta", "tmp"] {
+        for dir in ["home", "config", "data", "meta", "tmp", "stub"] {
             fs::create_dir_all(base.join(dir)).unwrap();
         }
+        meta_test_support::hide_git_cowtree(&base.join("stub"));
         fs::write(
             base.join("gitconfig"),
             "[user]\n\tname = T\n\temail = t@example.invalid\n[init]\n\tdefaultBranch = main\n",
@@ -69,7 +70,11 @@ impl Workspace {
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env(
                 "PATH",
-                format!("{}:/usr/local/bin:/usr/bin:/bin", bin.display()),
+                format!(
+                    "{}:{}:/usr/local/bin:/usr/bin:/bin",
+                    self.base.join("stub").display(),
+                    bin.display()
+                ),
             )
             .stdin(Stdio::null());
         command

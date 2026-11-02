@@ -78,15 +78,6 @@ pub enum Backend {
     Git,
 }
 
-impl Backend {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Reflink => "reflink",
-            Self::Git => "git",
-        }
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub struct ListOutput {
     pub worktrees: Vec<ListEntry>,

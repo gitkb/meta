@@ -66,13 +66,8 @@ impl Sandbox {
             use std::os::unix::fs::PermissionsExt;
             let private = std::fs::Permissions::from_mode(0o700);
             std::fs::set_permissions(root.join("runtime"), private).unwrap();
-            // a git-cowtree installed on the machine stays out of the tests:
-            // this one, first on PATH, fails as a missing program does, so
-            // meta takes it for absent. A test of meta with git-cowtree
-            // writes its own over it.
-            let stub = root.join("bin/git-cowtree");
-            std::fs::write(&stub, "#!/bin/sh\nexit 127\n").unwrap();
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+            // a test of meta with git-cowtree writes its own over this one
+            hide_git_cowtree(&root.join("bin"));
         }
         // whatever the machine's git defaults to, a new repo starts on main
         std::fs::write(root.join("gitconfig"), "[init]\n\tdefaultBranch = main\n").unwrap();
@@ -271,6 +266,18 @@ macro_rules! isolated {
             None => return,
         }
     };
+}
+
+/// Writes a `git-cowtree` into `dir` that fails as a missing program does,
+/// so meta, with `dir` first on PATH, takes git-cowtree for absent: one
+/// installed on the machine stays out of the tests. (git-cowtree runs only
+/// on Linux and macOS.)
+#[cfg(unix)]
+pub fn hide_git_cowtree(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let stub = dir.join("git-cowtree");
+    std::fs::write(&stub, "#!/bin/sh\nexit 127\n").unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 /// Whether git can make reftable repos (2.45 on); says why not when not.

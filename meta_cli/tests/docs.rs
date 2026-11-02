@@ -472,6 +472,9 @@ impl Sandbox {
             "registries: [\"http://127.0.0.1:9\"]\n",
         )
         .unwrap();
+        let stub = base.join("stub");
+        fs::create_dir_all(&stub).unwrap();
+        meta_test_support::hide_git_cowtree(&stub);
         let ws = base.join("ws");
         fs::create_dir_all(&ws).unwrap();
         // one project per name, none the same as another but for case or
@@ -506,8 +509,9 @@ impl Sandbox {
             bin: bin.to_path_buf(),
             env,
             path: format!(
-                "{0}:{0}/examples:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
-                bin.display()
+                "{1}:{0}:{0}/examples:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
+                bin.display(),
+                stub.display()
             ),
         };
         let init = sandbox.command("git").args(["init", "-q"]).status();

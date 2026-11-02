@@ -148,7 +148,7 @@ For local changes that must succeed together:
 ```
 
 Atomic mode runs only when every selected project is a clean git repository. If any repo fails:
-- The command stops, and each repo it reached is put back on its branch and commit from before; what the command left uncommitted is saved in a stash
+- The command stops, and each repo it reached is put back where it was (on its branch, or on the commit a detached HEAD was at); what the command left uncommitted is saved in a stash
 - `rollback.status` is `success` when every one of them was; otherwise `rollback.failed` lists each repo it couldn't fully put back, with git's reason. Such a repo may be partly restored: its uncommitted changes may already be in a stash, which the reason then names
 - `rollback.restored` names, for each repo put back, the stash holding its uncommitted changes and the commits it replaced
 

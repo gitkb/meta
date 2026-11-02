@@ -109,7 +109,7 @@ projects:
       - utils-api
 ```
 
-The [MCP server](mcp_server.md) reads them: `meta_analyze_impact` lists the projects a change to one affects, `meta_execution_order` puts projects in build order, and `meta_batch_execute` with `"atomic": true` runs a command across repos and, if any repo fails, stops and puts each repo it reached back on its branch and commit from before (see [Agent Workflows](agent_workflows.md)). On the command line, `meta project dependents <project>` names the projects that depend on one.
+The [MCP server](mcp_server.md) reads them: `meta_analyze_impact` lists the projects a change to one affects, `meta_execution_order` puts projects in build order, and `meta_batch_execute` with `"atomic": true` runs a command across repos and, if any repo fails, stops and puts each repo it reached back where it was (on its branch, or on the commit a detached HEAD was at) (see [Agent Workflows](agent_workflows.md)). On the command line, `meta project dependents <project>` names the projects that depend on one.
 
 ---
 
@@ -222,7 +222,7 @@ meta --json exec -- npm test | jq '.summary.failed'
 
 ## Parallel Execution
 
-`meta exec` and the `meta git` commands run in every repo at once by default (`defaults.parallel: true` in `.meta.yaml`). Each repo's output is captured and shown after all are done, the root first; on a terminal a spinner per repo shows progress. `--sequential`, or `defaults: {parallel: false}`, runs one repo after another with live output: use it for commands that ask for input, share state, or that you are debugging. `--parallel` wins over both. `loop` runs sequentially by default.
+`meta exec` and the `meta git` commands that run git as typed run in every repo at once by default (`defaults.parallel: true` in `.meta.yaml`). Each repo's output is captured and shown after all are done, the root first; on a terminal a spinner per repo shows progress. `--sequential`, or `defaults: {parallel: false}`, runs one repo after another with live output: use it for commands that ask for input, share state, or that you are debugging. `--parallel` wins over both. `meta git clone` and `meta git update` clone and pull several repos at once whatever these say (`meta git clone --parallel 8` sets how many) and show their own progress. `loop` runs sequentially by default.
 
 ```bash
 meta --sequential exec -- npm install

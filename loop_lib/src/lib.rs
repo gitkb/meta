@@ -590,12 +590,14 @@ fn not_started(argv: &[String], error: &std::io::Error) -> String {
             && one.contains(char::is_whitespace)
             && !one.contains(std::path::is_separator)
         {
-            let words: Vec<String> = one.split_whitespace().map(String::from).collect();
-            said.push_str(&format!(
-                "\n  a program and its arguments are separate words: {}, not {}",
-                escape(&display_command(&words)),
-                escape(&command)
-            ));
+            // read as a shell would (`git commit -m "a b"` is four words)
+            if let Some(words) = shlex::split(one) {
+                said.push_str(&format!(
+                    "\n  a program and its arguments are separate words: {}, not {}",
+                    escape(&display_command(&words)),
+                    escape(&command)
+                ));
+            }
         }
     }
     said

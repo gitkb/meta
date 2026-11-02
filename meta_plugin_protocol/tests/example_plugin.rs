@@ -27,7 +27,7 @@ fn it_serves_its_file_word_and_plans_one_command_per_selected_repo() {
         }
         _ => Vec::new(),
     };
-    let argv = vec!["echo".to_string(), "hello team".to_string()];
+    let argv = hello::echo("hello team");
     assert_eq!(
         planned,
         [

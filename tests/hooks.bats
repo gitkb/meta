@@ -47,7 +47,10 @@ EOF
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"$workspace"* ]]
-    [ "$(wc -l <"$calls" | tr -d ' ')" -eq 4 ]  # fmt, clippy, build, test
+    # fmt, clippy, then the binaries the tests run, then the tests
+    [ "$(wc -l <"$calls" | tr -d ' ')" -eq 4 ]
+    [ "$(sed -n 3p "$calls")" = "build --workspace --bins --examples --locked" ]
+    [ "$(sed -n 4p "$calls")" = "test --workspace --locked" ]
     cmp -s "$config_before" "$workspace/.git/config"
 }
 

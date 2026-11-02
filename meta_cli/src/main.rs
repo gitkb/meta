@@ -457,11 +457,14 @@ fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Resul
         for (i, word) in words.iter().enumerate() {
             found = match found.find_subcommand_mut(word) {
                 Some(sub) => sub,
-                None => anyhow::bail!(
-                    "meta {} has no command '{}'",
-                    escape(&words.get(..i).unwrap_or_default().join(" ")),
-                    escape(word)
-                ),
+                None => {
+                    return Err(meta_core::exit::Usage(format!(
+                        "meta {} has no command '{}'",
+                        escape(&words.get(..i).unwrap_or_default().join(" ")),
+                        escape(word)
+                    ))
+                    .into())
+                }
             };
         }
         return Ok(out!("{}", found.render_help())?);

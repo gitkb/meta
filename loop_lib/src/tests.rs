@@ -796,6 +796,13 @@ fn one_argument_with_a_space_that_names_no_program_is_told_apart() {
     assert!(!not_started(&["gti".to_string()], &missing).contains("separate"));
     let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
     assert!(!not_started(&["a b".to_string()], &denied).contains("separate"));
+    // the words are read as a shell would, or not suggested
+    let quoted = not_started(&["git commit -m \"a b\"".to_string()], &missing);
+    assert!(
+        quoted.contains("separate words: git commit -m 'a b',"),
+        "{quoted}"
+    );
+    assert!(!not_started(&["echo \"a".to_string()], &missing).contains("separate"));
     // nor a path with a space in it
     assert!(!not_started(&["/opt/My Tools/run".to_string()], &missing).contains("separate"));
 }

@@ -98,8 +98,7 @@ impl<'de> Deserialize<'de> for ProjectEntry {
             }
 
             fn visit_str<E: serde::de::Error>(self, url: &str) -> Result<Self::Value, E> {
-                GitUrl::deserialize(serde::de::value::StrDeserializer::new(url))
-                    .map(ProjectEntry::Simple)
+                Ok(ProjectEntry::Simple(GitUrl::from(url.to_string())))
             }
 
             fn visit_map<M: serde::de::MapAccess<'de>>(

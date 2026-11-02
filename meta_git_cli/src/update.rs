@@ -53,7 +53,7 @@ pub(crate) fn execute_git_update(
             || meta_cli::worktree::holds_meta_checkout(&set_dir)
         {
             anyhow::bail!(
-                "meta git update brings the workspace up to date, not worktree set '{}'; \
+                "`meta git update` brings the workspace up to date, not worktree set '{}'; \
                  run it in the workspace, or 'meta git pull' in the set",
                 escape(&set)
             );

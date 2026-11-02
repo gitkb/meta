@@ -70,7 +70,7 @@ echo ""
 
 echo "==> Running tests..."
 # the docs and hints tests run the plugins and the example plugin
-if ! cargo build --workspace --bins --examples || ! cargo test --workspace; then
+if ! cargo build --workspace --bins --examples --locked || ! cargo test --workspace --locked; then
     echo ""
     echo "Tests failed! Fix the failing tests above."
     exit 1

@@ -51,9 +51,23 @@ pub(crate) fn execute(request: PluginRequest) -> CommandResult {
         .iter()
         .map(|dir| PlannedCommand {
             dir: dir.clone(),
-            argv: vec!["echo".to_string(), format!("hello {name}")],
+            argv: echo(&format!("hello {name}")),
             env: None,
         })
         .collect();
     CommandResult::Plan(commands, None)
+}
+
+/// A command that prints `text`: meta runs plans with no shell, and on
+/// Windows `echo` is part of cmd.
+pub(crate) fn echo(text: &str) -> Vec<String> {
+    let echo: &[&str] = if cfg!(windows) {
+        &["cmd", "/c", "echo"]
+    } else {
+        &["echo"]
+    };
+    echo.iter()
+        .map(|word| word.to_string())
+        .chain([text.to_string()])
+        .collect()
 }

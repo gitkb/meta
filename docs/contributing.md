@@ -18,7 +18,7 @@ cargo test --workspace --locked
 make bats    # the integration tests in tests/*.bats; needs bats
 ```
 
-`cargo test -p meta --test docs` (part of `cargo test`) runs every `meta …` command the README, docs and skills show; when you change a command, update the docs it breaks. `make install-hooks` installs git hooks that check commit messages and run these checks before a push.
+`cargo test -p meta --test docs` (part of `cargo test`) runs every `meta …` command the README, docs and skills show; when you change a command, update the docs it breaks. `make install-hooks` installs git hooks that check commit messages and, before a push, run the cargo checks above (not `make bats`, which you run yourself).
 
 ## Reporting Issues
 

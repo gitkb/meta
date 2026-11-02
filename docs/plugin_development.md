@@ -6,7 +6,7 @@ The whole of a working plugin in Rust is [`meta_plugin_protocol/examples/meta-he
 
 ```bash
 cargo build -p meta_plugin_protocol --example meta-hello
-cp target/debug/examples/meta-hello ~/.meta/plugins/
+mkdir -p ~/.meta/plugins && cp target/debug/examples/meta-hello ~/.meta/plugins/
 meta hello world
 meta --tag backend hello team    # meta's options, selection included, go before the command
 ```
@@ -19,7 +19,7 @@ meta looks for plugins in, in order:
 2. `~/.meta/plugins/` (moved by `META_DATA_DIR`), where `meta plugin install <name>` installs.
 3. Executables named `meta-*` on PATH.
 
-The first file with the name wins. The file name decides which command reaches a plugin (`meta-hello`, or `meta-hello.exe` on Windows; `.cmd` and `.bat` files aren't plugins), not the `name` or `commands` it reports: a plugin serving two top-level words ships two files. A word meta has as a built-in command (`exec`, `plugin`, `help`, ...) never reaches a plugin.
+The first executable file with the name wins. The file name decides which command reaches a plugin (`meta-hello`, or `meta-hello.exe` on Windows; `.cmd` and `.bat` files aren't plugins), not the `name` or `commands` it reports: a plugin serving two top-level words ships two files. A word meta has as a built-in command (`exec`, `plugin`, `help`, ...) never reaches a plugin.
 
 For `meta <word> ...` meta starts only `meta-<word>`; if it doesn't answer `--meta-plugin-info` within 5 seconds, the command fails naming it. `meta`, `meta help`, `meta --help` and `meta plugin list` start every plugin, and skip with a warning one that doesn't answer in time or answers with anything but its info (a `meta-*` program on PATH that isn't a plugin is just left out).
 
@@ -94,8 +94,8 @@ else:
 ## Testing a plugin
 
 ```bash
-meta-hello --meta-plugin-info | jq .
-echo '{"command":"hello","args":["team"],"projects":["."]}' | meta-hello --meta-plugin-exec
+~/.meta/plugins/meta-hello --meta-plugin-info | jq .
+echo '{"command":"hello","args":["team"],"projects":["."]}' | ~/.meta/plugins/meta-hello --meta-plugin-exec
 meta --dry-run hello team    # what meta would run, run nowhere
 ```
 

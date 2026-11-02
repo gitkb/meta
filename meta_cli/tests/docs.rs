@@ -422,8 +422,10 @@ fn selected(lines: &[Line]) -> (Vec<String>, Vec<String>) {
                     .filter(|v| {
                         *v != "."
                             && !v.is_empty()
+                            && !v.starts_with(['.', '/'])
+                            && !v.ends_with('/')
                             && v.chars()
-                                .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+                                .all(|c| c.is_ascii_alphanumeric() || "._-/".contains(c))
                     })
                     .map(String::from),
             );
@@ -472,12 +474,24 @@ impl Sandbox {
         .unwrap();
         let ws = base.join("ws");
         fs::create_dir_all(&ws).unwrap();
-        let mut all: Vec<&str> = ["web", FILL]
+        // one project per name, none the same as another but for case or
+        // inside another, so the workspace is one meta accepts
+        let mut all: Vec<&str> = Vec::new();
+        for name in ["web", FILL]
             .into_iter()
             .chain(names.iter().map(String::as_str))
-            .collect();
-        all.sort();
-        all.dedup();
+        {
+            let lower = name.to_lowercase();
+            let overlaps = |other: &&str| {
+                let other = other.to_lowercase();
+                other == lower
+                    || lower.starts_with(&format!("{other}/"))
+                    || other.starts_with(&format!("{lower}/"))
+            };
+            if !all.iter().any(overlaps) {
+                all.push(name);
+            }
+        }
         let mut projects = String::from("projects:\n");
         for name in all {
             projects.push_str(&format!(
@@ -498,6 +512,13 @@ impl Sandbox {
         };
         let init = sandbox.command("git").args(["init", "-q"]).status();
         assert!(init.unwrap().success());
+        // a workspace meta refuses would refuse every command alike
+        let list = sandbox.meta(&["project".into(), "list".into()]);
+        assert!(
+            list.status.success(),
+            "the sandbox workspace is one meta refuses: {}",
+            String::from_utf8_lossy(&list.stderr)
+        );
         sandbox
     }
 
@@ -527,6 +548,14 @@ impl Sandbox {
     fn rejects(&self, line: &Line) -> Option<String> {
         let mut words = previewed(&line.words);
         let out = self.meta(&words);
+        let said = String::from_utf8_lossy(&out.stderr);
+        // refused for its selection, it never reached its command's parser
+        assert!(
+            !said.contains("names none of the repos") && !said.contains("is no project's tag"),
+            "{}: meta {}: the sandbox lacks a project or tag it selects: {said}",
+            line.at,
+            words.join(" ")
+        );
         let accepted = matches!(out.status.code(), Some(0 | 1))
             || (line.name_only && out.status.code() == Some(2) && {
                 // `meta exec -- <command>` names exec; `meta --tag` an option
@@ -605,6 +634,19 @@ fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
 
     let (tags, names) = selected(&lines);
     let sandbox = Sandbox::new(bin, &tags, &names);
+    // the check rejects what it should, in this sandbox
+    for bad in [
+        &["git", "worktree", "no-such-command"][..],
+        &["--include", FILL, "project", "no-such-command"],
+        &["no-such-command"],
+    ] {
+        let line = Line {
+            at: "a command that doesn't exist".into(),
+            words: bad.iter().map(|word| word.to_string()).collect(),
+            name_only: false,
+        };
+        assert!(sandbox.rejects(&line).is_some(), "meta {bad:?} passed");
+    }
     let rejected: Vec<String> = lines
         .iter()
         .filter_map(|line| {
@@ -654,14 +696,13 @@ fn a_command_ends_where_the_shell_takes_over_and_its_blanks_are_filled_in() {
         ]
     );
     // meta's --dry-run goes before the command, whatever the command takes
-    let w2 = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
     assert_eq!(
-        previewed(&w2(&["--tag", "x", "exec", "--", "rm", "--dry-run"])),
-        w2(&["--dry-run", "--tag", "x", "exec", "--", "rm", "--dry-run"])
+        previewed(&w(&["--tag", "x", "exec", "--", "rm", "--dry-run"])),
+        w(&["--dry-run", "--tag", "x", "exec", "--", "rm", "--dry-run"])
     );
     assert_eq!(
-        previewed(&w2(&["--dry-run", "git", "update"])),
-        w2(&["--dry-run", "git", "update"])
+        previewed(&w(&["--dry-run", "git", "update"])),
+        w(&["--dry-run", "git", "update"])
     );
     // a blank where the command goes leaves a command name
     assert_eq!(

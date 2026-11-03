@@ -89,7 +89,7 @@ projects:
   web: git@github.com:org/web.git
 EOF
 printf 'api/\nweb/\n' > .gitignore   # the child repos keep their own history
-meta git update                      # clones api and web
+meta git clone-missing               # clones api and web
 ```
 
 Commit `.meta.yaml` and `.gitignore` and push the workspace repo; others then get everything with `meta git clone <url>`.
@@ -257,7 +257,7 @@ The same rules apply to every meta config that a recursive command reads, includ
 
 YAML anchors and merge keys (`<<: *defaults`) work as YAML defines them.
 
-**A project is acted on only if its folder is its own repository.** `meta exec` and the per-repo `meta git` commands run in each selected project that is a git repository of its own, and name the others, then exit 1: `web: not cloned (run 'meta git update')`, or `r1: not a git repository (folder exists, no .git)`. git started for a project never looks above the project's folder, so it can't reach the workspace repository around it: meta sets `GIT_CEILING_DIRECTORIES` (added to any you set) for every command it runs in a project, the root included. `meta git update` clones a missing project, or into an empty folder, and names a folder that holds something else. `meta project check` names every project that is missing, not a repository, or cloned from another remote, and exits 1. `--json` prints `{"problems": [{"name", "path", "state", "reason", "repo"?, "actual"?}]}` on stdout, `state` being `missing`, `not_a_repo` or `wrong_remote` (`actual`: the checkout's origin, `null` without one).
+**A project is acted on only if its folder is its own repository.** `meta exec` and the per-repo `meta git` commands run in each selected project that is a git repository of its own, and name the others. `meta exec` then exits 1: `web: not cloned (run 'meta git clone-missing')`, or `r1: not a git repository (folder exists, no .git)`. The per-repo `meta git` commands (`meta git pull`, `meta git status`, …) name a project that isn't cloned yet as a warning ("web is not cloned; `meta git clone-missing` clones it"), which fails the command only with `--strict`, and exit 1 for a folder that is not a repository. git started for a project never looks above the project's folder, so it can't reach the workspace repository around it: meta sets `GIT_CEILING_DIRECTORIES` (added to any you set) for every command it runs in a project, the root included. `meta git update` clones a missing project, or into an empty folder, and names a folder that holds something else. `meta project check` names every project that is missing, not a repository, or cloned from another remote, and exits 1. `--json` prints `{"problems": [{"name", "path", "state", "reason", "repo"?, "actual"?}]}` on stdout, `state` being `missing`, `not_a_repo` or `wrong_remote` (`actual`: the checkout's origin, `null` without one).
 
 You can mix simple and extended formats in the same file.
 
@@ -296,7 +296,20 @@ meta git clone -r https://github.com/org/top-level.git
 
 # Pull what's cloned and clone what's missing, nested meta repos included
 meta git update -r
+```
 
+Keeping the clones to what the `.meta.yaml` files list:
+
+| Command | What it does |
+|---------|--------------|
+| `meta git update` | Pull the workspace repo, fast-forward every cloned repo (`git pull --ff-only`), clone the missing ones |
+| `meta git clone-missing` | Clone the projects the `.meta.yaml` files on disk list that aren't cloned; change no repo that is |
+| `meta git clone-prune` | Remove the repos no `.meta.yaml` lists that hold nothing unpushed; keep and name the others |
+| `meta git clone-sync` | `clone-missing`, then `clone-prune` |
+
+Each takes `-r` (or meta's `--recursive`) for nested meta repos, and `--dry-run` before the command. `clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files as they are on disk and pull nothing; they take `--include`, `--exclude` and `--tag` (the projects cloned, the meta repos searched for leftovers) and `--json` (`{"dry_run", "repos": [{"path", "action", "reason"?}]}`, `action` being `cloned`, `removed`, `kept` or `failed`). `clone-prune` removes a repo only when git shows nothing in it that isn't on a remote: no uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it (bare ones too). Other ignored files are not checked.
+
+```bash
 # List entire tree
 meta project list --recursive
 ```

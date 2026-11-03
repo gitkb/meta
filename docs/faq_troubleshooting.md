@@ -86,10 +86,10 @@ projects:
     tags: [backend]
 ```
 
-Then clone the missing repo (this also fast-forwards the workspace repo and every cloned repo, `git pull --ff-only`):
+Then clone the missing repo, changing nothing else (`meta git update` also fast-forwards the workspace repo and every cloned repo):
 
 ```bash
-meta git update
+meta git clone-missing
 ```
 
 ### Q: Can I use HTTPS URLs instead of SSH?
@@ -157,7 +157,7 @@ meta --json git status | jq '.results[] | select(.success == false)'
 2. Reads its meta config
 3. Clones each repo it lists; the repos of nested meta repos (`meta: true`) only with `meta git clone -r <url>`
 
-If child repos aren't cloning, the meta config may be missing or malformed. `meta git update` in the clone clones whatever is still missing.
+If child repos aren't cloning, the meta config may be missing or malformed. `meta git clone-missing` in the clone clones whatever is still missing.
 
 ### Q: Git operations are slow over SSH?
 

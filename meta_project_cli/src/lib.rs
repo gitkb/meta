@@ -136,7 +136,7 @@ struct ListArgs {
     about = "Verify configured projects are present (meta --recursive checks nested meta repos as well)",
     after_help = "Agent hints:
   Run this when commands fail because a child checkout is missing.
-  Missing repos can usually be cloned with `meta git update`.
+  Missing repos can usually be cloned with `meta git clone-missing`.
 
 Examples:
   meta project check
@@ -326,7 +326,7 @@ fn check(
         "{} project(s) are not clones of their configured repository{}",
         problems.len(),
         if missing {
-            "; run 'meta git update' to clone the missing ones"
+            "; run 'meta git clone-missing' to clone the missing ones"
         } else {
             ""
         }

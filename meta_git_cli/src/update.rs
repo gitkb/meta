@@ -7,10 +7,10 @@ use meta_core::display::{escape, escape_path};
 use meta_core::git::GitUrl;
 use meta_core::gitdir::Checkout;
 use meta_core::{errln, outln};
-use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
+use meta_git_lib::clone_queue::{CloneQueue, CloneTask, MetaRepo, Work};
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// `meta git update`
@@ -24,12 +24,78 @@ use std::sync::Arc;
                   (fast-forward only) is named with git's error and the command exits 1; \
                   nothing is merged or rebased. A repo on no branch, or whose branch has no \
                   upstream, is named and left alone. With -r the same goes for the meta repos \
-                  nested in it, each pulled before its .meta.yaml is read."
+                  nested in it, each pulled before its .meta.yaml is read.\n\n\
+                  To clone the missing projects and touch nothing else, run \
+                  `meta git clone-missing`."
 )]
 pub(crate) struct UpdateArgs {
     /// Also update the projects of nested meta repos
     #[arg(short, long)]
     recursive: bool,
+}
+
+/// The workspace at or above `cwd` that `meta <command>` acts on. Refused
+/// inside a worktree set meta made: the workspace around the set is not
+/// the command's to change from in it (`in_set`: what to run there
+/// instead). A plain git worktree of a meta repo under .worktrees is a
+/// workspace of its own: one that meta didn't make, whose .meta.yaml is its
+/// own.
+pub(crate) fn workspace(
+    cwd: &Path,
+    command: &str,
+    in_set: &str,
+) -> anyhow::Result<config::Workspace> {
+    let Some(workspace) = config::Workspace::find(cwd, None)? else {
+        anyhow::bail!("No .meta.yaml found in {} or above it", escape_path(cwd));
+    };
+    if let Some((set, set_dir)) = meta_cli::worktree::detect_worktree_location(cwd)? {
+        let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        if !real(&workspace.dir).starts_with(real(&set_dir))
+            || meta_cli::worktree::holds_meta_checkout(&set_dir)
+        {
+            anyhow::bail!(
+                "`meta {command}` acts on the workspace, not worktree set '{}'; run it in the \
+                 workspace{in_set}",
+                escape(&set)
+            );
+        }
+    }
+    Ok(workspace)
+}
+
+/// The name the workspace at `root` goes by in progress and errors.
+pub(crate) fn root_name(root: &Path) -> String {
+    root.file_name()
+        .map_or_else(|| ".".to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// Clone and pull `tasks`, and the tasks their `.meta.yaml` files add, four
+/// at a time, over SSH masters set up for `urls` (the remotes the run
+/// contacts first).
+pub(crate) fn run(
+    queue: &CloneQueue,
+    tasks: Vec<CloneTask>,
+    urls: &[GitUrl],
+) -> anyhow::Result<()> {
+    let mut parallel = 4_usize;
+    let ssh_cmd = match ssh::establish_ssh_masters(urls) {
+        ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
+        ssh::SshMasters::UserManaged => None, // parallel OK
+        ssh::SshMasters::Failed => {
+            meta_core::out::warn(
+                "SSH multiplexing could not be set up: working on one repository at a time",
+            );
+            parallel = 1;
+            None
+        }
+    };
+    clone_with_queue(
+        queue,
+        tasks,
+        parallel,
+        &MultiProgress::new(),
+        ssh_cmd.as_deref(),
+    )
 }
 
 pub(crate) fn execute_git_update(
@@ -40,42 +106,21 @@ pub(crate) fn execute_git_update(
     let recursive = args.recursive || options.recursive;
     // Without -r only the workspace's own .meta.yaml is read
     let meta_depth = if recursive { options.depth } else { Some(0) };
-    let Some(workspace) = config::Workspace::find(cwd, None)? else {
-        anyhow::bail!("No .meta.yaml found in {} or above it", escape_path(cwd));
-    };
-    // A worktree set's checkouts are pulled with `meta git pull`; the
-    // workspace around the set is not this command's to change from in it
-    // (A plain git worktree of a meta repo under .worktrees is a workspace
-    // of its own: one that meta didn't make, whose .meta.yaml is its own.)
-    if let Some((set, set_dir)) = meta_cli::worktree::detect_worktree_location(cwd)? {
-        let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-        if !real(&workspace.dir).starts_with(real(&set_dir))
-            || meta_cli::worktree::holds_meta_checkout(&set_dir)
-        {
-            anyhow::bail!(
-                "`meta git update` brings the workspace up to date, not worktree set '{}'; \
-                 run it in the workspace, or 'meta git pull' in the set",
-                escape(&set)
-            );
-        }
-    }
+    // A worktree set's checkouts are pulled with `meta git pull`
+    let workspace = workspace(cwd, "git update", ", or 'meta git pull' in the set")?;
     ssh::warn_remote_mismatches(&workspace);
 
     let queue = CloneQueue::new(None, meta_depth, true); // No git depth for update
     let root = workspace.dir.as_path();
-    let name = root
-        .file_name()
-        .map_or_else(|| ".".to_string(), |n| n.to_string_lossy().into_owned());
+    let name = root_name(root);
+    let top = || Arc::from([MetaRepo::at(&name, root, None)]);
     // The workspace repo first: its .meta.yaml is read once it is pulled
     let tasks = match Checkout::of(root) {
         Checkout::Repo { .. } => {
             let url = meta_core::git::remote_url(root)?;
             vec![queue.root(&name, root, url, Work::Pull)]
         }
-        _ => {
-            let top = MetaRepo::at(&name, root, None);
-            queue.discover_in(&workspace, 0, &Arc::from([top]))?
-        }
+        _ => queue.discover_in(&workspace, 0, &top())?,
     };
 
     if options.mode().is_preview() {
@@ -104,11 +149,19 @@ pub(crate) fn execute_git_update(
                 },
             }
         }
-        report_unlisted(&queue, cwd);
-        if let Some(error) = crate::clone_worker::report_failures(&queue) {
+        report_unlisted(&queue, root, cwd, recursive);
+        if let Some(error) = crate::clone_worker::report_failures(&queue, "git update") {
             return Ok(CommandResult::Error(error));
         }
         return Ok(CommandResult::Message(String::new()));
+    }
+
+    // Progress counts to the repos the .meta.yaml files on disk list, the
+    // workspace's own first; pulls that add projects add to it
+    let on_disk = CloneQueue::new(None, meta_depth, false);
+    if on_disk.discover_in(&workspace, 0, &top()).is_ok() {
+        let own = usize::from(matches!(Checkout::of(root), Checkout::Repo { .. }));
+        queue.expect(on_disk.found() + own);
     }
 
     // Establish SSH multiplexing before parallel clones and pulls, for the
@@ -130,30 +183,16 @@ pub(crate) fn execute_git_update(
         .chain(projects.map(|p| contacted(&root.join(&p.path), p.repo.as_ref())))
         .flatten()
         .collect();
-    let mut parallel = 4_usize;
-    let ssh_cmd = match ssh::establish_ssh_masters(&urls) {
-        ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
-        ssh::SshMasters::UserManaged => None, // parallel OK
-        ssh::SshMasters::Failed => {
-            meta_core::out::warn(
-                "SSH multiplexing could not be set up: updating one repository at a time",
-            );
-            parallel = 1;
-            None
-        }
-    };
-
-    let mp = MultiProgress::new();
-    clone_with_queue(&queue, tasks, parallel, &mp, ssh_cmd.as_deref())?;
-    report_unlisted(&queue, cwd);
+    run(&queue, tasks, &urls)?;
+    report_unlisted(&queue, root, cwd, recursive);
     let outcome = queue.outcome();
     for (name, why) in &outcome.not_pulled {
         errln!("{} {}: {why}", "Not pulled".yellow(), escape(name));
     }
-    if let Some(error) = crate::clone_worker::report_failures(&queue) {
+    if let Some(error) = crate::clone_worker::report_failures(&queue, "git update") {
         return Ok(CommandResult::Error(error));
     }
-    let (pulled, cloned) = (outcome.pulled, outcome.cloned);
+    let (pulled, cloned) = (outcome.pulled, outcome.cloned.len());
     let not_pulled = match outcome.not_pulled.len() {
         0 => String::new(),
         n => format!(", {n} with nothing to pull from"),
@@ -162,25 +201,107 @@ pub(crate) fn execute_git_update(
     Ok(CommandResult::Message(String::new()))
 }
 
-/// Name each repository in a meta repo's folder that its `.meta.yaml`
-/// doesn't list, with what deleting it would lose.
-fn report_unlisted(queue: &CloneQueue, cwd: &Path) {
-    for path in queue.outcome().unlisted {
-        let shown = escape_path(path.strip_prefix(cwd).unwrap_or(&path));
-        let holds = match meta_git_lib::worktree::safety::repo_holds(&path) {
-            Ok(held) if held.is_empty() => "it has no uncommitted or untracked files, stashes, \
-                 worktrees, or commits on a branch, tag or HEAD that its remote branches lack \
-                 (ignored files and the reflog not checked)"
-                .to_string(),
-            Ok(held) => format!(
-                "it holds {} (ignored files and the reflog not checked)",
-                held.join("; ")
-            ),
-            Err(e) => format!(
+/// What deleting a repository no `.meta.yaml` lists would lose.
+pub(crate) enum Leftover {
+    /// Nothing git shows that isn't on a remote
+    Nothing,
+    /// What it holds, or why it isn't deleted
+    Holds(String),
+}
+
+impl Leftover {
+    /// The repository at `path`, a leftover in the workspace at `root`.
+    pub(crate) fn of(path: &Path, root: &Path) -> Self {
+        let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let inside = real(path);
+        if path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Self::Holds("it is a symbolic link".to_string());
+        }
+        if !inside.starts_with(real(root)) || inside == real(root) {
+            return Self::Holds(format!(
+                "it is outside the workspace ({})",
+                escape_path(&inside)
+            ));
+        }
+        // Deleting the folder must delete its repository, not leave it
+        if let Checkout::Repo { git_dir } = Checkout::of(path) {
+            if !real(&path.join(&git_dir)).starts_with(&inside) {
+                return Self::Holds(format!(
+                    "its git directory is elsewhere ({})",
+                    escape_path(&git_dir)
+                ));
+            }
+        }
+        // git sees a repo inside it as untracked, or not at all if ignored
+        match nested_repo(path) {
+            Ok(Some(inner)) => {
+                return Self::Holds(format!(
+                    "it holds another git repository: {}",
+                    escape_path(inner.strip_prefix(path).unwrap_or(&inner))
+                ))
+            }
+            Ok(None) => {}
+            Err(e) => return Self::Holds(format!("it can't be searched ({e})")),
+        }
+        match meta_git_lib::worktree::safety::repo_holds(path) {
+            Ok(held) if held.is_empty() => Self::Nothing,
+            Ok(held) => Self::Holds(format!("it holds {}", held.join("; "))),
+            Err(e) => Self::Holds(format!(
                 "what it holds can't be told ({})",
                 meta_core::display::escape_lines(&format!("{e:#}"))
-            ),
+            )),
+        }
+    }
+}
+
+/// The first git repository inside the folder `dir` (not `dir` itself): a
+/// folder with a `.git`, or a bare one (`HEAD`, `objects` and `refs`);
+/// links aren't followed.
+fn nested_repo(dir: &Path) -> std::io::Result<Option<PathBuf>> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_name() == ".git" || !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let path = entry.path();
+        let bare = ["HEAD", "objects", "refs"]
+            .iter()
+            .all(|part| path.join(part).symlink_metadata().is_ok());
+        if bare || path.join(".git").symlink_metadata().is_ok() {
+            return Ok(Some(path));
+        }
+        if let Some(inner) = nested_repo(&path)? {
+            return Ok(Some(inner));
+        }
+    }
+    Ok(None)
+}
+
+/// `path` as shown: from `cwd` where it is inside it.
+pub(crate) fn shown(path: &Path, cwd: &Path) -> String {
+    escape_path(path.strip_prefix(cwd).unwrap_or(path))
+}
+
+/// Name each repository in a meta repo's folder that no `.meta.yaml` lists,
+/// with what deleting it would lose (`root`: the workspace's folder; `-r`:
+/// whether nested meta repos were read).
+fn report_unlisted(queue: &CloneQueue, root: &Path, cwd: &Path, recursive: bool) {
+    let prune = if recursive {
+        "meta -r git clone-prune"
+    } else {
+        "meta git clone-prune"
+    };
+    for path in queue.outcome().unlisted {
+        let shown = shown(&path, cwd);
+        let warning = match Leftover::of(&path, root) {
+            Leftover::Nothing => {
+                format!("{shown} isn't in .meta.yaml (nothing unpushed; {prune} removes it)")
+            }
+            Leftover::Holds(why) => format!("{shown} isn't in .meta.yaml; {why}"),
         };
-        meta_core::out::warn(format!("{shown} is not in .meta.yaml; {holds}"));
+        meta_core::out::warn(warning);
     }
 }

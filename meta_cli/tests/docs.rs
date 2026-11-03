@@ -597,7 +597,15 @@ impl Sandbox {
 
 /// The git commands meta's git plugin answers itself; any other word after
 /// `meta git` goes to git.
-const ADAPTED: &[&str] = &["clone", "commit", "update", "worktree"];
+const ADAPTED: &[&str] = &[
+    "clone",
+    "clone-missing",
+    "clone-prune",
+    "clone-sync",
+    "commit",
+    "update",
+    "worktree",
+];
 
 #[test]
 fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {

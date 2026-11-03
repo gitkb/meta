@@ -3,6 +3,7 @@
 //! Provides git operations optimized for meta repositories.
 
 mod clone;
+mod clone_missing;
 mod clone_worker;
 mod commit;
 mod git_env;
@@ -74,14 +75,31 @@ pub fn execute_command(
         "git update" => {
             return match meta_plugin_protocol::parse_args(command, args) {
                 Ok(args) => finish(update::execute_git_update(args, options, cwd)),
-                // meta's own options aren't update's
-                Err(CommandResult::Usage(e)) if e.starts_with("unexpected argument '-") => {
-                    CommandResult::Usage(format!(
-                        "{e}\n\nmeta's own options (--dry-run, --depth, ...) go before the \
-                         command, as in `meta --dry-run git update`"
-                    ))
-                }
-                Err(result) => result,
+                Err(result) => own_options_go_first(command, result),
+            };
+        }
+        "git clone-missing" => {
+            return match meta_plugin_protocol::parse_args::<clone_missing::CloneMissingArgs>(
+                command, args,
+            ) {
+                Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
+                Err(result) => own_options_go_first(command, result),
+            };
+        }
+        "git clone-prune" => {
+            return match meta_plugin_protocol::parse_args::<clone_missing::ClonePruneArgs>(
+                command, args,
+            ) {
+                Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
+                Err(result) => own_options_go_first(command, result),
+            };
+        }
+        "git clone-sync" => {
+            return match meta_plugin_protocol::parse_args::<clone_missing::CloneSyncArgs>(
+                command, args,
+            ) {
+                Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
+                Err(result) => own_options_go_first(command, result),
             };
         }
         "git commit" => {
@@ -106,6 +124,20 @@ pub fn execute_command(
 
     // `git status` and every other git command run as typed in each repo
     execute_raw_git_command(command, args, projects, options, cwd)
+}
+
+/// A usage error of `command`, with where meta's own options go when one
+/// was given after it.
+fn own_options_go_first(command: &str, result: CommandResult) -> CommandResult {
+    match result {
+        CommandResult::Usage(e) if e.starts_with("unexpected argument '-") => {
+            CommandResult::Usage(format!(
+                "{e}\n\nmeta's own options (--dry-run, --depth, ...) go before the command, as \
+                 in `meta --dry-run {command}`"
+            ))
+        }
+        result => result,
+    }
 }
 
 fn finish(result: anyhow::Result<CommandResult>) -> CommandResult {
@@ -134,7 +166,15 @@ fn build_passthrough_git_help(
         return None;
     }
 
-    let adapted_commands = ["clone", "update", "commit", "worktree"];
+    let adapted_commands = [
+        "clone",
+        "clone-missing",
+        "clone-prune",
+        "clone-sync",
+        "update",
+        "commit",
+        "worktree",
+    ];
     let git_args: Vec<String> = command_words
         .iter()
         .skip(1)
@@ -210,6 +250,23 @@ fn execute_raw_git_command(
         Ok(d) => d,
         Err(e) => return CommandResult::Error(format!("Failed to get project directories: {e:#}")),
     };
+    // A listed project that isn't cloned yet is named, not counted as a
+    // failure: cloning it is `meta git clone-missing`'s (with --strict, an
+    // error)
+    let (missing, dirs): (Vec<String>, Vec<String>) = dirs.into_iter().partition(|dir| {
+        matches!(
+            meta_core::gitdir::Checkout::of(Path::new(dir)),
+            meta_core::gitdir::Checkout::Missing
+        )
+    });
+    for dir in &missing {
+        let shown = Path::new(dir);
+        let shown = meta_core::display::escape_path(shown.strip_prefix(cwd).unwrap_or(shown));
+        let warning = format!("{shown} is not cloned; `meta git clone-missing` clones it");
+        if let Err(e) = meta_core::out::warn_or_bail(options.strict, warning) {
+            return CommandResult::Error(format!("{e:#}"));
+        }
+    }
 
     // The git argv: the command words (e.g. "git" or "git add") and the
     // user's args exactly as given

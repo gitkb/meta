@@ -41,7 +41,7 @@ fn main() {
                     "meta project list --recursive".to_string(),
                     "meta project check".to_string(),
                 ],
-                note: Some("To clone missing projects, use: meta git update".to_string()),
+                note: Some("To clone missing projects, use: meta git clone-missing".to_string()),
             }),
         },
         execute,

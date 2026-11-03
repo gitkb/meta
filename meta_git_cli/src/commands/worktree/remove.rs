@@ -3,6 +3,7 @@ use colored::*;
 use meta_core::display::{escape, escape_path};
 use meta_core::out;
 use meta_core::outln;
+use meta_core::set_record as record;
 use meta_core::ExecutionMode;
 
 use meta_git_lib::worktree::helpers::*;
@@ -170,6 +171,19 @@ pub(crate) fn remove_set(
         ));
     }
 
+    // The branches meta created for the set, read before git deletes the
+    // notes with the worktrees
+    let branches: Vec<(std::path::PathBuf, String)> = check
+        .members
+        .iter()
+        .filter_map(|member| {
+            let linked = meta_core::gitdir::linked(&member.path).ok()?;
+            let branch = record::created_branch(&linked.admin)?;
+            let git_dir = linked.common.canonicalize().unwrap_or(linked.common);
+            Some((git_dir, branch))
+        })
+        .collect();
+
     if !preview {
         // Remove exactly what was checked, nested worktrees first
         delete_checked_set(&wt_dir, &check, force, verbose)?;
@@ -198,10 +212,115 @@ pub(crate) fn remove_set(
     } else {
         outln!("{} Removed worktree '{}'", "✓".green(), name.bold())?;
     }
+    if !json {
+        report_branches(&branches, preview)?;
+    } else if !preview {
+        for (git_dir, branch) in &branches {
+            delete_branch(git_dir, branch)?;
+        }
+    }
     if preview {
         return Ok(());
     }
     // What was done is reported first: a failing hook doesn't undo it
     fire_post_destroy(name, &wt_dir, force, Some(&configs.owner))
         .or_else(|e| out::warn_or_bail(strict, format!("{e:#}")))
+}
+
+/// What became of a branch meta created for a set being removed.
+enum BranchFate {
+    /// Deleted (or, in a preview, would be): every commit on it is on a
+    /// remote, another branch or a tag
+    Deleted,
+    /// Gone already
+    Gone,
+    /// Kept, and why
+    Kept(String),
+}
+
+/// Delete `branch` from the repository whose git directory is `git_dir` if
+/// no commit on it would be lost; `preview`: only say whether it would be.
+fn branch_fate(git_dir: &std::path::Path, branch: &str, preview: bool) -> Result<BranchFate> {
+    let full = format!("refs/heads/{branch}");
+    if meta_core::git::lookup(git_dir, ["rev-parse", "--verify", "--quiet", &full])?.is_none() {
+        return Ok(BranchFate::Gone);
+    }
+    // (--branches matches names without refs/heads/; a branch name holds no
+    // glob characters)
+    let exclude = format!("--exclude={branch}");
+    let unique = meta_core::git::run(
+        git_dir,
+        [
+            "log",
+            "--oneline",
+            &full,
+            "--not",
+            "--remotes",
+            "--tags",
+            &exclude,
+            "--branches",
+        ],
+    )?;
+    let unique: Vec<&str> = unique.lines().collect();
+    if let Some(first) = unique.first() {
+        return Ok(BranchFate::Kept(format!(
+            "{} on no remote, other branch or tag (first: {})",
+            match unique.len() {
+                1 => "1 commit".to_string(),
+                n => format!("{n} commits"),
+            },
+            escape(first)
+        )));
+    }
+    if preview {
+        return Ok(BranchFate::Deleted);
+    }
+    // git refuses a branch checked out in another worktree
+    match meta_core::git::run(git_dir, ["branch", "-D", "--", branch]) {
+        Ok(_) => Ok(BranchFate::Deleted),
+        Err(e) => Ok(BranchFate::Kept(
+            meta_core::display::escape_lines(&format!("{e:#}")).into_owned(),
+        )),
+    }
+}
+
+/// [`branch_fate`] without the report, for `--json`.
+fn delete_branch(git_dir: &std::path::Path, branch: &str) -> Result<()> {
+    branch_fate(git_dir, branch, false).map(|_| ())
+}
+
+/// Delete each branch meta created for the set (`branches`: the repository's
+/// git directory and the branch) that holds nothing that isn't elsewhere,
+/// and name each one kept, with why.
+fn report_branches(branches: &[(std::path::PathBuf, String)], preview: bool) -> Result<()> {
+    // the checkout the git directory belongs to, as the user knows it
+    let repo = |git_dir: &std::path::Path| {
+        let dir = match git_dir.file_name() {
+            Some(name) if name == ".git" => git_dir.parent().unwrap_or(git_dir),
+            _ => git_dir,
+        };
+        escape_path(dir)
+    };
+    for (git_dir, branch) in branches {
+        match branch_fate(git_dir, branch, preview)? {
+            BranchFate::Deleted if preview => outln!(
+                "  would delete branch '{}' in {} (all its commits are on a remote or another branch)",
+                escape(branch),
+                repo(git_dir)
+            )?,
+            BranchFate::Deleted => outln!(
+                "  deleted branch '{}' in {} (all its commits are on a remote or another branch)",
+                escape(branch),
+                repo(git_dir)
+            )?,
+            BranchFate::Gone => {}
+            BranchFate::Kept(why) => outln!(
+                "  {} branch '{}' in {}: {why}",
+                if preview { "would keep" } else { "kept" }.yellow(),
+                escape(branch),
+                repo(git_dir)
+            )?,
+        }
+    }
+    Ok(())
 }

@@ -254,9 +254,14 @@ pub(crate) fn handle_add(
             };
         // A worktree that can't be recorded is reported as failed, not added
         if let Some(set_record) = &set_record {
-            if let Err(e) = meta_core::gitdir::linked(&dest)
-                .and_then(|linked| record::write(&linked.admin, set_record))
-            {
+            if let Err(e) = meta_core::gitdir::linked(&dest).and_then(|linked| {
+                record::write(&linked.admin, set_record)?;
+                // so remove can delete the branch again, once nothing is lost
+                match created_branch {
+                    true => record::write_created_branch(&linked.admin, &branch),
+                    false => Ok(()),
+                }
+            }) {
                 failed = Some(e.context(format!(
                     "Added '{}', but cannot record it in worktree '{name}'",
                     escape(&spec.alias)

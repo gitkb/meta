@@ -345,6 +345,11 @@ pub(crate) fn handle_create(
                     Ok(start.new_branch_at())
                 })?;
             mark(&dest)?;
+            // so remove can delete the branch again, once nothing is lost
+            if created_branch {
+                meta_core::gitdir::linked(&dest)
+                    .and_then(|linked| record::write_created_branch(&linked.admin, &repo.branch))?;
+            }
             created_repos.push(CreateRepoEntry {
                 alias: repo.project.clone(),
                 path: dest.display().to_string(),

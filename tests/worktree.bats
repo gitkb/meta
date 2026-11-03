@@ -632,11 +632,34 @@ assert d['totals']['files_changed'] >= 1
     [ ! -d ".worktrees/temp" ]
 }
 
-@test "worktree remove preserves branches" {
-    "$META_BIN" git worktree create keep-branch --repo backend --no-deps
-    run "$META_BIN" git worktree remove keep-branch
+@test "worktree remove deletes the branches it created that hold nothing unique, and names the ones it keeps" {
+    git clone --quiet --bare frontend "$TEST_DIR/frontend.git"
+    git -C frontend remote add origin "$TEST_DIR/frontend.git"
+    git -C frontend fetch --quiet origin
+    git -C backend branch existing
+    "$META_BIN" git worktree create b1 --repo backend --repo frontend --no-deps
+    # a commit only this branch has, and one pushed to the remote
+    git -C .worktrees/b1/backend commit --quiet --allow-empty -m "only on b1"
+    git -C .worktrees/b1/frontend commit --quiet --allow-empty -m "pushed"
+    git -C .worktrees/b1/frontend push --quiet origin b1
+    "$META_BIN" git worktree create b2 --repo backend:existing --no-deps
+    run "$META_BIN" --dry-run git worktree remove b1
     [ "$status" -eq 0 ]
-    git -C backend branch | grep -q "keep-branch"
+    [[ "$output" == *"would keep branch 'b1' in $TEST_DIR/backend: 1 commit on no remote, other branch or tag (first: "*"only on b1)"* ]]
+    [[ "$output" == *"would delete branch 'b1' in $TEST_DIR/frontend"* ]]
+    git -C frontend rev-parse --verify --quiet refs/heads/b1
+    run "$META_BIN" git worktree remove b1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"kept branch 'b1' in $TEST_DIR/backend: 1 commit on no remote, other branch or tag"* ]]
+    [[ "$output" == *"deleted branch 'b1' in $TEST_DIR/frontend (all its commits are on a remote or another branch)"* ]]
+    git -C backend rev-parse --verify --quiet refs/heads/b1
+    run git -C frontend rev-parse --verify --quiet refs/heads/b1
+    [ "$status" -ne 0 ]
+    # a branch the set only checked out was not created for it: kept, unmentioned
+    run "$META_BIN" git worktree remove b2
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"branch 'existing'"* ]]
+    git -C backend rev-parse --verify --quiet refs/heads/existing
 }
 
 @test "worktree remove refuses dirty worktree without --force" {
@@ -882,9 +905,9 @@ assert d['totals']['files_changed'] >= 1
     [ -d "backend" ]
     [ -d "frontend" ]
 
-    # Branches should still exist in original repos
-    git -C backend branch | grep -q "dot-remove"
-    git -C frontend branch | grep -q "dot-remove"
+    # The branches the set made held nothing new: deleted with it
+    [ -z "$(git -C backend branch --list dot-remove)" ]
+    [ -z "$(git -C frontend branch --list dot-remove)" ]
 }
 
 # ============ Edge Cases: Add duplicate repo ============

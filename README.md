@@ -250,7 +250,7 @@ projects:
 | `tags` | No | Array of tags for filtering |
 | `meta` | No | Set `true` if this project contains a nested `.meta.yaml` |
 | `provides` | No | Array of capabilities this project provides |
-| `depends_on` | No | Array of project names or provided capabilities this depends on |
+| `depends_on` | No | Array of project names or provided capabilities this depends on; an entry `- name: <sha or tag>` pins it (see [Pins](#pins)) |
 
 A token in a `repo` URL (`https://user:token@host/org/repo.git`) works, and meta's own messages show it as `***`, but it is stored in plain text in `.meta.yaml` and in the clone's `.git/config`; prefer a git credential helper, such as `gh auth setup-git`.
 
@@ -348,6 +348,28 @@ projects:
 ```
 
 This enables impact analysis ("what breaks if I change shared-utils?"), topological build ordering, and transitive dependency resolution.
+
+### Pins
+
+A `depends_on` entry can pin the dependency at the revision this project builds against: a full commit SHA or a tag, never a branch or a short SHA.
+
+```yaml
+projects:
+  desktop:
+    repo: git@github.com:org/desktop.git
+    depends_on:
+      - app-atc                                              # any revision
+      - open-source/gitkb/core: c2630d5bf95e6553d71fdc61199759024293ecec
+      - open-source/app-sdk: app-sdk-v0.1.39                  # a tag
+```
+
+The pin belongs to the project that depends, as a Chromium `DEPS` entry or a git submodule's commit does, so it is written in the `.meta.yaml` that lists that project (for nested meta repos too), and another project may pin the same dependency elsewhere. Change it by editing the entry.
+
+Pins apply in worktree sets, which are made for one task. The workspace's own checkouts serve every project that depends on them, so `meta git update` there keeps following their branches.
+
+- `meta git worktree create` and `add` start a new branch of a repo at its pin when a repo of the set pins it: `core -> fix (new from c2630d5bf95e (pinned by clients/desktop))`. A pin the repo lacks is fetched from origin first (only that commit or tag; a shallow clone stays shallow). A commit-ish on the command line starts every new branch instead, and a branch that exists already is checked out as it is; both are said. When two repos of the set pin one repo at different revisions, or origin lacks a pin, no set is made and the error names them.
+- `meta git update` in a set moves each pinned repo to its pin, after a pin changes on the set's branch. A clean checkout on the branch the set made for it, or on a detached HEAD, is fast-forwarded to the pin, or moved there when every commit on it is on a remote, a tag or another branch (the rule `meta git worktree remove` deletes the branch under). Anything else is left where it is, named with the reason and the fix, and the command exits 1: uncommitted changes to tracked files, a merge or rebase under way, a branch the set didn't make, or a commit nothing else holds. `meta --dry-run git update` says what it would do.
+- `meta git worktree status` says whether each pinned repo is at its pin (`--json`: `"pin": {"rev", "by", "at_pin"}`, `at_pin` `null` when the pin isn't fetched yet).
 
 ---
 

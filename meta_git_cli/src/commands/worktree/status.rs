@@ -27,6 +27,20 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
         escape(name)
     );
 
+    // The pins its members put on each other, from the set's own configs:
+    // one that can't be read is a warning, not a status that fails
+    let pins = match meta_core::config::Workspace::in_dir(&wt_dir) {
+        Ok(Some(workspace)) => {
+            crate::pins::of_set(&workspace, members.iter().map(|m| m.alias.clone()))
+        }
+        Ok(None) => Ok(Default::default()),
+        Err(e) => Err(e),
+    }
+    .unwrap_or_else(|e| {
+        meta_core::out::warn(format!("pins not shown: {e:#}"));
+        Default::default()
+    });
+
     let statuses: Vec<StatusRepoEntry> = members
         .par_iter()
         .map(|r| {
@@ -42,6 +56,24 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
                 ),
             };
             let counts = refs.as_ref().map(|r| r.ahead_behind.unwrap_or_default());
+            let pin = match pins.get(&r.alias) {
+                Some(pin) => {
+                    let head = meta_core::git::lookup(
+                        &r.path,
+                        ["rev-parse", "--verify", "--quiet", "HEAD"],
+                    );
+                    let pinned = crate::pins::pinned_commit(&r.path, pin);
+                    Some(PinStatus {
+                        rev: pin.rev.clone(),
+                        by: pin.by.clone(),
+                        at_pin: match (head, pinned) {
+                            (Ok(head), Ok(Some(pinned))) => Some(head.as_deref() == Some(&pinned)),
+                            _ => None,
+                        },
+                    })
+                }
+                None => None,
+            };
             Ok(StatusRepoEntry {
                 alias: r.alias.clone(),
                 path: r.path.display().to_string(),
@@ -55,6 +87,7 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
                     .iter()
                     .flat_map(|s| s.changed_paths().map(str::to_string))
                     .collect(),
+                pin,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -89,11 +122,23 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
             if let Some(n) = s.behind.filter(|&n| n > 0) {
                 details.push(format!("↓{n}"));
             }
-            let detail_str = match s.dirty {
+            let mut detail_str = match s.dirty {
                 None => "unknown: git can't read its work tree".to_string(),
                 Some(_) if details.is_empty() => "clean".to_string(),
                 Some(_) => details.join(", "),
             };
+            if let Some(pin) = &s.pin {
+                let shown = crate::pins::Pin {
+                    rev: pin.rev.clone(),
+                    by: pin.by.clone(),
+                }
+                .shown();
+                detail_str.push_str(&match pin.at_pin {
+                    Some(true) => format!("; at pin {shown}"),
+                    Some(false) => format!("; not at pin {shown}: meta git update moves it"),
+                    None => format!("; pin {shown} not fetched: meta git update fetches it"),
+                });
+            }
             outln!(
                 "  {} {:12} {:20} {}",
                 status_icon,

@@ -26,7 +26,18 @@ use std::sync::Arc;
                   upstream, is named and left alone. With -r the same goes for the meta repos \
                   nested in it, each pulled before its .meta.yaml is read.\n\n\
                   To clone the missing projects and touch nothing else, run \
-                  `meta git clone-missing`.",
+                  `meta git clone-missing`.\n\n\
+                  Pins (a `depends_on` entry written `- <project>: <sha or tag>`) are not \
+                  applied here: the workspace's checkouts serve every project that depends \
+                  on them, and follow their branches. In a worktree set, `meta git update` \
+                  instead moves each repo a member pins to that pin, and nothing else: a \
+                  clean checkout on the branch the set made for it, or on a detached HEAD, \
+                  is fast-forwarded to the pin, or moved there when every commit on it is \
+                  on a remote, a tag or another branch. Any other is left where it is, \
+                  named with why and what to do, and the command exits 1: uncommitted \
+                  changes, a merge or rebase under way, a branch the set didn't make, or \
+                  a commit nothing else holds. A pin the repo lacks is fetched from origin \
+                  first.",
     after_help = "Git options: none of git pull's; each repo is pulled with `git pull --ff-only`."
 )]
 pub(crate) struct UpdateArgs {
@@ -49,19 +60,29 @@ pub(crate) fn workspace(
     let Some(workspace) = config::Workspace::find(cwd, None)? else {
         anyhow::bail!("No .meta.yaml found in {} or above it", escape_path(cwd));
     };
-    if let Some((set, set_dir)) = meta_cli::worktree::detect_worktree_location(cwd)? {
-        let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-        if !real(&workspace.dir).starts_with(real(&set_dir))
-            || meta_cli::worktree::holds_meta_checkout(&set_dir)
-        {
-            anyhow::bail!(
-                "`meta {command}` acts on the workspace, not worktree set '{}'; run it in the \
-                 workspace{in_set}",
-                escape(&set)
-            );
-        }
+    if let Some((set, _)) = meta_set(cwd, &workspace)? {
+        anyhow::bail!(
+            "`meta {command}` acts on the workspace, not worktree set '{}'; run it in the \
+             workspace{in_set}",
+            escape(&set)
+        );
     }
     Ok(workspace)
+}
+
+/// The worktree set meta made that `cwd` is in, by name and directory, if
+/// it is in one; `workspace`: the one found at or above `cwd`.
+fn meta_set(
+    cwd: &Path,
+    workspace: &config::Workspace,
+) -> anyhow::Result<Option<(String, PathBuf)>> {
+    let Some((set, set_dir)) = meta_cli::worktree::detect_worktree_location(cwd)? else {
+        return Ok(None);
+    };
+    let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let made = !real(&workspace.dir).starts_with(real(&set_dir))
+        || meta_cli::worktree::holds_meta_checkout(&set_dir);
+    Ok(made.then_some((set, set_dir)))
 }
 
 /// The name the workspace at `root` goes by in progress and errors.
@@ -107,8 +128,12 @@ pub(crate) fn execute_git_update(
     let recursive = args.recursive || options.recursive;
     // Without -r only the workspace's own .meta.yaml is read
     let meta_depth = if recursive { options.depth } else { Some(0) };
-    // A worktree set's checkouts are pulled with `meta git pull`
-    let workspace = workspace(cwd, "git update", ", or 'meta git pull' in the set")?;
+    if let Some(found) = config::Workspace::find(cwd, None)? {
+        if let Some((set, set_dir)) = meta_set(cwd, &found)? {
+            return update_set(&set, &set_dir, options.mode().is_preview());
+        }
+    }
+    let workspace = workspace(cwd, "git update", "")?;
     ssh::warn_remote_mismatches(&workspace);
 
     let queue = CloneQueue::new(None, meta_depth, true); // No git depth for update
@@ -199,6 +224,90 @@ pub(crate) fn execute_git_update(
         n => format!(", {n} with nothing to pull from"),
     };
     outln!("Update completed ({pulled} pulled, {cloned} cloned{not_pulled})")?;
+    Ok(CommandResult::Message(String::new()))
+}
+
+/// `meta git update` in the worktree set `set` at `set_dir`: each repo a
+/// member pins, brought to its pin by [`crate::pins::bring_to_pin`]. The
+/// pins are read from the set's own `.meta.yaml` files, so a pin changed on
+/// the set's branch (or pulled into it) is the one applied; a set without
+/// its root repo reads the workspace's it was made from.
+fn update_set(set: &str, set_dir: &Path, preview: bool) -> anyhow::Result<CommandResult> {
+    use crate::pins::Moved;
+    let members = meta_cli::worktree::discover_worktree_members_nested(set_dir)?;
+    let workspace = match config::Workspace::in_dir(set_dir)? {
+        Some(own) => own,
+        None => {
+            let made = meta_core::set_record::find(set_dir, members.iter().map(|m| &m.path));
+            let from = made.and_then(|made| config::Workspace::in_dir(&made.project).transpose());
+            from.transpose()?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Worktree set '{}' has no .meta.yaml, nor a record of the workspace it \
+                     was made from, so its pins can't be read",
+                    escape(set)
+                )
+            })?
+        }
+    };
+    let pins = crate::pins::of_set(&workspace, members.iter().map(|m| m.alias.clone()))?;
+    if pins.is_empty() {
+        outln!(
+            "No repo of worktree set '{}' is pinned (pins are written in depends_on: \
+             `- <project>: <sha or tag>`)",
+            escape(set)
+        )?;
+        return Ok(CommandResult::Message(String::new()));
+    }
+    let mut left = Vec::new();
+    for member in members.iter().filter(|m| pins.contains_key(&m.alias)) {
+        let Some(pin) = pins.get(&member.alias) else {
+            continue;
+        };
+        let place = escape(&member.alias).into_owned();
+        let set_branch = meta_core::gitdir::linked(&member.path)
+            .ok()
+            .and_then(|linked| meta_core::set_record::created_branch(&linked.admin));
+        let moved = crate::pins::bring_to_pin(
+            &member.path,
+            &member.alias,
+            pin,
+            set_branch.as_deref(),
+            preview,
+        )
+        .unwrap_or_else(|e| {
+            Moved::Left(meta_core::display::escape_lines(&format!("{e:#}")).into_owned())
+        });
+        match moved {
+            Moved::AtPin => outln!("{} {place} at pin {}", "✓".green(), pin.shown())?,
+            Moved::From(from) => outln!(
+                "{} {place} moved from {} to pin {}",
+                "→".cyan(),
+                from.chars().take(12).collect::<String>(),
+                pin.shown()
+            )?,
+            Moved::Would(what) => outln!(
+                "{} {place} would {what}: pin {}",
+                "[DRY RUN]".cyan(),
+                pin.shown()
+            )?,
+            Moved::Left(why) => {
+                errln!(
+                    "{} {place} not moved to pin {}: {why}",
+                    "✗".red(),
+                    pin.shown()
+                );
+                left.push(place);
+            }
+        }
+    }
+    anyhow::ensure!(
+        left.is_empty(),
+        "{} of worktree set '{}' {} not at {} pin",
+        left.join(", "),
+        escape(set),
+        if left.len() == 1 { "is" } else { "are" },
+        if left.len() == 1 { "its" } else { "their" }
+    );
     Ok(CommandResult::Message(String::new()))
 }
 

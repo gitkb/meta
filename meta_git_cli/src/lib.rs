@@ -8,6 +8,7 @@ mod clone_worker;
 mod commit;
 mod git_env;
 mod helpers;
+mod pins;
 mod ssh;
 mod update;
 

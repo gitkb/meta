@@ -148,6 +148,21 @@ pub struct StatusRepoEntry {
     pub behind: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub modified_files: Vec<String>,
+    /// The pin a member of the set puts on it, if one does
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pin: Option<PinStatus>,
+}
+
+/// A set member's pin, and whether its checkout is there.
+#[derive(Debug, Serialize)]
+pub struct PinStatus {
+    /// A full commit SHA or a tag
+    pub rev: String,
+    /// The members that pin it, by place
+    pub by: Vec<String>,
+    /// Whether HEAD is the pinned commit; `None` (`null`): the repo lacks
+    /// the pin (`meta git update` in the set fetches it)
+    pub at_pin: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

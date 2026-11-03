@@ -647,7 +647,7 @@ fn path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
 /// The operation in progress in a checkout, if any. Its state (a rebase's
 /// autostash, say) lives in the worktree's git directory, which removal
 /// deletes.
-fn operation_in_progress(repo: &Path) -> Result<Option<&'static str>> {
+pub fn operation_in_progress(repo: &Path) -> Result<Option<&'static str>> {
     let output = git(repo)
         .args(["rev-parse", "--git-dir"])
         .output()

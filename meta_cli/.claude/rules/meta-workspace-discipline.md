@@ -20,3 +20,7 @@ You are working in a **meta-repo** — multiple independent git repositories man
    - `--include repo1,repo2` — only these repos
    - `--exclude repo3` — skip this repo
    - `--tag backend` — only repos with this tag
+
+5. **Move pinned repos with meta, not by hand**
+   - A `depends_on` entry `- core: <sha or tag>` pins `core` for worktree sets
+   - After changing a pin, run `meta git update` inside the set: it moves only checkouts that lose nothing

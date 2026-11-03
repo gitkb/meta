@@ -35,11 +35,65 @@ pub struct ExtendedEntry {
     pub tags: Vec<String>,
     #[serde(default, deserialize_with = "strings")]
     pub provides: Vec<String>,
-    #[serde(default, deserialize_with = "strings")]
-    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub depends_on: Vec<Dependency>,
     /// If true, this directory contains a nested .meta.yaml
     #[serde(default)]
     pub meta: bool,
+}
+
+/// One `depends_on` entry: a project's name (or what one provides), or a
+/// one-key mapping of that to the revision this project builds it at
+/// (`- open-source/gitkb/core: <sha or tag>`), a pin.
+#[derive(Debug, Clone)]
+pub struct Dependency {
+    pub name: String,
+    pub pin: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for Dependency {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct DependencyVisitor;
+        impl<'de> serde::de::Visitor<'de> for DependencyVisitor {
+            type Value = Dependency;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str(
+                    "a project name, or a mapping of one project name to its pin (a commit \
+                     SHA or a tag)",
+                )
+            }
+
+            fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<Dependency, E> {
+                Ok(Dependency {
+                    name: name.to_string(),
+                    pin: None,
+                })
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<Dependency, M::Error> {
+                let Some((name, pin)) = map.next_entry::<YamlString, YamlString>()? else {
+                    return Err(serde::de::Error::custom(
+                        "a pinned dependency names no project",
+                    ));
+                };
+                if map.next_key::<YamlString>()?.is_some() {
+                    return Err(serde::de::Error::custom(format!(
+                        "a pinned dependency is one `name: revision` pair; '{}' has more",
+                        escape(&name.0)
+                    )));
+                }
+                Ok(Dependency {
+                    name: name.0,
+                    pin: Some(pin.0),
+                })
+            }
+        }
+        deserializer.deserialize_any(DependencyVisitor)
+    }
 }
 
 /// A YAML string, as `T`.
@@ -93,7 +147,7 @@ impl<'de> Deserialize<'de> for ProjectEntry {
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 formatter.write_str(
                     "a repo URL, or a mapping of repo, path, tags (a list), provides (a list), \
-                     depends_on (a list) and meta (true or false)",
+                     depends_on (a list of names, or `name: pin` pairs) and meta (true or false)",
                 )
             }
 
@@ -128,6 +182,10 @@ pub struct ProjectInfo {
     /// What this project depends on (other project names or provided items)
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// The revision (a full commit SHA or a tag) this project builds a
+    /// dependency at, by the `depends_on` entry that names it
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pins: BTreeMap<String, String>,
     /// If true, this directory contains a nested .meta.yaml
     #[serde(default)]
     pub meta: bool,
@@ -625,13 +683,31 @@ impl Workspace {
                         (repo, resolved_path, tags, provides, depends_on, meta)
                     }
                 };
+                let mut pins = BTreeMap::new();
+                for (dependency, pin) in depends_on
+                    .iter()
+                    .filter_map(|d| Some((&d.name, d.pin.as_ref()?)))
+                {
+                    if let Some(other) = pins.insert(dependency.clone(), pin.clone()) {
+                        anyhow::ensure!(
+                            other == *pin,
+                            "Invalid project '{}' in {}: '{}' is pinned twice, at '{}' and '{}'",
+                            escape(&name),
+                            escape_path(meta_path),
+                            escape(dependency),
+                            escape(&other),
+                            escape(pin)
+                        );
+                    }
+                }
                 let mut info = ProjectInfo {
                     name,
                     path,
                     repo,
                     tags,
                     provides,
-                    depends_on,
+                    depends_on: depends_on.into_iter().map(|d| d.name).collect(),
+                    pins,
                     meta,
                 };
                 let location =
@@ -745,6 +821,9 @@ fn validate_project(
     {
         return Err(format!("tag '{tag}' contains whitespace or ','"));
     }
+    for (dependency, pin) in &info.pins {
+        pin_problem(pin).map_err(|why| format!("pin of '{dependency}': {why}"))?;
+    }
     info.path = normalize_path(&info.path);
     // The configured worktree directory, and the default one always
     let in_worktrees = |value: &str| {
@@ -769,6 +848,40 @@ fn validate_project(
         ));
     }
     Ok(location)
+}
+
+/// Why `pin` can't be a pin, if it can't: a pin is a full commit SHA (40 or
+/// 64 hex digits) or a tag. As in west's `revision:` and repo's
+/// `revision=`, but never a branch, whose head moves, nor a short SHA,
+/// which can come to name two commits (or read as a tag): those would be
+/// guesses.
+fn pin_problem(pin: &str) -> Result<(), String> {
+    let hex = !pin.is_empty() && pin.chars().all(|c| c.is_ascii_hexdigit());
+    if hex && ![40, 64].contains(&pin.len()) && pin.len() >= 4 {
+        return Err(format!(
+            "'{pin}' looks like a short commit SHA; give the full SHA"
+        ));
+    }
+    if hex && pin.chars().any(|c| c.is_ascii_uppercase()) {
+        return Err(format!("'{pin}': write the SHA in lowercase, as git does"));
+    }
+    // what `git check-ref-format` refuses in a tag's name
+    let bad = pin.starts_with(['-', '.', '/'])
+        || pin.ends_with(['.', '/'])
+        || pin.ends_with(".lock")
+        || pin.contains("..")
+        || pin.contains("@{")
+        || pin.contains("//")
+        || pin == "@"
+        || pin
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
+    if bad {
+        return Err(format!(
+            "'{pin}' is neither a full commit SHA nor a tag name"
+        ));
+    }
+    Ok(())
 }
 
 /// A path a config names (a project's, `worktrees_dir`) in normal form: an
@@ -1490,6 +1603,48 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn a_pin_is_a_full_sha_or_a_tag_on_a_depends_on_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".meta.yaml");
+        let sha = "c2630d5bf95e6553d71fdc61199759024293ecec";
+        let load = |deps: &str| {
+            std::fs::write(
+                &config,
+                format!(
+                    "projects:\n  lib: u\n  sdk: u\n  app:\n    repo: u\n    depends_on: {deps}\n"
+                ),
+            )
+            .unwrap();
+            Workspace::load(&config).map_err(|e| format!("{e:#}"))
+        };
+        let app = load(&format!(
+            "[sdk, {{lib: {sha}}}, {{other: app-sdk-v0.1.39}}]"
+        ))
+        .unwrap();
+        let app = app.projects.iter().find(|p| p.name == "app").unwrap();
+        // a pinned entry is a dependency too
+        assert_eq!(app.depends_on, ["sdk", "lib", "other"]);
+        assert_eq!(
+            app.pins
+                .iter()
+                .map(|(d, p)| (d.as_str(), p.as_str()))
+                .collect::<Vec<_>>(),
+            [("lib", sha), ("other", "app-sdk-v0.1.39")]
+        );
+        // never a guess: a short SHA, two pairs in one entry, a non-ref
+        for (deps, says) in [
+            ("[{lib: c2630d5}]", "short commit SHA"),
+            ("[{lib: v1, sdk: v2}]", "one `name: revision` pair"),
+            ("[{lib: 'a b'}]", "neither a full commit SHA nor a tag"),
+            ("[{lib: [v1]}]", "a string"),
+            ("[{lib: v1}, {lib: v2}]", "pinned twice"),
+        ] {
+            let err = load(deps).unwrap_err();
+            assert!(err.contains(says), "{deps}: {err}");
+        }
     }
 
     #[test]

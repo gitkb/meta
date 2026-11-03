@@ -313,21 +313,7 @@ fn branch_fate(git_dir: &std::path::Path, branch: &str, preview: bool) -> Branch
         if meta_core::git::lookup(git_dir, ["rev-parse", "--verify", "--quiet", &full])?.is_none() {
             return Ok(BranchFate::Gone);
         }
-        let exclude = format!("--exclude={branch}");
-        let unique = meta_core::git::run(
-            git_dir,
-            [
-                "log",
-                "--oneline",
-                &full,
-                "--not",
-                "--remotes",
-                "--tags",
-                &exclude,
-                "--branches",
-            ],
-        )?;
-        let unique: Vec<&str> = unique.lines().collect();
+        let unique = crate::pins::unpublished(git_dir, &full, Some(branch))?;
         if let Some(first) = unique.first() {
             return Ok(BranchFate::Kept(format!(
                 "{} on no remote, other branch or tag (first: {})",

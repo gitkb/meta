@@ -15,7 +15,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use meta_core::config::ProjectInfo;
 use meta_core::git::GitUrl;
@@ -33,6 +33,9 @@ pub struct ProjectDependencies {
     pub provides: Vec<String>,
     /// What this project depends on (other project names or provided items)
     pub depends_on: Vec<String>,
+    /// The revision it builds a dependency at, by its `depends_on` entry
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pins: BTreeMap<String, String>,
 }
 
 impl From<ProjectInfo> for ProjectDependencies {
@@ -44,6 +47,7 @@ impl From<ProjectInfo> for ProjectDependencies {
             tags: p.tags,
             provides: p.provides,
             depends_on: p.depends_on,
+            pins: p.pins,
         }
     }
 }
@@ -61,6 +65,8 @@ pub struct DependencyGraph {
     dependents: HashMap<String, Vec<String>>,
     /// What resolving each project's `depends_on` ran into, by project
     problems: HashMap<String, Vec<DependencyProblem>>,
+    /// Pinned project -> (the project pinning it, the pin), by pinner
+    pins: HashMap<String, BTreeMap<String, String>>,
 }
 
 /// A `depends_on` the graph couldn't follow as written.
@@ -113,6 +119,7 @@ impl DependencyGraph {
             dependencies: HashMap::new(),
             dependents: HashMap::new(),
             problems: HashMap::new(),
+            pins: HashMap::new(),
         };
 
         // First pass: register all projects and who provides what (the
@@ -158,6 +165,13 @@ impl DependencyGraph {
                     graph.problem(&project.name, DependencyProblem::Unresolved(dep.clone()));
                     continue;
                 };
+                if let Some(pin) = project.pins.get(dep) {
+                    graph
+                        .pins
+                        .entry(resolved.clone())
+                        .or_default()
+                        .insert(project.name.clone(), pin.clone());
+                }
                 graph
                     .dependents
                     .entry(resolved.clone())
@@ -184,6 +198,11 @@ impl DependencyGraph {
     /// What resolving `project`'s `depends_on` ran into.
     pub fn problems_of(&self, project: &str) -> &[DependencyProblem] {
         self.problems.get(project).map_or(&[], Vec::as_slice)
+    }
+
+    /// The pins on `project`: each project that pins it, with its pin.
+    pub fn pins_on(&self, project: &str) -> Option<&BTreeMap<String, String>> {
+        self.pins.get(project)
     }
 
     /// Get direct dependencies of a project
@@ -382,6 +401,7 @@ mod tests {
             tags: vec![],
             provides: provides.iter().map(|s| s.to_string()).collect(),
             depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
+            pins: Default::default(),
         };
         let graph = DependencyGraph::build(vec![
             project("app", &[], &["db", "lib", "nosuch"]),
@@ -416,6 +436,7 @@ mod tests {
                 tags: vec!["lib".to_string()],
                 provides: vec!["utils".to_string()],
                 depends_on: vec![],
+                pins: Default::default(),
             },
             ProjectDependencies {
                 name: "auth-service".to_string(),
@@ -424,6 +445,7 @@ mod tests {
                 tags: vec!["backend".to_string()],
                 provides: vec!["auth-api".to_string()],
                 depends_on: vec!["shared-utils".to_string()],
+                pins: Default::default(),
             },
             ProjectDependencies {
                 name: "api-service".to_string(),
@@ -432,6 +454,7 @@ mod tests {
                 tags: vec!["backend".to_string()],
                 provides: vec!["api-v2".to_string()],
                 depends_on: vec!["auth-service".to_string(), "shared-utils".to_string()],
+                pins: Default::default(),
             },
             ProjectDependencies {
                 name: "web-app".to_string(),
@@ -440,6 +463,7 @@ mod tests {
                 tags: vec!["frontend".to_string()],
                 provides: vec![],
                 depends_on: vec!["api-v2".to_string()], // Depends on provided item
+                pins: Default::default(),
             },
         ]
     }
@@ -523,6 +547,7 @@ mod tests {
             tags: vec![],
             provides: provides.iter().map(|s| s.to_string()).collect(),
             depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
+            pins: Default::default(),
         };
         let graph = DependencyGraph::build(vec![
             project("loop_lib", &["loop-lib"], &[]),

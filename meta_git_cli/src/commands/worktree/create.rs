@@ -8,7 +8,7 @@ use meta_core::{errln, outln};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
-use meta_cli::dependency_graph::{DependencyGraph, DependencyProblem, ProjectDependencies};
+use meta_cli::dependency_graph::{DependencyGraph, DependencyProblem};
 use meta_core::duration::format_duration;
 use meta_core::set_record::{self as record, SetRecord};
 use meta_git_lib::worktree::git_ops::*;
@@ -160,6 +160,19 @@ pub(crate) fn handle_create(
         index = index_of()?;
     };
 
+    // A new branch starts at its pin when a member of the set pins it
+    let pins = crate::pins::of_set(
+        &configs.here,
+        repos_to_create.iter().map(|r| r.place.clone()),
+    )?;
+    if let (Some(r), false) = (from_ref, pins.is_empty()) {
+        out::warn(format!(
+            "'{}' starts every new branch, so the pins on {} aren't applied",
+            escape(r),
+            escape(&pins.keys().cloned().collect::<Vec<_>>().join(", "))
+        ));
+    }
+
     // A preview makes the checks a run makes (all but asking GitHub for a
     // PR's branch), skips what it skips and fails where it fails
     if mode.is_preview() {
@@ -202,12 +215,33 @@ pub(crate) fn handle_create(
         // what the run checks before each add; a PR's branch is fetched
         // first, so its repo gets only the check that doesn't need it
         let pr_branch = from_pr_spec.map(|spec| format!("<the head branch of {spec}>"));
+        let mut pinned = HashMap::new();
         for repo in &kept {
             if pr_branch.as_ref() == Some(&repo.branch) {
                 ensure_checkout_config_is_not_bare(&repo.source)?;
-            } else {
-                worktree_start(&repo.source, &repo.branch, from_ref)?;
+                continue;
             }
+            let start = crate::pins::start(
+                &pins,
+                &repo.place,
+                &repo.source,
+                &repo.branch,
+                from_ref,
+                false,
+            )?;
+            let commit = match start {
+                Some((commit, shown)) => {
+                    let fetch = if commit.is_some() {
+                        ""
+                    } else {
+                        ", fetched from origin first"
+                    };
+                    pinned.insert(repo.place.clone(), format!("{shown}{fetch}"));
+                    commit
+                }
+                None => None,
+            };
+            worktree_start(&repo.source, &repo.branch, from_ref.or(commit.as_deref()))?;
         }
         let plan = CreateDryRunPlan {
             name,
@@ -215,6 +249,7 @@ pub(crate) fn handle_create(
             repos_to_create: &kept,
             from_ref,
             from_pr_spec,
+            pinned: &pinned,
             ephemeral,
             ttl_seconds,
             custom_meta: &custom_meta,
@@ -243,6 +278,23 @@ pub(crate) fn handle_create(
             ))
         })?;
         repo.branch = pr_branch.clone();
+    }
+
+    // Each pinned start, its commit fetched if need be: before anything of
+    // the set exists, so a pin origin lacks makes no set
+    let mut pinned = HashMap::new();
+    for repo in &repos_to_create {
+        let start = crate::pins::start(
+            &pins,
+            &repo.place,
+            &repo.source,
+            &repo.branch,
+            from_ref,
+            true,
+        )?;
+        if let Some((Some(commit), shown)) = start {
+            pinned.insert(repo.place.clone(), (commit, shown));
+        }
     }
 
     // Before anything of the set exists, its lease: until this call is done,
@@ -348,10 +400,15 @@ pub(crate) fn handle_create(
             }
             // Any failure other than a missing ref is a failed create.
             let mut started_from = None;
+            let pin = pinned.get(&repo.place);
+            let start_ref = from_ref.or(pin.map(|(commit, _)| commit.as_str()));
             let created_branch =
                 journal_new_branch(&repo.source, &repo.branch, &mut new_branches, || {
-                    let start = git_worktree_add(&repo.source, &dest, &repo.branch, from_ref)?;
-                    started_from = start.base(&repo.branch);
+                    let start = git_worktree_add(&repo.source, &dest, &repo.branch, start_ref)?;
+                    started_from = match pin {
+                        Some((_, shown)) => Some(shown.clone()),
+                        None => start.base(&repo.branch),
+                    };
                     Ok(start.new_branch_at())
                 })?;
             mark(&dest)?;
@@ -550,6 +607,8 @@ struct CreateDryRunPlan<'a> {
     repos_to_create: &'a [PlannedRepo],
     from_ref: Option<&'a str>,
     from_pr_spec: Option<&'a str>,
+    /// Each pinned start, as said, by place
+    pinned: &'a HashMap<String, String>,
     ephemeral: bool,
     ttl_seconds: Option<u64>,
     custom_meta: &'a HashMap<String, String>,
@@ -611,9 +670,12 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
             shell_quote(branch),
             shell_quote(&dest.display().to_string())
         );
+        let pin = plan.pinned.get(place);
         if let Some(from_ref) = plan.from_ref {
             cmd.push(' ');
             cmd.push_str(&shell_quote(from_ref));
+        } else if pin.is_some() {
+            cmd.push_str(" <pin>");
         }
         outln!("  {}:", escape(alias))?;
         outln!("    source: {}", escape_path(source))?;
@@ -626,6 +688,9 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
         }
         outln!("    dest:   {}", escape_path(&dest))?;
         outln!("    branch: {}", escape(branch))?;
+        if let Some(pin) = pin {
+            outln!("    start:  {pin}")?;
+        }
         outln!("    bash:   {}", escape(&cmd))?;
     }
 
@@ -1090,7 +1155,7 @@ fn not_cloned_error(repos: &[PlannedRepo], recursive: bool) -> String {
 /// of its own projects.
 fn dep_graph(index: &Index) -> Result<DependencyGraph> {
     Ok(match index.tree() {
-        Some(tree) => nested_dep_graph(tree)?,
+        Some(tree) => crate::pins::nested_dep_graph(tree),
         None => DependencyGraph::build(
             index
                 .workspace
@@ -1123,42 +1188,6 @@ fn report_problems<'a>(
         }
     }
     Ok(())
-}
-
-/// The dependency graph of the whole tree (`tree`, every project by its
-/// place), named by place. A project's `depends_on` and `provides` are
-/// qualified with the place of the meta repo that lists it, so they name
-/// places too: `depends_on: [vendor/x]` of `open-source/gitkb/core` is
-/// `open-source/gitkb/vendor/x`.
-fn nested_dep_graph(
-    tree: &HashMap<String, (std::path::PathBuf, meta_core::config::ProjectInfo)>,
-) -> Result<DependencyGraph> {
-    let mut project_deps = Vec::new();
-    for (full_path, (_, info)) in tree {
-        // full_path="open-source/gitkb/core", info.path="core" → "open-source/gitkb/"
-        let parent_prefix = full_path
-            .strip_suffix(info.path.as_str())
-            .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
-            .unwrap_or("");
-        let qualify = |name: &str| {
-            if tree.contains_key(name) || name == "." {
-                name.to_string()
-            } else {
-                format!("{parent_prefix}{name}")
-            }
-        };
-        project_deps.push(ProjectDependencies {
-            name: full_path.clone(),
-            path: full_path.clone(),
-            repo: info.repo.clone(),
-            tags: info.tags.clone(),
-            provides: info.provides.iter().map(|p| qualify(p)).collect(),
-            depends_on: info.depends_on.iter().map(|d| qualify(d)).collect(),
-        });
-    }
-    // in the order of the places, so a run picks the provider the last did
-    project_deps.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(DependencyGraph::build(project_deps))
 }
 
 #[cfg(test)]

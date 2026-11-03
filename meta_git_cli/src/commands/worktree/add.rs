@@ -166,16 +166,34 @@ pub(crate) fn handle_add(
         planned.push((spec, source, place));
     }
 
+    // As in create, a new branch starts at its pin when a member of the
+    // set, there already or added now, pins it
+    let places = existing
+        .iter()
+        .map(|r| r.alias.clone())
+        .chain(planned.iter().map(|(_, _, place)| place.clone()));
+    let pins = crate::pins::of_set(&configs.here, places)?;
+    let pinned_start = |spec: &RepoSpec, source: &std::path::Path, place: &str, fetch| {
+        let branch = resolve_branch(name, None, spec.branch.as_deref());
+        crate::pins::start(&pins, place, source, &branch, from_ref, fetch)
+    };
+
     if mode.is_preview() {
         let mut repos = Vec::new();
         for (spec, source, place) in &planned {
             // what the run checks before adding
             let branch = resolve_branch(name, None, spec.branch.as_deref());
-            let start = worktree_start(source, &branch, from_ref)?;
+            let pin = pinned_start(spec, source, place, false)?;
+            let commit = pin.as_ref().and_then(|(commit, _)| commit.as_deref());
+            let start = worktree_start(source, &branch, from_ref.or(commit))?;
             repos.push(CreateRepoEntry {
                 alias: spec.alias.clone(),
                 path: wt_dir.join(place).display().to_string(),
-                started_from: start.base(&branch),
+                started_from: match pin {
+                    Some((Some(_), shown)) => Some(shown),
+                    Some((None, shown)) => Some(format!("{shown}, fetched from origin first")),
+                    None => start.base(&branch),
+                },
                 created_branch: start.new_branch_at().is_some(),
                 branch,
             });
@@ -200,6 +218,14 @@ pub(crate) fn handle_add(
             }
         }
         return Ok(());
+    }
+
+    // Each pinned start, fetched before any repo is added
+    let mut pinned = std::collections::HashMap::new();
+    for (spec, source, place) in &planned {
+        if let Some((Some(commit), shown)) = pinned_start(spec, source, place, true)? {
+            pinned.insert(place.clone(), (commit, shown));
+        }
     }
 
     let mut added = Vec::new();
@@ -242,10 +268,15 @@ pub(crate) fn handle_add(
         }
 
         // A failed add stops here; what was added is reported
+        let pin = pinned.get(&place);
+        let start_ref = from_ref.or(pin.map(|(commit, _)| commit.as_str()));
         let (created_branch, started_from) =
-            match git_worktree_add(&source, &dest, &branch, from_ref) {
+            match git_worktree_add(&source, &dest, &branch, start_ref) {
                 Ok(start) => {
-                    let base = start.base(&branch);
+                    let base = match pin {
+                        Some((_, shown)) => Some(shown.clone()),
+                        None => start.base(&branch),
+                    };
                     (start.new_branch_at().is_some(), base)
                 }
                 Err(e) => {

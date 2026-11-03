@@ -72,6 +72,19 @@ out; only a repo whose remote names no default branch starts from its HEAD,
 with a warning. The output names the start of each new branch:
 `backend -> auth-fix (new from origin/main)`.
 
+A repo pinned by a repo of the set (`depends_on: [{core: <sha or tag>}]` in
+the `.meta.yaml` that lists the pinning repo) starts its new branch at the pin
+instead: `core -> fix (new from c2630d5bf95e (pinned by clients/desktop))`. A
+commit-ish given wins over pins, and an existing branch is checked out as it
+is. Two repos pinning one repo differently, or a pin origin lacks, make no set.
+After a pin changes on the set's branch, `meta git update` run inside the set
+moves each pinned repo there: a clean checkout on the branch the set made (or
+a detached HEAD) is fast-forwarded, or moved when every commit on it is on a
+remote, tag or other branch. Anything else (uncommitted changes, another
+branch, a commit nothing else holds) is left, named with the fix, and the
+command exits 1. `meta git worktree status` shows `at pin` or `not at pin`.
+The workspace's own checkouts never move to pins.
+
 A repo the set needs that isn't cloned (one asked for, a dependency, or a
 parent on the way to a nested repo) is cloned first, as
 `meta git clone-missing` would, and named: `Cloning 2 repos the set needs: web, db`.

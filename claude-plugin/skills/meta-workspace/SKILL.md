@@ -44,7 +44,7 @@ projects:
 ```
 
 **Simple format**: `name: git-url` - clones to `./name`
-**Extended format**: a mapping; every key is optional (`repo`, `path`, `tags`, `provides`, `depends_on`, `meta: true` for a nested meta repo)
+**Extended format**: a mapping; every key is optional (`repo`, `path`, `tags`, `provides`, `depends_on`, `meta: true` for a nested meta repo). A `depends_on` entry written `- core: <full sha or tag>` pins that dependency; worktree sets start it there (see the meta-worktree skill)
 
 ## Discovering What's Here
 

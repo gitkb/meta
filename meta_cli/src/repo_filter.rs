@@ -357,6 +357,7 @@ mod tests {
             tags: tags.iter().map(|t| t.to_string()).collect(),
             provides: vec![],
             depends_on: vec![],
+            pins: Default::default(),
             meta: false,
         }
     }

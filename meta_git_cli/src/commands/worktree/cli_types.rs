@@ -24,6 +24,9 @@ pub enum WorktreeCommands {
     /// List worktree sets (defaults to the current set when inside one)
     List(ListArgs),
     /// Show detailed status of a worktree set
+    ///
+    /// Each repo's branch, changes and commits ahead of or behind its
+    /// upstream, and, for a repo a member pins, whether it is at its pin.
     Status(StatusArgs),
     /// Show cross-repo diff vs base branch
     Diff(DiffArgs),
@@ -40,7 +43,9 @@ pub struct CreateArgs {
     pub name: String,
 
     /// Start new branches from this commit-ish (tag, SHA, branch); without
-    /// it, each from its remote's default branch (origin/HEAD)
+    /// it, each from its pin if a repo of the set pins it (a `depends_on`
+    /// entry `- repo: <sha or tag>`), else from its remote's default branch
+    /// (origin/HEAD)
     pub commit_ish: Option<String>,
 
     /// Override default branch name
@@ -109,7 +114,8 @@ pub struct AddArgs {
     pub name: String,
 
     /// Start a new branch from this commit-ish (tag, SHA, branch); without
-    /// it, from the remote's default branch (origin/HEAD)
+    /// it, from its pin if a repo of the set pins it, else from the
+    /// remote's default branch (origin/HEAD)
     pub commit_ish: Option<String>,
 
     /// Repo(s) to add (alias or alias:branch)

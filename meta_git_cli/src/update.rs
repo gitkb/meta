@@ -83,8 +83,8 @@ pub(crate) fn run(
         ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
         ssh::SshMasters::UserManaged => None, // parallel OK
         ssh::SshMasters::Failed => {
-            meta_core::out::warn(
-                "SSH multiplexing could not be set up: working on one repository at a time",
+            log::debug!(
+                "SSH multiplexing could not be set up: working on one repository at a time"
             );
             parallel = 1;
             None

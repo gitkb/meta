@@ -1,6 +1,7 @@
 //! The commit meta is built from, for `meta --version`: a build from a git
-//! checkout (GitHub main) says which commit it is; one from elsewhere (a
-//! source archive) says only the version.
+//! checkout (GitHub main) says which commit it is, and whether files git
+//! tracks were changed since; one from elsewhere (a source archive) says
+//! only the version.
 
 use std::process::Command;
 
@@ -16,8 +17,8 @@ fn git(args: &[&str]) -> Option<String> {
 }
 
 fn main() {
-    // a new commit, a branch switch or a fetch that packs refs: build again
-    for name in ["HEAD", "packed-refs"] {
+    // a new commit, a branch switch, a fetch that packs refs, staging: build again
+    for name in ["HEAD", "packed-refs", "index"] {
         if let Some(path) = git(&["rev-parse", "--git-path", name]) {
             println!("cargo:rerun-if-changed={path}");
         }
@@ -27,8 +28,26 @@ fn main() {
             println!("cargo:rerun-if-changed={path}");
         }
     }
+    // and an edit of any file git tracks (target/ isn't one)
+    if let Some(top) = git(&["rev-parse", "--show-toplevel"]) {
+        for entry in git(&["ls-tree", "--name-only", "--full-tree", "HEAD"])
+            .unwrap_or_default()
+            .lines()
+        {
+            println!("cargo:rerun-if-changed={top}/{entry}");
+        }
+    }
+    // (without writing the index, which would make every build run this again)
+    let dirty = git(&[
+        "--no-optional-locks",
+        "status",
+        "--porcelain",
+        "--untracked-files=no",
+    ])
+    .map(|_| ", with uncommitted changes")
+    .unwrap_or_default();
     let commit = git(&["log", "-1", "--format=%h %cs"])
-        .map(|commit| format!(" (git {commit})"))
+        .map(|commit| format!(" (git {commit}{dirty})"))
         .unwrap_or_default();
     println!("cargo:rustc-env=META_BUILD_COMMIT={commit}");
 }

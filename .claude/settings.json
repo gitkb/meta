@@ -15,7 +15,7 @@
       {
         "hooks": [
           {
-            "command": "command -v agent >/dev/null 2>&1 || exit 0; exec agent guard",
+            "command": "agent --help 2>/dev/null | grep -q 'Claude Code agent toolkit' && agent guard; exit 0",
             "timeout": 5,
             "type": "command"
           }

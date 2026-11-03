@@ -198,8 +198,8 @@ pub(crate) fn execute_git_clone(
             }
             ssh::SshMasters::UserManaged => {} // parallel OK, no override needed
             ssh::SshMasters::Failed if ssh_cmd.is_none() => {
-                meta_core::out::warn(
-                    "SSH multiplexing could not be set up: cloning one repository at a time",
+                log::debug!(
+                    "SSH multiplexing could not be set up: cloning one repository at a time"
                 );
                 parallel = 1;
             }

@@ -639,12 +639,20 @@ within() {
     with_remotes
     rm -rf shared
     git clone --quiet remotes/frontend.git old
+    run "$META_BIN" --dry-run git clone-missing
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"git clone"* ]]
     run "$META_BIN" --json git clone-sync
     [ "$status" -eq 0 ]
     [[ "$output" == *'{"action":"cloned","path":"shared"}'* ]]
     [[ "$output" == *'{"action":"removed","path":"old"}'* ]]
     [ -d shared/.git ]
     [ ! -e old ]
+    # with everything cloned, the preview says so, not an empty list
+    run "$META_BIN" --dry-run git clone-sync
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[DRY RUN] Nothing to clone: every project the .meta.yaml files list is cloned"* ]]
+    [[ "$output" != *"Would run"* ]]
 }
 
 @test "meta --json git clone-missing names a failed clone and a refused folder by their paths" {

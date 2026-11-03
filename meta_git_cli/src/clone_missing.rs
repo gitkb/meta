@@ -216,7 +216,12 @@ pub(crate) fn execute(
     let from_root = |path: &Path| escape_path(path.strip_prefix(root).unwrap_or(path));
     let mut records = Vec::new();
 
-    if preview && steps.clones() {
+    if preview && steps.clones() && tasks.is_empty() {
+        say(format!(
+            "{} Nothing to clone: every project the .meta.yaml files list is cloned",
+            "[DRY RUN]".cyan()
+        ))?;
+    } else if preview && steps.clones() {
         say(format!(
             "{} Would run (from the .meta.yaml files as they are now; the clones may add projects):",
             "[DRY RUN]".cyan()

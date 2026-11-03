@@ -312,6 +312,18 @@ fn install_claude_integration_to(
     // --update leaves settings untouched; --force uses the same merge as default.
     if update {
         outln!("Skipped .claude/settings.json (--update preserves settings)")?;
+        let old_guard = fs::read_to_string(&settings_path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .is_some_and(|mut settings| upgrade_guard(&mut settings));
+        if old_guard {
+            outln!(
+                "{} Its PreToolUse hook runs any `agent` on PATH, and blocks every Bash call when \
+                 one fails: run `meta init claude` (without --update) to make it run only \
+                 gitkb's agent",
+                "•".yellow()
+            )?;
+        }
     } else if let Some(plan) = settings_plan {
         if let Some(content) = plan.content {
             init.write_settings(&settings_path, &content)?;
@@ -326,7 +338,7 @@ fn install_claude_integration_to(
         !init.guard && !update && !present_hooks.iter().any(|key| key == "PreToolUse");
     let guard_note = || -> Result<()> {
         outln!(
-            "{} Skipped the PreToolUse hook `agent guard`: the agent CLI is not installed.",
+            "{} Skipped the PreToolUse hook `agent guard`: gitkb's agent CLI is not installed (an `agent` on PATH that isn't gitkb's doesn't count).",
             "•".yellow()
         )?;
         outln!(
@@ -748,7 +760,9 @@ fn prepare_settings(path: &Path, init: &Init) -> Result<SettingsPlan> {
         Err(e) => return Err(e).with_context(|| format!("Failed to read {}", escape_path(path))),
     };
     let created = existing.is_none();
-    let existing = existing.unwrap_or_else(|| json!({}));
+    let mut existing = existing.unwrap_or_else(|| json!({}));
+    // an older meta's guard hook ran any `agent`; it now runs only gitkb's
+    let upgraded = upgrade_guard(&mut existing);
     let before = installed_hooks(&existing);
     let merged = merge_hooks_into_settings(existing, build_meta_hooks(init.guard), path)?;
     let hooks = installed_hooks(&merged);
@@ -760,13 +774,16 @@ fn prepare_settings(path: &Path, init: &Init) -> Result<SettingsPlan> {
     let preview = init.mode.is_preview();
     let message = if created {
         if preview { "Would create" } else { "Created" }.to_string()
+    } else if upgraded && added.is_empty() {
+        let verb = if preview { "Would make" } else { "Made" };
+        format!("{verb} the PreToolUse hook run only gitkb's agent, never block on its failure, in")
     } else if added.is_empty() {
         "Already has meta's hooks (no write):".to_string()
     } else {
         let verb = if preview { "Would add" } else { "Added" };
         format!("{verb} {} hooks to", added.join(", "))
     };
-    let content = if created || !added.is_empty() {
+    let content = if created || upgraded || !added.is_empty() {
         Some(serde_json::to_string_pretty(&merged)?)
     } else {
         None
@@ -865,7 +882,7 @@ fn build_meta_hooks(guard: bool) -> Map<String, Value> {
                 "matcher": "Bash",
                 "hooks": [{
                     "type": "command",
-                    "command": "agent guard",
+                    "command": GUARD_COMMAND,
                     "timeout": 5
                 }]
             }]),
@@ -936,6 +953,23 @@ fn merge_hooks_into_settings(
     Ok(existing)
 }
 
+/// What gitkb's agent CLI says about itself in `agent --help`: another
+/// program named `agent` doesn't, so its guard is never run.
+const AGENT_IDENTITY: &str = "Claude Code agent toolkit";
+
+/// The PreToolUse command: `agent guard` only when the `agent` on PATH is
+/// gitkb's, and never an exit status that blocks the tool call (gitkb's
+/// guard refuses a command by printing its decision, exiting 0), so a
+/// missing, foreign or failing `agent` lets Bash run. meta's own
+/// `.claude/settings.json` runs the same command.
+pub(crate) const GUARD_COMMAND: &str =
+    "agent --help 2>/dev/null | grep -q 'Claude Code agent toolkit' && agent guard; exit 0";
+
+/// The command older versions of meta wrote, which ran any `agent` on PATH
+/// and blocked every Bash call when one failed with exit status 2.
+const OLD_GUARD_COMMAND: &str = "agent guard";
+
+/// Whether the `agent` on PATH is gitkb's agent CLI.
 fn agent_cli_available() -> bool {
     use std::process::{Command, Stdio};
 
@@ -944,12 +978,33 @@ fn agent_cli_available() -> bool {
         reason = "a probe for the agent CLI, in no repo"
     )]
     Command::new("agent")
-        .arg("--version")
-        .stdout(Stdio::null())
+        .arg("--help")
+        .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .output()
+        .is_ok_and(|out| {
+            out.status.success() && String::from_utf8_lossy(&out.stdout).contains(AGENT_IDENTITY)
+        })
+}
+
+/// Rewrite, in `settings`, each PreToolUse hook running the command an older
+/// meta wrote ([`OLD_GUARD_COMMAND`]) to [`GUARD_COMMAND`]. Whether any was.
+fn upgrade_guard(settings: &mut Value) -> bool {
+    let mut upgraded = false;
+    let groups = settings
+        .get_mut("hooks")
+        .and_then(|hooks| hooks.get_mut("PreToolUse"))
+        .and_then(Value::as_array_mut);
+    for group in groups.into_iter().flatten() {
+        let hooks = group.get_mut("hooks").and_then(Value::as_array_mut);
+        for hook in hooks.into_iter().flatten() {
+            if hook.get("command").and_then(Value::as_str) == Some(OLD_GUARD_COMMAND) {
+                hook["command"] = json!(GUARD_COMMAND);
+                upgraded = true;
+            }
+        }
+    }
+    upgraded
 }
 
 fn write_file(path: &Path, content: &str, verbose: bool) -> Result<()> {
@@ -1111,6 +1166,80 @@ mod tests {
         ));
         install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
         assert!(other.exists());
+    }
+
+    #[test]
+    fn this_repo_runs_the_guard_meta_installs() {
+        let settings: Value =
+            serde_json::from_str(include_str!("../../.claude/settings.json")).unwrap();
+        assert_eq!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            GUARD_COMMAND
+        );
+    }
+
+    #[test]
+    fn an_older_meta_s_guard_hook_is_made_safe() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut old = json!({"hooks": build_meta_hooks(true), "theme": "dark"});
+        old["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = json!(OLD_GUARD_COMMAND);
+        fs::write(&path, old.to_string()).unwrap();
+        // even where agent isn't installed now
+        let no_agent = Init {
+            guard: false,
+            ..RUN
+        };
+        let plan = prepare_settings(&path, &no_agent).unwrap();
+        let merged: Value = serde_json::from_str(&plan.content.unwrap()).unwrap();
+        let groups = merged["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["hooks"][0]["command"], GUARD_COMMAND);
+        assert_eq!(merged["theme"], "dark");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_guard_command_never_blocks_and_runs_only_gitkb_s_agent() {
+        use std::os::unix::fs::PermissionsExt;
+        let run_hook = |agent: &str| {
+            let bin = tempdir().unwrap();
+            let script = bin.path().join("agent");
+            fs::write(&script, agent).unwrap();
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+            let path = format!("{}:/usr/bin:/bin", bin.path().display());
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "runs the hook as Claude Code does"
+            )]
+            let out = std::process::Command::new("sh")
+                .args(["-c", GUARD_COMMAND])
+                .env("PATH", path)
+                .output()
+                .unwrap();
+            (
+                out.status.code(),
+                String::from_utf8_lossy(&out.stdout).into_owned(),
+            )
+        };
+        // another program named agent, failing with the status that blocks
+        let foreign = "#!/bin/sh\necho 'usage: agent [task]'\nexit 2\n";
+        assert_eq!(run_hook(foreign), (Some(0), String::new()));
+        // gitkb's agent: its decision reaches Claude Code; its failure doesn't block
+        let gitkb = "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'Claude Code agent toolkit'; exit 0; fi\necho '{\"deny\":1}'\nexit 2\n";
+        assert_eq!(run_hook(gitkb), (Some(0), "{\"deny\":1}\n".to_string()));
+        // none at all
+        let bin = tempdir().unwrap();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "runs the hook as Claude Code does"
+        )]
+        let out = std::process::Command::new("sh")
+            .args(["-c", GUARD_COMMAND])
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0));
     }
 
     #[test]

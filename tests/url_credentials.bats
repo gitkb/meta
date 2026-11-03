@@ -165,7 +165,7 @@ EOF
     [ -d r3/.git ]
 }
 
-@test "a failed ssh setup says so" {
+@test "a failed ssh setup stays quiet: git connects without it" {
     printf '#!/bin/sh\nexit 255\n' > "$TEST_DIR/bin/ssh"
     chmod +x "$TEST_DIR/bin/ssh"
     cat > .meta.yaml <<EOF
@@ -174,11 +174,31 @@ projects:
   b: git@nohost.invalid:org/b.git
 EOF
     run "$META_BIN" git update
-    [[ "$output" == *"SSH master for git@nohost.invalid (port 22) could not be started"* ]] || false
-    [[ "$output" == *"working on one repository at a time"* ]]
+    [[ "$output" != *"SSH master"* ]]
+    [[ "$output" != *"multiplexing"* ]]
     # the same for empty folders git clones into
     mkdir a b
     run "$META_BIN" git update
-    [[ "$output" == *"SSH master for git@nohost.invalid (port 22) could not be started"* ]] || false
-    [[ "$output" == *"working on one repository at a time"* ]]
+    [[ "$output" != *"SSH master"* ]]
+    [[ "$output" != *"multiplexing"* ]]
+}
+
+@test "a URL git rewrites to another scheme (insteadOf) starts no ssh" {
+    git init --quiet --bare "$TEST_DIR/remotes/x.git"
+    git -C "$TEST_DIR/remotes/x.git" symbolic-ref HEAD refs/heads/main
+    git init --quiet --initial-branch=main "$TEST_DIR/src-x"
+    git -C "$TEST_DIR/src-x" -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m x
+    git -C "$TEST_DIR/src-x" push --quiet "$TEST_DIR/remotes/x.git" main
+    git config --global url."file://$TEST_DIR/remotes/".insteadOf "git@nohost.invalid:org/"
+    printf '#!/bin/sh\ntouch "%s/ssh-ran"\nexit 255\n' "$TEST_DIR" > "$TEST_DIR/bin/ssh"
+    chmod +x "$TEST_DIR/bin/ssh"
+    cat > .meta.yaml <<EOF
+projects:
+  x: git@nohost.invalid:org/x.git
+EOF
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [ -d x/.git ]
+    [ ! -e "$TEST_DIR/ssh-ran" ]
+    [[ "$output" != *"SSH"* ]]
 }

@@ -108,7 +108,10 @@ pub(crate) fn ssh_urls(projects: &[ProjectInfo]) -> Vec<GitUrl> {
 /// - `SshMasters::Failed` if sockets dir couldn't be created or all connections failed
 pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
     let mut seen = BTreeSet::new();
-    let targets: Vec<SshTarget> = urls
+    // what git will contact: a url.<base>.insteadOf rewrite (git@github.com:
+    // to https://, say) leaves no SSH to share
+    let contacted: Vec<GitUrl> = urls.iter().map(contacted).collect();
+    let targets: Vec<SshTarget> = contacted
         .iter()
         .filter_map(SshTarget::of)
         .filter(|t| seen.insert(t.socket_name()))
@@ -120,13 +123,13 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
     }
 
     let Some(home) = dirs::home_dir() else {
-        meta_core::out::warn("could not find the HOME directory for SSH sockets");
+        debug!("could not find the HOME directory for SSH sockets");
         return SshMasters::Failed;
     };
     let sockets_dir = match ensure_ssh_sockets_dir(&home) {
         Ok(dir) => dir,
         Err(e) => {
-            meta_core::out::warn(format!("could not create the SSH sockets directory: {e}"));
+            debug!("could not create the SSH sockets directory: {e}");
             return SshMasters::Failed;
         }
     };
@@ -186,11 +189,12 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
             );
             any_succeeded = true;
         } else {
-            meta_core::out::warn(format!(
+            // git connects without it, one repository at a time
+            debug!(
                 "SSH master for {} (port {}) could not be started",
                 escape(&target.destination()),
                 target.port
-            ));
+            );
         }
     }
 
@@ -204,6 +208,29 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
         SshMasters::OurSockets(sockets_dir)
     } else {
         SshMasters::Failed
+    }
+}
+
+/// The URL git contacts for `url`, after its `url.<base>.insteadOf`
+/// rewrites (`git ls-remote --get-url` applies them without connecting);
+/// `url` itself where git can't say.
+fn contacted(url: &GitUrl) -> GitUrl {
+    let dir = std::env::temp_dir();
+    let out = meta_core::git::git(&dir)
+        .arg("ls-remote")
+        .arg("--get-url")
+        .arg(url.as_git_arg())
+        .output();
+    match out {
+        Ok(out) if out.status.success() => {
+            let rewritten = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if rewritten.is_empty() {
+                url.clone()
+            } else {
+                GitUrl::from(rewritten)
+            }
+        }
+        _ => url.clone(),
     }
 }
 

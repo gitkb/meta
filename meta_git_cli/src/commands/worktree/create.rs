@@ -996,13 +996,17 @@ fn not_cloned_error(repos: &[PlannedRepo], recursive: bool) -> String {
         }
     );
     let mut missing = Vec::new();
+    let mut blocked = Vec::new();
     for repo in repos {
         let why = match Checkout::of(&repo.source) {
             Checkout::Missing => {
                 missing.push(repo.place.as_str());
                 "not cloned".to_string()
             }
-            checkout => checkout.problem().unwrap_or_default(),
+            checkout => {
+                blocked.push(escape_path(&repo.source));
+                checkout.problem().unwrap_or_default()
+            }
         };
         message.push_str(&format!(
             "\n  '{}' at {}: {}",
@@ -1011,7 +1015,18 @@ fn not_cloned_error(repos: &[PlannedRepo], recursive: bool) -> String {
             escape(&why)
         ));
     }
-    if !missing.is_empty() {
+    // a folder that holds something else is the user's: clone-missing
+    // refuses it too, so the way on is to move it aside, and create clones
+    // the project there
+    if !blocked.is_empty() {
+        message.push_str(&format!(
+            "\nMove {} aside (or delete {}, if nothing in {} is needed), then run this \
+             create again: it clones what isn't there.",
+            blocked.join(", "),
+            if blocked.len() == 1 { "it" } else { "them" },
+            if blocked.len() == 1 { "it" } else { "them" }
+        ));
+    } else if !missing.is_empty() {
         let include = meta_core::display::shell_quote(&missing.join(","));
         message.push_str(&format!(
             "\nTo clone just the missing ones, then run this create again:\n  meta {}--include {} git clone-missing",

@@ -251,6 +251,27 @@ EOF
     [ -e .worktrees/t/clients/.git ]
 }
 
+@test "worktree create says to move aside a folder that blocks a member, and offers no command that would fail" {
+    git clone --quiet --bare frontend "$TEST_DIR/frontend.git"
+    cat > .meta.yaml <<EOF
+projects:
+  api: {repo: "file://$TEST_DIR/frontend.git", depends_on: [web]}
+  web: "file://$TEST_DIR/frontend.git"
+  backend: "git@github.com:org/backend.git"
+EOF
+    mkdir web && echo notes > web/notes.txt
+    run "$META_BIN" git worktree create blocked --repo api
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'web' at $TEST_DIR/web: not a git repository"* ]]
+    [[ "$output" == *"Move $TEST_DIR/web aside (or delete it, if nothing in it is needed), then run this create again: it clones what isn't there."* ]]
+    [[ "$output" != *"clone-missing"* ]]
+    [ ! -e api ] && [ ! -e .worktrees/blocked ]
+    mv web web.aside
+    run "$META_BIN" git worktree create blocked --repo api
+    [ "$status" -eq 0 ]
+    [ -d .worktrees/blocked/web ]
+}
+
 @test "worktree create names every repo it couldn't clone, and makes nothing" {
     git clone --quiet --bare frontend "$TEST_DIR/frontend.git"
     cat > .meta.yaml <<EOF

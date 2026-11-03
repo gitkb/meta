@@ -20,7 +20,7 @@ setup() {
     printf '#!/bin/sh\necho "$*" >> "%s/claude-calls"\n' "$STUB_DIR" > "$STUB_DIR/claude"
     chmod +x "$STUB_DIR/claude"
     # `agent` is installed unless a test removes it
-    printf '#!/bin/sh\nexit 0\n' > "$STUB_DIR/agent"
+    printf '#!/bin/sh\n[ "$1" = --help ] && echo "Claude Code agent toolkit"\nexit 0\n' > "$STUB_DIR/agent"
     chmod +x "$STUB_DIR/agent"
     PATH="$STUB_DIR:$PATH"
 
@@ -147,6 +147,15 @@ teardown() {
     [ "$status" -eq 0 ]
     run grep "meta agent guard" .claude/settings.json
     [ "$status" -ne 0 ]
+}
+
+@test "init claude adds no guard hook for an agent that isn't gitkb's" {
+    printf '#!/bin/sh\necho "some other agent"\nexit 0\n' > "$STUB_DIR/agent"
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Skipped the PreToolUse hook"* ]]
+    run grep -c PreToolUse .claude/settings.json
+    [ "$output" = 0 ]
 }
 
 @test "init claude PreToolUse has Bash matcher" {
@@ -440,7 +449,7 @@ import json
 groups = json.load(open('.claude/settings.json'))['hooks']['PreToolUse']
 assert len(groups) == 1, groups
 commands = [h['command'] for h in groups[0]['hooks']]
-assert commands == ['agent guard', 'my-own-check'], commands
+assert commands == ["agent --help 2>/dev/null | grep -q 'Claude Code agent toolkit' && agent guard; exit 0", 'my-own-check'], commands
 PY
 }
 
@@ -455,7 +464,7 @@ PY
     run grep "agent guard" .claude/settings.json
     [ "$status" -ne 0 ]
 
-    printf '#!/bin/sh\nexit 0\n' > "$STUB_DIR/agent"
+    printf '#!/bin/sh\n[ "$1" = --help ] && echo "Claude Code agent toolkit"\nexit 0\n' > "$STUB_DIR/agent"
     chmod +x "$STUB_DIR/agent"
     run init_claude
     [ "$status" -eq 0 ]

@@ -84,6 +84,21 @@ pub struct DestroyOutput {
     pub repos_removed: usize,
     /// A preview: nothing was removed
     pub dry_run: bool,
+    /// What became (with dry_run: would become) of each set's branch
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub branches: Vec<BranchReport>,
+}
+
+/// What `remove` did with a branch of the set's.
+#[derive(Debug, Serialize)]
+pub struct BranchReport {
+    /// The workspace's checkout of the repository
+    pub repo: String,
+    pub branch: String,
+    /// deleted, kept, or left (the set didn't make it, as meta recorded)
+    pub action: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

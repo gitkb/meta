@@ -272,6 +272,32 @@ EOF
     [ -d .worktrees/blocked/web ]
 }
 
+@test "worktree create -r --strict fails on a bad depends_on after cloning the meta repo on the way" {
+    git init --quiet --initial-branch=main "$TEST_DIR/src-desktop"
+    git -C "$TEST_DIR/src-desktop" commit --quiet --allow-empty -m desktop
+    git clone --quiet --bare "$TEST_DIR/src-desktop" "$TEST_DIR/desktop.git"
+    git init --quiet --initial-branch=main "$TEST_DIR/src-clients"
+    printf 'projects:\n  desktop: {repo: "file://%s/desktop.git", depends_on: [nowhere]}\n' "$TEST_DIR" > "$TEST_DIR/src-clients/.meta.yaml"
+    echo "desktop/" > "$TEST_DIR/src-clients/.gitignore"
+    git -C "$TEST_DIR/src-clients" add -A
+    git -C "$TEST_DIR/src-clients" commit --quiet -m clients
+    git clone --quiet --bare "$TEST_DIR/src-clients" "$TEST_DIR/clients.git"
+    cat > .meta.yaml <<EOF
+projects:
+  clients: {repo: "file://$TEST_DIR/clients.git", meta: true}
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" git worktree create t -r --strict --repo clients/desktop
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cloned clients"* ]]
+    [[ "$output" == *"'clients/desktop' depends on 'clients/nowhere'"*"(strict mode)"* ]]
+    [ ! -e .worktrees/t ]
+    # without --strict, the same is a warning, once
+    run "$META_BIN" git worktree create t -r --repo clients/desktop
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "depends on 'clients/nowhere'" <<<"$output")" -eq 1 ]
+}
+
 @test "worktree create names every repo it couldn't clone, and makes nothing" {
     git clone --quiet --bare frontend "$TEST_DIR/frontend.git"
     cat > .meta.yaml <<EOF
@@ -690,8 +716,40 @@ assert d['totals']['files_changed'] >= 1
     # a branch the set only checked out was not created for it: left, and said so
     run "$META_BIN" git worktree remove b2
     [ "$status" -eq 0 ]
-    [[ "$output" == *"left branch 'existing' in $TEST_DIR/backend (this set didn't make it)"* ]]
+    [[ "$output" == *"left branch 'existing' in $TEST_DIR/backend (no record says meta made it for this set)"* ]]
     git -C backend rev-parse --verify --quiet refs/heads/existing
+}
+
+@test "worktree remove keeps a branch whose reflogs hold work reset or left away, and says so in --json" {
+    # work reset away on the set's branch: only the branch's reflog holds it
+    "$META_BIN" git worktree create r1 --repo backend --no-deps
+    git -C .worktrees/r1/backend commit --quiet --allow-empty -m "reset away"
+    git -C .worktrees/r1/backend reset --quiet --hard HEAD~1
+    run "$META_BIN" git worktree remove r1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"kept branch 'r1' in $TEST_DIR/backend: 1 commit only in its reflogs (reset, amended or rebased away; on no remote, other branch or tag; first: "*"reset away)"* ]]
+    git -C backend rev-parse --verify --quiet refs/heads/r1
+    # work on a detached HEAD in the worktree: only the worktree's HEAD reflog holds it
+    "$META_BIN" git worktree create r2 --repo frontend --no-deps
+    git -C .worktrees/r2/frontend switch --quiet --detach
+    git -C .worktrees/r2/frontend commit --quiet --allow-empty -m "left on a detached HEAD"
+    git -C .worktrees/r2/frontend switch --quiet r2
+    run "$META_BIN" --json git worktree remove r2
+    [ "$status" -eq 0 ]
+    python3 -c '
+import json, sys
+out = json.load(sys.stdin)
+[b] = out["branches"]
+assert b["branch"] == "r2" and b["action"] == "kept", b
+assert "left on a detached HEAD" in b["reason"], b
+' <<<"$output"
+    git -C frontend rev-parse --verify --quiet refs/heads/r2
+    # nothing in either: deleted, and --json says so
+    "$META_BIN" git worktree create r3 --repo frontend --no-deps
+    run "$META_BIN" --json git worktree remove r3
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"action": "deleted"'* ]]
+    [ -z "$(git -C frontend branch --list r3)" ]
 }
 
 @test "worktree remove refuses dirty worktree without --force" {

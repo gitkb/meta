@@ -105,6 +105,9 @@ pub(crate) fn handle_create(
     // clone-missing would; a clone may list more (a nested meta repo's
     // projects), so it plans again until none is missing
     let mut rounds = 0;
+    // warnings (errors with --strict) come from the first plan, whatever was
+    // cloned before it
+    let mut warned = false;
     let mut repos_to_create = loop {
         // a repo asked for inside a meta repo that isn't cloned is unknown
         // until that meta repo is: it is cloned first, then planned again
@@ -126,7 +129,8 @@ pub(crate) fn handle_create(
             index = index_of()?;
             continue;
         }
-        let planned = plan_repos(&index, &args, strict, verbose, rounds == 0)?;
+        let planned = plan_repos(&index, &args, strict, verbose, !warned)?;
+        warned = true;
         if planned.missing.is_empty() {
             break planned.repos;
         }

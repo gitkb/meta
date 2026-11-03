@@ -650,6 +650,20 @@ fn install_skills_with(
                     }
                     continue;
                 }
+                // a marked copy is replaced only when nothing in it is the
+                // user's: it holds the text it was copied from, or a version
+                // meta shipped
+                SkillEntry::Owned
+                    if overwrite && !copy_is_meta_s(root, &tool_dir, name, &link)? =>
+                {
+                    outln!(
+                        "{} {} (a copy meta made, changed since; to get a link instead, move it \
+                         away and run `meta init claude --update`)",
+                        "Kept".yellow(),
+                        escape_path(&link)
+                    )?;
+                    continue;
+                }
                 SkillEntry::Owned if overwrite => init.remove_owned(&link, &marker)?,
                 SkillEntry::Owned => {
                     outln!("Skipped {} (already exists)", escape_path(&link))?;
@@ -674,6 +688,25 @@ fn install_skills_with(
     }
 
     Ok(report)
+}
+
+/// Whether the skill copy at `link` (a folder meta marked, or git's link
+/// placeholder file) holds nothing but meta's: the `SKILL.md` it was copied
+/// from (`<root>/<tool_dir>/<name>/SKILL.md`), or a version meta shipped.
+fn copy_is_meta_s(root: &Path, tool_dir: &Path, name: &str, link: &Path) -> Result<bool> {
+    let copy = link.join("SKILL.md");
+    if !fs::symlink_metadata(&copy).is_ok_and(|m| m.is_file()) {
+        return Ok(true); // a placeholder file holds only meta's link target
+    }
+    let text = fs::read(&copy).with_context(|| format!("Failed to read {}", escape_path(&copy)))?;
+    let source = fs::read(root.join(tool_dir).join(name).join("SKILL.md")).ok();
+    if source.as_deref() == Some(text.as_slice()) {
+        return Ok(true);
+    }
+    Ok(shipped(
+        &format!("{name}/SKILL.md"),
+        &blob_of(root, &String::from_utf8_lossy(&text))?,
+    ))
 }
 
 /// Classify the entry at `link` without following it.
@@ -1526,13 +1559,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let copy = dir.path().join(".claude/skills/meta-git");
         fs::create_dir_all(&copy).unwrap();
-        fs::write(copy.join("SKILL.md"), "old copy").unwrap();
+        // a copy an older meta made
+        fs::write(copy.join("SKILL.md"), OLD_GIT_SKILL).unwrap();
         fs::write(copy.join(".meta-skill-copy"), "").unwrap();
 
         install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
         assert_eq!(
             fs::read_to_string(copy.join("SKILL.md")).unwrap(),
-            "old copy"
+            OLD_GIT_SKILL
         );
 
         install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
@@ -1776,6 +1810,35 @@ mod tests {
         assert_eq!(report.copied, 0);
         install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
         assert_linked(dir.path(), ".claude/skills", "meta-git");
+    }
+
+    #[test]
+    fn update_keeps_a_skill_copy_the_user_edited() {
+        let dir = tempdir().unwrap();
+        let fail = |_: &Path, _: &Path| Err(std::io::Error::other("no links"));
+        let install = |overwrite| {
+            install_skills_with(
+                dir.path(),
+                "meta",
+                SKILLS,
+                AGENT_SKILL_DIRS,
+                overwrite,
+                &RUN,
+                fail,
+            )
+            .unwrap()
+        };
+        install(false);
+        let copy = dir.path().join(".claude/skills/meta-workspace/SKILL.md");
+        let mine = format!("{}\nmy own note\n", fs::read_to_string(&copy).unwrap());
+        fs::write(&copy, &mine).unwrap();
+        // an older meta's copy of another skill is meta's to replace
+        let old = dir.path().join(".claude/skills/meta-git/SKILL.md");
+        fs::write(&old, OLD_GIT_SKILL).unwrap();
+        let report = install(true);
+        assert_eq!(fs::read_to_string(&copy).unwrap(), mine);
+        assert_eq!(fs::read_to_string(&old).unwrap(), skill("meta-git"));
+        assert!(report.copied > 0);
     }
 
     #[cfg(unix)]

@@ -171,10 +171,11 @@ pub(crate) fn remove_set(
         ));
     }
 
-    // The branches meta created for the set, read before git deletes the
-    // notes with the worktrees
-    // (the others' branches, which it leaves, are named too)
-    let mut branches: Vec<(std::path::PathBuf, String)> = Vec::new();
+    // The branches meta created for the set, with what only their reflogs
+    // and the worktree's HEAD reflog hold, read before git deletes the
+    // worktrees (their notes and HEAD reflogs with them); the others' branches
+    // are left, and named
+    let mut made: Vec<(std::path::PathBuf, String, Result<Vec<String>>)> = Vec::new();
     let mut left: Vec<(std::path::PathBuf, String)> = Vec::new();
     for member in &check.members {
         let Ok(linked) = meta_core::gitdir::linked(&member.path) else {
@@ -185,7 +186,10 @@ pub(crate) fn remove_set(
             .canonicalize()
             .unwrap_or(linked.common.clone());
         match record::created_branch(&linked.admin) {
-            Some(branch) => branches.push((git_dir, branch)),
+            Some(branch) => {
+                let reflogs = only_in_reflogs(&member.path, &git_dir, &branch);
+                made.push((git_dir, branch, reflogs));
+            }
             None => {
                 if let Ok(Some(branch)) = meta_core::git::current_branch(&member.path) {
                     left.push((git_dir, branch));
@@ -202,12 +206,38 @@ pub(crate) fn remove_set(
         }
     }
 
+    // Once the worktrees are gone (a preview only looks); what goes wrong
+    // here keeps a branch, never stops the remove
+    let mut branches: Vec<BranchReport> = made
+        .into_iter()
+        .filter_map(|(git_dir, branch, reflogs)| {
+            let (action, reason) = match branch_fate(&git_dir, &branch, reflogs, preview) {
+                BranchFate::Deleted => ("deleted", None),
+                BranchFate::Gone => return None,
+                BranchFate::Kept(why) => ("kept", Some(why)),
+            };
+            Some(BranchReport {
+                repo: repo_of(&git_dir).display().to_string(),
+                branch,
+                action,
+                reason,
+            })
+        })
+        .collect();
+    branches.extend(left.into_iter().map(|(git_dir, branch)| BranchReport {
+        repo: repo_of(&git_dir).display().to_string(),
+        branch,
+        action: "left",
+        reason: Some("no record says meta made it for this set".to_string()),
+    }));
+
     if json {
         let output = DestroyOutput {
             name: name.to_string(),
             path: wt_dir.display().to_string(),
             repos_removed: check.members.len(),
             dry_run: preview,
+            branches: std::mem::take(&mut branches),
         };
         outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else if preview {
@@ -223,18 +253,27 @@ pub(crate) fn remove_set(
         outln!("{} Removed worktree '{}'", "✓".green(), name.bold())?;
     }
     if !json {
-        report_branches(&branches, preview)?;
-        for (git_dir, branch) in &left {
-            outln!(
-                "  {} branch '{}' in {} (this set didn't make it)",
-                if preview { "would leave" } else { "left" },
-                escape(branch),
-                repo_shown(git_dir)
-            )?;
-        }
-    } else if !preview {
-        for (git_dir, branch) in &branches {
-            delete_branch(git_dir, branch)?;
+        for report in &branches {
+            let (verb, why) = match (report.action, preview) {
+                ("deleted", true) => ("would delete", None),
+                ("deleted", false) => ("deleted", None),
+                ("kept", true) => ("would keep", report.reason.as_deref()),
+                ("kept", false) => ("kept", report.reason.as_deref()),
+                (_, true) => ("would leave", report.reason.as_deref()),
+                (_, false) => ("left", report.reason.as_deref()),
+            };
+            let shown = format!(
+                "branch '{}' in {}",
+                escape(&report.branch),
+                escape_path(std::path::Path::new(&report.repo))
+            );
+            match (report.action, why) {
+                ("kept", Some(why)) => outln!("  {} {shown}: {why}", verb.yellow())?,
+                (_, Some(why)) => outln!("  {verb} {shown} ({why})")?,
+                (_, None) => {
+                    outln!("  {verb} {shown} (all its commits are on a remote or another branch)")?
+                }
+            }
         }
     }
     if preview {
@@ -246,18 +285,17 @@ pub(crate) fn remove_set(
 }
 
 /// The checkout the git directory `git_dir` belongs to, as the user knows it.
-fn repo_shown(git_dir: &std::path::Path) -> String {
-    let dir = match git_dir.file_name() {
+fn repo_of(git_dir: &std::path::Path) -> &std::path::Path {
+    match git_dir.file_name() {
         Some(name) if name == ".git" => git_dir.parent().unwrap_or(git_dir),
         _ => git_dir,
-    };
-    escape_path(dir)
+    }
 }
 
-/// What became of a branch meta created for a set being removed.
+/// What becomes of a branch meta created for a set being removed.
 enum BranchFate {
-    /// Deleted (or, in a preview, would be): every commit on it is on a
-    /// remote, another branch or a tag
+    /// Deleted (or, in a preview, would be): nothing on it or in its
+    /// reflogs is lost
     Deleted,
     /// Gone already
     Gone,
@@ -265,82 +303,106 @@ enum BranchFate {
     Kept(String),
 }
 
-/// Delete `branch` from the repository whose git directory is `git_dir` if
-/// no commit on it would be lost; `preview`: only say whether it would be.
-fn branch_fate(git_dir: &std::path::Path, branch: &str, preview: bool) -> Result<BranchFate> {
+/// The commits only the reflogs of `branch` (in the repository whose git
+/// directory is `git_dir`) and of the worktree `checkout`'s HEAD hold: work
+/// reset, amended or rebased away there, on no remote, tag or other branch.
+/// Deleting the branch and the worktree deletes those reflogs.
+fn only_in_reflogs(
+    checkout: &std::path::Path,
+    git_dir: &std::path::Path,
+    branch: &str,
+) -> Result<Vec<String>> {
     let full = format!("refs/heads/{branch}");
-    if meta_core::git::lookup(git_dir, ["rev-parse", "--verify", "--quiet", &full])?.is_none() {
-        return Ok(BranchFate::Gone);
+    let mut entries: Vec<String> = Vec::new();
+    for (dir, rev) in [(checkout, "HEAD"), (git_dir, full.as_str())] {
+        if rev != "HEAD"
+            && meta_core::git::lookup(git_dir, ["rev-parse", "--verify", "--quiet", rev])?.is_none()
+        {
+            continue;
+        }
+        let listed = meta_core::git::run(dir, ["rev-list", "-g", rev])?;
+        for sha in listed.lines() {
+            if !entries.iter().any(|known| known == sha) {
+                entries.push(sha.to_string());
+            }
+        }
     }
     // (--branches matches names without refs/heads/; a branch name holds no
     // glob characters)
     let exclude = format!("--exclude={branch}");
-    let unique = meta_core::git::run(
-        git_dir,
-        [
-            "log",
-            "--oneline",
-            &full,
-            "--not",
-            "--remotes",
-            "--tags",
-            &exclude,
-            "--branches",
-        ],
-    )?;
-    let unique: Vec<&str> = unique.lines().collect();
-    if let Some(first) = unique.first() {
-        return Ok(BranchFate::Kept(format!(
-            "{} on no remote, other branch or tag (first: {})",
-            match unique.len() {
-                1 => "1 commit".to_string(),
-                n => format!("{n} commits"),
-            },
-            escape(first)
-        )));
-    }
-    if preview {
-        return Ok(BranchFate::Deleted);
-    }
-    // git refuses a branch checked out in another worktree
-    match meta_core::git::run(git_dir, ["branch", "-D", "--", branch]) {
-        Ok(_) => Ok(BranchFate::Deleted),
-        Err(e) => Ok(BranchFate::Kept(
-            meta_core::display::escape_lines(&format!("{e:#}")).into_owned(),
-        )),
-    }
-}
-
-/// [`branch_fate`] without the report, for `--json`.
-fn delete_branch(git_dir: &std::path::Path, branch: &str) -> Result<()> {
-    branch_fate(git_dir, branch, false).map(|_| ())
-}
-
-/// Delete each branch meta created for the set (`branches`: the repository's
-/// git directory and the branch) that holds nothing that isn't elsewhere,
-/// and name each one kept, with why.
-fn report_branches(branches: &[(std::path::PathBuf, String)], preview: bool) -> Result<()> {
-    let repo = repo_shown;
-    for (git_dir, branch) in branches {
-        match branch_fate(git_dir, branch, preview)? {
-            BranchFate::Deleted if preview => outln!(
-                "  would delete branch '{}' in {} (all its commits are on a remote or another branch)",
-                escape(branch),
-                repo(git_dir)
-            )?,
-            BranchFate::Deleted => outln!(
-                "  deleted branch '{}' in {} (all its commits are on a remote or another branch)",
-                escape(branch),
-                repo(git_dir)
-            )?,
-            BranchFate::Gone => {}
-            BranchFate::Kept(why) => outln!(
-                "  {} branch '{}' in {}: {why}",
-                if preview { "would keep" } else { "kept" }.yellow(),
-                escape(branch),
-                repo(git_dir)
-            )?,
+    let mut unique: Vec<String> = Vec::new();
+    // in parts, so the command line stays short
+    for part in entries.chunks(200) {
+        let mut args: Vec<&str> = vec!["log", "--oneline"];
+        args.extend(part.iter().map(String::as_str));
+        args.extend(["--not", "--remotes", "--tags", &exclude, "--branches"]);
+        let found = meta_core::git::run(git_dir, &args)?;
+        for line in found.lines() {
+            if !unique.iter().any(|known| known == line) {
+                unique.push(line.to_string());
+            }
         }
     }
-    Ok(())
+    Ok(unique)
+}
+
+/// Delete `branch` from the repository whose git directory is `git_dir` if
+/// no commit on it, or only in its reflogs (`reflogs`), would be lost;
+/// `preview`: only say whether it would be. A git error keeps it.
+fn branch_fate(
+    git_dir: &std::path::Path,
+    branch: &str,
+    reflogs: Result<Vec<String>>,
+    preview: bool,
+) -> BranchFate {
+    let commits = |count: usize| match count {
+        1 => "1 commit".to_string(),
+        n => format!("{n} commits"),
+    };
+    let fate = || -> Result<BranchFate> {
+        let full = format!("refs/heads/{branch}");
+        if meta_core::git::lookup(git_dir, ["rev-parse", "--verify", "--quiet", &full])?.is_none() {
+            return Ok(BranchFate::Gone);
+        }
+        let exclude = format!("--exclude={branch}");
+        let unique = meta_core::git::run(
+            git_dir,
+            [
+                "log",
+                "--oneline",
+                &full,
+                "--not",
+                "--remotes",
+                "--tags",
+                &exclude,
+                "--branches",
+            ],
+        )?;
+        let unique: Vec<&str> = unique.lines().collect();
+        if let Some(first) = unique.first() {
+            return Ok(BranchFate::Kept(format!(
+                "{} on no remote, other branch or tag (first: {})",
+                commits(unique.len()),
+                escape(first)
+            )));
+        }
+        let reflogs = reflogs?;
+        if let Some(first) = reflogs.first() {
+            return Ok(BranchFate::Kept(format!(
+                "{} only in its reflogs (reset, amended or rebased away; on no remote, other \
+                 branch or tag; first: {})",
+                commits(reflogs.len()),
+                escape(first)
+            )));
+        }
+        if preview {
+            return Ok(BranchFate::Deleted);
+        }
+        // git refuses a branch checked out in another worktree
+        meta_core::git::run(git_dir, ["branch", "-D", "--", branch])?;
+        Ok(BranchFate::Deleted)
+    };
+    fate().unwrap_or_else(|e| {
+        BranchFate::Kept(meta_core::display::escape_lines(&format!("{e:#}")).into_owned())
+    })
 }

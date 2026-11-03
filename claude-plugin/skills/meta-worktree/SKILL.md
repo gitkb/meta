@@ -204,12 +204,15 @@ from inside a set, they act on the workspace the set was made from.
 `--force` and `exec --ephemeral` discard that work: commit and push first.
 
 `remove` (and `exec --ephemeral`) then deletes each branch create or add made
-for the set, in the workspace's repos, when every commit on it is also on a
-remote, another branch or a tag; it names each one it deletes, and keeps and
-names any branch with a commit nowhere else (`kept branch 'auth-fix' in
-…/backend: 1 commit on no remote, other branch or tag`). A branch the set only
-checked out (`--repo api:release/2.3`, an existing one) is never deleted, nor
-are the branches of sets made by a meta older than this.
+for the set, in the workspace's repos, when every commit on it, and every
+commit only its reflog or the worktree's HEAD reflog still holds (work reset,
+amended or rebased away), is also on a remote, another branch or a tag. It
+names each one it deletes, and keeps and names any branch with a commit nowhere
+else (`kept branch 'auth-fix' in …/backend: 1 commit on no remote, other branch
+or tag`). A branch the set only checked out (`--repo api:release/2.3`, an
+existing one) is never deleted, nor are the branches of sets made by a meta
+older than this; `remove` names those as left. `--json` lists each branch with
+its action (deleted, kept, left) and reason.
 
 ## Lifecycle Hooks
 

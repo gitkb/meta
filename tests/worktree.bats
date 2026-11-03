@@ -193,7 +193,7 @@ EOF
     [ -d ".worktrees/aged" ]
 }
 
-@test "worktree create names every repo the set needs that isn't cloned, and how to clone just those" {
+@test "worktree create and add clone the repos the set needs that aren't cloned, and only those" {
     for repo in backend frontend; do
         git clone --quiet --bare "$repo" "$TEST_DIR/$repo.git"
     done
@@ -202,27 +202,49 @@ projects:
   api: {repo: "file://$TEST_DIR/backend.git", depends_on: [web, db]}
   web: "file://$TEST_DIR/frontend.git"
   db: "file://$TEST_DIR/backend.git"
+  tool: "file://$TEST_DIR/frontend.git"
+  unrelated: "file://$TEST_DIR/frontend.git"
   backend: "git@github.com:org/backend.git"
 EOF
-    run "$META_BIN" git worktree create all-at-once --repo api
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"3 repos the set needs can't be used; no worktree was created:"* ]]
-    [[ "$output" == *"'api' at $TEST_DIR/api: not cloned"* ]]
-    [[ "$output" == *"'web' at $TEST_DIR/web: not cloned"* ]]
-    [[ "$output" == *"'db' at $TEST_DIR/db: not cloned"* ]]
-    [ ! -e ".worktrees/all-at-once" ]
-    # the command it gives clones those three and nothing else
-    [[ "$output" == *"meta --include 'api,web,db' git clone-missing"* ]]
-    run "$META_BIN" --include 'api,web,db' git clone-missing
+    run "$META_BIN" --dry-run git worktree create all-at-once --repo api
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Clone completed (3 cloned)"* ]]
+    [[ "$output" == *"Would clone the repos the set needs that aren't cloned (api, web, db)"* ]]
+    [ ! -e api ] && [ ! -e ".worktrees/all-at-once" ]
     run "$META_BIN" git worktree create all-at-once --repo api
     [ "$status" -eq 0 ]
-    [ -d ".worktrees/all-at-once/db" ]
+    [[ "$output" == *"Cloning 3 repos the set needs: api, web, db"* ]]
+    [[ "$output" == *"Cloned api, web, db"* ]]
+    [ -d ".worktrees/all-at-once/api" ] && [ -d ".worktrees/all-at-once/db" ] && [ -d ".worktrees/all-at-once/web" ]
+    [ ! -e unrelated ] && [ ! -e tool ]
+    run "$META_BIN" git worktree add all-at-once --repo tool
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Cloning 1 repo the set needs: tool"* ]]
+    [ -d ".worktrees/all-at-once/tool" ]
+    [ ! -e unrelated ]
 }
 
-@test "worktree create --all skips a repo that is not cloned; --repo and add refuse it" {
+@test "worktree create names every repo it couldn't clone, and makes nothing" {
+    git clone --quiet --bare frontend "$TEST_DIR/frontend.git"
+    cat > .meta.yaml <<EOF
+projects:
+  api: {repo: "file://$TEST_DIR/frontend.git", depends_on: [web, db]}
+  web: "file://$TEST_DIR/no-access-web.git"
+  db: "file://$TEST_DIR/no-access-db.git"
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" git worktree create denied --repo api
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"3 repos the set needs can't be used; no worktree was created:"* ]]
+    [[ "$output" == *"'web' at $TEST_DIR/web: not cloned"* ]]
+    [[ "$output" == *"'db' at $TEST_DIR/db: not cloned"* ]]
+    [[ "$output" == *"Cloning them failed"* ]]
+    [ ! -e ".worktrees/denied" ]
+}
+
+@test "worktree create --all skips a repo that is not cloned; --repo and add refuse it when it can't be cloned" {
     rm -rf frontend
+    # a remote that can't be cloned (as without access), kept offline
+    sed -i.bak "s#git@github.com:org/frontend.git#file://$TEST_DIR/nowhere.git#" .meta.yaml
     run "$META_BIN" git worktree create some --all
     [ "$status" -eq 0 ]
     [[ "$output" == *"'frontend' at $TEST_DIR/frontend: not cloned"*"skipping"* ]]

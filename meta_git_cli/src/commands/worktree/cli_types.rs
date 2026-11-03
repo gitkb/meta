@@ -68,8 +68,9 @@ pub struct CreateArgs {
     /// Fail where a repo would be skipped (errors instead of warnings)
     ///
     /// Repos are normally skipped with a warning when they don't have the
-    /// commit-ish to start from, or (with --all, or as an intermediate
-    /// parent) aren't cloned. With --strict, the entire operation fails
+    /// commit-ish to start from, or (with --all) aren't cloned; any other
+    /// repo the set needs that isn't cloned is cloned first. With --strict,
+    /// the entire operation fails
     /// instead, and nothing is made. A failing post-create hook fails it
     /// too, after the set was made: that set stays.
     #[arg(long)]

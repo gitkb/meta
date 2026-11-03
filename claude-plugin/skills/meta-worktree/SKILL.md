@@ -72,6 +72,13 @@ out; only a repo whose remote names no default branch starts from its HEAD,
 with a warning. The output names the start of each new branch:
 `backend -> auth-fix (new from origin/main)`.
 
+A repo the set needs that isn't cloned (one asked for, a dependency, or a
+parent on the way to a nested repo) is cloned first, as
+`meta git clone-missing` would, and named: `Cloning 2 repos the set needs: web, db`.
+`add` does the same for the repos it adds. Nothing else is cloned. When a clone
+fails (no access, say), nothing is made, and the error names every repo the set
+needs that isn't there. `--all` skips the projects that aren't cloned instead.
+
 A set lays its repos out as the workspace does: each repo sits at its `path`
 from the meta config, so relative references between repos keep working.
 
@@ -239,7 +246,7 @@ worktrees not recorded yet included.
 ## Strict Mode
 
 `--strict` on `create` (or global `meta --strict`) turns warnings such as a
-missing commit-ish in one repo, or a repo that isn't cloned, into errors. A create that fails is rolled back:
+missing commit-ish in one repo, or (with `--all`) a repo that isn't cloned, into errors. A create that fails is rolled back:
 the worktrees and branches it made are deleted again. If the rollback itself
 can't delete something, the error says what was left behind. A failing hook
 fails the command too, but only after the set was made (or removed): that is

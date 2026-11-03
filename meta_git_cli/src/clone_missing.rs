@@ -343,3 +343,32 @@ pub(crate) fn execute(
     }
     Ok(CommandResult::Message(String::new()))
 }
+
+/// Clone the projects at `dirs` that the `.meta.yaml` files of `workspace`
+/// (and of the meta repos nested in it) list and that aren't cloned, the way
+/// `clone-missing` does, for `command` (`git worktree create`). The folders
+/// it cloned, or the error naming each clone that failed.
+pub(crate) fn clone_dirs(
+    workspace: &meta_core::config::Workspace,
+    dirs: &[PathBuf],
+    command: &str,
+) -> anyhow::Result<Result<Vec<PathBuf>, String>> {
+    let root = workspace.dir.as_path();
+    let queue = CloneQueue::new(None, None, false).only(dirs.iter().cloned());
+    let top = Arc::from([MetaRepo::at(&update::root_name(root), root, None)]);
+    let tasks = queue.discover_in(workspace, 0, &top)?;
+    let urls: Vec<_> = tasks
+        .iter()
+        .filter_map(|task| match &task.work {
+            Work::Clone(url) => Some(url.clone()),
+            Work::Pull => None,
+        })
+        .collect();
+    if !tasks.is_empty() {
+        update::run(&queue, tasks, &urls)?;
+    }
+    if let Some(error) = crate::clone_worker::report_failures(&queue, command) {
+        return Ok(Err(error));
+    }
+    Ok(Ok(queue.outcome().cloned))
+}

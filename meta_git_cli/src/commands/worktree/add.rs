@@ -8,7 +8,7 @@ use meta_cli::worktree::discover_worktree_repos;
 use meta_core::set_record as record;
 use meta_git_lib::worktree::git_ops::{git_worktree_add, worktree_start};
 use meta_git_lib::worktree::helpers::*;
-use meta_git_lib::worktree::plan::Index;
+use meta_git_lib::worktree::plan::{Index, PlannedRepo};
 use meta_git_lib::worktree::types::*;
 
 use super::cli_types::AddArgs;
@@ -57,6 +57,35 @@ pub(crate) fn handle_add(
     // Check every repo before adding any: one refused after others were
     // added would leave a set the caller didn't ask for
     let index = Index::new(&configs.here);
+    // A repo asked for that isn't cloned is cloned first, as clone-missing
+    // would, and as create does
+    let mut missing: Vec<PlannedRepo> = Vec::new();
+    for spec in repo_specs {
+        let found = index.find(&spec.alias)?;
+        if meta_core::gitdir::Checkout::of(&found.source) == meta_core::gitdir::Checkout::Missing
+            && !missing.iter().any(|r| r.source == found.source)
+        {
+            missing.push(PlannedRepo {
+                place: place_in_set(meta_dir, &spec.alias, &found.source),
+                project: found.key,
+                source: found.source,
+                branch: resolve_branch(name, None, spec.branch.as_deref()),
+            });
+        }
+    }
+    if !missing.is_empty() {
+        if mode.is_preview() {
+            let places: Vec<_> = missing.iter().map(|r| escape(&r.place)).collect();
+            outln!(
+                "[DRY RUN] Would clone the repos to add that aren't cloned ({}), then add \
+                 them to worktree set '{}'; nothing was cloned or added.",
+                places.join(", "),
+                escape(name)
+            )?;
+            return Ok(());
+        }
+        super::create::clone_missing(&index, &missing)?;
+    }
     let mut planned: Vec<(&RepoSpec, std::path::PathBuf, String)> = Vec::new();
     for spec in repo_specs {
         // by name, else by place, as in create

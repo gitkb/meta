@@ -93,11 +93,41 @@ pub(crate) fn handle_create(
 
     // The repos of the set, each resolved once: through one index of the
     // projects (the whole tree, walked once, with --recursive)
-    let index = match recursive {
-        true => Index::recursive(&configs.here)?,
-        false => Index::new(&configs.here),
+    let index_of = || -> Result<Index> {
+        Ok(match recursive {
+            true => Index::recursive(&configs.here)?,
+            false => Index::new(&configs.here),
+        })
     };
-    let mut repos_to_create = plan_repos(&index, &args, strict, verbose)?;
+    let mut index = index_of()?;
+    // The repos it needs that aren't cloned are cloned first, as
+    // clone-missing would; a clone may list more (a nested meta repo's
+    // projects), so it plans again until none is missing
+    let mut rounds = 0;
+    let mut repos_to_create = loop {
+        let planned = plan_repos(&index, &args, strict, verbose, rounds == 0)?;
+        if planned.missing.is_empty() {
+            break planned.repos;
+        }
+        if mode.is_preview() {
+            let places: Vec<_> = planned.missing.iter().map(|r| escape(&r.place)).collect();
+            outln!(
+                "[DRY RUN] Would clone the repos the set needs that aren't cloned ({}), then \
+                 create worktree set '{}'; nothing was cloned or created.",
+                places.join(", "),
+                escape(name)
+            )?;
+            return Ok(None);
+        }
+        anyhow::ensure!(
+            rounds < 16,
+            "{}",
+            not_cloned_error(&planned.missing, index.tree().is_some())
+        );
+        clone_missing(&index, &planned.missing)?;
+        rounds += 1;
+        index = index_of()?;
+    };
 
     // A preview makes the checks a run makes (all but asking GitHub for a
     // PR's branch), skips what it skips and fails where it fails
@@ -628,7 +658,8 @@ fn plan_repos(
     args: &CreateArgs,
     strict: bool,
     verbose: bool,
-) -> Result<Vec<PlannedRepo>> {
+    warn: bool,
+) -> Result<Planned> {
     let workspace = index.workspace;
     let meta_dir = workspace.dir.as_path();
     let branch = |asked: Option<&str>| resolve_branch(&args.name, args.branch.as_deref(), asked);
@@ -767,17 +798,24 @@ fn plan_repos(
 
     // What resolving the depends_on this create follows ran into; a parent
     // on the way to a nested repo is in the set for its place, not its needs
-    if !args.no_deps {
+    if !args.no_deps && warn {
         let set = followed.iter().map(String::as_str);
         report_problems(&dep_graph(index)?, set, index.tree().is_none(), strict)?;
     }
 
-    // A project not cloned yet has no repository to make a worktree of:
-    // each one the set needs is named at once, with one command that clones
-    // just those
+    // A project not cloned yet has no repository to make a worktree of: the
+    // ones the set needs are returned, for the caller to clone; any other
+    // folder that is no repository is named, each at once
+    let mut missing: Vec<PlannedRepo> = Vec::new();
     let mut not_cloned: Vec<PlannedRepo> = Vec::new();
     let mut repos = Vec::with_capacity(plan.repos.len());
     for (repo, why) in plan.repos {
+        let absent =
+            meta_core::gitdir::Checkout::of(&repo.source) == meta_core::gitdir::Checkout::Missing;
+        if absent && why != Why::All {
+            missing.push(repo);
+            continue;
+        }
         let why = match why {
             Why::Parent(child) => {
                 meta_core::gitdir::Checkout::of(&repo.source)
@@ -809,13 +847,56 @@ fn plan_repos(
         out::warn(format!("{why}, skipping"));
     }
     if !not_cloned.is_empty() {
+        not_cloned.extend(missing);
         anyhow::bail!("{}", not_cloned_error(&not_cloned, index.tree().is_some()));
     }
     repos.sort_by(|a, b| {
         let order = |r: &PlannedRepo| (r.place != ".", r.place.split('/').count());
         order(a).cmp(&order(b)).then_with(|| a.place.cmp(&b.place))
     });
-    Ok(repos)
+    Ok(Planned { repos, missing })
+}
+
+/// The repos of a set being made: those to make worktrees of, and those it
+/// needs that aren't cloned yet.
+struct Planned {
+    repos: Vec<PlannedRepo>,
+    missing: Vec<PlannedRepo>,
+}
+
+/// Clone `missing`, the repos a set needs that aren't cloned (in the
+/// workspace `index` reads), saying so; an error naming them, and why
+/// cloning failed, when it does.
+pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()> {
+    let places: Vec<String> = missing
+        .iter()
+        .map(|r| escape(&r.place).into_owned())
+        .collect();
+    errln!(
+        "Cloning {} the set needs: {}",
+        match missing.len() {
+            1 => "1 repo".to_string(),
+            n => format!("{n} repos"),
+        },
+        places.join(", ")
+    );
+    let dirs: Vec<_> = missing.iter().map(|r| r.source.clone()).collect();
+    let cloned = crate::clone_missing::clone_dirs(index.workspace, &dirs, "git worktree create")?;
+    match cloned {
+        Ok(cloned) if !cloned.is_empty() => {
+            errln!("{} {}", "Cloned".green(), places.join(", "));
+            Ok(())
+        }
+        Ok(_) => anyhow::bail!(
+            "{}\n(cloning cloned none of them)",
+            not_cloned_error(missing, index.tree().is_some())
+        ),
+        Err(why) => anyhow::bail!(
+            "{}\nCloning them failed: {}",
+            not_cloned_error(missing, index.tree().is_some()),
+            why
+        ),
+    }
 }
 
 /// The error for the repos a set needs that can't be used, most often

@@ -13,6 +13,13 @@ pub enum WorktreeCommands {
     /// Add a repo to an existing worktree set
     Add(AddArgs),
     /// Remove a worktree set
+    ///
+    /// Like `git worktree remove` in each repo: modified or untracked files
+    /// refuse the remove unless --force; files git ignores (.env, target/)
+    /// are deleted with it. A branch create or add made for the set is
+    /// deleted only when every commit on it is on a remote, a tag or another
+    /// branch, as `git branch -d` would; otherwise it is kept and named.
+    /// Branches the set only checked out are left.
     Remove(RemoveArgs),
     /// List worktree sets (defaults to the current set when inside one)
     List(ListArgs),

@@ -264,7 +264,7 @@ pub(crate) fn execute(
             let (action, reason) = match leftover {
                 Ok(ignored) if preview => {
                     say(format!("Would remove {shown} ({})", note(&ignored)))?;
-                    ("removed", None)
+                    ("removed", ignored.as_ref().map(|_| note(&ignored)))
                 }
                 Ok(ignored) => match std::fs::remove_dir_all(path) {
                     Ok(()) => {
@@ -273,7 +273,7 @@ pub(crate) fn execute(
                             "Removed".green(),
                             note(&ignored)
                         ))?;
-                        ("removed", None)
+                        ("removed", ignored.as_ref().map(|_| note(&ignored)))
                     }
                     // what was removed before the error is gone
                     Err(e) => {

@@ -613,10 +613,26 @@ within() {
     run "$META_BIN" --dry-run git clone-prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"Would remove local-data (nothing unpushed; ignored files: .env, data/ deleted with it)"* ]]
+    # --json names them too, in the preview and the run, for both commands
+    local json_check='
+import json, sys
+[r] = [r for r in json.load(sys.stdin)["repos"] if r["path"] == "local-data"]
+assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored files: .env, data/ deleted with it", r
+'
+    run "$META_BIN" --json --dry-run git clone-prune
+    [ "$status" -eq 0 ]
+    python3 -c "$json_check" <<<"$output"
     [ -f local-data/.env ]
+    run "$META_BIN" --json git clone-sync
+    [ "$status" -eq 0 ]
+    python3 -c "$json_check" <<<"$output"
+    [ ! -e local-data ]
+    git clone --quiet remotes/shared.git local-data
+    echo SECRET=1 > local-data/.env
+    printf '.env\ndata/\n' > local-data/.git/info/exclude
     run "$META_BIN" git clone-prune
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Removed local-data (nothing unpushed; ignored files: .env, data/ deleted with it)"* ]]
+    [[ "$output" == *"Removed local-data (nothing unpushed; ignored files: .env deleted with it)"* ]]
     [ ! -e local-data ]
     run "$META_BIN" git clone-prune --delete-ignored
     [ "$status" -ne 0 ]

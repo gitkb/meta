@@ -46,6 +46,15 @@ meta git pull      # Pull every existing repo
 meta git update    # Fast-forward cloned repos, clone the missing ones
 ```
 
+| Command | What it does |
+|---------|--------------|
+| `meta git update` | Pull the workspace repo, fast-forward every cloned repo (`git pull --ff-only`), clone the missing ones |
+| `meta git clone-missing` | Clone the projects the `.meta.yaml` files on disk list that aren't cloned; change no repo that is |
+| `meta git clone-prune` | Remove the repos no `.meta.yaml` lists that hold nothing unpushed; keep and name the others |
+| `meta git clone-sync` | `clone-missing`, then `clone-prune` |
+
+`clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files on disk and pull nothing. `clone-prune` keeps any repo that holds uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it, and says what it holds; preview with `meta --dry-run git clone-prune`. A project that isn't cloned yet is a warning in `meta git pull` and the other per-repo commands, not a failure.
+
 `meta git update` pulls the workspace repo first, then runs `git pull --ff-only` in each cloned repo and clones each missing one, so projects added upstream are cloned in one run. A repo git can't fast-forward is named and the command exits 1; nothing is merged or rebased. A repo on no branch, or on a branch without an upstream, is named and left alone. `meta git update -r` does the same in nested meta repos, each pulled before its `.meta.yaml` is read.
 
 ## Before Batch Operations (Critical)

@@ -376,7 +376,7 @@ J
     rm -rf "$TEST_DIR/shared"
     run "$META_BIN" project check
     [ "$status" -ne 0 ]
-    [[ "$output" == *"shared: not cloned (run 'meta git update')"* ]]
+    [[ "$output" == *"shared: not cloned (run 'meta git clone-missing')"* ]]
     [[ "$output" != *"meta project update"* ]]
 }
 

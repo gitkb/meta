@@ -326,7 +326,7 @@ fn check(
         "{} project(s) are not clones of their configured repository{}",
         problems.len(),
         if missing {
-            "; run 'meta git update' to clone the missing ones"
+            "; run 'meta git clone-missing' to clone the missing ones"
         } else {
             ""
         }

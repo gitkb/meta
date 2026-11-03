@@ -496,10 +496,151 @@ within() {
     git push --quiet
     run "$META_BIN" git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"frontend is not in .meta.yaml; it holds "*"untracked: scratch.txt"*"1 commit on no remote: "*"unpushed work"*"1 linked worktree: $TEST_DIR/remotes/fe-review"* ]]
+    [[ "$output" == *"frontend isn't in .meta.yaml; it holds "*"untracked: scratch.txt"*"1 commit on no remote: "*"unpushed work"*"1 linked worktree: $TEST_DIR/remotes/fe-review"* ]]
     [[ "$output" != *"rm -rf"* ]]
     [[ "$output" != *"stray"* ]]
     [ -d "$TEST_DIR/web/.git" ]
+}
+
+@test "meta git update calls a leftover that holds nothing one clone-prune removes" {
+    with_remotes
+    git clone --quiet remotes/shared.git old
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"old isn't in .meta.yaml (nothing unpushed; meta git clone-prune removes it)"* ]]
+    [ -d "$TEST_DIR/old/.git" ]
+}
+
+# ============ meta git clone-missing, clone-prune, clone-sync ============
+
+@test "meta git clone-missing clones what is missing and changes no repo that is cloned" {
+    with_remotes
+    teammate frontend
+    teammate ws
+    echo mine >> backend/README.md
+    rm -rf shared
+    local frontend_head ws_head frontend_origin
+    frontend_head=$(head_of frontend)
+    ws_head=$(head_of .)
+    frontend_origin=$(git -C frontend rev-parse origin/main)
+    run "$META_BIN" --dry-run git clone-missing
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"git clone -- file://$TEST_DIR/remotes/shared.git $TEST_DIR/shared"* ]]
+    [ ! -e shared ]
+    run "$META_BIN" git clone-missing
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Clone completed (1 cloned)"* ]]
+    [ -d shared/.git ]
+    # nothing pulled, fetched or checked out
+    [ "$(head_of frontend)" = "$frontend_head" ]
+    [ "$(head_of .)" = "$ws_head" ]
+    [ "$(git -C frontend rev-parse origin/main)" = "$frontend_origin" ]
+    [ "$(git -C backend status --porcelain)" = " M README.md" ]
+}
+
+@test "meta git clone-missing clones only the selected projects" {
+    with_remotes
+    rm -rf frontend shared
+    run "$META_BIN" --include shared git clone-missing
+    [ "$status" -eq 0 ]
+    [ -d shared/.git ]
+    [ ! -e frontend ]
+}
+
+@test "meta git clone-prune keeps each leftover that holds work, and removes a clean one" {
+    with_remotes
+    local name
+    for name in clean untracked modified stashed unpushed worktree nested; do
+        git clone --quiet remotes/shared.git "$name"
+    done
+    echo new > untracked/new.txt
+    echo more >> modified/README.md
+    echo stash >> stashed/README.md
+    git -C stashed stash --quiet
+    echo wip > unpushed/wip.md
+    git -C unpushed add wip.md
+    git -C unpushed commit --quiet -m "unpushed work"
+    git -C worktree worktree add --quiet "$TEST_DIR/remotes/wt"
+    # a repo the leftover ignores, with work of its own
+    echo /inner/ > nested/.git/info/exclude
+    git init --quiet nested/inner
+    # never a folder that is no repo, nor a link to a repo
+    mkdir plain
+    git clone --quiet remotes/shared.git remotes/elsewhere
+    ln -s "$TEST_DIR/remotes/elsewhere" link
+    run "$META_BIN" --dry-run git clone-prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Would remove clean (nothing unpushed)"* ]]
+    [ -d clean/.git ]
+    run "$META_BIN" git clone-prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Removed clean (nothing unpushed)"* ]]
+    [[ "$output" == *"Kept untracked: it holds 1 file untracked: new.txt"* ]]
+    [[ "$output" == *"Kept modified: it holds 1 file with uncommitted changes: README.md"* ]]
+    [[ "$output" == *"Kept stashed: it holds 1 stash"* ]]
+    [[ "$output" == *"Kept unpushed: it holds 1 commit on no remote: "*"unpushed work"* ]]
+    [[ "$output" == *"Kept worktree: it holds 1 linked worktree: $TEST_DIR/remotes/wt"* ]]
+    [[ "$output" == *"Kept nested: it holds another git repository: inner"* ]]
+    [[ "$output" == *"Kept link: it is a symbolic link"* ]]
+    [[ "$output" == *"Prune completed (1 removed, 7 kept)"* ]]
+    [ ! -e clean ]
+    for name in untracked modified stashed unpushed worktree nested plain link remotes/elsewhere frontend backend shared; do
+        [ -e "$name" ]
+    done
+}
+
+@test "meta git clone-sync clones what is missing and prunes what no .meta.yaml lists" {
+    with_remotes
+    rm -rf shared
+    git clone --quiet remotes/frontend.git old
+    run "$META_BIN" --json git clone-sync
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'{"action":"cloned","path":"shared"}'* ]]
+    [[ "$output" == *'{"action":"removed","path":"old"}'* ]]
+    [ -d shared/.git ]
+    [ ! -e old ]
+}
+
+@test "meta git clone-missing in a worktree set refuses instead of cloning into the workspace" {
+    with_remotes
+    "$META_BIN" git worktree create review --repo frontend --no-deps >/dev/null
+    rm -rf "$TEST_DIR/shared"
+    cd "$TEST_DIR/.worktrees/review/frontend"
+    run "$META_BIN" git clone-sync
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not worktree set 'review'"* ]]
+    [ ! -e "$TEST_DIR/shared" ]
+}
+
+# ============ looped commands ============
+
+@test "an option of meta's typed after the command gets a tip; a real git error doesn't" {
+    run "$META_BIN" git status --recursive
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"tip: --recursive is an option of meta itself: it goes before the command, as in meta --recursive git status"* ]]
+    run "$META_BIN" --sequential git status --recursive
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"tip: --recursive is an option of meta itself"* ]]
+    # rejected, but no option of meta's; and an error that is no option's
+    run "$META_BIN" git status --no-such-option
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"tip:"* ]]
+    run "$META_BIN" git checkout no-such-branch
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"tip:"* ]]
+}
+
+@test "a project that isn't cloned is a warning in looped git commands, and a failure in exec" {
+    rm -rf "$TEST_DIR/shared"
+    run "$META_BIN" git status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: shared is not cloned; \`meta git clone-missing\` clones it"* ]]
+    [[ "$output" == *"3 commands complete"* ]]
+    run "$META_BIN" --strict git status
+    [ "$status" -ne 0 ]
+    run "$META_BIN" exec -- git status
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"not cloned (run 'meta git clone-missing')"* ]]
 }
 
 @test "meta git update compares no origin for a project that is not cloned" {

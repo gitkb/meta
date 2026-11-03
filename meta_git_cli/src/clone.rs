@@ -174,7 +174,7 @@ pub(crate) fn execute_git_clone(
     let initial_count = tasks.len();
 
     if initial_count == 0 {
-        if let Some(error) = crate::clone_worker::report_failures(&queue) {
+        if let Some(error) = crate::clone_worker::report_failures(&queue, "git clone-missing") {
             return Ok(CommandResult::Error(error));
         }
         return Ok(CommandResult::Message(
@@ -215,7 +215,7 @@ pub(crate) fn execute_git_clone(
     let mp = MultiProgress::new();
 
     clone_with_queue(&queue, tasks, parallel, &mp, ssh_cmd.as_deref())?;
-    if let Some(error) = crate::clone_worker::report_failures(&queue) {
+    if let Some(error) = crate::clone_worker::report_failures(&queue, "git clone-missing") {
         return Ok(CommandResult::Error(error));
     }
 

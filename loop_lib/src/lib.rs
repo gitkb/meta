@@ -48,6 +48,95 @@ pub struct LoopConfig {
     /// is displayed as "." or ". (basename)" instead of its full path,
     /// and is sorted first in output.
     pub root_dir: Option<PathBuf>,
+    /// The program that runs loop, when its options may be typed after the
+    /// command by mistake
+    #[serde(skip)]
+    pub outer: Option<Outer>,
+}
+
+/// A program that runs commands through loop, and takes options of its own
+/// before the command. When every command fails because its program
+/// rejected one of them, a tip after the summary says where it goes.
+#[derive(Debug, Clone, Default)]
+pub struct Outer {
+    /// Its name, as the tip shows it (`meta`)
+    pub program: String,
+    /// The words between its options and the command (`exec --`)
+    pub before: Vec<String>,
+    /// Each option's spellings (`--recursive`, `-r`), and whether a value
+    /// follows it
+    pub options: Vec<(String, bool)>,
+}
+
+impl Outer {
+    /// The tip for `results`, the commands of `argv` having all failed:
+    /// the option of ours they rejected, found in their error output (git:
+    /// ``unknown option `recursive'``; clap: `unexpected argument
+    /// '--recursive'`), or, with no output captured, the one option of ours
+    /// in `argv` when each exited 129 (git's usage error).
+    fn tip(&self, argv: &[String], results: &[CommandResult]) -> Option<String> {
+        let typed = |spelling: &str| {
+            argv.iter().skip(1).position(|arg| {
+                arg == spelling
+                    || spelling.starts_with("--") && arg.starts_with(&format!("{spelling}="))
+            })
+        };
+        let ours: Vec<&(String, bool)> = self
+            .options
+            .iter()
+            .filter(|(o, _)| typed(o).is_some())
+            .collect();
+        let rejected = |spelling: &str, result: &CommandResult| {
+            let name = spelling.trim_start_matches('-');
+            String::from_utf8_lossy(&result.stderr).lines().any(|line| {
+                let lower = line.to_lowercase();
+                [
+                    "unknown option",
+                    "unknown switch",
+                    "unrecognized option",
+                    "unexpected argument",
+                ]
+                .iter()
+                .any(|says| lower.contains(says))
+                    && (line.contains(&format!("`{name}'"))
+                        || line.contains(&format!("'{spelling}'")))
+            })
+        };
+        let usage_only = |result: &CommandResult| {
+            result.exit_code == Some(129) && result.stderr.trim_ascii().is_empty()
+        };
+        let (spelling, takes_value) = match ours
+            .iter()
+            .find(|(o, _)| results.iter().all(|r| rejected(o, r)))
+        {
+            Some(found) => found,
+            None if ours.len() == 1 && results.iter().all(usage_only) => ours.first()?,
+            None => return None,
+        };
+        // the option (and its value) before the command, the rest as typed
+        let at = typed(spelling)? + 1;
+        let given = argv.get(at)?;
+        let mut moved = vec![given.clone()];
+        let mut skip = 1;
+        if *takes_value && !given.contains('=') {
+            moved.push(argv.get(at + 1)?.clone());
+            skip = 2;
+        }
+        let rest = argv
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i < at || *i >= at + skip);
+        let example: Vec<String> = std::iter::once(self.program.clone())
+            .chain(moved)
+            .chain(self.before.iter().cloned())
+            .chain(rest.map(|(_, arg)| arg.clone()))
+            .collect();
+        Some(format!(
+            "{spelling} is an option of {} itself: it goes before the command, as in {}",
+            self.program,
+            escape(&display_command(&example))
+        ))
+    }
 }
 
 /// A command to execute in a specific directory
@@ -78,6 +167,7 @@ impl Default for LoopConfig {
             max_parallel: None,
             aliases: BTreeMap::new(),
             root_dir: None,
+            outer: None,
         }
     }
 }
@@ -830,6 +920,15 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
 
     let total = results.len();
     let failed_count = results.iter().filter(|r| !r.success).count();
+    // A failure in every repo may be an option of the caller's typed after
+    // the command
+    let tip = config
+        .outer
+        .as_ref()
+        .filter(|_| failed_count == total && !config.silent && !config.dry_run)
+        .zip(commands.first())
+        .filter(|(_, first)| commands.iter().all(|c| c.argv == first.argv))
+        .and_then(|(outer, first)| outer.tip(&first.argv, &results));
 
     if config.json_output {
         let output = JsonOutput {
@@ -887,6 +986,14 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
             }
             outln!()?;
         }
+    }
+
+    if let Some(tip) = tip {
+        meta_core::out::flush()?;
+        errln!(
+            "{} {tip}",
+            meta_core::out::label("tip:", |l| l.cyan().bold())
+        );
     }
 
     // In a dry run only commands that cannot run (a missing directory, a

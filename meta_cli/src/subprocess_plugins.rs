@@ -560,6 +560,7 @@ fn execute_plan(
             max_parallel,
             aliases,
             root_dir,
+            outer: Some(crate::outer(&[])),
             ..LoopConfig::default()
         };
 

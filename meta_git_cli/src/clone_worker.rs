@@ -133,7 +133,8 @@ impl<'a> Worker<'a> {
 /// uncloned because its folder holds something else, each meta repo that
 /// lists one above it, and each nested `.meta.yaml` that can't be read, to
 /// stderr; return the command's error, or `None` when nothing failed.
-pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
+/// `command` (`git update`) is the one to run again.
+pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<String> {
     let Outcome {
         cloned,
         failures,
@@ -165,7 +166,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
     }
     for (name, why) in &refused {
         errln!(
-            "{} {}: not a git repository ({}); move it away and run 'meta git update' again",
+            "{} {}: not a git repository ({}); move it away and run 'meta {command}' again",
             "Not cloned".red().bold(),
             meta_core::display::escape(name),
             meta_core::display::escape(why)
@@ -201,7 +202,7 @@ pub(crate) fn report_failures(queue: &CloneQueue) -> Option<String> {
                 format!(
                     "{} of {} repositories failed to clone: {}",
                     clones.len(),
-                    cloned + clones.len(),
+                    cloned.len() + clones.len(),
                     clones.join(", ")
                 )
             }),

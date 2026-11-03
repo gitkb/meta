@@ -67,9 +67,9 @@ pub struct CloneFailure {
 /// What became of the repositories a clone or update found.
 #[derive(Debug, Clone, Default)]
 pub struct Outcome {
-    /// Repositories pulled and cloned
+    /// How many repositories were pulled, and the folders cloned into
     pub pulled: usize,
-    pub cloned: usize,
+    pub cloned: Vec<PathBuf>,
     /// Failed clones and pulls, in the order they failed
     pub failures: Vec<CloneFailure>,
     /// Repositories not pulled because there is nothing to pull from: the
@@ -83,8 +83,8 @@ pub struct Outcome {
     pub cycles: Vec<Vec<String>>,
     /// Nested `.meta.yaml` files that can't be read or used, each with its repo
     pub unreadable: Vec<String>,
-    /// Repositories in a meta repo's folder that its `.meta.yaml` doesn't
-    /// list (found only when pulling)
+    /// Repositories in a meta repo's folder that no `.meta.yaml` read lists,
+    /// and that hold no project one lists
     pub unlisted: Vec<PathBuf>,
 }
 
@@ -93,11 +93,15 @@ pub struct Outcome {
 /// Reading a meta repo's `.meta.yaml` hands back the tasks for its
 /// projects; each folder is handed out once.
 pub struct CloneQueue {
-    /// Folders a task was handed out for
+    /// Folders a task was handed out for, or that were entered as cloned
     claimed: Mutex<HashSet<PathBuf>>,
+    /// The folder of every project a `.meta.yaml` read lists (resolved)
+    listed: Mutex<Vec<PathBuf>>,
     outcome: Mutex<Outcome>,
     /// Tasks handed out (for progress display)
     total_discovered: AtomicUsize,
+    /// How many tasks the run is expected to hand out (for progress display)
+    expected: AtomicUsize,
     /// Tasks finished, failed ones included (for progress display)
     total_completed: AtomicUsize,
     /// Git depth argument (if any)
@@ -106,6 +110,9 @@ pub struct CloneQueue {
     meta_depth: Option<usize>,
     /// Whether projects already cloned are pulled
     pull: bool,
+    /// The folders a selection chose: only their projects are cloned, and
+    /// only their meta repos are searched for unlisted repositories
+    only: Option<HashSet<PathBuf>>,
 }
 
 impl CloneQueue {
@@ -115,13 +122,40 @@ impl CloneQueue {
     pub fn new(git_depth: Option<String>, meta_depth: Option<usize>, pull: bool) -> Self {
         Self {
             claimed: Mutex::new(HashSet::new()),
+            listed: Mutex::new(Vec::new()),
             outcome: Mutex::new(Outcome::default()),
             total_discovered: AtomicUsize::new(0),
+            expected: AtomicUsize::new(0),
             total_completed: AtomicUsize::new(0),
             git_depth,
             meta_depth,
             pull,
+            only: None,
         }
+    }
+
+    /// The queue, keeping to the folders `dirs` (a selection's).
+    pub fn only(mut self, dirs: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.only = Some(dirs.into_iter().map(|dir| resolved(&dir)).collect());
+        self
+    }
+
+    /// Whether the folder at `dir` is one the queue keeps to.
+    fn selected(&self, dir: &Path) -> bool {
+        self.only
+            .as_ref()
+            .is_none_or(|only| only.contains(&resolved(dir)))
+    }
+
+    /// Show at least `tasks` as the total in progress, until more are found.
+    pub fn expect(&self, tasks: usize) {
+        self.expected.store(tasks, Ordering::SeqCst);
+    }
+
+    /// How many folders were handed out or entered: the repositories a run
+    /// would clone or pull, as far as discovery went.
+    pub fn found(&self) -> usize {
+        self.claimed.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     /// The task for the meta repo at `dir` itself, which is `name` and comes
@@ -137,6 +171,7 @@ impl CloneQueue {
             above: Arc::from([]),
         };
         self.claim(&task.target_path);
+        self.total_discovered.fetch_add(1, Ordering::SeqCst);
         task
     }
 
@@ -147,24 +182,27 @@ impl CloneQueue {
 
     /// What became of the repositories so far.
     pub fn outcome(&self) -> Outcome {
-        self.outcome
+        let mut outcome = self
+            .outcome
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .clone()
+            .clone();
+        // A repository another .meta.yaml lists, or that holds a listed
+        // project, is no leftover
+        let listed = self.listed.lock().unwrap_or_else(|e| e.into_inner());
+        outcome
+            .unlisted
+            .retain(|path| !listed.iter().any(|dir| dir.starts_with(resolved(path))));
+        outcome
     }
 
-    /// Hand out the task for the folder at `path`: false if one was handed
-    /// out for it before, however spelled.
+    /// Claim the folder at `path`: false if it was claimed before, however
+    /// spelled.
     fn claim(&self, path: &Path) -> bool {
-        let fresh = self
-            .claimed
+        self.claimed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(resolved(path));
-        if fresh {
-            self.total_discovered.fetch_add(1, Ordering::SeqCst);
-        }
-        fresh
+            .insert(resolved(path))
     }
 
     /// The tasks for the projects of the `.meta.yaml` in `dir`, at `level`,
@@ -196,23 +234,28 @@ impl CloneQueue {
         above: &Arc<[MetaRepo]>,
     ) -> anyhow::Result<Vec<CloneTask>> {
         let base_dir = workspace.dir.as_path();
-        if self.pull {
-            self.note_unlisted(workspace);
-        }
+        self.note_unlisted(workspace);
         let mut tasks = Vec::new();
         for project in &workspace.projects {
             let target_path = base_dir.join(&project.path);
+            self.listed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(resolved(&target_path));
 
             let work = match Checkout::of(&target_path) {
                 Checkout::Repo { .. } if self.pull => Work::Pull,
                 // Cloned: still look in it for nested discovery
                 Checkout::Repo { .. } => {
                     if self.claim(&target_path) {
-                        self.total_completed.fetch_add(1, Ordering::SeqCst);
                         let this = MetaRepo::at(&project.name, &target_path, project.repo.clone());
                         tasks.extend(self.enter(this, &target_path, level + 1, above)?);
                     }
                     continue;
+                }
+                // Outside a selection, nothing is cloned
+                Checkout::Missing | Checkout::NotARepo(_) if !self.selected(&target_path) => {
+                    continue
                 }
                 // git clones into an empty folder, and refuses any other
                 Checkout::NotARepo(why) if !is_empty_dir(&target_path) => {
@@ -239,6 +282,7 @@ impl CloneQueue {
                 }
             }
             if self.claim(&target_path) {
+                self.total_discovered.fetch_add(1, Ordering::SeqCst);
                 debug!("Queued {work:?} for {} at depth {level}", project.name);
                 tasks.push(CloneTask {
                     name: project.name.clone(),
@@ -254,8 +298,12 @@ impl CloneQueue {
         Ok(tasks)
     }
 
-    /// Record the repositories in `workspace`'s folder that it doesn't list.
+    /// Record the repositories in `workspace`'s folder that it doesn't list
+    /// (outside a selection's meta repos, none).
     fn note_unlisted(&self, workspace: &config::Workspace) {
+        if !self.selected(&workspace.dir) {
+            return;
+        }
         let listed: HashSet<&str> = workspace.projects.iter().map(|p| p.path.as_str()).collect();
         let entries = std::fs::read_dir(&workspace.dir)
             .into_iter()
@@ -274,11 +322,13 @@ impl CloneQueue {
         self.record(|o| o.unlisted.extend(found));
     }
 
-    /// Get current counts for display
+    /// Tasks finished, and tasks handed out (or expected, if more)
     pub fn get_counts(&self) -> (usize, usize) {
         (
             self.total_completed.load(Ordering::SeqCst),
-            self.total_discovered.load(Ordering::SeqCst),
+            self.total_discovered
+                .load(Ordering::SeqCst)
+                .max(self.expected.load(Ordering::SeqCst)),
         )
     }
 
@@ -293,7 +343,7 @@ impl CloneQueue {
         self.total_completed.fetch_add(1, Ordering::SeqCst);
         self.record(|o| match task.work {
             Work::Pull => o.pulled += 1,
-            Work::Clone(_) => o.cloned += 1,
+            Work::Clone(_) => o.cloned.push(task.target_path.clone()),
         });
         let found = self.nested(task);
 
@@ -557,7 +607,8 @@ mod tests {
         assert!(tasks[0].is_meta);
         let nested = queue.mark_completed(&tasks[0]);
         assert_eq!(names(&nested), ["grandchild"]);
-        assert_eq!((queue.outcome().pulled, queue.outcome().cloned), (0, 1));
+        assert_eq!(queue.outcome().pulled, 0);
+        assert_eq!(queue.outcome().cloned, [child]);
 
         // with depth limit 0, the clone's .meta.yaml isn't read
         let queue = CloneQueue::new(None, Some(0), false);
@@ -710,6 +761,24 @@ mod tests {
         let queue = CloneQueue::new(None, None, true);
         queue.discover(&dir, 0, &top(&dir, None)).unwrap();
         assert_eq!(queue.outcome().unlisted, [dir.join("other")]);
+    }
+
+    #[test]
+    fn a_repository_that_holds_a_listed_project_is_no_leftover() {
+        // libs is a repo of its own, unlisted, but the project libs/x is in it
+        let sandbox = meta_test_support::isolated!();
+        let dir = sandbox.work();
+        for name in ["libs", "libs/x", "stray"] {
+            std::fs::create_dir(dir.join(name)).unwrap();
+            sandbox.git(&dir.join(name), &["init", "-q"]);
+        }
+        write_meta(
+            &dir,
+            r#"{"projects": {"x": {"repo": "u", "path": "libs/x"}}}"#,
+        );
+        let queue = CloneQueue::new(None, None, false);
+        queue.discover(&dir, 0, &top(&dir, None)).unwrap();
+        assert_eq!(queue.outcome().unlisted, [dir.join("stray")]);
     }
 
     #[test]

@@ -19,6 +19,18 @@ fn main() {
         "Clone a meta repo and the repos its .meta.yaml lists (-r: nested ones too)".to_string(),
     );
     adapted.insert(
+        "clone-missing".to_string(),
+        "Clone the projects in .meta.yaml that aren't cloned; change nothing else".to_string(),
+    );
+    adapted.insert(
+        "clone-prune".to_string(),
+        "Remove the repos no .meta.yaml lists that hold nothing unpushed".to_string(),
+    );
+    adapted.insert(
+        "clone-sync".to_string(),
+        "clone-missing, then clone-prune".to_string(),
+    );
+    adapted.insert(
         "commit".to_string(),
         "Commit changes with optional per-repo messages".to_string(),
     );
@@ -52,6 +64,9 @@ fn main() {
             version: env!("CARGO_PKG_VERSION").to_string(),
             commands: vec![
                 "git clone".to_string(),
+                "git clone-missing".to_string(),
+                "git clone-prune".to_string(),
+                "git clone-sync".to_string(),
                 "git status".to_string(),
                 "git update".to_string(),
                 "git commit".to_string(),

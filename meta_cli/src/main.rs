@@ -549,6 +549,7 @@ fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin
                 json_output: cli.json,
                 aliases: loop_lib::aliases()?,
                 root_dir: Some(target.root.clone()),
+                outer: Some(outer(&["exec", "--"])),
                 ..Default::default()
             };
             // only in the selected projects that are repositories
@@ -572,6 +573,26 @@ fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin
             &start,
             cli.request_options(target.parallel),
         ),
+    }
+}
+
+/// meta, as the program that runs a command in each repo: its options, so a
+/// command that rejected one is told it goes before the command (`before`:
+/// the words between meta's options and the command).
+fn outer(before: &[&str]) -> loop_lib::Outer {
+    let options = Cli::command()
+        .get_arguments()
+        .flat_map(|arg| {
+            let value = arg.get_action().takes_values();
+            let long = arg.get_long().map(|long| (format!("--{long}"), value));
+            let short = arg.get_short().map(|short| (format!("-{short}"), value));
+            long.into_iter().chain(short)
+        })
+        .collect();
+    loop_lib::Outer {
+        program: "meta".to_string(),
+        before: before.iter().map(ToString::to_string).collect(),
+        options,
     }
 }
 

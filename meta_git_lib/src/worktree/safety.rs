@@ -401,7 +401,10 @@ fn scan(
 /// What deleting the repository at `repo`, a checkout of its own, would
 /// lose: uncommitted, untracked and hidden files, an operation in progress,
 /// commits on no remote, stashes, and its linked worktrees. Empty when git
-/// shows nothing that isn't on a remote (ignored files aside).
+/// shows nothing that isn't on a remote (ignored files aside). Like `git
+/// worktree remove` and `git branch -d`, it counts only what git keeps:
+/// commits only a reflog holds are ones git counts discarded, and ignored
+/// files are disposable.
 pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
     let born = meta_core::git::lookup(repo, ["rev-parse", "--verify", "--quiet", "HEAD"])?;
     let mut found = match born {
@@ -421,7 +424,7 @@ pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
     // Commits on no remote include those on no branch either
     found.retain(|what| !what.ends_with(STRANDED));
     let mut log = vec!["log", "--oneline", "--branches", "--tags"];
-    log.extend(born.as_ref().map(|_| "HEAD"));
+    log.extend(born.map(|_| "HEAD"));
     log.extend(["--not", "--remotes"]);
     let unpushed = meta_core::git::run(repo, log)?;
     let unpushed: Vec<&str> = unpushed.lines().collect();
@@ -430,48 +433,6 @@ pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
             "{} on no remote: {}",
             plural(unpushed.len(), "commit"),
             sample(&unpushed, |line| escape(line).into_owned())
-        ));
-    }
-    // Commits only a reflog still holds (one made on a detached HEAD that was
-    // left): on no branch, tag or remote, and not HEAD's (counted above) or a
-    // stash's (counted below)
-    let mut reflog: Vec<String> = ["log", "--oneline", "--reflog", "--not", "--branches"]
-        .iter()
-        .chain(&["--tags", "--remotes", "--glob=refs/meta/kept/*"])
-        .map(|arg| arg.to_string())
-        .collect();
-    reflog.extend(born.as_ref().map(|_| "HEAD".to_string()));
-    let stashes = meta_core::git::run(repo, ["log", "-g", "--format=%H", "refs/stash", "--"])
-        .unwrap_or_default();
-    reflog.extend(stashes.lines().map(str::to_string));
-    let only_reflog = meta_core::git::run(repo, &reflog)?;
-    let only_reflog: Vec<&str> = only_reflog.lines().collect();
-    if !only_reflog.is_empty() {
-        found.push(format!(
-            "{} only in the reflog (on no branch, tag or remote): {}",
-            plural(only_reflog.len(), "commit"),
-            sample(&only_reflog, |line| escape(line).into_owned())
-        ));
-    }
-    // Commits worktree remove saved from a worktree's HEAD reflog
-    let kept = meta_core::git::run(
-        repo,
-        [
-            "log",
-            "--oneline",
-            "--glob=refs/meta/kept/*",
-            "--not",
-            "--branches",
-            "--tags",
-            "--remotes",
-        ],
-    )?;
-    let kept: Vec<&str> = kept.lines().collect();
-    if !kept.is_empty() {
-        found.push(format!(
-            "{} that worktree remove saved under refs/meta/kept: {}",
-            plural(kept.len(), "commit"),
-            sample(&kept, |line| escape(line).into_owned())
         ));
     }
     match meta_core::git::run(repo, ["stash", "list"])?
@@ -798,34 +759,6 @@ mod tests {
         assert!(held.contains("1 stash"), "{held}");
         assert!(held.contains("1 linked worktree: "), "{held}");
         assert!(!held.contains(STRANDED), "{held}");
-        // back on a branch, the loose commit is only in the reflog: still held
-        sandbox.git(&repo, &["switch", "-q", "holds-topic"]);
-        let held = repo_holds(&repo).unwrap().join("; ");
-        assert!(
-            held.contains("1 commit only in the reflog (on no branch, tag or remote): ")
-                && held.contains("loose"),
-            "{held}"
-        );
-        // and a stash is counted once, as a stash
-        assert!(
-            held.contains("1 stash") && !held.contains("WIP on"),
-            "{held}"
-        );
-        // a commit worktree remove saved is held too
-        sandbox.git(&repo, &["switch", "-q", "--detach"]);
-        sandbox.git(
-            &repo,
-            &["commit", "-q", "--allow-empty", "-m", "saved by remove"],
-        );
-        sandbox.git(&repo, &["update-ref", "refs/meta/kept/s/repo/x", "HEAD"]);
-        sandbox.git(&repo, &["switch", "-q", "holds-topic"]);
-        let held = repo_holds(&repo).unwrap().join("; ");
-        assert!(
-            held.contains("1 commit that worktree remove saved under refs/meta/kept: ")
-                && held.contains("saved by remove"),
-            "{held}"
-        );
-        assert_eq!(held.matches("saved by remove").count(), 1, "{held}");
     }
 
     #[test]

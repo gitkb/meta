@@ -25,12 +25,11 @@ macro_rules! no_pull {
 macro_rules! prune {
     () => {
         "\n\nA repo is removed only when git shows nothing in it that isn't on a \
-                     remote: no uncommitted or untracked files, stashes, commits on no remote (those \
-                     only a reflog holds too) \
-                     or linked worktrees, and no git repo inside it. A repo that holds \
-                     anything is kept and named with what it holds. One that holds only files \
-                     git ignores (.env, target/) is kept too, and named with them, unless \
-                     --delete-ignored is given. Folders that are no git \
+                     remote: no uncommitted or untracked files, stashes, commits on a branch \
+                     or tag that no remote has, or linked worktrees, and no git repo inside it. \
+                     A repo that holds anything is kept and named with what it holds. Files git \
+                     ignores (.env, target/) are deleted with it, and named first; commits only \
+                     a reflog holds are not kept, as git counts them discarded. Folders that are no git \
                      repo of their own, links, and the projects a .meta.yaml lists are never \
                      removed. With -r the meta repos nested in it are searched too; --include, \
                      --exclude and --tag choose the meta repos searched."
@@ -72,10 +71,6 @@ pub(crate) struct ClonePruneArgs {
     /// Also search the folders of nested meta repos
     #[arg(short, long)]
     recursive: bool,
-    /// Also remove repos whose only files no remote has are ones git
-    /// ignores, deleting those files
-    #[arg(long)]
-    delete_ignored: bool,
 }
 
 /// `meta git clone-sync`
@@ -94,10 +89,6 @@ pub(crate) struct CloneSyncArgs {
     /// Also act on nested meta repos
     #[arg(short, long)]
     recursive: bool,
-    /// Also remove repos whose only files no remote has are ones git
-    /// ignores, deleting those files
-    #[arg(long)]
-    delete_ignored: bool,
 }
 
 /// What a command does: clone, prune, or both.
@@ -124,11 +115,10 @@ impl Steps {
     }
 }
 
-/// What a command was asked: its steps, -r, and --delete-ignored.
+/// What a command was asked: its steps and -r.
 pub(crate) struct Request {
     steps: Steps,
     recursive: bool,
-    delete_ignored: bool,
 }
 
 impl From<CloneMissingArgs> for Request {
@@ -136,7 +126,6 @@ impl From<CloneMissingArgs> for Request {
         Self {
             steps: Steps::Clone,
             recursive: args.recursive,
-            delete_ignored: false,
         }
     }
 }
@@ -146,7 +135,6 @@ impl From<ClonePruneArgs> for Request {
         Self {
             steps: Steps::Prune,
             recursive: args.recursive,
-            delete_ignored: args.delete_ignored,
         }
     }
 }
@@ -156,7 +144,6 @@ impl From<CloneSyncArgs> for Request {
         Self {
             steps: Steps::Sync,
             recursive: args.recursive,
-            delete_ignored: args.delete_ignored,
         }
     }
 }
@@ -175,11 +162,7 @@ struct Record {
 /// Run `steps` (`-r`: `recursive`) in the workspace at or above `cwd`, on
 /// the selected `projects` when meta's options filter them.
 pub(crate) fn execute(
-    Request {
-        steps,
-        recursive,
-        delete_ignored,
-    }: Request,
+    Request { steps, recursive }: Request,
     projects: &[String],
     options: &PluginRequestOptions,
     cwd: &Path,
@@ -270,11 +253,7 @@ pub(crate) fn execute(
         for path in &outcome.unlisted {
             let shown = update::shown(path, cwd);
             let leftover = match Leftover::of(path, root) {
-                Leftover::Ignored(ignored) if delete_ignored => Ok(Some(ignored)),
-                Leftover::Ignored(ignored) => Err(format!(
-                    "it holds {ignored} (--delete-ignored removes it, deleting them)"
-                )),
-                Leftover::Nothing => Ok(None),
+                Leftover::Removable(ignored) => Ok(ignored),
                 Leftover::Holds(why) => Err(why),
             };
             // what is deleted along with it is said, in the preview too

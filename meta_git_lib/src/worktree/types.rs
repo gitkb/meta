@@ -87,23 +87,6 @@ pub struct DestroyOutput {
     /// What became (with dry_run: would become) of each set's branch
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub branches: Vec<BranchReport>,
-    /// Refs saved (with dry_run: to be saved) for commits only a removed
-    /// worktree's HEAD reflog held
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub kept_refs: Vec<KeptRef>,
-}
-
-/// A ref `remove` made so commits only a worktree's HEAD reflog held stay
-/// reachable once the worktree, and its reflog, are gone.
-#[derive(Debug, Serialize)]
-pub struct KeptRef {
-    /// The workspace's checkout of the repository
-    pub repo: String,
-    /// `refs/meta/kept/<set>/<commit>`
-    #[serde(rename = "ref")]
-    pub ref_name: String,
-    /// How many commits it keeps that nothing else does
-    pub commits: usize,
 }
 
 /// What `remove` did with a branch of the set's.

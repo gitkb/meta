@@ -204,11 +204,11 @@ pub(crate) fn execute_git_update(
 
 /// What deleting a repository no `.meta.yaml` lists would lose.
 pub(crate) enum Leftover {
-    /// Nothing git shows that isn't on a remote
-    Nothing,
-    /// Nothing unpushed, but files git ignores, which no remote has
-    /// either: "ignored files: .env, target/"
-    Ignored(String),
+    /// Nothing git shows that isn't on a remote, maybe with files git
+    /// ignores ("ignored files: .env, target/"). Those are deleted with it,
+    /// as `git worktree remove` deletes them: ignoring a file says it isn't
+    /// work. They are named, so none goes unseen.
+    Removable(Option<String>),
     /// What it holds, or why it isn't deleted
     Holds(String),
 }
@@ -253,8 +253,7 @@ impl Leftover {
         let held = meta_git_lib::worktree::safety::repo_holds(path)
             .and_then(|held| Ok((held, meta_git_lib::worktree::safety::repo_ignored(path)?)));
         match held {
-            Ok((held, None)) if held.is_empty() => Self::Nothing,
-            Ok((held, Some(ignored))) if held.is_empty() => Self::Ignored(ignored),
+            Ok((held, ignored)) if held.is_empty() => Self::Removable(ignored),
             Ok((held, ignored)) => Self::Holds(format!(
                 "it holds {}",
                 held.into_iter()
@@ -310,12 +309,12 @@ fn report_unlisted(queue: &CloneQueue, root: &Path, cwd: &Path, recursive: bool)
     for path in queue.outcome().unlisted {
         let shown = shown(&path, cwd);
         let warning = match Leftover::of(&path, root) {
-            Leftover::Nothing => {
+            Leftover::Removable(None) => {
                 format!("{shown} isn't in .meta.yaml (nothing unpushed; {prune} removes it)")
             }
-            Leftover::Ignored(ignored) => format!(
-                "{shown} isn't in .meta.yaml (nothing unpushed, but it holds {ignored}; \
-                 {prune} --delete-ignored removes it)"
+            Leftover::Removable(Some(ignored)) => format!(
+                "{shown} isn't in .meta.yaml (nothing unpushed; {prune} removes it, and its \
+                 {ignored})"
             ),
             Leftover::Holds(why) => format!("{shown} isn't in .meta.yaml; {why}"),
         };

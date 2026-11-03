@@ -598,41 +598,28 @@ within() {
     done
 }
 
-@test "meta git clone-prune keeps a leftover holding ignored files unless told to delete them" {
+@test "meta git clone-prune removes a leftover holding only ignored files, naming them" {
     with_remotes
     git clone --quiet remotes/shared.git local-data
     printf '.env\ndata/\n' > local-data/.git/info/exclude
     echo SECRET=1 > local-data/.env
     mkdir local-data/data && echo row > local-data/data/a.db
-    run "$META_BIN" --dry-run git clone-prune
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Would keep local-data: it holds ignored files: .env, data/ (--delete-ignored removes it, deleting them)"* ]]
-    run "$META_BIN" git clone-sync
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Kept local-data: it holds ignored files: .env, data/"* ]]
-    [ -f local-data/.env ]
+    # a commit only the reflog holds is not kept: git counts it discarded
+    git -C local-data switch --quiet --detach
+    git -C local-data commit --quiet --allow-empty -m "left on a detached HEAD"
+    git -C local-data switch --quiet main
     run "$META_BIN" git update
-    [[ "$output" == *"local-data isn't in .meta.yaml (nothing unpushed, but it holds ignored files: .env, data/; meta git clone-prune --delete-ignored removes it)"* ]]
-    run "$META_BIN" --dry-run git clone-prune --delete-ignored
+    [[ "$output" == *"local-data isn't in .meta.yaml (nothing unpushed; meta git clone-prune removes it, and its ignored files: .env, data/)"* ]]
+    run "$META_BIN" --dry-run git clone-prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"Would remove local-data (nothing unpushed; ignored files: .env, data/ deleted with it)"* ]]
     [ -f local-data/.env ]
-    run "$META_BIN" git clone-prune --delete-ignored
+    run "$META_BIN" git clone-prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"Removed local-data (nothing unpushed; ignored files: .env, data/ deleted with it)"* ]]
     [ ! -e local-data ]
-}
-
-@test "meta git clone-prune keeps a leftover whose commit only the reflog holds" {
-    with_remotes
-    git clone --quiet remotes/shared.git detached
-    git -C detached switch --quiet --detach
-    git -C detached commit --quiet --allow-empty -m "made on a detached HEAD"
-    git -C detached switch --quiet main
-    run "$META_BIN" git clone-prune
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Kept detached: it holds 1 commit only in the reflog (on no branch, tag or remote): "*"made on a detached HEAD"* ]]
-    [ -d detached/.git ]
+    run "$META_BIN" git clone-prune --delete-ignored
+    [ "$status" -ne 0 ]
 }
 
 @test "meta git clone-sync clones what is missing and prunes what no .meta.yaml lists" {

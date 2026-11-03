@@ -13,11 +13,84 @@ mod update;
 
 mod commands;
 
+use indexmap::IndexMap;
 use log::debug;
-use meta_plugin_protocol::{has_help_token, CommandResult, PlannedCommand, PluginRequestOptions};
+use meta_plugin_protocol::{
+    has_help_token, CommandResult, PlannedCommand, PluginHelp, PluginInfo, PluginRequestOptions,
+};
 use std::path::Path;
 
 use helpers::get_project_directories_with_fallback;
+
+/// What meta-git says about itself: the commands it routes, and its help.
+pub fn plugin_info() -> PluginInfo {
+    // The git commands meta adapts; every other one runs as typed
+    let mut adapted = IndexMap::new();
+    adapted.insert(
+        "clone".to_string(),
+        "Clone a meta repo and the repos its .meta.yaml lists (-r: nested ones too)".to_string(),
+    );
+    adapted.insert(
+        "clone-missing".to_string(),
+        "Clone the projects in .meta.yaml that aren't cloned; change nothing else".to_string(),
+    );
+    adapted.insert(
+        "clone-prune".to_string(),
+        "Remove the repos no .meta.yaml lists that hold nothing unpushed".to_string(),
+    );
+    adapted.insert(
+        "clone-sync".to_string(),
+        "clone-missing, then clone-prune".to_string(),
+    );
+    adapted.insert(
+        "commit".to_string(),
+        "Commit changes with optional per-repo messages".to_string(),
+    );
+    adapted.insert(
+        "update".to_string(),
+        "Fast-forward cloned repos (git pull --ff-only) and clone missing ones".to_string(),
+    );
+    adapted.insert(
+        "worktree".to_string(),
+        "Create isolated worktree sets for multi-repo branches".to_string(),
+    );
+
+    PluginInfo {
+        name: "git".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        commands: vec![
+            "git clone".to_string(),
+            "git clone-missing".to_string(),
+            "git clone-prune".to_string(),
+            "git clone-sync".to_string(),
+            "git update".to_string(),
+            "git commit".to_string(),
+            "git worktree".to_string(),
+            "git worktree create".to_string(),
+            "git worktree add".to_string(),
+            "git worktree remove".to_string(),
+            "git worktree list".to_string(),
+            "git worktree status".to_string(),
+            "git worktree diff".to_string(),
+            "git worktree exec".to_string(),
+            "git worktree prune".to_string(),
+        ],
+        description: Some("Git operations for meta repositories".to_string()),
+        help: Some(PluginHelp {
+            usage: "Usage: meta git <COMMAND> [OPTIONS]".to_string(),
+            commands: adapted,
+            runs_as_typed: Some("git".to_string()),
+            examples: vec![
+                "meta git clone https://github.com/org/meta-repo.git".to_string(),
+                "meta git commit --edit              # Per-repo messages".to_string(),
+                "meta git worktree create feature-x --repo api --repo web".to_string(),
+                "meta git status                     # git status in each repo".to_string(),
+                "meta git log --oneline -3           # git log, as typed".to_string(),
+            ],
+            note: None,
+        }),
+    }
+}
 
 /// Execute a command for meta repositories.
 ///
@@ -115,14 +188,12 @@ pub fn execute_command(
         _ => {}
     }
 
+    // meta answers the help of a command it runs as typed itself
     if help_requested {
-        if let Some(help) = build_passthrough_git_help(command, args, projects, cwd) {
-            return CommandResult::Message(help);
-        }
         return CommandResult::ShowHelp(None);
     }
 
-    // `git status` and every other git command run as typed in each repo
+    // Every other git command runs as typed in each repo
     execute_raw_git_command(command, args, projects, options, cwd)
 }
 
@@ -149,90 +220,6 @@ fn is_remote_command(argv: &[String]) -> bool {
     let remote_commands = ["push", "pull", "fetch", "clone", "ls-remote"];
     argv.get(1)
         .is_some_and(|subcommand| remote_commands.contains(&subcommand.as_str()))
-}
-
-fn build_passthrough_git_help(
-    command: &str,
-    args: &[String],
-    projects: &[String],
-    cwd: &Path,
-) -> Option<String> {
-    let command_words: Vec<&str> = command
-        .split_whitespace()
-        .filter(|word| *word != "--help" && *word != "-h")
-        .collect();
-
-    if command_words.first().copied() != Some("git") {
-        return None;
-    }
-
-    let adapted_commands = [
-        "clone",
-        "clone-missing",
-        "clone-prune",
-        "clone-sync",
-        "update",
-        "commit",
-        "worktree",
-    ];
-    let git_args: Vec<String> = command_words
-        .iter()
-        .skip(1)
-        .map(|s| s.to_string())
-        .chain(
-            args.iter()
-                .filter(|arg| arg.as_str() != "--help" && arg.as_str() != "-h")
-                .cloned(),
-        )
-        .collect();
-    let subcommand = git_args.first()?;
-
-    if adapted_commands.contains(&subcommand.as_str()) {
-        return None;
-    }
-
-    let git_argv: Vec<String> = std::iter::once("git".to_string())
-        .chain(git_args.iter().cloned())
-        .collect();
-    let display_command = loop_lib::display_command(&git_argv);
-    let scope = match get_project_directories_with_fallback(projects, cwd) {
-        Ok(dirs) => {
-            if dirs.is_empty() {
-                "Current scope: no repos were discovered.".to_string()
-            } else {
-                format!(
-                    "Current scope: {} repo(s): {}",
-                    dirs.len(),
-                    dirs.iter()
-                        .map(|d| d.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            }
-        }
-        Err(_) => "Current scope: unable to resolve repos from the current directory.".to_string(),
-    };
-
-    Some(format!(
-        "meta git {subcommand} - Pass-through git command\n\n\
-Usage: meta [META_OPTIONS] git {subcommand} [GIT_ARGS...]\n\n\
-Runs `{display_command}` in each repo in the current meta workspace.\n\n\
-{scope}\n\n\
-Meta options (before `git`):\n\
-  --dry-run             Show the command that would run in each repo\n\
-  --recursive           Include repos from nested meta workspaces\n\
-  --depth <N>           Limit recursive traversal depth\n\
-  --include <REPOS>     These repos (and those --tag selects; .meta.yaml name or path from the root)\n\
-  --exclude <REPOS>     Skip these repos (.meta.yaml name or path from the root)\n\
-  --tag <TAGS>          The repos with any of these tags, comma-separated (never the root)\n\
-  --parallel            Run repo commands concurrently\n\
-  --sequential          Run repo commands one at a time\n\n\
-Examples:\n\
-  meta git {subcommand}\n\
-  meta --dry-run git {subcommand}\n\
-  meta --recursive --dry-run git {subcommand}\n\n\
-Git help: run `git {subcommand} --help` directly for upstream git options."
-    ))
 }
 
 /// Execute a raw git command across all repos (fallback for unrecognized subcommands)
@@ -360,6 +347,41 @@ mod tests {
     }
     use commit::parse_multi_commit_file;
     use helpers::get_project_directories;
+
+    #[test]
+    fn the_commands_meta_git_adapts_are_the_ones_it_routes_and_each_names_its_git_options() {
+        let info = plugin_info();
+        let adapted: std::collections::BTreeSet<&str> = info
+            .help
+            .as_ref()
+            .unwrap()
+            .commands
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let routed = info
+            .commands
+            .iter()
+            .filter_map(|command| command.split_whitespace().nth(1))
+            .collect();
+        assert_eq!(adapted, routed);
+        let sandbox = Sandbox::new();
+        for verb in adapted {
+            let options = PluginRequestOptions::default();
+            let result = execute_command(
+                &format!("git {verb}"),
+                &argv("--help"),
+                &[],
+                &options,
+                &sandbox.work(),
+            );
+            let help = match result {
+                CommandResult::Message(help) => help,
+                _ => String::new(),
+            };
+            assert!(help.contains("\nGit options: "), "git {verb}: {help}");
+        }
+    }
 
     #[test]
     fn test_execute_git_status_no_meta_file() {

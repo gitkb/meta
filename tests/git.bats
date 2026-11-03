@@ -1477,7 +1477,7 @@ YAML
     [[ "$output" == *"Usage: meta git update"* ]]
     run "$META_BIN" git status --help
     [ "$status" -eq 0 ]
-    [[ "$output" == *"meta git status - Pass-through git command"* ]]
+    [[ "${lines[0]}" == '`meta git status` runs as typed (`git status`) in each selected repo.' ]]
 }
 
 @test "meta help never runs the command, even with -- in the words" {
@@ -1485,7 +1485,7 @@ YAML
     run "$META_BIN" help git clean -f -- .
     [ "$status" -eq 0 ]
     [ -f "$TEST_DIR/frontend/junk" ]
-    [[ "$output" == *"Pass-through git command"* ]]
+    [[ "$output" == *'runs as typed (`git clean -f`)'* ]]
     # and a plugin command's own help, by its words
     run "$META_BIN" help git worktree create
     [ "$status" -eq 0 ]

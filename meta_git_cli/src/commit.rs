@@ -8,6 +8,9 @@ use std::process::Command;
 
 /// Commit what is staged, in every repo that has staged changes.
 #[derive(clap::Parser)]
+#[command(
+    after_help = "Git options: of git commit's own, only -m (one message for every repo) and -e (an editor for each repo)."
+)]
 pub(crate) struct CommitArgs {
     /// Write each repo's message in your editor (needs a terminal)
     #[arg(short, long)]

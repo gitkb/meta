@@ -272,6 +272,25 @@ EOF
     [[ "$output" == *"Error: At least one command failed"* ]]
 }
 
+@test "a failure every repo shares prints once; different failures print per repo" {
+    run "$META_BIN" --parallel exec -- sh -c 'echo shared failure >&2; exit 3'
+    [ "$status" -eq 1 ]
+    [ "$(grep -cx 'shared failure' <<<"$output")" -eq 1 ]
+    [[ "$output" == *"4 out of 4 commands failed"* ]]
+    [[ "$output" == *"./api, ./frontend, ./worker: sh -c"*"(exit code 3)"* ]]
+
+    run "$META_BIN" --parallel exec -- sh -c 'echo "failed in ${PWD##*/}" >&2; exit 3'
+    [ "$status" -eq 1 ]
+    for repo in api worker frontend; do
+        [[ "$output" == *"failed in $repo"* ]]
+        [[ "$output" == *"✗ ./$repo: sh -c"* ]]
+    done
+
+    # JSON keeps every repo's record
+    run "$META_BIN" --json --parallel exec -- sh -c 'echo shared failure >&2; exit 3'
+    [ "$(grep -c '"directory"' <<<"$output")" -eq 4 ]
+}
+
 @test "loop captures stdout from commands" {
     # Use a script file to avoid arg-joining issues with shell expressions
     cat > "$TEST_DIR/api/test.sh" <<'SCRIPT'

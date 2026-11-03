@@ -544,6 +544,18 @@ impl Sandbox {
             .unwrap()
     }
 
+    /// The git commands meta's git plugin answers itself, as its info
+    /// declares them; any other word after `meta git` goes to git.
+    fn adapted(&self) -> Vec<String> {
+        let info = self
+            .command(self.bin.join("meta-git"))
+            .arg("--meta-plugin-info")
+            .output()
+            .unwrap();
+        let info: meta_plugin_protocol::PluginInfo = serde_json::from_slice(&info.stdout).unwrap();
+        info.help.unwrap().commands.into_keys().collect()
+    }
+
     /// Why meta doesn't accept `line`, if it doesn't.
     fn rejects(&self, line: &Line) -> Option<String> {
         let mut words = previewed(&line.words);
@@ -585,7 +597,7 @@ impl Sandbox {
         // `meta git WORD` passes WORD to git: it has to be one of git's
         let git = line.words.iter().position(|word| word == "git")?;
         let word = line.words.get(git + 1)?;
-        if word.starts_with('-') || ADAPTED.contains(&word.as_str()) {
+        if word.starts_with('-') || self.adapted().contains(word) {
             return None;
         }
         let out = self.command("git").args([word, "-h"]).output().unwrap();
@@ -594,18 +606,6 @@ impl Sandbox {
         (!known).then(|| format!("'{word}' is not a git command"))
     }
 }
-
-/// The git commands meta's git plugin answers itself; any other word after
-/// `meta git` goes to git.
-const ADAPTED: &[&str] = &[
-    "clone",
-    "clone-missing",
-    "clone-prune",
-    "clone-sync",
-    "commit",
-    "update",
-    "worktree",
-];
 
 #[test]
 fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {

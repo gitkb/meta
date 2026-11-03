@@ -78,17 +78,20 @@ setup() {
     [[ "$output" == *"Usage: meta"*"git pull"* ]]
 }
 
-@test "cargo help uses the simple plugin help without side effects" {
+@test "cargo help has git's shape and runs nothing" {
     cd "$NO_CONFIG_DIR"
     export PATH="$NO_CONFIG_DIR/.meta/plugins:$PATH"
 
-    for command in "cargo --help" "cargo build --help"; do
-        run "$META_BIN" $command
-        [ "$status" -eq 0 ]
-        [[ "$output" == *"meta cargo"* ]]
-        [[ "$output" != *"Could not find meta config"* ]]
-        [[ "$output" != *"No Rust projects found"* ]]
-    done
+    run "$META_BIN" cargo --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Pass-through: every cargo command runs as typed in each selected repo"* ]]
+    [[ "$output" != *"Commands:"* ]]
+    run "$META_BIN" cargo build --help
+    [ "$status" -eq 0 ]
+    [[ "${lines[0]}" == '`meta cargo build` runs as typed (`cargo build`) in each selected repo.' ]]
+    [[ "$output" == *"Current scope: no repos here"* ]]
+    [[ "$output" == *"For cargo's own options: cargo build --help"* ]]
+    [[ "$output" != *"No Rust projects found"* ]]
 }
 
 @test "git pass-through help is meta's, names the repos and runs no git" {
@@ -222,4 +225,68 @@ setup() {
         [[ "$output" == *"Usage: meta [OPTIONS] [COMMAND]"* ]]
         [[ "$output" == *"[plugin: git"* ]]
     done
+}
+
+@test "meta --help, meta help <word> and meta <word> --help list a plugin's own commands from its info" {
+    mkdir -p "$BATS_TEST_TMPDIR/bin"
+    cat > "$BATS_TEST_TMPDIR/bin/meta-fake" <<'EOF'
+#!/bin/sh
+case "$1" in
+  --meta-plugin-info) echo '{"name":"fake","version":"1.0","commands":["fake alpha","fake beta"],"description":"Fake tool across repos","help":{"usage":"Usage: meta fake <COMMAND>","commands":{"alpha":"Do alpha","beta":"Do beta"},"runs_as_typed":"faketool"}}' ;;
+esac
+EOF
+    chmod +x "$BATS_TEST_TMPDIR/bin/meta-fake"
+    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+
+    run "$META_BIN" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Fake tool across repos [plugin: fake v1.0]"*"alpha, beta"*"any other faketool command runs as typed in each selected repo"* ]]
+    # so does every command meta-git declares it adapts
+    adapted=$("$META_BIN_DIR/meta-git" --meta-plugin-info | python3 -c 'import json,sys; print(", ".join(json.load(sys.stdin)["help"]["commands"]))')
+    [[ "$output" == *"$adapted"* ]]
+
+    for words in "fake --help" "help fake" "fake"; do
+        run "$META_BIN" $words
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"Commands meta-fake adapts:"*"alpha"*"Do alpha"*"beta"*"Do beta"* ]]
+        [[ "$output" == *"Pass-through: any other faketool command runs as typed in each selected repo"* ]]
+    done
+}
+
+@test "a command's help says first who answers it: meta-git, or git as typed" {
+    for words in "git clone --help" "help git clone" "git commit --help" "git update -h"; do
+        run "$META_BIN" $words
+        [ "$status" -eq 0 ]
+        [[ "${lines[0]}" == '`meta git '*'` is adapted by meta-git: meta'"'"'s own command, not `git '* ]]
+        [[ "$output" == *"Git options: "* ]]
+    done
+    for words in "git pull --help" "help git pull"; do
+        run "$META_BIN" $words
+        [ "$status" -eq 0 ]
+        [[ "${lines[0]}" == '`meta git pull` runs as typed (`git pull`) in each selected repo.' ]]
+        [[ "$output" == *"For git's own options: git pull --help"* ]]
+    done
+    run "$META_BIN" project list --help
+    [ "$status" -eq 0 ]
+    [[ "${lines[0]}" == '`meta project list` is a command of meta-project.' ]]
+}
+
+@test "a git extension on PATH shows in plugin list and runs as meta git <name>" {
+    git init --quiet api && git init --quiet web
+    mkdir -p "$BATS_TEST_TMPDIR/ext"
+    printf '#!/bin/sh\necho "hello from ${PWD##*/}"\n' > "$BATS_TEST_TMPDIR/ext/git-hello"
+    # meta's own `meta git commit` shadows this one
+    printf '#!/bin/sh\nexit 9\n' > "$BATS_TEST_TMPDIR/ext/git-commit"
+    chmod +x "$BATS_TEST_TMPDIR/ext/git-hello" "$BATS_TEST_TMPDIR/ext/git-commit"
+    export PATH="$BATS_TEST_TMPDIR/ext:$PATH"
+
+    run "$META_BIN" plugin list
+    [ "$status" -eq 0 ]
+    line=$(grep '^meta git <name>' <<<"$output")
+    [[ "$line" == *"hello"* ]]
+    [[ "$line" != *"commit"* ]]
+
+    run "$META_BIN" git hello
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"hello from api"* && "$output" == *"hello from web"* ]]
 }

@@ -26,7 +26,8 @@ use std::sync::Arc;
                   upstream, is named and left alone. With -r the same goes for the meta repos \
                   nested in it, each pulled before its .meta.yaml is read.\n\n\
                   To clone the missing projects and touch nothing else, run \
-                  `meta git clone-missing`."
+                  `meta git clone-missing`.",
+    after_help = "Git options: none of git pull's; each repo is pulled with `git pull --ff-only`."
 )]
 pub(crate) struct UpdateArgs {
     /// Also update the projects of nested meta repos

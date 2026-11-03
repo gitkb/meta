@@ -3,101 +3,11 @@
 //! Logging is handled by `run_plugin()` which initializes env_logger.
 //! Use RUST_LOG=meta_git_cli=debug for debug output.
 
-use indexmap::IndexMap;
-use meta_plugin_protocol::{
-    run_plugin, CommandResult, PluginDefinition, PluginHelp, PluginInfo, PluginRequest,
-};
+use meta_plugin_protocol::{run_plugin, CommandResult, PluginDefinition, PluginRequest};
 
 fn main() {
-    // Build command sections for help display
-    let mut command_sections = IndexMap::new();
-
-    // Adapted Commands - meta-specific behavior that differs from plain git
-    let mut adapted = IndexMap::new();
-    adapted.insert(
-        "clone".to_string(),
-        "Clone a meta repo and the repos its .meta.yaml lists (-r: nested ones too)".to_string(),
-    );
-    adapted.insert(
-        "clone-missing".to_string(),
-        "Clone the projects in .meta.yaml that aren't cloned; change nothing else".to_string(),
-    );
-    adapted.insert(
-        "clone-prune".to_string(),
-        "Remove the repos no .meta.yaml lists that hold nothing unpushed".to_string(),
-    );
-    adapted.insert(
-        "clone-sync".to_string(),
-        "clone-missing, then clone-prune".to_string(),
-    );
-    adapted.insert(
-        "commit".to_string(),
-        "Commit changes with optional per-repo messages".to_string(),
-    );
-    adapted.insert(
-        "update".to_string(),
-        "Fast-forward cloned repos (git pull --ff-only) and clone missing ones".to_string(),
-    );
-    adapted.insert(
-        "worktree".to_string(),
-        "Create isolated worktree sets for multi-repo branches".to_string(),
-    );
-    command_sections.insert(
-        "Adapted Commands (meta-specific behavior)".to_string(),
-        adapted,
-    );
-
-    // Pass-through Commands - runs git command in each repo
-    let mut passthrough = IndexMap::new();
-    passthrough.insert(
-        "status".to_string(),
-        "Show git status across all repos".to_string(),
-    );
-    command_sections.insert(
-        "Pass-through Commands (runs git command in each repo)".to_string(),
-        passthrough,
-    );
-
     run_plugin(PluginDefinition {
-        info: PluginInfo {
-            name: "git".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            commands: vec![
-                "git clone".to_string(),
-                "git clone-missing".to_string(),
-                "git clone-prune".to_string(),
-                "git clone-sync".to_string(),
-                "git status".to_string(),
-                "git update".to_string(),
-                "git commit".to_string(),
-                "git worktree".to_string(),
-                "git worktree create".to_string(),
-                "git worktree add".to_string(),
-                "git worktree remove".to_string(),
-                "git worktree list".to_string(),
-                "git worktree status".to_string(),
-                "git worktree diff".to_string(),
-                "git worktree exec".to_string(),
-                "git worktree prune".to_string(),
-            ],
-            description: Some("Git operations for meta repositories".to_string()),
-            help: Some(PluginHelp {
-                usage: "Usage: meta git <COMMAND> [OPTIONS]".to_string(),
-                commands: IndexMap::new(), // Using command_sections instead
-                command_sections,
-                examples: vec![
-                    "meta git clone https://github.com/org/meta-repo.git".to_string(),
-                    "meta git status".to_string(),
-                    "meta git commit -m \"Update all repos\"".to_string(),
-                    "meta git commit --edit              # Per-repo messages".to_string(),
-                    "meta git worktree create feature-x --repo api --repo web".to_string(),
-                ],
-                note: Some(
-                    "Any other git command (meta git pull, meta git log) runs as typed in each repo"
-                        .to_string(),
-                ),
-            }),
-        },
+        info: meta_git_cli::plugin_info(),
         execute,
     });
 }

@@ -34,9 +34,14 @@ macro_rules! prune {
     };
 }
 
+/// What the clone commands take of git's options: there is no such git
+/// command.
+const NO_GIT_OPTIONS: &str = "Git options: none; git has no command of this name.";
+
 /// `meta git clone-missing`
 #[derive(clap::Parser)]
 #[command(
+    after_help = NO_GIT_OPTIONS,
     about = "Clone each project in .meta.yaml that isn't cloned; change no repo that is",
     long_about = concat!(
         "Clone each project in .meta.yaml that isn't cloned; change no repo that is.",
@@ -52,6 +57,7 @@ pub(crate) struct CloneMissingArgs {
 /// `meta git clone-prune`
 #[derive(clap::Parser)]
 #[command(
+    after_help = NO_GIT_OPTIONS,
     about = "Remove each repo in the workspace that no .meta.yaml lists and that holds nothing unpushed",
     long_about = concat!(
         "Remove each repo in the workspace's folder that no .meta.yaml lists and that holds \
@@ -68,6 +74,7 @@ pub(crate) struct ClonePruneArgs {
 /// `meta git clone-sync`
 #[derive(clap::Parser)]
 #[command(
+    after_help = NO_GIT_OPTIONS,
     about = "clone-missing, then clone-prune: the clones become what the .meta.yaml files list",
     long_about = concat!(
         "clone-missing, then clone-prune: clone each project in .meta.yaml that isn't cloned, \

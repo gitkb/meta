@@ -34,7 +34,7 @@ fn main() {
             help: Some(PluginHelp {
                 usage: "meta project <command> [args...]".to_string(),
                 commands: help_commands,
-                command_sections: IndexMap::new(),
+                runs_as_typed: None,
                 examples: vec![
                     "meta project list".to_string(),
                     "meta project list --json".to_string(),

@@ -187,7 +187,6 @@ pub(crate) fn remove_set(
             .common
             .canonicalize()
             .unwrap_or(linked.common.clone());
-        let place = member.path.strip_prefix(&wt_dir).unwrap_or(&member.path);
         // a ref that can't be made stops the remove before anything is deleted
         let (tips, commits) = head_reflog_tips(&member.path, &git_dir).with_context(|| {
             format!(
@@ -196,7 +195,7 @@ pub(crate) fn remove_set(
             )
         })?;
         for tip in &tips {
-            let ref_name = kept_ref(name, place, tip);
+            let ref_name = kept_ref(name, tip);
             if !preview {
                 meta_core::git::run(&git_dir, ["update-ref", ref_name.as_str(), tip])
                     .with_context(|| {
@@ -347,22 +346,14 @@ enum BranchFate {
     Kept(String),
 }
 
-/// Where refs/meta/kept keeps a tip from the worktree at `place` in set
-/// `set`: `refs/meta/kept/<set>/<place>/<commit>`, `root` for the set's root,
-/// and no part starting with a dot, which a ref name can't have.
-fn kept_ref(set: &str, place: &std::path::Path, tip: &str) -> String {
-    let place: Vec<String> = place
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().replace('.', "_"))
-        .filter(|c| !c.is_empty())
-        .collect();
-    let place = if place.is_empty() {
-        "root".to_string()
-    } else {
-        place.join("/")
-    };
+/// Where refs/meta/kept keeps the tip `tip` of a worktree in set `set`, in
+/// the worktree's repository: `refs/meta/kept/<set>/<commit>`. A set's name
+/// ([`validate_worktree_name`]: ASCII letters, digits, `-` and `_`) and a
+/// commit id are valid parts of a ref name; a project's name or place, which
+/// may hold a space, is not used.
+fn kept_ref(set: &str, tip: &str) -> String {
     let short = tip.get(..12).unwrap_or(tip);
-    format!("refs/meta/kept/{set}/{place}/{short}")
+    format!("refs/meta/kept/{set}/{short}")
 }
 
 /// What `rev-list --not` excludes as held elsewhere: remotes, tags,
@@ -526,4 +517,22 @@ fn branch_fate(
     fate().unwrap_or_else(|e| {
         BranchFate::Kept(meta_core::display::escape_lines(&format!("{e:#}")).into_owned())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kept_ref;
+    use meta_git_lib::worktree::helpers::validate_worktree_name;
+
+    #[test]
+    fn every_kept_ref_is_a_ref_name_git_takes() {
+        let sandbox = meta_test_support::isolated!();
+        let tip = "0123456789abcdef0123456789abcdef01234567";
+        for set in ["t", "my-set", "Set_2", "a-b_c-9"] {
+            validate_worktree_name(set).unwrap();
+            let name = kept_ref(set, tip);
+            assert_eq!(name, format!("refs/meta/kept/{set}/0123456789ab"));
+            sandbox.git(&sandbox.work(), &["check-ref-format", &name]);
+        }
+    }
 }

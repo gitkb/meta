@@ -111,7 +111,13 @@ pub(crate) fn handle_create(
     let mut repos_to_create = loop {
         // a repo asked for inside a meta repo that isn't cloned is unknown
         // until that meta repo is: it is cloned first, then planned again
-        let parents = uncloned_meta_parents(&index, &args.repos, name);
+        // and one on the way to a project they depend on (open-source for
+        // open-source/atc), which only that meta repo's .meta.yaml lists
+        let mut wanted: Vec<String> = args.repos.iter().map(|r| r.alias.clone()).collect();
+        if !args.no_deps {
+            wanted.extend(unresolved_dependencies(&index, &args.repos));
+        }
+        let parents = uncloned_meta_parents(&index, &wanted, name);
         if !parents.is_empty() {
             if mode.is_preview() {
                 let places: Vec<_> = parents.iter().map(|r| escape(&r.place)).collect();
@@ -893,7 +899,7 @@ fn plan_repos(
 /// (`name`).
 pub(super) fn uncloned_meta_parents(
     index: &Index,
-    specs: &[RepoSpec],
+    wanted: &[String],
     name: &str,
 ) -> Vec<PlannedRepo> {
     let dir = index.workspace.dir.as_path();
@@ -912,12 +918,12 @@ pub(super) fn uncloned_meta_parents(
             .collect(),
     };
     let mut parents: Vec<PlannedRepo> = Vec::new();
-    for spec in specs {
-        if index.find(&spec.alias).is_ok() {
+    for alias in wanted {
+        if index.find(alias).is_ok() {
             continue;
         }
         for (place, source) in &metas {
-            let on_the_way = spec.alias.starts_with(&format!("{place}/"));
+            let on_the_way = alias.starts_with(&format!("{place}/"));
             if on_the_way
                 && meta_core::gitdir::Checkout::of(source) == meta_core::gitdir::Checkout::Missing
                 && !parents.iter().any(|r| r.place == *place)
@@ -932,6 +938,50 @@ pub(super) fn uncloned_meta_parents(
         }
     }
     parents
+}
+
+/// The `depends_on` of the repos `specs` ask for, and of what they depend on
+/// in turn, that the tree `index` walked names no project of: each as
+/// written and from the place of the meta repo that lists it
+/// (`open-source/atc` and `clients/open-source/atc` for the depends_on of
+/// `clients/desktop`), where an uncloned meta repo may hold it. With
+/// --recursive only: without it, nested projects aren't dependencies.
+fn unresolved_dependencies(index: &Index, specs: &[RepoSpec]) -> Vec<String> {
+    let Some(tree) = index.tree() else {
+        return Vec::new();
+    };
+    let mut todo: Vec<String> = specs
+        .iter()
+        .filter_map(|spec| index.find(&spec.alias).ok())
+        .map(|found| found.key)
+        .collect();
+    let mut seen: Vec<String> = Vec::new();
+    let mut unresolved: Vec<String> = Vec::new();
+    while let Some(key) = todo.pop() {
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key.clone());
+        let Some((_, info)) = tree.get(&key) else {
+            continue;
+        };
+        let prefix = key
+            .strip_suffix(info.path.as_str())
+            .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
+            .unwrap_or("");
+        for dep in &info.depends_on {
+            let placed = format!("{prefix}{dep}");
+            let found = [dep.as_str(), placed.as_str()]
+                .into_iter()
+                .find(|name| tree.contains_key(*name))
+                .map(str::to_string);
+            match found {
+                Some(found) => todo.push(found),
+                None => unresolved.extend([dep.clone(), placed]),
+            }
+        }
+    }
+    unresolved
 }
 
 /// The repos of a set being made: those to make worktrees of, and those it

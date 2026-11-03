@@ -272,6 +272,37 @@ EOF
     [ -d .worktrees/blocked/web ]
 }
 
+@test "worktree create clones the meta repos on the way to what a nested repo depends on, in one go" {
+    # bare remotes: repo NAME [FILE CONTENT]...
+    remote() {
+        local name=$1; shift
+        git init --quiet --initial-branch=main "$TEST_DIR/src-$name"
+        while [ $# -ge 2 ]; do printf '%s\n' "$2" > "$TEST_DIR/src-$name/$1"; shift 2; done
+        git -C "$TEST_DIR/src-$name" add -A
+        git -C "$TEST_DIR/src-$name" commit --quiet --allow-empty -m "$name"
+        git clone --quiet --bare "$TEST_DIR/src-$name" "$TEST_DIR/$name.git"
+    }
+    remote desktop
+    remote sdk
+    remote core
+    remote gitkb .meta.yaml "projects: {core: \"file://$TEST_DIR/core.git\"}" .gitignore "core/"
+    remote open-source .meta.yaml "projects: {sdk: \"file://$TEST_DIR/sdk.git\", gitkb: {repo: \"file://$TEST_DIR/gitkb.git\", meta: true}}" .gitignore "sdk/
+gitkb/"
+    remote clients .meta.yaml "projects: {desktop: {repo: \"file://$TEST_DIR/desktop.git\", depends_on: [open-source/sdk, open-source/gitkb/core]}}" .gitignore "desktop/"
+    cat > .meta.yaml <<EOF
+projects:
+  clients: {repo: "file://$TEST_DIR/clients.git", meta: true}
+  open-source: {repo: "file://$TEST_DIR/open-source.git", meta: true}
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" git worktree create t -r --repo clients/desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"warning"* ]]
+    for repo in clients clients/desktop open-source open-source/sdk open-source/gitkb open-source/gitkb/core; do
+        [ -e ".worktrees/t/$repo/.git" ]
+    done
+}
+
 @test "worktree create -r --strict fails on a bad depends_on after cloning the meta repo on the way" {
     git init --quiet --initial-branch=main "$TEST_DIR/src-desktop"
     git -C "$TEST_DIR/src-desktop" commit --quiet --allow-empty -m desktop
@@ -735,11 +766,11 @@ assert d['totals']['files_changed'] >= 1
     git -C .worktrees/r2/frontend switch --quiet r2
     run "$META_BIN" --dry-run git worktree remove r2
     [ "$status" -eq 0 ]
-    [[ "$output" == *"would save 1 commit only the worktree's HEAD reflog held, in $TEST_DIR/frontend, as refs/meta/kept/r2/frontend/"* ]]
+    [[ "$output" == *"would save 1 commit only the worktree's HEAD reflog held, in $TEST_DIR/frontend, as refs/meta/kept/r2/"* ]]
     [ -z "$(git -C frontend for-each-ref refs/meta/kept)" ]
     run "$META_BIN" git worktree remove r2
     [ "$status" -eq 0 ]
-    [[ "$output" == *"saved 1 commit only the worktree's HEAD reflog held, in $TEST_DIR/frontend, as refs/meta/kept/r2/frontend/${detached:0:12} (see them: git -C $TEST_DIR/frontend log refs/meta/kept/r2/frontend/${detached:0:12}; delete the ref once they're kept elsewhere)"* ]]
+    [[ "$output" == *"saved 1 commit only the worktree's HEAD reflog held, in $TEST_DIR/frontend, as refs/meta/kept/r2/${detached:0:12} (see them: git -C $TEST_DIR/frontend log refs/meta/kept/r2/${detached:0:12}; delete the ref once they're kept elsewhere)"* ]]
     [ ! -e .worktrees/r2 ]
     reachable frontend "$detached"
 
@@ -756,7 +787,7 @@ assert d['totals']['files_changed'] >= 1
 import json, sys
 out = json.load(sys.stdin)
 [k] = out["kept_refs"]
-assert k["ref"].startswith("refs/meta/kept/r1/backend/") and k["commits"] == 1, k
+assert k["ref"].startswith("refs/meta/kept/r1/") and k["commits"] == 1, k
 [b] = out["branches"]
 assert b["branch"] == "r1" and b["action"] == "deleted", b
 ' <<<"$output"
@@ -785,6 +816,30 @@ assert b["branch"] == "r1" and b["action"] == "deleted", b
     [[ "$output" == *'"action": "deleted"'* ]]
     [[ "$output" != *"kept_refs"* ]]
     [ -z "$(git -C frontend branch --list r4)" ]
+}
+
+@test "worktree remove saves the commits of a project whose name has a space" {
+    git init --quiet --initial-branch=main "my app"
+    git -C "my app" commit --quiet --allow-empty -m init
+    cat > .meta.yaml <<EOF
+projects:
+  my app: {repo: "git@github.com:org/app.git", path: "my app"}
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" git worktree create spaced --repo "my app" --no-deps
+    [ "$status" -eq 0 ]
+    git -C ".worktrees/spaced/my app" switch --quiet --detach
+    git -C ".worktrees/spaced/my app" commit --quiet --allow-empty -m "detached in my app"
+    local detached
+    detached=$(git -C ".worktrees/spaced/my app" rev-parse HEAD)
+    git -C ".worktrees/spaced/my app" switch --quiet spaced
+    run "$META_BIN" git worktree remove spaced
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"as refs/meta/kept/spaced/${detached:0:12}"* ]]
+    [ ! -e .worktrees/spaced ]
+    git -C "my app" check-ref-format "refs/meta/kept/spaced/${detached:0:12}"
+    git -C "my app" gc --quiet --prune=now
+    git -C "my app" cat-file -e "$detached^{commit}"
 }
 
 @test "worktree remove refuses dirty worktree without --force" {

@@ -206,7 +206,7 @@ from inside a set, they act on the workspace the set was made from.
 Before it deletes a worktree, `remove` saves the commits only that worktree's
 HEAD reflog holds (work left on a detached HEAD, reset, amended or rebased
 away), which git deletes with the worktree, under
-`refs/meta/kept/<set>/<repo>/<commit>` in the workspace's repo, and says how to
+`refs/meta/kept/<set>/<commit>` in that repo of the workspace, and says how to
 see them; delete the ref once they're kept elsewhere. `clone-prune` counts
 them as work.
 

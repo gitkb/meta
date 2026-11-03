@@ -99,7 +99,7 @@ pub struct DestroyOutput {
 pub struct KeptRef {
     /// The workspace's checkout of the repository
     pub repo: String,
-    /// `refs/meta/kept/<set>/<place>/<commit>`
+    /// `refs/meta/kept/<set>/<commit>`
     #[serde(rename = "ref")]
     pub ref_name: String,
     /// How many commits it keeps that nothing else does

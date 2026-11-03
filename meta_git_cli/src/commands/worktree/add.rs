@@ -59,7 +59,8 @@ pub(crate) fn handle_add(
     let mut index = Index::new(&configs.here);
     // As in create: a meta repo that isn't cloned on the way to a repo asked
     // for is cloned first, and a repo asked for that isn't cloned too
-    let parents = super::create::uncloned_meta_parents(&index, repo_specs, name);
+    let wanted: Vec<String> = repo_specs.iter().map(|r| r.alias.clone()).collect();
+    let parents = super::create::uncloned_meta_parents(&index, &wanted, name);
     if !parents.is_empty() {
         if mode.is_preview() {
             let places: Vec<_> = parents.iter().map(|r| escape(&r.place)).collect();

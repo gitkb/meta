@@ -147,7 +147,8 @@ pub fn worktree_start(
     let on = meta_core::git::current_branch(repo_path)?;
     if lookup(repo_path, ["config", "--get", "remote.origin.url"])?.is_some() {
         meta_core::out::warn(format!(
-            "{}: origin names no default branch (origin/HEAD), so '{}' starts from HEAD{};              give the commit-ish to start from, or set it with: git -C {} remote set-head origin --auto",
+            "{}: origin names no default branch (origin/HEAD), so '{}' starts from HEAD{}; \
+             give the commit-ish to start from, or set it with: git -C {} remote set-head origin --auto",
             escape_path(repo_path),
             escape(branch),
             on.as_deref()

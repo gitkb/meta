@@ -223,6 +223,34 @@ EOF
     [ ! -e unrelated ]
 }
 
+@test "worktree create clones the meta repo on the way to a nested repo it asks for, in one go" {
+    # a remote meta repo clients that lists desktop; neither is cloned
+    git init --quiet --initial-branch=main "$TEST_DIR/src-desktop"
+    git -C "$TEST_DIR/src-desktop" commit --quiet --allow-empty -m desktop
+    git clone --quiet --bare "$TEST_DIR/src-desktop" "$TEST_DIR/desktop.git"
+    git init --quiet --initial-branch=main "$TEST_DIR/src-clients"
+    printf 'projects:\n  desktop: "file://%s/desktop.git"\n' "$TEST_DIR" > "$TEST_DIR/src-clients/.meta.yaml"
+    echo "desktop/" > "$TEST_DIR/src-clients/.gitignore"
+    git -C "$TEST_DIR/src-clients" add -A
+    git -C "$TEST_DIR/src-clients" commit --quiet -m clients
+    git clone --quiet --bare "$TEST_DIR/src-clients" "$TEST_DIR/clients.git"
+    cat > .meta.yaml <<EOF
+projects:
+  clients: {repo: "file://$TEST_DIR/clients.git", meta: true}
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" --dry-run git worktree create t -r --repo clients/desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Would clone the meta repos on the way to the repos asked for (clients)"* ]]
+    [ ! -e clients ]
+    run "$META_BIN" git worktree create t -r --repo clients/desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Cloning 1 repo the set needs: clients"* ]]
+    [[ "$output" == *"Cloning 1 repo the set needs: clients/desktop"* ]]
+    [ -e .worktrees/t/clients/desktop/.git ]
+    [ -e .worktrees/t/clients/.git ]
+}
+
 @test "worktree create names every repo it couldn't clone, and makes nothing" {
     git clone --quiet --bare frontend "$TEST_DIR/frontend.git"
     cat > .meta.yaml <<EOF
@@ -372,6 +400,12 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"(new from feature)"* ]]
     [ "$(git -C .worktrees/third-set/frontend rev-parse HEAD)" = "$(git -C frontend rev-parse feature)" ]
+    # a remote that names no default branch: HEAD, with a warning in one line
+    git -C backend remote set-head origin --delete
+    run "$META_BIN" git worktree create fourth-set --repo backend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"so 'fourth-set' starts from HEAD (feature); give the commit-ish to start from, or set it with: git -C "*"remote set-head origin --auto"* ]]
+    [[ "$output" == *"backend -> fourth-set (new from HEAD (feature))"* ]]
 }
 
 @test "worktree add rejects dot-alias" {

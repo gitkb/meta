@@ -62,8 +62,8 @@ Control which repos run the command:
 ```bash
 # Only these repos: each value is a repo's .meta.yaml name or its path from the workspace root
 meta --include api,worker git status
-meta --include libs/core,. git status   # `.` is the root repo
-meta -r --include open-source/sdk/core git status   # a repo of a nested meta repo needs -r
+meta --include services/api,. git status   # services/api: the path of a project this .meta.yaml lists; `.` is the root repo
+meta -r --include open-source/sdk/core git status   # a repo of a nested meta repo (sdk/core in open-source/.meta.yaml) needs -r
 
 # Skip these repos
 meta --exclude legacy-service git push

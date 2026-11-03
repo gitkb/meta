@@ -18,6 +18,7 @@ use meta_git_lib::worktree::lease;
 use meta_git_lib::worktree::plan::{Found, Index, PlannedRepo};
 use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
 use meta_git_lib::worktree::types::{CreateOutput, CreateRepoEntry};
+use meta_git_lib::worktree::RepoSpec;
 
 use super::cli_types::CreateArgs;
 use meta_core::display::shell_quote;
@@ -105,6 +106,26 @@ pub(crate) fn handle_create(
     // projects), so it plans again until none is missing
     let mut rounds = 0;
     let mut repos_to_create = loop {
+        // a repo asked for inside a meta repo that isn't cloned is unknown
+        // until that meta repo is: it is cloned first, then planned again
+        let parents = uncloned_meta_parents(&index, &args.repos, name);
+        if !parents.is_empty() {
+            if mode.is_preview() {
+                let places: Vec<_> = parents.iter().map(|r| escape(&r.place)).collect();
+                outln!(
+                    "[DRY RUN] Would clone the meta repos on the way to the repos asked for \
+                     ({}), then plan worktree set '{}' again; nothing was cloned or created.",
+                    places.join(", "),
+                    escape(name)
+                )?;
+                return Ok(None);
+            }
+            anyhow::ensure!(rounds < 16, "{}", not_cloned_error(&parents, recursive));
+            clone_missing(&index, &parents)?;
+            rounds += 1;
+            index = index_of()?;
+            continue;
+        }
         let planned = plan_repos(&index, &args, strict, verbose, rounds == 0)?;
         if planned.missing.is_empty() {
             break planned.repos;
@@ -855,6 +876,53 @@ fn plan_repos(
         order(a).cmp(&order(b)).then_with(|| a.place.cmp(&b.place))
     });
     Ok(Planned { repos, missing })
+}
+
+/// The meta repos that aren't cloned on the way to a repo `specs` ask for
+/// that `index` doesn't know (`clients` for `clients/desktop`, whose place
+/// only `clients/.meta.yaml` lists), each once, on the set's branch
+/// (`name`).
+pub(super) fn uncloned_meta_parents(
+    index: &Index,
+    specs: &[RepoSpec],
+    name: &str,
+) -> Vec<PlannedRepo> {
+    let dir = index.workspace.dir.as_path();
+    let metas: Vec<(String, std::path::PathBuf)> = match index.tree() {
+        Some(tree) => tree
+            .iter()
+            .filter(|(_, (_, info))| info.meta)
+            .map(|(place, (source, _))| (place.clone(), source.clone()))
+            .collect(),
+        None => index
+            .workspace
+            .projects
+            .iter()
+            .filter(|p| p.meta)
+            .map(|p| (p.path.clone(), dir.join(&p.path)))
+            .collect(),
+    };
+    let mut parents: Vec<PlannedRepo> = Vec::new();
+    for spec in specs {
+        if index.find(&spec.alias).is_ok() {
+            continue;
+        }
+        for (place, source) in &metas {
+            let on_the_way = spec.alias.starts_with(&format!("{place}/"));
+            if on_the_way
+                && meta_core::gitdir::Checkout::of(source) == meta_core::gitdir::Checkout::Missing
+                && !parents.iter().any(|r| r.place == *place)
+            {
+                parents.push(PlannedRepo {
+                    project: place.clone(),
+                    source: source.clone(),
+                    place: place.clone(),
+                    branch: resolve_branch(name, None, None),
+                });
+            }
+        }
+    }
+    parents
 }
 
 /// The repos of a set being made: those to make worktrees of, and those it

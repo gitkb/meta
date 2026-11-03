@@ -239,15 +239,18 @@ EOF
 
 # ============ --update flag ============
 
-@test "init claude --update refreshes skill files" {
-    mkdir -p .meta/skills/meta-workspace
-    echo "old content" > .meta/skills/meta-workspace/SKILL.md
+@test "init claude --update refreshes skill files meta wrote, and keeps one the user edited" {
+    local root="$BATS_TEST_DIRNAME/.."
+    mkdir -p .meta/skills/meta-workspace .meta/skills/meta-git
+    # as an older meta wrote it
+    cp "$root/meta_cli/tests/fixtures/meta-workspace-SKILL.md" .meta/skills/meta-workspace/SKILL.md
+    echo "my own notes" > .meta/skills/meta-git/SKILL.md
 
     run "$META_BIN" init claude --update
     [ "$status" -eq 0 ]
-
-    run grep "Meta Workspace Skill" .meta/skills/meta-workspace/SKILL.md
-    [ "$status" -eq 0 ]
+    cmp "$root/claude-plugin/skills/meta-workspace/SKILL.md" .meta/skills/meta-workspace/SKILL.md
+    [ "$(cat .meta/skills/meta-git/SKILL.md)" = "my own notes" ]
+    [[ "$output" == *"Kept $TEST_DIR/.meta/skills/meta-git/SKILL.md (changed since meta wrote it"* ]]
 }
 
 @test "init claude --update keeps a skill folder meta did not mark" {
@@ -301,15 +304,16 @@ EOF
 
 # ============ --force flag ============
 
-@test "init claude --force overwrites skill files" {
-    mkdir -p .meta/skills/meta-workspace
-    echo "custom content" > .meta/skills/meta-workspace/SKILL.md
+@test "init claude --force overwrites skill files meta wrote, and keeps one the user edited" {
+    local root="$BATS_TEST_DIRNAME/.."
+    mkdir -p .meta/skills/meta-workspace .meta/skills/meta-git
+    cp "$root/meta_cli/tests/fixtures/meta-workspace-SKILL.md" .meta/skills/meta-workspace/SKILL.md
+    echo "custom content" > .meta/skills/meta-git/SKILL.md
 
     run "$META_BIN" init claude --force
     [ "$status" -eq 0 ]
-
-    run grep "Meta Workspace Skill" .meta/skills/meta-workspace/SKILL.md
-    [ "$status" -eq 0 ]
+    cmp "$root/claude-plugin/skills/meta-workspace/SKILL.md" .meta/skills/meta-workspace/SKILL.md
+    [ "$(cat .meta/skills/meta-git/SKILL.md)" = "custom content" ]
 }
 
 @test "init claude --force overwrites rule files" {

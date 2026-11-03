@@ -623,6 +623,18 @@ within() {
     [ ! -e local-data ]
 }
 
+@test "meta git clone-prune keeps a leftover whose commit only the reflog holds" {
+    with_remotes
+    git clone --quiet remotes/shared.git detached
+    git -C detached switch --quiet --detach
+    git -C detached commit --quiet --allow-empty -m "made on a detached HEAD"
+    git -C detached switch --quiet main
+    run "$META_BIN" git clone-prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Kept detached: it holds 1 commit only in the reflog (on no branch, tag or remote): "*"made on a detached HEAD"* ]]
+    [ -d detached/.git ]
+}
+
 @test "meta git clone-sync clones what is missing and prunes what no .meta.yaml lists" {
     with_remotes
     rm -rf shared

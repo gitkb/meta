@@ -56,9 +56,24 @@ pub(crate) fn handle_add(
 
     // Check every repo before adding any: one refused after others were
     // added would leave a set the caller didn't ask for
-    let index = Index::new(&configs.here);
-    // A repo asked for that isn't cloned is cloned first, as clone-missing
-    // would, and as create does
+    let mut index = Index::new(&configs.here);
+    // As in create: a meta repo that isn't cloned on the way to a repo asked
+    // for is cloned first, and a repo asked for that isn't cloned too
+    let parents = super::create::uncloned_meta_parents(&index, repo_specs, name);
+    if !parents.is_empty() {
+        if mode.is_preview() {
+            let places: Vec<_> = parents.iter().map(|r| escape(&r.place)).collect();
+            outln!(
+                "[DRY RUN] Would clone the meta repos on the way to the repos to add ({}), \
+                 then add them to worktree set '{}'; nothing was cloned or added.",
+                places.join(", "),
+                escape(name)
+            )?;
+            return Ok(());
+        }
+        super::create::clone_missing(&index, &parents)?;
+        index = Index::new(&configs.here);
+    }
     let mut missing: Vec<PlannedRepo> = Vec::new();
     for spec in repo_specs {
         let found = index.find(&spec.alias)?;

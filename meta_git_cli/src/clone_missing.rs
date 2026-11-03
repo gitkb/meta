@@ -25,7 +25,8 @@ macro_rules! no_pull {
 macro_rules! prune {
     () => {
         "\n\nA repo is removed only when git shows nothing in it that isn't on a \
-                     remote: no uncommitted or untracked files, stashes, commits on no remote \
+                     remote: no uncommitted or untracked files, stashes, commits on no remote (those \
+                     only a reflog holds too) \
                      or linked worktrees, and no git repo inside it. A repo that holds \
                      anything is kept and named with what it holds. One that holds only files \
                      git ignores (.env, target/) is kept too, and named with them, unless \

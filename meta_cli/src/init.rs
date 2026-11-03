@@ -89,45 +89,20 @@ const RULE_DESTRUCTIVE_COMMANDS: &str =
 /// in the settings, so the rule never claims a protection that isn't there.
 const GUARD_SECTION: &str = "## Blocked by `agent guard`";
 
-/// Every flat `.claude/skills/<name>.md` file older releases of meta wrote
-/// (a layout Claude Code doesn't load), by name and git blob id: the
-/// `.claude/skills/meta-*.md` files in the history of gitkb/meta and
-/// gitkb/meta_cli. `--update` and `--force` remove such a file only while
-/// it is exactly one of these, so no file anyone changed is deleted.
-const OLD_FLAT_SKILLS: &[(&str, &str)] = &[
-    ("meta-build", "0aabc8b10d896c601425ee43409ce704acd238e6"),
-    ("meta-build", "1363979118fb2618294058080bd82e2c6f5808f6"),
-    ("meta-core", "9015bc7937fad5ec437f5e6fee8e8fce1a9553b8"),
-    ("meta-core", "fe9948125513e16bdf387c39b9d770c70db64432"),
-    ("meta-discover", "8efa51364c6fdd8759f20715f80770d434ff071e"),
-    ("meta-discover", "ba4268b88bb63b406d7c0c552bbdc2b415457035"),
-    ("meta-exec", "02c97c07ceb5902dc6a8af49b61c0d332c066912"),
-    ("meta-exec", "0f4571268d948b4a0807f59f63f8e57503dcf9cf"),
-    ("meta-exec", "3d747e012b411f1f27266ea431d4b10182da7160"),
-    ("meta-exec", "48278c03ccee4500a175e88dcb96265e3c612fad"),
-    ("meta-exec", "9a687fdec10538efcc88ec62b13c381af1816adc"),
-    ("meta-exec", "f2a0335735560d11196ed62185f9927027653e96"),
-    ("meta-git", "45318346fd42a7a71dd8fb79cab6077dc0e218b6"),
-    ("meta-git", "45a1ad37b717d6e58a6fab327822f58a36db8ca7"),
-    ("meta-git", "5e83eb1e5f5fc0e051a852cf6931bfeecf74e58e"),
-    ("meta-git", "991d149317e54f15c54db9581a2a5432065520fd"),
-    ("meta-git", "b3a327990f872b55c19826177402b94738902788"),
-    ("meta-plugins", "af4e7a19bea4b5a1b7e2fb6f6a93d0351998dfc1"),
-    ("meta-plugins", "b2167f8d729bc8c4488182137b906d1b54fd51eb"),
-    ("meta-safety", "04629a5ac132aa1059cd097c891520ed8cf6251e"),
-    ("meta-safety", "45343fdf5dbfad4b4f4ae7ef4f35ec60c7d01991"),
-    ("meta-safety", "5a7c24cc1a17f0be08daabee9420cea5c0aa41d2"),
-    ("meta-safety", "aa79c88fc02d458fd16201b896adaf066e0c3063"),
-    ("meta-workspace", "32bc1999539013cf755e07701c30bd233e7a5f6f"),
-    ("meta-workspace", "7288debb80f4454f59a66c60c6bea6204a0821ef"),
-    ("meta-workspace", "cc2228e2cf2c55f6bed7488f421bb24b682d84ab"),
-    ("meta-workspace", "ddd9185ebac0c659fa7761adb4b599fd15d19176"),
-    ("meta-worktree", "07b7c14fd8381f9c543142db8c1b87c3b30d3795"),
-    ("meta-worktree", "277f9fd0672e7fa06acf684276e0a7b9825598aa"),
-    ("meta-worktree", "28781ae1b494ba8e68d9a8b176fa5363f99dcdaf"),
-    ("meta-worktree", "47fd447957bf9b0fa3ad50b880f6a1b74e755b9c"),
-    ("meta-worktree", "6e0bc8b5b0869f2446c2dbd94c585a36a7dd7fe4"),
-];
+/// Every skill file meta ever wrote, by its path under a skills folder
+/// (`meta-exec.md`, the flat layout of older releases that Claude Code
+/// doesn't load; `meta-exec/SKILL.md`) and git blob id. `--update` and
+/// `--force` replace or remove a skill file only while it is exactly one of
+/// these, so no file anyone changed is lost.
+const SHIPPED_SKILLS: &str = include_str!("shipped-skills.txt");
+
+/// Whether meta wrote `blob` (a git blob id) at `path` ([`SHIPPED_SKILLS`]).
+fn shipped(path: &str, blob: &str) -> bool {
+    SHIPPED_SKILLS
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .any(|(at, id)| at == path && id == blob)
+}
 
 /// All available rules with their filenames
 const RULES: &[(&str, &str)] = &[
@@ -442,12 +417,17 @@ fn hooks_in(path: &Path) -> Vec<String> {
 
 /// The git blob id of the file at `path` with its line endings as git
 /// stores them (`\r\n` read as `\n`, as a Windows checkout writes them):
-/// what [`OLD_FLAT_SKILLS`] lists.
+/// what [`SHIPPED_SKILLS`] lists.
 fn blob_id(dir: &Path, path: &Path) -> Result<String> {
+    let text = fs::read(path).with_context(|| format!("Failed to read {}", escape_path(path)))?;
+    blob_of(dir, &String::from_utf8_lossy(&text))
+}
+
+/// The git blob id of `text`, its `\r\n` read as `\n`.
+fn blob_of(dir: &Path, text: &str) -> Result<String> {
     use std::io::Write;
     use std::process::Stdio;
-    let text = fs::read(path).with_context(|| format!("Failed to read {}", escape_path(path)))?;
-    let text = String::from_utf8_lossy(&text).replace("\r\n", "\n");
+    let text = text.replace("\r\n", "\n");
     let mut child = meta_core::git::git(dir)
         .args(["hash-object", "--stdin"])
         .stdin(Stdio::piped())
@@ -481,19 +461,24 @@ fn without_section(text: &str, heading: &str) -> String {
 }
 
 /// Remove, with `overwrite`, each flat skill file in `skills_dir` an older
-/// meta wrote ([`OLD_FLAT_SKILLS`]); name the ones left. How many were left
+/// meta wrote ([`SHIPPED_SKILLS`]); name the ones left. How many were left
 /// that `overwrite` would remove.
 fn remove_old_flat_skills(skills_dir: &Path, overwrite: bool, init: &Init) -> Result<usize> {
     let mut left = 0;
-    let mut names: Vec<&str> = OLD_FLAT_SKILLS.iter().map(|(name, _)| *name).collect();
+    let mut names: Vec<&str> = SHIPPED_SKILLS
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .map(|(at, _)| at)
+        .filter(|at| !at.contains('/') && at.ends_with(".md"))
+        .collect();
     names.dedup();
     for name in names {
-        let path = skills_dir.join(format!("{name}.md"));
+        let path = skills_dir.join(name);
         if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
             continue;
         }
         let blob = blob_id(skills_dir, &path)?;
-        let meta_wrote = OLD_FLAT_SKILLS.contains(&(name, blob.as_str()));
+        let meta_wrote = shipped(name, &blob);
         if meta_wrote && overwrite {
             init.remove_file(&path)?;
         } else if meta_wrote {
@@ -599,6 +584,17 @@ fn install_skills_with(
                 escape_path(&path)
             )?;
             report.skipped += 1;
+            continue;
+        }
+        // An edit of the user's is never written over: only a file that is
+        // exactly one meta wrote is replaced
+        if path.exists() && !shipped(&format!("{name}/SKILL.md"), &blob_id(root, &path)?) {
+            outln!(
+                "{} {} (changed since meta wrote it; to get meta's version, move it \
+                 away and run `meta init claude --update`)",
+                "Kept".yellow(),
+                escape_path(&path)
+            )?;
             continue;
         }
         init.create_dir_all(&root.join(tool_dir.join(name)))?;
@@ -976,6 +972,15 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    /// Skills as an older meta wrote them, byte for byte
+    const OLD_WORKSPACE_SKILL: &str = include_str!("../tests/fixtures/meta-workspace-SKILL.md");
+    const OLD_GIT_SKILL: &str = include_str!("../tests/fixtures/meta-git-SKILL.md");
+
+    /// The skill meta ships as `name`
+    fn skill(name: &str) -> &'static str {
+        SKILLS.iter().find(|(n, _)| *n == name).unwrap().1
+    }
+
     /// A real run with `agent` installed
     const RUN: Init = Init {
         mode: ExecutionMode::Execute,
@@ -1073,6 +1078,39 @@ mod tests {
         fs::write(skills.join("meta-discover.md"), crlf).unwrap();
         install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
         assert!(!skills.join("meta-discover.md").exists());
+    }
+
+    #[test]
+    fn every_skill_meta_ships_is_listed_as_meta_s() {
+        let dir = tempdir().unwrap();
+        for (name, content) in SKILLS {
+            let blob = blob_of(dir.path(), content).unwrap();
+            assert!(
+                shipped(&format!("{name}/SKILL.md"), &blob),
+                "add `{name}/SKILL.md {blob}` to meta_cli/src/shipped-skills.txt"
+            );
+        }
+    }
+
+    #[test]
+    fn update_keeps_a_skill_the_user_edited() {
+        let dir = tempdir().unwrap();
+        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
+        let skill = dir.path().join(".meta/skills/meta-workspace/SKILL.md");
+        let mine = format!("{}\nmy own note\n", fs::read_to_string(&skill).unwrap());
+        fs::write(&skill, &mine).unwrap();
+        for force in [false, true] {
+            install_claude_integration_to(dir.path(), force, !force, &RUN).unwrap();
+            assert_eq!(fs::read_to_string(&skill).unwrap(), mine);
+        }
+        // one meta wrote, of an older version, is replaced
+        let other = dir.path().join(".meta/skills/meta-git/SKILL.md");
+        assert!(shipped(
+            "meta-git/SKILL.md",
+            &blob_id(dir.path(), &other).unwrap()
+        ));
+        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        assert!(other.exists());
     }
 
     #[test]
@@ -1233,9 +1271,10 @@ mod tests {
         fs::create_dir_all(&meta_skill_dir).unwrap();
         fs::create_dir_all(&rules_dir).unwrap();
 
-        // Create existing files with different content
+        // Create existing files with different content: the skill as an
+        // older meta wrote it
         let existing_skill = meta_skill_dir.join("SKILL.md");
-        fs::write(&existing_skill, "custom content").unwrap();
+        fs::write(&existing_skill, OLD_WORKSPACE_SKILL).unwrap();
 
         let existing_rule = rules_dir.join("meta-workspace-discipline.md");
         fs::write(&existing_rule, "custom rule").unwrap();
@@ -1247,7 +1286,7 @@ mod tests {
 
         // Should overwrite with embedded content
         let skill_content = fs::read_to_string(&existing_skill).unwrap();
-        assert!(skill_content.contains("Meta Workspace Skill"));
+        assert_eq!(skill_content, skill("meta-workspace"));
 
         let rule_content = fs::read_to_string(&existing_rule).unwrap();
         assert!(rule_content.contains("Meta Workspace Discipline"));
@@ -1272,9 +1311,9 @@ mod tests {
         fs::create_dir_all(&meta_skill_dir).unwrap();
         fs::create_dir_all(&rules_dir).unwrap();
 
-        // Create existing files
+        // Create existing files: the skill as an older meta wrote it
         let existing_skill = meta_skill_dir.join("SKILL.md");
-        fs::write(&existing_skill, "old skill content").unwrap();
+        fs::write(&existing_skill, OLD_WORKSPACE_SKILL).unwrap();
 
         let existing_rule = rules_dir.join("meta-workspace-discipline.md");
         fs::write(&existing_rule, "old rule content").unwrap();
@@ -1291,8 +1330,9 @@ mod tests {
 
         // Skills and rules should be updated
         let skill_content = fs::read_to_string(&existing_skill).unwrap();
-        assert!(
-            skill_content.contains("Meta Workspace Skill"),
+        assert_eq!(
+            skill_content,
+            skill("meta-workspace"),
             "skill should be updated"
         );
 
@@ -1656,15 +1696,13 @@ mod tests {
                 target.join(suffix)
             };
             fs::create_dir_all(file.parent().unwrap()).unwrap();
-            fs::write(&file, "custom skill").unwrap();
+            fs::write(&file, OLD_GIT_SKILL).unwrap();
             fs::create_dir_all(link.parent().unwrap()).unwrap();
             symlink_dir(&target, &link).unwrap();
             install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
-            assert_eq!(fs::read_to_string(&file).unwrap(), "custom skill");
+            assert_eq!(fs::read_to_string(&file).unwrap(), OLD_GIT_SKILL);
             install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
-            assert!(fs::read_to_string(&file)
-                .unwrap()
-                .contains("Meta Git Skill"));
+            assert_eq!(fs::read_to_string(&file).unwrap(), skill("meta-git"));
             assert_eq!(fs::read_link(&link).unwrap(), target);
         }
     }

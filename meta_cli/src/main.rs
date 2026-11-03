@@ -544,10 +544,9 @@ fn command_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Result
             if !cli.json {
                 let owner = match tool {
                     Some(tool) => format!(
-                        "`meta {named}` is adapted by meta-{}: meta's own command, not `{} {}` in each repo.",
+                        "`meta {named}` is adapted by meta-{}: meta's own command, not {} run as typed.",
                         escape(&plugin.word),
-                        escape(tool),
-                        escape(verb)
+                        escape(tool)
                     ),
                     None => format!("`meta {named}` is a command of meta-{}.", escape(&plugin.word)),
                 };

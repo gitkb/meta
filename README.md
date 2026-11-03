@@ -387,7 +387,7 @@ Help says who answers each command. `meta --help` lists each plugin's own comman
 
 ```
 $ meta git clone --help
-`meta git clone` is adapted by meta-git: meta's own command, not `git clone` in each repo.
+`meta git clone` is adapted by meta-git: meta's own command, not git run as typed.
 ...
 Git options: of git clone's own, only --depth, given to each clone.
 

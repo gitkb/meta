@@ -49,7 +49,7 @@ setup() {
     [[ "$output" == *"Usage: meta git worktree"* ]]
     [[ "$output" == *"--dry-run"* ]]
     [[ "$output" == *"--json"* ]]
-    [[ "$output" != *"Adapted Commands"* ]]
+    [[ "$output" != *"Commands meta-git adapts:"* ]]
 
     run "$META_BIN" git worktree create --help
     [ "$status" -eq 0 ]
@@ -107,7 +107,7 @@ setup() {
         [ ! -e "$BATS_TEST_TMPDIR/git-ran" ]
         [[ "$output" == *"--dry-run"* ]]
         [[ "$output" == *"--recursive"* ]]
-        [[ "$output" != *"Adapted Commands"* ]]
+        [[ "$output" != *"Commands meta-git adapts:"* ]]
     done
 }
 
@@ -245,6 +245,9 @@ EOF
     adapted=$("$META_BIN_DIR/meta-git" --meta-plugin-info | python3 -c 'import json,sys; print(", ".join(json.load(sys.stdin)["help"]["commands"]))')
     [[ "$output" == *"$adapted"* ]]
 
+    run "$META_BIN" git --help
+    [[ "$output" == *"Pass-through: any other git command runs as typed in each selected repo, git's own extensions on PATH included"* ]]
+
     for words in "fake --help" "help fake" "fake"; do
         run "$META_BIN" $words
         [ "$status" -eq 0 ]
@@ -257,7 +260,7 @@ EOF
     for words in "git clone --help" "help git clone" "git commit --help" "git update -h"; do
         run "$META_BIN" $words
         [ "$status" -eq 0 ]
-        [[ "${lines[0]}" == '`meta git '*'` is adapted by meta-git: meta'"'"'s own command, not `git '* ]]
+        [[ "${lines[0]}" == '`meta git '*'` is adapted by meta-git: meta'"'"'s own command, not git run as typed.' ]]
         [[ "$output" == *"Git options: "* ]]
     done
     for words in "git pull --help" "help git pull"; do
@@ -282,9 +285,9 @@ EOF
 
     run "$META_BIN" plugin list
     [ "$status" -eq 0 ]
-    line=$(grep '^meta git <name>' <<<"$output")
-    [[ "$line" == *"hello"* ]]
-    [[ "$line" != *"commit"* ]]
+    names=$(grep '^meta git <name>' <<<"$output" | sed 's/^meta git <name> *//; s/, /\n/g')
+    grep -qx hello <<<"$names"
+    ! grep -qx commit <<<"$names"
 
     run "$META_BIN" git hello
     [ "$status" -eq 0 ]

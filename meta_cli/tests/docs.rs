@@ -447,6 +447,8 @@ struct Sandbox {
     bin: PathBuf,
     env: Vec<(&'static str, PathBuf)>,
     path: String,
+    /// What [`Sandbox::git_adapts`] answers
+    adapted: Vec<String>,
 }
 
 impl Sandbox {
@@ -500,7 +502,7 @@ impl Sandbox {
             ));
         }
         fs::write(ws.join(".meta.yaml"), projects).unwrap();
-        let sandbox = Self {
+        let mut sandbox = Self {
             _temp: temp,
             ws,
             bin: bin.to_path_buf(),
@@ -509,7 +511,9 @@ impl Sandbox {
                 "{0}:{0}/examples:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
                 bin.display()
             ),
+            adapted: Vec::new(),
         };
+        sandbox.adapted = sandbox.git_adapts();
         let init = sandbox.command("git").args(["init", "-q"]).status();
         assert!(init.unwrap().success());
         // a workspace meta refuses would refuse every command alike
@@ -546,7 +550,7 @@ impl Sandbox {
 
     /// The git commands meta's git plugin answers itself, as its info
     /// declares them; any other word after `meta git` goes to git.
-    fn adapted(&self) -> Vec<String> {
+    fn git_adapts(&self) -> Vec<String> {
         let info = self
             .command(self.bin.join("meta-git"))
             .arg("--meta-plugin-info")
@@ -597,7 +601,7 @@ impl Sandbox {
         // `meta git WORD` passes WORD to git: it has to be one of git's
         let git = line.words.iter().position(|word| word == "git")?;
         let word = line.words.get(git + 1)?;
-        if word.starts_with('-') || self.adapted().contains(word) {
+        if word.starts_with('-') || self.adapted.contains(word) {
             return None;
         }
         let out = self.command("git").args([word, "-h"]).output().unwrap();

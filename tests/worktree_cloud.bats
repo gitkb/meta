@@ -132,7 +132,7 @@ assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
     [[ "$output" == *"invalid value 'notavalue' for '--ttl <DURATION>'"* ]]
     # Not "error: error:", and not the whole git help after it
     [[ "$output" != *"error: error:"* ]]
-    [[ "$output" != *"Pass-through Commands"* ]]
+    [[ "$output" != *"Commands meta-git adapts:"* ]]
     [ ! -e .worktrees/ttl-bad ]
 }
 

@@ -168,9 +168,9 @@ pub(crate) fn handle_add(
 
     // As in create, a new branch starts at its pin when a member of the
     // set, there already or added now, pins it
-    let places = existing
-        .iter()
-        .map(|r| r.alias.clone())
+    let places = meta_cli::worktree::discover_worktree_members_nested(&wt_dir)?
+        .into_iter()
+        .map(|r| r.alias)
         .chain(planned.iter().map(|(_, _, place)| place.clone()));
     let pins = crate::pins::of_set(&configs.here, places)?;
     let pinned_start = |spec: &RepoSpec, source: &std::path::Path, place: &str, fetch| {

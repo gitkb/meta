@@ -309,3 +309,74 @@ fn update_in_the_workspace_leaves_a_pinned_checkout_on_its_branch() {
         "main"
     );
 }
+
+#[test]
+fn a_pin_written_in_a_nested_meta_repo_applies_to_the_repos_added_later() {
+    let sandbox = Sandbox::new();
+    let (ws, v1, _) = workspace(&sandbox, "[]");
+    // app moves into the nested meta repo `group`, which pins lib
+    let group = sandbox.repo(&ws.join("group"));
+    let app_url = sandbox.work().join("up/app.git");
+    fs::write(
+        group.join(".meta.yaml"),
+        format!(
+            "projects:\n  app:\n    repo: {}\n    depends_on: [{{lib: v1}}]\n",
+            app_url.display()
+        ),
+    )
+    .unwrap();
+    fs::write(group.join(".gitignore"), "app\n").unwrap();
+    sandbox.git(&group, &["add", "."]);
+    sandbox.git(&group, &["commit", "-qm", "group"]);
+    let group_url = sandbox.work().join("up/group.git");
+    sandbox.git(
+        &sandbox.work().join("up"),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            group.to_str().unwrap(),
+            "group.git",
+        ],
+    );
+    sandbox.git(
+        &group,
+        &["remote", "add", "origin", group_url.to_str().unwrap()],
+    );
+    sandbox.git(&group, &["fetch", "-q", "origin"]);
+    sandbox.git(&group, &["remote", "set-head", "origin", "main"]);
+    sandbox.git(&group, &["clone", "-q", app_url.to_str().unwrap(), "app"]);
+    let lib_url = sandbox.work().join("up/lib.git");
+    write_config(
+        &sandbox,
+        &ws,
+        &format!(
+            "projects:\n  group:\n    repo: {}\n    meta: true\n  lib:\n    repo: {}\n",
+            group_url.display(),
+            lib_url.display()
+        ),
+    );
+
+    let out = meta_git(
+        &sandbox,
+        &ws,
+        "git worktree create",
+        &["t", "-r", "--no-deps", "--repo", "group/app"],
+        json!({}),
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    let out = meta_git(
+        &sandbox,
+        &ws,
+        "git worktree add",
+        &["t", "--repo", "lib"],
+        json!({}),
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("(new from v1 (pinned by group/app))"),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(head(&sandbox, &ws.join(".worktrees/t/lib")), v1);
+}

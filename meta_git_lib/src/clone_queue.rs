@@ -60,6 +60,8 @@ pub struct CloneTask {
 #[derive(Debug, Clone)]
 pub struct CloneFailure {
     pub name: String,
+    /// The project's folder
+    pub path: PathBuf,
     pub work: Work,
     pub error: String,
 }
@@ -76,8 +78,8 @@ pub struct Outcome {
     /// name, and why
     pub not_pulled: Vec<(String, String)>,
     /// Projects not cloned because their folder holds something that is no
-    /// repository of its own: the name, and why
-    pub refused: Vec<(String, String)>,
+    /// repository of its own: the name, the folder, and why
+    pub refused: Vec<(String, PathBuf, String)>,
     /// Projects not entered because they repeat a meta repo above them:
     /// the chain of names, the top one first
     pub cycles: Vec<Vec<String>>,
@@ -259,7 +261,10 @@ impl CloneQueue {
                 }
                 // git clones into an empty folder, and refuses any other
                 Checkout::NotARepo(why) if !is_empty_dir(&target_path) => {
-                    self.record(|o| o.refused.push((project.name.clone(), why)));
+                    self.record(|o| {
+                        o.refused
+                            .push((project.name.clone(), target_path.clone(), why))
+                    });
                     continue;
                 }
                 Checkout::Missing | Checkout::NotARepo(_) => match &project.repo {
@@ -432,6 +437,7 @@ impl CloneQueue {
         self.record(|o| {
             o.failures.push(CloneFailure {
                 name: task.name.clone(),
+                path: task.target_path.clone(),
                 work: task.work.clone(),
                 error,
             })
@@ -578,7 +584,11 @@ mod tests {
         // the plain folder is named, never cloned over nor taken for a clone
         assert_eq!(
             queue.outcome().refused,
-            [("plain".to_string(), "folder exists, no .git".to_string())]
+            [(
+                "plain".to_string(),
+                dir.join("plain"),
+                "folder exists, no .git".to_string()
+            )]
         );
         // a folder is handed out once
         assert!(queue

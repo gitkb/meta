@@ -149,7 +149,7 @@ pub(crate) fn execute_git_update(
                 },
             }
         }
-        report_unlisted(&queue, root, cwd);
+        report_unlisted(&queue, root, cwd, recursive);
         if let Some(error) = crate::clone_worker::report_failures(&queue, "git update") {
             return Ok(CommandResult::Error(error));
         }
@@ -184,7 +184,7 @@ pub(crate) fn execute_git_update(
         .flatten()
         .collect();
     run(&queue, tasks, &urls)?;
-    report_unlisted(&queue, root, cwd);
+    report_unlisted(&queue, root, cwd, recursive);
     let outcome = queue.outcome();
     for (name, why) in &outcome.not_pulled {
         errln!("{} {}: {why}", "Not pulled".yellow(), escape(name));
@@ -257,8 +257,9 @@ impl Leftover {
     }
 }
 
-/// The first git repository inside the folder `dir` (not `dir` itself), by
-/// a `.git` below it; links aren't followed.
+/// The first git repository inside the folder `dir` (not `dir` itself): a
+/// folder with a `.git`, or a bare one (`HEAD`, `objects` and `refs`);
+/// links aren't followed.
 fn nested_repo(dir: &Path) -> std::io::Result<Option<PathBuf>> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -266,7 +267,10 @@ fn nested_repo(dir: &Path) -> std::io::Result<Option<PathBuf>> {
             continue;
         }
         let path = entry.path();
-        if path.join(".git").symlink_metadata().is_ok() {
+        let bare = ["HEAD", "objects", "refs"]
+            .iter()
+            .all(|part| path.join(part).symlink_metadata().is_ok());
+        if bare || path.join(".git").symlink_metadata().is_ok() {
             return Ok(Some(path));
         }
         if let Some(inner) = nested_repo(&path)? {
@@ -282,15 +286,20 @@ pub(crate) fn shown(path: &Path, cwd: &Path) -> String {
 }
 
 /// Name each repository in a meta repo's folder that no `.meta.yaml` lists,
-/// with what deleting it would lose.
-/// (`root`: the workspace's folder)
-fn report_unlisted(queue: &CloneQueue, root: &Path, cwd: &Path) {
+/// with what deleting it would lose (`root`: the workspace's folder; `-r`:
+/// whether nested meta repos were read).
+fn report_unlisted(queue: &CloneQueue, root: &Path, cwd: &Path, recursive: bool) {
+    let prune = if recursive {
+        "meta -r git clone-prune"
+    } else {
+        "meta git clone-prune"
+    };
     for path in queue.outcome().unlisted {
         let shown = shown(&path, cwd);
         let warning = match Leftover::of(&path, root) {
-            Leftover::Nothing => format!(
-                "{shown} isn't in .meta.yaml (nothing unpushed; meta git clone-prune removes it)"
-            ),
+            Leftover::Nothing => {
+                format!("{shown} isn't in .meta.yaml (nothing unpushed; {prune} removes it)")
+            }
             Leftover::Holds(why) => format!("{shown} isn't in .meta.yaml; {why}"),
         };
         meta_core::out::warn(warning);

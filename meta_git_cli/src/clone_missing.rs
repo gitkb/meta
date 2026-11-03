@@ -143,6 +143,14 @@ pub(crate) fn execute(
     options: &PluginRequestOptions,
     cwd: &Path,
 ) -> anyhow::Result<CommandResult> {
+    // meta chose the selection without the nested projects
+    if recursive && !options.recursive && options.filtered() {
+        anyhow::bail!(
+            "with --include, --exclude or --tag, give -r to meta, before the command, so the \
+             selection reaches the nested projects: `meta -r ... {}`",
+            steps.command()
+        );
+    }
     let recursive = recursive || options.recursive;
     // Without -r only the workspace's own .meta.yaml is read
     let meta_depth = if recursive { options.depth } else { Some(0) };
@@ -201,12 +209,17 @@ pub(crate) fn execute(
         }));
     }
     records.extend(outcome.failures.iter().map(|failure| Record {
-        path: escape(&failure.name).into_owned(),
+        path: from_root(&failure.path),
         action: "failed",
         reason: Some(failure.error.clone()),
     }));
+    records.extend(outcome.refused.iter().map(|(_, path, why)| Record {
+        path: from_root(path),
+        action: "failed",
+        reason: Some(format!("not a git repository ({why})")),
+    }));
 
-    let (mut removed, mut kept) = (0, 0);
+    let (mut removed, mut kept, mut failed_removals) = (0, 0, 0);
     if steps.prunes() {
         for path in &outcome.unlisted {
             let shown = update::shown(path, cwd);
@@ -220,10 +233,11 @@ pub(crate) fn execute(
                         say(format!("{} {shown} (nothing unpushed)", "Removed".green()))?;
                         ("removed", None)
                     }
+                    // what was removed before the error is gone
                     Err(e) => {
-                        let why = format!("it can't be removed ({e})");
-                        say(format!("{} {shown}: {why}", "Kept".yellow()))?;
-                        ("kept", Some(why))
+                        let why = format!("it was removed only in part ({e})");
+                        say(format!("{} {shown}: {why}", "Not removed".red()))?;
+                        ("failed", Some(why))
                     }
                 },
                 Leftover::Holds(why) => {
@@ -234,7 +248,8 @@ pub(crate) fn execute(
             };
             match action {
                 "removed" => removed += 1,
-                _ => kept += 1,
+                "kept" => kept += 1,
+                _ => failed_removals += 1,
             }
             records.push(Record {
                 path: from_root(path),
@@ -254,6 +269,11 @@ pub(crate) fn execute(
         .flatten();
     if let Some(error) = failed {
         return Ok(CommandResult::Error(error));
+    }
+    if failed_removals > 0 {
+        return Ok(CommandResult::Error(format!(
+            "{failed_removals} repositories could not be removed"
+        )));
     }
     if !preview {
         let cloned = format!("{} cloned", outcome.cloned.len());

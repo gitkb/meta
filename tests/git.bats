@@ -545,6 +545,11 @@ within() {
     [ "$status" -eq 0 ]
     [ -d shared/.git ]
     [ ! -e frontend ]
+    # the selection was made without nested projects: -r goes to meta
+    run "$META_BIN" --include frontend git clone-missing -r
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"give -r to meta, before the command"* ]]
+    [ ! -e frontend ]
 }
 
 @test "meta git clone-prune keeps each leftover that holds work, and removes a clean one" {
@@ -561,9 +566,12 @@ within() {
     git -C unpushed add wip.md
     git -C unpushed commit --quiet -m "unpushed work"
     git -C worktree worktree add --quiet "$TEST_DIR/remotes/wt"
-    # a repo the leftover ignores, with work of its own
-    echo /inner/ > nested/.git/info/exclude
+    # a repo the leftover ignores, with work of its own, and a bare one
+    printf '/inner/\n/bare.git/\n' > nested/.git/info/exclude
     git init --quiet nested/inner
+    git clone --quiet remotes/shared.git bare
+    printf '/bare.git/\n' > bare/.git/info/exclude
+    git init --quiet --bare bare/bare.git
     # never a folder that is no repo, nor a link to a repo
     mkdir plain
     git clone --quiet remotes/shared.git remotes/elsewhere
@@ -581,10 +589,11 @@ within() {
     [[ "$output" == *"Kept unpushed: it holds 1 commit on no remote: "*"unpushed work"* ]]
     [[ "$output" == *"Kept worktree: it holds 1 linked worktree: $TEST_DIR/remotes/wt"* ]]
     [[ "$output" == *"Kept nested: it holds another git repository: inner"* ]]
+    [[ "$output" == *"Kept bare: it holds another git repository: bare.git"* ]]
     [[ "$output" == *"Kept link: it is a symbolic link"* ]]
-    [[ "$output" == *"Prune completed (1 removed, 7 kept)"* ]]
+    [[ "$output" == *"Prune completed (1 removed, 8 kept)"* ]]
     [ ! -e clean ]
-    for name in untracked modified stashed unpushed worktree nested plain link remotes/elsewhere frontend backend shared; do
+    for name in untracked modified stashed unpushed worktree nested bare plain link remotes/elsewhere frontend backend shared; do
         [ -e "$name" ]
     done
 }
@@ -599,6 +608,16 @@ within() {
     [[ "$output" == *'{"action":"removed","path":"old"}'* ]]
     [ -d shared/.git ]
     [ ! -e old ]
+}
+
+@test "meta --json git clone-missing names a failed clone and a refused folder by their paths" {
+    rm -rf shared
+    mkdir -p frontend-notes && echo mine > frontend-notes/notes.txt
+    echo '{"projects": {"api": {"repo": "file://'"$TEST_DIR"'/nowhere.git", "path": "services/api"}, "notes": {"repo": "u", "path": "frontend-notes"}}}' > .meta.yaml
+    run "$META_BIN" --json git clone-missing
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'"path":"services/api"'* ]]
+    [[ "$output" == *'{"action":"failed","path":"frontend-notes","reason":"not a git repository (folder exists, no .git)"}'* ]]
 }
 
 @test "meta git clone-missing in a worktree set refuses instead of cloning into the workspace" {
@@ -618,9 +637,16 @@ within() {
     run "$META_BIN" git status --recursive
     [ "$status" -eq 1 ]
     [[ "$output" == *"tip: --recursive is an option of meta itself: it goes before the command, as in meta --recursive git status"* ]]
-    run "$META_BIN" --sequential git status --recursive
+    run "$META_BIN" git status --tag=v1
     [ "$status" -eq 1 ]
-    [[ "$output" == *"tip: --recursive is an option of meta itself"* ]]
+    [[ "$output" == *"tip: --tag is an option of meta itself: it goes before the command, as in meta '--tag=v1' git status"* ]]
+    run "$META_BIN" git log --json
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"tip: --json is an option of meta itself: it goes before the command, as in meta --json git log"* ]]
+    # -s is meta's and git's: git rejected the other one
+    run "$META_BIN" git status -s --no-such-option
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"tip:"* ]]
     # rejected, but no option of meta's; and an error that is no option's
     run "$META_BIN" git status --no-such-option
     [ "$status" -eq 1 ]
@@ -631,11 +657,15 @@ within() {
 }
 
 @test "a project that isn't cloned is a warning in looped git commands, and a failure in exec" {
+    with_remotes
+    teammate frontend
     rm -rf "$TEST_DIR/shared"
-    run "$META_BIN" git status
+    run "$META_BIN" git pull
     [ "$status" -eq 0 ]
+    [ "$(grep -c 'shared is not cloned' <<< "$output")" -eq 1 ]
     [[ "$output" == *"warning: shared is not cloned; \`meta git clone-missing\` clones it"* ]]
     [[ "$output" == *"3 commands complete"* ]]
+    [ "$(head_of frontend)" = "$(head_of remotes/frontend.git)" ]
     run "$META_BIN" --strict git status
     [ "$status" -ne 0 ]
     run "$META_BIN" exec -- git status

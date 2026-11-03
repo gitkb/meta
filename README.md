@@ -307,7 +307,7 @@ Keeping the clones to what the `.meta.yaml` files list:
 | `meta git clone-prune` | Remove the repos no `.meta.yaml` lists that hold nothing unpushed; keep and name the others |
 | `meta git clone-sync` | `clone-missing`, then `clone-prune` |
 
-Each takes `-r` (or meta's `--recursive`) for nested meta repos, and `--dry-run` before the command. `clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files as they are on disk and pull nothing; they take `--include`, `--exclude` and `--tag` (the projects cloned, the meta repos searched for leftovers) and `--json` (`{"dry_run", "repos": [{"path", "action", "reason"?}]}`, `action` being `cloned`, `removed`, `kept` or `failed`). `clone-prune` removes a repo only when git shows nothing in it that isn't on a remote: no uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it. Ignored files are not checked.
+Each takes `-r` (or meta's `--recursive`) for nested meta repos, and `--dry-run` before the command. `clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files as they are on disk and pull nothing; they take `--include`, `--exclude` and `--tag` (the projects cloned, the meta repos searched for leftovers) and `--json` (`{"dry_run", "repos": [{"path", "action", "reason"?}]}`, `action` being `cloned`, `removed`, `kept` or `failed`). `clone-prune` removes a repo only when git shows nothing in it that isn't on a remote: no uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it (bare ones too). Other ignored files are not checked.
 
 ```bash
 # List entire tree

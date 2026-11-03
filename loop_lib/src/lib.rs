@@ -70,10 +70,10 @@ pub struct Outer {
 
 impl Outer {
     /// The tip for `results`, the commands of `argv` having all failed:
-    /// the option of ours they rejected, found in their error output (git:
-    /// ``unknown option `recursive'``; clap: `unexpected argument
-    /// '--recursive'`), or, with no output captured, the one option of ours
-    /// in `argv` when each exited 129 (git's usage error).
+    /// the option of ours that each one's error output says it rejected
+    /// (git: ``unknown option `recursive'``, `unrecognized argument:
+    /// --json`; clap: `unexpected argument '--recursive'`). Output that
+    /// wasn't captured (`--sequential`) gives none.
     fn tip(&self, argv: &[String], results: &[CommandResult]) -> Option<String> {
         let typed = |spelling: &str| {
             argv.iter().skip(1).position(|arg| {
@@ -94,25 +94,21 @@ impl Outer {
                     "unknown option",
                     "unknown switch",
                     "unrecognized option",
+                    "unrecognized argument",
                     "unexpected argument",
                 ]
                 .iter()
                 .any(|says| lower.contains(says))
                     && (line.contains(&format!("`{name}'"))
-                        || line.contains(&format!("'{spelling}'")))
+                        || line.contains(&format!("`{name}="))
+                        || line.contains(&format!("'{spelling}'"))
+                        || line.contains(&format!("'{spelling}="))
+                        || line.trim_end().ends_with(&format!(": {spelling}")))
             })
         };
-        let usage_only = |result: &CommandResult| {
-            result.exit_code == Some(129) && result.stderr.trim_ascii().is_empty()
-        };
-        let (spelling, takes_value) = match ours
+        let (spelling, takes_value) = ours
             .iter()
-            .find(|(o, _)| results.iter().all(|r| rejected(o, r)))
-        {
-            Some(found) => found,
-            None if ours.len() == 1 && results.iter().all(usage_only) => ours.first()?,
-            None => return None,
-        };
+            .find(|(o, _)| results.iter().all(|r| rejected(o, r)))?;
         // the option (and its value) before the command, the rest as typed
         let at = typed(spelling)? + 1;
         let given = argv.get(at)?;

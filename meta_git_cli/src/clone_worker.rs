@@ -164,7 +164,7 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
             errln!("    {}", meta_core::display::escape(line));
         }
     }
-    for (name, why) in &refused {
+    for (name, _, why) in &refused {
         errln!(
             "{} {}: not a git repository ({}); move it away and run 'meta {command}' again",
             "Not cloned".red().bold(),
@@ -219,7 +219,7 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
                     refused.len(),
                     refused
                         .iter()
-                        .map(|(name, _)| name.as_str())
+                        .map(|(name, _, _)| name.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )

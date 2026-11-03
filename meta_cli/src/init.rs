@@ -440,11 +440,39 @@ fn hooks_in(path: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The git blob id of the file at `path` with its line endings as git
+/// stores them (`\r\n` read as `\n`, as a Windows checkout writes them):
+/// what [`OLD_FLAT_SKILLS`] lists.
+fn blob_id(dir: &Path, path: &Path) -> Result<String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let text = fs::read(path).with_context(|| format!("Failed to read {}", escape_path(path)))?;
+    let text = String::from_utf8_lossy(&text).replace("\r\n", "\n");
+    let mut child = meta_core::git::git(dir)
+        .args(["hash-object", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("cannot run git hash-object")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes())?;
+    }
+    let output = child.wait_with_output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "git hash-object failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// `text` without the markdown section that starts at the line `heading`,
-/// up to the next `## ` heading.
+/// up to the next `## ` heading (line endings come out as `\n`).
 fn without_section(text: &str, heading: &str) -> String {
+    let text = text.replace("\r\n", "\n");
     let Some((before, rest)) = text.split_once(&format!("{heading}\n")) else {
-        return text.to_string();
+        return text;
     };
     match rest.split_once("\n## ") {
         Some((_, after)) => format!("{before}## {after}"),
@@ -464,16 +492,8 @@ fn remove_old_flat_skills(skills_dir: &Path, overwrite: bool, init: &Init) -> Re
         if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
             continue;
         }
-        let blob = meta_core::git::run(
-            skills_dir,
-            [
-                "hash-object".as_ref(),
-                "--no-filters".as_ref(),
-                "--".as_ref(),
-                path.as_os_str(),
-            ],
-        )?;
-        let meta_wrote = OLD_FLAT_SKILLS.contains(&(name, blob.trim()));
+        let blob = blob_id(skills_dir, &path)?;
+        let meta_wrote = OLD_FLAT_SKILLS.contains(&(name, blob.as_str()));
         if meta_wrote && overwrite {
             init.remove_file(&path)?;
         } else if meta_wrote {
@@ -1048,6 +1068,11 @@ mod tests {
         // changed since, or not a name meta used: kept
         assert!(skills.join("meta-exec.md").exists());
         assert!(skills.join("my-skill.md").exists());
+        // as a Windows checkout writes it, with CRLF line endings: the same file
+        let crlf = old.replace("\r\n", "\n").replace('\n', "\r\n");
+        fs::write(skills.join("meta-discover.md"), crlf).unwrap();
+        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        assert!(!skills.join("meta-discover.md").exists());
     }
 
     #[test]
@@ -1059,6 +1084,12 @@ mod tests {
             "# T\n\n## A\na\n\n## B\nb\n\n"
         );
         assert_eq!(without_section(text, "## D"), text);
+        // as a Windows checkout has it
+        let crlf = text.replace('\n', "\r\n");
+        assert_eq!(
+            without_section(&crlf, "## B"),
+            without_section(text, "## B")
+        );
     }
 
     #[test]

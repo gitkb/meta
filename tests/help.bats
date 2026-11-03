@@ -287,7 +287,7 @@ EOF
     [ "$status" -eq 0 ]
     names=$(grep '^meta git <name>' <<<"$output" | sed 's/^meta git <name> *//; s/, /\n/g')
     grep -qx hello <<<"$names"
-    ! grep -qx commit <<<"$names"
+    [ -z "$(grep -x commit <<<"$names")" ]
 
     run "$META_BIN" git hello
     [ "$status" -eq 0 ]

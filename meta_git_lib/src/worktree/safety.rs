@@ -437,7 +437,7 @@ pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
     // stash's (counted below)
     let mut reflog: Vec<String> = ["log", "--oneline", "--reflog", "--not", "--branches"]
         .iter()
-        .chain(&["--tags", "--remotes"])
+        .chain(&["--tags", "--remotes", "--glob=refs/meta/kept/*"])
         .map(|arg| arg.to_string())
         .collect();
     reflog.extend(born.as_ref().map(|_| "HEAD".to_string()));
@@ -451,6 +451,27 @@ pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
             "{} only in the reflog (on no branch, tag or remote): {}",
             plural(only_reflog.len(), "commit"),
             sample(&only_reflog, |line| escape(line).into_owned())
+        ));
+    }
+    // Commits worktree remove saved from a worktree's HEAD reflog
+    let kept = meta_core::git::run(
+        repo,
+        [
+            "log",
+            "--oneline",
+            "--glob=refs/meta/kept/*",
+            "--not",
+            "--branches",
+            "--tags",
+            "--remotes",
+        ],
+    )?;
+    let kept: Vec<&str> = kept.lines().collect();
+    if !kept.is_empty() {
+        found.push(format!(
+            "{} that worktree remove saved under refs/meta/kept: {}",
+            plural(kept.len(), "commit"),
+            sample(&kept, |line| escape(line).into_owned())
         ));
     }
     match meta_core::git::run(repo, ["stash", "list"])?
@@ -790,6 +811,21 @@ mod tests {
             held.contains("1 stash") && !held.contains("WIP on"),
             "{held}"
         );
+        // a commit worktree remove saved is held too
+        sandbox.git(&repo, &["switch", "-q", "--detach"]);
+        sandbox.git(
+            &repo,
+            &["commit", "-q", "--allow-empty", "-m", "saved by remove"],
+        );
+        sandbox.git(&repo, &["update-ref", "refs/meta/kept/s/repo/x", "HEAD"]);
+        sandbox.git(&repo, &["switch", "-q", "holds-topic"]);
+        let held = repo_holds(&repo).unwrap().join("; ");
+        assert!(
+            held.contains("1 commit that worktree remove saved under refs/meta/kept: ")
+                && held.contains("saved by remove"),
+            "{held}"
+        );
+        assert_eq!(held.matches("saved by remove").count(), 1, "{held}");
     }
 
     #[test]

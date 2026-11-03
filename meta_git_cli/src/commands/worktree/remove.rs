@@ -171,12 +171,14 @@ pub(crate) fn remove_set(
         ));
     }
 
-    // The branches meta created for the set, with what only their reflogs
-    // and the worktree's HEAD reflog hold, read before git deletes the
-    // worktrees (their notes and HEAD reflogs with them); the others' branches
-    // are left, and named
+    // Read before git deletes the worktrees (their notes and HEAD reflogs
+    // with them): the branches meta created for the set, with what only their
+    // reflogs hold; the others' branches, which are left, and named; and the
+    // commits only a worktree's HEAD reflog holds, saved under a ref so they
+    // stay reachable
     let mut made: Vec<(std::path::PathBuf, String, Result<Vec<String>>)> = Vec::new();
     let mut left: Vec<(std::path::PathBuf, String)> = Vec::new();
+    let mut kept_refs: Vec<KeptRef> = Vec::new();
     for member in &check.members {
         let Ok(linked) = meta_core::gitdir::linked(&member.path) else {
             continue;
@@ -185,9 +187,36 @@ pub(crate) fn remove_set(
             .common
             .canonicalize()
             .unwrap_or(linked.common.clone());
+        let place = member.path.strip_prefix(&wt_dir).unwrap_or(&member.path);
+        // a ref that can't be made stops the remove before anything is deleted
+        let (tips, commits) = head_reflog_tips(&member.path, &git_dir).with_context(|| {
+            format!(
+                "Refusing to remove worktree '{name}': can't tell what the HEAD reflog of {} holds",
+                escape_path(&member.path)
+            )
+        })?;
+        for tip in &tips {
+            let ref_name = kept_ref(name, place, tip);
+            if !preview {
+                meta_core::git::run(&git_dir, ["update-ref", ref_name.as_str(), tip])
+                    .with_context(|| {
+                        format!(
+                            "Refusing to remove worktree '{name}': can't save the commits only \
+                             the HEAD reflog of {} holds",
+                            escape_path(&member.path)
+                        )
+                    })?;
+            }
+            kept_refs.push(KeptRef {
+                repo: repo_of(&git_dir).display().to_string(),
+                ref_name,
+                commits,
+            });
+        }
         match record::created_branch(&linked.admin) {
             Some(branch) => {
-                let reflogs = only_in_reflogs(&member.path, &git_dir, &branch);
+                // what the refs just saved hold is held (in a preview too)
+                let reflogs = only_in_branch_reflog(&git_dir, &branch, &tips);
                 made.push((git_dir, branch, reflogs));
             }
             None => {
@@ -238,6 +267,7 @@ pub(crate) fn remove_set(
             repos_removed: check.members.len(),
             dry_run: preview,
             branches: std::mem::take(&mut branches),
+            kept_refs: std::mem::take(&mut kept_refs),
         };
         outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else if preview {
@@ -253,6 +283,20 @@ pub(crate) fn remove_set(
         outln!("{} Removed worktree '{}'", "✓".green(), name.bold())?;
     }
     if !json {
+        for kept in &kept_refs {
+            let repo = escape_path(std::path::Path::new(&kept.repo));
+            outln!(
+                "  {} {} only the worktree's HEAD reflog held, in {repo}, as {} (see them: \
+                 git -C {repo} log {}; delete the ref once they're kept elsewhere)",
+                if preview { "would save" } else { "saved" }.yellow(),
+                match kept.commits {
+                    1 => "1 commit".to_string(),
+                    n => format!("{n} commits"),
+                },
+                escape(&kept.ref_name),
+                escape(&kept.ref_name)
+            )?;
+        }
         for report in &branches {
             let (verb, why) = match (report.action, preview) {
                 ("deleted", true) => ("would delete", None),
@@ -303,47 +347,124 @@ enum BranchFate {
     Kept(String),
 }
 
-/// The commits only the reflogs of `branch` (in the repository whose git
-/// directory is `git_dir`) and of the worktree `checkout`'s HEAD hold: work
-/// reset, amended or rebased away there, on no remote, tag or other branch.
-/// Deleting the branch and the worktree deletes those reflogs.
-fn only_in_reflogs(
-    checkout: &std::path::Path,
+/// Where refs/meta/kept keeps a tip from the worktree at `place` in set
+/// `set`: `refs/meta/kept/<set>/<place>/<commit>`, `root` for the set's root,
+/// and no part starting with a dot, which a ref name can't have.
+fn kept_ref(set: &str, place: &std::path::Path, tip: &str) -> String {
+    let place: Vec<String> = place
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().replace('.', "_"))
+        .filter(|c| !c.is_empty())
+        .collect();
+    let place = if place.is_empty() {
+        "root".to_string()
+    } else {
+        place.join("/")
+    };
+    let short = tip.get(..12).unwrap_or(tip);
+    format!("refs/meta/kept/{set}/{place}/{short}")
+}
+
+/// What `rev-list --not` excludes as held elsewhere: remotes, tags,
+/// branches (but `branch`), stashes, and what meta already kept.
+fn held_elsewhere(git_dir: &std::path::Path, branch: Option<&str>) -> Vec<String> {
+    let mut not = vec![
+        "--not".to_string(),
+        "--remotes".to_string(),
+        "--tags".to_string(),
+    ];
+    if let Some(branch) = branch {
+        // (--branches matches names without refs/heads/; a branch name holds
+        // no glob characters)
+        not.push(format!("--exclude={branch}"));
+    }
+    not.push("--branches".to_string());
+    not.push("--glob=refs/meta/kept/*".to_string());
+    let stashes =
+        meta_core::git::run(git_dir, ["rev-list", "-g", "refs/stash", "--"]).unwrap_or_default();
+    not.extend(stashes.lines().map(str::to_string));
+    not
+}
+
+/// The commits reachable from `revs` (reflog entries) and from nothing in
+/// `not`, as `git log --format` prints them, in parts so the command line
+/// stays short.
+fn reachable_only(
+    git_dir: &std::path::Path,
+    revs: &[String],
+    not: &[String],
+    format: &str,
+) -> Result<Vec<String>> {
+    let mut found: Vec<String> = Vec::new();
+    for part in revs.chunks(200) {
+        let mut args: Vec<&str> = vec!["log", format];
+        args.extend(part.iter().map(String::as_str));
+        args.extend(not.iter().map(String::as_str));
+        for line in meta_core::git::run(git_dir, &args)?.lines() {
+            if !found.iter().any(|known| known == line) {
+                found.push(line.to_string());
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// The entries of the reflog `rev` (run in `dir`), each once.
+fn reflog_entries(dir: &std::path::Path, rev: &str) -> Result<Vec<String>> {
+    let mut entries: Vec<String> = Vec::new();
+    for sha in meta_core::git::run(dir, ["rev-list", "-g", rev, "--"])?.lines() {
+        if !entries.iter().any(|known| known == sha) {
+            entries.push(sha.to_string());
+        }
+    }
+    Ok(entries)
+}
+
+/// The commits only the reflog of `branch` (in the repository whose git
+/// directory is `git_dir`) holds: work reset, amended or rebased away on it,
+/// on no remote, tag or other branch. Deleting the branch deletes its reflog.
+fn only_in_branch_reflog(
     git_dir: &std::path::Path,
     branch: &str,
+    saved: &[String],
 ) -> Result<Vec<String>> {
     let full = format!("refs/heads/{branch}");
-    let mut entries: Vec<String> = Vec::new();
-    for (dir, rev) in [(checkout, "HEAD"), (git_dir, full.as_str())] {
-        if rev != "HEAD"
-            && meta_core::git::lookup(git_dir, ["rev-parse", "--verify", "--quiet", rev])?.is_none()
-        {
-            continue;
-        }
-        let listed = meta_core::git::run(dir, ["rev-list", "-g", rev])?;
-        for sha in listed.lines() {
-            if !entries.iter().any(|known| known == sha) {
-                entries.push(sha.to_string());
-            }
-        }
+    if meta_core::git::lookup(git_dir, ["rev-parse", "--verify", "--quiet", &full])?.is_none() {
+        return Ok(Vec::new());
     }
-    // (--branches matches names without refs/heads/; a branch name holds no
-    // glob characters)
-    let exclude = format!("--exclude={branch}");
-    let mut unique: Vec<String> = Vec::new();
-    // in parts, so the command line stays short
-    for part in entries.chunks(200) {
-        let mut args: Vec<&str> = vec!["log", "--oneline"];
-        args.extend(part.iter().map(String::as_str));
-        args.extend(["--not", "--remotes", "--tags", &exclude, "--branches"]);
-        let found = meta_core::git::run(git_dir, &args)?;
-        for line in found.lines() {
-            if !unique.iter().any(|known| known == line) {
-                unique.push(line.to_string());
-            }
-        }
+    let entries = reflog_entries(git_dir, &full)?;
+    let mut not = held_elsewhere(git_dir, Some(branch));
+    not.extend(saved.iter().cloned());
+    reachable_only(git_dir, &entries, &not, "--oneline")
+}
+
+/// The tips of what only the HEAD reflog of the worktree `checkout` holds
+/// (commits on no branch, tag, remote, stash or meta-kept ref; git deletes
+/// that reflog with the worktree), and how many commits that is.
+fn head_reflog_tips(
+    checkout: &std::path::Path,
+    git_dir: &std::path::Path,
+) -> Result<(Vec<String>, usize)> {
+    let entries = reflog_entries(checkout, "HEAD")?;
+    let not = held_elsewhere(git_dir, None);
+    let unique = reachable_only(git_dir, &entries, &not, "--format=%H")?;
+    if unique.is_empty() {
+        return Ok((Vec::new(), 0));
     }
-    Ok(unique)
+    // the entries that hold them, less those another one holds too
+    let tips: Vec<String> = entries.into_iter().filter(|e| unique.contains(e)).collect();
+    let tips = match tips.len() {
+        0 | 1 => tips,
+        _ => {
+            let mut args = vec!["merge-base", "--independent"];
+            args.extend(tips.iter().map(String::as_str));
+            meta_core::git::run(git_dir, &args)?
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+    };
+    Ok((tips, unique.len()))
 }
 
 /// Delete `branch` from the repository whose git directory is `git_dir` if
@@ -389,7 +510,7 @@ fn branch_fate(
         let reflogs = reflogs?;
         if let Some(first) = reflogs.first() {
             return Ok(BranchFate::Kept(format!(
-                "{} only in its reflogs (reset, amended or rebased away; on no remote, other \
+                "{} only in its reflog (reset, amended or rebased away; on no remote, other \
                  branch or tag; first: {})",
                 commits(reflogs.len()),
                 escape(first)

@@ -203,10 +203,17 @@ repositories. Another workspace's set is never touched, even when both share a
 from inside a set, they act on the workspace the set was made from.
 `--force` and `exec --ephemeral` discard that work: commit and push first.
 
+Before it deletes a worktree, `remove` saves the commits only that worktree's
+HEAD reflog holds (work left on a detached HEAD, reset, amended or rebased
+away), which git deletes with the worktree, under
+`refs/meta/kept/<set>/<repo>/<commit>` in the workspace's repo, and says how to
+see them; delete the ref once they're kept elsewhere. `clone-prune` counts
+them as work.
+
 `remove` (and `exec --ephemeral`) then deletes each branch create or add made
 for the set, in the workspace's repos, when every commit on it, and every
-commit only its reflog or the worktree's HEAD reflog still holds (work reset,
-amended or rebased away), is also on a remote, another branch or a tag. It
+commit only its reflog still holds, is also on a remote, another branch, a tag
+or a ref it just saved. It
 names each one it deletes, and keeps and names any branch with a commit nowhere
 else (`kept branch 'auth-fix' in …/backend: 1 commit on no remote, other branch
 or tag`). A branch the set only checked out (`--repo api:release/2.3`, an

@@ -720,36 +720,71 @@ assert d['totals']['files_changed'] >= 1
     git -C backend rev-parse --verify --quiet refs/heads/existing
 }
 
-@test "worktree remove keeps a branch whose reflogs hold work reset or left away, and says so in --json" {
-    # work reset away on the set's branch: only the branch's reflog holds it
-    "$META_BIN" git worktree create r1 --repo backend --no-deps
-    git -C .worktrees/r1/backend commit --quiet --allow-empty -m "reset away"
-    git -C .worktrees/r1/backend reset --quiet --hard HEAD~1
-    run "$META_BIN" git worktree remove r1
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"kept branch 'r1' in $TEST_DIR/backend: 1 commit only in its reflogs (reset, amended or rebased away; on no remote, other branch or tag; first: "*"reset away)"* ]]
-    git -C backend rev-parse --verify --quiet refs/heads/r1
-    # work on a detached HEAD in the worktree: only the worktree's HEAD reflog holds it
+@test "worktree remove keeps reachable the commits only reflogs hold, and says how to find them" {
+    # reachable from a ref, after git drops every unreachable object
+    reachable() { git -C "$1" gc --quiet --prune=now; git -C "$1" cat-file -e "$2^{commit}" &&
+        [ -n "$(git -C "$1" for-each-ref --contains "$2" --format='%(refname)')" ]; }
+
+    # a commit left on a detached HEAD in the worktree: only the worktree's
+    # HEAD reflog holds it, and git deletes that reflog with the worktree
     "$META_BIN" git worktree create r2 --repo frontend --no-deps
     git -C .worktrees/r2/frontend switch --quiet --detach
     git -C .worktrees/r2/frontend commit --quiet --allow-empty -m "left on a detached HEAD"
+    local detached
+    detached=$(git -C .worktrees/r2/frontend rev-parse HEAD)
     git -C .worktrees/r2/frontend switch --quiet r2
-    run "$META_BIN" --json git worktree remove r2
+    run "$META_BIN" --dry-run git worktree remove r2
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"would save 1 commit only the worktree's HEAD reflog held, in $TEST_DIR/frontend, as refs/meta/kept/r2/frontend/"* ]]
+    [ -z "$(git -C frontend for-each-ref refs/meta/kept)" ]
+    run "$META_BIN" git worktree remove r2
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"saved 1 commit only the worktree's HEAD reflog held, in $TEST_DIR/frontend, as refs/meta/kept/r2/frontend/${detached:0:12} (see them: git -C $TEST_DIR/frontend log refs/meta/kept/r2/frontend/${detached:0:12}; delete the ref once they're kept elsewhere)"* ]]
+    [ ! -e .worktrees/r2 ]
+    reachable frontend "$detached"
+
+    # work reset away on the set's branch, in the worktree: saved the same way,
+    # so the branch holds nothing else and goes
+    "$META_BIN" git worktree create r1 --repo backend --no-deps
+    git -C .worktrees/r1/backend commit --quiet --allow-empty -m "reset away"
+    local reset
+    reset=$(git -C .worktrees/r1/backend rev-parse HEAD)
+    git -C .worktrees/r1/backend reset --quiet --hard HEAD~1
+    run "$META_BIN" --json git worktree remove r1
     [ "$status" -eq 0 ]
     python3 -c '
 import json, sys
 out = json.load(sys.stdin)
+[k] = out["kept_refs"]
+assert k["ref"].startswith("refs/meta/kept/r1/backend/") and k["commits"] == 1, k
 [b] = out["branches"]
-assert b["branch"] == "r2" and b["action"] == "kept", b
-assert "left on a detached HEAD" in b["reason"], b
+assert b["branch"] == "r1" and b["action"] == "deleted", b
 ' <<<"$output"
-    git -C frontend rev-parse --verify --quiet refs/heads/r2
-    # nothing in either: deleted, and --json says so
-    "$META_BIN" git worktree create r3 --repo frontend --no-deps
-    run "$META_BIN" --json git worktree remove r3
+    reachable backend "$reset"
+
+    # a commit only the branch's own reflog holds (the branch moved from the
+    # workspace's checkout, not in the worktree): the branch is kept, and so
+    # is its reflog
+    "$META_BIN" git worktree create r3 --repo backend --no-deps
+    local base moved
+    base=$(git -C backend rev-parse refs/heads/r3)
+    moved=$(git -C backend commit-tree -p "$base" -m "moved the branch" "$base^{tree}")
+    git -C backend update-ref -m "move" refs/heads/r3 "$moved"
+    git -C backend update-ref -m "back" refs/heads/r3 "$base"
+    run "$META_BIN" git worktree remove r3
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"kept branch 'r3' in $TEST_DIR/backend: 1 commit only in its reflog (reset, amended or rebased away; on no remote, other branch or tag; first: "*"moved the branch)"* ]]
+    git -C backend rev-parse --verify --quiet refs/heads/r3
+    git -C backend cat-file -e "$moved^{commit}"
+    git -C backend reflog refs/heads/r3 | grep -q "${moved:0:7}"
+
+    # nothing in any reflog: deleted, and --json says so
+    "$META_BIN" git worktree create r4 --repo frontend --no-deps
+    run "$META_BIN" --json git worktree remove r4
     [ "$status" -eq 0 ]
     [[ "$output" == *'"action": "deleted"'* ]]
-    [ -z "$(git -C frontend branch --list r3)" ]
+    [[ "$output" != *"kept_refs"* ]]
+    [ -z "$(git -C frontend branch --list r4)" ]
 }
 
 @test "worktree remove refuses dirty worktree without --force" {

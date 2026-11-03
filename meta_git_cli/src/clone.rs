@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 /// Clone a meta repository, then the repos its .meta.yaml lists.
 #[derive(clap::Parser)]
+#[command(after_help = "Git options: of git clone's own, only --depth, given to each clone.")]
 pub(crate) struct CloneArgs {
     /// The meta repository to clone
     url: GitUrl,

@@ -54,14 +54,16 @@ pub struct PluginInfo {
 pub struct PluginHelp {
     /// Usage string (e.g., "meta git <command> [args...]")
     pub usage: String,
-    /// Command descriptions (command name -> description)
-    /// Uses IndexMap to preserve insertion order for consistent help output
+    /// The plugin's own commands (for meta-git, the git commands it
+    /// adapts), each with a one-line description, in the order help shows
+    /// them. Every help surface reads them from here: `meta --help`,
+    /// `meta <word> --help` and `meta <word> <command> --help`.
     #[serde(default)]
     pub commands: IndexMap<String, String>,
-    /// Categorized commands (section title -> commands map)
-    /// When present and non-empty, commands are displayed by section instead of flat list
+    /// The tool that every other command runs as typed, in each selected
+    /// repo: with `git`, `meta git log -3` runs `git log -3` there.
     #[serde(default)]
-    pub command_sections: IndexMap<String, IndexMap<String, String>>,
+    pub runs_as_typed: Option<String>,
     /// Example usage strings
     #[serde(default)]
     pub examples: Vec<String>,
@@ -310,9 +312,52 @@ pub fn read_request_from_stdin() -> anyhow::Result<PluginRequest> {
     Ok(request)
 }
 
-/// A plugin's help, from its info. Every value comes from the plugin, so
-/// each is escaped onto its own line.
-pub fn help_text(info: &PluginInfo) -> String {
+/// Who answers `meta <word> <verb>`, as a plugin's help declares it.
+#[derive(Debug, PartialEq)]
+pub enum Verb<'a> {
+    /// One of the plugin's own commands
+    Own,
+    /// Not one of them: `<tool> <verb> ...` runs as typed in each repo
+    AsTyped(&'a str),
+    /// Neither: the plugin decides
+    Unknown,
+}
+
+impl PluginInfo {
+    /// Who answers `meta <word> <verb>` (`verb`: the word after the
+    /// plugin's word).
+    pub fn verb(&self, verb: &str) -> Verb<'_> {
+        let Some(help) = &self.help else {
+            return Verb::Unknown;
+        };
+        match &help.runs_as_typed {
+            _ if help.commands.contains_key(verb) => Verb::Own,
+            Some(tool) => Verb::AsTyped(tool),
+            None => Verb::Unknown,
+        }
+    }
+}
+
+impl PluginHelp {
+    /// What becomes of the commands that aren't the plugin's own, if it
+    /// runs them as typed: "any other git command runs as typed in each
+    /// selected repo". Not escaped.
+    pub fn as_typed_rule(&self) -> Option<String> {
+        let tool = self.runs_as_typed.as_ref()?;
+        let which = if self.commands.is_empty() {
+            "every"
+        } else {
+            "any other"
+        };
+        Some(format!(
+            "{which} {tool} command runs as typed in each selected repo"
+        ))
+    }
+}
+
+/// The help of the plugin serving `meta <word>`, from its info. Every value
+/// comes from the plugin, so each is escaped onto its own line.
+pub fn help_text(word: &str, info: &PluginInfo) -> String {
     use meta_core::display::escape;
     let mut out = String::new();
     let mut line = |text: &str| {
@@ -320,11 +365,7 @@ pub fn help_text(info: &PluginInfo) -> String {
         out.push('\n');
     };
     let Some(help) = &info.help else {
-        line(&format!(
-            "meta {} v{}",
-            escape(&info.name),
-            escape(&info.version)
-        ));
+        line(&format!("meta {} v{}", escape(word), escape(&info.version)));
         if let Some(desc) = &info.description {
             line(&escape(desc));
         }
@@ -339,17 +380,23 @@ pub fn help_text(info: &PluginInfo) -> String {
     };
     line(&escape(&help.usage));
     line("");
-    let flat = "Commands".to_string();
-    let sections: Vec<_> = if help.command_sections.is_empty() {
-        vec![(&flat, &help.commands)]
-    } else {
-        help.command_sections.iter().collect()
-    };
-    for (title, commands) in sections.into_iter().filter(|(_, c)| !c.is_empty()) {
-        line(&format!("{}:", escape(title)));
-        for (cmd, desc) in commands {
+    if !help.commands.is_empty() {
+        match help.runs_as_typed {
+            Some(_) => line(&format!("Commands meta-{} adapts:", escape(word))),
+            None => line("Commands:"),
+        }
+        for (cmd, desc) in &help.commands {
             line(&format!("  {:<20} {}", escape(cmd), escape(desc)));
         }
+        line("");
+    }
+    if let (Some(tool), Some(rule)) = (&help.runs_as_typed, help.as_typed_rule()) {
+        let (tool, word) = (escape(tool), escape(word));
+        line(&format!(
+            "Pass-through: {}, {tool}'s own extensions on PATH included \
+             ({tool}-<name>: meta {word} <name>).",
+            escape(&rule)
+        ));
         line("");
     }
     if !help.examples.is_empty() {
@@ -451,7 +498,7 @@ fn serve(plugin: &PluginDefinition) -> anyhow::Result<()> {
     match flag.to_str() {
         Some("--meta-plugin-info") => emit_json(&plugin.info),
         Some("--meta-plugin-exec") => execute(plugin),
-        Some("--help" | "-h") => emit(&help_text(&plugin.info)),
+        Some("--help" | "-h") => emit(&help_text(&plugin.info.name, &plugin.info)),
         _ => Err(usage(format!(
             "Unknown flag: {}\n",
             escape(&flag.to_string_lossy())
@@ -480,11 +527,11 @@ fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
         CommandResult::Error(e) => Err(anyhow::anyhow!(e)),
         CommandResult::Usage(e) => Err(meta_core::exit::Usage(e).into()),
         CommandResult::Exit(code) => Err(meta_core::exit::ExitWith(code).into()),
-        CommandResult::ShowHelp(None) => emit(&help_text(&plugin.info)),
+        CommandResult::ShowHelp(None) => emit(&help_text(&plugin.info.name, &plugin.info)),
         // on stderr, so it's seen even though meta reads stdout
         CommandResult::ShowHelp(Some(err)) => Err(meta_core::exit::Usage(format!(
             "{err}\n\n{}",
-            help_text(&plugin.info).trim_end()
+            help_text(&plugin.info.name, &plugin.info).trim_end()
         ))
         .into()),
     }
@@ -715,7 +762,7 @@ mod tests {
         assert!(info.description.is_none());
         let help = info.help.unwrap();
         assert_eq!(help.usage, "meta git");
-        assert!(help.commands.is_empty() && help.command_sections.is_empty());
+        assert!(help.commands.is_empty() && help.runs_as_typed.is_none());
         assert!(help.examples.is_empty() && help.note.is_none());
         let written = serde_json::json!({
             "name": "git", "version": "1.0", "commands": ["git status"],
@@ -723,7 +770,7 @@ mod tests {
             "help": {
                 "usage": "meta git <command>",
                 "commands": {"status": "Show status"},
-                "command_sections": {"Worktrees": {"worktree create": "Make a set"}},
+                "runs_as_typed": "git",
                 "examples": ["meta git status"],
                 "note": "Raw git: meta exec -- git",
             },
@@ -732,10 +779,7 @@ mod tests {
         let help = info.help.as_ref().unwrap();
         assert_eq!(info.description.as_deref(), Some("Git across repos"));
         assert_eq!(help.commands["status"], "Show status");
-        assert_eq!(
-            help.command_sections["Worktrees"]["worktree create"],
-            "Make a set"
-        );
+        assert_eq!(help.runs_as_typed.as_deref(), Some("git"));
         assert_eq!((help.examples.len(), help.note.is_some()), (1, true));
         assert_eq!(serde_json::to_value(&info).unwrap(), written);
         // the order of the help's commands is kept
@@ -746,7 +790,7 @@ mod tests {
         let help = round_trip(&PluginHelp {
             usage: "u".to_string(),
             commands,
-            command_sections: IndexMap::new(),
+            runs_as_typed: None,
             examples: vec![],
             note: None,
         });
@@ -765,18 +809,53 @@ mod tests {
             description: Some(forged.clone()),
             help: None,
         };
-        let plain = help_text(&info);
+        let plain = help_text(&forged, &info);
         info.help = Some(PluginHelp {
             usage: forged.clone(),
             commands,
-            command_sections: IndexMap::new(),
+            runs_as_typed: Some(forged.clone()),
             examples: vec![forged.clone()],
-            note: Some(forged),
+            note: Some(forged.clone()),
         });
-        for text in [plain, help_text(&info)] {
+        for text in [plain, help_text(&forged, &info)] {
             assert!(!text.contains('\u{1b}'), "{text}");
             assert!(!text.lines().any(|l| l.starts_with("FORGED")), "{text}");
             assert!(text.contains("x\\u{1b}[2J\\nFORGED"), "{text}");
         }
+    }
+
+    #[test]
+    fn a_verb_is_the_plugins_own_or_runs_as_typed_as_its_help_says() {
+        let mut commands = IndexMap::new();
+        commands.insert("clone".to_string(), "Clone a workspace".to_string());
+        let mut info = PluginInfo {
+            name: "git".to_string(),
+            version: "1".to_string(),
+            commands: vec!["git clone".to_string()],
+            description: None,
+            help: Some(PluginHelp {
+                usage: "meta git".to_string(),
+                commands,
+                runs_as_typed: Some("git".to_string()),
+                ..PluginHelp::default()
+            }),
+        };
+        assert_eq!(info.verb("clone"), Verb::Own);
+        assert_eq!(info.verb("log"), Verb::AsTyped("git"));
+        let text = help_text("git", &info);
+        assert!(
+            text.contains("Commands meta-git adapts:\n  clone"),
+            "{text}"
+        );
+        assert!(
+            text.contains("any other git command runs as typed in each selected repo"),
+            "{text}"
+        );
+        // a plugin that runs nothing as typed decides the rest itself
+        if let Some(help) = info.help.as_mut() {
+            help.runs_as_typed = None;
+        }
+        assert_eq!(info.verb("log"), Verb::Unknown);
+        assert!(!help_text("git", &info).contains("as typed"));
     }
 }

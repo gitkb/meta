@@ -607,6 +607,26 @@ pub fn on_path(program: &str) -> bool {
         })
 }
 
+/// The extensions of `tool` on PATH: for each executable file named
+/// `<tool>-<name>` in a PATH directory, the `<name>` that `<tool> <name>`
+/// runs it as. Sorted, each once.
+pub fn extensions_on_path(tool: &str) -> std::collections::BTreeSet<String> {
+    let prefix = format!("{tool}-");
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let file = entry.file_name().into_string().ok()?;
+            let name = file
+                .strip_suffix(std::env::consts::EXE_SUFFIX)?
+                .strip_prefix(&prefix)?;
+            (!name.is_empty() && is_executable(&entry.path())).then(|| name.to_string())
+        })
+        .collect()
+}
+
 /// Check if a file is executable
 #[cfg(unix)]
 fn is_executable(path: &Path) -> bool {

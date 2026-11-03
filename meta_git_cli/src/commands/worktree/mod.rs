@@ -21,7 +21,10 @@ use cli_types::WorktreeCommands;
 
 /// Manage git worktrees across repos
 #[derive(Parser)]
-#[command(arg_required_else_help = true)]
+#[command(
+    arg_required_else_help = true,
+    after_help = "Git options: none of git worktree's; these commands are meta's own."
+)]
 struct WorktreeParser {
     /// Show what would be created, run or removed, and change nothing
     #[arg(long, global = true)]

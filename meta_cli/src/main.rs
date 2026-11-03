@@ -236,9 +236,19 @@ enum InitCommands {
     },
 }
 
+/// The two kinds of extension meta runs, told apart
+const PLUGIN_KINDS: &str =
+    "A meta plugin (meta-<word>) adds or adapts `meta <word> ...`. A tool's \
+     own extension (git-<name>) is just part of that tool, and runs through meta as typed: \
+     `meta git <name>` runs `git <name>` in each repo. `meta plugin list` shows both.";
+
 /// Arguments for `meta plugin`
 #[derive(Args)]
-#[command(subcommand_required = true, arg_required_else_help = true)]
+#[command(
+    subcommand_required = true,
+    arg_required_else_help = true,
+    after_help = PLUGIN_KINDS
+)]
 struct PluginArgs {
     #[command(subcommand)]
     command: PluginCommands,
@@ -262,7 +272,8 @@ enum PluginCommands {
         #[arg(long)]
         local: bool,
     },
-    /// List installed plugins
+    /// List the plugins meta finds, and the tool extensions on PATH they run
+    #[command(after_help = PLUGIN_KINDS)]
     List {
         /// List only project-local plugins
         #[arg(long)]
@@ -294,10 +305,10 @@ enum PluginCommands {
 
 // === Help Utilities ===
 
-/// meta's help, with a line for each plugin's command word (each plugin is
-/// started for its description and version) unless a built-in command has
-/// that name. Plugins name and describe themselves, so their values are
-/// escaped.
+/// meta's help, with an entry for each plugin's command word (each plugin is
+/// started for its info) unless a built-in command has that name: its
+/// description and version, its own commands, and what becomes of the
+/// rest. Plugins name and describe themselves, so their values are escaped.
 fn help_with_plugins(plugins: &SubprocessPluginManager) -> String {
     let mut cmd = Cli::command();
     for plugin in plugins.all() {
@@ -312,12 +323,21 @@ fn help_with_plugins(plugins: &SubprocessPluginManager) -> String {
             .description
             .as_deref()
             .unwrap_or("No description available");
-        let about = format!(
+        let mut about = format!(
             "{} [plugin: {} v{}]",
             escape(description),
             escape(&plugin.word),
             escape(&plugin.info.version)
         );
+        if let Some(help) = &plugin.info.help {
+            if !help.commands.is_empty() {
+                let names: Vec<_> = help.commands.keys().map(|name| escape(name)).collect();
+                about.push_str(&format!("\n{}", names.join(", ")));
+            }
+            if let Some(rule) = help.as_typed_rule() {
+                about.push_str(&format!("\n{}", escape(&rule)));
+            }
+        }
         cmd = cmd.subcommand(clap::Command::new(shown).about(about));
     }
     cmd.render_help().to_string()
@@ -496,14 +516,145 @@ fn plugin_command(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Resu
     let namespace_help =
         args.len() == 2 && matches!(args.get(1).map(String::as_str), Some("--help" | "-h"));
     if args.len() == 1 || namespace_help {
-        let help = meta_plugin_protocol::help_text(&plugin.info);
-        return Ok(outln!("{help}")?);
+        let help = meta_plugin_protocol::help_text(&plugin.word, &plugin.info);
+        return Ok(outln!("{}", help.trim_end())?);
     }
     if wants_help {
-        let options = cli.request_options(cli.parallel);
-        return plugin.execute(args, &[], None, &cli.start_dir()?, options);
+        return command_help(cli, args, plugin);
     }
     dispatch(cli, args, Some(plugin))
+}
+
+/// `meta <word> <verb> ... --help`: a line saying who answers the command,
+/// as the plugin's info declares it, then the command's help: the plugin's
+/// for one of its own, meta's for one it runs as typed.
+fn command_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Result<()> {
+    use meta_plugin_protocol::Verb;
+    let verb = args.get(1).map(String::as_str).unwrap_or_default();
+    let named = loop_lib::display_command(&[plugin.word.clone(), verb.to_string()]);
+    let named = escape(&named);
+    match plugin.info.verb(verb) {
+        Verb::Own => {
+            let tool = plugin
+                .info
+                .help
+                .as_ref()
+                .and_then(|h| h.runs_as_typed.as_deref());
+            // --json keeps stdout the plugin's JSON
+            if !cli.json {
+                let owner = match tool {
+                    Some(tool) => format!(
+                        "`meta {named}` is adapted by meta-{}: meta's own command, not {} run as typed.",
+                        escape(&plugin.word),
+                        escape(tool)
+                    ),
+                    None => format!("`meta {named}` is a command of meta-{}.", escape(&plugin.word)),
+                };
+                outln!("{owner}\n")?;
+            }
+            let options = cli.request_options(cli.parallel);
+            plugin.execute(args, &[], None, &cli.start_dir()?, options)
+        }
+        Verb::AsTyped(tool) => {
+            let help = as_typed_help(cli, args, plugin, tool);
+            match cli.json {
+                true => Ok(outln!(
+                    "{}",
+                    serde_json::json!({"success": true, "output": help})
+                )?),
+                false => Ok(out!("{help}")?),
+            }
+        }
+        Verb::Unknown => {
+            let options = cli.request_options(cli.parallel);
+            plugin.execute(args, &[], None, &cli.start_dir()?, options)
+        }
+    }
+}
+
+/// The help of `args` (`meta <word> <verb> ... --help`), a command that
+/// runs as typed with `tool` in each selected repo: which repos those are
+/// now, meta's options that choose them, and where `tool`'s own help is.
+fn as_typed_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin, tool: &str) -> String {
+    // the command as typed, without its help flags
+    let typed: Vec<String> = args
+        .iter()
+        .take_while(|arg| *arg != "--")
+        .filter(|arg| !matches!(arg.as_str(), "--help" | "-h"))
+        .cloned()
+        .collect();
+    let run: Vec<String> = std::iter::once(tool.to_string())
+        .chain(typed.iter().skip(1).cloned())
+        .collect();
+    let (typed, run, word) = (
+        escape(&loop_lib::display_command(&typed)).into_owned(),
+        escape(&loop_lib::display_command(&run)).into_owned(),
+        escape(&plugin.word),
+    );
+    let tool = escape(tool);
+    let scope = match cli.start_dir().and_then(|start| target(cli, &start)) {
+        Ok(target) => {
+            let names: Vec<String> = target
+                .dirs
+                .iter()
+                .map(|dir| match dir.strip_prefix(&target.root) {
+                    Ok(rel) if rel.as_os_str().is_empty() => ".".to_string(),
+                    Ok(rel) => escape_path(rel),
+                    Err(_) => escape_path(dir),
+                })
+                .collect();
+            format!("{} repo(s): {}", names.len(), names.join(", "))
+        }
+        Err(e) => format!(
+            "no repos here ({})",
+            format!("{e:#}").lines().next().unwrap_or_default()
+        ),
+    };
+    let note = plugin
+        .info
+        .help
+        .as_ref()
+        .and_then(|help| help.note.as_ref())
+        .map(|note| format!("\n{}\n", escape(note)))
+        .unwrap_or_default();
+    format!(
+        "`meta {typed}` runs as typed (`{run}`) in each selected repo.\n\n\
+         Usage: meta [META_OPTIONS] {typed} [{}_ARGS...]\n\n\
+         Current scope: {scope}\n\n\
+         Meta options (before `{word}`):\n{}\n\n\
+         Examples:\n  meta {typed}\n  meta --dry-run {typed}\n  meta --recursive --dry-run {typed}\n\n\
+         For {tool}'s own options: {run} --help\n{note}",
+        tool.to_uppercase(),
+        selection_options_help().trim_end()
+    )
+}
+
+/// The help of meta's options that choose the repos a command runs in, and
+/// how: from meta's own definitions, so it says what meta takes.
+fn selection_options_help() -> String {
+    const SHOWN: [&str; 9] = [
+        "dry_run",
+        "recursive",
+        "depth",
+        "include",
+        "exclude",
+        "tag",
+        "parallel",
+        "sequential",
+        "primary",
+    ];
+    let options: Vec<clap::Arg> = Cli::command()
+        .get_arguments()
+        .filter(|arg| SHOWN.contains(&arg.get_id().as_str()))
+        .cloned()
+        .collect();
+    clap::Command::new("meta")
+        .disable_help_flag(true)
+        .disable_version_flag(true)
+        .help_template("{options}")
+        .args(options)
+        .render_help()
+        .to_string()
 }
 
 // === Command Dispatch (shared by exec and external) ===
@@ -696,6 +847,35 @@ fn target(cli: &Cli, start: &Path) -> Result<Target> {
 
 // === Plugin Management ===
 
+/// The extensions on PATH of each tool a plugin runs as typed (`git-foo`
+/// for meta-git's git), by the command that reaches them: they are part of
+/// the tool, not meta plugins. One the plugin's own command shadows is
+/// left out: meta never runs it.
+fn tool_extensions(plugins: &[SubprocessPlugin]) -> Result<()> {
+    let found: Vec<(&SubprocessPlugin, Vec<String>)> = plugins
+        .iter()
+        .filter_map(|plugin| {
+            let help = plugin.info.help.as_ref()?;
+            let names: Vec<String> =
+                subprocess_plugins::extensions_on_path(help.runs_as_typed.as_deref()?)
+                    .into_iter()
+                    .filter(|name| !help.commands.contains_key(name))
+                    .collect();
+            (!names.is_empty()).then_some((plugin, names))
+        })
+        .collect();
+    if found.is_empty() {
+        return Ok(());
+    }
+    outln!("\nTool extensions on PATH, run as typed (part of their tool, not meta plugins):\n")?;
+    for (plugin, names) in found {
+        let names: Vec<_> = names.iter().map(|name| escape(name)).collect();
+        let command = format!("meta {} <name>", escape(&plugin.word));
+        outln!("{command:<20} {}", names.join(", "))?;
+    }
+    Ok(())
+}
+
 /// Create a plugin installer for the specified scope (local or global)
 fn create_installer(local: bool) -> Result<registry::PluginInstaller> {
     if local {
@@ -884,6 +1064,7 @@ fn handle_plugin_command(
                             escape_path(&plugin.path)
                         )?;
                     }
+                    tool_extensions(&plugins)?;
                 }
             }
         }

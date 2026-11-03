@@ -84,8 +84,18 @@ Project-local plugins are binaries: `--local` writes `.meta/plugins/.gitignore`
 
 ## Plugin Management
 
+A meta plugin (`meta-<word>`) adds or adapts `meta <word> ...`. A tool's own
+extension (`git-<name>` on PATH) is just part of that tool and runs through
+meta as typed: `meta git <name>` runs `git <name>` in each repo.
+`meta plugin list` shows both.
+
+To learn who answers a command, read the first line of its help:
+`meta git clone --help` says it is adapted by meta-git (and which of git's
+options it takes); `meta git pull --help` says it runs as typed. `meta --help`
+lists each plugin's own commands.
+
 ```bash
-# List installed plugins
+# List installed plugins, then the tool extensions on PATH
 meta plugin list
 
 # Search registry for plugins
@@ -111,7 +121,7 @@ meta git status
   │
   ├─ Is there a file named meta-git? Yes
   │
-  ├─ Plugin receives: command="git status", projects=[list]
+  ├─ Plugin receives: command="git", args=["status"], projects=[list]
   │
   ├─ Plugin returns: ExecutionPlan with commands per repo
   │

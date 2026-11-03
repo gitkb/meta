@@ -17,13 +17,6 @@ pub fn execute_command(
     projects: &[String],
     cwd: &Path,
 ) -> CommandResult {
-    // `meta cargo` and any `--help`/`-h` show this plugin's help instead of
-    // running cargo once per repo. meta_cli sends help requests without the
-    // repo list, so cargo's own help could not reach each repo anyway.
-    if args.is_empty() || meta_plugin_protocol::has_help_token("", args) {
-        return CommandResult::ShowHelp(None);
-    }
-
     let dirs: Vec<String> = if projects.is_empty() {
         vec![".".to_string()]
     } else {
@@ -148,14 +141,5 @@ mod tests {
             ["cargo", "test", "--", "--help"]
         );
         assert_eq!(commands, [expected]);
-    }
-
-    #[test]
-    fn bare_or_help_shows_plugin_help() {
-        for args in [&[][..], &["test", "--help"][..]] {
-            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            let result = execute_command(&args, &Default::default(), &[], Path::new("."));
-            assert!(matches!(result, CommandResult::ShowHelp(None)));
-        }
     }
 }

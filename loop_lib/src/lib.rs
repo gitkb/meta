@@ -966,18 +966,30 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
                 failed_count.to_string().red(),
                 total
             )?;
-            for result in results.iter().filter(|r| !r.success) {
-                // Without a root the basename is ambiguous, so keep the full path
-                let name = match config.root_dir.as_deref() {
-                    Some(root) => result_name(&result.directory, Some(root)),
-                    None => escape_path(&result.directory),
+            // Without a root the basename is ambiguous, so keep the full path
+            let name = |result: &CommandResult| match config.root_dir.as_deref() {
+                Some(root) => result_name(&result.directory, Some(root)),
+                None => escape_path(&result.directory),
+            };
+            let failures: Vec<&[CommandResult]> = match same_failure(&results) {
+                true => vec![results.as_slice()],
+                false => results
+                    .iter()
+                    .filter(|r| !r.success)
+                    .map(std::slice::from_ref)
+                    .collect(),
+            };
+            for failed in failures {
+                let Some(first) = failed.first() else {
+                    continue;
                 };
+                let names: Vec<String> = failed.iter().map(name).collect();
                 outln!(
                     "\n{} {}: {} ({}) ",
                     "✗".red(),
-                    name,
-                    escape(&result.command),
-                    result.ending()
+                    names.join(", "),
+                    escape(&first.command),
+                    first.ending()
                 )?;
             }
             outln!()?;
@@ -1007,15 +1019,28 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
 
 /// The output parallel commands captured, each under its directory's name:
 /// what a command wrote to stdout on stdout, to stderr on stderr, as it
-/// wrote it.
+/// wrote it. When every command failed the same way, its output is shown
+/// once, under all their names.
 fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
     let has_output =
         |r: &CommandResult| !r.stdout.trim_ascii().is_empty() || !r.stderr.trim_ascii().is_empty();
     if results.iter().any(has_output) {
         outln!()?;
     }
-    for result in results.iter().filter(|r| has_output(r)) {
-        let dir_name = result_name(&result.directory, config.root_dir.as_deref());
+    let grouped = same_failure(results);
+    let shown = match grouped {
+        true => results.get(..1).unwrap_or_default(),
+        false => results,
+    };
+    for result in shown.iter().filter(|r| has_output(r)) {
+        let dir_name = match grouped {
+            true => results
+                .iter()
+                .map(|r| result_name(&r.directory, config.root_dir.as_deref()))
+                .collect::<Vec<_>>()
+                .join(", "),
+            false => result_name(&result.directory, config.root_dir.as_deref()),
+        };
         if result.success {
             outln!("{} {}:", "✓".green(), dir_name.green())?;
         } else {
@@ -1032,6 +1057,26 @@ fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> 
         outln!()?; // Blank line after each repo's output
     }
     Ok(())
+}
+
+/// Whether two or more commands all failed the same way: the same command,
+/// output and ending, so it is one failure to show once.
+fn same_failure(results: &[CommandResult]) -> bool {
+    let [first, rest @ ..] = results else {
+        return false;
+    };
+    !rest.is_empty()
+        && results.iter().all(|r| {
+            !r.success
+                && (&r.command, &r.stdout, &r.stderr, r.exit_code, r.signal)
+                    == (
+                        &first.command,
+                        &first.stdout,
+                        &first.stderr,
+                        first.exit_code,
+                        first.signal,
+                    )
+        })
 }
 
 /// Whether the directory `path` is one an `ignore` entry names: by its name

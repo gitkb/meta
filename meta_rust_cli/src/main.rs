@@ -6,12 +6,6 @@ use meta_plugin_protocol::{
 };
 
 fn main() {
-    let mut help_commands = IndexMap::new();
-    help_commands.insert(
-        "cargo".to_string(),
-        "Run cargo with your args in each selected repo that has a Cargo.toml".to_string(),
-    );
-
     run_plugin(PluginDefinition {
         info: PluginInfo {
             name: "cargo".to_string(),
@@ -19,9 +13,9 @@ fn main() {
             commands: vec!["cargo".to_string()],
             description: Some("Run cargo across the Rust repos of a meta workspace".to_string()),
             help: Some(PluginHelp {
-                usage: "meta cargo <cargo args>".to_string(),
-                commands: help_commands,
-                command_sections: IndexMap::new(),
+                usage: "Usage: meta cargo <CARGO_ARGS>...".to_string(),
+                commands: IndexMap::new(),
+                runs_as_typed: Some("cargo".to_string()),
                 examples: vec![
                     "meta cargo build --release".to_string(),
                     "meta cargo fmt --check".to_string(),
@@ -30,8 +24,7 @@ fn main() {
                 ],
                 note: Some(
                     "Repos without a Cargo.toml are skipped. A Cargo workspace that spans repos \
-                     runs in each of them; for one run from its root, use plain cargo there. \
-                     For cargo's own help: cargo help <command>"
+                     runs in each of them; for one run from its root, use plain cargo there."
                         .to_string(),
                 ),
             }),

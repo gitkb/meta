@@ -379,13 +379,29 @@ meta --recursive --depth 2 git pull
 
 ## Plugins
 
-Plugins are standalone executables that extend meta: a program named `meta-<word>` serves `meta <word> ...`. meta finds them in the workspace's `.meta/plugins/` folders, then `~/.meta/plugins/` (where `meta plugin install <name>` puts them; `--local` installs into the workspace), then PATH; the first file with the name wins. `meta plugin list` shows what it found. See [docs/plugin_development.md](docs/plugin_development.md#discovery-and-naming) for the details.
+Plugins are standalone executables that extend meta: a program named `meta-<word>` serves `meta <word> ...`. meta finds them in the workspace's `.meta/plugins/` folders, then `~/.meta/plugins/` (where `meta plugin install <name>` puts them; `--local` installs into the workspace), then PATH; the first file with the name wins. See [docs/plugin_development.md](docs/plugin_development.md#discovery-and-naming) for the details.
+
+A **meta plugin** (`meta-<word>`) adds or adapts `meta <word> ...`. A **tool's own extension** (`git-<name>`, `cargo-<name>`) is just part of that tool, and runs through meta as typed: with `git-<name>` on PATH, `meta git <name>` runs `git <name>` in each repo. `meta plugin list` shows both: the plugins meta found, then the extensions on PATH of each tool a plugin runs as typed.
+
+Help says who answers each command. `meta --help` lists each plugin's own commands under its word. `meta git --help` lists the git commands meta adapts and says that every other one runs as typed. A command's help starts with the same answer:
+
+```
+$ meta git clone --help
+`meta git clone` is adapted by meta-git: meta's own command, not git run as typed.
+...
+Git options: of git clone's own, only --depth, given to each clone.
+
+$ meta git pull --help
+`meta git pull` runs as typed (`git pull`) in each selected repo.
+...
+For git's own options: git pull --help
+```
 
 ### Built-in Plugins
 
 | Plugin | Description |
 |--------|-------------|
-| `git` | `clone`, `update`, `commit` and `worktree` sets; any other `meta git <command>` runs git in each repo |
+| `git` | `clone`, `clone-missing`, `clone-prune`, `clone-sync`, `update`, `commit` and `worktree` sets; any other `meta git <command>` runs git in each repo |
 | `project` | `list`, `check` (is every project cloned from its remote?), `dependents` |
 | `cargo` | `meta cargo <cargo args>`: any cargo command in each repo that has a `Cargo.toml` |
 

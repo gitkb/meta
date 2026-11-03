@@ -882,6 +882,16 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
     );
     let dirs: Vec<_> = missing.iter().map(|r| r.source.clone()).collect();
     let cloned = crate::clone_missing::clone_dirs(index.workspace, &dirs, "git worktree create")?;
+    // the ones still not there, for the error: those cloned are fine now
+    let still: Vec<PlannedRepo> = missing
+        .iter()
+        .filter(|r| {
+            meta_core::gitdir::Checkout::of(&r.source)
+                .problem()
+                .is_some()
+        })
+        .cloned()
+        .collect();
     match cloned {
         Ok(cloned) if !cloned.is_empty() => {
             errln!("{} {}", "Cloned".green(), places.join(", "));
@@ -889,11 +899,11 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
         }
         Ok(_) => anyhow::bail!(
             "{}\n(cloning cloned none of them)",
-            not_cloned_error(missing, index.tree().is_some())
+            not_cloned_error(&still, index.tree().is_some())
         ),
         Err(why) => anyhow::bail!(
-            "{}\nCloning them failed: {}",
-            not_cloned_error(missing, index.tree().is_some()),
+            "{}\nCloning failed: {}",
+            not_cloned_error(&still, index.tree().is_some()),
             why
         ),
     }

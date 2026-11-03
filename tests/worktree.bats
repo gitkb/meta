@@ -234,10 +234,13 @@ projects:
 EOF
     run "$META_BIN" git worktree create denied --repo api
     [ "$status" -ne 0 ]
-    [[ "$output" == *"3 repos the set needs can't be used; no worktree was created:"* ]]
+    # api clones; the two it can't are named, and nothing else
+    [[ "$output" == *"2 repos the set needs can't be used; no worktree was created:"* ]]
     [[ "$output" == *"'web' at $TEST_DIR/web: not cloned"* ]]
     [[ "$output" == *"'db' at $TEST_DIR/db: not cloned"* ]]
-    [[ "$output" == *"Cloning them failed"* ]]
+    [[ "$output" != *"'api' at"* ]]
+    [[ "$output" == *"meta --include 'web,db' git clone-missing"* ]]
+    [[ "$output" == *"Cloning failed"* ]]
     [ ! -e ".worktrees/denied" ]
 }
 

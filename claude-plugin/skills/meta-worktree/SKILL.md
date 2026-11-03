@@ -76,8 +76,8 @@ A repo the set needs that isn't cloned (one asked for, a dependency, or a
 parent on the way to a nested repo) is cloned first, as
 `meta git clone-missing` would, and named: `Cloning 2 repos the set needs: web, db`.
 `add` does the same for the repos it adds. Nothing else is cloned. When a clone
-fails (no access, say), nothing is made, and the error names every repo the set
-needs that isn't there. `--all` skips the projects that aren't cloned instead.
+fails (no access, say), no set is made (the repos it did clone stay cloned), and
+the error names every repo the set needs that still isn't there. `--all` skips the projects that aren't cloned instead.
 
 A set lays its repos out as the workspace does: each repo sits at its `path`
 from the meta config, so relative references between repos keep working.

@@ -125,11 +125,12 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
                 .iter()
                 .map(|row| row["alias"].as_str().unwrap().replace('\\', "/"))
                 .collect();
+            // every member is listed, nested ones too, with or without -r
+            assert_eq!(
+                aliases,
+                [".", "open-source", "open-source/atc", "other/atc"]
+            );
             if recursive || explicit {
-                assert_eq!(
-                    aliases,
-                    [".", "open-source", "open-source/atc", "other/atc"]
-                );
                 let nested = rows
                     .as_array()
                     .unwrap()
@@ -140,8 +141,6 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
                     .unwrap();
                 assert_eq!(nested["branch"], "topic");
                 assert_eq!(nested["dirty"], true);
-            } else {
-                assert_eq!(aliases, [".", "open-source", "other/atc"]);
             }
         }
     }

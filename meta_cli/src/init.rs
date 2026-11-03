@@ -84,6 +84,51 @@ const RULE_WORKSPACE_DISCIPLINE: &str =
 const RULE_DESTRUCTIVE_COMMANDS: &str =
     include_str!("../.claude/rules/meta-destructive-commands.md");
 
+/// The section of [`RULE_DESTRUCTIVE_COMMANDS`] that names what the
+/// PreToolUse hook `agent guard` refuses: written only where that hook is
+/// in the settings, so the rule never claims a protection that isn't there.
+const GUARD_SECTION: &str = "## Blocked by `agent guard`";
+
+/// Every flat `.claude/skills/<name>.md` file older releases of meta wrote
+/// (a layout Claude Code doesn't load), by name and git blob id: the
+/// `.claude/skills/meta-*.md` files in the history of gitkb/meta and
+/// gitkb/meta_cli. `--update` and `--force` remove such a file only while
+/// it is exactly one of these, so no file anyone changed is deleted.
+const OLD_FLAT_SKILLS: &[(&str, &str)] = &[
+    ("meta-build", "0aabc8b10d896c601425ee43409ce704acd238e6"),
+    ("meta-build", "1363979118fb2618294058080bd82e2c6f5808f6"),
+    ("meta-core", "9015bc7937fad5ec437f5e6fee8e8fce1a9553b8"),
+    ("meta-core", "fe9948125513e16bdf387c39b9d770c70db64432"),
+    ("meta-discover", "8efa51364c6fdd8759f20715f80770d434ff071e"),
+    ("meta-discover", "ba4268b88bb63b406d7c0c552bbdc2b415457035"),
+    ("meta-exec", "02c97c07ceb5902dc6a8af49b61c0d332c066912"),
+    ("meta-exec", "0f4571268d948b4a0807f59f63f8e57503dcf9cf"),
+    ("meta-exec", "3d747e012b411f1f27266ea431d4b10182da7160"),
+    ("meta-exec", "48278c03ccee4500a175e88dcb96265e3c612fad"),
+    ("meta-exec", "9a687fdec10538efcc88ec62b13c381af1816adc"),
+    ("meta-exec", "f2a0335735560d11196ed62185f9927027653e96"),
+    ("meta-git", "45318346fd42a7a71dd8fb79cab6077dc0e218b6"),
+    ("meta-git", "45a1ad37b717d6e58a6fab327822f58a36db8ca7"),
+    ("meta-git", "5e83eb1e5f5fc0e051a852cf6931bfeecf74e58e"),
+    ("meta-git", "991d149317e54f15c54db9581a2a5432065520fd"),
+    ("meta-git", "b3a327990f872b55c19826177402b94738902788"),
+    ("meta-plugins", "af4e7a19bea4b5a1b7e2fb6f6a93d0351998dfc1"),
+    ("meta-plugins", "b2167f8d729bc8c4488182137b906d1b54fd51eb"),
+    ("meta-safety", "04629a5ac132aa1059cd097c891520ed8cf6251e"),
+    ("meta-safety", "45343fdf5dbfad4b4f4ae7ef4f35ec60c7d01991"),
+    ("meta-safety", "5a7c24cc1a17f0be08daabee9420cea5c0aa41d2"),
+    ("meta-safety", "aa79c88fc02d458fd16201b896adaf066e0c3063"),
+    ("meta-workspace", "32bc1999539013cf755e07701c30bd233e7a5f6f"),
+    ("meta-workspace", "7288debb80f4454f59a66c60c6bea6204a0821ef"),
+    ("meta-workspace", "cc2228e2cf2c55f6bed7488f421bb24b682d84ab"),
+    ("meta-workspace", "ddd9185ebac0c659fa7761adb4b599fd15d19176"),
+    ("meta-worktree", "07b7c14fd8381f9c543142db8c1b87c3b30d3795"),
+    ("meta-worktree", "277f9fd0672e7fa06acf684276e0a7b9825598aa"),
+    ("meta-worktree", "28781ae1b494ba8e68d9a8b176fa5363f99dcdaf"),
+    ("meta-worktree", "47fd447957bf9b0fa3ad50b880f6a1b74e755b9c"),
+    ("meta-worktree", "6e0bc8b5b0869f2446c2dbd94c585a36a7dd7fe4"),
+];
+
 /// All available rules with their filenames
 const RULES: &[(&str, &str)] = &[
     ("meta-workspace-discipline.md", RULE_WORKSPACE_DISCIPLINE),
@@ -133,6 +178,18 @@ impl Init {
             return Ok(());
         }
         write_settings_atomic(path, content)
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<()> {
+        if self.mode.is_preview() {
+            outln!("  would remove {}", escape_path(path))?;
+            return Ok(());
+        }
+        fs::remove_file(path).with_context(|| format!("Failed to remove {}", escape_path(path)))?;
+        if self.verbose {
+            outln!("{} {}", "Removed".yellow(), escape_path(path))?;
+        }
+        Ok(())
     }
 
     fn remove_owned(&self, link: &Path, marker: &str) -> Result<()> {
@@ -233,8 +290,16 @@ fn install_claude_integration_to(
         Some(prepare_settings(&settings_path, init)?)
     };
 
+    // The rules say what `agent guard` refuses only where the settings run it
+    let hooks = match &settings_plan {
+        Some(plan) => plan.hooks.clone(),
+        None => hooks_in(&settings_path),
+    };
+    let guarded = hooks.iter().any(|key| key == "PreToolUse");
+
     // --force or --update: overwrite; default: skip existing
     let overwrite_content = force || update;
+    let mut skipped = remove_old_flat_skills(&claude_dir.join("skills"), overwrite_content, init)?;
     let skills = install_skills(
         target_dir,
         "meta",
@@ -244,7 +309,7 @@ fn install_claude_integration_to(
         init,
     )?;
     let mut installed = skills.written;
-    let mut skipped = skills.skipped;
+    skipped += skills.skipped;
 
     // Install rule files
     // --force or --update: overwrite; default: skip existing
@@ -260,7 +325,12 @@ fn install_claude_integration_to(
             continue;
         }
 
-        init.write_file(&target_path, content)?;
+        let content = if *filename == "meta-destructive-commands.md" && !guarded {
+            without_section(content, GUARD_SECTION)
+        } else {
+            content.to_string()
+        };
+        init.write_file(&target_path, &content)?;
         installed += 1;
     }
 
@@ -274,11 +344,7 @@ fn install_claude_integration_to(
         }
         outln!("{} {}", plan.message, escape_path(&settings_path))?;
     }
-    let present_hooks = fs::read_to_string(&settings_path)
-        .ok()
-        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-        .map(|settings| installed_hooks(&settings))
-        .unwrap_or_default();
+    let present_hooks = hooks_in(&settings_path);
     // Without `agent`, Claude Code would run a hook that doesn't exist; one
     // already in the settings stays
     let guard_skipped =
@@ -363,6 +429,70 @@ fn install_claude_integration_to(
     outln!("  claude plugin install meta@gitkb")?;
 
     Ok(())
+}
+
+/// Meta's hooks in the settings at `path`; none where it can't be read.
+fn hooks_in(path: &Path) -> Vec<String> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        .map(|settings| installed_hooks(&settings))
+        .unwrap_or_default()
+}
+
+/// `text` without the markdown section that starts at the line `heading`,
+/// up to the next `## ` heading.
+fn without_section(text: &str, heading: &str) -> String {
+    let Some((before, rest)) = text.split_once(&format!("{heading}\n")) else {
+        return text.to_string();
+    };
+    match rest.split_once("\n## ") {
+        Some((_, after)) => format!("{before}## {after}"),
+        None => before.to_string(),
+    }
+}
+
+/// Remove, with `overwrite`, each flat skill file in `skills_dir` an older
+/// meta wrote ([`OLD_FLAT_SKILLS`]); name the ones left. How many were left
+/// that `overwrite` would remove.
+fn remove_old_flat_skills(skills_dir: &Path, overwrite: bool, init: &Init) -> Result<usize> {
+    let mut left = 0;
+    let mut names: Vec<&str> = OLD_FLAT_SKILLS.iter().map(|(name, _)| *name).collect();
+    names.dedup();
+    for name in names {
+        let path = skills_dir.join(format!("{name}.md"));
+        if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+            continue;
+        }
+        let blob = meta_core::git::run(
+            skills_dir,
+            [
+                "hash-object".as_ref(),
+                "--no-filters".as_ref(),
+                "--".as_ref(),
+                path.as_os_str(),
+            ],
+        )?;
+        let meta_wrote = OLD_FLAT_SKILLS.contains(&(name, blob.trim()));
+        if meta_wrote && overwrite {
+            init.remove_file(&path)?;
+        } else if meta_wrote {
+            outln!(
+                "{} {} (an older meta's skill file, which agents don't load; --update removes it)",
+                "Skipped".yellow(),
+                escape_path(&path)
+            )?;
+            left += 1;
+        } else {
+            outln!(
+                "{} {} (an older meta's layout, but changed since; delete it once its \
+                 changes are kept elsewhere)",
+                "Kept".yellow(),
+                escape_path(&path)
+            )?;
+        }
+    }
+    Ok(left)
 }
 
 /// What [`install_skills`] did.
@@ -588,6 +718,8 @@ fn copy_skill(source: &Path, dir: &Path, marker: &str) -> Result<()> {
 struct SettingsPlan {
     content: Option<String>,
     message: String,
+    /// Meta's hooks the settings hold once written
+    hooks: Vec<String>,
 }
 
 fn prepare_settings(path: &Path, init: &Init) -> Result<SettingsPlan> {
@@ -603,9 +735,11 @@ fn prepare_settings(path: &Path, init: &Init) -> Result<SettingsPlan> {
     let existing = existing.unwrap_or_else(|| json!({}));
     let before = installed_hooks(&existing);
     let merged = merge_hooks_into_settings(existing, build_meta_hooks(init.guard), path)?;
-    let added: Vec<_> = installed_hooks(&merged)
-        .into_iter()
+    let hooks = installed_hooks(&merged);
+    let added: Vec<_> = hooks
+        .iter()
         .filter(|key| !before.contains(key))
+        .cloned()
         .collect();
     let preview = init.mode.is_preview();
     let message = if created {
@@ -621,7 +755,11 @@ fn prepare_settings(path: &Path, init: &Init) -> Result<SettingsPlan> {
     } else {
         None
     };
-    Ok(SettingsPlan { content, message })
+    Ok(SettingsPlan {
+        content,
+        message,
+        hooks,
+    })
 }
 
 fn write_settings_atomic(path: &Path, content: &str) -> Result<()> {
@@ -867,6 +1005,60 @@ mod tests {
                 assert_eq!(snapshot(dir.path()), before);
             }
         }
+    }
+
+    #[test]
+    fn the_rule_names_what_agent_guard_refuses_only_where_settings_run_it() {
+        let rule = |root: &Path| {
+            fs::read_to_string(root.join(".claude/rules/meta-destructive-commands.md")).unwrap()
+        };
+        assert!(RULE_DESTRUCTIVE_COMMANDS.contains(GUARD_SECTION));
+        let no_agent = Init {
+            guard: false,
+            ..RUN
+        };
+        let dir = tempdir().unwrap();
+        install_claude_integration_to(dir.path(), false, false, &no_agent).unwrap();
+        let text = rule(dir.path());
+        assert!(!text.contains("agent guard"), "{text}");
+        assert!(text.contains("## Before Destructive Operations") && text.contains("## Recovery"));
+        // once agent is installed, the hook and the section arrive together
+        install_claude_integration_to(dir.path(), true, false, &RUN).unwrap();
+        assert!(rule(dir.path()).contains(GUARD_SECTION));
+        // --update keeps the settings, and a hook already in them counts
+        install_claude_integration_to(dir.path(), false, true, &no_agent).unwrap();
+        assert!(rule(dir.path()).contains(GUARD_SECTION));
+    }
+
+    #[test]
+    fn update_removes_only_the_flat_skill_files_an_older_meta_wrote() {
+        // meta-discover.md as an older meta wrote it, byte for byte
+        let old = include_str!("../tests/fixtures/meta-discover.md");
+        let dir = tempdir().unwrap();
+        let skills = dir.path().join(".claude/skills");
+        fs::create_dir_all(&skills).unwrap();
+        fs::write(skills.join("meta-discover.md"), old).unwrap();
+        fs::write(skills.join("meta-exec.md"), "# Meta Exec Skill\nmy notes\n").unwrap();
+        fs::write(skills.join("my-skill.md"), old).unwrap();
+        // without --update or --force, nothing of the user's is touched
+        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
+        assert!(skills.join("meta-discover.md").exists());
+        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        assert!(!skills.join("meta-discover.md").exists());
+        // changed since, or not a name meta used: kept
+        assert!(skills.join("meta-exec.md").exists());
+        assert!(skills.join("my-skill.md").exists());
+    }
+
+    #[test]
+    fn without_section_drops_one_section_only() {
+        let text = "# T\n\n## A\na\n\n## B\nb\n\n## C\nc\n";
+        assert_eq!(without_section(text, "## B"), "# T\n\n## A\na\n\n## C\nc\n");
+        assert_eq!(
+            without_section(text, "## C"),
+            "# T\n\n## A\na\n\n## B\nb\n\n"
+        );
+        assert_eq!(without_section(text, "## D"), text);
     }
 
     #[test]

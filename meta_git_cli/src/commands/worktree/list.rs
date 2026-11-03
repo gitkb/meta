@@ -8,8 +8,9 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 use meta_cli::worktree::{
-    detect_worktree_location, discover_worktree_members, discover_worktree_members_recursive,
-    discover_worktree_repos, discover_worktree_repos_recursive, WorktreeMemberInfo,
+    detect_worktree_location, discover_worktree_members_nested,
+    discover_worktree_members_recursive, discover_worktree_repos_nested,
+    discover_worktree_repos_recursive, WorktreeMemberInfo,
 };
 use meta_core::duration::format_duration;
 use meta_core::set_record::{self as record, SetRecord};
@@ -66,7 +67,7 @@ fn repo_entries(
         let members = if args.recursive {
             discover_worktree_members_recursive(path)?
         } else {
-            discover_worktree_members(path)?
+            discover_worktree_members_nested(path)?
         };
         let record = record::find(path, members.iter().map(|m| &m.path));
         return Ok((
@@ -77,7 +78,7 @@ fn repo_entries(
     let repos = if args.recursive {
         discover_worktree_repos_recursive(path)?
     } else {
-        discover_worktree_repos(path)?
+        discover_worktree_repos_nested(path)?
     };
     let record = record::find(path, repos.iter().map(|r| &r.path));
     let entries = repos

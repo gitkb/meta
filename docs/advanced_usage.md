@@ -276,8 +276,11 @@ meta git worktree list example --recursive
 meta git worktree list --recursive
 ```
 
-An explicit name overrides the enclosing set. `--recursive` includes
-repositories nested beneath other repositories of the set.
+An explicit name overrides the enclosing set. Every repository of the set is
+listed, those nested beneath other repositories of the set (`clients/desktop`
+inside `clients`) too. `--recursive` fails on a folder that can't be scanned,
+a checkout whose git files are broken, or a repository git can't read, instead
+of skipping it or marking it unknown.
 
 ### Metadata-only listing
 

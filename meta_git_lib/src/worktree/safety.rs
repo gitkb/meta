@@ -457,6 +457,30 @@ pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
     Ok(found)
 }
 
+/// The files and folders git ignores in the checkout at `repo` (`.env`,
+/// `target/`), which no remote has either: "ignored files: .env, target/",
+/// or None when there are none. An ignored folder is named once.
+pub fn repo_ignored(repo: &Path) -> Result<Option<String>> {
+    let listed = meta_core::git::run(
+        repo,
+        [
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        ],
+    )?;
+    let ignored: Vec<&str> = listed.split('\0').filter(|p| !p.is_empty()).collect();
+    Ok((!ignored.is_empty()).then(|| {
+        format!(
+            "ignored files: {}",
+            sample(&ignored, |path| escape(path).into_owned())
+        )
+    }))
+}
+
 /// How [`unsaved_work`] ends the line for commits that nothing holds.
 const STRANDED: &str = "not on any branch, tag or remote";
 
@@ -732,6 +756,25 @@ mod tests {
         assert!(held.contains("1 stash"), "{held}");
         assert!(held.contains("1 linked worktree: "), "{held}");
         assert!(!held.contains(STRANDED), "{held}");
+    }
+
+    #[test]
+    fn repo_ignored_names_what_git_ignores() {
+        let sandbox = meta_test_support::isolated!();
+        let repo = sandbox.work().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        sandbox.git(&repo, &["init", "-q"]);
+        std::fs::write(repo.join(".gitignore"), ".env\ndata/\n").unwrap();
+        assert_eq!(repo_ignored(&repo).unwrap(), None);
+        std::fs::write(repo.join(".env"), "SECRET=1").unwrap();
+        std::fs::create_dir(repo.join("data")).unwrap();
+        std::fs::write(repo.join("data/a.db"), "").unwrap();
+        std::fs::write(repo.join("data/b.db"), "").unwrap();
+        // a folder is named once, not file by file
+        assert_eq!(
+            repo_ignored(&repo).unwrap().as_deref(),
+            Some("ignored files: .env, data/")
+        );
     }
 
     #[test]

@@ -32,7 +32,8 @@ pub struct CreateArgs {
     /// Worktree name
     pub name: String,
 
-    /// Start from a specific commit-ish (tag, SHA, branch)
+    /// Start new branches from this commit-ish (tag, SHA, branch); without
+    /// it, each from its remote's default branch (origin/HEAD)
     pub commit_ish: Option<String>,
 
     /// Override default branch name
@@ -99,6 +100,10 @@ pub struct AddArgs {
     /// Worktree name
     pub name: String,
 
+    /// Start a new branch from this commit-ish (tag, SHA, branch); without
+    /// it, from the remote's default branch (origin/HEAD)
+    pub commit_ish: Option<String>,
+
     /// Repo(s) to add (alias or alias:branch)
     #[arg(long = "repo", value_name = "ALIAS[:BRANCH]", required = true)]
     pub repos: Vec<RepoSpec>,
@@ -119,7 +124,9 @@ pub struct ListArgs {
     /// Worktree name (defaults to the current set inside .worktrees/<name>)
     pub name: Option<String>,
 
-    /// Include realized repositories nested beneath other worktree repositories
+    /// Fail on a folder that can't be scanned, a checkout whose git files
+    /// are broken, or a repo git can't read, instead of skipping it or
+    /// marking it unknown (repos nested in others are listed either way)
     #[arg(long, short = 'r')]
     pub recursive: bool,
 
@@ -130,7 +137,9 @@ pub struct ListArgs {
 
 #[derive(Args)]
 pub struct StatusArgs {
-    /// Include realized repositories nested beneath other worktree repositories
+    /// Fail on a folder that can't be scanned, a checkout whose git files
+    /// are broken, or a repo git can't read, instead of skipping it or
+    /// marking it unknown (repos nested in others are listed either way)
     #[arg(long, short = 'r')]
     pub recursive: bool,
     /// Worktree name

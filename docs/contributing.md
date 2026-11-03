@@ -4,7 +4,7 @@ Thank you for your interest in contributing to `meta`! The commit and PR title r
 
 ## Development Environment
 
-Build from source as the README's [From Source](../README.md#from-source) section says. All of meta's crates are in this one repo and Cargo workspace, so a change across crates is one commit and one PR.
+Build from source as the README's [From GitHub main](../README.md#from-github-main-recommended) section says. All of meta's crates are in this one repo and Cargo workspace, so a change across crates is one commit and one PR.
 
 ## Before Opening a PR
 

@@ -126,15 +126,16 @@ meta git worktree diff auth-fix --base main   # committed changes: a summary, th
 meta git worktree diff auth-fix --stat        # the summary only
 ```
 
-`list` and `status` take `--recursive` to include repos nested beneath other
-worktree repos.
+`list` and `status` show every repo of the set, those nested beneath other
+worktree repos too; `--recursive` makes them fail on what they can't read
+instead of skipping it.
 
 ## Running Commands
 
 ```bash
 meta git worktree exec auth-fix -- cargo test
 meta git worktree exec auth-fix --include backend -- make build
-meta git worktree exec auth-fix --exclude legacy -- npm test
+meta git worktree exec auth-fix --exclude frontend -- npm test
 meta git worktree exec auth-fix --parallel -- cargo build
 ```
 
@@ -159,8 +160,8 @@ meta --tag cli exec -- pwd
 Detection relies on the `.worktrees/<name>` path. It, and
 `meta git worktree exec`, only find repos down to the first nested repo: repos
 created with `--recursive` inside another repo of the set (e.g.
-`open-source/sdk/core` inside `open-source`) are skipped. `list --recursive`
-shows them; run the tool itself (`cargo`, `git`) in their directory, not `meta exec`, which still scopes to the set's top-level repos there. The root repo is part of a set
+`open-source/sdk/core` inside `open-source`) are skipped. `list` shows
+them; run the tool itself (`cargo`, `git`) in their directory, not `meta exec`, which still scopes to the set's top-level repos there. The root repo is part of a set
 by default, so the set has its own `.meta.yaml` config; otherwise meta walks up to
 the primary checkout's config. `meta --primary <command>` bypasses detection and acts on the
 workspace the set was made from (found through meta's records in the set's

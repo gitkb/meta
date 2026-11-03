@@ -206,6 +206,9 @@ pub(crate) fn execute_git_update(
 pub(crate) enum Leftover {
     /// Nothing git shows that isn't on a remote
     Nothing,
+    /// Nothing unpushed, but files git ignores, which no remote has
+    /// either: "ignored files: .env, target/"
+    Ignored(String),
     /// What it holds, or why it isn't deleted
     Holds(String),
 }
@@ -247,9 +250,18 @@ impl Leftover {
             Ok(None) => {}
             Err(e) => return Self::Holds(format!("it can't be searched ({e})")),
         }
-        match meta_git_lib::worktree::safety::repo_holds(path) {
-            Ok(held) if held.is_empty() => Self::Nothing,
-            Ok(held) => Self::Holds(format!("it holds {}", held.join("; "))),
+        let held = meta_git_lib::worktree::safety::repo_holds(path)
+            .and_then(|held| Ok((held, meta_git_lib::worktree::safety::repo_ignored(path)?)));
+        match held {
+            Ok((held, None)) if held.is_empty() => Self::Nothing,
+            Ok((held, Some(ignored))) if held.is_empty() => Self::Ignored(ignored),
+            Ok((held, ignored)) => Self::Holds(format!(
+                "it holds {}",
+                held.into_iter()
+                    .chain(ignored)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )),
             Err(e) => Self::Holds(format!(
                 "what it holds can't be told ({})",
                 meta_core::display::escape_lines(&format!("{e:#}"))
@@ -301,6 +313,10 @@ fn report_unlisted(queue: &CloneQueue, root: &Path, cwd: &Path, recursive: bool)
             Leftover::Nothing => {
                 format!("{shown} isn't in .meta.yaml (nothing unpushed; {prune} removes it)")
             }
+            Leftover::Ignored(ignored) => format!(
+                "{shown} isn't in .meta.yaml (nothing unpushed, but it holds {ignored}; \
+                 {prune} --delete-ignored removes it)"
+            ),
             Leftover::Holds(why) => format!("{shown} isn't in .meta.yaml; {why}"),
         };
         meta_core::out::warn(warning);

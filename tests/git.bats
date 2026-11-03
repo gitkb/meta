@@ -598,6 +598,31 @@ within() {
     done
 }
 
+@test "meta git clone-prune keeps a leftover holding ignored files unless told to delete them" {
+    with_remotes
+    git clone --quiet remotes/shared.git local-data
+    printf '.env\ndata/\n' > local-data/.git/info/exclude
+    echo SECRET=1 > local-data/.env
+    mkdir local-data/data && echo row > local-data/data/a.db
+    run "$META_BIN" --dry-run git clone-prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Would keep local-data: it holds ignored files: .env, data/ (--delete-ignored removes it, deleting them)"* ]]
+    run "$META_BIN" git clone-sync
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Kept local-data: it holds ignored files: .env, data/"* ]]
+    [ -f local-data/.env ]
+    run "$META_BIN" git update
+    [[ "$output" == *"local-data isn't in .meta.yaml (nothing unpushed, but it holds ignored files: .env, data/; meta git clone-prune --delete-ignored removes it)"* ]]
+    run "$META_BIN" --dry-run git clone-prune --delete-ignored
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Would remove local-data (nothing unpushed; ignored files: .env, data/ deleted with it)"* ]]
+    [ -f local-data/.env ]
+    run "$META_BIN" git clone-prune --delete-ignored
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Removed local-data (nothing unpushed; ignored files: .env, data/ deleted with it)"* ]]
+    [ ! -e local-data ]
+}
+
 @test "meta git clone-sync clones what is missing and prunes what no .meta.yaml lists" {
     with_remotes
     rm -rf shared

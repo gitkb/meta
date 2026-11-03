@@ -35,14 +35,18 @@ brew --prefix  # Should show installation prefix
 
 ### Q: How do I install on Windows?
 
-**A:** Use the PowerShell installer:
+**A:** Build it from GitHub main in Git Bash or WSL (see [From GitHub main](../README.md#from-github-main-recommended));
+that needs `git`, `make` and Rust:
+
+```bash
+git clone https://github.com/gitkb/meta && make -C meta install
+```
+
+Where you can't build, the PowerShell installer installs the latest release, which lags main:
 
 ```powershell
 irm https://raw.githubusercontent.com/gitkb/meta/main/install.ps1 | iex
 ```
-
-Or build it from source in Git Bash or WSL (see [From Source](../README.md#from-source)):
-those steps need `bash`, `git`, `make` and Rust.
 
 ### Q: How do I update meta?
 
@@ -52,12 +56,12 @@ those steps need `bash`, `git`, `make` and Rust.
 # Homebrew
 brew upgrade meta-cli
 
-# From source: git pull in your meta checkout, then
-# make install. A checkout with meta_cli/ and the rest as separate clones
-# must first run the snippet in https://github.com/gitkb/meta/pull/135.
-make install
+# From GitHub main (from the folder you cloned meta in). A checkout with
+# meta_cli/ and the rest as separate clones must first run the snippet in
+# https://github.com/gitkb/meta/pull/135.
+git -C meta pull && make -C meta install
 
-# Script install
+# Script install (the latest release, which lags main)
 curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | bash
 ```
 

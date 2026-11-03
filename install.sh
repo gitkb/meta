@@ -2,7 +2,9 @@
 set -e
 
 # Meta CLI Installation Script
-# Downloads and installs meta from GitHub releases
+# Downloads and installs meta from GitHub releases, which lag main. The
+# recommended install builds main instead:
+#   git clone https://github.com/gitkb/meta && make -C meta install
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${VERSION:-latest}"
@@ -121,7 +123,7 @@ install_meta() {
             chmod +x "$INSTALL_DIR/$binary_name"
             info "Installed $binary_name"
         else
-            warn "Binary $binary_name not found in archive"
+            warn "$binary_name is not in this release; build main to get it (see the first lines above)"
         fi
     done
 
@@ -151,6 +153,9 @@ install_meta() {
 main() {
     echo "Meta CLI Installer"
     echo "=================="
+    echo ""
+    warn "This installs a release build, which can lag main by many fixes and commands."
+    warn "To build main instead: git clone https://github.com/gitkb/meta && make -C meta install"
     echo ""
 
     # Check for curl

@@ -193,6 +193,34 @@ EOF
     [ -d ".worktrees/aged" ]
 }
 
+@test "worktree create names every repo the set needs that isn't cloned, and how to clone just those" {
+    for repo in backend frontend; do
+        git clone --quiet --bare "$repo" "$TEST_DIR/$repo.git"
+    done
+    cat > .meta.yaml <<EOF
+projects:
+  api: {repo: "file://$TEST_DIR/backend.git", depends_on: [web, db]}
+  web: "file://$TEST_DIR/frontend.git"
+  db: "file://$TEST_DIR/backend.git"
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" git worktree create all-at-once --repo api
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"3 repos the set needs can't be used; no worktree was created:"* ]]
+    [[ "$output" == *"'api' at $TEST_DIR/api: not cloned"* ]]
+    [[ "$output" == *"'web' at $TEST_DIR/web: not cloned"* ]]
+    [[ "$output" == *"'db' at $TEST_DIR/db: not cloned"* ]]
+    [ ! -e ".worktrees/all-at-once" ]
+    # the command it gives clones those three and nothing else
+    [[ "$output" == *"meta --include 'api,web,db' git clone-missing"* ]]
+    run "$META_BIN" --include 'api,web,db' git clone-missing
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Clone completed (3 cloned)"* ]]
+    run "$META_BIN" git worktree create all-at-once --repo api
+    [ "$status" -eq 0 ]
+    [ -d ".worktrees/all-at-once/db" ]
+}
+
 @test "worktree create --all skips a repo that is not cloned; --repo and add refuse it" {
     rm -rf frontend
     run "$META_BIN" git worktree create some --all
@@ -287,6 +315,38 @@ EOF
     run "$META_BIN" git worktree add extend-test --repo frontend
     [ "$status" -eq 0 ]
     [ -d ".worktrees/extend-test/frontend" ]
+}
+
+@test "worktree add and create start a new branch from the remote's default branch, not the checkout's" {
+    "$META_BIN" git worktree create base-set --repo backend
+    for repo in backend frontend; do
+        git clone --quiet --bare "$repo" "$TEST_DIR/$repo.git"
+        git -C "$repo" remote add origin "$TEST_DIR/$repo.git"
+        git -C "$repo" fetch --quiet origin
+        git -C "$repo" remote set-head origin main
+        # the canonical checkout is on a feature branch, ahead of main
+        git -C "$repo" switch --quiet -c feature
+        git -C "$repo" commit --quiet --allow-empty -m "feature work"
+    done
+    local main_commit
+    main_commit=$(git -C frontend rev-parse origin/main)
+    run "$META_BIN" git worktree add base-set --repo frontend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Added 'frontend' to worktree 'base-set' (branch: base-set) (new from origin/main)"* ]]
+    [ "$(git -C .worktrees/base-set/frontend rev-parse HEAD)" = "$main_commit" ]
+    # a branch of its own: it tracks nothing, so a push or pull never reaches main
+    run git -C .worktrees/base-set/frontend rev-parse --abbrev-ref '@{upstream}'
+    [ "$status" -ne 0 ]
+    run "$META_BIN" git worktree create other-set --repo backend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"backend -> other-set (new from origin/main)"* ]]
+    [ "$(git -C .worktrees/other-set/backend rev-parse HEAD)" = "$(git -C backend rev-parse origin/main)" ]
+    # add takes the commit-ish to start from, as create does
+    "$META_BIN" git worktree create third-set --repo backend
+    run "$META_BIN" git worktree add third-set feature --repo frontend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"(new from feature)"* ]]
+    [ "$(git -C .worktrees/third-set/frontend rev-parse HEAD)" = "$(git -C frontend rev-parse feature)" ]
 }
 
 @test "worktree add rejects dot-alias" {
@@ -843,11 +903,15 @@ EOF
 
 # ============ Nested Repo (meta-53) ============
 
-@test "a parent a nested repo needs is checked for its depends_on too" {
+@test "a parent a nested repo needs is in the set for its place: its depends_on is not checked" {
     setup_nested_meta
     sed -i.bak 's#"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}#"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true, "depends_on": ["missing"]}#' .meta.yaml
     grep -q '"missing"' .meta.yaml
-    run "$META_BIN" --strict --dry-run git worktree create parent-check --recursive --repo vendor/nested-lib
+    run "$META_BIN" --dry-run git worktree create parent-check --recursive --repo vendor/nested-lib
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"depends on 'missing'"* ]]
+    # asked for, its depends_on is followed, and checked
+    run "$META_BIN" --strict --dry-run git worktree create parent-check --recursive --repo vendor
     [ "$status" -ne 0 ]
     [[ "$output" == *"'vendor' depends on 'missing'"*"(strict mode)"* ]]
 }
@@ -874,6 +938,25 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"is given twice"* ]]
     [ ! -e ".worktrees/two-names" ]
+}
+
+@test "worktree list and status show a repo nested in another repo of the set without -r" {
+    setup_nested_meta
+    # vendor is a repo of its own, holding nested-lib
+    echo "nested-lib/" > vendor/.gitignore
+    git -C vendor init --quiet --initial-branch=main
+    git -C vendor add .gitignore .meta.yaml
+    git -C vendor commit --quiet -m "vendor"
+    "$META_BIN" git worktree create nest --recursive --repo vendor --repo vendor/nested-lib
+    [ -e .worktrees/nest/vendor/nested-lib/.git ]
+    run "$META_BIN" git worktree list nest
+    [ "$status" -eq 0 ]
+    grep -Eq 'vendor/nested-lib +-> nest' <<<"$output"
+    run "$META_BIN" git worktree list
+    grep -Eq 'vendor/nested-lib +-> nest' <<<"$output"
+    run "$META_BIN" --json git worktree status nest
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"alias": "vendor/nested-lib"'* ]]
 }
 
 @test "worktree add with nested repo alias succeeds" {

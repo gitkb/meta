@@ -59,6 +59,9 @@ pub struct CreateRepoEntry {
     pub path: String,
     pub branch: String,
     pub created_branch: bool,
+    /// What a new branch started from (`origin/main`, a commit-ish)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_from: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

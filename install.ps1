@@ -1,5 +1,7 @@
 # Meta CLI Installation Script for Windows
-# Downloads and installs meta from GitHub releases
+# Downloads and installs meta from GitHub releases, which lag main. The
+# recommended install builds main instead (in Git Bash or WSL):
+#   git clone https://github.com/gitkb/meta && make -C meta install
 #
 # Usage: irm https://raw.githubusercontent.com/gitkb/meta/main/install.ps1 | iex
 
@@ -103,7 +105,7 @@ function Install-Meta {
             Copy-Item $binaryPath -Destination $InstallDir -Force
             Write-Info "Installed $binary"
         } else {
-            Write-Warn "Binary $binary not found in archive"
+            Write-Warn "$binary is not in this release; build main to get it (see the first lines above)"
         }
     }
 
@@ -141,6 +143,9 @@ function Install-Meta {
 # Main
 Write-Host "Meta CLI Installer for Windows" -ForegroundColor Cyan
 Write-Host "===============================" -ForegroundColor Cyan
+Write-Host ""
+Write-Warn "This installs a release build, which can lag main by many fixes and commands."
+Write-Warn "To build main instead (Git Bash or WSL): git clone https://github.com/gitkb/meta && make -C meta install"
 Write-Host ""
 
 Install-Meta

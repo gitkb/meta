@@ -286,9 +286,12 @@ pub(crate) fn handle_create(
                 );
             }
             // Any failure other than a missing ref is a failed create.
+            let mut started_from = None;
             let created_branch =
                 journal_new_branch(&repo.source, &repo.branch, &mut new_branches, || {
-                    git_worktree_add(&repo.source, &dest, &repo.branch, from_ref)
+                    let start = git_worktree_add(&repo.source, &dest, &repo.branch, from_ref)?;
+                    started_from = start.base(&repo.branch);
+                    Ok(start.new_branch_at())
                 })?;
             mark(&dest)?;
             created_repos.push(CreateRepoEntry {
@@ -296,6 +299,7 @@ pub(crate) fn handle_create(
                 path: dest.display().to_string(),
                 branch: repo.branch.clone(),
                 created_branch,
+                started_from,
             });
         }
 
@@ -334,7 +338,7 @@ pub(crate) fn handle_create(
             escape_path(&wt_dir)
         )?;
         for r in &output.repos {
-            let branch_note = if r.created_branch { " (new)" } else { "" };
+            let branch_note = new_branch_note(r);
             outln!(
                 "  {} -> {}{}",
                 escape(&r.alias),
@@ -376,6 +380,16 @@ pub(crate) fn handle_create(
         return Err(e);
     }
     Ok(Some(Created { dir: wt_dir, lease }))
+}
+
+/// How a repo's line ends: ` (new from origin/main)` for a branch this call
+/// made, nothing for an existing one.
+pub(super) fn new_branch_note(repo: &CreateRepoEntry) -> String {
+    match (repo.created_branch, &repo.started_from) {
+        (true, Some(base)) => format!(" (new from {})", escape(base)),
+        (true, None) => " (new)".to_string(),
+        (false, _) => String::new(),
+    }
 }
 
 /// The commit-ish a repo doesn't have, if any: such repos are skipped. A
@@ -662,6 +676,12 @@ fn plan_repos(
                 }
             }
         }
+    }
+    // The projects whose depends_on this create follows: with --all every
+    // one, else those asked for and what they need. Only theirs are checked.
+    let mut followed: Vec<String> = Vec::new();
+    if args.all {
+        followed.extend(plan.repos.iter().map(|(repo, _)| repo.project.clone()));
     } else {
         let mut asked_keys = Vec::new();
         for spec in &args.repos {
@@ -677,7 +697,9 @@ fn plan_repos(
             }
             let graph = dep_graph(index)?;
             for key in asked_keys.iter().filter(|key| *key != ".") {
+                followed.push(key.clone());
                 let deps = graph.get_all_dependencies(key);
+                followed.extend(deps.iter().map(|dep| dep.to_string()));
                 log::debug!("Resolved transitive dependencies for '{key}': {deps:?}");
                 for dep in deps {
                     if verbose {
@@ -743,14 +765,17 @@ fn plan_repos(
         }
     }
 
-    // What resolving the depends_on of each project in the set ran into,
-    // however it got there (asked for, --all, a dependency, a parent)
+    // What resolving the depends_on this create follows ran into; a parent
+    // on the way to a nested repo is in the set for its place, not its needs
     if !args.no_deps {
-        let set = plan.repos.iter().map(|(repo, _)| repo.project.as_str());
+        let set = followed.iter().map(String::as_str);
         report_problems(&dep_graph(index)?, set, index.tree().is_none(), strict)?;
     }
 
-    // A project not cloned yet has no repository to make a worktree of
+    // A project not cloned yet has no repository to make a worktree of:
+    // each one the set needs is named at once, with one command that clones
+    // just those
+    let mut not_cloned: Vec<PlannedRepo> = Vec::new();
     let mut repos = Vec::with_capacity(plan.repos.len());
     for (repo, why) in plan.repos {
         let why = match why {
@@ -767,7 +792,10 @@ fn plan_repos(
                     })
             }
             why => match super::not_a_repository(&repo.project, &repo.source) {
-                Some(problem) if why != Why::All => anyhow::bail!("{problem}"),
+                Some(_) if why != Why::All => {
+                    not_cloned.push(repo);
+                    continue;
+                }
                 problem => problem,
             },
         };
@@ -780,11 +808,54 @@ fn plan_repos(
         }
         out::warn(format!("{why}, skipping"));
     }
+    if !not_cloned.is_empty() {
+        anyhow::bail!("{}", not_cloned_error(&not_cloned, index.tree().is_some()));
+    }
     repos.sort_by(|a, b| {
         let order = |r: &PlannedRepo| (r.place != ".", r.place.split('/').count());
         order(a).cmp(&order(b)).then_with(|| a.place.cmp(&b.place))
     });
     Ok(repos)
+}
+
+/// The error for the repos a set needs that can't be used, most often
+/// because they aren't cloned, with the command that clones exactly the
+/// missing ones (`recursive`: places are of the whole tree, so the command
+/// needs -r).
+fn not_cloned_error(repos: &[PlannedRepo], recursive: bool) -> String {
+    use meta_core::gitdir::Checkout;
+    let mut message = format!(
+        "{} the set needs can't be used; no worktree was created:",
+        match repos.len() {
+            1 => "1 repo".to_string(),
+            n => format!("{n} repos"),
+        }
+    );
+    let mut missing = Vec::new();
+    for repo in repos {
+        let why = match Checkout::of(&repo.source) {
+            Checkout::Missing => {
+                missing.push(repo.place.as_str());
+                "not cloned".to_string()
+            }
+            checkout => checkout.problem().unwrap_or_default(),
+        };
+        message.push_str(&format!(
+            "\n  '{}' at {}: {}",
+            escape(&repo.project),
+            escape_path(&repo.source),
+            escape(&why)
+        ));
+    }
+    if !missing.is_empty() {
+        let include = meta_core::display::shell_quote(&missing.join(","));
+        message.push_str(&format!(
+            "\nTo clone just the missing ones, then run this create again:\n  meta {}--include {} git clone-missing",
+            if recursive { "-r " } else { "" },
+            escape(&include)
+        ));
+    }
+    message
 }
 
 /// The workspace's dependency graph: of every place with --recursive, else

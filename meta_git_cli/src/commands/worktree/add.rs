@@ -21,6 +21,7 @@ pub(crate) fn handle_add(
 ) -> Result<()> {
     let name = &args.name;
     validate_worktree_name(name)?;
+    let from_ref = args.commit_ish.as_deref();
 
     let repo_specs = &args.repos;
 
@@ -125,10 +126,11 @@ pub(crate) fn handle_add(
         for (spec, source, place) in &planned {
             // what the run checks before adding
             let branch = resolve_branch(name, None, spec.branch.as_deref());
-            let start = worktree_start(source, &branch, None)?;
+            let start = worktree_start(source, &branch, from_ref)?;
             repos.push(CreateRepoEntry {
                 alias: spec.alias.clone(),
                 path: wt_dir.join(place).display().to_string(),
+                started_from: start.base(&branch),
                 created_branch: start.new_branch_at().is_some(),
                 branch,
             });
@@ -144,11 +146,11 @@ pub(crate) fn handle_add(
             outln!("[DRY RUN] Would add to worktree set '{}':", escape(name))?;
             for r in &repos {
                 outln!(
-                    "  {} at {} (branch: {}{})",
+                    "  {} at {} (branch: {}){}",
                     escape(&r.alias),
                     escape(&r.path),
                     escape(&r.branch),
-                    if r.created_branch { ", new" } else { "" }
+                    super::create::new_branch_note(r)
                 )?;
             }
         }
@@ -195,13 +197,17 @@ pub(crate) fn handle_add(
         }
 
         // A failed add stops here; what was added is reported
-        let created_branch = match git_worktree_add(&source, &dest, &branch, None) {
-            Ok(created) => created.is_some(),
-            Err(e) => {
-                failed = Some(e);
-                break;
-            }
-        };
+        let (created_branch, started_from) =
+            match git_worktree_add(&source, &dest, &branch, from_ref) {
+                Ok(start) => {
+                    let base = start.base(&branch);
+                    (start.new_branch_at().is_some(), base)
+                }
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
+            };
         // A worktree that can't be recorded is reported as failed, not added
         if let Some(set_record) = &set_record {
             if let Err(e) = meta_core::gitdir::linked(&dest)
@@ -219,6 +225,7 @@ pub(crate) fn handle_add(
             path: dest.display().to_string(),
             branch,
             created_branch,
+            started_from,
         });
     }
 
@@ -231,14 +238,13 @@ pub(crate) fn handle_add(
         outln!("{}", serde_json::to_string_pretty(&output)?)?;
     } else {
         for r in &added {
-            let branch_note = if r.created_branch { " (new)" } else { "" };
             outln!(
-                "{} Added '{}' to worktree '{}' (branch: {}{})",
+                "{} Added '{}' to worktree '{}' (branch: {}){}",
                 "✓".green(),
                 escape(&r.alias),
                 name,
                 escape(&r.branch),
-                branch_note
+                super::create::new_branch_note(r)
             )?;
         }
     }

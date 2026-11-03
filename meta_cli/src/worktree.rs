@@ -407,6 +407,28 @@ fn with_branch(member: WorktreeMemberInfo) -> WorktreeRepoInfo {
 /// Legacy discovery boundaries without branch probes. Implicit command scoping
 /// only needs repository paths; it must not start Git for each member.
 pub fn discover_worktree_members(task_dir: &Path) -> Result<Vec<WorktreeMemberInfo>> {
+    discover_members(task_dir, false)
+}
+
+/// Every member of the set, nested ones (`clients/desktop` inside
+/// `clients`) too, without branch probes: what a listing of the set shows.
+/// As in legacy discovery, what can't be read is skipped; a checkout found
+/// inside a member counts only if git's linked-worktree layout holds (a
+/// submodule doesn't).
+pub fn discover_worktree_members_nested(task_dir: &Path) -> Result<Vec<WorktreeMemberInfo>> {
+    discover_members(task_dir, true)
+}
+
+/// [`discover_worktree_members_nested`] with each one's branch.
+pub fn discover_worktree_repos_nested(task_dir: &Path) -> Result<Vec<WorktreeRepoInfo>> {
+    Ok(discover_worktree_members_nested(task_dir)?
+        .into_iter()
+        .map(with_branch)
+        .collect())
+}
+
+/// The members of the set at `task_dir`; `nested`: those inside members too.
+fn discover_members(task_dir: &Path, nested: bool) -> Result<Vec<WorktreeMemberInfo>> {
     let mut repos = Vec::new();
 
     // Check if the task dir itself is a worktree (the "." alias)
@@ -429,7 +451,7 @@ pub fn discover_worktree_members(task_dir: &Path) -> Result<Vec<WorktreeMemberIn
     // dependencies have paths with intermediate directories.
     if task_dir.is_dir() {
         let scanned = ScannedDirs::of(task_dir);
-        discover_repos_recursive(task_dir, task_dir, &scanned, &mut repos)?;
+        discover_repos_recursive(task_dir, task_dir, &scanned, nested, false, &mut repos)?;
     }
 
     // Sort by alias for deterministic output ("." sorts first)
@@ -441,13 +463,17 @@ pub fn discover_worktree_members(task_dir: &Path) -> Result<Vec<WorktreeMemberIn
 /// Recursively scan `dir` for git worktree repos, recording aliases as
 /// relative paths from `root` (the worktree task directory).
 ///
-/// A directory with a `.git` file is a worktree repo — record it and stop
-/// recursing into it. A directory without `.git` is an intermediate directory
-/// (e.g., `vendor/`) — recurse into it to find nested repos.
+/// A directory with a `.git` file is a worktree repo — record it and, unless
+/// `nested`, stop recursing into it. A directory without `.git` is an
+/// intermediate directory (e.g., `vendor/`) — recurse into it to find nested
+/// repos. `in_checkout`: `dir` is inside a member, where only a checkout in
+/// git's linked-worktree layout counts (a submodule doesn't).
 fn discover_repos_recursive(
     root: &Path,
     dir: &Path,
     scanned: &ScannedDirs,
+    nested: bool,
+    in_checkout: bool,
     repos: &mut Vec<WorktreeMemberInfo>,
 ) -> Result<()> {
     let entries = match std::fs::read_dir(dir) {
@@ -481,6 +507,12 @@ fn discover_repos_recursive(
             .map(|m| m.is_file())
             .unwrap_or(false)
         {
+            if nested {
+                discover_repos_recursive(root, &sub_path, scanned, nested, true, repos)?;
+            }
+            if in_checkout && gitdir::linked(&sub_path).is_err() {
+                continue;
+            }
             if !scanned.member(root, &sub_path)? {
                 continue;
             }
@@ -510,7 +542,7 @@ fn discover_repos_recursive(
             // Not a repo — recurse into intermediate directory (an
             // unreadable one is skipped there; a record that can't be read
             // is an error)
-            discover_repos_recursive(root, &sub_path, scanned, repos)?;
+            discover_repos_recursive(root, &sub_path, scanned, nested, in_checkout, repos)?;
         }
     }
     Ok(())
@@ -735,6 +767,11 @@ mod recursive_tests {
             aliases(discover_worktree_repos_recursive(root).unwrap()),
             [".", "open-source", "open-source/atc", "other/atc"]
         );
+        // a listing shows every member without -r
+        assert_eq!(
+            aliases(discover_worktree_repos_nested(root).unwrap()),
+            [".", "open-source", "open-source/atc", "other/atc"]
+        );
     }
 
     #[test]
@@ -770,6 +807,10 @@ mod recursive_tests {
         assert!(discover_worktree_repos_recursive(sandbox.work().as_path()).is_err());
         assert_eq!(
             aliases(discover_worktree_repos(sandbox.work().as_path()).unwrap()),
+            ["parent"]
+        );
+        assert_eq!(
+            aliases(discover_worktree_repos_nested(sandbox.work().as_path()).unwrap()),
             ["parent"]
         );
     }

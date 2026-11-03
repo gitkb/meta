@@ -113,6 +113,8 @@ preview() {
     preview 1 git worktree create new --repo backend
     [[ "$output" == *"core.bare=true"* ]]
     git -C backend config core.bare false
+    # with no default branch on the remote, a new branch starts at HEAD
+    git -C backend remote set-head origin --delete
     git -C backend symbolic-ref HEAD refs/heads/unborn
     preview 1 git worktree create new --repo backend --no-deps
     [[ "$output" == *"has no commit to branch from"* ]]
@@ -140,7 +142,9 @@ preview() {
     preview 1 git worktree add clean --repo frontend
     [[ "$output" == *"core.bare=true"* ]]
     git -C frontend config core.bare false
-    # as is a repo with no commit for the new branch to start at
+    # as is a repo with no commit for the new branch to start at: no
+    # default branch on the remote, and HEAD on a branch with no commits
+    git -C frontend remote set-head origin --delete
     git -C frontend symbolic-ref HEAD refs/heads/unborn
     preview 1 git worktree add clean --repo frontend
     [[ "$output" == *"has no commit to branch from"* ]]

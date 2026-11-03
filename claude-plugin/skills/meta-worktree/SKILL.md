@@ -61,7 +61,16 @@ meta git worktree create sdk-fix --recursive --repo open-source/sdk/core
 meta git worktree create auth-fix --repo backend --dry-run
 ```
 
-Add a repo to an existing set with `meta git worktree add auth-fix --repo another-service`.
+Add a repo to an existing set with `meta git worktree add auth-fix --repo another-service`
+(`meta git worktree add auth-fix v2.3.1 --repo another-service` starts it from a commit-ish).
+
+Each repo's branch is checked out if it exists locally, else made tracking
+`origin/<branch>` if the remote has it. Otherwise a new branch starts from the
+commit-ish given, or else from the remote's default branch (`origin/HEAD`,
+tracking nothing), never from whatever the workspace's checkout has checked
+out; only a repo whose remote names no default branch starts from its HEAD,
+with a warning. The output names the start of each new branch:
+`backend -> auth-fix (new from origin/main)`.
 
 A set lays its repos out as the workspace does: each repo sits at its `path`
 from the meta config, so relative references between repos keep working.

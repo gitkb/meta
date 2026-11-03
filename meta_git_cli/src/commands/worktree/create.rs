@@ -115,7 +115,7 @@ pub(crate) fn handle_create(
         // open-source/atc), which only that meta repo's .meta.yaml lists
         let mut wanted: Vec<String> = args.repos.iter().map(|r| r.alias.clone()).collect();
         if !args.no_deps {
-            wanted.extend(unresolved_dependencies(&index, &args.repos));
+            wanted.extend(unresolved_dependencies(&index, &args.repos)?);
         }
         let parents = uncloned_meta_parents(&index, &wanted, name);
         if !parents.is_empty() {
@@ -940,48 +940,43 @@ pub(super) fn uncloned_meta_parents(
     parents
 }
 
-/// The `depends_on` of the repos `specs` ask for, and of what they depend on
-/// in turn, that the tree `index` walked names no project of: each as
-/// written and from the place of the meta repo that lists it
-/// (`open-source/atc` and `clients/open-source/atc` for the depends_on of
-/// `clients/desktop`), where an uncloned meta repo may hold it. With
-/// --recursive only: without it, nested projects aren't dependencies.
-fn unresolved_dependencies(index: &Index, specs: &[RepoSpec]) -> Vec<String> {
+/// The `depends_on` targets the planner's dependency graph ([`dep_graph`],
+/// which resolves names and what projects provide) can't resolve, of the
+/// repos `specs` ask for and of every project they depend on: each as the
+/// graph names it (qualified with the place of the meta repo that lists it,
+/// `clients/open-source/atc`) and as written there (`open-source/atc`), the
+/// places where an uncloned meta repo may hold it. With --recursive only:
+/// without it, nested projects aren't dependencies.
+fn unresolved_dependencies(index: &Index, specs: &[RepoSpec]) -> Result<Vec<String>> {
     let Some(tree) = index.tree() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
-    let mut todo: Vec<String> = specs
-        .iter()
-        .filter_map(|spec| index.find(&spec.alias).ok())
-        .map(|found| found.key)
-        .collect();
-    let mut seen: Vec<String> = Vec::new();
+    let graph = dep_graph(index)?;
     let mut unresolved: Vec<String> = Vec::new();
-    while let Some(key) = todo.pop() {
-        if seen.contains(&key) {
-            continue;
-        }
-        seen.push(key.clone());
-        let Some((_, info)) = tree.get(&key) else {
+    for spec in specs {
+        let Ok(found) = index.find(&spec.alias) else {
             continue;
         };
-        let prefix = key
-            .strip_suffix(info.path.as_str())
-            .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
-            .unwrap_or("");
-        for dep in &info.depends_on {
-            let placed = format!("{prefix}{dep}");
-            let found = [dep.as_str(), placed.as_str()]
-                .into_iter()
-                .find(|name| tree.contains_key(*name))
-                .map(str::to_string);
-            match found {
-                Some(found) => todo.push(found),
-                None => unresolved.extend([dep.clone(), placed]),
+        let key = found.key;
+        let deps = graph.get_all_dependencies(&key);
+        for project in std::iter::once(key.as_str()).chain(deps) {
+            // the place of the meta repo that lists it, as qualify adds it
+            let prefix = tree
+                .get(project)
+                .and_then(|(_, info)| project.strip_suffix(info.path.as_str()))
+                .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
+                .unwrap_or("");
+            for problem in graph.problems_of(project) {
+                if let DependencyProblem::Unresolved(dep) = problem {
+                    unresolved.push(dep.clone());
+                    if let Some(written) = dep.strip_prefix(prefix).filter(|_| !prefix.is_empty()) {
+                        unresolved.push(written.to_string());
+                    }
+                }
             }
         }
     }
-    unresolved
+    Ok(unresolved)
 }
 
 /// The repos of a set being made: those to make worktrees of, and those it

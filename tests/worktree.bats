@@ -303,6 +303,35 @@ EOF
     done
 }
 
+@test "worktree create clones the meta repo on the way to what a provider it needs depends on" {
+    remote() {
+        local name=$1; shift
+        git init --quiet --initial-branch=main "$TEST_DIR/src-$name"
+        while [ $# -ge 2 ]; do printf '%s\n' "$2" > "$TEST_DIR/src-$name/$1"; shift 2; done
+        git -C "$TEST_DIR/src-$name" add -A
+        git -C "$TEST_DIR/src-$name" commit --quiet --allow-empty -m "$name"
+        git clone --quiet --bare "$TEST_DIR/src-$name" "$TEST_DIR/$name.git"
+    }
+    remote app
+    remote service
+    remote sdk
+    remote vendor .meta.yaml "projects: {sdk: \"file://$TEST_DIR/sdk.git\"}" .gitignore "sdk/"
+    # app needs api, which service provides; service needs vendor/sdk
+    cat > .meta.yaml <<EOF
+projects:
+  app: {repo: "file://$TEST_DIR/app.git", depends_on: [api]}
+  service: {repo: "file://$TEST_DIR/service.git", provides: [api], depends_on: [vendor/sdk]}
+  vendor: {repo: "file://$TEST_DIR/vendor.git", meta: true}
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" git worktree create t -r --strict --repo app
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"warning"* ]]
+    for repo in app service vendor vendor/sdk; do
+        [ -e ".worktrees/t/$repo/.git" ]
+    done
+}
+
 @test "worktree create -r --strict fails on a bad depends_on after cloning the meta repo on the way" {
     git init --quiet --initial-branch=main "$TEST_DIR/src-desktop"
     git -C "$TEST_DIR/src-desktop" commit --quiet --allow-empty -m desktop

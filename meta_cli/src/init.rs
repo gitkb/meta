@@ -84,6 +84,26 @@ const RULE_WORKSPACE_DISCIPLINE: &str =
 const RULE_DESTRUCTIVE_COMMANDS: &str =
     include_str!("../.claude/rules/meta-destructive-commands.md");
 
+/// The section of [`RULE_DESTRUCTIVE_COMMANDS`] that names what the
+/// PreToolUse hook `agent guard` refuses: written only where that hook is
+/// in the settings, so the rule never claims a protection that isn't there.
+const GUARD_SECTION: &str = "## Blocked by `agent guard`";
+
+/// Every skill file meta ever wrote, by its path under a skills folder
+/// (`meta-exec.md`, the flat layout of older releases that Claude Code
+/// doesn't load; `meta-exec/SKILL.md`) and git blob id. `--update` and
+/// `--force` replace or remove a skill file only while it is exactly one of
+/// these, so no file anyone changed is lost.
+const SHIPPED_SKILLS: &str = include_str!("shipped-skills.txt");
+
+/// Whether meta wrote `blob` (a git blob id) at `path` ([`SHIPPED_SKILLS`]).
+fn shipped(path: &str, blob: &str) -> bool {
+    SHIPPED_SKILLS
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .any(|(at, id)| at == path && id == blob)
+}
+
 /// All available rules with their filenames
 const RULES: &[(&str, &str)] = &[
     ("meta-workspace-discipline.md", RULE_WORKSPACE_DISCIPLINE),
@@ -133,6 +153,18 @@ impl Init {
             return Ok(());
         }
         write_settings_atomic(path, content)
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<()> {
+        if self.mode.is_preview() {
+            outln!("  would remove {}", escape_path(path))?;
+            return Ok(());
+        }
+        fs::remove_file(path).with_context(|| format!("Failed to remove {}", escape_path(path)))?;
+        if self.verbose {
+            outln!("{} {}", "Removed".yellow(), escape_path(path))?;
+        }
+        Ok(())
     }
 
     fn remove_owned(&self, link: &Path, marker: &str) -> Result<()> {
@@ -233,8 +265,16 @@ fn install_claude_integration_to(
         Some(prepare_settings(&settings_path, init)?)
     };
 
+    // The rules say what `agent guard` refuses only where the settings run it
+    let hooks = match &settings_plan {
+        Some(plan) => plan.hooks.clone(),
+        None => hooks_in(&settings_path),
+    };
+    let guarded = hooks.iter().any(|key| key == "PreToolUse");
+
     // --force or --update: overwrite; default: skip existing
     let overwrite_content = force || update;
+    let mut skipped = remove_old_flat_skills(&claude_dir.join("skills"), overwrite_content, init)?;
     let skills = install_skills(
         target_dir,
         "meta",
@@ -244,7 +284,7 @@ fn install_claude_integration_to(
         init,
     )?;
     let mut installed = skills.written;
-    let mut skipped = skills.skipped;
+    skipped += skills.skipped;
 
     // Install rule files
     // --force or --update: overwrite; default: skip existing
@@ -260,13 +300,30 @@ fn install_claude_integration_to(
             continue;
         }
 
-        init.write_file(&target_path, content)?;
+        let content = if *filename == "meta-destructive-commands.md" && !guarded {
+            without_section(content, GUARD_SECTION)
+        } else {
+            content.to_string()
+        };
+        init.write_file(&target_path, &content)?;
         installed += 1;
     }
 
     // --update leaves settings untouched; --force uses the same merge as default.
     if update {
         outln!("Skipped .claude/settings.json (--update preserves settings)")?;
+        let old_guard = fs::read_to_string(&settings_path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .is_some_and(|mut settings| upgrade_guard(&mut settings));
+        if old_guard {
+            outln!(
+                "{} Its PreToolUse hook runs any `agent` on PATH, and blocks every Bash call when \
+                 one fails: run `meta init claude` (without --update) to make it run only \
+                 gitkb's agent",
+                "•".yellow()
+            )?;
+        }
     } else if let Some(plan) = settings_plan {
         if let Some(content) = plan.content {
             init.write_settings(&settings_path, &content)?;
@@ -274,18 +331,14 @@ fn install_claude_integration_to(
         }
         outln!("{} {}", plan.message, escape_path(&settings_path))?;
     }
-    let present_hooks = fs::read_to_string(&settings_path)
-        .ok()
-        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-        .map(|settings| installed_hooks(&settings))
-        .unwrap_or_default();
+    let present_hooks = hooks_in(&settings_path);
     // Without `agent`, Claude Code would run a hook that doesn't exist; one
     // already in the settings stays
     let guard_skipped =
         !init.guard && !update && !present_hooks.iter().any(|key| key == "PreToolUse");
     let guard_note = || -> Result<()> {
         outln!(
-            "{} Skipped the PreToolUse hook `agent guard`: the agent CLI is not installed.",
+            "{} Skipped the PreToolUse hook `agent guard`: gitkb's agent CLI is not installed (an `agent` on PATH that isn't gitkb's doesn't count).",
             "•".yellow()
         )?;
         outln!(
@@ -363,6 +416,104 @@ fn install_claude_integration_to(
     outln!("  claude plugin install meta@gitkb")?;
 
     Ok(())
+}
+
+/// Meta's hooks in the settings at `path`, an older meta's guard hook
+/// included (it runs too); none where the file can't be read.
+fn hooks_in(path: &Path) -> Vec<String> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        .map(|mut settings| {
+            upgrade_guard(&mut settings);
+            installed_hooks(&settings)
+        })
+        .unwrap_or_default()
+}
+
+/// The git blob id of the file at `path` with its line endings as git
+/// stores them (`\r\n` read as `\n`, as a Windows checkout writes them):
+/// what [`SHIPPED_SKILLS`] lists.
+fn blob_id(dir: &Path, path: &Path) -> Result<String> {
+    let text = fs::read(path).with_context(|| format!("Failed to read {}", escape_path(path)))?;
+    blob_of(dir, &String::from_utf8_lossy(&text))
+}
+
+/// The git blob id of `text`, its `\r\n` read as `\n`.
+fn blob_of(dir: &Path, text: &str) -> Result<String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let text = text.replace("\r\n", "\n");
+    let mut child = meta_core::git::git(dir)
+        .args(["hash-object", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("cannot run git hash-object")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes())?;
+    }
+    let output = child.wait_with_output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "git hash-object failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// `text` without the markdown section that starts at the line `heading`,
+/// up to the next `## ` heading (line endings come out as `\n`).
+fn without_section(text: &str, heading: &str) -> String {
+    let text = text.replace("\r\n", "\n");
+    let Some((before, rest)) = text.split_once(&format!("{heading}\n")) else {
+        return text;
+    };
+    match rest.split_once("\n## ") {
+        Some((_, after)) => format!("{before}## {after}"),
+        None => before.to_string(),
+    }
+}
+
+/// Remove, with `overwrite`, each flat skill file in `skills_dir` an older
+/// meta wrote ([`SHIPPED_SKILLS`]); name the ones left. How many were left
+/// that `overwrite` would remove.
+fn remove_old_flat_skills(skills_dir: &Path, overwrite: bool, init: &Init) -> Result<usize> {
+    let mut left = 0;
+    let mut names: Vec<&str> = SHIPPED_SKILLS
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .map(|(at, _)| at)
+        .filter(|at| !at.contains('/') && at.ends_with(".md"))
+        .collect();
+    names.dedup();
+    for name in names {
+        let path = skills_dir.join(name);
+        if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+            continue;
+        }
+        let blob = blob_id(skills_dir, &path)?;
+        let meta_wrote = shipped(name, &blob);
+        if meta_wrote && overwrite {
+            init.remove_file(&path)?;
+        } else if meta_wrote {
+            outln!(
+                "{} {} (an older meta's skill file, which agents don't load; --update removes it)",
+                "Skipped".yellow(),
+                escape_path(&path)
+            )?;
+            left += 1;
+        } else {
+            outln!(
+                "{} {} (an older meta's layout, but changed since; delete it once its \
+                 changes are kept elsewhere)",
+                "Kept".yellow(),
+                escape_path(&path)
+            )?;
+        }
+    }
+    Ok(left)
 }
 
 /// What [`install_skills`] did.
@@ -451,6 +602,17 @@ fn install_skills_with(
             report.skipped += 1;
             continue;
         }
+        // An edit of the user's is never written over: only a file that is
+        // exactly one meta wrote is replaced
+        if path.exists() && !shipped(&format!("{name}/SKILL.md"), &blob_id(root, &path)?) {
+            outln!(
+                "{} {} (changed since meta wrote it; to get meta's version, move it \
+                 away and run `meta init claude --update`)",
+                "Kept".yellow(),
+                escape_path(&path)
+            )?;
+            continue;
+        }
         init.create_dir_all(&root.join(tool_dir.join(name)))?;
         init.write_file(&path, content)?;
         report.written += 1;
@@ -488,6 +650,20 @@ fn install_skills_with(
                     }
                     continue;
                 }
+                // a marked copy is replaced only when nothing in it is the
+                // user's: it holds the text it was copied from, or a version
+                // meta shipped
+                SkillEntry::Owned
+                    if overwrite && !copy_is_meta_s(root, &tool_dir, name, &link)? =>
+                {
+                    outln!(
+                        "{} {} (a copy meta made, changed since; to get a link instead, move it \
+                         away and run `meta init claude --update`)",
+                        "Kept".yellow(),
+                        escape_path(&link)
+                    )?;
+                    continue;
+                }
                 SkillEntry::Owned if overwrite => init.remove_owned(&link, &marker)?,
                 SkillEntry::Owned => {
                     outln!("Skipped {} (already exists)", escape_path(&link))?;
@@ -512,6 +688,25 @@ fn install_skills_with(
     }
 
     Ok(report)
+}
+
+/// Whether the skill copy at `link` (a folder meta marked, or git's link
+/// placeholder file) holds nothing but meta's: the `SKILL.md` it was copied
+/// from (`<root>/<tool_dir>/<name>/SKILL.md`), or a version meta shipped.
+fn copy_is_meta_s(root: &Path, tool_dir: &Path, name: &str, link: &Path) -> Result<bool> {
+    let copy = link.join("SKILL.md");
+    if !fs::symlink_metadata(&copy).is_ok_and(|m| m.is_file()) {
+        return Ok(true); // a placeholder file holds only meta's link target
+    }
+    let text = fs::read(&copy).with_context(|| format!("Failed to read {}", escape_path(&copy)))?;
+    let source = fs::read(root.join(tool_dir).join(name).join("SKILL.md")).ok();
+    if source.as_deref() == Some(text.as_slice()) {
+        return Ok(true);
+    }
+    Ok(shipped(
+        &format!("{name}/SKILL.md"),
+        &blob_of(root, &String::from_utf8_lossy(&text))?,
+    ))
 }
 
 /// Classify the entry at `link` without following it.
@@ -588,6 +783,8 @@ fn copy_skill(source: &Path, dir: &Path, marker: &str) -> Result<()> {
 struct SettingsPlan {
     content: Option<String>,
     message: String,
+    /// Meta's hooks the settings hold once written
+    hooks: Vec<String>,
 }
 
 fn prepare_settings(path: &Path, init: &Init) -> Result<SettingsPlan> {
@@ -600,28 +797,39 @@ fn prepare_settings(path: &Path, init: &Init) -> Result<SettingsPlan> {
         Err(e) => return Err(e).with_context(|| format!("Failed to read {}", escape_path(path))),
     };
     let created = existing.is_none();
-    let existing = existing.unwrap_or_else(|| json!({}));
+    let mut existing = existing.unwrap_or_else(|| json!({}));
+    // an older meta's guard hook ran any `agent`; it now runs only gitkb's
+    let upgraded = upgrade_guard(&mut existing);
     let before = installed_hooks(&existing);
     let merged = merge_hooks_into_settings(existing, build_meta_hooks(init.guard), path)?;
-    let added: Vec<_> = installed_hooks(&merged)
-        .into_iter()
+    let hooks = installed_hooks(&merged);
+    let added: Vec<_> = hooks
+        .iter()
         .filter(|key| !before.contains(key))
+        .cloned()
         .collect();
     let preview = init.mode.is_preview();
     let message = if created {
         if preview { "Would create" } else { "Created" }.to_string()
+    } else if upgraded && added.is_empty() {
+        let verb = if preview { "Would make" } else { "Made" };
+        format!("{verb} the PreToolUse hook run only gitkb's agent, never block on its failure, in")
     } else if added.is_empty() {
         "Already has meta's hooks (no write):".to_string()
     } else {
         let verb = if preview { "Would add" } else { "Added" };
         format!("{verb} {} hooks to", added.join(", "))
     };
-    let content = if created || !added.is_empty() {
+    let content = if created || upgraded || !added.is_empty() {
         Some(serde_json::to_string_pretty(&merged)?)
     } else {
         None
     };
-    Ok(SettingsPlan { content, message })
+    Ok(SettingsPlan {
+        content,
+        message,
+        hooks,
+    })
 }
 
 fn write_settings_atomic(path: &Path, content: &str) -> Result<()> {
@@ -711,7 +919,7 @@ fn build_meta_hooks(guard: bool) -> Map<String, Value> {
                 "matcher": "Bash",
                 "hooks": [{
                     "type": "command",
-                    "command": "agent guard",
+                    "command": GUARD_COMMAND,
                     "timeout": 5
                 }]
             }]),
@@ -782,6 +990,23 @@ fn merge_hooks_into_settings(
     Ok(existing)
 }
 
+/// What gitkb's agent CLI says about itself in `agent --help`: another
+/// program named `agent` doesn't, so its guard is never run.
+const AGENT_IDENTITY: &str = "Claude Code agent toolkit";
+
+/// The PreToolUse command: `agent guard` only when the `agent` on PATH is
+/// gitkb's, and never an exit status that blocks the tool call (gitkb's
+/// guard refuses a command by printing its decision, exiting 0), so a
+/// missing, foreign or failing `agent` lets Bash run. meta's own
+/// `.claude/settings.json` runs the same command.
+pub(crate) const GUARD_COMMAND: &str =
+    "agent --help 2>/dev/null | grep -q 'Claude Code agent toolkit' && agent guard; exit 0";
+
+/// The command older versions of meta wrote, which ran any `agent` on PATH
+/// and blocked every Bash call when one failed with exit status 2.
+const OLD_GUARD_COMMAND: &str = "agent guard";
+
+/// Whether the `agent` on PATH is gitkb's agent CLI.
 fn agent_cli_available() -> bool {
     use std::process::{Command, Stdio};
 
@@ -790,12 +1015,33 @@ fn agent_cli_available() -> bool {
         reason = "a probe for the agent CLI, in no repo"
     )]
     Command::new("agent")
-        .arg("--version")
-        .stdout(Stdio::null())
+        .arg("--help")
+        .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .output()
+        .is_ok_and(|out| {
+            out.status.success() && String::from_utf8_lossy(&out.stdout).contains(AGENT_IDENTITY)
+        })
+}
+
+/// Rewrite, in `settings`, each PreToolUse hook running the command an older
+/// meta wrote ([`OLD_GUARD_COMMAND`]) to [`GUARD_COMMAND`]. Whether any was.
+fn upgrade_guard(settings: &mut Value) -> bool {
+    let mut upgraded = false;
+    let groups = settings
+        .get_mut("hooks")
+        .and_then(|hooks| hooks.get_mut("PreToolUse"))
+        .and_then(Value::as_array_mut);
+    for group in groups.into_iter().flatten() {
+        let hooks = group.get_mut("hooks").and_then(Value::as_array_mut);
+        for hook in hooks.into_iter().flatten() {
+            if hook.get("command").and_then(Value::as_str) == Some(OLD_GUARD_COMMAND) {
+                hook["command"] = json!(GUARD_COMMAND);
+                upgraded = true;
+            }
+        }
+    }
+    upgraded
 }
 
 fn write_file(path: &Path, content: &str, verbose: bool) -> Result<()> {
@@ -817,6 +1063,15 @@ fn write_file(path: &Path, content: &str, verbose: bool) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// Skills as an older meta wrote them, byte for byte
+    const OLD_WORKSPACE_SKILL: &str = include_str!("../tests/fixtures/meta-workspace-SKILL.md");
+    const OLD_GIT_SKILL: &str = include_str!("../tests/fixtures/meta-git-SKILL.md");
+
+    /// The skill meta ships as `name`
+    fn skill(name: &str) -> &'static str {
+        SKILLS.iter().find(|(n, _)| *n == name).unwrap().1
+    }
 
     /// A real run with `agent` installed
     const RUN: Init = Init {
@@ -867,6 +1122,178 @@ mod tests {
                 assert_eq!(snapshot(dir.path()), before);
             }
         }
+    }
+
+    #[test]
+    fn the_rule_names_what_agent_guard_refuses_only_where_settings_run_it() {
+        let rule = |root: &Path| {
+            fs::read_to_string(root.join(".claude/rules/meta-destructive-commands.md")).unwrap()
+        };
+        assert!(RULE_DESTRUCTIVE_COMMANDS.contains(GUARD_SECTION));
+        let no_agent = Init {
+            guard: false,
+            ..RUN
+        };
+        let dir = tempdir().unwrap();
+        install_claude_integration_to(dir.path(), false, false, &no_agent).unwrap();
+        let text = rule(dir.path());
+        assert!(!text.contains("agent guard"), "{text}");
+        assert!(text.contains("## Before Destructive Operations") && text.contains("## Recovery"));
+        // once agent is installed, the hook and the section arrive together
+        install_claude_integration_to(dir.path(), true, false, &RUN).unwrap();
+        assert!(rule(dir.path()).contains(GUARD_SECTION));
+        // --update keeps the settings, and a hook already in them counts
+        install_claude_integration_to(dir.path(), false, true, &no_agent).unwrap();
+        assert!(rule(dir.path()).contains(GUARD_SECTION));
+    }
+
+    #[test]
+    fn update_removes_only_the_flat_skill_files_an_older_meta_wrote() {
+        // meta-discover.md as an older meta wrote it, byte for byte
+        let old = include_str!("../tests/fixtures/meta-discover.md");
+        let dir = tempdir().unwrap();
+        let skills = dir.path().join(".claude/skills");
+        fs::create_dir_all(&skills).unwrap();
+        fs::write(skills.join("meta-discover.md"), old).unwrap();
+        fs::write(skills.join("meta-exec.md"), "# Meta Exec Skill\nmy notes\n").unwrap();
+        fs::write(skills.join("my-skill.md"), old).unwrap();
+        // without --update or --force, nothing of the user's is touched
+        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
+        assert!(skills.join("meta-discover.md").exists());
+        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        assert!(!skills.join("meta-discover.md").exists());
+        // changed since, or not a name meta used: kept
+        assert!(skills.join("meta-exec.md").exists());
+        assert!(skills.join("my-skill.md").exists());
+        // as a Windows checkout writes it, with CRLF line endings: the same file
+        let crlf = old.replace("\r\n", "\n").replace('\n', "\r\n");
+        fs::write(skills.join("meta-discover.md"), crlf).unwrap();
+        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        assert!(!skills.join("meta-discover.md").exists());
+    }
+
+    #[test]
+    fn every_skill_meta_ships_is_listed_as_meta_s() {
+        let dir = tempdir().unwrap();
+        for (name, content) in SKILLS {
+            let blob = blob_of(dir.path(), content).unwrap();
+            assert!(
+                shipped(&format!("{name}/SKILL.md"), &blob),
+                "add `{name}/SKILL.md {blob}` to meta_cli/src/shipped-skills.txt"
+            );
+        }
+    }
+
+    #[test]
+    fn update_keeps_a_skill_the_user_edited() {
+        let dir = tempdir().unwrap();
+        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
+        let skill = dir.path().join(".meta/skills/meta-workspace/SKILL.md");
+        let mine = format!("{}\nmy own note\n", fs::read_to_string(&skill).unwrap());
+        fs::write(&skill, &mine).unwrap();
+        for force in [false, true] {
+            install_claude_integration_to(dir.path(), force, !force, &RUN).unwrap();
+            assert_eq!(fs::read_to_string(&skill).unwrap(), mine);
+        }
+        // one meta wrote, of an older version, is replaced
+        let other = dir.path().join(".meta/skills/meta-git/SKILL.md");
+        assert!(shipped(
+            "meta-git/SKILL.md",
+            &blob_id(dir.path(), &other).unwrap()
+        ));
+        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        assert!(other.exists());
+    }
+
+    #[test]
+    fn this_repo_runs_the_guard_meta_installs() {
+        let settings: Value =
+            serde_json::from_str(include_str!("../../.claude/settings.json")).unwrap();
+        assert_eq!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            GUARD_COMMAND
+        );
+    }
+
+    #[test]
+    fn an_older_meta_s_guard_hook_is_made_safe() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut old = json!({"hooks": build_meta_hooks(true), "theme": "dark"});
+        old["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = json!(OLD_GUARD_COMMAND);
+        fs::write(&path, old.to_string()).unwrap();
+        // even where agent isn't installed now
+        let no_agent = Init {
+            guard: false,
+            ..RUN
+        };
+        let plan = prepare_settings(&path, &no_agent).unwrap();
+        let merged: Value = serde_json::from_str(&plan.content.unwrap()).unwrap();
+        let groups = merged["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["hooks"][0]["command"], GUARD_COMMAND);
+        assert_eq!(merged["theme"], "dark");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_guard_command_never_blocks_and_runs_only_gitkb_s_agent() {
+        use std::os::unix::fs::PermissionsExt;
+        let run_hook = |agent: &str| {
+            let bin = tempdir().unwrap();
+            let script = bin.path().join("agent");
+            fs::write(&script, agent).unwrap();
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+            let path = format!("{}:/usr/bin:/bin", bin.path().display());
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "runs the hook as Claude Code does"
+            )]
+            let out = std::process::Command::new("sh")
+                .args(["-c", GUARD_COMMAND])
+                .env("PATH", path)
+                .output()
+                .unwrap();
+            (
+                out.status.code(),
+                String::from_utf8_lossy(&out.stdout).into_owned(),
+            )
+        };
+        // another program named agent, failing with the status that blocks
+        let foreign = "#!/bin/sh\necho 'usage: agent [task]'\nexit 2\n";
+        assert_eq!(run_hook(foreign), (Some(0), String::new()));
+        // gitkb's agent: its decision reaches Claude Code; its failure doesn't block
+        let gitkb = "#!/bin/sh\nif [ \"$1\" = --help ]; then echo 'Claude Code agent toolkit'; exit 0; fi\necho '{\"deny\":1}'\nexit 2\n";
+        assert_eq!(run_hook(gitkb), (Some(0), "{\"deny\":1}\n".to_string()));
+        // none at all
+        let bin = tempdir().unwrap();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "runs the hook as Claude Code does"
+        )]
+        let out = std::process::Command::new("sh")
+            .args(["-c", GUARD_COMMAND])
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.path().display()))
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0));
+    }
+
+    #[test]
+    fn without_section_drops_one_section_only() {
+        let text = "# T\n\n## A\na\n\n## B\nb\n\n## C\nc\n";
+        assert_eq!(without_section(text, "## B"), "# T\n\n## A\na\n\n## C\nc\n");
+        assert_eq!(
+            without_section(text, "## C"),
+            "# T\n\n## A\na\n\n## B\nb\n\n"
+        );
+        assert_eq!(without_section(text, "## D"), text);
+        // as a Windows checkout has it
+        let crlf = text.replace('\n', "\r\n");
+        assert_eq!(
+            without_section(&crlf, "## B"),
+            without_section(text, "## B")
+        );
     }
 
     #[test]
@@ -1010,9 +1437,10 @@ mod tests {
         fs::create_dir_all(&meta_skill_dir).unwrap();
         fs::create_dir_all(&rules_dir).unwrap();
 
-        // Create existing files with different content
+        // Create existing files with different content: the skill as an
+        // older meta wrote it
         let existing_skill = meta_skill_dir.join("SKILL.md");
-        fs::write(&existing_skill, "custom content").unwrap();
+        fs::write(&existing_skill, OLD_WORKSPACE_SKILL).unwrap();
 
         let existing_rule = rules_dir.join("meta-workspace-discipline.md");
         fs::write(&existing_rule, "custom rule").unwrap();
@@ -1024,7 +1452,7 @@ mod tests {
 
         // Should overwrite with embedded content
         let skill_content = fs::read_to_string(&existing_skill).unwrap();
-        assert!(skill_content.contains("Meta Workspace Skill"));
+        assert_eq!(skill_content, skill("meta-workspace"));
 
         let rule_content = fs::read_to_string(&existing_rule).unwrap();
         assert!(rule_content.contains("Meta Workspace Discipline"));
@@ -1049,9 +1477,9 @@ mod tests {
         fs::create_dir_all(&meta_skill_dir).unwrap();
         fs::create_dir_all(&rules_dir).unwrap();
 
-        // Create existing files
+        // Create existing files: the skill as an older meta wrote it
         let existing_skill = meta_skill_dir.join("SKILL.md");
-        fs::write(&existing_skill, "old skill content").unwrap();
+        fs::write(&existing_skill, OLD_WORKSPACE_SKILL).unwrap();
 
         let existing_rule = rules_dir.join("meta-workspace-discipline.md");
         fs::write(&existing_rule, "old rule content").unwrap();
@@ -1068,8 +1496,9 @@ mod tests {
 
         // Skills and rules should be updated
         let skill_content = fs::read_to_string(&existing_skill).unwrap();
-        assert!(
-            skill_content.contains("Meta Workspace Skill"),
+        assert_eq!(
+            skill_content,
+            skill("meta-workspace"),
             "skill should be updated"
         );
 
@@ -1130,13 +1559,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let copy = dir.path().join(".claude/skills/meta-git");
         fs::create_dir_all(&copy).unwrap();
-        fs::write(copy.join("SKILL.md"), "old copy").unwrap();
+        // a copy an older meta made
+        fs::write(copy.join("SKILL.md"), OLD_GIT_SKILL).unwrap();
         fs::write(copy.join(".meta-skill-copy"), "").unwrap();
 
         install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
         assert_eq!(
             fs::read_to_string(copy.join("SKILL.md")).unwrap(),
-            "old copy"
+            OLD_GIT_SKILL
         );
 
         install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
@@ -1382,6 +1812,35 @@ mod tests {
         assert_linked(dir.path(), ".claude/skills", "meta-git");
     }
 
+    #[test]
+    fn update_keeps_a_skill_copy_the_user_edited() {
+        let dir = tempdir().unwrap();
+        let fail = |_: &Path, _: &Path| Err(std::io::Error::other("no links"));
+        let install = |overwrite| {
+            install_skills_with(
+                dir.path(),
+                "meta",
+                SKILLS,
+                AGENT_SKILL_DIRS,
+                overwrite,
+                &RUN,
+                fail,
+            )
+            .unwrap()
+        };
+        install(false);
+        let copy = dir.path().join(".claude/skills/meta-workspace/SKILL.md");
+        let mine = format!("{}\nmy own note\n", fs::read_to_string(&copy).unwrap());
+        fs::write(&copy, &mine).unwrap();
+        // an older meta's copy of another skill is meta's to replace
+        let old = dir.path().join(".claude/skills/meta-git/SKILL.md");
+        fs::write(&old, OLD_GIT_SKILL).unwrap();
+        let report = install(true);
+        assert_eq!(fs::read_to_string(&copy).unwrap(), mine);
+        assert_eq!(fs::read_to_string(&old).unwrap(), skill("meta-git"));
+        assert!(report.copied > 0);
+    }
+
     #[cfg(unix)]
     #[test]
     fn symlinked_agent_skill_dirs_create_working_links() {
@@ -1433,15 +1892,13 @@ mod tests {
                 target.join(suffix)
             };
             fs::create_dir_all(file.parent().unwrap()).unwrap();
-            fs::write(&file, "custom skill").unwrap();
+            fs::write(&file, OLD_GIT_SKILL).unwrap();
             fs::create_dir_all(link.parent().unwrap()).unwrap();
             symlink_dir(&target, &link).unwrap();
             install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
-            assert_eq!(fs::read_to_string(&file).unwrap(), "custom skill");
+            assert_eq!(fs::read_to_string(&file).unwrap(), OLD_GIT_SKILL);
             install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
-            assert!(fs::read_to_string(&file)
-                .unwrap()
-                .contains("Meta Git Skill"));
+            assert_eq!(fs::read_to_string(&file).unwrap(), skill("meta-git"));
             assert_eq!(fs::read_link(&link).unwrap(), target);
         }
     }

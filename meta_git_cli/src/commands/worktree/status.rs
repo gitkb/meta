@@ -11,7 +11,7 @@ use meta_git_lib::worktree::types::*;
 
 use super::cli_types::StatusArgs;
 
-/// Render a named set, preserving legacy defaults unless recursive is requested.
+/// Render a named set: every repo in it; with -r, failing on what can't be read.
 pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
     let name = &args.name;
     let wt_dir = resolve_existing_worktree(name)?;
@@ -19,7 +19,7 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
     let members = if args.recursive {
         meta_cli::worktree::discover_worktree_members_recursive(&wt_dir)?
     } else {
-        meta_cli::worktree::discover_worktree_members(&wt_dir)?
+        meta_cli::worktree::discover_worktree_members_nested(&wt_dir)?
     };
     anyhow::ensure!(
         !members.is_empty(),

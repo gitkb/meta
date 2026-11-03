@@ -25,9 +25,11 @@ macro_rules! no_pull {
 macro_rules! prune {
     () => {
         "\n\nA repo is removed only when git shows nothing in it that isn't on a \
-                     remote: no uncommitted or untracked files, stashes, commits on no remote \
-                     or linked worktrees (ignored files are not checked), and no git repo inside it. A repo that holds \
-                     anything is kept and named with what it holds. Folders that are no git \
+                     remote: no uncommitted or untracked files, stashes, commits on a branch \
+                     or tag that no remote has, or linked worktrees, and no git repo inside it. \
+                     A repo that holds anything is kept and named with what it holds. Files git \
+                     ignores (.env, target/) are deleted with it, and named first; commits only \
+                     a reflog holds are not kept, as git counts them discarded. Folders that are no git \
                      repo of their own, links, and the projects a .meta.yaml lists are never \
                      removed. With -r the meta repos nested in it are searched too; --include, \
                      --exclude and --tag choose the meta repos searched."
@@ -113,21 +115,36 @@ impl Steps {
     }
 }
 
-impl From<CloneMissingArgs> for (Steps, bool) {
+/// What a command was asked: its steps and -r.
+pub(crate) struct Request {
+    steps: Steps,
+    recursive: bool,
+}
+
+impl From<CloneMissingArgs> for Request {
     fn from(args: CloneMissingArgs) -> Self {
-        (Steps::Clone, args.recursive)
+        Self {
+            steps: Steps::Clone,
+            recursive: args.recursive,
+        }
     }
 }
 
-impl From<ClonePruneArgs> for (Steps, bool) {
+impl From<ClonePruneArgs> for Request {
     fn from(args: ClonePruneArgs) -> Self {
-        (Steps::Prune, args.recursive)
+        Self {
+            steps: Steps::Prune,
+            recursive: args.recursive,
+        }
     }
 }
 
-impl From<CloneSyncArgs> for (Steps, bool) {
+impl From<CloneSyncArgs> for Request {
     fn from(args: CloneSyncArgs) -> Self {
-        (Steps::Sync, args.recursive)
+        Self {
+            steps: Steps::Sync,
+            recursive: args.recursive,
+        }
     }
 }
 
@@ -145,7 +162,7 @@ struct Record {
 /// Run `steps` (`-r`: `recursive`) in the workspace at or above `cwd`, on
 /// the selected `projects` when meta's options filter them.
 pub(crate) fn execute(
-    (steps, recursive): (Steps, bool),
+    Request { steps, recursive }: Request,
     projects: &[String],
     options: &PluginRequestOptions,
     cwd: &Path,
@@ -182,7 +199,12 @@ pub(crate) fn execute(
     let from_root = |path: &Path| escape_path(path.strip_prefix(root).unwrap_or(path));
     let mut records = Vec::new();
 
-    if preview && steps.clones() {
+    if preview && steps.clones() && tasks.is_empty() {
+        say(format!(
+            "{} Nothing to clone: every project the .meta.yaml files list is cloned",
+            "[DRY RUN]".cyan()
+        ))?;
+    } else if preview && steps.clones() {
         say(format!(
             "{} Would run (from the .meta.yaml files as they are now; the clones may add projects):",
             "[DRY RUN]".cyan()
@@ -230,15 +252,28 @@ pub(crate) fn execute(
     if steps.prunes() {
         for path in &outcome.unlisted {
             let shown = update::shown(path, cwd);
-            let (action, reason) = match Leftover::of(path, root) {
-                Leftover::Nothing if preview => {
-                    say(format!("Would remove {shown} (nothing unpushed)"))?;
-                    ("removed", None)
+            let leftover = match Leftover::of(path, root) {
+                Leftover::Removable(ignored) => Ok(ignored),
+                Leftover::Holds(why) => Err(why),
+            };
+            // what is deleted along with it is said, in the preview too
+            let note = |ignored: &Option<String>| match ignored {
+                Some(ignored) => format!("nothing unpushed; {ignored} deleted with it"),
+                None => "nothing unpushed".to_string(),
+            };
+            let (action, reason) = match leftover {
+                Ok(ignored) if preview => {
+                    say(format!("Would remove {shown} ({})", note(&ignored)))?;
+                    ("removed", ignored.as_ref().map(|_| note(&ignored)))
                 }
-                Leftover::Nothing => match std::fs::remove_dir_all(path) {
+                Ok(ignored) => match std::fs::remove_dir_all(path) {
                     Ok(()) => {
-                        say(format!("{} {shown} (nothing unpushed)", "Removed".green()))?;
-                        ("removed", None)
+                        say(format!(
+                            "{} {shown} ({})",
+                            "Removed".green(),
+                            note(&ignored)
+                        ))?;
+                        ("removed", ignored.as_ref().map(|_| note(&ignored)))
                     }
                     // what was removed before the error is gone
                     Err(e) => {
@@ -247,7 +282,7 @@ pub(crate) fn execute(
                         ("failed", Some(why))
                     }
                 },
-                Leftover::Holds(why) => {
+                Err(why) => {
                     let verb = if preview { "Would keep" } else { "Kept" };
                     say(format!("{} {shown}: {why}", verb.yellow()))?;
                     ("kept", Some(why))
@@ -292,4 +327,33 @@ pub(crate) fn execute(
         })?;
     }
     Ok(CommandResult::Message(String::new()))
+}
+
+/// Clone the projects at `dirs` that the `.meta.yaml` files of `workspace`
+/// (and of the meta repos nested in it) list and that aren't cloned, the way
+/// `clone-missing` does, for `command` (`git worktree create`). The folders
+/// it cloned, or the error naming each clone that failed.
+pub(crate) fn clone_dirs(
+    workspace: &meta_core::config::Workspace,
+    dirs: &[PathBuf],
+    command: &str,
+) -> anyhow::Result<Result<Vec<PathBuf>, String>> {
+    let root = workspace.dir.as_path();
+    let queue = CloneQueue::new(None, None, false).only(dirs.iter().cloned());
+    let top = Arc::from([MetaRepo::at(&update::root_name(root), root, None)]);
+    let tasks = queue.discover_in(workspace, 0, &top)?;
+    let urls: Vec<_> = tasks
+        .iter()
+        .filter_map(|task| match &task.work {
+            Work::Clone(url) => Some(url.clone()),
+            Work::Pull => None,
+        })
+        .collect();
+    if !tasks.is_empty() {
+        update::run(&queue, tasks, &urls)?;
+    }
+    if let Some(error) = crate::clone_worker::report_failures(&queue, command) {
+        return Ok(Err(error));
+    }
+    Ok(Ok(queue.outcome().cloned))
 }

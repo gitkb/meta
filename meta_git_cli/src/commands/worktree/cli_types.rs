@@ -13,6 +13,13 @@ pub enum WorktreeCommands {
     /// Add a repo to an existing worktree set
     Add(AddArgs),
     /// Remove a worktree set
+    ///
+    /// Like `git worktree remove` in each repo: modified or untracked files
+    /// refuse the remove unless --force; files git ignores (.env, target/)
+    /// are deleted with it. A branch create or add made for the set is
+    /// deleted only when every commit on it is on a remote, a tag or another
+    /// branch, as `git branch -d` would; otherwise it is kept and named.
+    /// Branches the set only checked out are left.
     Remove(RemoveArgs),
     /// List worktree sets (defaults to the current set when inside one)
     List(ListArgs),
@@ -32,7 +39,8 @@ pub struct CreateArgs {
     /// Worktree name
     pub name: String,
 
-    /// Start from a specific commit-ish (tag, SHA, branch)
+    /// Start new branches from this commit-ish (tag, SHA, branch); without
+    /// it, each from its remote's default branch (origin/HEAD)
     pub commit_ish: Option<String>,
 
     /// Override default branch name
@@ -67,8 +75,9 @@ pub struct CreateArgs {
     /// Fail where a repo would be skipped (errors instead of warnings)
     ///
     /// Repos are normally skipped with a warning when they don't have the
-    /// commit-ish to start from, or (with --all, or as an intermediate
-    /// parent) aren't cloned. With --strict, the entire operation fails
+    /// commit-ish to start from, or (with --all) aren't cloned; any other
+    /// repo the set needs that isn't cloned is cloned first. With --strict,
+    /// the entire operation fails
     /// instead, and nothing is made. A failing post-create hook fails it
     /// too, after the set was made: that set stays.
     #[arg(long)]
@@ -99,6 +108,10 @@ pub struct AddArgs {
     /// Worktree name
     pub name: String,
 
+    /// Start a new branch from this commit-ish (tag, SHA, branch); without
+    /// it, from the remote's default branch (origin/HEAD)
+    pub commit_ish: Option<String>,
+
     /// Repo(s) to add (alias or alias:branch)
     #[arg(long = "repo", value_name = "ALIAS[:BRANCH]", required = true)]
     pub repos: Vec<RepoSpec>,
@@ -119,7 +132,9 @@ pub struct ListArgs {
     /// Worktree name (defaults to the current set inside .worktrees/<name>)
     pub name: Option<String>,
 
-    /// Include realized repositories nested beneath other worktree repositories
+    /// Fail on a folder that can't be scanned, a checkout whose git files
+    /// are broken, or a repo git can't read, instead of skipping it or
+    /// marking it unknown (repos nested in others are listed either way)
     #[arg(long, short = 'r')]
     pub recursive: bool,
 
@@ -130,7 +145,9 @@ pub struct ListArgs {
 
 #[derive(Args)]
 pub struct StatusArgs {
-    /// Include realized repositories nested beneath other worktree repositories
+    /// Fail on a folder that can't be scanned, a checkout whose git files
+    /// are broken, or a repo git can't read, instead of skipping it or
+    /// marking it unknown (repos nested in others are listed either way)
     #[arg(long, short = 'r')]
     pub recursive: bool,
     /// Worktree name

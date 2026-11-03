@@ -18,6 +18,12 @@ use subprocess_plugins::{SubprocessPlugin, SubprocessPluginManager};
 
 const VERSION: &str = include_str!("../../VERSION");
 
+/// The version, and for a build from a git checkout its commit and date:
+/// `0.2.22 (git 1c96c7e 2026-11-03)`
+fn version() -> String {
+    format!("{}{}", VERSION.trim(), env!("META_BUILD_COMMIT"))
+}
+
 /// meta's options go before the command; every word after the command
 /// belongs to it, so `meta git pull --tag v1` gives `--tag v1` to git.
 #[derive(Parser)]
@@ -27,7 +33,7 @@ const VERSION: &str = include_str!("../../VERSION");
     name = "meta",
     bin_name = "meta",
     author,
-    version = VERSION.trim(),
+    version = version(),
     about,
     long_about = None,
     disable_help_subcommand = true,

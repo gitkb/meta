@@ -61,7 +61,23 @@ meta git worktree create sdk-fix --recursive --repo open-source/sdk/core
 meta git worktree create auth-fix --repo backend --dry-run
 ```
 
-Add a repo to an existing set with `meta git worktree add auth-fix --repo another-service`.
+Add a repo to an existing set with `meta git worktree add auth-fix --repo another-service`
+(`meta git worktree add auth-fix v2.3.1 --repo another-service` starts it from a commit-ish).
+
+Each repo's branch is checked out if it exists locally, else made tracking
+`origin/<branch>` if the remote has it. Otherwise a new branch starts from the
+commit-ish given, or else from the remote's default branch (`origin/HEAD`,
+tracking nothing), never from whatever the workspace's checkout has checked
+out; only a repo whose remote names no default branch starts from its HEAD,
+with a warning. The output names the start of each new branch:
+`backend -> auth-fix (new from origin/main)`.
+
+A repo the set needs that isn't cloned (one asked for, a dependency, or a
+parent on the way to a nested repo) is cloned first, as
+`meta git clone-missing` would, and named: `Cloning 2 repos the set needs: web, db`.
+`add` does the same for the repos it adds. Nothing else is cloned. When a clone
+fails (no access, say), no set is made (the repos it did clone stay cloned), and
+the error names every repo the set needs that still isn't there. `--all` skips the projects that aren't cloned instead.
 
 A set lays its repos out as the workspace does: each repo sits at its `path`
 from the meta config, so relative references between repos keep working.
@@ -126,15 +142,16 @@ meta git worktree diff auth-fix --base main   # committed changes: a summary, th
 meta git worktree diff auth-fix --stat        # the summary only
 ```
 
-`list` and `status` take `--recursive` to include repos nested beneath other
-worktree repos.
+`list` and `status` show every repo of the set, those nested beneath other
+worktree repos too; `--recursive` makes them fail on what they can't read
+instead of skipping it.
 
 ## Running Commands
 
 ```bash
 meta git worktree exec auth-fix -- cargo test
 meta git worktree exec auth-fix --include backend -- make build
-meta git worktree exec auth-fix --exclude legacy -- npm test
+meta git worktree exec auth-fix --exclude frontend -- npm test
 meta git worktree exec auth-fix --parallel -- cargo build
 ```
 
@@ -159,8 +176,8 @@ meta --tag cli exec -- pwd
 Detection relies on the `.worktrees/<name>` path. It, and
 `meta git worktree exec`, only find repos down to the first nested repo: repos
 created with `--recursive` inside another repo of the set (e.g.
-`open-source/sdk/core` inside `open-source`) are skipped. `list --recursive`
-shows them; run the tool itself (`cargo`, `git`) in their directory, not `meta exec`, which still scopes to the set's top-level repos there. The root repo is part of a set
+`open-source/sdk/core` inside `open-source`) are skipped. `list` shows
+them; run the tool itself (`cargo`, `git`) in their directory, not `meta exec`, which still scopes to the set's top-level repos there. The root repo is part of a set
 by default, so the set has its own `.meta.yaml` config; otherwise meta walks up to
 the primary checkout's config. `meta --primary <command>` bypasses detection and acts on the
 workspace the set was made from (found through meta's records in the set's
@@ -185,6 +202,18 @@ repositories. Another workspace's set is never touched, even when both share a
 `META_WORKTREES` directory; `remove` refuses it and names its workspace. Run
 from inside a set, they act on the workspace the set was made from.
 `--force` and `exec --ephemeral` discard that work: commit and push first.
+
+Like `git worktree remove`, files git ignores (`.env`, `target/`) don't count
+as work and go with the set. `remove` (and `exec --ephemeral`) then deletes
+each branch create or add made for the set, in the workspace's repos, when
+every commit on it is also on a remote, another branch or a tag, as `git
+branch -d` would. Commits only a reflog holds (reset, amended or rebased away)
+are not kept: git counts them discarded. It names each one it deletes, and keeps and names any branch with a commit nowhere
+else (`kept branch 'auth-fix' in …/backend: 1 commit on no remote, other branch
+or tag`). A branch the set only checked out (`--repo api:release/2.3`, an
+existing one) is never deleted, nor are the branches of sets made by a meta
+older than this; `remove` names those as left. `--json` lists each branch with
+its action (deleted, kept, left) and reason.
 
 ## Lifecycle Hooks
 
@@ -229,7 +258,7 @@ worktrees not recorded yet included.
 ## Strict Mode
 
 `--strict` on `create` (or global `meta --strict`) turns warnings such as a
-missing commit-ish in one repo, or a repo that isn't cloned, into errors. A create that fails is rolled back:
+missing commit-ish in one repo, or (with `--all`) a repo that isn't cloned, into errors. A create that fails is rolled back:
 the worktrees and branches it made are deleted again. If the rollback itself
 can't delete something, the error says what was left behind. A failing hook
 fails the command too, but only after the set was made (or removed): that is

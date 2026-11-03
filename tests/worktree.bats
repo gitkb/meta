@@ -193,8 +193,196 @@ EOF
     [ -d ".worktrees/aged" ]
 }
 
-@test "worktree create --all skips a repo that is not cloned; --repo and add refuse it" {
+@test "worktree create and add clone the repos the set needs that aren't cloned, and only those" {
+    for repo in backend frontend; do
+        git clone --quiet --bare "$repo" "$TEST_DIR/$repo.git"
+    done
+    cat > .meta.yaml <<EOF
+projects:
+  api: {repo: "file://$TEST_DIR/backend.git", depends_on: [web, db]}
+  web: "file://$TEST_DIR/frontend.git"
+  db: "file://$TEST_DIR/backend.git"
+  tool: "file://$TEST_DIR/frontend.git"
+  unrelated: "file://$TEST_DIR/frontend.git"
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" --dry-run git worktree create all-at-once --repo api
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Would clone the repos the set needs that aren't cloned (api, web, db)"* ]]
+    [ ! -e api ] && [ ! -e ".worktrees/all-at-once" ]
+    run "$META_BIN" git worktree create all-at-once --repo api
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Cloning 3 repos the set needs: api, web, db"* ]]
+    [[ "$output" == *"Cloned api, web, db"* ]]
+    [ -d ".worktrees/all-at-once/api" ] && [ -d ".worktrees/all-at-once/db" ] && [ -d ".worktrees/all-at-once/web" ]
+    [ ! -e unrelated ] && [ ! -e tool ]
+    run "$META_BIN" git worktree add all-at-once --repo tool
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Cloning 1 repo the set needs: tool"* ]]
+    [ -d ".worktrees/all-at-once/tool" ]
+    [ ! -e unrelated ]
+}
+
+@test "worktree create clones the meta repo on the way to a nested repo it asks for, in one go" {
+    # a remote meta repo clients that lists desktop; neither is cloned
+    git init --quiet --initial-branch=main "$TEST_DIR/src-desktop"
+    git -C "$TEST_DIR/src-desktop" commit --quiet --allow-empty -m desktop
+    git clone --quiet --bare "$TEST_DIR/src-desktop" "$TEST_DIR/desktop.git"
+    git init --quiet --initial-branch=main "$TEST_DIR/src-clients"
+    printf 'projects:\n  desktop: "file://%s/desktop.git"\n' "$TEST_DIR" > "$TEST_DIR/src-clients/.meta.yaml"
+    echo "desktop/" > "$TEST_DIR/src-clients/.gitignore"
+    git -C "$TEST_DIR/src-clients" add -A
+    git -C "$TEST_DIR/src-clients" commit --quiet -m clients
+    git clone --quiet --bare "$TEST_DIR/src-clients" "$TEST_DIR/clients.git"
+    cat > .meta.yaml <<EOF
+projects:
+  clients: {repo: "file://$TEST_DIR/clients.git", meta: true}
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" --dry-run git worktree create t -r --repo clients/desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Would clone the meta repos on the way to the repos asked for (clients)"* ]]
+    [ ! -e clients ]
+    run "$META_BIN" git worktree create t -r --repo clients/desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Cloning 1 repo the set needs: clients"* ]]
+    [[ "$output" == *"Cloning 1 repo the set needs: clients/desktop"* ]]
+    [ -e .worktrees/t/clients/desktop/.git ]
+    [ -e .worktrees/t/clients/.git ]
+}
+
+@test "worktree create says to move aside a folder that blocks a member, and offers no command that would fail" {
+    git clone --quiet --bare frontend "$TEST_DIR/frontend.git"
+    cat > .meta.yaml <<EOF
+projects:
+  api: {repo: "file://$TEST_DIR/frontend.git", depends_on: [web]}
+  web: "file://$TEST_DIR/frontend.git"
+  backend: "git@github.com:org/backend.git"
+EOF
+    mkdir web && echo notes > web/notes.txt
+    run "$META_BIN" git worktree create blocked --repo api
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'web' at $TEST_DIR/web: not a git repository"* ]]
+    [[ "$output" == *"Move $TEST_DIR/web aside (or delete it, if nothing in it is needed), then run this create again: it clones what isn't there."* ]]
+    [[ "$output" != *"clone-missing"* ]]
+    [ ! -e api ] && [ ! -e .worktrees/blocked ]
+    mv web web.aside
+    run "$META_BIN" git worktree create blocked --repo api
+    [ "$status" -eq 0 ]
+    [ -d .worktrees/blocked/web ]
+}
+
+@test "worktree create clones the meta repos on the way to what a nested repo depends on, in one go" {
+    # bare remotes: repo NAME [FILE CONTENT]...
+    remote() {
+        local name=$1; shift
+        git init --quiet --initial-branch=main "$TEST_DIR/src-$name"
+        while [ $# -ge 2 ]; do printf '%s\n' "$2" > "$TEST_DIR/src-$name/$1"; shift 2; done
+        git -C "$TEST_DIR/src-$name" add -A
+        git -C "$TEST_DIR/src-$name" commit --quiet --allow-empty -m "$name"
+        git clone --quiet --bare "$TEST_DIR/src-$name" "$TEST_DIR/$name.git"
+    }
+    remote desktop
+    remote sdk
+    remote core
+    remote gitkb .meta.yaml "projects: {core: \"file://$TEST_DIR/core.git\"}" .gitignore "core/"
+    remote open-source .meta.yaml "projects: {sdk: \"file://$TEST_DIR/sdk.git\", gitkb: {repo: \"file://$TEST_DIR/gitkb.git\", meta: true}}" .gitignore "sdk/
+gitkb/"
+    remote clients .meta.yaml "projects: {desktop: {repo: \"file://$TEST_DIR/desktop.git\", depends_on: [open-source/sdk, open-source/gitkb/core]}}" .gitignore "desktop/"
+    cat > .meta.yaml <<EOF
+projects:
+  clients: {repo: "file://$TEST_DIR/clients.git", meta: true}
+  open-source: {repo: "file://$TEST_DIR/open-source.git", meta: true}
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" git worktree create t -r --repo clients/desktop
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"warning"* ]]
+    for repo in clients clients/desktop open-source open-source/sdk open-source/gitkb open-source/gitkb/core; do
+        [ -e ".worktrees/t/$repo/.git" ]
+    done
+}
+
+@test "worktree create clones the meta repo on the way to what a provider it needs depends on" {
+    remote() {
+        local name=$1; shift
+        git init --quiet --initial-branch=main "$TEST_DIR/src-$name"
+        while [ $# -ge 2 ]; do printf '%s\n' "$2" > "$TEST_DIR/src-$name/$1"; shift 2; done
+        git -C "$TEST_DIR/src-$name" add -A
+        git -C "$TEST_DIR/src-$name" commit --quiet --allow-empty -m "$name"
+        git clone --quiet --bare "$TEST_DIR/src-$name" "$TEST_DIR/$name.git"
+    }
+    remote app
+    remote service
+    remote sdk
+    remote vendor .meta.yaml "projects: {sdk: \"file://$TEST_DIR/sdk.git\"}" .gitignore "sdk/"
+    # app needs api, which service provides; service needs vendor/sdk
+    cat > .meta.yaml <<EOF
+projects:
+  app: {repo: "file://$TEST_DIR/app.git", depends_on: [api]}
+  service: {repo: "file://$TEST_DIR/service.git", provides: [api], depends_on: [vendor/sdk]}
+  vendor: {repo: "file://$TEST_DIR/vendor.git", meta: true}
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" git worktree create t -r --strict --repo app
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"warning"* ]]
+    for repo in app service vendor vendor/sdk; do
+        [ -e ".worktrees/t/$repo/.git" ]
+    done
+}
+
+@test "worktree create -r --strict fails on a bad depends_on after cloning the meta repo on the way" {
+    git init --quiet --initial-branch=main "$TEST_DIR/src-desktop"
+    git -C "$TEST_DIR/src-desktop" commit --quiet --allow-empty -m desktop
+    git clone --quiet --bare "$TEST_DIR/src-desktop" "$TEST_DIR/desktop.git"
+    git init --quiet --initial-branch=main "$TEST_DIR/src-clients"
+    printf 'projects:\n  desktop: {repo: "file://%s/desktop.git", depends_on: [nowhere]}\n' "$TEST_DIR" > "$TEST_DIR/src-clients/.meta.yaml"
+    echo "desktop/" > "$TEST_DIR/src-clients/.gitignore"
+    git -C "$TEST_DIR/src-clients" add -A
+    git -C "$TEST_DIR/src-clients" commit --quiet -m clients
+    git clone --quiet --bare "$TEST_DIR/src-clients" "$TEST_DIR/clients.git"
+    cat > .meta.yaml <<EOF
+projects:
+  clients: {repo: "file://$TEST_DIR/clients.git", meta: true}
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" git worktree create t -r --strict --repo clients/desktop
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cloned clients"* ]]
+    [[ "$output" == *"'clients/desktop' depends on 'clients/nowhere'"*"(strict mode)"* ]]
+    [ ! -e .worktrees/t ]
+    # without --strict, the same is a warning, once
+    run "$META_BIN" git worktree create t -r --repo clients/desktop
+    [ "$status" -eq 0 ]
+    [ "$(grep -c "depends on 'clients/nowhere'" <<<"$output")" -eq 1 ]
+}
+
+@test "worktree create names every repo it couldn't clone, and makes nothing" {
+    git clone --quiet --bare frontend "$TEST_DIR/frontend.git"
+    cat > .meta.yaml <<EOF
+projects:
+  api: {repo: "file://$TEST_DIR/frontend.git", depends_on: [web, db]}
+  web: "file://$TEST_DIR/no-access-web.git"
+  db: "file://$TEST_DIR/no-access-db.git"
+  backend: "git@github.com:org/backend.git"
+EOF
+    run "$META_BIN" git worktree create denied --repo api
+    [ "$status" -ne 0 ]
+    # api clones; the two it can't are named, and nothing else
+    [[ "$output" == *"2 repos the set needs can't be used; no worktree was created:"* ]]
+    [[ "$output" == *"'web' at $TEST_DIR/web: not cloned"* ]]
+    [[ "$output" == *"'db' at $TEST_DIR/db: not cloned"* ]]
+    [[ "$output" != *"'api' at"* ]]
+    [[ "$output" == *"meta --include 'web,db' git clone-missing"* ]]
+    [[ "$output" == *"Cloning failed"* ]]
+    [ ! -e ".worktrees/denied" ]
+}
+
+@test "worktree create --all skips a repo that is not cloned; --repo and add refuse it when it can't be cloned" {
     rm -rf frontend
+    # a remote that can't be cloned (as without access), kept offline
+    sed -i.bak "s#git@github.com:org/frontend.git#file://$TEST_DIR/nowhere.git#" .meta.yaml
     run "$META_BIN" git worktree create some --all
     [ "$status" -eq 0 ]
     [[ "$output" == *"'frontend' at $TEST_DIR/frontend: not cloned"*"skipping"* ]]
@@ -287,6 +475,55 @@ EOF
     run "$META_BIN" git worktree add extend-test --repo frontend
     [ "$status" -eq 0 ]
     [ -d ".worktrees/extend-test/frontend" ]
+}
+
+@test "worktree add and create start a new branch from the remote's default branch, not the checkout's" {
+    "$META_BIN" git worktree create base-set --repo backend
+    for repo in backend frontend; do
+        git clone --quiet --bare "$repo" "$TEST_DIR/$repo.git"
+        git -C "$repo" remote add origin "$TEST_DIR/$repo.git"
+        git -C "$repo" fetch --quiet origin
+        git -C "$repo" remote set-head origin main
+        # the canonical checkout is on a feature branch, ahead of main
+        git -C "$repo" switch --quiet -c feature
+        git -C "$repo" commit --quiet --allow-empty -m "feature work"
+    done
+    local main_commit
+    main_commit=$(git -C frontend rev-parse origin/main)
+    run "$META_BIN" git worktree add base-set --repo frontend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Added 'frontend' to worktree 'base-set' (branch: base-set) (new from origin/main)"* ]]
+    [ "$(git -C .worktrees/base-set/frontend rev-parse HEAD)" = "$main_commit" ]
+    # a branch of its own: it tracks nothing, so a push or pull never reaches main
+    run git -C .worktrees/base-set/frontend rev-parse --abbrev-ref '@{upstream}'
+    [ "$status" -ne 0 ]
+    run "$META_BIN" git worktree create other-set --repo backend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"backend -> other-set (new from origin/main)"* ]]
+    [ "$(git -C .worktrees/other-set/backend rev-parse HEAD)" = "$(git -C backend rev-parse origin/main)" ]
+    # add takes the commit-ish to start from, as create does
+    "$META_BIN" git worktree create third-set --repo backend
+    run "$META_BIN" git worktree add third-set feature --repo frontend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"(new from feature)"* ]]
+    [ "$(git -C .worktrees/third-set/frontend rev-parse HEAD)" = "$(git -C frontend rev-parse feature)" ]
+    # a remote that names no default branch: HEAD, with a warning in one line
+    git -C backend remote set-head origin --delete
+    run "$META_BIN" git worktree create fourth-set --repo backend
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"so 'fourth-set' starts from HEAD (feature); give the commit-ish to start from, or set it with: git -C "*"remote set-head origin --auto"* ]]
+    [[ "$output" == *"backend -> fourth-set (new from HEAD (feature))"* ]]
+}
+
+@test "worktree create with a commit-ish and a branch that exists says what to do" {
+    git -C backend branch keepme
+    run "$META_BIN" git worktree create keepme main --repo backend --no-deps
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Branch 'keepme' already exists in $TEST_DIR/backend, and a commit-ish ('main') starts a new branch. Drop the commit-ish to check out the existing branch"* ]]
+    [[ "$output" != *"fatal:"* ]]
+    [ ! -e .worktrees/keepme ]
+    run "$META_BIN" git worktree create keepme --repo backend --no-deps
+    [ "$status" -eq 0 ]
 }
 
 @test "worktree add rejects dot-alias" {
@@ -513,11 +750,56 @@ assert d['totals']['files_changed'] >= 1
     [ ! -d ".worktrees/temp" ]
 }
 
-@test "worktree remove preserves branches" {
-    "$META_BIN" git worktree create keep-branch --repo backend --no-deps
-    run "$META_BIN" git worktree remove keep-branch
+@test "worktree remove deletes the branches it created that hold nothing unique, and names the ones it keeps" {
+    git clone --quiet --bare frontend "$TEST_DIR/frontend.git"
+    git -C frontend remote add origin "$TEST_DIR/frontend.git"
+    git -C frontend fetch --quiet origin
+    git -C backend branch existing
+    "$META_BIN" git worktree create b1 --repo backend --repo frontend --no-deps
+    # a commit only this branch has, and one pushed to the remote
+    git -C .worktrees/b1/backend commit --quiet --allow-empty -m "only on b1"
+    git -C .worktrees/b1/frontend commit --quiet --allow-empty -m "pushed"
+    git -C .worktrees/b1/frontend push --quiet origin b1
+    "$META_BIN" git worktree create b2 --repo backend:existing --no-deps
+    run "$META_BIN" --dry-run git worktree remove b1
     [ "$status" -eq 0 ]
-    git -C backend branch | grep -q "keep-branch"
+    [[ "$output" == *"would keep branch 'b1' in $TEST_DIR/backend: 1 commit on no remote, other branch or tag (first: "*"only on b1)"* ]]
+    [[ "$output" == *"would delete branch 'b1' in $TEST_DIR/frontend"* ]]
+    git -C frontend rev-parse --verify --quiet refs/heads/b1
+    run "$META_BIN" git worktree remove b1
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"kept branch 'b1' in $TEST_DIR/backend: 1 commit on no remote, other branch or tag"* ]]
+    [[ "$output" == *"deleted branch 'b1' in $TEST_DIR/frontend (all its commits are on a remote or another branch)"* ]]
+    git -C backend rev-parse --verify --quiet refs/heads/b1
+    run git -C frontend rev-parse --verify --quiet refs/heads/b1
+    [ "$status" -ne 0 ]
+    # a branch the set only checked out was not created for it: left, and said so
+    run "$META_BIN" git worktree remove b2
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"left branch 'existing' in $TEST_DIR/backend (no record says meta made it for this set)"* ]]
+    git -C backend rev-parse --verify --quiet refs/heads/existing
+}
+
+@test "worktree remove deletes ignored files and a branch work was reset away from, as git does" {
+    # ignored files are disposable without --force, as for git worktree remove;
+    # untracked ones are refused
+    "$META_BIN" git worktree create ig --repo backend --no-deps
+    echo .env >> backend/.git/info/exclude
+    echo SECRET=1 > .worktrees/ig/backend/.env
+    touch .worktrees/ig/backend/new.txt
+    run "$META_BIN" git worktree remove ig
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"1 file untracked: new.txt"* ]]
+    [[ "$output" != *".env"* ]]
+    rm .worktrees/ig/backend/new.txt
+    # a commit reset away is only in the reflogs: git counts it discarded
+    git -C .worktrees/ig/backend commit --quiet --allow-empty -m "reset away"
+    git -C .worktrees/ig/backend reset --quiet --hard HEAD~1
+    run "$META_BIN" git worktree remove ig
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"deleted branch 'ig' in $TEST_DIR/backend"* ]]
+    [ ! -e .worktrees/ig ]
+    [ -z "$(git -C backend for-each-ref refs/meta)" ]
 }
 
 @test "worktree remove refuses dirty worktree without --force" {
@@ -763,9 +1045,9 @@ assert d['totals']['files_changed'] >= 1
     [ -d "backend" ]
     [ -d "frontend" ]
 
-    # Branches should still exist in original repos
-    git -C backend branch | grep -q "dot-remove"
-    git -C frontend branch | grep -q "dot-remove"
+    # The branches the set made held nothing new: deleted with it
+    [ -z "$(git -C backend branch --list dot-remove)" ]
+    [ -z "$(git -C frontend branch --list dot-remove)" ]
 }
 
 # ============ Edge Cases: Add duplicate repo ============
@@ -843,11 +1125,15 @@ EOF
 
 # ============ Nested Repo (meta-53) ============
 
-@test "a parent a nested repo needs is checked for its depends_on too" {
+@test "a parent a nested repo needs is in the set for its place: its depends_on is not checked" {
     setup_nested_meta
     sed -i.bak 's#"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}#"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true, "depends_on": ["missing"]}#' .meta.yaml
     grep -q '"missing"' .meta.yaml
-    run "$META_BIN" --strict --dry-run git worktree create parent-check --recursive --repo vendor/nested-lib
+    run "$META_BIN" --dry-run git worktree create parent-check --recursive --repo vendor/nested-lib
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"depends on 'missing'"* ]]
+    # asked for, its depends_on is followed, and checked
+    run "$META_BIN" --strict --dry-run git worktree create parent-check --recursive --repo vendor
     [ "$status" -ne 0 ]
     [[ "$output" == *"'vendor' depends on 'missing'"*"(strict mode)"* ]]
 }
@@ -874,6 +1160,25 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"is given twice"* ]]
     [ ! -e ".worktrees/two-names" ]
+}
+
+@test "worktree list and status show a repo nested in another repo of the set without -r" {
+    setup_nested_meta
+    # vendor is a repo of its own, holding nested-lib
+    echo "nested-lib/" > vendor/.gitignore
+    git -C vendor init --quiet --initial-branch=main
+    git -C vendor add .gitignore .meta.yaml
+    git -C vendor commit --quiet -m "vendor"
+    "$META_BIN" git worktree create nest --recursive --repo vendor --repo vendor/nested-lib
+    [ -e .worktrees/nest/vendor/nested-lib/.git ]
+    run "$META_BIN" git worktree list nest
+    [ "$status" -eq 0 ]
+    grep -Eq 'vendor/nested-lib +-> nest' <<<"$output"
+    run "$META_BIN" git worktree list
+    grep -Eq 'vendor/nested-lib +-> nest' <<<"$output"
+    run "$META_BIN" --json git worktree status nest
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'"alias": "vendor/nested-lib"'* ]]
 }
 
 @test "worktree add with nested repo alias succeeds" {

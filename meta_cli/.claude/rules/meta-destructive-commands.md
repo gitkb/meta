@@ -24,7 +24,8 @@ Multi-repo workspaces amplify the impact of destructive commands.
 
 ## Blocked by `agent guard`
 
-These commands trigger PreToolUse denial:
+gitkb's `agent guard`, the PreToolUse hook, refuses these. It is a safety net, not a lock: when the agent fails, the command runs.
+
 - `git push --force` (use `--force-with-lease` instead)
 - `git reset --hard` (commit or stash first; recover commits with `git reflog`)
 - `git clean -fd` (dangerous file removal)

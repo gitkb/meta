@@ -79,6 +79,24 @@ pub fn write(admin: &Path, record: &SetRecord) -> Result<()> {
     written.with_context(|| format!("Cannot write {}", escape_path(&path)))
 }
 
+/// The file, beside the record, naming the branch meta created for the
+/// worktree (it holds the branch's name); git deletes it with the worktree.
+const CREATED_BRANCH_FILE: &str = "meta-created-branch";
+
+/// Note in a worktree's admin directory that meta created `branch` for it.
+pub fn write_created_branch(admin: &Path, branch: &str) -> Result<()> {
+    let path = admin.join(CREATED_BRANCH_FILE);
+    std::fs::write(&path, branch).with_context(|| format!("Cannot write {}", escape_path(&path)))
+}
+
+/// The branch meta created for the worktree whose admin directory is
+/// `admin`, if it noted one.
+pub fn created_branch(admin: &Path) -> Option<String> {
+    std::fs::read_to_string(admin.join(CREATED_BRANCH_FILE))
+        .ok()
+        .filter(|branch| !branch.is_empty())
+}
+
 /// Delete the record in a worktree's admin directory, if any.
 pub fn delete(admin: &Path) -> Result<()> {
     let path = admin.join(RECORD_FILE);

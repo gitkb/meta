@@ -20,7 +20,7 @@ setup() {
     printf '#!/bin/sh\necho "$*" >> "%s/claude-calls"\n' "$STUB_DIR" > "$STUB_DIR/claude"
     chmod +x "$STUB_DIR/claude"
     # `agent` is installed unless a test removes it
-    printf '#!/bin/sh\nexit 0\n' > "$STUB_DIR/agent"
+    printf '#!/bin/sh\n[ "$1" = --help ] && echo "Claude Code agent toolkit"\nexit 0\n' > "$STUB_DIR/agent"
     chmod +x "$STUB_DIR/agent"
     PATH="$STUB_DIR:$PATH"
 
@@ -149,6 +149,30 @@ teardown() {
     [ "$status" -ne 0 ]
 }
 
+@test "init claude --update lists an older meta's guard hook among the hooks that run" {
+    "$META_BIN" init claude
+    python3 - <<'PY'
+import json
+p = '.claude/settings.json'
+s = json.load(open(p))
+s['hooks']['PreToolUse'][0]['hooks'][0]['command'] = 'agent guard'
+json.dump(s, open(p, 'w'))
+PY
+    run "$META_BIN" init claude --update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Its PreToolUse hook runs any \`agent\` on PATH"* ]]
+    [[ "$output" == *"Hooks:   .claude/settings.json (PreCompact, PreToolUse, SessionStart)"* ]]
+}
+
+@test "init claude adds no guard hook for an agent that isn't gitkb's" {
+    printf '#!/bin/sh\necho "some other agent"\nexit 0\n' > "$STUB_DIR/agent"
+    run "$META_BIN" init claude
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Skipped the PreToolUse hook"* ]]
+    run grep -c PreToolUse .claude/settings.json
+    [ "$output" = 0 ]
+}
+
 @test "init claude PreToolUse has Bash matcher" {
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
@@ -239,15 +263,18 @@ EOF
 
 # ============ --update flag ============
 
-@test "init claude --update refreshes skill files" {
-    mkdir -p .meta/skills/meta-workspace
-    echo "old content" > .meta/skills/meta-workspace/SKILL.md
+@test "init claude --update refreshes skill files meta wrote, and keeps one the user edited" {
+    local root="$BATS_TEST_DIRNAME/.."
+    mkdir -p .meta/skills/meta-workspace .meta/skills/meta-git
+    # as an older meta wrote it
+    cp "$root/meta_cli/tests/fixtures/meta-workspace-SKILL.md" .meta/skills/meta-workspace/SKILL.md
+    echo "my own notes" > .meta/skills/meta-git/SKILL.md
 
     run "$META_BIN" init claude --update
     [ "$status" -eq 0 ]
-
-    run grep "Meta Workspace Skill" .meta/skills/meta-workspace/SKILL.md
-    [ "$status" -eq 0 ]
+    cmp "$root/claude-plugin/skills/meta-workspace/SKILL.md" .meta/skills/meta-workspace/SKILL.md
+    [ "$(cat .meta/skills/meta-git/SKILL.md)" = "my own notes" ]
+    [[ "$output" == *"Kept $TEST_DIR/.meta/skills/meta-git/SKILL.md (changed since meta wrote it"* ]]
 }
 
 @test "init claude --update keeps a skill folder meta did not mark" {
@@ -301,15 +328,16 @@ EOF
 
 # ============ --force flag ============
 
-@test "init claude --force overwrites skill files" {
-    mkdir -p .meta/skills/meta-workspace
-    echo "custom content" > .meta/skills/meta-workspace/SKILL.md
+@test "init claude --force overwrites skill files meta wrote, and keeps one the user edited" {
+    local root="$BATS_TEST_DIRNAME/.."
+    mkdir -p .meta/skills/meta-workspace .meta/skills/meta-git
+    cp "$root/meta_cli/tests/fixtures/meta-workspace-SKILL.md" .meta/skills/meta-workspace/SKILL.md
+    echo "custom content" > .meta/skills/meta-git/SKILL.md
 
     run "$META_BIN" init claude --force
     [ "$status" -eq 0 ]
-
-    run grep "Meta Workspace Skill" .meta/skills/meta-workspace/SKILL.md
-    [ "$status" -eq 0 ]
+    cmp "$root/claude-plugin/skills/meta-workspace/SKILL.md" .meta/skills/meta-workspace/SKILL.md
+    [ "$(cat .meta/skills/meta-git/SKILL.md)" = "custom content" ]
 }
 
 @test "init claude --force overwrites rule files" {
@@ -436,7 +464,7 @@ import json
 groups = json.load(open('.claude/settings.json'))['hooks']['PreToolUse']
 assert len(groups) == 1, groups
 commands = [h['command'] for h in groups[0]['hooks']]
-assert commands == ['agent guard', 'my-own-check'], commands
+assert commands == ["agent --help 2>/dev/null | grep -q 'Claude Code agent toolkit' && agent guard; exit 0", 'my-own-check'], commands
 PY
 }
 
@@ -451,7 +479,7 @@ PY
     run grep "agent guard" .claude/settings.json
     [ "$status" -ne 0 ]
 
-    printf '#!/bin/sh\nexit 0\n' > "$STUB_DIR/agent"
+    printf '#!/bin/sh\n[ "$1" = --help ] && echo "Claude Code agent toolkit"\nexit 0\n' > "$STUB_DIR/agent"
     chmod +x "$STUB_DIR/agent"
     run init_claude
     [ "$status" -eq 0 ]

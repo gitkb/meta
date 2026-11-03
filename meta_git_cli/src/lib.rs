@@ -294,8 +294,8 @@ fn execute_raw_git_command(
             ssh::SshMasters::OurSockets(dir) => (Some(ssh::git_ssh_command(&dir)), true),
             ssh::SshMasters::UserManaged => (None, true),
             ssh::SshMasters::Failed => {
-                meta_core::out::warn(
-                    "SSH multiplexing could not be set up: running one repository at a time",
+                log::debug!(
+                    "SSH multiplexing could not be set up: running one repository at a time"
                 );
                 (None, false)
             }

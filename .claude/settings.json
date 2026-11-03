@@ -4,7 +4,7 @@
       {
         "hooks": [
           {
-            "command": "meta context 2>/dev/null",
+            "command": "meta context 2>/dev/null || true",
             "timeout": 10,
             "type": "command"
           }
@@ -15,7 +15,7 @@
       {
         "hooks": [
           {
-            "command": "./target/debug/agent guard",
+            "command": "agent --help 2>/dev/null | grep -q 'Claude Code agent toolkit' && agent guard; exit 0",
             "timeout": 5,
             "type": "command"
           }
@@ -27,7 +27,7 @@
       {
         "hooks": [
           {
-            "command": "meta context 2>/dev/null",
+            "command": "meta context 2>/dev/null || true",
             "timeout": 10,
             "type": "command"
           }
@@ -36,7 +36,7 @@
       {
         "hooks": [
           {
-            "command": "git kb service status --quiet 2>/dev/null || git kb service start 2>/dev/null",
+            "command": "git kb service status --quiet 2>/dev/null || git kb service start 2>/dev/null || true",
             "timeout": 10,
             "type": "command"
           }

@@ -598,16 +598,64 @@ within() {
     done
 }
 
+@test "meta git clone-prune removes a leftover holding only ignored files, naming them" {
+    with_remotes
+    git clone --quiet remotes/shared.git local-data
+    printf '.env\ndata/\n' > local-data/.git/info/exclude
+    echo SECRET=1 > local-data/.env
+    mkdir local-data/data && echo row > local-data/data/a.db
+    # a commit only the reflog holds is not kept: git counts it discarded
+    git -C local-data switch --quiet --detach
+    git -C local-data commit --quiet --allow-empty -m "left on a detached HEAD"
+    git -C local-data switch --quiet main
+    run "$META_BIN" git update
+    [[ "$output" == *"local-data isn't in .meta.yaml (nothing unpushed; meta git clone-prune removes it, and its ignored files: .env, data/)"* ]]
+    run "$META_BIN" --dry-run git clone-prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Would remove local-data (nothing unpushed; ignored files: .env, data/ deleted with it)"* ]]
+    # --json names them too, in the preview and the run, for both commands
+    local json_check='
+import json, sys
+[r] = [r for r in json.load(sys.stdin)["repos"] if r["path"] == "local-data"]
+assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored files: .env, data/ deleted with it", r
+'
+    run "$META_BIN" --json --dry-run git clone-prune
+    [ "$status" -eq 0 ]
+    python3 -c "$json_check" <<<"$output"
+    [ -f local-data/.env ]
+    run "$META_BIN" --json git clone-sync
+    [ "$status" -eq 0 ]
+    python3 -c "$json_check" <<<"$output"
+    [ ! -e local-data ]
+    git clone --quiet remotes/shared.git local-data
+    echo SECRET=1 > local-data/.env
+    printf '.env\ndata/\n' > local-data/.git/info/exclude
+    run "$META_BIN" git clone-prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Removed local-data (nothing unpushed; ignored files: .env deleted with it)"* ]]
+    [ ! -e local-data ]
+    run "$META_BIN" git clone-prune --delete-ignored
+    [ "$status" -ne 0 ]
+}
+
 @test "meta git clone-sync clones what is missing and prunes what no .meta.yaml lists" {
     with_remotes
     rm -rf shared
     git clone --quiet remotes/frontend.git old
+    run "$META_BIN" --dry-run git clone-missing
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"git clone"* ]]
     run "$META_BIN" --json git clone-sync
     [ "$status" -eq 0 ]
     [[ "$output" == *'{"action":"cloned","path":"shared"}'* ]]
     [[ "$output" == *'{"action":"removed","path":"old"}'* ]]
     [ -d shared/.git ]
     [ ! -e old ]
+    # with everything cloned, the preview says so, not an empty list
+    run "$META_BIN" --dry-run git clone-sync
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[DRY RUN] Nothing to clone: every project the .meta.yaml files list is cloned"* ]]
+    [[ "$output" != *"Would run"* ]]
 }
 
 @test "meta --json git clone-missing names a failed clone and a refused folder by their paths" {

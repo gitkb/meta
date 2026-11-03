@@ -28,15 +28,14 @@ meta exec -- sh -c 'npm ci && npm test'
 
 A `.looprc` alias for the program is expanded into words (POSIX quoting rules, nothing expanded or run). On Windows meta does not wrap commands in `cmd /c` either. Batch files such as `npm.cmd` need their extension (`meta exec -- npm.cmd install`); Windows runs those through `cmd.exe`, and Rust escapes their arguments for it and refuses any it cannot pass safely.
 
-The `--` separates meta options from the command to execute. The `--` is optional unless your command starts with `-`.
+The `--` marks where the command starts; it is optional. The first word after `exec` (or after `--`) is the program, and every word after it belongs to the command, so its own options reach it either way. meta's options go before `exec`.
 
 ```bash
 # These are equivalent:
 meta exec make test
 meta exec -- make test
-
-# Use -- when command starts with dash:
-meta exec -- --version
+meta exec git --version
+meta exec -- git --version
 ```
 
 ## Parallel vs Sequential
@@ -63,7 +62,8 @@ Control which repos run the command:
 ```bash
 # Only these repos: each value is a repo's .meta.yaml name or its path from the workspace root
 meta --include api,worker git status
-meta --include libs/core,. git status   # `.` is the root repo
+meta --include services/api,. git status   # services/api: the path of a project this .meta.yaml lists; `.` is the root repo
+meta -r --include open-source/sdk/core git status   # a repo of a nested meta repo (sdk/core in open-source/.meta.yaml) needs -r
 
 # Skip these repos
 meta --exclude legacy-service git push

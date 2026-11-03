@@ -42,6 +42,12 @@ Most multi-repo tools solve the *cloning* problem. Meta solves the *working* pro
 
 ## Quick Start
 
+0. **Install meta** from GitHub main (needs [rustup](https://rustup.rs) and `git`; see [Installation](#installation)):
+
+   ```bash
+   git clone https://github.com/gitkb/meta && make -C meta install
+   ```
+
 1. **Clone a meta repository:**
 
    ```bash
@@ -125,7 +131,39 @@ Plugins communicate via JSON over stdin/stdout — language-agnostic, process-is
 
 ## Installation
 
-### Via Install Script (Recommended)
+### From GitHub main (Recommended)
+
+With [rustup](https://rustup.rs) and `git` installed:
+
+```bash
+git clone https://github.com/gitkb/meta && make -C meta install
+```
+
+This builds meta from the main branch with the committed `Cargo.lock` and
+installs `meta`, the `meta-git`, `meta-project` and `meta-cargo` plugins,
+`meta-mcp` and `loop` into `~/.cargo/bin` (the crates in the Makefile's
+`BIN_CRATES`), replacing any copies already there, with your default
+stable toolchain. `meta --version` names the commit it was built from
+(as in `0.2.22 (git 1c96c7e 2026-11-03)`). Building also
+needs a C compiler and linker and `make`, which most machines that build
+Rust already have (Xcode Command Line Tools on macOS, `build-essential` or
+your distro's equivalent on Linux, Visual Studio Build Tools on Windows,
+where the command runs in Git Bash or WSL).
+
+To update, run from the same folder: `git -C meta pull && make -C meta install`.
+
+A checkout from before the crates moved into this repo, with `meta_cli/` and
+the rest as separate clones, must run the snippet in
+[#135](https://github.com/gitkb/meta/pull/135) first: a plain pull writes over
+those clones.
+`agent` and `meta-plugins` in `.meta.yaml` are not needed for the build;
+`meta git` commands report them as missing until you clone them too.
+
+### Release builds (lag main)
+
+These install the latest published release, which can be well behind main:
+commands and fixes made since the release (`meta-cargo`, for one) are missing
+from it. Use them only where you can't build from source.
 
 **macOS/Linux:**
 ```bash
@@ -135,6 +173,11 @@ curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | bash
 **Windows (PowerShell):**
 ```powershell
 irm https://raw.githubusercontent.com/gitkb/meta/main/install.ps1 | iex
+```
+
+**Homebrew (macOS/Linux):**
+```bash
+brew install gitkb/tap/meta-cli
 ```
 
 The scripts download the release archive for your platform together with
@@ -156,39 +199,10 @@ The checksum comes from the same place as the archive, so it catches a
 corrupted or truncated download, not a compromised source: use a mirror you
 trust, over https.
 
-### Via Homebrew (macOS/Linux)
-
-```bash
-brew install gitkb/tap/meta-cli
-```
-
-### From Source
-
-Prerequisites: [rustup](https://rustup.rs) (it installs the toolchain
-pinned in `rust-toolchain.toml`), a C compiler and linker (Xcode Command
-Line Tools on macOS, `build-essential` or your distro's equivalent on
-Linux, Visual Studio Build Tools on Windows), `git` and `make`.
-
-Clone this repo, which holds all of meta's crates, then install with the
-committed `Cargo.lock`:
-
-```bash
-git clone https://github.com/gitkb/meta && cd meta
-make install
-```
-
-This installs `meta`, the `meta-git`, `meta-project` and `meta-cargo`
-plugins, `meta-mcp` and `loop` into `~/.cargo/bin` (the crates in the
-Makefile's `BIN_CRATES`, the binaries a release ships), replacing any
-copies already there. To update, `git pull` and run `make install` again.
-A checkout from before the crates moved into this repo, with `meta_cli/` and
-the rest as separate clones, must run the snippet in
-[#135](https://github.com/gitkb/meta/pull/135) first: a plain pull writes over
-those clones.
 Copies the install scripts put in `~/.local/bin` or `%USERPROFILE%\.meta\bin`
-(their defaults) stay; remove them or put `~/.cargo/bin` first in `PATH`.
-`agent` and `meta-plugins` in `.meta.yaml` are not needed for the build;
-`meta git` commands report them as missing until you clone them too.
+(their defaults) shadow or are shadowed by a build from main, depending on
+`PATH`: remove them once you build from main, or put `~/.cargo/bin` first in
+`PATH`.
 
 ---
 
@@ -307,7 +321,7 @@ Keeping the clones to what the `.meta.yaml` files list:
 | `meta git clone-prune` | Remove the repos no `.meta.yaml` lists that hold nothing unpushed; keep and name the others |
 | `meta git clone-sync` | `clone-missing`, then `clone-prune` |
 
-Each takes `-r` (or meta's `--recursive`) for nested meta repos, and `--dry-run` before the command. `clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files as they are on disk and pull nothing; they take `--include`, `--exclude` and `--tag` (the projects cloned, the meta repos searched for leftovers) and `--json` (`{"dry_run", "repos": [{"path", "action", "reason"?}]}`, `action` being `cloned`, `removed`, `kept` or `failed`). `clone-prune` removes a repo only when git shows nothing in it that isn't on a remote: no uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it (bare ones too). Other ignored files are not checked.
+Each takes `-r` (or meta's `--recursive`) for nested meta repos, and `--dry-run` before the command. `clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files as they are on disk and pull nothing; they take `--include`, `--exclude` and `--tag` (the projects cloned, the meta repos searched for leftovers) and `--json` (`{"dry_run", "repos": [{"path", "action", "reason"?}]}`, `action` being `cloned`, `removed`, `kept` or `failed`; a removed repo's `reason` names the ignored files deleted with it). `clone-prune` removes a repo only when git shows nothing in it that isn't on a remote: no uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it (bare ones too). Files git ignores (`.env`, `target/`) are deleted with it and named first, as `git worktree remove` deletes them; commits only a reflog holds are not kept.
 
 ```bash
 # List entire tree

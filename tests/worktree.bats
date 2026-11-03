@@ -835,7 +835,7 @@ EOF
     git -C ".worktrees/spaced/my app" switch --quiet spaced
     run "$META_BIN" git worktree remove spaced
     [ "$status" -eq 0 ]
-    [[ "$output" == *"as refs/meta/kept/spaced/${detached:0:12}"* ]]
+    [[ "$output" == *"as refs/meta/kept/spaced/${detached:0:12} (see them: git -C '$TEST_DIR/my app' log refs/meta/kept/spaced/${detached:0:12};"* ]]
     [ ! -e .worktrees/spaced ]
     git -C "my app" check-ref-format "refs/meta/kept/spaced/${detached:0:12}"
     git -C "my app" gc --quiet --prune=now

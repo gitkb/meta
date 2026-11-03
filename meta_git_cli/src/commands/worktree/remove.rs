@@ -284,9 +284,11 @@ pub(crate) fn remove_set(
     if !json {
         for kept in &kept_refs {
             let repo = escape_path(std::path::Path::new(&kept.repo));
+            // the command, to paste: its path quoted for a shell
+            let quoted = escape(&meta_core::display::shell_quote(&kept.repo)).into_owned();
             outln!(
                 "  {} {} only the worktree's HEAD reflog held, in {repo}, as {} (see them: \
-                 git -C {repo} log {}; delete the ref once they're kept elsewhere)",
+                 git -C {quoted} log {}; delete the ref once they're kept elsewhere)",
                 if preview { "would save" } else { "saved" }.yellow(),
                 match kept.commits {
                     1 => "1 commit".to_string(),

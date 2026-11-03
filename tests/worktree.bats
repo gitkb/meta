@@ -429,6 +429,17 @@ EOF
     [[ "$output" == *"backend -> fourth-set (new from HEAD (feature))"* ]]
 }
 
+@test "worktree create with a commit-ish and a branch that exists says what to do" {
+    git -C backend branch keepme
+    run "$META_BIN" git worktree create keepme main --repo backend --no-deps
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Branch 'keepme' already exists in $TEST_DIR/backend, and a commit-ish ('main') starts a new branch. Drop the commit-ish to check out the existing branch"* ]]
+    [[ "$output" != *"fatal:"* ]]
+    [ ! -e .worktrees/keepme ]
+    run "$META_BIN" git worktree create keepme --repo backend --no-deps
+    [ "$status" -eq 0 ]
+}
+
 @test "worktree add rejects dot-alias" {
     "$META_BIN" git worktree create code-only --repo backend
     run "$META_BIN" git worktree add code-only --repo .
@@ -676,10 +687,10 @@ assert d['totals']['files_changed'] >= 1
     git -C backend rev-parse --verify --quiet refs/heads/b1
     run git -C frontend rev-parse --verify --quiet refs/heads/b1
     [ "$status" -ne 0 ]
-    # a branch the set only checked out was not created for it: kept, unmentioned
+    # a branch the set only checked out was not created for it: left, and said so
     run "$META_BIN" git worktree remove b2
     [ "$status" -eq 0 ]
-    [[ "$output" != *"branch 'existing'"* ]]
+    [[ "$output" == *"left branch 'existing' in $TEST_DIR/backend (this set didn't make it)"* ]]
     git -C backend rev-parse --verify --quiet refs/heads/existing
 }
 

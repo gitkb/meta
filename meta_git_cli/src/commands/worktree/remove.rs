@@ -173,16 +173,26 @@ pub(crate) fn remove_set(
 
     // The branches meta created for the set, read before git deletes the
     // notes with the worktrees
-    let branches: Vec<(std::path::PathBuf, String)> = check
-        .members
-        .iter()
-        .filter_map(|member| {
-            let linked = meta_core::gitdir::linked(&member.path).ok()?;
-            let branch = record::created_branch(&linked.admin)?;
-            let git_dir = linked.common.canonicalize().unwrap_or(linked.common);
-            Some((git_dir, branch))
-        })
-        .collect();
+    // (the others' branches, which it leaves, are named too)
+    let mut branches: Vec<(std::path::PathBuf, String)> = Vec::new();
+    let mut left: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for member in &check.members {
+        let Ok(linked) = meta_core::gitdir::linked(&member.path) else {
+            continue;
+        };
+        let git_dir = linked
+            .common
+            .canonicalize()
+            .unwrap_or(linked.common.clone());
+        match record::created_branch(&linked.admin) {
+            Some(branch) => branches.push((git_dir, branch)),
+            None => {
+                if let Ok(Some(branch)) = meta_core::git::current_branch(&member.path) {
+                    left.push((git_dir, branch));
+                }
+            }
+        }
+    }
 
     if !preview {
         // Remove exactly what was checked, nested worktrees first
@@ -214,6 +224,14 @@ pub(crate) fn remove_set(
     }
     if !json {
         report_branches(&branches, preview)?;
+        for (git_dir, branch) in &left {
+            outln!(
+                "  {} branch '{}' in {} (this set didn't make it)",
+                if preview { "would leave" } else { "left" },
+                escape(branch),
+                repo_shown(git_dir)
+            )?;
+        }
     } else if !preview {
         for (git_dir, branch) in &branches {
             delete_branch(git_dir, branch)?;
@@ -225,6 +243,15 @@ pub(crate) fn remove_set(
     // What was done is reported first: a failing hook doesn't undo it
     fire_post_destroy(name, &wt_dir, force, Some(&configs.owner))
         .or_else(|e| out::warn_or_bail(strict, format!("{e:#}")))
+}
+
+/// The checkout the git directory `git_dir` belongs to, as the user knows it.
+fn repo_shown(git_dir: &std::path::Path) -> String {
+    let dir = match git_dir.file_name() {
+        Some(name) if name == ".git" => git_dir.parent().unwrap_or(git_dir),
+        _ => git_dir,
+    };
+    escape_path(dir)
 }
 
 /// What became of a branch meta created for a set being removed.
@@ -293,14 +320,7 @@ fn delete_branch(git_dir: &std::path::Path, branch: &str) -> Result<()> {
 /// git directory and the branch) that holds nothing that isn't elsewhere,
 /// and name each one kept, with why.
 fn report_branches(branches: &[(std::path::PathBuf, String)], preview: bool) -> Result<()> {
-    // the checkout the git directory belongs to, as the user knows it
-    let repo = |git_dir: &std::path::Path| {
-        let dir = match git_dir.file_name() {
-            Some(name) if name == ".git" => git_dir.parent().unwrap_or(git_dir),
-            _ => git_dir,
-        };
-        escape_path(dir)
-    };
+    let repo = repo_shown;
     for (git_dir, branch) in branches {
         match branch_fate(git_dir, branch, preview)? {
             BranchFate::Deleted if preview => outln!(

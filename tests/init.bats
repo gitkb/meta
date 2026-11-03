@@ -149,6 +149,21 @@ teardown() {
     [ "$status" -ne 0 ]
 }
 
+@test "init claude --update lists an older meta's guard hook among the hooks that run" {
+    "$META_BIN" init claude
+    python3 - <<'PY'
+import json
+p = '.claude/settings.json'
+s = json.load(open(p))
+s['hooks']['PreToolUse'][0]['hooks'][0]['command'] = 'agent guard'
+json.dump(s, open(p, 'w'))
+PY
+    run "$META_BIN" init claude --update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Its PreToolUse hook runs any \`agent\` on PATH"* ]]
+    [[ "$output" == *"Hooks:   .claude/settings.json (PreCompact, PreToolUse, SessionStart)"* ]]
+}
+
 @test "init claude adds no guard hook for an agent that isn't gitkb's" {
     printf '#!/bin/sh\necho "some other agent"\nexit 0\n' > "$STUB_DIR/agent"
     run "$META_BIN" init claude

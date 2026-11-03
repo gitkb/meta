@@ -418,12 +418,16 @@ fn install_claude_integration_to(
     Ok(())
 }
 
-/// Meta's hooks in the settings at `path`; none where it can't be read.
+/// Meta's hooks in the settings at `path`, an older meta's guard hook
+/// included (it runs too); none where the file can't be read.
 fn hooks_in(path: &Path) -> Vec<String> {
     fs::read_to_string(path)
         .ok()
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-        .map(|settings| installed_hooks(&settings))
+        .map(|mut settings| {
+            upgrade_guard(&mut settings);
+            installed_hooks(&settings)
+        })
         .unwrap_or_default()
 }
 

@@ -101,6 +101,17 @@ pub fn worktree_start(
 ) -> Result<WorktreeStart> {
     ensure_checkout_config_is_not_bare(repo_path)?;
     if let Some(ref_name) = from_ref {
+        // a commit-ish starts a new branch: git would refuse one that exists
+        if git_rev_parse(repo_path, &format!("refs/heads/{branch}"))?.is_some() {
+            anyhow::bail!(
+                "Branch '{}' already exists in {}, and a commit-ish ('{}') starts a new branch. \
+                 Drop the commit-ish to check out the existing branch, or name a new branch \
+                 with --branch <name> (or --repo <repo>:<name>).",
+                escape(branch),
+                escape_path(repo_path),
+                escape(ref_name)
+            );
+        }
         let commit =
             git_rev_parse(repo_path, &format!("{ref_name}^{{commit}}"))?.ok_or_else(|| {
                 anyhow::anyhow!(

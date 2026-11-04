@@ -155,13 +155,15 @@ Meta propagates exit codes from failed commands, making it suitable for CI/CD:
 meta exec -- npm test || echo "Tests failed in at least one repo"
 ```
 
+<!-- generated:exit-codes -->
 | Code | Meaning |
 |------|---------|
 | 0 | Done |
-| 1 | Something failed: a command in at least one repo (the summary names them), or meta itself (`Error: …` on stderr) |
+| 1 | Something failed: a command in at least one repo (the summary names them), or meta itself (`Error: …` on stderr; with `--json`, a JSON error on stdout) |
 | 2 | The command line is wrong: an unknown command, or an option or value clap rejects |
 | 141 | Its output was cut off: stdout closed early, as in `meta exec -- git log \| head` |
 | 128 + n | Stopped by signal n (Ctrl-C: 130), or a plugin was |
+<!-- /generated -->
 
 A plugin's own exit code passes through. `loop` and `meta-mcp` exit the same way.
 

@@ -1,26 +1,57 @@
-//! How meta's programs end, decided in one place.
-//!
-//! - 0: done
-//! - 1: failed (the error is printed: `Error: …` on stderr, or with
-//!   `--json`, before any other output, a JSON object on stdout)
-//! - 2: the command line was wrong ([`Usage`], clap's usage errors)
-//! - 128 + n: a plugin was killed by signal n, or this program was
-//!   (see [`crate::children`])
-//! - 141: stdout was closed (`meta … | head`), as a shell reports a
-//!   program SIGPIPE stopped
-//! - a plugin's own exit code passes through ([`ExitWith`])
+//! How meta's programs end, decided in one place: the exit codes are
+//! [`CODES`], and nothing else defines them (the docs' table is
+//! [`table`]'s). A plugin's own exit code passes through ([`ExitWith`]).
 
 use crate::display::escape_lines;
 use crate::out::{self, StdoutError};
 use colored::Colorize;
 use std::process::{ExitCode, ExitStatus};
 
-/// Exit status for output cut off by a closed stdout (128 + SIGPIPE): a
-/// failure it hid isn't success.
-pub const CLOSED_STDOUT: i32 = 141;
+/// Done.
+pub const SUCCESS: i32 = 0;
+
+/// Something failed; the error was printed.
+pub const FAILURE: i32 = 1;
 
 /// Exit status for a command line that can't be run, as clap's.
 pub const USAGE: i32 = 2;
+
+/// The exit status of a program that signal `n` ended (or that ended
+/// because it got it): 128 + n, as a shell reports it.
+pub const fn signalled(n: i32) -> i32 {
+    128 + n
+}
+
+/// Exit status for output cut off by a closed stdout (SIGPIPE, 13): a
+/// failure it hid isn't success.
+pub const CLOSED_STDOUT: i32 = signalled(13);
+
+/// Every exit code of meta's programs, and what it means.
+pub const CODES: &[(&str, &str)] = &[
+    ("0", "Done"),
+    (
+        "1",
+        "Something failed: a command in at least one repo (the summary names them), or meta itself (`Error: …` on stderr; with `--json`, a JSON error on stdout)",
+    ),
+    (
+        "2",
+        "The command line is wrong: an unknown command, or an option or value clap rejects",
+    ),
+    (
+        "141",
+        "Its output was cut off: stdout closed early, as in `meta exec -- git log \\| head`",
+    ),
+    ("128 + n", "Stopped by signal n (Ctrl-C: 130), or a plugin was"),
+];
+
+/// [`CODES`] as the Markdown table the docs show.
+pub fn table() -> String {
+    let rows: String = CODES
+        .iter()
+        .map(|(code, meaning)| format!("| {code} | {meaning} |\n"))
+        .collect();
+    format!("| Code | Meaning |\n|------|---------|\n{rows}")
+}
 
 /// An ending that was already reported (by a child, by the summary of the
 /// commands that failed, by clap's help or usage error): the program ends
@@ -34,7 +65,7 @@ impl ExitWith {
     pub fn of(status: ExitStatus) -> Self {
         #[cfg(unix)]
         if let Some(signal) = std::os::unix::process::ExitStatusExt::signal(&status) {
-            return ExitWith(128 + signal);
+            return ExitWith(signalled(signal));
         }
         ExitWith(status.code().unwrap_or(1))
     }
@@ -102,13 +133,13 @@ pub fn ending(error: &anyhow::Error) -> Option<i32> {
 /// escaped on stderr.
 pub fn code(result: anyhow::Result<()>) -> i32 {
     let Err(error) = result else {
-        return 0;
+        return SUCCESS;
     };
     if let Some(code) = ending(&error) {
         return code;
     }
     let usage = error.chain().any(|cause| cause.is::<Usage>());
-    let code = if usage { USAGE } else { 1 };
+    let code = if usage { USAGE } else { FAILURE };
     if out::json() && !out::wrote_stdout() {
         let report = serde_json::json!({ "success": false, "error": format!("{error:#}") });
         match crate::outln!("{report}") {

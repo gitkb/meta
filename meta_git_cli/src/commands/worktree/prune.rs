@@ -1,9 +1,9 @@
 use anyhow::Result;
 use chrono::Utc;
 use colored::*;
-use meta_core::display::escape;
-use meta_core::out;
-use meta_core::outln;
+use meta_plugin::display::escape;
+use meta_plugin::out;
+use meta_plugin::outln;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -17,7 +17,7 @@ use meta_git_lib::worktree::ttl;
 use meta_git_lib::worktree::types::*;
 use meta_git_lib::worktree::workspace::Workspace;
 
-use meta_core::ExecutionMode;
+use meta_plugin::ExecutionMode;
 
 /// Helper to create a PruneEntry with consistent structure.
 fn create_prune_entry(

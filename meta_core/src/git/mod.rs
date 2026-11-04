@@ -1,7 +1,8 @@
 //! Running git. Every git process meta starts comes from [`git`], so none
 //! inherits the variables that tie git to one repository.
 
-use crate::display::{escape, escape_path, program_output};
+use meta_plugin::display::{escape, escape_path, program_output};
+use meta_plugin::RepoUrl;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 #[cfg(windows)]
@@ -9,44 +10,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 mod status;
-mod url;
 
 pub use status::{Operation, RepoStatus, StatusEntry};
-pub use url::GitUrl;
 
-/// The variables that tie git to one repository, which git itself clears
-/// when it runs in another (`git rev-parse --local-env-vars`, less the
-/// `-c`/`GIT_CONFIG_COUNT` settings git keeps for a submodule: they are the
-/// user's, not the repository's). A git hook or alias sets some of them
-/// (`GIT_DIR`, `GIT_INDEX_FILE`); left in place, git would act on that
-/// repository from every directory meta runs it in.
-pub const REPO_ENV_VARS: &[&str] = &[
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-    "GIT_CONFIG",
-    "GIT_DIR",
-    "GIT_GRAFT_FILE",
-    "GIT_IMPLICIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_INTERNAL_SUPER_PREFIX",
-    "GIT_NO_REPLACE_OBJECTS",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_PREFIX",
-    "GIT_REPLACE_REF_BASE",
-    "GIT_SHALLOW_FILE",
-    "GIT_WORK_TREE",
-];
-
-/// Remove [`REPO_ENV_VARS`] from what `command` will inherit.
-pub fn clear_repo_env(command: &mut Command) -> &mut Command {
-    for key in REPO_ENV_VARS {
-        command.env_remove(key);
-    }
-    command
-}
-
-/// `program`, to run in the repository folder `dir` with [`REPO_ENV_VARS`]
-/// cleared: each folder is its own repository, so a `GIT_DIR` from a git
+/// `program`, to run in the repository folder `dir` with
+/// [`REPO_ENV_VARS`](meta_plugin::process::REPO_ENV_VARS) cleared: each folder is its own repository, so a `GIT_DIR` from a git
 /// hook around meta must not point the git the program starts at the
 /// hook's. Every program meta starts in a repo starts here (or through
 /// [`git`]).
@@ -57,7 +25,7 @@ pub fn in_repo(program: impl AsRef<std::ffi::OsStr>, dir: &Path) -> Command {
     )]
     let mut command = Command::new(program);
     command.current_dir(dir);
-    clear_repo_env(&mut command);
+    meta_plugin::process::clean_env(&mut command);
     command
 }
 
@@ -100,7 +68,7 @@ pub fn ceiling(dir: &Path) -> Option<(&'static str, OsString)> {
 }
 
 /// `git`, to run in `dir` and the repository there only (see [`ceiling`]),
-/// without [`REPO_ENV_VARS`] and without optional locks, so a read such as `git
+/// without [`REPO_ENV_VARS`](meta_plugin::process::REPO_ENV_VARS) and without optional locks, so a read such as `git
 /// status` never rewrites the index (meta's reads change nothing, previews
 /// included).
 pub fn git(dir: &Path) -> Command {
@@ -145,7 +113,7 @@ where
             .join(" ")
     };
     // a child this program owns: stopping it stops git and its hooks too
-    let output = crate::children::output(git(dir).args(&args)).map_err(|e| {
+    let output = meta_plugin::process::output(git(dir).args(&args)).map_err(|e| {
         anyhow::anyhow!(
             "Cannot run git {} in {}: {e}",
             escape(&shown()),
@@ -180,8 +148,8 @@ pub fn current_branch(dir: &Path) -> anyhow::Result<Option<String>> {
 /// don't apply. Every config git reads there counts (the repository's,
 /// its worktree's, included files). `None` without one; ask only about a
 /// folder that is a repository (see [`crate::gitdir::common_dir`]).
-pub fn remote_url(dir: &Path) -> anyhow::Result<Option<GitUrl>> {
-    Ok(lookup(dir, ["config", "--get", "remote.origin.url"])?.map(GitUrl::from))
+pub fn remote_url(dir: &Path) -> anyhow::Result<Option<RepoUrl>> {
+    Ok(lookup(dir, ["config", "--get", "remote.origin.url"])?.map(RepoUrl::from))
 }
 
 #[cfg(test)]
@@ -190,17 +158,20 @@ mod tests {
 
     #[test]
     fn every_variable_git_reports_is_cleared() {
-        let _sandbox = meta_test_support::isolated!();
+        let _sandbox = meta_plugin::testing::isolated!();
         let reported = run(Path::new("."), ["rev-parse", "--local-env-vars"]).unwrap();
         let kept = ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"];
         for name in reported.lines().filter(|name| !kept.contains(name)) {
-            assert!(REPO_ENV_VARS.contains(&name), "{name} is not cleared");
+            assert!(
+                meta_plugin::process::REPO_ENV_VARS.contains(&name),
+                "{name} is not cleared"
+            );
         }
     }
 
     #[test]
     fn git_in_a_project_folder_never_reaches_the_repository_around_it() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         let workspace = dir.join("ws");
         std::fs::create_dir_all(workspace.join("plain")).unwrap();
@@ -230,7 +201,7 @@ mod tests {
 
     #[test]
     fn a_path_list_separator_in_the_path_still_keeps_git_inside() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let separator = if cfg!(windows) { ";" } else { ":" };
         let dir = sandbox.work();
         let workspace = dir.join(format!("client{separator}acme"));
@@ -259,7 +230,7 @@ mod tests {
 
     #[test]
     fn remote_url_is_the_configured_one() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         let configured = "https://example.invalid/org/repo.git";
         for args in [
@@ -309,7 +280,7 @@ mod tests {
 
     #[test]
     fn run_names_the_failing_command() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         let err = run(dir.as_path(), ["rev-parse", "--verify", "nope"]).unwrap_err();
         assert!(

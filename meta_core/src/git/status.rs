@@ -84,8 +84,8 @@ impl Operation {
         else {
             anyhow::bail!(
                 "git rev-parse --git-path in {} printed '{}'",
-                crate::display::escape_path(dir),
-                crate::display::escape(&out)
+                meta_plugin::display::escape_path(dir),
+                meta_plugin::display::escape(&out)
             );
         };
         let exists = |path: &Path| path.symlink_metadata().is_ok();
@@ -141,11 +141,11 @@ impl Operation {
 /// Whether the ref `name` (a full name, such as `CHERRY_PICK_HEAD`) is
 /// there: `git show-ref --exists`, which exits 2 for one that isn't.
 fn ref_exists(dir: &Path, name: &str) -> anyhow::Result<bool> {
-    let output = crate::children::output(super::git(dir).args(["show-ref", "--exists", name]))
+    let output = meta_plugin::process::output(super::git(dir).args(["show-ref", "--exists", name]))
         .map_err(|e| {
             anyhow::anyhow!(
                 "Cannot run git show-ref in {}: {e}",
-                crate::display::escape_path(dir)
+                meta_plugin::display::escape_path(dir)
             )
         })?;
     match output.status.code() {
@@ -153,8 +153,8 @@ fn ref_exists(dir: &Path, name: &str) -> anyhow::Result<bool> {
         Some(2) => Ok(false),
         _ => anyhow::bail!(
             "git show-ref --exists {name} failed in {}:{}",
-            crate::display::escape_path(dir),
-            crate::display::program_output(&output.stderr)
+            meta_plugin::display::escape_path(dir),
+            meta_plugin::display::program_output(&output.stderr)
         ),
     }
 }
@@ -184,7 +184,7 @@ impl RepoStatus {
         if crate::gitdir::common_dir(dir)?.is_none() {
             anyhow::bail!(
                 "{} is not a git repository",
-                crate::display::escape_path(dir)
+                meta_plugin::display::escape_path(dir)
             );
         }
         let status = super::run(
@@ -253,8 +253,8 @@ impl RepoStatus {
                 Some(parsed.ok_or_else(|| {
                     anyhow::anyhow!(
                         "git rev-list --count in {} printed '{}'",
-                        crate::display::escape_path(dir),
-                        crate::display::escape(&counts)
+                        meta_plugin::display::escape_path(dir),
+                        meta_plugin::display::escape(&counts)
                     )
                 })?)
             }
@@ -377,7 +377,7 @@ impl RepoStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::{path, Sandbox};
+    use meta_plugin::testing::{path, Sandbox};
 
     fn commit(sandbox: &Sandbox, dir: &Path, file: &str) {
         commit_text(sandbox, dir, file, file);
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn reads_branch_changes_and_upstream() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let upstream = sandbox.repo(&sandbox.work().join("upstream"));
         commit(&sandbox, &upstream, "a");
         let dir = sandbox.work();
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn each_kind_of_change_is_told_apart() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.repo(&sandbox.work().join("repo"));
         commit(&sandbox, dir.as_path(), "a");
         let status = |dir: &Path| RepoStatus::read(dir).unwrap();
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn a_bare_repository_has_a_branch_commit_and_upstream() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let upstream = sandbox.repo(&sandbox.work().join("upstream"));
         commit(&sandbox, &upstream, "a");
         let dir = sandbox.work();
@@ -521,7 +521,7 @@ mod tests {
 
     #[test]
     fn a_new_repo_has_no_commit_or_upstream() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         sandbox.git(&dir, &["init", "-q", "-b", "main"]);
         let status = RepoStatus::read(dir.as_path()).unwrap();
@@ -532,7 +532,7 @@ mod tests {
 
     #[test]
     fn detached_head_has_no_branch() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.repo(&sandbox.work().join("repo"));
         commit(&sandbox, dir.as_path(), "a");
         sandbox.git(dir.as_path(), &["checkout", "-q", "--detach"]);
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn each_stopped_operation_is_named() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.repo(&sandbox.work().join("main-conflict"));
         make_conflicting(&sandbox, &dir);
         let dir = dir.as_path();
@@ -642,7 +642,7 @@ mod tests {
 
     #[test]
     fn a_cherry_pick_sequence_stays_named_after_its_stopped_pick_is_committed() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.repo(&sandbox.work().join("repo"));
         make_conflicting(&sandbox, &dir);
         let dir = dir.as_path();
@@ -666,9 +666,9 @@ mod tests {
 
     #[test]
     fn a_stopped_cherry_pick_is_found_in_a_reftable_repository() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
-        if !meta_test_support::git_has_reftable() {
+        if !meta_plugin::testing::git_has_reftable() {
             return;
         }
         sandbox.git(
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn an_operation_belongs_to_the_worktree_it_stopped_in() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.repo(&sandbox.work().join("repo"));
         make_conflicting(&sandbox, &dir);
         let linked = dir.join("linked");
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn an_upstream_is_gone_only_when_its_branch_is() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let upstream = sandbox.repo(&sandbox.work().join("upstream"));
         commit(&sandbox, &upstream, "a");
         sandbox.git(&upstream, &["branch", "topic"]);

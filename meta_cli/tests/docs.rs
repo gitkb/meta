@@ -557,7 +557,7 @@ impl Sandbox {
             .arg("--meta-plugin-info")
             .output()
             .unwrap();
-        let info: meta_plugin_protocol::PluginInfo = serde_json::from_slice(&info.stdout).unwrap();
+        let info: meta_plugin::PluginInfo = serde_json::from_slice(&info.stdout).unwrap();
         info.help.unwrap().commands.into_keys().collect()
     }
 

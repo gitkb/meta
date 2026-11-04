@@ -15,7 +15,7 @@ mod commands;
 
 use indexmap::IndexMap;
 use log::debug;
-use meta_plugin_protocol::{
+use meta_plugin::{
     has_help_token, CommandResult, PlannedCommand, PluginHelp, PluginInfo, PluginRequestOptions,
 };
 use std::path::Path;
@@ -148,19 +148,19 @@ pub fn execute_command(
                      depth), as in {line}"
                 ));
             }
-            return match meta_plugin_protocol::parse_args(command, args, &all_but_filters) {
+            return match meta_plugin::parse_args(command, args, &all_but_filters) {
                 Ok(args) => finish(clone::execute_git_clone(args, options, cwd)),
                 Err(result) => result,
             };
         }
         "git update" => {
-            return match meta_plugin_protocol::parse_args(command, args, &all_but_filters) {
+            return match meta_plugin::parse_args(command, args, &all_but_filters) {
                 Ok(args) => finish(update::execute_git_update(args, options, cwd)),
                 Err(result) => result,
             };
         }
         "git clone-missing" => {
-            return match meta_plugin_protocol::parse_args::<clone_missing::CloneMissingArgs>(
+            return match meta_plugin::parse_args::<clone_missing::CloneMissingArgs>(
                 command, args, meta,
             ) {
                 Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
@@ -168,7 +168,7 @@ pub fn execute_command(
             };
         }
         "git clone-prune" => {
-            return match meta_plugin_protocol::parse_args::<clone_missing::ClonePruneArgs>(
+            return match meta_plugin::parse_args::<clone_missing::ClonePruneArgs>(
                 command, args, meta,
             ) {
                 Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
@@ -176,7 +176,7 @@ pub fn execute_command(
             };
         }
         "git clone-sync" => {
-            return match meta_plugin_protocol::parse_args::<clone_missing::CloneSyncArgs>(
+            return match meta_plugin::parse_args::<clone_missing::CloneSyncArgs>(
                 command, args, meta,
             ) {
                 Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
@@ -188,7 +188,7 @@ pub fn execute_command(
             // makes of the arguments, it never commits
             let help = ["--help".to_string()];
             let args = if help_requested { &help[..] } else { args };
-            return match meta_plugin_protocol::parse_args(command, args, meta) {
+            return match meta_plugin::parse_args(command, args, meta) {
                 Ok(args) => finish(commit::execute_git_commit(args, projects, options, cwd)),
                 Err(result) => result,
             };
@@ -208,7 +208,7 @@ pub fn execute_command(
 /// For a clone typed with the `--meta-depth N` it no longer takes, the line
 /// with `-r --depth N` before the command (meta's -r after it moved there
 /// too), when that line parses.
-fn meta_depth_line(args: &[String], meta: &meta_core::args::MetaOptions) -> Option<String> {
+fn meta_depth_line(args: &[String], meta: &meta_plugin::args::MetaOptions) -> Option<String> {
     let at = args
         .iter()
         .position(|a| a == "--meta-depth" || a.starts_with("--meta-depth="))?;
@@ -231,7 +231,7 @@ fn meta_depth_line(args: &[String], meta: &meta_core::args::MetaOptions) -> Opti
         .filter(|(i, a)| (*i < at || *i >= at + taken) && !recursive(a))
         .map(|(_, a)| a.clone())
         .collect();
-    meta_plugin_protocol::parse_args::<clone::CloneArgs>("git clone", &rest, meta).ok()?;
+    meta_plugin::parse_args::<clone::CloneArgs>("git clone", &rest, meta).ok()?;
     let already = meta.typed.iter().any(recursive);
     let line: Vec<String> = std::iter::once("meta".to_string())
         .chain(meta.typed.iter().cloned())
@@ -240,7 +240,7 @@ fn meta_depth_line(args: &[String], meta: &meta_core::args::MetaOptions) -> Opti
         .chain(["git".to_string(), "clone".to_string()])
         .chain(rest)
         .collect();
-    Some(meta_core::display::escape(&meta_core::display::display_command(&line)).into_owned())
+    Some(meta_plugin::display::escape(&meta_plugin::display::display_command(&line)).into_owned())
 }
 
 fn finish(result: anyhow::Result<CommandResult>) -> CommandResult {
@@ -262,7 +262,7 @@ fn execute_raw_git_command(
     options: &PluginRequestOptions,
     cwd: &Path,
 ) -> CommandResult {
-    use meta_plugin_protocol::ExecutionPlan;
+    use meta_plugin::ExecutionPlan;
 
     // Get project directories
     let dirs = match get_project_directories_with_fallback(projects, cwd) {
@@ -281,7 +281,7 @@ fn execute_raw_git_command(
     let mut warnings = Vec::new();
     for dir in &missing {
         let shown = Path::new(dir);
-        let shown = meta_core::display::escape_path(shown.strip_prefix(cwd).unwrap_or(shown));
+        let shown = meta_plugin::display::escape_path(shown.strip_prefix(cwd).unwrap_or(shown));
         let warning = format!("{shown} is not cloned; `meta git clone-missing` clones it");
         if options.strict {
             return CommandResult::Error(format!("{warning} (strict mode)"));
@@ -384,7 +384,7 @@ fn execute_raw_git_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::Sandbox;
+    use meta_plugin::testing::Sandbox;
 
     fn argv(line: &str) -> Vec<String> {
         line.split_whitespace().map(str::to_string).collect()

@@ -3,7 +3,7 @@
 //! Logging is handled by `run_plugin()` which initializes env_logger.
 //! Use RUST_LOG=meta_git_cli=debug for debug output.
 
-use meta_plugin_protocol::{run_plugin, CommandResult, PluginDefinition, PluginRequest};
+use meta_plugin::{run_plugin, CommandResult, PluginDefinition, PluginRequest};
 
 fn main() {
     run_plugin(PluginDefinition {

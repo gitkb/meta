@@ -3,10 +3,10 @@
 //! This module provides the core types and functions for finding and parsing
 //! meta's YAML configuration files.
 
-use crate::display::{escape, escape_path, is_unsafe_char};
-use crate::git::GitUrl;
 use crate::gitdir;
 use anyhow::Context;
+use meta_plugin::display::{escape, escape_path, is_unsafe_char};
+use meta_plugin::RepoUrl;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub enum ProjectEntry {
     /// Simple format: just a git URL string
-    Simple(GitUrl),
+    Simple(RepoUrl),
     /// Extended format: object with repo, path, tags, and dependency info
     Extended(ExtendedEntry),
 }
@@ -28,7 +28,7 @@ pub enum ProjectEntry {
 pub struct ExtendedEntry {
     /// Git remote URL (optional for local-only projects).
     #[serde(default, deserialize_with = "some_string")]
-    pub repo: Option<GitUrl>,
+    pub repo: Option<RepoUrl>,
     #[serde(default, deserialize_with = "some_string")]
     pub path: Option<String>,
     #[serde(default, deserialize_with = "strings")]
@@ -98,7 +98,7 @@ impl<'de> Deserialize<'de> for ProjectEntry {
             }
 
             fn visit_str<E: serde::de::Error>(self, url: &str) -> Result<Self::Value, E> {
-                Ok(ProjectEntry::Simple(GitUrl::from(url.to_string())))
+                Ok(ProjectEntry::Simple(RepoUrl::from(url.to_string())))
             }
 
             fn visit_map<M: serde::de::MapAccess<'de>>(
@@ -120,7 +120,7 @@ pub struct ProjectInfo {
     pub path: String,
     /// Git remote URL (optional for local-only projects).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo: Option<GitUrl>,
+    pub repo: Option<RepoUrl>,
     pub tags: Vec<String>,
     /// What this project provides (e.g., APIs, libraries)
     #[serde(default)]
@@ -731,7 +731,7 @@ fn validate_project(
             return Err(format!(
                 "{what} '{}' contains control characters",
                 // printed as a URL prints: the repo's credentials hidden
-                GitUrl::from(value)
+                RepoUrl::from(value)
             ));
         }
     }
@@ -2674,7 +2674,7 @@ mod tests {
     #[test]
     fn a_worktree_meta_made_belongs_to_its_sources_workspace() {
         // runs git through the code it tests
-        let _sandbox = meta_test_support::isolated!();
+        let _sandbox = meta_plugin::testing::isolated!();
         let tmp = tempfile::tempdir().unwrap();
         let top = tmp.path().canonicalize().unwrap();
         meta_yaml(&top, r#""a": "x""#);
@@ -2703,7 +2703,7 @@ mod tests {
     #[test]
     fn a_nested_checkout_in_a_set_climbs_the_set_then_its_source() {
         // runs git through the code it tests
-        let _sandbox = meta_test_support::isolated!();
+        let _sandbox = meta_plugin::testing::isolated!();
         let tmp = tempfile::tempdir().unwrap();
         let top = tmp.path().canonicalize().unwrap();
         let listing_child = r#""child": {"repo": "x", "meta": true}"#;
@@ -2737,7 +2737,7 @@ mod tests {
     #[test]
     fn a_set_checkout_stands_for_the_repo_at_its_place() {
         // runs git through the code it tests
-        let _sandbox = meta_test_support::isolated!();
+        let _sandbox = meta_plugin::testing::isolated!();
         // alpha lives at beta, and beta at gamma: a checkout at <set>/beta is
         // alpha's, not beta's
         let tmp = tempfile::tempdir().unwrap();
@@ -2762,7 +2762,7 @@ mod tests {
     #[test]
     fn a_set_checkout_a_branch_link_put_elsewhere_stands_for_its_own_repo() {
         // runs git through the code it tests
-        let _sandbox = meta_test_support::isolated!();
+        let _sandbox = meta_plugin::testing::isolated!();
         // app is at `link`; the root's branch in the set links it to
         // `alternate`, which in the workspace is another repository
         let tmp = tempfile::tempdir().unwrap();
@@ -2807,7 +2807,7 @@ mod tests {
     #[test]
     fn a_second_checkout_of_a_projects_repo_is_not_its_source() {
         // runs git through the code it tests
-        let _sandbox = meta_test_support::isolated!();
+        let _sandbox = meta_plugin::testing::isolated!();
         // app is at `real`; `alternate` is a hand-made `git worktree add` of
         // the same repository, no project; a branch link put the set's
         // checkout of app at `<set>/alternate`
@@ -2834,7 +2834,7 @@ mod tests {
     #[test]
     fn a_separate_git_dir_workspace_is_its_set_roots_source() {
         // runs git through the code it tests
-        let _sandbox = meta_test_support::isolated!();
+        let _sandbox = meta_plugin::testing::isolated!();
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path().canonicalize().unwrap();
         let (top, git) = (base.join("ws"), base.join("git"));

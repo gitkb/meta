@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use meta_core::git::git;
 
 /// What a cancel does to a git command of the batch: the pre-check stops,
-/// the rollback finishes, in a process group of its own so that a signal to
-/// the server's group can't cut it short either.
+/// the rollback finishes ([`meta_plugin::process::spawn_finishing`]), so a
+/// signal to the server's group can't cut it short either.
 #[derive(Clone, Copy)]
 enum OnCancel {
     Stop,
@@ -172,10 +172,7 @@ impl McpServer {
             .args(args);
         let output = match on_cancel {
             OnCancel::Stop => self.calls.output(&mut command),
-            // in a group of its own, out of reach of a signal to the server's
-            // (meta-mcp handles its signals itself and never calls
-            // children::own, which would pass them on to this group)
-            OnCancel::Finish => meta_core::children::spawn_group(
+            OnCancel::Finish => meta_plugin::process::spawn_finishing(
                 command
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::piped())
@@ -186,7 +183,7 @@ impl McpServer {
         .with_context(|| {
             format!(
                 "Failed to run git {args:?} in {}",
-                meta_core::display::escape_path(path)
+                meta_plugin::display::escape_path(path)
             )
         })?;
         if output.status.success() {
@@ -200,7 +197,7 @@ impl McpServer {
             Err(anyhow::anyhow!(
                 "git {} failed in {}: {why}",
                 args.join(" "),
-                meta_core::display::escape_path(path),
+                meta_plugin::display::escape_path(path),
             ))
         }
     }
@@ -284,7 +281,7 @@ mod tests {
 
     #[test]
     fn test_batch_runs_its_argv_with_no_shell() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = workspace(&sandbox);
         let args = json!({"command": ["git", "rev-parse", "--sq-quote", "$(touch PWNED)", "a b"]});
         let result = json(call(&server, "meta_batch_execute", args));
@@ -299,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_atomic_batch_never_touches_projects_it_does_not_target() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = workspace(&sandbox);
         let (a, b) = (tmp.join("a"), tmp.join("b"));
         std::fs::write(b.join("README"), "my edit").unwrap();
@@ -338,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_atomic_batch_refuses_a_dirty_target_and_runs_nothing() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = workspace(&sandbox);
         std::fs::write(tmp.join("b/README"), "my edit").unwrap();
 
@@ -354,7 +351,7 @@ mod tests {
 
     #[test]
     fn test_atomic_batch_refuses_hidden_untracked_files_and_non_repos() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = workspace(&sandbox);
         let a = tmp.join("a");
         sandbox.git(&a, &["config", "status.showUntrackedFiles", "no"]);
@@ -382,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_atomic_batch_reports_a_failed_rollback() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = workspace(&sandbox);
         // The workspace root is a repository too, with work of its own.
         sandbox.repo(&tmp);
@@ -407,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_atomic_batch_stops_at_a_project_that_disappeared() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = workspace(&sandbox);
         sandbox.repo(&tmp.join("c"));
         std::fs::write(
@@ -432,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_rollback_reports_the_branch_tip_and_recreates_a_deleted_branch() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = workspace(&sandbox);
         let a = tmp.join("a");
         std::fs::write(tmp.join(".meta.yaml"), r#"{"projects":{"a":"x"}}"#).unwrap();
@@ -467,7 +464,7 @@ mod tests {
 
     #[test]
     fn test_rollback_never_moves_a_submodule() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = workspace(&sandbox);
         let a = tmp.join("a");
         let b = tmp.join("b");
@@ -521,7 +518,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn a_cancelled_atomic_batch_is_rolled_back_whatever_its_command_exits_with() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = workspace(&sandbox);
         std::fs::write(tmp.join(".meta.yaml"), r#"{"projects":{"a":"x"}}"#).unwrap();
         let a = tmp.join("a");
@@ -545,7 +542,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn a_cancel_stops_the_atomic_check_before_anything_runs() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         use std::os::unix::fs::PermissionsExt;
         let (server, tmp) = workspace(&sandbox);
         let a = tmp.join("a");
@@ -565,7 +562,7 @@ mod tests {
 
     #[test]
     fn the_atomic_check_says_why_it_refused() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = workspace(&sandbox);
         // a commit, but an index git can't read
         std::fs::write(tmp.join("a/.git/index"), "garbage").unwrap();
@@ -580,7 +577,7 @@ mod tests {
 
     #[test]
     fn a_batch_fails_when_every_project_failed_or_an_atomic_one_rolled_back() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = workspace(&sandbox);
         let a = tmp.join("a");
         std::fs::write(a.join("marker"), "").unwrap();

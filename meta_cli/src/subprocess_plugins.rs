@@ -4,15 +4,15 @@
 //! This approach provides better isolation, language flexibility, and simpler debugging.
 
 use anyhow::{Context, Result};
-use meta_core::display::{escape, escape_path};
-use meta_core::errln;
+use meta_plugin::display::{escape, escape_path};
+use meta_plugin::errln;
 use std::io::Read;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use meta_plugin_protocol::{
+use meta_plugin::{
     ExecutionPlan, PlanResponse, PlannedCommand, PluginInfo, PluginRequest, PluginRequestOptions,
 };
 
@@ -58,7 +58,7 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<PluginInfo, NoInfo> {
         .stderr(Stdio::null());
     // its own process group (job on Windows): what a wrapper starts is
     // stopped with it
-    let mut child = meta_core::children::spawn_group(&mut command)
+    let mut child = meta_plugin::process::spawn_group(&mut command)
         .map_err(|e| not_a_plugin(format!("it could not start ({e})")))?;
     let Some(stdout) = child.stdout() else {
         child.stop(true);
@@ -148,7 +148,7 @@ impl SubprocessPluginManager {
         // A config meta can't use leaves no project plugins; the command
         // itself reports it, and `--help` still prints
         let nearest = meta_core::config::nearest_meta_dir(&cwd).unwrap_or_else(|e| {
-            meta_core::out::warn(format!(
+            meta_plugin::out::warn(format!(
                 "{} Skipping project plugins.",
                 escape(&format!("{e:#}"))
             ));
@@ -161,7 +161,7 @@ impl SubprocessPluginManager {
                     add(dir.join(".meta/plugins"), false);
                 }
             }
-            Err(e) => meta_core::out::warn(format!(
+            Err(e) => meta_plugin::out::warn(format!(
                 "{} Skipping project plugins.",
                 escape(&format!("{e:#}"))
             )),
@@ -224,7 +224,7 @@ impl SubprocessPluginManager {
                 Ok(info) => Some(self.loaded(word, path, info)),
                 Err(NoInfo::NotAPlugin(_)) if on_path => None,
                 Err(e) => {
-                    meta_core::out::warn(format!("{}; skipping", e.into_error()));
+                    meta_plugin::out::warn(format!("{}; skipping", e.into_error()));
                     None
                 }
             })
@@ -244,7 +244,7 @@ impl SubprocessPluginManager {
                 Ok(entries) => entries,
                 Err(e) if *on_path || e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => {
-                    meta_core::out::warn(format!(
+                    meta_plugin::out::warn(format!(
                         "Cannot read plugins directory {}: {}; skipping",
                         escape_path(dir),
                         escape(&e.to_string())
@@ -257,7 +257,7 @@ impl SubprocessPluginManager {
                     Ok(entry) => entry,
                     Err(_) if *on_path => continue,
                     Err(e) => {
-                        meta_core::out::warn(format!(
+                        meta_plugin::out::warn(format!(
                             "Cannot read plugins directory {}: {}; skipping entry",
                             escape_path(dir),
                             escape(&e.to_string())
@@ -276,7 +276,7 @@ impl SubprocessPluginManager {
                 if is_executable(&path) {
                     files.entry(word.to_string()).or_insert((path, *on_path));
                 } else if !on_path && path.is_file() {
-                    meta_core::out::warn(format!(
+                    meta_plugin::out::warn(format!(
                         "Plugin {} is not executable; skipping",
                         escape_path(&path)
                     ));
@@ -385,8 +385,8 @@ impl SubprocessPlugin {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped()) // Capture stdout to parse response
             .stderr(Stdio::inherit()); // Let stderr pass through for error messages
-        meta_core::out::pass_color(&mut plugin);
-        let output = meta_core::children::spawn(&mut plugin)
+        meta_plugin::out::pass_color(&mut plugin);
+        let output = meta_plugin::process::spawn(&mut plugin)
             .and_then(|child| child.exchange(request_json.as_bytes()))
             .with_context(|| format!("Failed to execute plugin {}", escape_path(&self.path)))?;
 
@@ -396,7 +396,7 @@ impl SubprocessPlugin {
             // error) is shown too; then its exit code is propagated.
             let json = request.options.json_output.then_some(self.word.as_str());
             relay(&output.stdout, json, false)?;
-            return Err(meta_core::exit::ExitWith::of(output.status).into());
+            return Err(meta_plugin::exit::ExitWith::of(output.status).into());
         }
 
         // Try to parse the response as JSON
@@ -451,7 +451,7 @@ impl SubprocessPlugin {
 /// so stdout stays JSON.
 fn relay(stdout: &[u8], json: Option<&str>, success: bool) -> Result<()> {
     let Some(word) = json else {
-        return Ok(meta_core::out::stdout_bytes(stdout)?);
+        return Ok(meta_plugin::out::stdout_bytes(stdout)?);
     };
     if stdout.trim_ascii().is_empty() {
         if !success {
@@ -459,7 +459,7 @@ fn relay(stdout: &[u8], json: Option<&str>, success: bool) -> Result<()> {
                 "success": false,
                 "error": format!("plugin {word} failed"),
             });
-            meta_core::outln!("{failed}")?;
+            meta_plugin::outln!("{failed}")?;
         }
         return Ok(());
     }
@@ -467,13 +467,13 @@ fn relay(stdout: &[u8], json: Option<&str>, success: bool) -> Result<()> {
         .into_iter::<serde::de::IgnoredAny>()
         .all(|value| value.is_ok());
     if is_json {
-        return Ok(meta_core::out::stdout_bytes(stdout)?);
+        return Ok(meta_plugin::out::stdout_bytes(stdout)?);
     }
     let wrapped = serde_json::json!({
         "success": success,
         "output": String::from_utf8_lossy(stdout),
     });
-    Ok(meta_core::outln!("{wrapped}")?)
+    Ok(meta_plugin::outln!("{wrapped}")?)
 }
 
 /// Execute an execution plan via loop_lib

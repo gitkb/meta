@@ -8,7 +8,7 @@
 // Unix only: the plugins here are shell scripts
 #![cfg(unix)]
 
-use meta_test_support::Sandbox;
+use meta_plugin::testing::Sandbox;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

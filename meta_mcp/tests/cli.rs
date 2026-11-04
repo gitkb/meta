@@ -7,9 +7,9 @@
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
-use meta_test_support::Sandbox;
+use meta_plugin::testing::Sandbox;
 #[cfg(unix)]
-use meta_test_support::{gone, wait_for};
+use meta_plugin::testing::{gone, wait_for};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Output, Stdio};

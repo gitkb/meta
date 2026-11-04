@@ -130,7 +130,7 @@ meta git status
 
 For commands with special handling (like `clone`), the plugin does the work directly instead of returning an execution plan.
 
-meta's own options (`-r`, `-A`, `--json`, `--dry-run`, `--include`, …) go before the command and reach a plugin in the request's `options`, never in `args` (`meta -r --json project list`). A plugin defines no option of meta's; it parses its arguments with `meta_plugin_protocol::parse_args` and refuses the rest with exit 2, so a meta option typed after its command gets the tip with the line that has it before (see `docs/plugin_development.md`).
+meta's own options (`-r`, `-A`, `--json`, `--dry-run`, `--include`, …) go before the command and reach a plugin in the request's `options`, never in `args` (`meta -r --json project list`). A plugin defines no option of meta's; it parses its arguments with `meta_plugin::parse_args` (feature `parse`) and refuses the rest with exit 2, so a meta option typed after its command gets the tip with the line that has it before (see `docs/plugin_development.md`).
 
 ## Why This Matters
 

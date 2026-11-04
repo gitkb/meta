@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use colored::*;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-pub use meta_core::display::display_command;
-use meta_core::display::{escape, escape_path, program_output};
-use meta_core::{errln, out, outln};
+pub use meta_plugin::display::display_command;
+use meta_plugin::display::{escape, escape_path, program_output};
+use meta_plugin::{errln, out, outln};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// A write to command-output stdout failed (meta's one stdout error).
-pub use meta_core::out::StdoutError;
+pub use meta_plugin::out::StdoutError;
 
 /// What loop runs and how: the `.looprc` file (JSON), and what meta builds for
 /// the commands it runs. A key the file leaves out takes its default; a key
@@ -64,7 +64,7 @@ pub struct LoopConfig {
 /// where it goes.
 #[derive(Debug, Clone, Default)]
 pub struct Outer {
-    pub meta: meta_core::args::MetaOptions,
+    pub meta: meta_plugin::args::MetaOptions,
     /// The words between meta's options and the command (`exec --`)
     pub before: Vec<String>,
 }
@@ -249,7 +249,7 @@ pub fn aliases() -> Result<BTreeMap<String, String>> {
 
 fn prompt_user(question: &str) -> Result<bool> {
     out!("{question} [y/N]: ")?;
-    meta_core::out::flush()?;
+    meta_plugin::out::flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     Ok(input.trim().to_lowercase() == "y")
@@ -541,11 +541,11 @@ fn execute_command_in_directory(
     let name = result_name(dir, config.root_dir.as_deref());
     if !config.silent {
         outln!("\n{}", format!("{name}:").bold())?;
-        meta_core::out::flush()?;
+        meta_plugin::out::flush()?;
     }
 
     let status = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
-        meta_core::children::status(
+        meta_plugin::process::status(
             cmd.stdout(if config.silent {
                 Stdio::null()
             } else {
@@ -634,9 +634,9 @@ fn execute_command_in_directory_capturing(
     // Its output goes through a pipe to meta: it colours as meta does.
     // Tool-specific settings (git's GIT_CONFIG_*) are the plugin's to set;
     // loop_lib is tool-agnostic.
-    meta_core::out::pass_color(&mut cmd_builder);
+    meta_plugin::out::pass_color(&mut cmd_builder);
 
-    let output = meta_core::children::output(&mut cmd_builder);
+    let output = meta_plugin::process::output(&mut cmd_builder);
 
     match output {
         Ok(output) => {
@@ -908,7 +908,7 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
     // on stderr, unless the JSON report lists them
     if !config.json_output {
         for warning in &config.warnings {
-            meta_core::out::warn(warning);
+            meta_plugin::out::warn(warning);
         }
     }
     if commands.is_empty() && !config.json_output {
@@ -1010,10 +1010,10 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
     }
 
     if let Some(tip) = tip {
-        meta_core::out::flush()?;
+        meta_plugin::out::flush()?;
         errln!(
             "{} {tip}",
-            meta_core::out::label("tip:", |l| l.cyan().bold())
+            meta_plugin::out::label("tip:", |l| l.cyan().bold())
         );
     }
 
@@ -1024,7 +1024,7 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
         if config.silent && !config.json_output {
             anyhow::bail!("At least one command failed");
         }
-        return Err(meta_core::exit::ExitWith(1).into());
+        return Err(meta_plugin::exit::ExitWith(1).into());
     }
 
     Ok(())
@@ -1060,12 +1060,12 @@ fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> 
             outln!("{} {}:", "✗".red(), dir_name.red())?;
         }
         if !result.stdout.trim_ascii().is_empty() {
-            meta_core::out::stdout_bytes(&result.stdout)?;
+            meta_plugin::out::stdout_bytes(&result.stdout)?;
         }
         if !result.stderr.trim_ascii().is_empty() {
             // after the name and the stdout above it, with 2>&1 too
-            meta_core::out::flush()?;
-            meta_core::out::stderr_bytes(&result.stderr);
+            meta_plugin::out::flush()?;
+            meta_plugin::out::stderr_bytes(&result.stderr);
         }
         outln!()?; // Blank line after each repo's output
     }

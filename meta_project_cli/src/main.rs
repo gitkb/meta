@@ -1,7 +1,7 @@
 //! meta-project subprocess plugin
 
 use indexmap::IndexMap;
-use meta_plugin_protocol::{
+use meta_plugin::{
     run_plugin, CommandResult, PluginDefinition, PluginHelp, PluginInfo, PluginRequest,
 };
 

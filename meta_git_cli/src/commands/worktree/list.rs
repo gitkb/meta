@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::*;
-use meta_core::display::{escape, escape_path};
-use meta_core::outln;
+use meta_plugin::display::{escape, escape_path};
+use meta_plugin::outln;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -178,7 +178,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
                 Some(record) => (
                     Some(record.ephemeral),
                     ttl::remaining(&record, now).unwrap_or_else(|e| {
-                        meta_core::out::warn(format!("{e:#}"));
+                        meta_plugin::out::warn(format!("{e:#}"));
                         None
                     }),
                     (!record.custom.is_empty()).then_some(record.custom),
@@ -274,7 +274,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
         outln!()?;
     }
     for warning in warnings {
-        meta_core::out::warn(format!(
+        meta_plugin::out::warn(format!(
             "{}: {}",
             escape(&warning.name),
             escape(&warning.message)

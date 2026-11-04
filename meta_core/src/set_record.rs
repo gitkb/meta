@@ -7,9 +7,9 @@
 //! Only something that can write the repository's git directory can make
 //! one, so a record is meta's proof that it made the set the record names.
 
-use crate::display::escape_path;
 use crate::gitdir;
 use anyhow::{Context, Result};
+use meta_plugin::display::escape_path;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

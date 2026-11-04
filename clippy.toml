@@ -3,9 +3,9 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-indexing-slicing-in-tests = true
 
-# Warnings go through meta_core::out::warn, which the user sees
+# Warnings go through meta_plugin::out::warn, which the user sees
 disallowed-macros = [
-    { path = "log::warn", reason = "a warning for the user goes through meta_core::out::warn" },
+    { path = "log::warn", reason = "a warning for the user goes through meta_plugin::out::warn" },
 ]
 
 disallowed-methods = [

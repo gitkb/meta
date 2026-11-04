@@ -1,8 +1,8 @@
 use anyhow::Result;
 use colored::*;
-use meta_core::display::{escape, escape_path};
-use meta_core::ExecutionMode;
-use meta_core::{errln, outln};
+use meta_plugin::display::{escape, escape_path};
+use meta_plugin::ExecutionMode;
+use meta_plugin::{errln, outln};
 
 use meta_core::set_record as record;
 use meta_core::worktree::discover_worktree_repos;

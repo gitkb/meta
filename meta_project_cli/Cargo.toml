@@ -18,7 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 meta_core.workspace = true
 shlex.workspace = true
-meta_plugin_protocol.workspace = true
+meta_plugin = { workspace = true, features = ["parse"] }
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 serde.workspace = true
@@ -26,7 +26,7 @@ serde_json.workspace = true
 indexmap.workspace = true
 
 [dev-dependencies]
-meta_test_support.workspace = true
+meta_plugin = { workspace = true, features = ["testing-git"] }
 
 [lints]
 workspace = true

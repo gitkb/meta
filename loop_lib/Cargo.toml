@@ -7,6 +7,7 @@ repository.workspace = true
 description = "Core loop engine library for running commands across directories"
 
 [dependencies]
+meta_plugin = { workspace = true, features = ["parse"] }
 meta_core.workspace = true
 anyhow.workspace = true
 rayon.workspace = true
@@ -18,7 +19,7 @@ indicatif.workspace = true
 shlex.workspace = true
 
 [dev-dependencies]
-meta_test_support.workspace = true
+meta_plugin = { workspace = true, features = ["testing-git"] }
 tempfile.workspace = true
 
 [lints]

@@ -8,7 +8,7 @@ mod run;
 mod tools;
 
 use anyhow::Result;
-use meta_core::out::StdoutError;
+use meta_plugin::out::StdoutError;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
@@ -178,12 +178,12 @@ impl McpServer {
                     let mut stopping = false;
                     for signal in signals.forever() {
                         if stopping {
-                            meta_core::exit::now(128 + signal);
+                            meta_plugin::exit::now(meta_plugin::exit::signalled(signal));
                         }
                         stopping = true;
                         scope.spawn(move || {
                             self.calls.stop_running();
-                            meta_core::exit::now(128 + signal);
+                            meta_plugin::exit::now(meta_plugin::exit::signalled(signal));
                         });
                     }
                 });
@@ -219,7 +219,7 @@ impl McpServer {
                             self.calls.cancel_all();
                             let _ = writeln!(std::io::stderr(), "Error: {e:#}; the reply was:");
                             let _ = write_answer(&Mutex::new(std::io::stderr()), &answer);
-                            meta_core::exit::now(meta_core::exit::ending(&e).unwrap_or(1));
+                            meta_plugin::exit::now(meta_plugin::exit::ending(&e).unwrap_or(1));
                         }
                     });
                 }
@@ -563,8 +563,8 @@ fn write_answer(output: &Mutex<impl Write>, answer: &Answer) -> Result<()> {
 struct Cli {}
 
 fn main() -> std::process::ExitCode {
-    meta_core::exit::run(|| {
-        meta_core::args::parse::<Cli>()?;
+    meta_plugin::exit::run(|| {
+        meta_plugin::args::parse::<Cli>()?;
         McpServer::new()?.run()
     })
 }
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn a_call_cancelled_before_it_starts_never_runs_or_answers() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = test_support::workspace(&sandbox);
         let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "meta_batch_execute", "arguments": {"command": ["touch", "ran"]}}});
@@ -714,7 +714,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn a_stopping_server_writes_the_reply_of_a_call_that_ended() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         use std::sync::atomic::{AtomicBool, Ordering};
         /// Output whose first write waits until it is let through.
         struct Gate<'a> {
@@ -765,7 +765,7 @@ mod tests {
 
     #[test]
     fn a_malformed_cancellation_in_a_batch_cancels_nothing() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = test_support::workspace(&sandbox);
         let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "meta_batch_execute", "arguments": {"command": ["git", "init", "-q", "ran"]}}});
@@ -789,7 +789,7 @@ mod tests {
 
     #[test]
     fn a_tool_error_keeps_its_cause() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, _tmp) = test_support::server(&sandbox, "unknown_top: 1\n");
         let result = server
             .handle_call_tool(&json!({"name": "meta_list_projects"}))

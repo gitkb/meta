@@ -4,7 +4,7 @@
 //! `target/debug/examples/meta-hello` on PATH or in a workspace's
 //! `.meta/plugins/`: its file name makes it serve `meta hello`.
 
-use meta_plugin_protocol::{
+use meta_plugin::{
     has_help_token, run_plugin, CommandResult, PlannedCommand, PluginDefinition, PluginHelp,
     PluginInfo, PluginRequest,
 };

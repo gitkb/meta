@@ -7,7 +7,7 @@
 // Unix only: the commands they run are shell commands and fixture scripts
 #![cfg(unix)]
 
-use meta_test_support::Sandbox;
+use meta_plugin::testing::Sandbox;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};

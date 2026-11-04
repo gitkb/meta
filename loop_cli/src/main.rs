@@ -5,7 +5,7 @@ use loop_lib::{
     display_command, expand_directories, import_aliases, parse_config, parse_config_if_present,
     run, should_ignore, with_global_aliases,
 };
-use meta_core::errln;
+use meta_plugin::errln;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -47,13 +47,13 @@ struct Cli {
 }
 
 fn main() -> std::process::ExitCode {
-    meta_core::exit::run(run_loop)
+    meta_plugin::exit::run(run_loop)
 }
 
 fn run_loop() -> Result<()> {
-    let cli = meta_core::args::parse::<Cli>()?;
-    if let Err(e) = meta_core::children::own() {
-        meta_core::out::warn(format!(
+    let cli = meta_plugin::args::parse::<Cli>()?;
+    if let Err(e) = meta_plugin::process::own() {
+        meta_plugin::out::warn(format!(
             "cannot pass signals on to the programs loop starts: {e}"
         ));
     }
@@ -80,12 +80,12 @@ fn run_loop() -> Result<()> {
     };
     // a .looprc's JSON output, before anything is printed: no colour in it,
     // errors as JSON
-    meta_core::out::set_json(config.json_output);
+    meta_plugin::out::set_json(config.json_output);
 
     if cli.command.is_empty() {
         Cli::command()
             .print_help()
-            .map_err(meta_core::out::StdoutError)?;
+            .map_err(meta_plugin::out::StdoutError)?;
         return Ok(());
     }
 
@@ -94,11 +94,11 @@ fn run_loop() -> Result<()> {
         errln!("{}", "Verbose mode enabled".green());
         errln!(
             "\nResolved config file path: {}",
-            meta_core::display::escape_path(&std::env::current_dir()?.join(&config_path))
+            meta_plugin::display::escape_path(&std::env::current_dir()?.join(&config_path))
         );
         errln!(
             "Executing command: {}",
-            meta_core::display::escape(&display_command(&cli.command))
+            meta_plugin::display::escape(&display_command(&cli.command))
         );
     }
 

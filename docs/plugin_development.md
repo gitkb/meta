@@ -2,10 +2,10 @@
 
 A plugin adds a command to `meta`. It is a program named `meta-<word>` that serves `meta <word> ...`: meta starts it, sends it the request as JSON, and runs the plan it answers with (or prints what it prints). Any language works.
 
-The whole of a working plugin in Rust is [`meta_plugin_protocol/examples/meta-hello.rs`](../meta_plugin_protocol/examples/meta-hello.rs), about 60 lines: `meta hello NAME` runs `echo hello NAME` in each selected repo. It is built and tested with the workspace, so it matches the protocol below.
+The whole of a working plugin in Rust is [`meta_plugin/examples/meta-hello.rs`](../meta_plugin/examples/meta-hello.rs), about 60 lines: `meta hello NAME` runs `echo hello NAME` in each selected repo. It is built and tested with the workspace, so it matches the protocol below.
 
 ```bash
-cargo build -p meta_plugin_protocol --example meta-hello
+cargo build -p meta_plugin --example meta-hello
 mkdir -p ~/.meta/plugins && cp target/debug/examples/meta-hello ~/.meta/plugins/
 meta hello world
 meta --tag backend hello team    # meta's options, selection included, go before the command
@@ -25,7 +25,7 @@ For `meta <word> ...` meta starts only `meta-<word>`; if it doesn't answer `--me
 
 ## The protocol
 
-The types are in [`meta_plugin_protocol`](../meta_plugin_protocol/src/lib.rs); a Rust plugin uses them and `run_plugin`, which handles the flags below.
+The types are in [`meta_plugin`](../meta_plugin/src/lib.rs), the plugin SDK; a Rust plugin uses them and `run_plugin`, which handles the flags below. It isn't published: depend on it by git (`meta_plugin = { git = "https://github.com/gitkb/meta", features = ["parse"] }`). Besides the protocol it gives a plugin meta's exit codes, output and escaping, the process owner (`meta_plugin::process`, on by default: a plugin's children stop when it is told to), and, with the feature `testing`, a test kit (`meta_plugin::testing`: a sandbox, a workspace builder with `testing-git`, `PluginRequest::builder` and `call`, which sends a plugin a request as meta does).
 
 **`meta-<word> --meta-plugin-info`** prints a `PluginInfo`:
 
@@ -59,7 +59,7 @@ The types are in [`meta_plugin_protocol`](../meta_plugin_protocol/src/lib.rs); a
 
 `recursive` is meta's `-r` (the meta repos nested under the nearest `.meta.yaml` too) and `all` its `-A` (the whole workspace, from its outermost `.meta.yaml`; meta sends `recursive` with it too, so a plugin that knows no `all` reaches at least `-r`'s repos); a plugin that finds its repos itself starts where they say. `projects` are the selected repos' directories, `--include`, `--exclude` and `--tag` already applied (the root included unless they left it out). The filters are passed too: a plugin that finds its repos itself must refuse filters it can't honour.
 
-meta's options go before the command, and `options` is where a plugin reads them: never define a `--json`, `-r`, `-A`/`--all`, `--dry-run`, `--strict`, `--depth`, `--include`, `--exclude`, `--tag` or `--parallel` of your own (an option of the tool you adapt that only shares a spelling and means something else stays the tool's: `git clone --depth N` is history depth, `--parallel N` a count). Parse your arguments with `meta_plugin_protocol::parse_args(command, args, &request.options.meta_options)` and refuse the rest with exit 2; meta's options typed after your command then get the tip with the line that has them before it (`options.meta_options`, which meta sends, lists meta's options and what was typed of them; `MetaOptions::refusing` marks the ones your command never takes, so no tip suggests a line that fails again).
+meta's options go before the command, and `options` is where a plugin reads them: never define a `--json`, `-r`, `-A`/`--all`, `--dry-run`, `--strict`, `--depth`, `--include`, `--exclude`, `--tag` or `--parallel` of your own (an option of the tool you adapt that only shares a spelling and means something else stays the tool's: `git clone --depth N` is history depth, `--parallel N` a count). Parse your arguments with `meta_plugin::parse_args(command, args, &request.options.meta_options)` and refuse the rest with exit 2; meta's options typed after your command then get the tip with the line that has them before it (`options.meta_options`, which meta sends, lists meta's options and what was typed of them; `MetaOptions::refusing` marks the ones your command never takes, so no tip suggests a line that fails again).
 
 It answers on stdout with one of:
 
@@ -70,7 +70,9 @@ It answers on stdout with one of:
   (A Rust plugin builds a full plan as `CommandResult::FullPlan(Box::new(plan))`.) Each `argv` runs as given, with no shell. A plan can also carry `pre_commands` and `post_commands`, which run one at a time before and after the main ones and **run under `--dry-run` too** (they are for setup such as an SSH connection, not for changes), `parallel`, `max_parallel`, `spawn_stagger_ms`, a per-command `env`, and `warnings`, which meta prints, or lists in its `--json` report (`ExecutionPlan`).
 - any other output, which meta prints as it is.
 
-and ends with its exit code: 0 done, 1 failed, 2 the command line was wrong (`CommandResult::Error` and `CommandResult::Usage` print the message on stderr and exit 1 and 2). meta ends with the plugin's code. A plugin that changes something itself (instead of planning) honours `options.dry_run`, or refuses it with exit 2.
+and ends with one of meta's [exit codes](advanced_usage.md#exit-codes) (`CommandResult::Error` and `CommandResult::Usage` print the message on stderr and end it as a failure and as a wrong command line). meta ends with the plugin's code. A plugin that changes something itself (instead of planning) honours `options.dry_run`, or refuses it with exit 2.
+
+meta starts a plugin with `META_OWNER_DEPTH` set (1, one more for each program in between); when meta is told to stop, a plugin gets half of meta's time to stop what it started first. `meta_plugin::process` reads and passes the variable on; the crate docs of `meta_plugin` say how.
 
 ## Other languages
 

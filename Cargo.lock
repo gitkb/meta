@@ -830,8 +830,7 @@ dependencies = [
  "clap",
  "colored",
  "loop_lib",
- "meta_core",
- "meta_test_support",
+ "meta_plugin",
  "serde_json",
 ]
 
@@ -844,7 +843,7 @@ dependencies = [
  "diff",
  "indicatif",
  "meta_core",
- "meta_test_support",
+ "meta_plugin",
  "rayon",
  "serde",
  "serde_json",
@@ -872,8 +871,7 @@ dependencies = [
  "log",
  "loop_lib",
  "meta_core",
- "meta_plugin_protocol",
- "meta_test_support",
+ "meta_plugin",
  "proc-macro2",
  "rayon",
  "rustix",
@@ -896,7 +894,7 @@ dependencies = [
  "clap",
  "loop_lib",
  "meta_core",
- "meta_test_support",
+ "meta_plugin",
  "schemars",
  "serde",
  "serde_json",
@@ -909,22 +907,14 @@ name = "meta_core"
 version = "0.2.22"
 dependencies = [
  "anyhow",
- "clap",
- "colored",
- "console",
  "dirs",
  "log",
- "meta_test_support",
- "rustix",
+ "meta_plugin",
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "shlex",
- "signal-hook",
- "strsim",
  "tempfile",
  "walkdir",
- "win32job",
 ]
 
 [[package]]
@@ -942,8 +932,7 @@ dependencies = [
  "loop_lib",
  "meta_core",
  "meta_git_lib",
- "meta_plugin_protocol",
- "meta_test_support",
+ "meta_plugin",
  "rayon",
  "rustix",
  "serde",
@@ -960,7 +949,7 @@ dependencies = [
  "chrono",
  "log",
  "meta_core",
- "meta_test_support",
+ "meta_plugin",
  "same-file",
  "serde",
  "serde_json",
@@ -968,16 +957,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "meta_plugin_protocol"
+name = "meta_plugin"
 version = "0.2.22"
 dependencies = [
  "anyhow",
  "clap",
+ "colored",
+ "console",
  "env_logger",
  "indexmap",
- "meta_core",
+ "meta_plugin",
+ "rustix",
  "serde",
  "serde_json",
+ "shlex",
+ "signal-hook",
+ "strsim",
+ "tempfile",
+ "win32job",
 ]
 
 [[package]]
@@ -988,8 +985,7 @@ dependencies = [
  "clap",
  "indexmap",
  "meta_core",
- "meta_plugin_protocol",
- "meta_test_support",
+ "meta_plugin",
  "serde",
  "serde_json",
  "shlex",
@@ -1000,15 +996,7 @@ name = "meta_rust_cli"
 version = "0.2.22"
 dependencies = [
  "indexmap",
- "meta_core",
- "meta_plugin_protocol",
- "tempfile",
-]
-
-[[package]]
-name = "meta_test_support"
-version = "0.2.22"
-dependencies = [
+ "meta_plugin",
  "tempfile",
 ]
 

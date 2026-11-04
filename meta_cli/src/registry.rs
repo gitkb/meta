@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 use log::{debug, info};
-use meta_core::display::{escape, escape_path};
+use meta_plugin::display::{escape, escape_path};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
@@ -273,7 +273,7 @@ impl RegistryClient {
                     // the error names the URL, which may hold a token:
                     // RUST_LOG=debug shows it
                     debug!("{e:#}");
-                    meta_core::out::warn(format!(
+                    meta_plugin::out::warn(format!(
                         "Failed to fetch the plugin index of registry {}",
                         shown_url(registry_url)
                     ));
@@ -544,7 +544,7 @@ pub struct GitHubShorthand {
 /// repo's URL) and its query, which may carry a token, left out; escaped.
 fn shown_url(url: &str) -> String {
     let url = url.split_once('?').map_or(url, |(base, _)| base);
-    escape(&meta_core::git::GitUrl::from(url).to_string()).into_owned()
+    escape(&meta_plugin::RepoUrl::from(url).to_string()).into_owned()
 }
 
 impl GitHubShorthand {
@@ -1132,7 +1132,7 @@ impl PluginInstaller {
                             version: match crate::subprocess_plugins::probe_plugin_info(&path) {
                                 Ok(info) => Some(info.version),
                                 Err(e) => {
-                                    meta_core::out::warn(e.into_error());
+                                    meta_plugin::out::warn(e.into_error());
                                     None
                                 }
                             },

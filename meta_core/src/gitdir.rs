@@ -4,8 +4,8 @@
 //! `commondir` names the repository's git directory and whose `gitdir`
 //! names the `.git` file back.
 
-use crate::display::escape_path;
 use anyhow::Context;
+use meta_plugin::display::escape_path;
 use std::path::{Path, PathBuf};
 
 /// What the `.git` file in `checkout` names, as written (relative to
@@ -105,7 +105,7 @@ pub fn common_dir(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
     anyhow::ensure!(
         output.status.success(),
         "git can't use its .git: {}",
-        crate::display::escape(
+        meta_plugin::display::escape(
             String::from_utf8_lossy(&output.stderr)
                 .trim()
                 .trim_start_matches("fatal: ")
@@ -226,7 +226,7 @@ pub fn linked(checkout: &Path) -> anyhow::Result<Linked> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meta_test_support::{path, Sandbox};
+    use meta_plugin::testing::{path, Sandbox};
 
     /// A repository with one commit at `dir/repo` and a linked worktree of
     /// it at `dir/wt`.
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn finds_the_common_dir_of_each_kind() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         let (repo, wt) = repo_and_worktree(&sandbox);
         let canonical = |p: Option<PathBuf>| p.unwrap().canonicalize().unwrap();
@@ -276,7 +276,7 @@ mod tests {
             for dir in ["objects", "refs"] {
                 std::fs::create_dir_all(plain.join(dir)).unwrap();
             }
-            if meta_test_support::mkfifo(&plain.join("HEAD")) {
+            if meta_plugin::testing::mkfifo(&plain.join("HEAD")) {
                 let (send, receive) = std::sync::mpsc::channel();
                 let dir = plain.clone();
                 std::thread::spawn(move || send.send(common_dir(&dir).ok().flatten()));
@@ -288,7 +288,7 @@ mod tests {
             for dir in ["objects", "refs"] {
                 std::fs::create_dir_all(real.join(dir)).unwrap();
             }
-            if meta_test_support::mkfifo(&real.join("HEAD")) {
+            if meta_plugin::testing::mkfifo(&real.join("HEAD")) {
                 let checkouts = ["dir", "link", "file"].map(|kind| tmp.join(kind));
                 for checkout in &checkouts {
                     std::fs::create_dir(checkout).unwrap();
@@ -316,7 +316,7 @@ mod tests {
 
     #[test]
     fn a_bare_repository_is_its_own_common_dir() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         let bare = tmp.join("bare.git");
         std::fs::create_dir(&bare).unwrap();
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn a_moved_worktree_is_not_linked() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         let (_, wt) = repo_and_worktree(&sandbox);
         let moved = tmp.join("moved");

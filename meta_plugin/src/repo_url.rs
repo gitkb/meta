@@ -9,11 +9,11 @@ use std::ops::Range;
 /// A remote URL, as configured or as a clone's remote has it, credentials
 /// and all. Everything that prints one (`Display`, `Debug`, `Serialize`)
 /// hides those (`https://***@host/org/repo`); the URL itself reaches only
-/// git's argv, through [`GitUrl::as_git_arg`].
+/// git's argv, through [`RepoUrl::as_git_arg`].
 #[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct GitUrl(String);
+pub struct RepoUrl(String);
 
-/// A [`GitUrl`] taken apart as git does, in the order git checks the forms.
+/// A [`RepoUrl`] taken apart as git does, in the order git checks the forms.
 #[derive(Debug, PartialEq, Eq)]
 enum Parts<'a> {
     /// `<transport>::<address>`: git hands the address to
@@ -97,52 +97,52 @@ impl<'a> Parts<'a> {
     }
 }
 
-impl From<String> for GitUrl {
+impl From<String> for RepoUrl {
     fn from(url: String) -> Self {
-        GitUrl(url)
+        RepoUrl(url)
     }
 }
 
-impl From<&str> for GitUrl {
+impl From<&str> for RepoUrl {
     fn from(url: &str) -> Self {
-        GitUrl(url.to_string())
+        RepoUrl(url.to_string())
     }
 }
 
 /// The URL with its credentials hidden, and unsafe characters escaped.
-impl fmt::Display for GitUrl {
+impl fmt::Display for RepoUrl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&escape(&self.shown()))
     }
 }
 
-impl fmt::Debug for GitUrl {
+impl fmt::Debug for RepoUrl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("GitUrl").field(&self.shown()).finish()
+        f.debug_tuple("RepoUrl").field(&self.shown()).finish()
     }
 }
 
 /// The URL with its credentials hidden.
-impl serde::Serialize for GitUrl {
+impl serde::Serialize for RepoUrl {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.shown())
     }
 }
 
-impl<'de> serde::Deserialize<'de> for GitUrl {
+impl<'de> serde::Deserialize<'de> for RepoUrl {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer).map(GitUrl)
+        String::deserialize(deserializer).map(RepoUrl)
     }
 }
 
-impl GitUrl {
+impl RepoUrl {
     /// The URL as configured, for git's argv and nothing else.
     pub fn as_git_arg(&self) -> &OsStr {
         OsStr::new(&self.0)
     }
 
-    /// The URL as configured, for meta_core's own checks of it.
-    pub(crate) fn raw(&self) -> &str {
+    /// The URL as configured: what the config says, for checks of the config itself.
+    pub fn raw(&self) -> &str {
         &self.0
     }
 
@@ -218,7 +218,7 @@ impl GitUrl {
 
     /// Whether `other` names the same repository: the same URL but for
     /// `.git`, a trailing `/`, an ssh port or ssh's default user `git`.
-    pub fn same_repository(&self, other: &GitUrl) -> bool {
+    pub fn same_repository(&self, other: &RepoUrl) -> bool {
         self.normalized() == other.normalized()
     }
 
@@ -341,7 +341,7 @@ fn valid_host(host: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn parse(url: &str) -> GitUrl {
+    fn parse(url: &str) -> RepoUrl {
         url.into()
     }
 
@@ -489,7 +489,7 @@ mod tests {
             let url = parse(url);
             assert_eq!(url.to_string(), shown);
             assert_eq!(url.has_credentials(), url.as_git_arg() != shown, "{shown}");
-            assert_eq!(format!("{url:?}"), format!("GitUrl({shown:?})"));
+            assert_eq!(format!("{url:?}"), format!("RepoUrl({shown:?})"));
             assert_eq!(serde_json::to_value(&url).unwrap(), shown);
         }
         // git still gets the URL as configured
@@ -499,7 +499,7 @@ mod tests {
             "https://alice:ghp_SECRET@github.com/org/repo.git"
         );
         // and a URL read from a config prints the same way
-        let read: GitUrl = serde_json::from_str("\"https://t@h/r\"").unwrap();
+        let read: RepoUrl = serde_json::from_str("\"https://t@h/r\"").unwrap();
         assert_eq!(read.to_string(), "https://***@h/r");
         // printed as text, a control character is escaped too
         assert_eq!(

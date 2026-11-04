@@ -1,7 +1,7 @@
 //! How long a worktree set has left.
 
-use meta_core::display::{escape, escape_path};
 use meta_core::set_record::SetRecord;
+use meta_plugin::display::{escape, escape_path};
 
 /// Seconds until `record`'s TTL expires: `None` without a TTL, negative
 /// once expired. A malformed `created_at` is an error: when the set

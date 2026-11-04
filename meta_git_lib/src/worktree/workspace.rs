@@ -5,7 +5,7 @@
 //! are kept (`META_WORKTREES` may be shared, or point into another
 //! workspace) doesn't change that.
 
-use meta_core::display::escape_path;
+use meta_plugin::display::escape_path;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 

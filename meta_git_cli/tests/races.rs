@@ -11,7 +11,7 @@
 // Unix only: the commands held mid-way are shell scripts that block on a pipe
 #![cfg(unix)]
 
-use meta_test_support::{mkfifo, Sandbox};
+use meta_plugin::testing::{mkfifo, Sandbox};
 use serde_json::json;
 use std::fs;
 use std::io::Write;

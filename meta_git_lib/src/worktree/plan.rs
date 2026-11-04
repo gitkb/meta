@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use meta_core::config::Workspace;
-use meta_core::display::escape;
+use meta_plugin::display::escape;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

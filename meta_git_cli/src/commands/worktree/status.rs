@@ -1,7 +1,7 @@
 use anyhow::Result;
 use colored::*;
-use meta_core::display::escape;
-use meta_core::outln;
+use meta_plugin::display::escape;
+use meta_plugin::outln;
 use rayon::prelude::*;
 
 use meta_core::worktree::WorktreeMemberInfo;

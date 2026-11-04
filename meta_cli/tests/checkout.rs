@@ -1,7 +1,7 @@
 //! `meta exec` acts only in project folders that are repositories of their
 //! own, and names the others.
 
-use meta_test_support::Sandbox;
+use meta_plugin::testing::Sandbox;
 use std::fs;
 
 #[test]

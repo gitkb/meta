@@ -6,9 +6,9 @@
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
-use meta_test_support::Sandbox;
+use meta_plugin::testing::{call, Sandbox};
+use meta_plugin::PluginRequest;
 use serde_json::{json, Value};
-use std::io::Write;
 use std::path::Path;
 use std::process::{Output, Stdio};
 
@@ -25,23 +25,17 @@ fn meta_git_from(
     args: &[&str],
     options: Value,
 ) -> Output {
-    let request = json!({"command": command, "args": args, "cwd": cwd, "options": options});
-    let mut child = sandbox
-        .command(env!("CARGO_BIN_EXE_meta-git"))
-        .arg("--meta-plugin-exec")
-        .current_dir(process_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(request.to_string().as_bytes())
-        .unwrap();
-    child.wait_with_output().unwrap()
+    let request = PluginRequest::builder(command)
+        .args(args.iter().copied())
+        .cwd(cwd)
+        .options(serde_json::from_value(options).unwrap())
+        .build();
+    call(
+        sandbox
+            .command(env!("CARGO_BIN_EXE_meta-git"))
+            .current_dir(process_dir),
+        &request,
+    )
 }
 
 fn text(out: &Output) -> String {

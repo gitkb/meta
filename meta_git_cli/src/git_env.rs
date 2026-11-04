@@ -15,7 +15,7 @@ use std::collections::HashMap;
 /// - `GIT_PAGER=cat` - Disable pager to prevent blocking
 /// - `GIT_TERMINAL_PROMPT=0` - Fail instead of prompting for credentials
 /// - `color.ui=always` when meta's output is coloured
-///   ([`meta_core::out::color`]), added after the `GIT_CONFIG_*` entries of
+///   ([`meta_plugin::out::color`]), added after the `GIT_CONFIG_*` entries of
 ///   meta's own environment (see [`with_color`])
 pub fn git_env() -> HashMap<String, String> {
     let mut env = HashMap::new();
@@ -26,7 +26,7 @@ pub fn git_env() -> HashMap<String, String> {
     // Disable interactive prompts (fail instead of hanging)
     env.insert("GIT_TERMINAL_PROMPT".to_string(), "0".to_string());
 
-    if meta_core::out::color() {
+    if meta_plugin::out::color() {
         with_color(&mut env, |name| std::env::var(name).ok());
     }
     env

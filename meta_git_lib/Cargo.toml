@@ -8,6 +8,7 @@ publish = false
 description = "Reusable git operations for meta plugins"
 
 [dependencies]
+meta_plugin.workspace = true
 meta_core.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
@@ -19,7 +20,7 @@ serde_json.workspace = true
 same-file = "1"
 
 [dev-dependencies]
-meta_test_support.workspace = true
+meta_plugin = { workspace = true, features = ["testing-git"] }
 tempfile.workspace = true
 
 [lints]

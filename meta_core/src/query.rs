@@ -14,9 +14,9 @@
 //! - `dirty:true AND tag:backend`
 //! - `branch:main AND modified_in:7d`
 
-use crate::display::escape;
 use crate::git::RepoStatus;
 use anyhow::{Context, Result};
+use meta_plugin::display::escape;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn untracked_files_are_neither_staged_nor_unstaged() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         sandbox.git(&dir, &["init", "-q", "-b", "main"]);
         std::fs::write(dir.join("new"), "").unwrap();
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn a_bare_repository_has_its_last_commit() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         sandbox.git(&dir, &["init", "-q", "--bare", "-b", "main"]);
         // the empty tree, which git always has
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn a_checkout_git_calls_bare_keeps_its_branch() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         sandbox.git(&dir, &["init", "-q", "-b", "main"]);
         sandbox.git(&dir, &["commit", "-q", "--allow-empty", "-m", "first"]);

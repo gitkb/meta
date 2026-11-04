@@ -8,14 +8,14 @@ publish = false
 description = "Run commands across multiple directories"
 
 [dependencies]
+meta_plugin = { workspace = true, features = ["parse"] }
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 colored.workspace = true
 loop_lib.workspace = true
-meta_core.workspace = true
 
 [dev-dependencies]
-meta_test_support.workspace = true
+meta_plugin = { workspace = true, features = ["testing-git"] }
 serde_json.workspace = true
 
 [[bin]]

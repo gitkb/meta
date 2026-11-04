@@ -5,16 +5,17 @@
 //! Claude Code SessionStart hook).
 
 use anyhow::Result;
-use meta_core::{errln, out, outln};
+use meta_plugin::{errln, out, outln};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
 
 use meta_core::config::{self, ProjectInfo};
 use meta_core::dependency_graph::DependencyGraph;
-use meta_core::display::{escape, escape_path};
-use meta_core::git::{GitUrl, Operation, RepoStatus};
+use meta_core::git::{Operation, RepoStatus};
 use meta_core::repo_filter::{Filters, Reach};
+use meta_plugin::display::{escape, escape_path};
+use meta_plugin::RepoUrl;
 
 // ── Public API ──────────────────────────────────────────
 
@@ -193,7 +194,7 @@ pub struct RepoContext {
     pub path: String,
     /// Git remote URL. Should be present for all normal projects.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo: Option<GitUrl>,
+    pub repo: Option<RepoUrl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     /// Whether HEAD names a commit rather than a branch.

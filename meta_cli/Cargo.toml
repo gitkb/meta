@@ -9,7 +9,7 @@ description = "Multi-repo management CLI with AI integration"
 
 [dependencies]
 meta_core.workspace = true
-meta_plugin_protocol.workspace = true
+meta_plugin = { workspace = true, features = ["parse"] }
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive", "string"] }
 colored.workspace = true
@@ -32,7 +32,7 @@ tempfile.workspace = true
 rustix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
-meta_test_support.workspace = true
+meta_plugin = { workspace = true, features = ["testing-git"] }
 indexmap.workspace = true
 proc-macro2 = { version = "1", features = ["span-locations"] }
 shlex.workspace = true

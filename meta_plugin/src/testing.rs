@@ -1,10 +1,15 @@
-//! One sandbox for every test in this workspace.
+//! The test kit for plugins, and for meta's own tests (feature `testing`;
+//! the git fixtures need `testing-git`).
 //!
 //! A [`Sandbox`] is a folder with a home, XDG dirs, a git config and a meta
 //! data dir of its own. Every program a test starts through
 //! [`Sandbox::command`] gets those instead of the user's, so a test never
 //! reads or writes the user's settings (their git identity, hooks, signing,
 //! plugins). Git a fixture runs fails the test unless it succeeds.
+//!
+//! [`Sandbox::workspace`] builds a meta workspace of repos, nested meta
+//! repos and members not cloned yet; [`PluginRequest::builder`] and
+//! [`call`] send a plugin a request the way meta does.
 //!
 //! On Windows the user's home is found without `HOME`, so there meta's own
 //! files stay out of it through `META_DATA_DIR` alone.
@@ -16,14 +21,13 @@
     clippy::unwrap_used,
     clippy::print_stdout,
     clippy::print_stderr,
-    clippy::panic,
     reason = "test support: a panic is a failed test, and tests start the programs they test"
 )]
 
+use crate::{PluginRequest, PluginRequestOptions};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
 
 /// The identity commits in a sandbox are made as.
 const NAME: &str = "t";
@@ -151,13 +155,14 @@ impl Sandbox {
     pub fn command(&self, program: impl AsRef<OsStr>) -> Command {
         let mut command = Command::new(program);
         command.current_dir(self.work());
-        for name in repo_env().iter().map(String::as_str).chain(UNSET) {
+        for name in crate::process::REPO_ENV_VARS.iter().chain(&UNSET) {
             command.env_remove(name);
         }
         command.envs(self.env());
         command
     }
 
+    #[cfg(feature = "testing-git")]
     /// `git args` in `dir`; its stdout. The test fails unless git does.
     pub fn git(&self, dir: &Path, args: &[&str]) -> String {
         let out = self
@@ -175,6 +180,7 @@ impl Sandbox {
         String::from_utf8(out.stdout).unwrap()
     }
 
+    #[cfg(feature = "testing-git")]
     /// A repo at `dir` on branch `main`, with one commit of a `README`
     /// that names it.
     pub fn repo(&self, dir: &Path) -> PathBuf {
@@ -187,6 +193,7 @@ impl Sandbox {
         dir.to_path_buf()
     }
 
+    #[cfg(feature = "testing-git")]
     /// A bare repo at `dir` whose `main` has one commit, to clone from.
     pub fn bare(&self, dir: &Path) -> PathBuf {
         // one seed per bare repo, wherever two of them share a name
@@ -202,11 +209,184 @@ impl Sandbox {
     }
 }
 
+/// `plugin --meta-plugin-exec` (a [`Sandbox::command`], with whatever else
+/// the test sets on it: its folder, its variables), sent `request` on stdin
+/// as meta sends it; what the plugin printed and how it ended.
+pub fn call(plugin: &mut Command, request: &PluginRequest) -> std::process::Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = plugin
+        .arg("--meta-plugin-exec")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let json = serde_json::to_vec(request).unwrap();
+    child.stdin.take().unwrap().write_all(&json).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+impl PluginRequest {
+    /// A request for `command` (`"git status"`), with no arguments, no
+    /// projects, no directory and meta's defaults.
+    pub fn builder(command: &str) -> RequestBuilder {
+        RequestBuilder(PluginRequest {
+            command: command.to_string(),
+            args: Vec::new(),
+            projects: Vec::new(),
+            cwd: PathBuf::new(),
+            options: PluginRequestOptions::default(),
+        })
+    }
+}
+
+/// A [`PluginRequest`] being built ([`PluginRequest::builder`]).
+pub struct RequestBuilder(PluginRequest);
+
+impl RequestBuilder {
+    /// The words the user typed after the command.
+    pub fn args<S: Into<String>>(mut self, args: impl IntoIterator<Item = S>) -> Self {
+        self.0.args = args.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The selected projects.
+    pub fn projects<S: Into<String>>(mut self, projects: impl IntoIterator<Item = S>) -> Self {
+        self.0.projects = projects.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Where the command runs.
+    pub fn cwd(mut self, cwd: &Path) -> Self {
+        self.0.cwd = cwd.to_path_buf();
+        self
+    }
+
+    /// meta's options, as meta resolved them.
+    pub fn options(mut self, options: PluginRequestOptions) -> Self {
+        self.0.options = options;
+        self
+    }
+
+    pub fn build(self) -> PluginRequest {
+        self.0
+    }
+}
+
+#[cfg(feature = "testing-git")]
+impl Sandbox {
+    /// A meta workspace at `dir`, itself a repo, to fill with projects:
+    /// see [`Workspace`].
+    pub fn workspace(&self, dir: &Path) -> Workspace<'_> {
+        Workspace {
+            sandbox: self,
+            dir: dir.to_path_buf(),
+            projects: Vec::new(),
+        }
+    }
+}
+
+/// A meta workspace being built ([`Sandbox::workspace`]). Each project is
+/// a clone of a bare repo of its own under the sandbox's work folder
+/// (`up/`), so `meta git update` can clone one that isn't cloned yet. The
+/// workspace's `.meta.yaml`, and its `.gitignore` of the projects and
+/// `.worktrees/`, are committed.
+#[cfg(feature = "testing-git")]
+pub struct Workspace<'a> {
+    sandbox: &'a Sandbox,
+    dir: PathBuf,
+    projects: Vec<(String, Member)>,
+}
+
+#[cfg(feature = "testing-git")]
+enum Member {
+    Cloned,
+    Uncloned,
+    /// A meta repo of its own, with these projects
+    Nested(Vec<(String, Member)>),
+}
+
+#[cfg(feature = "testing-git")]
+impl<'a> Workspace<'a> {
+    /// A project `name`, cloned at `name`.
+    pub fn repo(mut self, name: &str) -> Self {
+        self.projects.push((name.to_string(), Member::Cloned));
+        self
+    }
+
+    /// A project `name` the config lists but that isn't cloned.
+    pub fn uncloned(mut self, name: &str) -> Self {
+        self.projects.push((name.to_string(), Member::Uncloned));
+        self
+    }
+
+    /// A nested meta repo `name` (`meta: true`), cloned, with the projects
+    /// `fill` gives it.
+    pub fn nested(mut self, name: &str, fill: impl FnOnce(Self) -> Self) -> Self {
+        let inner = fill(self.sandbox.workspace(&self.dir.join(name)));
+        self.projects
+            .push((name.to_string(), Member::Nested(inner.projects)));
+        self
+    }
+
+    /// Make it all; the workspace's folder.
+    pub fn build(self) -> PathBuf {
+        let up = self.sandbox.work().join("up");
+        build(self.sandbox, &self.dir, &up, &self.projects);
+        self.dir
+    }
+}
+
+/// The meta repo at `dir` with `projects`, their upstreams under `up`.
+#[cfg(feature = "testing-git")]
+fn build(sandbox: &Sandbox, dir: &Path, up: &Path, projects: &[(String, Member)]) {
+    std::fs::create_dir_all(dir).unwrap();
+    sandbox.git(dir, &["init", "-q", "-b", "main"]);
+    let mut config = serde_json::Map::new();
+    for (name, member) in projects {
+        let url = up.join(format!("{name}.git"));
+        sandbox.bare(&url);
+        let entry = match member {
+            Member::Nested(_) => serde_json::json!({ "repo": path(&url), "meta": true }),
+            _ => serde_json::json!(path(&url)),
+        };
+        config.insert(name.clone(), entry);
+        match member {
+            Member::Cloned => {
+                sandbox.git(dir, &["clone", "-q", &path(&url), name]);
+            }
+            Member::Uncloned => {}
+            Member::Nested(inner) => {
+                // its own projects, pushed upstream so a clone of it has them
+                let clone = dir.join(name);
+                sandbox.git(dir, &["clone", "-q", &path(&url), name]);
+                build(sandbox, &clone, &up.join(name), inner);
+                sandbox.git(&clone, &["push", "-q", "origin", "main"]);
+            }
+        }
+    }
+    let config = serde_json::json!({ "projects": config }).to_string();
+    std::fs::write(dir.join(".meta.yaml"), config).unwrap();
+    let ignored: Vec<&str> = projects.iter().map(|(name, _)| name.as_str()).collect();
+    std::fs::write(
+        dir.join(".gitignore"),
+        format!("{}\n.worktrees/\n", ignored.join("\n")),
+    )
+    .unwrap();
+    sandbox.git(dir, &["add", ".meta.yaml", ".gitignore"]);
+    sandbox.git(dir, &["commit", "-qm", "meta"]);
+}
+
 /// A git config file with nothing in it, for the git the sandbox itself runs
+#[cfg(feature = "testing-git")]
 const NO_CONFIG: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 /// Settings of the user's shell a test would otherwise pick up.
-const UNSET: [&str; 11] = [
+const UNSET: [&str; 13] = [
+    // the `-c` settings a git around the tests was given
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
     "META_WORKTREES",
     "META_GITHUB_URL",
     "META_PLATFORM",
@@ -220,42 +400,21 @@ const UNSET: [&str; 11] = [
     "FORCE_COLOR",
 ];
 
-/// The variables that point git at a repo (`GIT_DIR`, `GIT_WORK_TREE`, …),
-/// as git names them.
-fn repo_env() -> &'static [String] {
-    static NAMES: OnceLock<Vec<String>> = OnceLock::new();
-    NAMES.get_or_init(|| {
-        // with no config of the user's: none is needed, and it could be broken
-        let out = Command::new("git")
-            .args(["rev-parse", "--local-env-vars"])
-            .env("GIT_CONFIG_GLOBAL", NO_CONFIG)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "git rev-parse --local-env-vars: {out:?}"
-        );
-        String::from_utf8(out.stdout)
-            .unwrap()
-            .lines()
-            .map(String::from)
-            .collect()
-    })
-}
-
 /// `let sandbox = isolated!();`: the sandbox of [`Sandbox::isolated`]; in
 /// the test as started, which only runs the copy, it returns.
 #[macro_export]
 macro_rules! isolated {
     () => {
-        match $crate::Sandbox::isolated() {
+        match $crate::testing::Sandbox::isolated() {
             Some(sandbox) => sandbox,
             None => return,
         }
     };
 }
+pub use crate::isolated;
 
+#[cfg(feature = "testing-git")]
+#[expect(clippy::panic, reason = "a git this can't read fails the test")]
 /// Whether git can make reftable repos (2.45 on); says why not when not.
 pub fn git_has_reftable() -> bool {
     let out = Command::new("git")

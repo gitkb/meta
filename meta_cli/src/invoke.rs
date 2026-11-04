@@ -354,7 +354,13 @@ pub fn call(
         _ => request.command.clone(),
     };
     crate::running(&report.command);
-    let response = plugin.call(request)?;
+    let (response, received) = plugin.call(request, cli.show())?;
+    // what it streamed came first; a record that is a failure fails the call
+    if let Some(error) = received.records.iter().find_map(|r| r.error.clone()) {
+        report.fail(error, !cli.json);
+    }
+    report.results.extend(received.records);
+    report.warnings.extend(received.warnings);
     answer(cli, response, target, report)
 }
 
@@ -417,7 +423,7 @@ pub fn answer(
 
 /// The records a command returned, in text: each under its project, its
 /// data as text, escaped (the data came from a repo or a plugin).
-fn show(records: &[ProjectResult]) -> Result<()> {
+pub fn show(records: &[ProjectResult]) -> Result<()> {
     for record in records {
         let header = record.project.as_deref().map(escape);
         if let Some(error) = &record.error {
@@ -495,6 +501,7 @@ pub fn run_plan(
             .unwrap_or_else(|| target.map_or(cli.parallel, |t| t.parallel)),
         dry_run: cli.dry_run,
         json_output: cli.json,
+        on_done: steps(cli),
         spawn_stagger_ms: plan.stagger_ms.unwrap_or(0),
         max_parallel,
         aliases: loop_lib::aliases()?,
@@ -538,6 +545,7 @@ pub fn exec(cli: &Cli, argv: &[String], report: &mut Report) -> Result<()> {
         parallel: target.parallel,
         dry_run: cli.dry_run,
         json_output: cli.json,
+        on_done: steps(cli),
         aliases: loop_lib::aliases()?,
         root_dir: Some(target.root.clone()),
         outer: Some(crate::outer(&["exec", "--"])),
@@ -550,4 +558,17 @@ pub fn exec(cli: &Cli, argv: &[String], report: &mut Report) -> Result<()> {
         report.fail(error, !cli.json);
     }
     Ok(())
+}
+
+/// Under `--json-stream`, a `step` event as each step of a plan ends.
+fn steps(cli: &Cli) -> loop_lib::OnDone {
+    match cli.show() {
+        crate::events::Show::Stream => loop_lib::OnDone::call(|result| {
+            crate::events::show(
+                crate::events::Show::Stream,
+                &meta_plugin::Event::Step(result.row()),
+            )
+        }),
+        _ => loop_lib::OnDone::default(),
+    }
 }

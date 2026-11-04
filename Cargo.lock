@@ -872,6 +872,7 @@ dependencies = [
  "loop_lib",
  "meta_core",
  "meta_plugin",
+ "nix",
  "proc-macro2",
  "rayon",
  "rustix",

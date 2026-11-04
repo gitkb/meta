@@ -223,6 +223,14 @@ meta --json exec -- git rev-parse HEAD
 
 With `--json`, stdout holds the envelope alone: what a command or plugin prints as text goes to stderr. A command line that can't be parsed is an envelope too (code `usage`, exit 2) when `--json` is among meta's options before the command; without, it is text on stderr. `--fields a,b.c` keeps only those fields of each row (`b.c` reaches into a field, as `data.name`).
 
+### Streaming
+
+`--json-stream` prints the same envelope as the last line of a stream (`{"envelope": …}`), after one line per event as it happens (`{"event": …}`): `step` when a step of a plan ends (its row, as in `results`), `record` when a command sends one of its records early (meta-grep's matches, say), `warning` as it is found, and `progress` (`{"done", "total"?, "project"?, "message"?}`). Under `--json` the same records and warnings are in the envelope, in the order they came, and progress is left out; in text they are shown as they come (progress only on a terminal).
+
+```bash
+meta --json-stream exec -- make test | jq -c 'select(.event) | .event | {project, exit_code}'
+```
+
 ### Parsing with jq
 
 ```bash

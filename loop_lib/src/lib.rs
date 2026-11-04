@@ -57,6 +57,38 @@ pub struct LoopConfig {
     /// commands run, or with `json_output` listed in the report
     #[serde(skip)]
     pub warnings: Vec<String>,
+    /// Told of each command as it ends (in parallel, from its thread)
+    #[serde(skip)]
+    pub on_done: OnDone,
+}
+
+/// A function told of each command as it ends.
+type Tell = dyn Fn(&CommandResult) + Send + Sync;
+
+/// What a caller is told as each command ends.
+#[derive(Clone, Default)]
+pub struct OnDone(Option<std::sync::Arc<Tell>>);
+
+impl OnDone {
+    pub fn call(f: impl Fn(&CommandResult) + Send + Sync + 'static) -> Self {
+        OnDone(Some(std::sync::Arc::new(f)))
+    }
+
+    fn tell(&self, result: &CommandResult) {
+        if let Some(f) = &self.0 {
+            f(result);
+        }
+    }
+}
+
+impl std::fmt::Debug for OnDone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "OnDone(..)"
+        } else {
+            "OnDone(none)"
+        })
+    }
 }
 
 /// meta, running commands through loop: when every command fails because
@@ -179,6 +211,7 @@ impl Default for LoopConfig {
             root_dir: None,
             outer: None,
             warnings: vec![],
+            on_done: OnDone::default(),
         }
     }
 }
@@ -931,6 +964,7 @@ fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Comm
                     Some(why) => refused_result(job, why),
                     None => execute_command_in_directory_capturing(job, config),
                 };
+                config.on_done.tell(&result);
                 // results are shown once all are done
                 if let Some(pb) = spinner {
                     pb.finish_and_clear();
@@ -962,25 +996,34 @@ fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Comm
 fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<CommandResult>> {
     commands
         .iter()
-        .map(|job| match (&job.refused, config.json_output) {
-            (Some(why), json) => {
-                if !json && !config.silent {
-                    outln!(
-                        "\n{}",
-                        format!(
-                            "✗ {}: {} (Exit code: 1)",
-                            display_name(&job.dir, config.root_dir.as_deref()),
-                            escape(why)
-                        )
-                        .red()
-                    )?;
-                }
-                Ok(refused_result(job, why))
-            }
-            (None, true) => Ok(execute_command_in_directory_capturing(job, config)),
-            (None, false) => execute_command_in_directory(job, config),
+        .map(|job| -> Result<CommandResult> {
+            let result = run_one(config, job)?;
+            config.on_done.tell(&result);
+            Ok(result)
         })
         .collect()
+}
+
+/// One command, in turn: its output live unless it goes into JSON.
+fn run_one(config: &LoopConfig, job: &DirCommand) -> Result<CommandResult> {
+    match (&job.refused, config.json_output) {
+        (Some(why), json) => {
+            if !json && !config.silent {
+                outln!(
+                    "\n{}",
+                    format!(
+                        "✗ {}: {} (Exit code: 1)",
+                        display_name(&job.dir, config.root_dir.as_deref()),
+                        escape(why)
+                    )
+                    .red()
+                )?;
+            }
+            Ok(refused_result(job, why))
+        }
+        (None, true) => Ok(execute_command_in_directory_capturing(job, config)),
+        (None, false) => execute_command_in_directory(job, config),
+    }
 }
 
 /// Execute a list of commands (each with its own directory) and say how

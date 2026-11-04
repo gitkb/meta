@@ -63,6 +63,7 @@ use serde::{Deserialize, Serialize};
 pub mod args;
 pub mod display;
 pub mod envelope;
+pub mod event;
 pub mod exit;
 mod mode;
 pub mod out;
@@ -78,6 +79,7 @@ pub mod testing;
 pub mod wire_path;
 
 pub use envelope::{Envelope, ErrorCode, ErrorInfo, ProjectResult, Skipped, Warning};
+pub use event::Event;
 pub use mode::ExecutionMode;
 pub use repo_url::RepoUrl;
 pub use request::{Meta, Project, Request, Scope, Set, Workspace, Worktree};

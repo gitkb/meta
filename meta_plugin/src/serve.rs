@@ -12,6 +12,7 @@
 //! the host can't read, fails with `plugin-failed`.
 
 use crate::envelope::{info_of, ErrorCode, ErrorInfo, Warning};
+use crate::event::Event;
 use crate::response::{Answer, Response};
 use crate::{PluginInfo, Request};
 use std::cell::RefCell;
@@ -21,19 +22,77 @@ pub const REQUEST_VAR: &str = "META_REQUEST";
 /// The variable naming the file the response goes to.
 pub const RESPONSE_VAR: &str = "META_RESPONSE";
 
-/// What a plugin reports while it works, collected into its response.
+/// What a plugin reports while it works: warnings collected into its
+/// response, and events streamed to meta as they happen.
 pub struct Ctx {
     meta: crate::Meta,
     warnings: RefCell<Vec<Warning>>,
+    /// Where events go (`META_EVENTS`); with none, records are kept for the
+    /// response and progress is dropped
+    events: Option<std::sync::Mutex<std::fs::File>>,
+    kept: RefCell<Vec<crate::ProjectResult>>,
 }
 
 impl Ctx {
-    /// A context for a call with `meta`'s options.
+    /// A context for a call with `meta`'s options, its events unsent.
     pub fn new(meta: crate::Meta) -> Self {
         Ctx {
             meta,
             warnings: RefCell::new(Vec::new()),
+            events: None,
+            kept: RefCell::new(Vec::new()),
         }
+    }
+
+    /// A context whose events go to `events` (the file `META_EVENTS` names).
+    fn streaming(meta: crate::Meta, events: std::fs::File) -> Self {
+        Ctx {
+            events: Some(std::sync::Mutex::new(events)),
+            ..Ctx::new(meta)
+        }
+    }
+
+    /// Send `event` to meta now. A step is meta's own event: a plugin's is
+    /// refused.
+    pub fn emit(&self, event: Event) -> anyhow::Result<()> {
+        use std::io::Write;
+        anyhow::ensure!(
+            !matches!(event, Event::Step(_)),
+            "a step event is meta's own: a plugin sends records"
+        );
+        let Some(events) = &self.events else {
+            match event {
+                Event::Record(record) => self.kept.borrow_mut().push(record),
+                Event::Warning(warning) => self.warn(warning),
+                _ => {}
+            }
+            return Ok(());
+        };
+        let line = event.line();
+        anyhow::ensure!(
+            line.len() <= crate::event::MAX_LINE,
+            "an event of {} bytes is longer than meta reads",
+            line.len()
+        );
+        let mut file = events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        file.write_all(line.as_bytes())?;
+        Ok(file.flush()?)
+    }
+
+    /// A record of the outcome, shown as it arrives.
+    pub fn record(&self, record: crate::ProjectResult) -> anyhow::Result<()> {
+        self.emit(Event::Record(record))
+    }
+
+    /// How far along the command is (`done` of `total`).
+    pub fn progress(&self, done: u64, total: Option<u64>) -> anyhow::Result<()> {
+        self.emit(Event::Progress(crate::event::Progress {
+            done,
+            total,
+            ..Default::default()
+        }))
     }
 
     /// A problem the command goes on despite: meta shows it, or lists it in
@@ -63,11 +122,28 @@ impl Ctx {
         &self.meta
     }
 
-    /// `response`, with the warnings reported so far before its own.
+    /// `response`, with the warnings reported so far before its own, and
+    /// the records no channel took before its records.
     pub fn finish(&self, mut response: Response) -> Response {
         let mut warnings = std::mem::take(&mut *self.warnings.borrow_mut());
         warnings.append(&mut response.warnings);
         response.warnings = warnings;
+        let mut kept = std::mem::take(&mut *self.kept.borrow_mut());
+        if !kept.is_empty() {
+            match &mut response.answer {
+                Answer::Results(results) => {
+                    kept.append(&mut results.records);
+                    results.records = kept;
+                }
+                Answer::Message(_) => {
+                    response.answer = Answer::Results(crate::Results {
+                        records: kept,
+                        text: crate::Text::Plugin,
+                    })
+                }
+                _ => {}
+            }
+        }
         response
     }
 }
@@ -137,7 +213,16 @@ fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
     let request: Request =
         serde_json::from_slice(&text).context("Failed to parse plugin request")?;
     crate::out::set_json(request.meta.json);
-    let ctx = Ctx::new(request.meta.clone());
+    let ctx = match std::env::var_os(crate::event::EVENTS_VAR) {
+        Some(path) => {
+            let events = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .context("Failed to open the events file meta named")?;
+            Ctx::streaming(request.meta.clone(), events)
+        }
+        None => Ctx::new(request.meta.clone()),
+    };
     let response = match (plugin.execute)(&ctx, request) {
         Ok(response) => response,
         // a closed stdout ends the plugin as it ends meta

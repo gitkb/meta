@@ -969,6 +969,29 @@ YAML
     [[ "$output" == *"-no-such-program"*"exit code"* ]]
 }
 
+@test "json usage errors are one JSON document" {
+    bats_require_minimum_version 1.5.0
+    # meta's own parse error, with the line to run
+    run --separate-stderr "$META_BIN" --json exec --include api -- pwd
+    [ "$status" -eq 2 ]
+    [ "$(jq -r .success <<<"$output")" = false ]
+    [[ "$(jq -r .error <<<"$output")" == *"as in meta --json --include api exec -- pwd"* ]]
+    [ "$(jq -s length <<<"$output")" -eq 1 ]
+    # a plugin's, relayed as it printed it
+    run --separate-stderr "$META_BIN" --json git update --dry-run
+    [ "$status" -eq 2 ]
+    [ "$(jq -s length <<<"$output")" -eq 1 ]
+    [[ "$(jq -r .error <<<"$output")" == *"as in meta --json --dry-run git update"* ]]
+    # --json that isn't meta's, before the command, prints no JSON
+    run --separate-stderr "$META_BIN" exec --json-x -- pwd
+    [ "$status" -eq 2 ]
+    [ -z "$output" ]
+    run "$META_BIN" exec -- echo --json --bad
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--json --bad"* ]]
+    [[ "$output" != *'"success"'* ]]
+}
+
 @test "--help with --add-aliases-to-global-looprc only prints help" {
     run sh -c "printf 'y\ny\ny\n' | '$META_BIN' --add-aliases-to-global-looprc --help"
     [ "$status" -eq 0 ]

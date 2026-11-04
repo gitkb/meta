@@ -30,7 +30,8 @@ pub fn escaped_error<P: clap::Parser>(
 /// is printed with [`escaped_error`] (help and version print as usual, and
 /// so does clap's invalid UTF-8 error, which doesn't echo the value) and
 /// returned as the [`ExitWith`] code clap gives it: 0 for help, 2 for a
-/// usage error.
+/// usage error; with `--json` before the command, a usage error is the
+/// JSON error report on stdout.
 pub fn parse<P: clap::Parser>() -> anyhow::Result<P> {
     use clap::error::{ContextKind, ContextValue, ErrorKind};
     let e = match P::try_parse() {
@@ -57,6 +58,12 @@ pub fn parse<P: clap::Parser>() -> anyhow::Result<P> {
             ContextKind::Suggested,
             ContextValue::StyledStrs(vec![tip.into()]),
         );
+    }
+    // with --json, the JSON error report on stdout (crate::exit::code)
+    let shown = matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion);
+    if !shown && meta.typed.iter().any(|word| word == "--json") {
+        crate::out::set_json(true);
+        return Err(crate::exit::Usage(message(&e)).into());
     }
     match e.print() {
         Err(io) if !e.use_stderr() => Err(StdoutError(io).into()),

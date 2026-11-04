@@ -992,6 +992,27 @@ YAML
     [[ "$output" != *'"success"'* ]]
 }
 
+@test "json results name each repo by path and list warnings" {
+    bats_require_minimum_version 1.5.0
+    rm -rf frontend
+    run --separate-stderr "$META_BIN" --json --exclude . git diff --quiet
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '[.results[].path] | join(" ")' <<<"$output")" = "./api ./worker" ]
+    # empty output is "", never a missing key
+    [ "$(jq -r '[.results[] | has("stdout") and has("stderr")] | all' <<<"$output")" = true ]
+    [ "$(jq -r '.results[0].stdout' <<<"$output")" = "" ]
+    [[ "$(jq -r '.warnings[0]' <<<"$output")" == "frontend is not cloned"* ]]
+    [ "$(jq -r .hint <<<"$output")" = null ]
+    # each path selects its repo as it is
+    path="$(jq -r '.results[0].path' <<<"$output")"
+    run --separate-stderr "$META_BIN" --json --include "$path" exec -- true
+    [ "$(jq -r '[.results[].path] | join(" ")' <<<"$output")" = "./api" ]
+    # the tip the human output ends with
+    run --separate-stderr "$META_BIN" --json --include api git status -r
+    [ "$status" -eq 1 ]
+    [[ "$(jq -r .hint <<<"$output")" == *"as in meta --json --include api -r git status" ]]
+}
+
 @test "--help with --add-aliases-to-global-looprc only prints help" {
     run sh -c "printf 'y\ny\ny\n' | '$META_BIN' --add-aliases-to-global-looprc --help"
     [ "$status" -eq 0 ]

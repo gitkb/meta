@@ -53,6 +53,10 @@ pub struct LoopConfig {
     /// command by mistake
     #[serde(skip)]
     pub outer: Option<Outer>,
+    /// Warnings about the run, from whoever planned it: printed before the
+    /// commands run, or with `json_output` listed in the report
+    #[serde(skip)]
+    pub warnings: Vec<String>,
 }
 
 /// meta, running commands through loop: when every command fails because
@@ -139,6 +143,7 @@ impl Default for LoopConfig {
             aliases: BTreeMap::new(),
             root_dir: None,
             outer: None,
+            warnings: vec![],
         }
     }
 }
@@ -705,20 +710,27 @@ pub struct JsonOutput {
     pub success: bool,
     pub results: Vec<JsonCommandResult>,
     pub summary: JsonSummary,
+    /// What the human output warns of before the results
+    pub warnings: Vec<String>,
+    /// The tip the human output ends with (an option of meta's typed
+    /// after the command), if any
+    pub hint: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JsonCommandResult {
     pub directory: String,
+    /// The repo as the human output names it: its path from the workspace
+    /// root (`.` for the root, `./api`), which `--include` takes as is
+    pub path: String,
     pub command: String,
     pub success: bool,
     /// null when a signal ended the command: see `signal`
     pub exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<i32>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// What it wrote, `""` for nothing
     pub stdout: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub stderr: String,
 }
 
@@ -871,6 +883,12 @@ fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Co
 /// Execute a list of commands (each with its own directory) and report how
 /// they went. This is the execution engine for meta and its plugins.
 pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> {
+    // on stderr, unless the JSON report lists them
+    if !config.json_output || commands.is_empty() {
+        for warning in &config.warnings {
+            meta_core::out::warn(warning);
+        }
+    }
     if commands.is_empty() {
         return Ok(());
     }
@@ -905,9 +923,12 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
                 failed: failed_count,
                 dry_run: config.dry_run,
             },
+            warnings: config.warnings.clone(),
+            hint: tip.clone(),
             results: results
                 .into_iter()
                 .map(|r| JsonCommandResult {
+                    path: plain_display_name(&r.directory, config.root_dir.as_deref()),
                     directory: r.directory.display().to_string(),
                     command: r.command,
                     success: r.success,

@@ -553,6 +553,7 @@ fn execute_plan(
         let config = LoopConfig {
             verbose: options.verbose,
             silent: options.silent,
+            warnings: plan.warnings.clone(),
             parallel: plan.parallel.unwrap_or(options.parallel),
             dry_run: options.dry_run,
             json_output: options.json_output,

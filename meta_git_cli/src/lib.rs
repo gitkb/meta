@@ -232,14 +232,28 @@ fn execute_raw_git_command(
             meta_core::gitdir::Checkout::Missing
         )
     });
+    let mut warnings = Vec::new();
     for dir in &missing {
         let shown = Path::new(dir);
         let shown = meta_core::display::escape_path(shown.strip_prefix(cwd).unwrap_or(shown));
         let warning = format!("{shown} is not cloned; `meta git clone-missing` clones it");
-        if let Err(e) = meta_core::out::warn_or_bail(options.strict, warning) {
-            return CommandResult::Error(format!("{e:#}"));
+        if options.strict {
+            return CommandResult::Error(format!("{warning} (strict mode)"));
         }
+        // meta shows them, or lists them in its --json report
+        warnings.push(warning);
     }
+    let plan = |commands, parallel, max_parallel, spawn_stagger_ms| {
+        CommandResult::FullPlan(Box::new(ExecutionPlan {
+            pre_commands: vec![],
+            commands,
+            post_commands: vec![],
+            parallel: Some(parallel),
+            max_parallel,
+            spawn_stagger_ms,
+            warnings: warnings.clone(),
+        }))
+    };
 
     // The git argv: the command words (e.g. "git" or "git add") and the
     // user's args exactly as given
@@ -273,7 +287,7 @@ fn execute_raw_git_command(
 
         // HTTPS-only workspaces don't need SSH multiplexing
         if urls.is_empty() {
-            return CommandResult::Plan(commands, Some(true));
+            return plan(commands, true, None, None);
         }
 
         let (ssh_env, parallel_ok) = match ssh::establish_ssh_masters(&urls) {
@@ -306,20 +320,18 @@ fn execute_raw_git_command(
         const SSH_SPAWN_STAGGER_MS: u64 = 25;
 
         if parallel_ok {
-            CommandResult::FullPlan(ExecutionPlan {
-                pre_commands: vec![],
+            plan(
                 commands,
-                post_commands: vec![],
-                parallel: Some(true),
-                max_parallel: Some(SSH_MAX_SESSIONS),
-                spawn_stagger_ms: Some(SSH_SPAWN_STAGGER_MS),
-            })
+                true,
+                Some(SSH_MAX_SESSIONS),
+                Some(SSH_SPAWN_STAGGER_MS),
+            )
         } else {
             // SSH setup failed — fall back to sequential
-            CommandResult::Plan(commands, Some(false))
+            plan(commands, false, None, None)
         }
     } else {
-        CommandResult::Plan(commands, Some(options.parallel))
+        plan(commands, options.parallel, None, None)
     }
 }
 
@@ -386,8 +398,8 @@ mod tests {
         // Unknown git subcommands should fall through to raw git execution
         let options = PluginRequestOptions::default();
         let result = execute_command("git unknown", &[], &[], &options, Path::new("."));
-        // Should return a Plan (to run `git unknown` in all repos), not ShowHelp
-        assert!(matches!(result, CommandResult::Plan(_, _)));
+        // Should return a plan (to run `git unknown` in all repos), not ShowHelp
+        assert!(matches!(result, CommandResult::FullPlan(_)));
     }
 
     #[test]

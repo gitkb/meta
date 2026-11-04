@@ -186,6 +186,12 @@ pub struct ExecutionPlan {
     /// socket saturation. A value of 25ms with 13 repos spreads spawns over ~325ms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawn_stagger_ms: Option<u64>,
+
+    /// Warnings about the run (a project that isn't cloned): meta prints
+    /// them, or with `--json` lists them in its report's `warnings`. A host
+    /// older than this field doesn't show them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// A single command to be executed by the host via loop_lib.
@@ -216,7 +222,7 @@ pub enum CommandResult {
     /// A plan of commands to execute via loop_lib (simple form, no pre/post commands)
     Plan(Vec<PlannedCommand>, Option<bool>),
     /// A full execution plan with pre/post commands
-    FullPlan(ExecutionPlan),
+    FullPlan(Box<ExecutionPlan>),
     /// A message to display (no commands to execute)
     Message(String),
     /// An error occurred: the plugin exits 1 (the host escapes the message)
@@ -263,6 +269,7 @@ fn simple_plan(commands: Vec<PlannedCommand>, parallel: Option<bool>) -> PlanRes
             parallel,
             max_parallel: None,
             spawn_stagger_ms: None,
+            warnings: vec![],
         },
     }
 }
@@ -293,6 +300,7 @@ pub fn output_execution_plan_full(
         parallel,
         max_parallel,
         spawn_stagger_ms,
+        warnings: vec![],
     };
     end(emit_json(&PlanResponse { plan }));
 }
@@ -543,7 +551,7 @@ fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
     }
     match (plugin.execute)(request) {
         CommandResult::Plan(commands, parallel) => emit_json(&simple_plan(commands, parallel)),
-        CommandResult::FullPlan(plan) => emit_json(&PlanResponse { plan }),
+        CommandResult::FullPlan(plan) => emit_json(&PlanResponse { plan: *plan }),
         CommandResult::Message(msg) if msg.is_empty() => Ok(()),
         CommandResult::Message(msg) => emit(&format!("{msg}\n")),
         CommandResult::Error(e) => Err(anyhow::anyhow!(e)),

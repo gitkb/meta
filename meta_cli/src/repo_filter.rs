@@ -206,11 +206,16 @@ impl Scope {
             }
             let hits = if by_path.is_empty() { by_name } else { by_path };
             if hits.is_empty() {
+                let hint = if nested {
+                    ""
+                } else {
+                    " --recursive adds the repos of nested meta repos."
+                };
                 bail!(
                     "{flag} '{value}' names none of the repos this command runs in{read_from}. Use a \
                      repo's name from .meta.yaml or its path from the workspace root (`.` for the \
                      root), as `meta project list` shows it; in a worktree set, the same, from the \
-                     set's root. --recursive adds the repos of nested meta repos."
+                     set's root.{hint}"
                 );
             }
             Ok(hits.iter().map(|r| r.id.as_path()).collect())

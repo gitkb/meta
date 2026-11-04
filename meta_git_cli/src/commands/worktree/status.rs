@@ -19,7 +19,7 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
     let members = if args.recursive {
         meta_cli::worktree::discover_worktree_members_recursive(&wt_dir)?
     } else {
-        meta_cli::worktree::discover_worktree_members_nested(&wt_dir)?
+        meta_cli::worktree::discover_worktree_members(&wt_dir)?
     };
     anyhow::ensure!(
         !members.is_empty(),

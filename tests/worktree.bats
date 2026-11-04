@@ -1181,6 +1181,42 @@ EOF
     [[ "$output" == *'"alias": "vendor/nested-lib"'* ]]
 }
 
+@test "loop commands in a set reach its nested members" {
+    setup_nested_meta
+    echo "nested-lib/" > vendor/.gitignore
+    git -C vendor init --quiet --initial-branch=main
+    git -C vendor add .gitignore .meta.yaml
+    git -C vendor commit --quiet -m "vendor"
+    "$META_BIN" -r git worktree create nest --repo vendor --repo vendor/nested-lib
+    echo changed >> .worktrees/nest/vendor/nested-lib/README.md
+    cd .worktrees/nest
+    run "$META_BIN" git status -s
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"vendor/nested-lib"*"M README.md"* ]]
+    run "$META_BIN" git add -u
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git commit -m "nested change"
+    [ "$status" -eq 0 ]
+    [ "$(git -C vendor/nested-lib log -1 --format=%s)" = "nested change" ]
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree exec nest -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".worktrees/nest/vendor/nested-lib"* ]]
+    # the set is the scope: -r adds nothing, so no hint names it
+    cd .worktrees/nest
+    run "$META_BIN" -r --include nope git status
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--include 'nope' names none"* ]]
+    [[ "$output" != *"--recursive"* ]]
+    # a dirty nested member stops remove without --force, by name
+    echo again >> vendor/nested-lib/README.md
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree remove nest
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nested-lib"* ]]
+    [ -e .worktrees/nest/vendor/nested-lib/README.md ]
+}
+
 @test "worktree add with nested repo alias succeeds" {
     setup_nested_meta
 

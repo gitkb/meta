@@ -446,6 +446,9 @@ paths() { jq -r '[.results[].path] | join(" ")'; }
     # -r context names the first level as their config does, so depends_on holds
     run --separate-stderr "$META_BIN" -r --json context --no-status
     [ "$(jq -c '.dependencies' <<<"$output")" = '{"api":["infra"]}' ]
+    # -r in a cluster: the -A line has it as -A
+    run "$META_BIN" -rs --include frontend exec -- true
+    [[ "$output" == *"as in meta -As --include frontend exec -- true"* ]]
     # the plugins that find their repos themselves reach as far
     run "$META_BIN" -r project list
     [[ "$output" == *"tf"* ]]
@@ -470,6 +473,9 @@ paths() { jq -r '[.results[].path] | join(" ")'; }
     [ "$status" -ne 0 ]
     # at the root, -r and -A reach the same repos
     cd "$TEST_DIR"
+    # a nested project's depends_on names its siblings, by their paths here
+    run --separate-stderr "$META_BIN" -r --json context --no-status
+    [ "$(jq -c '.dependencies' <<<"$output")" = '{"platform/api":["platform/infra"]}' ]
     run --separate-stderr "$META_BIN" -r --json exec -- true
     r="$(paths <<<"$output")"
     run --separate-stderr "$META_BIN" -A --json exec -- true

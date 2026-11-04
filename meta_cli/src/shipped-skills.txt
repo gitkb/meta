@@ -198,3 +198,4 @@ meta-plugins/SKILL.md d5e929511221c7bf7ea97973f0c0129e166d1c1a
 meta-safety/SKILL.md f623e0f8dd6726658a64d6af4407f834f0112e9f
 meta-workspace/SKILL.md f8641664a853129144f895e91e21d96d38de4769
 meta-worktree/SKILL.md c679ba34983f3e1d448cd9a40f5ff749683efa48
+meta-worktree/SKILL.md 3e48d61a6f78f5023ff29055e355b14f780d70cb

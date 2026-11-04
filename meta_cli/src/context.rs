@@ -134,18 +134,34 @@ pub fn handle_context(
 
 /// The projects of `nodes`, nested ones after their parent, each at its
 /// path from the root (under `prefix`); a nested one is named by that path
-/// too, one of the `first` level by its name, as its config's depends_on
-/// names it.
+/// too, one of the `first` level by its name. A depends_on naming a project
+/// of the same config names it as it is called here.
 fn flatten(nodes: &[config::MetaTreeNode], prefix: &str, first: bool, out: &mut Vec<ProjectInfo>) {
+    let called = |node: &config::MetaTreeNode| match first {
+        true => node.info.name.clone(),
+        false => config::nested_path(prefix, &node.info.path),
+    };
+    let siblings: HashMap<&str, String> = nodes
+        .iter()
+        .map(|node| (node.info.name.as_str(), called(node)))
+        .collect();
     for node in nodes {
         let path = config::nested_path(prefix, &node.info.path);
-        let name = match first {
-            true => node.info.name.clone(),
-            false => path.clone(),
-        };
+        let depends_on = node
+            .info
+            .depends_on
+            .iter()
+            .map(|dep| {
+                siblings
+                    .get(dep.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| dep.clone())
+            })
+            .collect();
         out.push(ProjectInfo {
-            name,
+            name: called(node),
             path: path.clone(),
+            depends_on,
             ..node.info.clone()
         });
         flatten(&node.children, &path, false, out);

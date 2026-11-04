@@ -1182,6 +1182,7 @@ EOF
 }
 
 @test "loop commands in a set reach its nested members" {
+    bats_require_minimum_version 1.5.0
     setup_nested_meta
     echo "nested-lib/" > vendor/.gitignore
     git -C vendor init --quiet --initial-branch=main
@@ -1206,8 +1207,14 @@ EOF
     run "$META_BIN" --include vendor/nested-lib git worktree exec nest -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"1 commands complete"* ]]
-    # the set is the scope: -r adds nothing, so no hint names it
+    # the set is the scope: -r adds nothing, so no hint names it; -A is the
+    # whole set, not the workspace around it
     cd .worktrees/nest
+    # (the set's own .meta.yaml, from before vendor was added to the
+    # workspace's, which -A would show from the workspace)
+    run --separate-stderr "$META_BIN" -A --json context --no-status
+    [ "$(jq -r .name <<<"$output")" = nest ]
+    [[ "$(jq -r '[.repos[].path] | join(" ")' <<<"$output")" != *"vendor"* ]]
     run "$META_BIN" -r --include nope git status
     [ "$status" -ne 0 ]
     [[ "$output" == *"--include 'nope' names none"* ]]

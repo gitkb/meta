@@ -207,7 +207,7 @@ meta --json exec -- git rev-parse HEAD
 }
 ```
 
-`path` is the repo as the human output names it, from the workspace root (`.` for the root), and `--include` takes it as is. `stdout` and `stderr` are always there, `""` for no output. `warnings` lists what the human output warns of (a project that isn't cloned); `hint` is the tip it ends with (an option of meta's typed after the command), or `null`. A command a signal ended has `"exit_code": null` and the signal's number in
+`path` is the repo as the human output names it, from the nearest workspace (with `-r` or `-A`, from the workspace root; `.` for that root), and `--include` takes it as is. `stdout` and `stderr` are always there, `""` for no output. `warnings` lists what the human output warns of (a project that isn't cloned); `hint` is the tip it ends with (an option of meta's typed after the command), or `null`. A command a signal ended has `"exit_code": null` and the signal's number in
 `"signal"` (`9` for `SIGKILL`); `signal` is left out otherwise.
 
 With `--json`, a command with a JSON result prints only JSON on stdout: one document, or the documents a plugin writes (help and `meta init claude` have no JSON form). A command line that can't be parsed is one JSON document on stdout too (`{"success": false, "error": "…"}`, exit 2) when `--json` is among meta's options before the command, its error carrying the line to run; without, it is text on stderr. After that, an error before any output is `{"success": false, "error": "…"}` (an unknown command exits 2, other errors 1); one after a report was printed goes to stderr, so the report stays the only document. A plugin's output that isn't JSON comes as `{"success": …, "output": "…"}`, and a plugin that fails without printing anything leaves `{"success": false, "error": "plugin … failed"}`. Warnings go into a loop report's `warnings` (and to stderr when nothing ran); `--verbose` lines go to stderr.
@@ -285,7 +285,7 @@ meta --strict git worktree list
 
 An explicit name overrides the enclosing set. Every repository of the set is
 listed, those nested beneath other repositories of the set (`clients/desktop`
-inside `clients`) too, so `-r` changes nothing here and is refused, before or
+inside `clients`) too, so `-r` and `-A` change nothing here and are refused, before or
 after the command. meta's `--strict` fails on a folder that can't be scanned,
 a checkout whose git files are broken, or a repository git can't read, instead
 of skipping it or marking it unknown.

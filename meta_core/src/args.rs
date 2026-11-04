@@ -241,7 +241,12 @@ impl MetaOptions {
                 (false, Some(next)) if !next.starts_with('-') => return Some(rule),
                 (false, _) => 1,
             };
-            moved.extend(rest.iter().skip(at).take(taken).cloned());
+            // a flag already before the command is said once
+            let said = |w: &String| option.spellings.contains(&spelling(w));
+            let again = !option.takes_value && self.typed.iter().chain(&moved).any(said);
+            if !again {
+                moved.extend(rest.iter().skip(at).take(taken).cloned());
+            }
             rest = rest
                 .iter()
                 .take(at)

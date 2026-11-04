@@ -460,10 +460,7 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
                     .parent()
                     .unwrap_or(std::path::Path::new("."))
                     .to_path_buf();
-                match config::find_root_meta_dir(&nearest_meta_dir) {
-                    Ok(root) => root,
-                    Err(e) => return CommandResult::from(e),
-                }
+                config::listed_root(&nearest_meta_dir)
             }
             Err(e) => return CommandResult::from(e),
             Ok(None) => {

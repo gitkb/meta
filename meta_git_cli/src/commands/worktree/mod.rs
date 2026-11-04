@@ -68,7 +68,12 @@ pub fn execute_worktree_command(
     // list and status always show nested repos: -r would only have been the
     // strict scan, which is --strict's
     if let Some(list @ ("list" | "status")) = subcommand {
-        let typed = |a: &String| ["-r", "--recursive", "-A", "--all"].contains(&a.as_str());
+        // in a cluster too (`-rv`): list and status take no short options
+        let typed = |a: &String| {
+            ["--recursive", "--all"].contains(&a.as_str())
+                || a.strip_prefix('-')
+                    .is_some_and(|s| !s.starts_with('-') && (s.contains('r') || s.contains('A')))
+        };
         if options.recursive || options.all || clap_args.iter().any(typed) {
             return CommandResult::Usage(format!(
                 "worktree {list} always shows nested repos; -r and -A change nothing here. For \
@@ -77,22 +82,27 @@ pub fn execute_worktree_command(
         }
     }
     // create's and exec's own --all became --every-repo: meta's --all
-    // (-A) before the command is the whole workspace, not every repo here
+    // (-A) before the command is the whole workspace, not every repo here;
+    // with no --repo, it is the old --all that was meant
     let words = || clap_args.iter().take_while(|a| *a != "--");
-    if matches!(subcommand, Some("create" | "exec")) && words().any(|a| a == "--all") {
+    let all = |a: &String| a == "--all" || a == "-A";
+    if matches!(subcommand, Some("create" | "exec"))
+        && words().any(all)
+        && !words().any(|a| a == "--repo" || a.starts_with("--repo="))
+    {
         let line: Vec<String> = std::iter::once("meta".to_string())
             .chain(options.meta_options.typed.iter().cloned())
             .chain(["git".to_string(), "worktree".to_string()])
             .chain(clap_args.iter().enumerate().map(|(i, a)| {
                 let before = clap_args.iter().take(i).all(|w| w != "--");
-                match before && a == "--all" {
+                match before && all(a) {
                     true => "--every-repo".to_string(),
                     false => a.clone(),
                 }
             }))
             .collect();
         return CommandResult::Usage(format!(
-            "--all is meta's own option (-A, the whole workspace) and goes before the command; \
+            "-A (--all) is meta's own option, the whole workspace, and goes before the command; \
              every repo meta reaches is --every-repo, as in {}",
             escape(&meta_core::display::display_command(&line))
         ));

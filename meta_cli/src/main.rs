@@ -845,18 +845,40 @@ fn target(cli: &Cli, start: &Path) -> Result<Target> {
 }
 
 /// The line as typed with meta's `-r` in it as `-A`, which reaches the
-/// whole workspace.
+/// whole workspace (in a cluster too: `-rv` as `-Av`).
 fn with_all() -> String {
     let args: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    let typed = meta_options().typed.len();
+    let meta = meta_options();
+    let valued = |c: char| {
+        let short = format!("-{c}");
+        meta.options
+            .iter()
+            .any(|o| o.takes_value && o.spellings.contains(&short))
+    };
+    // the r of a cluster, up to its first short option that takes a value
+    let cluster = |shorts: &str| -> String {
+        let mut seen_value = false;
+        let swapped: String = shorts
+            .chars()
+            .map(|c| {
+                seen_value |= valued(c);
+                match c == 'r' && !seen_value {
+                    true => 'A',
+                    false => c,
+                }
+            })
+            .collect();
+        format!("-{swapped}")
+    };
     let line: Vec<String> = std::iter::once("meta".to_string())
         .chain(args.iter().enumerate().map(|(i, arg)| {
-            match i < typed && (arg == "-r" || arg == "--recursive") {
-                true => "-A".to_string(),
-                false => arg.clone(),
+            match (i < meta.typed.len(), arg.strip_prefix('-')) {
+                (true, _) if arg == "--recursive" => "-A".to_string(),
+                (true, Some(shorts)) if !shorts.starts_with('-') => cluster(shorts),
+                _ => arg.clone(),
             }
         }))
         .collect();

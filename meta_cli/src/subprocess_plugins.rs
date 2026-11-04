@@ -537,16 +537,9 @@ fn execute_plan(
         }
     }
 
-    // A plan with nothing to run still says why (every repo it would run
-    // in isn't cloned, say)
-    if plan.commands.is_empty() {
-        for warning in &plan.warnings {
-            meta_core::out::warn(warning);
-        }
-    }
-
-    // Phase 2: Run main commands (may be parallel)
-    if !plan.commands.is_empty() {
+    // Phase 2: Run main commands (may be parallel); with none, the report
+    // still says why (every repo it would run in isn't cloned, say)
+    {
         let commands: Vec<DirCommand> = plan.commands.iter().map(job).collect();
         // only in the selected projects that are repositories
         let projects: Vec<PathBuf> = projects.iter().map(PathBuf::from).collect();

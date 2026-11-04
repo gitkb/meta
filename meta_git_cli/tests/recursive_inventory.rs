@@ -95,6 +95,8 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
         );
     }
     fs::write(set.join("open-source/atc/untracked.txt"), "dirty").unwrap();
+    // a repo nested in a member is one of its .meta.yaml's projects
+    fs::write(set.join("open-source/.meta.yaml"), "projects:\n  atc: u\n").unwrap();
     for command in ["list", "status"] {
         for (recursive, explicit) in [(false, false), (true, false), (false, true), (true, true)] {
             let out = request(&sandbox, root, command, recursive, explicit);

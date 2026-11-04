@@ -506,7 +506,7 @@ meta --json exec -- git rev-parse HEAD
 meta --json project list
 ```
 
-A command run in each repo reports `{"success", "results", "summary", "warnings", "hint"}`. Each result names its repo by `path`, its path from the workspace root as the human output shows it (`.` for the root, `./api`), which `--include` takes as is (`./` makes it a path only; a bare value also matches project names); `stdout` and `stderr` are always there, `""` for no output. `warnings` lists what the human output warns of (a project that isn't cloned), and `hint` is the tip it ends with (an option of meta's typed after the command), or `null`. See [Advanced Usage](docs/advanced_usage.md#json-output-mode) for the format.
+A command run in each repo reports `{"success", "results", "summary", "warnings", "hint"}`. Each result names its repo by `path`, as the human output shows it: its path from the nearest workspace, or with `-r` or `-A` from the workspace root (`.` for that root, `./api`), which `--include` takes as is (`./` makes it a path only; a bare value also matches project names); `stdout` and `stderr` are always there, `""` for no output. `warnings` lists what the human output warns of (a project that isn't cloned), and `hint` is the tip it ends with (an option of meta's typed after the command), or `null`. See [Advanced Usage](docs/advanced_usage.md#json-output-mode) for the format.
 
 ---
 

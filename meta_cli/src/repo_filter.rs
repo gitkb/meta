@@ -97,7 +97,7 @@ impl Reach {
     ) -> Result<Self> {
         let workspace = if all { workspace.root()? } else { workspace };
         let root = match recursive && !all {
-            true => config::find_root_meta_dir(&workspace.dir)?,
+            true => config::listed_root(&workspace.dir),
             false => workspace.dir.clone(),
         };
         let tree = match recursive || all {

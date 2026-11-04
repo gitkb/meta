@@ -144,7 +144,7 @@ meta git worktree diff auth-fix --stat        # the summary only
 ```
 
 `list` and `status` show every repo of the set, those nested beneath other
-worktree repos too (`-r` changes nothing there and is refused);
+worktree repos too (`-r` and `-A` change nothing there and are refused);
 `meta --strict git worktree list` fails on what it can't read instead of
 skipping it.
 
@@ -178,7 +178,7 @@ meta --tag cli exec -- pwd
 
 Detection relies on the `.worktrees/<name>` path. Every repo of the set is in
 scope, those nested inside another repo of the set (e.g. `open-source/sdk/core`
-inside `open-source`) too, as `list` shows them; `-r` adds nothing inside a
+inside `open-source`) too, as `list` shows them; `-r` and `-A` add nothing inside a
 set. The root repo is part of a set
 by default, so the set has its own `.meta.yaml` config; otherwise meta walks up to
 the primary checkout's config. `meta --primary <command>` bypasses detection and acts on the

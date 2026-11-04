@@ -110,8 +110,23 @@ impl Outer {
             .filter(|spelling| results.iter().all(|r| rejected(spelling, r)))
             .find_map(|spelling| typed(spelling))?;
         let command: Vec<String> = self.before.iter().chain(argv).cloned().collect();
-        // the commands' programs can't be asked whether the line would do
-        self.meta.tip(&command, word, &|_, _| Ok(()))
+        // the commands' programs can't be asked whether the line would do:
+        // none is given while another long option of meta's stays after the
+        // command (git names only the first word it rejects)
+        let ours = |word: &String| {
+            let spelling = word.split('=').next().unwrap_or(word);
+            spelling.starts_with("--")
+                && self
+                    .meta
+                    .options
+                    .iter()
+                    .any(|o| o.spellings.iter().any(|s| s == spelling))
+        };
+        let check = |_: &[String], rest: &[String]| match rest.iter().any(ours) {
+            true => Err(None),
+            false => Ok(()),
+        };
+        self.meta.tip(&command, word, &check)
     }
 }
 
@@ -724,7 +739,9 @@ pub struct JsonOutput {
 pub struct JsonCommandResult {
     pub directory: String,
     /// The repo as the human output names it: its path from the workspace
-    /// root (`.` for the root, `./api`), which `--include` takes as is
+    /// (from its root with -r or -A; `.` for the root, `./api`), which
+    /// `--include` takes as is (an older meta left it out)
+    #[serde(default)]
     pub path: String,
     pub command: String,
     pub success: bool,
@@ -889,12 +906,12 @@ fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Co
 /// they went. This is the execution engine for meta and its plugins.
 pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> {
     // on stderr, unless the JSON report lists them
-    if !config.json_output || commands.is_empty() {
+    if !config.json_output {
         for warning in &config.warnings {
             meta_core::out::warn(warning);
         }
     }
-    if commands.is_empty() {
+    if commands.is_empty() && !config.json_output {
         return Ok(());
     }
     let results = if config.parallel {

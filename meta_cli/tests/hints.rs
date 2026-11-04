@@ -191,6 +191,11 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
             &["project", "list", "--json", "-r"],
             &["--json", "-r", "project", "list"],
         ),
+        // typed before it too: said once
+        (
+            &["--verbose", "project", "list", "--verbose"],
+            &["--verbose", "project", "list"],
+        ),
         (
             &["project", "check", "--include", "api"],
             &["--include", "api", "project", "check"],
@@ -360,6 +365,7 @@ fn meta_owned_commands_take_no_copy_of_meta_options() {
         &["--recursive", "git", "worktree", "status", "t"],
         &["git", "worktree", "list", "--all"],
         &["-A", "git", "worktree", "list"],
+        &["git", "worktree", "list", "-rv"],
     ] {
         let out = workspace.meta(typed);
         assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
@@ -369,7 +375,15 @@ fn meta_owned_commands_take_no_copy_of_meta_options() {
             text(&out)
         );
     }
-    // create's own --all became --every-repo
+    // create's own --all became --every-repo; so did -A typed after it
+    // with no --repo
+    let out = workspace.meta(&["git", "worktree", "create", "e", "-A"]);
+    assert_eq!(
+        tip_line(&out),
+        ["git", "worktree", "create", "e", "--every-repo"],
+        "{}",
+        text(&out)
+    );
     let out = workspace.meta(&["git", "worktree", "create", "e", "--all"]);
     assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     assert_eq!(

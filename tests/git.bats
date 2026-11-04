@@ -690,6 +690,13 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     run "$META_BIN" git log --json
     [ "$status" -ne 0 ]
     [[ "$output" == *"tip: --json is an option of meta itself: it goes before the command, as in meta --json git log"* ]]
+    # with another of meta's left after it, no line: git names only one
+    run "$META_BIN" git status --recursive --json
+    [[ "$output" == *"tip: --recursive is an option of meta itself: it goes before the command"* ]]
+    [[ "$output" != *"as in meta"* ]]
+    # typed before too: said once
+    run sh -c '"$1" --json git status --json 2>/dev/null' _ "$META_BIN"
+    [[ "$(jq -r .hint <<<"$output")" == *"as in meta --json git status" ]]
     # -s is meta's and git's: git rejected the other one
     run "$META_BIN" git status -s --no-such-option
     [ "$status" -eq 1 ]
@@ -715,10 +722,14 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     [ "$(head_of frontend)" = "$(head_of remotes/frontend.git)" ]
     run "$META_BIN" --strict git status
     [ "$status" -ne 0 ]
-    # with nothing left to run, the warning still says why
+    # with nothing left to run, the warning still says why, and --json is
+    # still one document
     run "$META_BIN" --include shared git status
     [ "$status" -eq 0 ]
     [[ "$output" == *"warning: shared is not cloned"* ]]
+    run sh -c '"$1" --json --include shared git status 2>/dev/null' _ "$META_BIN"
+    [[ "$(jq -r '.warnings[0]' <<<"$output")" == "shared is not cloned"* ]]
+    [ "$(jq '.results | length' <<<"$output")" -eq 0 ]
     run "$META_BIN" exec -- git status
     [ "$status" -eq 1 ]
     [[ "$output" == *"not cloned (run 'meta git clone-missing')"* ]]

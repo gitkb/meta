@@ -75,6 +75,8 @@ pub(crate) fn handle_create(
         true => Configs::of(configs.here.root()?)?,
         false => configs,
     };
+    // with -r or -A, meta names repos by their path from here
+    let root = meta_core::config::listed_root(&configs.here.dir);
     let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
 
     // Check if worktree already exists
@@ -129,7 +131,11 @@ pub(crate) fn handle_create(
                 )?;
                 return Ok(None);
             }
-            anyhow::ensure!(rounds < 16, "{}", not_cloned_error(&parents, recursive));
+            anyhow::ensure!(
+                rounds < 16,
+                "{}",
+                not_cloned_error(&parents, recursive.then(|| root.clone()))
+            );
             clone_missing(&index, &parents)?;
             rounds += 1;
             index = index_of()?;
@@ -153,7 +159,12 @@ pub(crate) fn handle_create(
         anyhow::ensure!(
             rounds < 16,
             "{}",
-            not_cloned_error(&planned.missing, index.tree().is_some())
+            not_cloned_error(
+                &planned.missing,
+                index
+                    .tree()
+                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
+            )
         );
         clone_missing(&index, &planned.missing)?;
         rounds += 1;
@@ -884,7 +895,15 @@ fn plan_repos(
     }
     if !not_cloned.is_empty() {
         not_cloned.extend(missing);
-        anyhow::bail!("{}", not_cloned_error(&not_cloned, index.tree().is_some()));
+        anyhow::bail!(
+            "{}",
+            not_cloned_error(
+                &not_cloned,
+                index
+                    .tree()
+                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
+            )
+        );
     }
     repos.sort_by(|a, b| {
         let order = |r: &PlannedRepo| (r.place != ".", r.place.split('/').count());
@@ -1021,11 +1040,21 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
         }
         Ok(_) => anyhow::bail!(
             "{}\n(cloning cloned none of them)",
-            not_cloned_error(&still, index.tree().is_some())
+            not_cloned_error(
+                &still,
+                index
+                    .tree()
+                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
+            )
         ),
         Err(why) => anyhow::bail!(
             "{}\nCloning failed: {}",
-            not_cloned_error(&still, index.tree().is_some()),
+            not_cloned_error(
+                &still,
+                index
+                    .tree()
+                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
+            ),
             why
         ),
     }
@@ -1035,7 +1064,7 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
 /// because they aren't cloned, with the command that clones exactly the
 /// missing ones (`recursive`: places are of the whole tree, so the command
 /// needs -r).
-fn not_cloned_error(repos: &[PlannedRepo], recursive: bool) -> String {
+fn not_cloned_error(repos: &[PlannedRepo], root: Option<std::path::PathBuf>) -> String {
     use meta_core::gitdir::Checkout;
     let mut message = format!(
         "{} the set needs can't be used; no worktree was created:",
@@ -1049,7 +1078,16 @@ fn not_cloned_error(repos: &[PlannedRepo], recursive: bool) -> String {
     for repo in repos {
         let why = match Checkout::of(&repo.source) {
             Checkout::Missing => {
-                missing.push(repo.place.as_str());
+                // with -A, from anywhere, by its path from the root
+                missing.push(
+                    match root
+                        .as_deref()
+                        .and_then(|root| repo.source.strip_prefix(root).ok())
+                    {
+                        Some(path) => path.to_string_lossy().into_owned(),
+                        None => repo.place.clone(),
+                    },
+                );
                 "not cloned".to_string()
             }
             checkout => {
@@ -1079,7 +1117,7 @@ fn not_cloned_error(repos: &[PlannedRepo], recursive: bool) -> String {
         let include = meta_core::display::shell_quote(&missing.join(","));
         message.push_str(&format!(
             "\nTo clone just the missing ones, then run this create again:\n  meta {}--include {} git clone-missing",
-            if recursive { "-r " } else { "" },
+            if root.is_some() { "-A " } else { "" },
             escape(&include)
         ));
     }

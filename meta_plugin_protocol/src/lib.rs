@@ -473,7 +473,14 @@ pub fn parse_args<P: clap::Parser>(
                     .map(str::to_string)
                     .chain(args.iter().cloned())
                     .collect();
-                if let Some(tip) = meta.rejected(&e, &typed) {
+                let words = command.split_whitespace().count();
+                let check = |_: &[String], rest: &[String]| {
+                    let args = rest.iter().skip(words).map(String::as_str);
+                    meta_core::args::verdict(P::try_parse_from(
+                        std::iter::once(name.as_str()).chain(args),
+                    ))
+                };
+                if let Some(tip) = meta.rejected(&e, &typed, &check) {
                     escaped.insert(
                         ContextKind::Suggested,
                         ContextValue::StyledStrs(vec![tip.into()]),

@@ -53,7 +53,15 @@ pub fn parse<P: clap::Parser>() -> anyhow::Result<P> {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
     let meta = MetaOptions::of(&P::command(), &args);
-    if let Some(tip) = meta.rejected(&e, args.get(meta.typed.len()..).unwrap_or_default()) {
+    let check = |moved: &[String], rest: &[String]| {
+        let line = std::iter::once("meta")
+            .chain(meta.typed.iter().map(String::as_str))
+            .chain(moved.iter().map(String::as_str))
+            .chain(rest.iter().map(String::as_str));
+        verdict(P::try_parse_from(line))
+    };
+    let command = args.get(meta.typed.len()..).unwrap_or_default();
+    if let Some(tip) = meta.rejected(&e, command, &check) {
         e.insert(
             ContextKind::Suggested,
             ContextValue::StyledStrs(vec![tip.into()]),
@@ -119,18 +127,50 @@ impl MetaOptions {
                 refused: false,
             })
             .collect();
+        let find = |spelling: &str| {
+            options
+                .iter()
+                .find(|o| o.spellings.iter().any(|s| s == spelling))
+        };
         let mut typed = Vec::new();
         let mut words = args.iter();
         while let Some(word) = words.next() {
-            let spelling = word.split('=').next().unwrap_or(word);
-            let Some(option) = options
-                .iter()
-                .find(|o| o.spellings.iter().any(|s| s == spelling))
-            else {
-                break;
+            // `--include=api`, `-i api`, and a cluster of short ones (`-rv`,
+            // `-iapi`: a value-taking one ends it, the rest its value)
+            let value_follows = match word.strip_prefix('-') {
+                Some(long) if long.starts_with('-') => {
+                    match find(word.split('=').next().unwrap_or(word)) {
+                        Some(option) => option.takes_value && !word.contains('='),
+                        None => break,
+                    }
+                }
+                Some(shorts) if !shorts.is_empty() => {
+                    // each a short option of meta's; one that takes a value
+                    // takes the rest of the word, or the next word
+                    let mut value_follows = false;
+                    let mut known = true;
+                    for (at, short) in shorts.char_indices() {
+                        match find(&format!("-{short}")) {
+                            Some(option) if option.takes_value => {
+                                value_follows = at + short.len_utf8() == shorts.len();
+                                break;
+                            }
+                            Some(_) => {}
+                            None => {
+                                known = false;
+                                break;
+                            }
+                        }
+                    }
+                    if !known {
+                        break;
+                    }
+                    value_follows
+                }
+                _ => break,
             };
             typed.push(word.clone());
-            if option.takes_value && !word.contains('=') {
+            if value_follows {
                 typed.extend(words.next().cloned());
             }
         }
@@ -149,59 +189,109 @@ impl MetaOptions {
 
     /// The tip for clap's `error` about `command` (the words from the
     /// command word on, as typed): see [`Self::tip`].
-    pub fn rejected(&self, error: &clap::Error, command: &[String]) -> Option<String> {
-        use clap::error::{ContextKind, ContextValue, ErrorKind};
-        if error.kind() != ErrorKind::UnknownArgument {
-            return None;
-        }
-        match error.get(ContextKind::InvalidArg) {
-            Some(ContextValue::String(arg)) => self.tip(command, arg),
-            _ => None,
-        }
+    pub fn rejected(
+        &self,
+        error: &clap::Error,
+        command: &[String],
+        check: Check,
+    ) -> Option<String> {
+        self.tip(command, &rejected_word(error)?, check)
     }
 
     /// The tip for `rejected`, a word that `command` (the words from the
     /// command word on, as typed) refused, when it is one of meta's options:
     /// it goes before the command, as in the line typed with it (and its
-    /// value) moved there. A line that would fail again is never shown: none
-    /// for an option the command never takes, and none that moves an option
-    /// taking no value away from the word typed right after it
-    /// (`--parallel 8`); the rule alone is.
-    pub fn tip(&self, command: &[String], rejected: &str) -> Option<String> {
-        let spelling = rejected.split('=').next().unwrap_or(rejected);
-        let option = self
-            .options
-            .iter()
-            .find(|o| o.spellings.iter().any(|s| s == spelling))?;
-        if option.refused {
+    /// value) moved there, and with each other option of meta's that `check`
+    /// then finds rejected moved too. A line that would fail again is never
+    /// shown: none for an option the command never takes, none that moves an
+    /// option taking no value away from the word typed right after it
+    /// (`--parallel 8`), and none that `check` rejects for anything else; the
+    /// rule alone is.
+    pub fn tip(&self, command: &[String], rejected: &str, check: Check) -> Option<String> {
+        let spelling = |word: &str| word.split('=').next().unwrap_or(word).to_string();
+        let find = |spelling: &str| {
+            self.options
+                .iter()
+                .find(|o| o.spellings.iter().any(|s| s == spelling))
+        };
+        let first = spelling(rejected);
+        if find(&first)?.refused {
             return Some(format!(
-                "{spelling} is an option of meta itself, and this command doesn't take it"
+                "{first} is an option of meta itself, and this command doesn't take it"
             ));
         }
-        let rule = format!("{spelling} is an option of meta itself: it goes before the command");
-        let at = command.iter().position(|word| {
-            word == rejected || rejected == spelling && word.starts_with(&format!("{spelling}="))
-        });
-        let Some((at, word)) = at.and_then(|at| Some((at, command.get(at)?))) else {
-            return Some(rule);
-        };
-        let next = command.get(at + 1);
-        let moved = match (option.takes_value && !word.contains('='), next) {
-            (true, Some(_)) => 2,
-            (true, None) => return Some(rule),
-            (false, Some(next)) if !next.starts_with('-') => return Some(rule),
-            (false, _) => 1,
-        };
-        let line: Vec<String> = std::iter::once("meta".to_string())
-            .chain(self.typed.iter().cloned())
-            .chain(command.iter().skip(at).take(moved).cloned())
-            .chain(command.iter().take(at).cloned())
-            .chain(command.iter().skip(at + moved).cloned())
-            .collect();
-        Some(format!(
-            "{rule}, as in {}",
-            escape(&crate::display::display_command(&line))
-        ))
+        let rule = format!("{first} is an option of meta itself: it goes before the command");
+        let mut rest = command.to_vec();
+        let mut moved: Vec<String> = Vec::new();
+        let mut rejected = rejected.to_string();
+        for _ in 0..command.len() {
+            let name = spelling(&rejected);
+            let Some(option) = find(&name).filter(|o| !o.refused) else {
+                return Some(rule);
+            };
+            let at = rest.iter().position(|word| {
+                *word == rejected || rejected == name && word.starts_with(&format!("{name}="))
+            });
+            let Some((at, word)) = at.and_then(|at| Some((at, rest.get(at)?))) else {
+                return Some(rule);
+            };
+            let taken = match (option.takes_value && !word.contains('='), rest.get(at + 1)) {
+                (true, Some(_)) => 2,
+                (true, None) => return Some(rule),
+                (false, Some(next)) if !next.starts_with('-') => return Some(rule),
+                (false, _) => 1,
+            };
+            moved.extend(rest.iter().skip(at).take(taken).cloned());
+            rest = rest
+                .iter()
+                .take(at)
+                .chain(rest.iter().skip(at + taken))
+                .cloned()
+                .collect();
+            match check(&moved, &rest) {
+                Ok(()) => {
+                    let line: Vec<String> = std::iter::once("meta".to_string())
+                        .chain(self.typed.iter().cloned())
+                        .chain(moved)
+                        .chain(rest)
+                        .collect();
+                    return Some(format!(
+                        "{rule}, as in {}",
+                        escape(&crate::display::display_command(&line))
+                    ));
+                }
+                Err(Some(next)) => rejected = next,
+                Err(None) => return Some(rule),
+            }
+        }
+        Some(rule)
+    }
+}
+
+/// Whether a corrected line parses, given meta's options moved before the
+/// command and the command's words left: `Ok`, the word the command
+/// rejects (`Err(Some)`), or another error (`Err(None)`).
+pub type Check<'a> = &'a dyn Fn(&[String], &[String]) -> Result<(), Option<String>>;
+
+/// `parsed`, a parse of a corrected line, as a [`Check`] answers.
+pub fn verdict<T>(parsed: Result<T, clap::Error>) -> Result<(), Option<String>> {
+    use clap::error::ErrorKind;
+    match parsed {
+        Ok(_) => Ok(()),
+        Err(e) if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => Ok(()),
+        Err(e) => Err(rejected_word(&e)),
+    }
+}
+
+/// The word clap's `error` says it doesn't know, if that is its error.
+fn rejected_word(error: &clap::Error) -> Option<String> {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+    if error.kind() != ErrorKind::UnknownArgument {
+        return None;
+    }
+    match error.get(ContextKind::InvalidArg) {
+        Some(ContextValue::String(arg)) => Some(arg.clone()),
+        _ => None,
     }
 }
 

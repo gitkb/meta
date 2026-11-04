@@ -487,10 +487,12 @@ fn discover_repos_recursive(
             .map(|m| m.is_file())
             .unwrap_or(false)
         {
-            discover_repos_recursive(root, &sub_path, scanned, true, repos)?;
+            // inside a member, only a linked worktree counts, and only one
+            // that counts is looked into (not a submodule's own worktrees)
             if in_checkout && gitdir::linked(&sub_path).is_err() {
                 continue;
             }
+            discover_repos_recursive(root, &sub_path, scanned, true, repos)?;
             if !scanned.member(root, &sub_path)? {
                 continue;
             }

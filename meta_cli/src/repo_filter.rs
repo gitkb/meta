@@ -82,6 +82,8 @@ pub struct Reach {
     /// The nested meta repos under `workspace`, `depth` levels of them
     /// (`-r`, `-A`); empty without
     pub tree: Vec<MetaTreeNode>,
+    /// `--depth`, as given
+    depth: Option<usize>,
 }
 
 impl Reach {
@@ -106,6 +108,7 @@ impl Reach {
             workspace,
             root,
             tree,
+            depth,
         })
     }
 
@@ -122,8 +125,8 @@ impl Reach {
     }
 
     /// The repos of it `filters` select. One that names a repo outside
-    /// where `-r` starts, but in the whole graph, says that `-A` reaches it,
-    /// as in `with_a` (the line to run).
+    /// where `-r` starts, but that `-A` (with the same `--depth`) reaches,
+    /// says so, as in `with_a` (the line to run).
     pub fn select(
         &self,
         filters: &Filters,
@@ -137,10 +140,12 @@ impl Reach {
             return Err(e);
         }
         let whole = Workspace::in_dir(&self.root)?
-            .map(|root| Reach::of(root, false, true, None))
+            .map(|root| Reach::of(root, false, true, self.depth))
             .transpose()?;
+        let outside =
+            |dirs: &Vec<PathBuf>| dirs.iter().any(|d| !d.starts_with(&self.workspace.dir));
         match whole.map(|whole| whole.scope().select(filters)) {
-            Some(Ok(_)) => bail!(
+            Some(Ok(dirs)) if outside(&dirs) => bail!(
                 "{e:#}\nThat names a repo outside {}, where -r starts; -A reaches the whole \
                  workspace, as in {}",
                 escape(&repo_path(&self.workspace.dir, &self.root)),

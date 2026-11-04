@@ -159,10 +159,10 @@ struct CheckArgs {}
 Examples:
   meta project dependents meta_core
   meta --json project dependents auth
-  meta -r project dependents auth
+  meta -A project dependents auth
 
-meta's -r looks in the root workspace of nested meta repos; --json emits the dependent project \
-records."
+meta's -r also looks in the meta repos nested under the nearest .meta.yaml, -A in the whole \
+workspace from its root; --json emits the dependent project records."
 )]
 struct DependentsArgs {
     /// Project name or provided capability to search for
@@ -198,13 +198,7 @@ pub fn execute_command(
         }
         "project dependents" => {
             match parse_args::<DependentsArgs>(command, args, &meta.refusing(&FILTERS)) {
-                Ok(dependents) => handle_project_dependents(
-                    &dependents.project,
-                    options.json_output,
-                    options.recursive,
-                    options.all,
-                    cwd,
-                ),
+                Ok(dependents) => handle_project_dependents(&dependents.project, options, cwd),
                 Err(result) => result,
             }
         }
@@ -646,12 +640,11 @@ fn format_project_tree(nodes: &[ProjectTreeNode], output: &mut String, prefix: &
 /// matching the project's name or any of its `provides` entries).
 fn handle_project_dependents(
     project_name: &str,
-    json: bool,
-    recursive: bool,
-    all: bool,
+    options: &ExecuteOptions,
     cwd: &Path,
 ) -> CommandResult {
-    match dependents(project_name, recursive, all, cwd) {
+    let json = options.json_output;
+    match dependents(project_name, options, cwd) {
         Err(e) => CommandResult::from(e),
         Ok(dependents) if json => match serde_json::to_string(&dependents) {
             Ok(json) => CommandResult::Message(json),
@@ -669,15 +662,15 @@ fn handle_project_dependents(
 
 /// The projects that depend directly on `project_name`, among those of the
 /// nearest workspace by name; with `recursive` (meta's -r), among every
-/// project in its tree, its own by name and nested ones by their path from it
-/// (two nested repos may share a name); with `all` (-A), in the tree of the
-/// outermost workspace.
+/// project in its tree (`depth` levels of it), its own by name and nested
+/// ones by their path from it (two nested repos may share a name); with
+/// `all` (-A), in the tree of the outermost workspace.
 fn dependents(
     project_name: &str,
-    recursive: bool,
-    all: bool,
+    options: &ExecuteOptions,
     cwd: &Path,
 ) -> anyhow::Result<Vec<String>> {
+    let (recursive, all) = (options.recursive, options.all);
     fn walk(nodes: Vec<MetaTreeNode>, prefix: &str, out: &mut Vec<ProjectDependencies>) {
         for node in nodes {
             let path = format!("{prefix}/{}", node.info.path);
@@ -697,7 +690,7 @@ fn dependents(
         workspace = workspace.root()?;
     }
     if recursive || all {
-        for node in config::walk_projects(&workspace.dir, &workspace.projects, None)? {
+        for node in config::walk_projects(&workspace.dir, &workspace.projects, options.depth)? {
             walk(node.children, &node.info.path, &mut projects);
             projects.push(node.info.into());
         }

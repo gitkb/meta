@@ -68,7 +68,7 @@ pub fn execute_worktree_command(
     // list and status always show nested repos: -r would only have been the
     // strict scan, which is --strict's
     if let Some(list @ ("list" | "status")) = subcommand {
-        let typed = |a: &String| ["-r", "--recursive", "-A"].contains(&a.as_str());
+        let typed = |a: &String| ["-r", "--recursive", "-A", "--all"].contains(&a.as_str());
         if options.recursive || options.all || clap_args.iter().any(typed) {
             return CommandResult::Usage(format!(
                 "worktree {list} always shows nested repos; -r and -A change nothing here. For \
@@ -101,7 +101,7 @@ pub fn execute_worktree_command(
     // the set's members
     let exec = subcommand == Some("exec");
     if options.filtered() && !exec {
-        return CommandResult::Error(format!(
+        return CommandResult::Usage(format!(
             "meta {command} does not take --include/--exclude/--tag; use `meta --include <repo> \
              git worktree exec <name> -- <command>`"
         ));
@@ -137,6 +137,7 @@ fn handle_worktree_command(
         WorktreeCommands::Create(mut args) => {
             args.recursive = options.recursive;
             args.from_root = options.all;
+            args.depth = options.depth;
             // An ephemeral set is the next prune's: its lease stays beside it
             let ephemeral = args.ephemeral;
             let created = create::handle_create(args, mode, verbose, json, global_strict)?;

@@ -182,6 +182,15 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
             &["--include", "api", "exec", "--", "pwd"][..],
         ),
         (&["context", "--dry-run"], &["--dry-run", "context"]),
+        // two of them: both move, so the line runs
+        (
+            &["context", "--verbose", "--dry-run"],
+            &["--verbose", "--dry-run", "context"],
+        ),
+        (
+            &["project", "list", "--json", "-r"],
+            &["--json", "-r", "project", "list"],
+        ),
         (
             &["project", "check", "--include", "api"],
             &["--include", "api", "project", "check"],
@@ -250,6 +259,12 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
         let said = text(&out);
         assert!(said.contains("--typo") || !said.contains("-- --"), "{said}");
     }
+    // a cluster of meta's short options before the command is read too:
+    // the --json among them makes the usage error JSON
+    let out = workspace.meta(&["-rv", "--json", "context", "--json"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let error: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(error["success"], false, "{}", text(&out));
     let out = workspace.meta(&["git", "update", "--include", "api"]);
     assert!(
         text(&out)
@@ -343,6 +358,8 @@ fn meta_owned_commands_take_no_copy_of_meta_options() {
         &["git", "worktree", "list", "-r"][..],
         &["-r", "git", "worktree", "list"],
         &["--recursive", "git", "worktree", "status", "t"],
+        &["git", "worktree", "list", "--all"],
+        &["-A", "git", "worktree", "list"],
     ] {
         let out = workspace.meta(typed);
         assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));

@@ -188,10 +188,12 @@ meta --json exec -- git rev-parse HEAD
   "results": [
     {
       "directory": "/work/ws/api",
+      "path": "./api",
       "command": "git rev-parse HEAD",
       "success": true,
       "exit_code": 0,
-      "stdout": "abc123...\n"
+      "stdout": "abc123...\n",
+      "stderr": ""
     }
   ],
   "summary": {
@@ -199,14 +201,16 @@ meta --json exec -- git rev-parse HEAD
     "succeeded": 5,
     "failed": 0,
     "dry_run": false
-  }
+  },
+  "warnings": [],
+  "hint": null
 }
 ```
 
-A result has `"stderr"` when the command wrote any. A command a signal ended has `"exit_code": null` and the signal's number in
+`path` is the repo as the human output names it, from the workspace root (`.` for the root), and `--include` takes it as is. `stdout` and `stderr` are always there, `""` for no output. `warnings` lists what the human output warns of (a project that isn't cloned); `hint` is the tip it ends with (an option of meta's typed after the command), or `null`. A command a signal ended has `"exit_code": null` and the signal's number in
 `"signal"` (`9` for `SIGKILL`); `signal` is left out otherwise.
 
-With `--json`, a command with a JSON result prints only JSON on stdout: one document, or the documents a plugin writes (help and `meta init claude` have no JSON form). A command line clap can't parse is reported before meta knows about `--json`, so it is text on stderr (exit 2). After that, an error before any output is `{"success": false, "error": "…"}` (an unknown command exits 2, other errors 1); one after a report was printed goes to stderr, so the report stays the only document. A plugin's output that isn't JSON comes as `{"success": …, "output": "…"}`, and a plugin that fails without printing anything leaves `{"success": false, "error": "plugin … failed"}`. Warnings and `--verbose` lines go to stderr.
+With `--json`, a command with a JSON result prints only JSON on stdout: one document, or the documents a plugin writes (help and `meta init claude` have no JSON form). A command line that can't be parsed is one JSON document on stdout too (`{"success": false, "error": "…"}`, exit 2) when `--json` is among meta's options before the command, its error carrying the line to run; without, it is text on stderr. After that, an error before any output is `{"success": false, "error": "…"}` (an unknown command exits 2, other errors 1); one after a report was printed goes to stderr, so the report stays the only document. A plugin's output that isn't JSON comes as `{"success": …, "output": "…"}`, and a plugin that fails without printing anything leaves `{"success": false, "error": "plugin … failed"}`. Warnings go into a loop report's `warnings` (and to stderr when nothing ran); `--verbose` lines go to stderr.
 
 ### Parsing with jq
 

@@ -51,7 +51,9 @@ The types are in [`meta_plugin_protocol`](../meta_plugin_protocol/src/lib.rs); a
   "cwd": "/home/me/ws",
   "options": {"json_output": false, "dry_run": false, "parallel": true, "recursive": false,
               "verbose": false, "silent": false, "strict": false, "all": false, "depth": null,
-              "include_filters": null, "exclude_filters": null, "tag_filters": ["backend"]}
+              "include_filters": null, "exclude_filters": null, "tag_filters": ["backend"],
+              "meta_options": {"options": [{"spellings": ["--recursive", "-r"], "takes_value": false}, …],
+                               "typed": ["--tag", "backend"]}}
 }
 ```
 

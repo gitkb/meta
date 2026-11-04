@@ -159,7 +159,8 @@ impl Cli {
             parallel,
             dry_run: self.dry_run,
             silent: self.silent,
-            recursive: self.recursive,
+            // an older plugin, which knows no `all`, reaches at least -r's
+            recursive: self.recursive || self.all,
             all: self.all,
             depth: self.depth,
             include_filters: self.include.clone(),
@@ -685,8 +686,10 @@ fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin
         && command_args
             .get(1)
             .is_some_and(|s| s == "clone" || s == "worktree");
+    // (meta's --parallel as typed: no config's default applies to them)
     if let Some(plugin) = plugin.filter(|_| finds_its_repos) {
-        return plugin.execute(command_args, &[], None, &start, cli.request_options(false));
+        let options = cli.request_options(cli.parallel);
+        return plugin.execute(command_args, &[], None, &start, options);
     }
 
     let target = target(cli, &start)?;

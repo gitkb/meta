@@ -117,6 +117,10 @@ pub struct CreateArgs {
     /// (open-source/gitkb/core)
     #[arg(skip)]
     pub from_root: bool,
+
+    /// meta's --depth: how many levels of nested meta repos -r or -A goes
+    #[arg(skip)]
+    pub depth: Option<usize>,
 }
 
 #[derive(Args)]

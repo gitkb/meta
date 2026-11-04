@@ -96,7 +96,7 @@ pub(crate) fn handle_create(
     // projects (the whole tree, walked once, with --recursive)
     let index_of = || -> Result<Index> {
         Ok(match recursive {
-            true => Index::recursive(&configs.here)?,
+            true => Index::recursive(&configs.here, args.depth)?,
             false => Index::new(&configs.here),
         })
     };

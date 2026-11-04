@@ -110,7 +110,8 @@ impl Outer {
             .filter(|spelling| results.iter().all(|r| rejected(spelling, r)))
             .find_map(|spelling| typed(spelling))?;
         let command: Vec<String> = self.before.iter().chain(argv).cloned().collect();
-        self.meta.tip(&command, word)
+        // the commands' programs can't be asked whether the line would do
+        self.meta.tip(&command, word, &|_, _| Ok(()))
     }
 }
 
@@ -711,9 +712,11 @@ pub struct JsonOutput {
     pub results: Vec<JsonCommandResult>,
     pub summary: JsonSummary,
     /// What the human output warns of before the results
+    #[serde(default)]
     pub warnings: Vec<String>,
     /// The tip the human output ends with (an option of meta's typed
     /// after the command), if any
+    #[serde(default)]
     pub hint: Option<String>,
 }
 
@@ -729,8 +732,10 @@ pub struct JsonCommandResult {
     pub exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<i32>,
-    /// What it wrote, `""` for nothing
+    /// What it wrote, `""` for nothing (an older meta left the key out)
+    #[serde(default)]
     pub stdout: String,
+    #[serde(default)]
     pub stderr: String,
 }
 

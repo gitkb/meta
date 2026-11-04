@@ -1031,8 +1031,9 @@ fn agent_cli_available() -> bool {
 }
 
 /// The SessionStart and PreCompact command: the workspace's context, nested
-/// meta repos' projects included
-const CONTEXT_COMMAND: &str = "meta -r context 2>/dev/null";
+/// meta repos' projects included; a meta older than `-r context` (a
+/// teammate's, the settings being shared) gives the context without them
+const CONTEXT_COMMAND: &str = "meta -r context 2>/dev/null || meta context 2>/dev/null";
 
 /// The command older versions of meta wrote, which left nested repos out.
 const OLD_CONTEXT_COMMAND: &str = "meta context 2>/dev/null";

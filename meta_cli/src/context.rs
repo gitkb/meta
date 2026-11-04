@@ -37,6 +37,7 @@ pub fn handle_context(
         workspace,
         root,
         tree,
+        ..
     } = reach;
     let meta_dir = workspace.dir.clone();
 
@@ -53,7 +54,7 @@ pub fn handle_context(
                 .strip_prefix(&root)
                 .map(|rel| rel.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default();
-            flatten(&tree, &prefix, &mut projects);
+            flatten(&tree, &prefix, true, &mut projects);
         }
         false => projects = workspace.projects,
     }
@@ -132,11 +133,13 @@ pub fn handle_context(
 }
 
 /// The projects of `nodes`, nested ones after their parent, each at its
-/// path from the root; a nested one is named by that path too.
-fn flatten(nodes: &[config::MetaTreeNode], prefix: &str, out: &mut Vec<ProjectInfo>) {
+/// path from the root (under `prefix`); a nested one is named by that path
+/// too, one of the `first` level by its name, as its config's depends_on
+/// names it.
+fn flatten(nodes: &[config::MetaTreeNode], prefix: &str, first: bool, out: &mut Vec<ProjectInfo>) {
     for node in nodes {
         let path = config::nested_path(prefix, &node.info.path);
-        let name = match prefix.is_empty() {
+        let name = match first {
             true => node.info.name.clone(),
             false => path.clone(),
         };
@@ -145,7 +148,7 @@ fn flatten(nodes: &[config::MetaTreeNode], prefix: &str, out: &mut Vec<ProjectIn
             path: path.clone(),
             ..node.info.clone()
         });
-        flatten(&node.children, &path, out);
+        flatten(&node.children, &path, false, out);
     }
 }
 

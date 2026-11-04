@@ -23,15 +23,14 @@ fn filters(options: &PluginRequestOptions) -> repo_filter::Filters {
 
 /// Runs in each of `repos` that meta's `--include`/`--exclude`/`--tag`
 /// select (by name, or alias: its path from `wt_dir`), naming them by that
-/// path; at once only with meta's `--parallel` typed (the config's default
-/// is for meta's own loop).
+/// path; at once only with meta's `--parallel` (meta sends it as typed for
+/// worktree commands: the config's default is for meta's own loop).
 fn build_loop_config(
     wt_dir: &Path,
     repos: &[WorktreeRepoInfo],
     options: &PluginRequestOptions,
 ) -> Result<loop_lib::LoopConfig> {
     let filters = filters(options);
-    let parallel = options.meta_options.typed.iter().any(|w| w == "--parallel");
     let paths: Vec<PathBuf> = repos.iter().map(|r| r.path.clone()).collect();
     // A set lays its repos out as the workspace, so the set's config names
     // them, by project name or path; only a filter reads it
@@ -50,7 +49,7 @@ fn build_loop_config(
             &filters,
         )?,
         verbose: options.verbose,
-        parallel,
+        parallel: options.parallel,
         dry_run: options.mode().is_preview(),
         json_output: options.json_output,
         env: Some(git_env::git_env()),
@@ -156,9 +155,10 @@ fn handle_ephemeral_exec(args: ExecArgs, options: &PluginRequestOptions) -> Resu
         ephemeral: true,
         ttl: None,
         custom_meta: args.custom_meta.clone(),
-        no_deps: false,   // Include dependencies by default
-        recursive: false, // Ephemeral exec uses current meta level
-        from_root: false,
+        no_deps: false, // Include dependencies by default
+        recursive: options.recursive,
+        from_root: options.all,
+        depth: options.depth,
     };
 
     if verbose {

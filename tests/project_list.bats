@@ -407,7 +407,7 @@ reach_tree() {
     cp "$META_BIN_DIR/meta-git" .meta/plugins/meta-git
     printf '{"projects": {"frontend": "git@github.com:org/frontend.git", "backend": "git@github.com:org/backend.git", "shared": "git@github.com:org/shared.git", "platform": {"repo": "git@github.com:org/platform.git", "meta": true}}}\n' > .meta.yaml
     mkdir -p platform/api platform/infra/tf
-    printf '{"projects": {"api": "git@github.com:org/api.git", "infra": {"repo": "git@github.com:org/infra.git", "meta": true}}}\n' > platform/.meta.yaml
+    printf '{"projects": {"api": {"repo": "git@github.com:org/api.git", "depends_on": ["infra"]}, "infra": {"repo": "git@github.com:org/infra.git", "meta": true}}}\n' > platform/.meta.yaml
     printf '{"projects": {"tf": "git@github.com:org/tf.git"}}\n' > platform/infra/.meta.yaml
     for repo in . frontend platform platform/api platform/infra platform/infra/tf; do
         git init --quiet "$repo"
@@ -437,6 +437,15 @@ paths() { jq -r '[.results[].path] | join(" ")'; }
     [[ "$output" == *"outside platform, where -r starts"*"as in meta -A --include frontend exec -- true"* ]]
     run --separate-stderr "$META_BIN" -r --include platform/infra/tf --json exec -- true
     [ "$(paths <<<"$output")" = "./platform/infra/tf" ]
+    # past --depth is not outside: no -A tip; the -A line keeps --depth
+    run "$META_BIN" -r --depth 0 --include platform/infra/tf exec -- true
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"-A reaches"* ]]
+    run "$META_BIN" -r --depth 1 --include frontend exec -- true
+    [[ "$output" == *"as in meta -A --depth 1 --include frontend exec -- true"* ]]
+    # -r context names the first level as their config does, so depends_on holds
+    run --separate-stderr "$META_BIN" -r --json context --no-status
+    [ "$(jq -c '.dependencies' <<<"$output")" = '{"api":["infra"]}' ]
     # the plugins that find their repos themselves reach as far
     run "$META_BIN" -r project list
     [[ "$output" == *"tf"* ]]
@@ -456,6 +465,9 @@ paths() { jq -r '[.results[].path] | join(" ")'; }
     [ "$status" -ne 0 ]
     run "$META_BIN" -A --dry-run git worktree create t --repo frontend --no-deps
     [ "$status" -eq 0 ]
+    # --depth limits how far down -r looks for --repo
+    run "$META_BIN" -r --depth 0 --dry-run git worktree create t --repo infra/tf --no-deps
+    [ "$status" -ne 0 ]
     # at the root, -r and -A reach the same repos
     cd "$TEST_DIR"
     run --separate-stderr "$META_BIN" -r --json exec -- true

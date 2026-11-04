@@ -715,6 +715,10 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     [ "$(head_of frontend)" = "$(head_of remotes/frontend.git)" ]
     run "$META_BIN" --strict git status
     [ "$status" -ne 0 ]
+    # with nothing left to run, the warning still says why
+    run "$META_BIN" --include shared git status
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: shared is not cloned"* ]]
     run "$META_BIN" exec -- git status
     [ "$status" -eq 1 ]
     [[ "$output" == *"not cloned (run 'meta git clone-missing')"* ]]

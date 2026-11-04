@@ -9,7 +9,6 @@ description = "Reusable git operations for meta plugins"
 
 [dependencies]
 meta_core.workspace = true
-meta_cli.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 log.workspace = true

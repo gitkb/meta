@@ -4,11 +4,11 @@
 use crate::McpServer;
 use anyhow::{Context, Result};
 use loop_lib::JsonOutput;
-use meta_cli::dependency_graph::{self, ProjectDependencies};
-use meta_cli::query::{Query, RepoState, WorkspaceState};
 use meta_core::config::{self, ProjectInfo};
+use meta_core::dependency_graph::{self, ProjectDependencies};
 use meta_core::display::escape;
 use meta_core::git::{git, RepoStatus};
+use meta_core::query::{Query, RepoState, WorkspaceState};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};

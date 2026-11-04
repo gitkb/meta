@@ -1,16 +1,16 @@
 //! Worktree context detection and discovery for meta.
 //!
 //! Provides filesystem-based detection of worktree contexts and
-//! discovery of repos within a worktree set. Used by meta_cli for
+//! discovery of repos within a worktree set. Used by the meta binary for
 //! automatic worktree-scoped command dispatch, and by meta_git_lib
 //! for worktree management commands.
 
+use crate::display::{escape, escape_lines, escape_path};
 use anyhow::{Context, Result};
-use meta_core::display::{escape, escape_lines, escape_path};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use meta_core::gitdir;
+use crate::gitdir;
 
 /// Discovered information about a repo within a worktree set.
 #[derive(Debug, Clone, Serialize)]
@@ -95,7 +95,7 @@ pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>>
 /// The set, resolved, that meta's record says the checkout at `dir` was
 /// made for; `None` without a record, or when the set is gone.
 fn recorded_set(dir: &Path) -> Result<Option<PathBuf>> {
-    Ok(meta_core::set_record::member(dir)?.and_then(|(_, record)| record.set.canonicalize().ok()))
+    Ok(crate::set_record::member(dir)?.and_then(|(_, record)| record.set.canonicalize().ok()))
 }
 
 /// The config that names the members of the set at `set_dir`: the set's own
@@ -106,7 +106,7 @@ pub fn set_config(
     members: &[PathBuf],
     config_name: Option<&PathBuf>,
 ) -> Result<Option<PathBuf>> {
-    use meta_core::config;
+    use crate::config;
     if let Some(found) = config::meta_config_at(set_dir, config_name)? {
         return Ok(Some(found));
     }
@@ -161,7 +161,7 @@ fn set_origin(set_dir: &Path, members: &[PathBuf]) -> Result<Option<PathBuf>> {
         .unwrap_or_else(|_| set_dir.to_path_buf());
     let mut origin: Option<PathBuf> = None;
     for member in members {
-        let Some((_, record)) = meta_core::set_record::member(member)? else {
+        let Some((_, record)) = crate::set_record::member(member)? else {
             continue;
         };
         if record.set.canonicalize().ok().as_ref() != Some(&set) {
@@ -191,7 +191,7 @@ fn set_origin(set_dir: &Path, members: &[PathBuf]) -> Result<Option<PathBuf>> {
 pub fn select_in_set(
     set_dir: &Path,
     members: &[PathBuf],
-    workspace: Option<&meta_core::config::Workspace>,
+    workspace: Option<&crate::config::Workspace>,
     filters: &crate::repo_filter::Filters,
 ) -> Result<Vec<PathBuf>> {
     use crate::repo_filter::{Candidate, Scope};
@@ -209,7 +209,7 @@ pub fn select_in_set(
     let projects: Vec<_> = workspace
         .map_or(&[][..], |w| &w.projects)
         .iter()
-        .map(|project| meta_core::config::ProjectInfo {
+        .map(|project| crate::config::ProjectInfo {
             path: project.set_place().to_string(),
             ..project.clone()
         })
@@ -218,8 +218,8 @@ pub fn select_in_set(
     // Compared as directories: a project at a link in the set is the
     // checkout where the link leads
     let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let infos: std::collections::HashMap<PathBuf, meta_core::config::ProjectInfo> =
-        meta_core::config::build_project_map(&tree, set_dir, "")
+    let infos: std::collections::HashMap<PathBuf, crate::config::ProjectInfo> =
+        crate::config::build_project_map(&tree, set_dir, "")
             .into_iter()
             .map(|(place, (_, info))| (real(&set_dir.join(place)), info))
             .collect();
@@ -250,9 +250,9 @@ pub fn select_in_set(
 fn set_tree(
     set_dir: &Path,
     members: &[PathBuf],
-    projects: &[meta_core::config::ProjectInfo],
-) -> Result<Vec<meta_core::config::MetaTreeNode>> {
-    use meta_core::config;
+    projects: &[crate::config::ProjectInfo],
+) -> Result<Vec<crate::config::MetaTreeNode>> {
+    use crate::config;
     let own = config::walk_projects(set_dir, projects, None)?;
     let mut tree: Vec<_> = set_origin(set_dir, members)?
         .map(|dir| {
@@ -268,10 +268,10 @@ fn set_tree(
 /// that can't be read: one broken config loses only its own projects.
 fn readable_tree(
     dir: &Path,
-    projects: &[meta_core::config::ProjectInfo],
+    projects: &[crate::config::ProjectInfo],
     visited: &mut std::collections::HashSet<PathBuf>,
-) -> Vec<meta_core::config::MetaTreeNode> {
-    use meta_core::config;
+) -> Vec<crate::config::MetaTreeNode> {
+    use crate::config;
     projects
         .iter()
         .map(|project| {
@@ -297,14 +297,14 @@ fn readable_tree(
 /// `nodes` without the projects of the nested meta repos whose config the
 /// set at `dir` holds: those the set's own tree describes.
 fn not_held(
-    nodes: Vec<meta_core::config::MetaTreeNode>,
+    nodes: Vec<crate::config::MetaTreeNode>,
     dir: &Path,
-) -> Vec<meta_core::config::MetaTreeNode> {
+) -> Vec<crate::config::MetaTreeNode> {
     nodes
         .into_iter()
         .map(|mut node| {
             let place = dir.join(&node.info.path);
-            node.children = match meta_core::config::find_meta_config_in(&place) {
+            node.children = match crate::config::find_meta_config_in(&place) {
                 Ok(Some(_)) => Vec::new(),
                 _ => not_held(node.children, &place),
             };
@@ -341,7 +341,7 @@ pub fn holds_meta_checkout(dir: &Path) -> bool {
             // worktrees_dir puts them) is no sign that `dir` is a set
             // (a record that can't be read says nothing, and is checked below)
             Ok(_)
-                if meta_core::set_record::member(entry.path())
+                if crate::set_record::member(entry.path())
                     .ok()
                     .flatten()
                     .is_some_and(|(_, record)| {
@@ -365,7 +365,7 @@ pub fn holds_meta_checkout(dir: &Path) -> bool {
                         !admin.is_dir()
                             || !matches!(
                                 admin
-                                    .join(meta_core::set_record::RECORD_FILE)
+                                    .join(crate::set_record::RECORD_FILE)
                                     .symlink_metadata(),
                                 Err(e) if e.kind() == std::io::ErrorKind::NotFound
                             )
@@ -392,7 +392,7 @@ fn with_branch(member: WorktreeMemberInfo) -> WorktreeRepoInfo {
     WorktreeRepoInfo {
         // a branch git can't read is shown as by git for a detached HEAD;
         // status and list say when a checkout can't be read
-        branch: meta_core::git::current_branch(&member.path)
+        branch: crate::git::current_branch(&member.path)
             .ok()
             .flatten()
             .unwrap_or_else(|| "HEAD".to_string()),
@@ -537,7 +537,7 @@ fn add_member(
     // it is on disk, which create planned from (a config that can't be read
     // lists none: the strict scan says why)
     let listed = |checkout: &Path| {
-        meta_core::config::Workspace::in_dir(checkout)
+        crate::config::Workspace::in_dir(checkout)
             .ok()
             .flatten()
             .map(|workspace| workspace.projects)
@@ -717,10 +717,10 @@ mod recursive_tests {
         };
         config(&workspace, r#""parent": {"repo": "x", "meta": true}"#);
         config(&workspace.join("parent"), r#""x": "x""#);
-        let projects = meta_core::config::Workspace::load(&workspace.join(".meta.yaml"))
+        let projects = crate::config::Workspace::load(&workspace.join(".meta.yaml"))
             .unwrap()
             .projects;
-        let tree = meta_core::config::walk_projects(&workspace, &projects, None).unwrap();
+        let tree = crate::config::walk_projects(&workspace, &projects, None).unwrap();
 
         // the set doesn't hold parent: the workspace's config tells about x
         std::fs::create_dir_all(&set).unwrap();
@@ -858,7 +858,7 @@ mod recursive_tests {
         let gitfile = std::fs::read_to_string(root.join(".deps/child/.git")).unwrap();
         let admin = Path::new(gitfile.trim().strip_prefix("gitdir: ").unwrap());
         std::fs::write(
-            admin.join(meta_core::set_record::RECORD_FILE),
+            admin.join(crate::set_record::RECORD_FILE),
             serde_json::json!({ "project": "/p", "set": root, "created_at": "2025-01-01T00:00:00Z" })
                 .to_string(),
         )

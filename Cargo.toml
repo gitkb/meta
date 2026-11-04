@@ -23,7 +23,6 @@ repository = "https://github.com/gitkb/meta"
 
 [workspace.dependencies]
 loop_lib = { path = "loop_lib" }
-meta_cli = { path = "meta_cli", package = "meta" }
 # Any 0.x: child-repo CI builds meta_core as 0.0.0 or 0.1.0, releases as
 # the workspace version; release.yml pins it before publishing the crates
 # that depend on it

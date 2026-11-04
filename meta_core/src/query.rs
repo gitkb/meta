@@ -14,9 +14,9 @@
 //! - `dirty:true AND tag:backend`
 //! - `branch:main AND modified_in:7d`
 
+use crate::display::escape;
+use crate::git::RepoStatus;
 use anyhow::{Context, Result};
-use meta_core::display::escape;
-use meta_core::git::RepoStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -106,7 +106,7 @@ impl Query {
             "branch" => Ok(QueryCondition::Branch(value.to_string())),
             "tag" => Ok(QueryCondition::Tag(value.to_string())),
             "modified_in" | "modified" => {
-                let secs = meta_core::duration::parse_duration(value)?;
+                let secs = crate::duration::parse_duration(value)?;
                 Ok(QueryCondition::ModifiedIn(Duration::from_secs(secs)))
             }
             "language" | "lang" => Ok(QueryCondition::Language(value.to_lowercase())),
@@ -172,7 +172,7 @@ impl RepoState {
         let last_commit = refs
             .as_ref()
             .and_then(|refs| refs.oid.as_ref())
-            .and_then(|_| meta_core::git::run(path, ["log", "-1", "--format=%ct%n%s"]).ok());
+            .and_then(|_| crate::git::run(path, ["log", "-1", "--format=%ct%n%s"]).ok());
         let (last_commit_time, last_commit_message) = match last_commit.as_deref() {
             Some(log) => {
                 let (time, message) = log.split_once('\n').unwrap_or((log, ""));

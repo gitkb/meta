@@ -45,10 +45,10 @@ pub(crate) fn workspace(
     let Some(workspace) = config::Workspace::find(cwd, None)? else {
         anyhow::bail!("No .meta.yaml found in {} or above it", escape_path(cwd));
     };
-    if let Some((set, set_dir)) = meta_cli::worktree::detect_worktree_location(cwd)? {
+    if let Some((set, set_dir)) = meta_core::worktree::detect_worktree_location(cwd)? {
         let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         if !real(&workspace.dir).starts_with(real(&set_dir))
-            || meta_cli::worktree::holds_meta_checkout(&set_dir)
+            || meta_core::worktree::holds_meta_checkout(&set_dir)
         {
             anyhow::bail!(
                 "`meta {command}` acts on the workspace, not worktree set '{}'; run it in the \

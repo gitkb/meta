@@ -20,7 +20,6 @@ tempfile.workspace = true
 meta_plugin_protocol.workspace = true
 meta_core.workspace = true
 meta_git_lib = { path = "../meta_git_lib" }
-meta_cli.workspace = true
 loop_lib.workspace = true
 clap = { workspace = true, features = ["derive"] }
 anyhow.workspace = true

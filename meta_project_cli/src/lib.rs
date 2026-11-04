@@ -2,12 +2,12 @@
 //!
 //! Provides project management commands for meta repositories.
 
-use meta_cli::dependency_graph::{DependencyGraph, ProjectDependencies};
-use meta_cli::worktree;
 use meta_core::config::{self, MetaTreeNode};
+use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
 use meta_core::display::{escape, escape_path};
 use meta_core::git::GitUrl;
 use meta_core::outln;
+use meta_core::worktree;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

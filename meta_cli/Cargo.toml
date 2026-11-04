@@ -1,7 +1,3 @@
-[lib]
-name = "meta_cli"
-path = "src/lib.rs"
-
 [package]
 name = "meta"
 version.workspace = true
@@ -19,7 +15,6 @@ clap = { workspace = true, features = ["derive", "string"] }
 colored.workspace = true
 loop_lib.workspace = true
 rayon.workspace = true
-walkdir = "2.3"
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true

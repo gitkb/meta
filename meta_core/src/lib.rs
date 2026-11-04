@@ -12,6 +12,7 @@ pub mod args;
 pub mod children;
 pub mod config;
 pub mod data_dir;
+pub mod dependency_graph;
 pub mod display;
 pub mod duration;
 pub mod exit;
@@ -19,9 +20,12 @@ pub mod git;
 pub mod gitdir;
 pub mod mode;
 pub mod out;
+pub mod query;
+pub mod repo_filter;
 pub mod set_record;
 pub use mode::ExecutionMode;
 pub mod store;
+pub mod worktree;
 
 /// Default meta data directory name.
 const META_DIR_NAME: &str = ".meta";

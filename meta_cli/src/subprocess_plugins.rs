@@ -543,7 +543,7 @@ fn execute_plan(
         let commands: Vec<DirCommand> = plan.commands.iter().map(job).collect();
         // only in the selected projects that are repositories
         let projects: Vec<PathBuf> = projects.iter().map(PathBuf::from).collect();
-        let commands = meta_cli::run_list::in_repos(commands, &projects, root_dir);
+        let commands = crate::run_list::in_repos(commands, &projects, root_dir);
 
         // Repos are named by their path from the root (shown as "."). Without
         // projects from meta_cli the plugin lists the root first.

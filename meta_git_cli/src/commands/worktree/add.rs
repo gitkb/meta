@@ -4,8 +4,8 @@ use meta_core::display::{escape, escape_path};
 use meta_core::ExecutionMode;
 use meta_core::{errln, outln};
 
-use meta_cli::worktree::discover_worktree_repos;
 use meta_core::set_record as record;
+use meta_core::worktree::discover_worktree_repos;
 use meta_git_lib::worktree::git_ops::{git_worktree_add, worktree_start};
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::plan::{Index, PlannedRepo};

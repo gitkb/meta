@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shared infrastructure for ~/.meta/ directory management and atomic JSON store"
+description = "The workspace domain meta and its plugins share: config, repo selection, worktree sets, the dependency graph, and the processes meta starts"
 
 [dependencies]
 anyhow.workspace = true
@@ -14,9 +14,11 @@ console = "0.15"
 shlex.workspace = true
 strsim = "0.11"
 dirs.workspace = true
+log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true
+walkdir = "2.3"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process", "termios"] }

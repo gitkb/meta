@@ -107,9 +107,9 @@ pub fn resolve_existing_worktree(name: &str) -> Result<PathBuf> {
 /// doesn't exist or holds none.
 pub fn discover_and_validate_worktree(
     name: &str,
-) -> Result<(PathBuf, Vec<meta_cli::worktree::WorktreeRepoInfo>)> {
+) -> Result<(PathBuf, Vec<meta_core::worktree::WorktreeRepoInfo>)> {
     let wt_dir = resolve_existing_worktree(name)?;
-    let repos = meta_cli::worktree::discover_worktree_repos(&wt_dir)?;
+    let repos = meta_core::worktree::discover_worktree_repos(&wt_dir)?;
     if repos.is_empty() {
         anyhow::bail!("No repos found in worktree '{}'", escape(name));
     }

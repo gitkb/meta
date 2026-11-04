@@ -7,8 +7,8 @@ use meta_core::outln;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use meta_cli::worktree::discover_worktree_members;
 use meta_core::set_record::{self as record, SetRecord};
+use meta_core::worktree::discover_worktree_members;
 use meta_git_lib::worktree::helpers::{resolve_worktree_root, Configs};
 use meta_git_lib::worktree::hooks::fire_post_prune;
 use meta_git_lib::worktree::lease;

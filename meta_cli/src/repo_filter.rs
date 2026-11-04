@@ -142,10 +142,10 @@ impl Reach {
         let whole = Workspace::in_dir(&self.root)?
             .map(|root| Reach::of(root, false, true, self.depth))
             .transpose()?;
-        let outside =
-            |dirs: &Vec<PathBuf>| dirs.iter().any(|d| !d.starts_with(&self.workspace.dir));
+        // -A from the root reaches no deeper below here than -r: what it
+        // takes that -r doesn't is outside (an --exclude of a repo there too)
         match whole.map(|whole| whole.scope().select(filters)) {
-            Some(Ok(dirs)) if outside(&dirs) => bail!(
+            Some(Ok(_)) => bail!(
                 "{e:#}\nThat names a repo outside {}, where -r starts; -A reaches the whole \
                  workspace, as in {}",
                 escape(&repo_path(&self.workspace.dir, &self.root)),
@@ -302,8 +302,8 @@ impl Scope {
                 bail!(
                     "{flag} '{value}' names none of the repos this command runs in{read_from}. Use a \
                      repo's name from .meta.yaml or its path from the workspace root (`.` for the \
-                     root), as `meta project list` shows it; in a worktree set, the same, from the \
-                     set's root.{hint}"
+                     root; without -r or -A, from the nearest .meta.yaml), as `meta project list` \
+                     shows it; in a worktree set, the same, from the set's root.{hint}"
                 );
             }
             Ok(hits.iter().map(|r| r.id.as_path()).collect())

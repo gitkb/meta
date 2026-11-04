@@ -443,6 +443,9 @@ paths() { jq -r '[.results[].path] | join(" ")'; }
     [[ "$output" != *"-A reaches"* ]]
     run "$META_BIN" -r --depth 1 --include frontend exec -- true
     [[ "$output" == *"as in meta -A --depth 1 --include frontend exec -- true"* ]]
+    # an --exclude of a repo outside gets it too
+    run "$META_BIN" -r --include platform/api --exclude frontend exec -- true
+    [[ "$output" == *"as in meta -A --include platform/api --exclude frontend exec -- true"* ]]
     # -r context names the first level as their config does, so depends_on holds
     run --separate-stderr "$META_BIN" -r --json context --no-status
     [ "$(jq -c '.dependencies' <<<"$output")" = '{"api":["infra"]}' ]
@@ -456,10 +459,15 @@ paths() { jq -r '[.results[].path] | join(" ")'; }
     run "$META_BIN" -A project list
     [[ "$output" == *"frontend"* && "$output" == *"tf"* ]]
     run "$META_BIN" project list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"api"* ]]
     [[ "$output" != *"tf"* && "$output" != *"frontend"* ]]
     run "$META_BIN" -A --dry-run git update
+    [ "$status" -eq 0 ]
     [[ "$output" == *"frontend"* ]]
     run "$META_BIN" -r --dry-run git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"(tf not pulled"* ]]
     [[ "$output" != *"frontend"* ]]
     # worktree create: --repo across the meta repos -r or -A reaches
     run "$META_BIN" -r --dry-run git worktree create t --repo infra/tf --no-deps

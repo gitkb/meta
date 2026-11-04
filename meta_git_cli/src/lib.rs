@@ -141,10 +141,17 @@ pub fn execute_command(
     let all_but_filters = meta.refusing(&FILTERS);
     match command {
         "git clone" => {
+            if let Some(line) = meta_depth_line(args, meta) {
+                return CommandResult::Usage(format!(
+                    "--meta-depth is gone: how deep into nested meta repos is meta's own --depth, \
+                     before the command with -r (after `git clone`, --depth is git's history \
+                     depth), as in {line}"
+                ));
+            }
             return match meta_plugin_protocol::parse_args(command, args, &all_but_filters) {
                 Ok(args) => finish(clone::execute_git_clone(args, options, cwd)),
                 Err(result) => result,
-            }
+            };
         }
         "git update" => {
             return match meta_plugin_protocol::parse_args(command, args, &all_but_filters) {
@@ -196,6 +203,44 @@ pub fn execute_command(
 
     // Every other git command runs as typed in each repo
     execute_raw_git_command(command, args, projects, options, cwd)
+}
+
+/// For a clone typed with the `--meta-depth N` it no longer takes, the line
+/// with `-r --depth N` before the command (meta's -r after it moved there
+/// too), when that line parses.
+fn meta_depth_line(args: &[String], meta: &meta_core::args::MetaOptions) -> Option<String> {
+    let at = args
+        .iter()
+        .position(|a| a == "--meta-depth" || a.starts_with("--meta-depth="))?;
+    let word = args.get(at)?;
+    let (depth, taken) = match word.split_once('=') {
+        Some((_, depth)) => (depth.to_string(), 1),
+        None => (args.get(at + 1)?.clone(), 2),
+    };
+    let typed_depth = meta
+        .typed
+        .iter()
+        .any(|w| w == "--depth" || w.starts_with("--depth="));
+    if depth.parse::<usize>().is_err() || typed_depth {
+        return None;
+    }
+    let recursive = |a: &String| a == "-r" || a == "--recursive";
+    let rest: Vec<String> = args
+        .iter()
+        .enumerate()
+        .filter(|(i, a)| (*i < at || *i >= at + taken) && !recursive(a))
+        .map(|(_, a)| a.clone())
+        .collect();
+    meta_plugin_protocol::parse_args::<clone::CloneArgs>("git clone", &rest, meta).ok()?;
+    let already = meta.typed.iter().any(recursive);
+    let line: Vec<String> = std::iter::once("meta".to_string())
+        .chain(meta.typed.iter().cloned())
+        .chain((!already).then(|| "-r".to_string()))
+        .chain(["--depth".to_string(), depth])
+        .chain(["git".to_string(), "clone".to_string()])
+        .chain(rest)
+        .collect();
+    Some(meta_core::display::escape(&meta_core::display::display_command(&line)).into_owned())
 }
 
 fn finish(result: anyhow::Result<CommandResult>) -> CommandResult {

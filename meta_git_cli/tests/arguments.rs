@@ -75,7 +75,7 @@ fn clone_and_commit_refuse_what_they_do_not_take() {
         (
             "git clone",
             &["--meta-depth", "1", "u"],
-            "unexpected argument",
+            "as in meta -r --depth 1 git clone u",
         ),
         ("git clone", &["u", "--branch", "b"], "unexpected argument"),
         ("git commit", &["--amend"], "unexpected argument"),

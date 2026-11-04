@@ -261,8 +261,10 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
         &["exec", "--parallel", "8", "--", "pwd"],
         // two values for one that takes one: which was meant can't be told
         &["--depth", "1", "project", "list", "--depth", "2"],
-        // a value meta wouldn't take
+        // a value meta wouldn't take: not a number, blank, an option
         &["project", "list", "--depth", "nope"],
+        &["exec", "--tag", "", "--", "pwd"],
+        &["git", "commit", "-m", "x", "--include", "--foo"],
         &["git", "clone", url, "d", "--depth", "5", "--typo"],
     ] {
         let out = workspace.meta(typed);
@@ -278,6 +280,24 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
     assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     let error: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(error["success"], false, "{}", text(&out));
+    // clone's --meta-depth is meta's --depth, with -r
+    let out = workspace.meta(&[
+        "git",
+        "clone",
+        url,
+        "d",
+        "--meta-depth",
+        "1",
+        "--depth",
+        "5",
+    ]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert_eq!(
+        tip_line(&out),
+        ["-r", "--depth", "1", "git", "clone", url, "d", "--depth", "5"],
+        "{}",
+        text(&out)
+    );
     let out = workspace.meta(&["git", "update", "--include", "api"]);
     assert!(
         text(&out)

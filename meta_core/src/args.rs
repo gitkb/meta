@@ -246,12 +246,19 @@ impl MetaOptions {
             let Some((at, word)) = at.and_then(|at| Some((at, rest.get(at)?))) else {
                 return Some(rule);
             };
-            // a value meta wouldn't take makes a line that fails again
+            // a value meta wouldn't take makes a line that fails again: not
+            // a number for one that takes a number, blank (`--tag ''`), or
+            // an option itself (`--include --foo`)
             let value = match word.split_once('=') {
                 Some((_, value)) => Some(value),
                 None => rest.get(at + 1).map(String::as_str),
             };
-            if option.number && value.is_some_and(|v| v.parse::<usize>().is_err()) {
+            let refused = |v: &str| {
+                option.number && v.parse::<usize>().is_err()
+                    || v.split(',').all(|part| part.trim().is_empty())
+                    || !word.contains('=') && v.starts_with('-')
+            };
+            if option.takes_value && value.is_some_and(refused) {
                 return Some(rule);
             }
             let taken = match (option.takes_value && !word.contains('='), rest.get(at + 1)) {

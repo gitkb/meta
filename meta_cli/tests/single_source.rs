@@ -242,6 +242,8 @@ impl Repo {
     fn generated(&self, file: &str, name: &str, render: &str) -> Result<(), String> {
         let path = self.root.join(file);
         let text = std::fs::read_to_string(&path).map_err(|e| format!("{file}: {e}"))?;
+        // as a Windows checkout has it, with CRLF line endings: the same text
+        let text = text.replace("\r\n", "\n");
         let open = format!("<!-- generated:{name} -->\n");
         let close = "<!-- /generated -->";
         let start = text

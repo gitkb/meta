@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use colored::*;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+pub use meta_core::display::display_command;
 use meta_core::display::{escape, escape_path, program_output};
 use meta_core::{errln, out, outln};
 use rayon::prelude::*;
@@ -54,38 +55,29 @@ pub struct LoopConfig {
     pub outer: Option<Outer>,
 }
 
-/// A program that runs commands through loop, and takes options of its own
-/// before the command. When every command fails because its program
-/// rejected one of them, a tip after the summary says where it goes.
+/// meta, running commands through loop: when every command fails because
+/// its program rejected one of meta's options, a tip after the summary says
+/// where it goes.
 #[derive(Debug, Clone, Default)]
 pub struct Outer {
-    /// Its name, as the tip shows it (`meta`)
-    pub program: String,
-    /// The words between its options and the command (`exec --`)
+    pub meta: meta_core::args::MetaOptions,
+    /// The words between meta's options and the command (`exec --`)
     pub before: Vec<String>,
-    /// Each option's spellings (`--recursive`, `-r`), and whether a value
-    /// follows it
-    pub options: Vec<(String, bool)>,
 }
 
 impl Outer {
     /// The tip for `results`, the commands of `argv` having all failed:
-    /// the option of ours that each one's error output says it rejected
-    /// (git: ``unknown option `recursive'``, `unrecognized argument:
-    /// --json`; clap: `unexpected argument '--recursive'`). Output that
-    /// wasn't captured (`--sequential`) gives none.
+    /// for the option of meta's that each one's error output says it
+    /// rejected (git: ``unknown option `recursive'``, `unrecognized
+    /// argument: --json`; clap: `unexpected argument '--recursive'`).
+    /// Output that wasn't captured (`--sequential`) gives none.
     fn tip(&self, argv: &[String], results: &[CommandResult]) -> Option<String> {
         let typed = |spelling: &str| {
-            argv.iter().skip(1).position(|arg| {
-                arg == spelling
+            argv.iter().skip(1).find(|arg| {
+                *arg == spelling
                     || spelling.starts_with("--") && arg.starts_with(&format!("{spelling}="))
             })
         };
-        let ours: Vec<&(String, bool)> = self
-            .options
-            .iter()
-            .filter(|(o, _)| typed(o).is_some())
-            .collect();
         let rejected = |spelling: &str, result: &CommandResult| {
             let name = spelling.trim_start_matches('-');
             String::from_utf8_lossy(&result.stderr).lines().any(|line| {
@@ -106,32 +98,15 @@ impl Outer {
                         || line.trim_end().ends_with(&format!(": {spelling}")))
             })
         };
-        let (spelling, takes_value) = ours
+        let word = self
+            .meta
+            .options
             .iter()
-            .find(|(o, _)| results.iter().all(|r| rejected(o, r)))?;
-        // the option (and its value) before the command, the rest as typed
-        let at = typed(spelling)? + 1;
-        let given = argv.get(at)?;
-        let mut moved = vec![given.clone()];
-        let mut skip = 1;
-        if *takes_value && !given.contains('=') {
-            moved.push(argv.get(at + 1)?.clone());
-            skip = 2;
-        }
-        let rest = argv
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i < at || *i >= at + skip);
-        let example: Vec<String> = std::iter::once(self.program.clone())
-            .chain(moved)
-            .chain(self.before.iter().cloned())
-            .chain(rest.map(|(_, arg)| arg.clone()))
-            .collect();
-        Some(format!(
-            "{spelling} is an option of {} itself: it goes before the command, as in {}",
-            self.program,
-            escape(&display_command(&example))
-        ))
+            .flat_map(|option| &option.spellings)
+            .filter(|spelling| results.iter().all(|r| rejected(spelling, r)))
+            .find_map(|spelling| typed(spelling))?;
+        let command: Vec<String> = self.before.iter().chain(argv).cloned().collect();
+        self.meta.tip(&command, word)
     }
 }
 
@@ -430,11 +405,6 @@ fn resolve_aliases(argv: &[String], aliases: &BTreeMap<String, String>) -> Resul
         })?;
     words.extend_from_slice(args);
     Ok(words)
-}
-
-/// `argv` as one line, quoted so that it reads back as the same words.
-pub fn display_command(argv: &[String]) -> String {
-    shlex::try_join(argv.iter().map(String::as_str)).unwrap_or_else(|_| argv.join(" "))
 }
 
 /// The process for `argv` in `dir`. The program runs directly: no shell sees

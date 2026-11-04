@@ -1518,7 +1518,7 @@ YAML
     sed -i.bak "s|git@github.com:org/shared.git|file://$TEST_DIR/shared.git|" "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git update --dry-run
     [ "$status" -ne 0 ]
-    [[ "$output" == *"unexpected argument '--dry-run'"*"go before the command, as in \`meta --dry-run git update\`"* ]]
+    [[ "$output" == *"unexpected argument '--dry-run'"*"goes before the command, as in meta --dry-run git update"* ]]
     [ ! -e "$TEST_DIR/shared" ]
     run "$META_BIN" git update --help
     [ "$status" -eq 0 ]

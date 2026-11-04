@@ -88,7 +88,12 @@ pub fn execute_worktree_command(
     } else {
         "worktree"
     };
-    match meta_plugin_protocol::parse_args::<WorktreeParser>(name, &clap_args) {
+    // only exec takes meta's --include/--exclude/--tag
+    let meta = match clap_args.iter().find(|a| !a.starts_with('-')) {
+        Some(exec) if exec == "exec" => options.meta_options.clone(),
+        _ => options.meta_options.refusing(&crate::FILTERS),
+    };
+    match meta_plugin_protocol::parse_args::<WorktreeParser>(name, &clap_args, &meta) {
         Ok(parsed) => match handle_worktree_command(
             parsed.command,
             // meta's --dry-run, or the worktree command's own

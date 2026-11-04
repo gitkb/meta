@@ -160,6 +160,107 @@ fn a_typo_of_a_command_suggests_the_command_it_is_near() {
     }
 }
 
+/// The line a tip gives to run instead: after its `as in meta `.
+fn tip_line(out: &Output) -> Vec<String> {
+    let said = text(out);
+    let line = said
+        .lines()
+        .find_map(|line| line.split_once("as in meta ").map(|(_, line)| line))
+        .unwrap_or_default();
+    shlex::split(line).unwrap_or_default()
+}
+
+#[test]
+fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
+    let workspace = Workspace::new();
+    let url = "https://example.invalid/m.git";
+    // as typed, and the line the tip gives: meta runs it (project check
+    // then finds api has no origin)
+    for (typed, line) in [
+        (
+            &["exec", "--include", "api", "--", "pwd"][..],
+            &["--include", "api", "exec", "--", "pwd"][..],
+        ),
+        (&["context", "--dry-run"], &["--dry-run", "context"]),
+        (
+            &["project", "check", "--include", "api"],
+            &["--include", "api", "project", "check"],
+        ),
+        (
+            &["git", "commit", "-m", "x", "--dry-run"],
+            &["--dry-run", "git", "commit", "-m", "x"],
+        ),
+        (
+            &["git", "update", "--dry-run"],
+            &["--dry-run", "git", "update"],
+        ),
+        (
+            &[
+                "git",
+                "worktree",
+                "create",
+                "t",
+                "--repo",
+                "api",
+                "--verbose",
+            ],
+            &[
+                "--verbose",
+                "git",
+                "worktree",
+                "create",
+                "t",
+                "--repo",
+                "api",
+            ],
+        ),
+        // meta's options typed before the command stay
+        (
+            &["--silent", "exec", "--include=api", "--", "pwd"],
+            &["--silent", "--include=api", "exec", "--", "pwd"],
+        ),
+    ] {
+        let out = workspace.meta(typed);
+        assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
+        assert!(
+            text(&out).contains("is an option of meta itself"),
+            "{}",
+            text(&out)
+        );
+        assert_eq!(tip_line(&out), line, "{}", text(&out));
+        let again = workspace.meta(line);
+        assert_ne!(again.status.code(), Some(2), "{line:?}: {}", text(&again));
+        assert!(!text(&again).contains("tip:"), "{line:?}: {}", text(&again));
+    }
+    // no line that fails again: a command that never takes the option, a
+    // value moved away from it, or a word the command takes (clone's
+    // --depth is git's)
+    for typed in [
+        &["project", "list", "--include", "api"][..],
+        &["git", "update", "--include", "api"],
+        &["git", "worktree", "create", "t", "--tag", "backend"],
+        &["git", "clone", url, "d", "--exclude", "api"],
+        &["exec", "--parallel", "8", "--", "pwd"],
+        &["git", "clone", url, "d", "--depth", "5", "--typo"],
+    ] {
+        let out = workspace.meta(typed);
+        assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
+        assert!(tip_line(&out).is_empty(), "{typed:?}: {}", text(&out));
+        // nor clap's "use '-- --include'", which hands it to the command
+        let said = text(&out);
+        assert!(said.contains("--typo") || !said.contains("-- --"), "{said}");
+    }
+    let out = workspace.meta(&["git", "update", "--include", "api"]);
+    assert!(
+        text(&out)
+            .contains("--include is an option of meta itself, and this command doesn't take it"),
+        "{}",
+        text(&out)
+    );
+    let out = workspace.meta(&["git", "clone", url, "d", "--depth", "5", "--typo"]);
+    assert!(!text(&out).contains("option of meta"), "{}", text(&out));
+}
+
 #[test]
 fn one_argument_with_a_space_is_told_to_be_two_words() {
     let workspace = Workspace::new();

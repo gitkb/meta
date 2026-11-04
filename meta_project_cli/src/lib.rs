@@ -23,7 +23,12 @@ pub struct ExecuteOptions {
     /// The project directories meta's `--include`, `--exclude` or `--tag`
     /// chose, when one was given: the commands act on these only
     pub selected: Option<Vec<PathBuf>>,
+    /// meta's options, for the tip when one is typed after the command
+    pub meta: meta_core::args::MetaOptions,
 }
+
+/// meta's options that choose repos, which list and dependents never take
+const FILTERS: [&str; 3] = ["--include", "--exclude", "--tag"];
 
 impl ExecuteOptions {
     /// `selected` from the directories meta sent
@@ -184,6 +189,7 @@ pub fn execute_command(
     provided_projects: &[String],
     cwd: &Path,
 ) -> CommandResult {
+    let meta = &options.meta;
     match command {
         // These read the workspace tree themselves, with their own
         // --recursive, so meta's selection isn't theirs to apply
@@ -193,28 +199,33 @@ pub fn execute_command(
                  tree itself"
             ))
         }
-        "project list" | "project ls" => match parse_args::<ListArgs>(command, args) {
-            Ok(list) => handle_project_list(
-                cwd,
-                &ExecuteOptions {
-                    json_output: meta_core::out::set_json(options.json_output || list.json),
-                    recursive: options.recursive || list.recursive,
-                    depth: list.depth.or(options.depth),
-                    selected: None,
-                },
-            ),
-            Err(result) => result,
-        },
-        "project dependents" => match parse_args::<DependentsArgs>(command, args) {
-            Ok(dependents) => handle_project_dependents(
-                &dependents.project,
-                meta_core::out::set_json(options.json_output || dependents.json),
-                options.recursive || dependents.recursive,
-                cwd,
-            ),
-            Err(result) => result,
-        },
-        "project check" => match parse_args::<CheckArgs>(command, args) {
+        "project list" | "project ls" => {
+            match parse_args::<ListArgs>(command, args, &meta.refusing(&FILTERS)) {
+                Ok(list) => handle_project_list(
+                    cwd,
+                    &ExecuteOptions {
+                        json_output: meta_core::out::set_json(options.json_output || list.json),
+                        recursive: options.recursive || list.recursive,
+                        depth: list.depth.or(options.depth),
+                        selected: None,
+                        meta: Default::default(),
+                    },
+                ),
+                Err(result) => result,
+            }
+        }
+        "project dependents" => {
+            match parse_args::<DependentsArgs>(command, args, &meta.refusing(&FILTERS)) {
+                Ok(dependents) => handle_project_dependents(
+                    &dependents.project,
+                    meta_core::out::set_json(options.json_output || dependents.json),
+                    options.recursive || dependents.recursive,
+                    cwd,
+                ),
+                Err(result) => result,
+            }
+        }
+        "project check" => match parse_args::<CheckArgs>(command, args, meta) {
             Ok(CheckArgs { json }) => check(
                 meta_core::out::set_json(options.json_output || json),
                 options,

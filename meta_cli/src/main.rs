@@ -154,6 +154,7 @@ impl Cli {
             exclude_filters: self.exclude.clone(),
             tag_filters: (!tags.is_empty()).then_some(tags),
             strict: self.strict,
+            meta_options: meta_options(),
         }
     }
 
@@ -733,23 +734,22 @@ fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin
     }
 }
 
+/// meta's options, and what of this process's arguments is them
+fn meta_options() -> meta_core::args::MetaOptions {
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    meta_core::args::MetaOptions::of(&Cli::command(), &args)
+}
+
 /// meta, as the program that runs a command in each repo: its options, so a
 /// command that rejected one is told it goes before the command (`before`:
 /// the words between meta's options and the command).
 fn outer(before: &[&str]) -> loop_lib::Outer {
-    let options = Cli::command()
-        .get_arguments()
-        .flat_map(|arg| {
-            let value = arg.get_action().takes_values();
-            let long = arg.get_long().map(|long| (format!("--{long}"), value));
-            let short = arg.get_short().map(|short| (format!("-{short}"), value));
-            long.into_iter().chain(short)
-        })
-        .collect();
     loop_lib::Outer {
-        program: "meta".to_string(),
+        meta: meta_options(),
         before: before.iter().map(ToString::to_string).collect(),
-        options,
     }
 }
 

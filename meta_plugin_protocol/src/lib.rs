@@ -126,6 +126,11 @@ pub struct PluginRequestOptions {
     /// Convert warnings to errors for all-or-nothing behavior (CI/automation)
     #[serde(default)]
     pub strict: bool,
+    /// meta's options and what was typed of them, for [`parse_args`]'s tip
+    /// when one is typed after the command. A host older than this field
+    /// sends none: then there is no tip.
+    #[serde(default)]
+    pub meta_options: meta_core::args::MetaOptions,
 }
 
 impl PluginRequestOptions {
@@ -426,14 +431,21 @@ pub fn has_help_token(command: &str, args: &[String]) -> bool {
 }
 
 /// Parse the arguments of `meta <command>` with `P`: its help (or version)
-/// as a message, its error, escaped, as an error.
-pub fn parse_args<P: clap::Parser>(command: &str, args: &[String]) -> Result<P, CommandResult> {
+/// as a message, its error, escaped, as an error. An option of meta's typed
+/// after the command that `P` rejects gets the tip with the line to run
+/// (`meta` sends its options in the request: `&request.options.meta_options`;
+/// [`meta_core::args::MetaOptions::refusing`] the ones the command never takes).
+pub fn parse_args<P: clap::Parser>(
+    command: &str,
+    args: &[String],
+    meta: &meta_core::args::MetaOptions,
+) -> Result<P, CommandResult> {
     let name = format!("meta {command}");
     let argv: Vec<String> = std::iter::once(name.clone())
         .chain(args.iter().cloned())
         .collect();
     P::try_parse_from(&argv).map_err(|e| {
-        use clap::error::ErrorKind;
+        use clap::error::{ContextKind, ContextValue, ErrorKind};
         match e.kind() {
             ErrorKind::DisplayHelp
             | ErrorKind::DisplayVersion
@@ -441,9 +453,19 @@ pub fn parse_args<P: clap::Parser>(command: &str, args: &[String]) -> Result<P, 
                 CommandResult::Message(e.render().to_string().trim_end().to_string())
             }
             _ => {
-                let message = meta_core::args::escaped_error::<P>(&argv).to_string();
-                let message = message.strip_prefix("error: ").unwrap_or(&message);
-                let mut message = message.trim_end().to_string();
+                let mut escaped = meta_core::args::escaped_error::<P>(&argv);
+                let typed: Vec<String> = command
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .chain(args.iter().cloned())
+                    .collect();
+                if let Some(tip) = meta.rejected(&e, &typed) {
+                    escaped.insert(
+                        ContextKind::Suggested,
+                        ContextValue::StyledStrs(vec![tip.into()]),
+                    );
+                }
+                let mut message = meta_core::args::message(&escaped);
                 // a command that isn't one: the ones there are
                 if e.kind() == ErrorKind::InvalidSubcommand {
                     let help = P::command().bin_name(&name).render_help().to_string();
@@ -706,6 +728,14 @@ mod tests {
                 exclude_filters: Some(vec!["b".to_string()]),
                 tag_filters: Some(vec!["t".to_string()]),
                 strict: true,
+                meta_options: meta_core::args::MetaOptions {
+                    options: vec![meta_core::args::MetaOption {
+                        spellings: vec!["--json".to_string()],
+                        takes_value: false,
+                        refused: false,
+                    }],
+                    typed: vec!["--json".to_string()],
+                },
             },
         };
         // the keys as a plugin reads them
@@ -722,6 +752,10 @@ mod tests {
                     "dry_run": true, "silent": true, "recursive": true, "depth": 2,
                     "include_filters": ["a"], "exclude_filters": ["b"],
                     "tag_filters": ["t"], "strict": true,
+                    "meta_options": {
+                        "options": [{"spellings": ["--json"], "takes_value": false}],
+                        "typed": ["--json"],
+                    },
                 },
             })
         );
@@ -731,6 +765,10 @@ mod tests {
             (sent.command, sent.args, sent.projects)
         );
         assert_eq!(got.cwd, sent.cwd);
+        assert_eq!(
+            got.options.meta_options.typed,
+            sent.options.meta_options.typed
+        );
         let (o, s) = (got.options, sent.options);
         assert_eq!(
             [

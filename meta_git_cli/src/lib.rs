@@ -22,6 +22,10 @@ use std::path::Path;
 
 use helpers::get_project_directories_with_fallback;
 
+/// meta's options that choose repos, which commands that find their repos
+/// themselves never take
+pub(crate) const FILTERS: [&str; 3] = ["--include", "--exclude", "--tag"];
+
 /// What meta-git says about itself: the commands it routes, and its help.
 pub fn plugin_info() -> PluginInfo {
     // The git commands meta adapts; every other one runs as typed
@@ -138,41 +142,43 @@ pub fn execute_command(
     }
 
     // Commands meta adapts parse their own arguments, help included
+    let meta = &options.meta_options;
+    let all_but_filters = meta.refusing(&FILTERS);
     match command {
         "git clone" => {
-            return match meta_plugin_protocol::parse_args(command, args) {
+            return match meta_plugin_protocol::parse_args(command, args, &all_but_filters) {
                 Ok(args) => finish(clone::execute_git_clone(args, options, cwd)),
                 Err(result) => result,
             }
         }
         "git update" => {
-            return match meta_plugin_protocol::parse_args(command, args) {
+            return match meta_plugin_protocol::parse_args(command, args, &all_but_filters) {
                 Ok(args) => finish(update::execute_git_update(args, options, cwd)),
-                Err(result) => own_options_go_first(command, result),
+                Err(result) => result,
             };
         }
         "git clone-missing" => {
             return match meta_plugin_protocol::parse_args::<clone_missing::CloneMissingArgs>(
-                command, args,
+                command, args, meta,
             ) {
                 Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
-                Err(result) => own_options_go_first(command, result),
+                Err(result) => result,
             };
         }
         "git clone-prune" => {
             return match meta_plugin_protocol::parse_args::<clone_missing::ClonePruneArgs>(
-                command, args,
+                command, args, meta,
             ) {
                 Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
-                Err(result) => own_options_go_first(command, result),
+                Err(result) => result,
             };
         }
         "git clone-sync" => {
             return match meta_plugin_protocol::parse_args::<clone_missing::CloneSyncArgs>(
-                command, args,
+                command, args, meta,
             ) {
                 Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
-                Err(result) => own_options_go_first(command, result),
+                Err(result) => result,
             };
         }
         "git commit" => {
@@ -180,7 +186,7 @@ pub fn execute_command(
             // makes of the arguments, it never commits
             let help = ["--help".to_string()];
             let args = if help_requested { &help[..] } else { args };
-            return match meta_plugin_protocol::parse_args(command, args) {
+            return match meta_plugin_protocol::parse_args(command, args, meta) {
                 Ok(args) => finish(commit::execute_git_commit(args, projects, options, cwd)),
                 Err(result) => result,
             };
@@ -195,20 +201,6 @@ pub fn execute_command(
 
     // Every other git command runs as typed in each repo
     execute_raw_git_command(command, args, projects, options, cwd)
-}
-
-/// A usage error of `command`, with where meta's own options go when one
-/// was given after it.
-fn own_options_go_first(command: &str, result: CommandResult) -> CommandResult {
-    match result {
-        CommandResult::Usage(e) if e.starts_with("unexpected argument '-") => {
-            CommandResult::Usage(format!(
-                "{e}\n\nmeta's own options (--dry-run, --depth, ...) go before the command, as \
-                 in `meta --dry-run {command}`"
-            ))
-        }
-        result => result,
-    }
 }
 
 fn finish(result: anyhow::Result<CommandResult>) -> CommandResult {

@@ -2,8 +2,8 @@
 //!
 //! Runs any cargo command across the Rust repos of a meta workspace.
 
-use meta_core::errln;
-pub use meta_plugin_protocol::{CommandResult, PlannedCommand, PluginRequestOptions};
+use meta_plugin::errln;
+pub use meta_plugin::{CommandResult, PlannedCommand, PluginRequestOptions};
 use std::path::Path;
 
 /// Plan `cargo <args>` in every selected repo that has a `Cargo.toml`.

@@ -1,7 +1,7 @@
 //! meta's git: run from a git hook it acts on its workspace's repos, not
 //! the hook's; and what it reads from each kind of repository.
 
-use meta_test_support::Sandbox;
+use meta_plugin::testing::Sandbox;
 use std::process::Output;
 
 #[test]

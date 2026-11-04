@@ -1,8 +1,8 @@
 use anyhow::Result;
-use meta_core::display::escape;
-use meta_core::ExecutionMode;
-use meta_core::{errln, outln};
-use meta_plugin_protocol::PluginRequestOptions;
+use meta_plugin::display::escape;
+use meta_plugin::ExecutionMode;
+use meta_plugin::PluginRequestOptions;
+use meta_plugin::{errln, outln};
 use std::path::{Path, PathBuf};
 
 use meta_core::repo_filter;
@@ -104,7 +104,7 @@ impl Drop for EphemeralGuard {
             return;
         }
         if let Err(e) = self.remove() {
-            meta_core::out::warn(format!(
+            meta_plugin::out::warn(format!(
                 "Failed to remove ephemeral worktree '{}': {e:#}\n  \
                  Run 'meta git worktree remove {} --force' or 'meta git worktree prune' to clean up.",
                 self.name, self.name
@@ -202,7 +202,7 @@ fn handle_ephemeral_exec(args: ExecArgs, options: &PluginRequestOptions) -> Resu
     }
     match (exec_result, cleanup) {
         (Err(e), Err(cleanup_error)) => {
-            meta_core::out::warn(format!("{cleanup_error:#}"));
+            meta_plugin::out::warn(format!("{cleanup_error:#}"));
             Err(e)
         }
         (Err(e), Ok(())) => Err(e),

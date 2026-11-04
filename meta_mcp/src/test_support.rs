@@ -2,9 +2,9 @@
 
 use crate::tools::{Reply, TOOLS};
 use crate::McpServer;
-use meta_test_support::Sandbox;
+use meta_plugin::testing::Sandbox;
 #[cfg(unix)]
-pub(crate) use meta_test_support::{gone, wait_for};
+pub(crate) use meta_plugin::testing::{gone, wait_for};
 use std::path::PathBuf;
 
 /// A server for a workspace whose `.meta.yaml` is `config`.

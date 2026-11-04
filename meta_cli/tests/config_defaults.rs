@@ -1,7 +1,7 @@
 //! `defaults` come from the config meta runs with, wherever it was found.
 
 #[cfg(unix)]
-use meta_test_support::Sandbox;
+use meta_plugin::testing::Sandbox;
 
 /// `defaults: {parallel: false}` holds when meta runs below the config, and
 /// when `--config` names it over a `.meta.yaml` that runs in parallel: two

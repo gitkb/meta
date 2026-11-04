@@ -5,10 +5,10 @@
 
 use crate::update::{self, Leftover};
 use colored::Colorize;
-use meta_core::display::{escape, escape_path};
-use meta_core::outln;
 use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
-use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
+use meta_plugin::display::{escape, escape_path};
+use meta_plugin::outln;
+use meta_plugin::{CommandResult, PluginRequestOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

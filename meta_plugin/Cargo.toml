@@ -1,0 +1,47 @@
+[package]
+name = "meta_plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The SDK for meta plugins: the plugin protocol, a plugin's runtime (exit codes, output, escaping), the one process owner, and a test kit"
+# pre-release: plugins depend on it by git, and nothing is published
+publish = false
+
+[features]
+default = ["process"]
+# the one owner of the processes a meta program starts
+process = ["dep:rustix", "dep:signal-hook", "dep:win32job"]
+# temporary: clap parsing of a plugin's arguments and the tip for one of
+# meta's options typed after the command, until the host parses for plugins
+parse = ["dep:clap", "dep:strsim"]
+# a sandbox and workspace builder for plugin tests
+testing = ["process", "dep:tempfile"]
+# the same, with git repositories in the workspace
+testing-git = ["testing"]
+
+[dependencies]
+anyhow.workspace = true
+colored.workspace = true
+console = "0.15"
+env_logger.workspace = true
+indexmap = { workspace = true, features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
+shlex.workspace = true
+clap = { workspace = true, optional = true }
+strsim = { version = "0.11", optional = true }
+tempfile = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process", "termios"], optional = true }
+signal-hook = { workspace = true, features = ["extended-siginfo"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+win32job = { version = "2", optional = true }
+
+[dev-dependencies]
+meta_plugin = { path = ".", features = ["parse", "testing-git"] }
+
+[lints]
+workspace = true

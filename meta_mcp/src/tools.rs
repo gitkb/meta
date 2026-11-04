@@ -6,9 +6,9 @@ use anyhow::{Context, Result};
 use loop_lib::JsonOutput;
 use meta_core::config::{self, ProjectInfo};
 use meta_core::dependency_graph::{self, ProjectDependencies};
-use meta_core::display::escape;
 use meta_core::git::{git, RepoStatus};
 use meta_core::query::{Query, RepoState, WorkspaceState};
+use meta_plugin::display::escape;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -604,7 +604,7 @@ impl McpServer {
             format!(
                 "Project '{}' at {}",
                 escape(&target.name),
-                meta_core::display::escape_path(&target.dir)
+                meta_plugin::display::escape_path(&target.dir)
             )
         };
         if !out.status.success() {
@@ -909,7 +909,7 @@ impl McpServer {
             let error = if !target.dir.exists() {
                 Some(format!(
                     "Project path does not exist: {}",
-                    meta_core::display::escape_path(&target.dir)
+                    meta_plugin::display::escape_path(&target.dir)
                 ))
             } else {
                 let commit = self.own_repo_git(&target).and_then(|mut cmd| {
@@ -1146,7 +1146,7 @@ impl McpServer {
                         "project": name,
                         "error": format!(
                             "Cannot search {}: its path contains the path list separator",
-                            meta_core::display::escape_path(&project_path)
+                            meta_plugin::display::escape_path(&project_path)
                         )
                     }));
                     continue;
@@ -1627,7 +1627,7 @@ mod tests {
 
     #[test]
     fn a_wrong_type_is_an_error_naming_the_tool_the_argument_and_the_value() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, _tmp) = workspace(&sandbox);
         for (tool, arguments, named) in [
             ("meta_list_projects", json!({"tag": 123}), ["tag", "123"]),
@@ -1665,7 +1665,7 @@ mod tests {
 
     #[test]
     fn a_project_is_a_name_of_the_config_or_the_root() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = server(&sandbox, "projects:\n  a: {path: dir/a, tags: [x]}\n");
         sandbox.repo(&tmp.join("dir/a"));
         let path = |project: &str| {
@@ -1731,7 +1731,7 @@ mod tests {
 
     #[test]
     fn multi_commit_commits_only_in_projects_of_the_workspace() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = server(&sandbox, "projects:\n  a: {path: dir/a}\n");
         let a = tmp.join("dir/a");
         sandbox.repo(&a);
@@ -1787,7 +1787,7 @@ mod tests {
 
     #[test]
     fn git_branch_reports_unknown_when_a_projects_git_file_points_nowhere() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = server(&sandbox, "projects:\n  broken: {}\n");
         sandbox.repo(&tmp);
         std::fs::create_dir(tmp.join("broken")).unwrap();
@@ -1822,7 +1822,7 @@ mod tests {
 
     #[test]
     fn git_acts_only_in_a_project_that_is_its_own_repository() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         // a plain folder, in a workspace root that is a repository with
         // work staged
         let (server, tmp) = server(&sandbox, "projects:\n  plain: {}\n");
@@ -1902,7 +1902,7 @@ mod tests {
     /// The check reads no path from git, so any folder name works.
     #[test]
     fn a_repository_with_any_name_is_its_own() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         let mut names = vec![std::ffi::OsString::from("name")];
         // Windows drops a trailing space from a folder's name
@@ -1928,7 +1928,7 @@ mod tests {
     /// it never takes the workspace around it for its own.
     #[test]
     fn a_workspace_whose_config_is_gone_is_not_its_parents() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (_, tmp) = server(&sandbox, "projects:\n  child: {meta: true}\n");
         let child = tmp.join("child");
         std::fs::create_dir(&child).unwrap();
@@ -1944,7 +1944,7 @@ mod tests {
 
     #[test]
     fn checkout_says_why_git_refused_the_branch() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = server(&sandbox, "projects: {}\n");
         sandbox.repo(&tmp);
         let refused = |branch: &str| {
@@ -1965,7 +1965,7 @@ mod tests {
 
     #[test]
     fn search_gives_at_most_fifty_matches_per_project_and_says_so() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = server(&sandbox, "projects:\n  a: {}\n  b: {}\n");
         for (project, lines) in [("a", 60), ("b", 50)] {
             let dir = tmp.join(project);
@@ -1990,7 +1990,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn build_uses_make_for_root_and_child_and_fails_only_when_all_do() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = server(&sandbox, r#"{"projects":{"child":{"tags":["selected"]}}}"#);
         let child = tmp.join("child");
         std::fs::create_dir(&child).unwrap();
@@ -2033,7 +2033,7 @@ mod tests {
 
     #[test]
     fn file_tree_lists_links_without_following_them() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = server(
             &sandbox,
             "projects:\n  a: {tags: [x]}\n  b: {tags: [y]}\n  c: {tags: [z]}\n",
@@ -2074,7 +2074,7 @@ mod tests {
 
     #[test]
     fn execution_order_selects_any_of_the_tags() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, _tmp) = server(
             &sandbox,
             "projects:\n  a: {tags: [x]}\n  b: {tags: [y]}\n  c: {tags: [z]}\n",
@@ -2089,7 +2089,7 @@ mod tests {
 
     #[test]
     fn build_and_test_share_detection_and_keep_release() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         for (file, program, build, test) in [
             ("Makefile", "make", vec![], vec!["test"]),
@@ -2118,7 +2118,7 @@ mod tests {
 
     #[test]
     fn get_config_ignores_meta_directory_and_shows_a_broken_config() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = server(&sandbox, "projects: {}\n");
         std::fs::create_dir_all(tmp.join(".meta/skills")).unwrap();
         let result = call(&server, "meta_get_config", json!({})).unwrap().text;

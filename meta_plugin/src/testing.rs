@@ -23,7 +23,6 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
 
 /// The identity commits in a sandbox are made as.
 const NAME: &str = "t";
@@ -151,13 +150,14 @@ impl Sandbox {
     pub fn command(&self, program: impl AsRef<OsStr>) -> Command {
         let mut command = Command::new(program);
         command.current_dir(self.work());
-        for name in repo_env().iter().map(String::as_str).chain(UNSET) {
+        for name in crate::process::REPO_ENV_VARS.iter().chain(&UNSET) {
             command.env_remove(name);
         }
         command.envs(self.env());
         command
     }
 
+    #[cfg(feature = "testing-git")]
     /// `git args` in `dir`; its stdout. The test fails unless git does.
     pub fn git(&self, dir: &Path, args: &[&str]) -> String {
         let out = self
@@ -175,6 +175,7 @@ impl Sandbox {
         String::from_utf8(out.stdout).unwrap()
     }
 
+    #[cfg(feature = "testing-git")]
     /// A repo at `dir` on branch `main`, with one commit of a `README`
     /// that names it.
     pub fn repo(&self, dir: &Path) -> PathBuf {
@@ -187,6 +188,7 @@ impl Sandbox {
         dir.to_path_buf()
     }
 
+    #[cfg(feature = "testing-git")]
     /// A bare repo at `dir` whose `main` has one commit, to clone from.
     pub fn bare(&self, dir: &Path) -> PathBuf {
         // one seed per bare repo, wherever two of them share a name
@@ -203,10 +205,14 @@ impl Sandbox {
 }
 
 /// A git config file with nothing in it, for the git the sandbox itself runs
+#[cfg(feature = "testing-git")]
 const NO_CONFIG: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 /// Settings of the user's shell a test would otherwise pick up.
-const UNSET: [&str; 11] = [
+const UNSET: [&str; 13] = [
+    // the `-c` settings a git around the tests was given
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
     "META_WORKTREES",
     "META_GITHUB_URL",
     "META_PLATFORM",
@@ -220,42 +226,20 @@ const UNSET: [&str; 11] = [
     "FORCE_COLOR",
 ];
 
-/// The variables that point git at a repo (`GIT_DIR`, `GIT_WORK_TREE`, …),
-/// as git names them.
-fn repo_env() -> &'static [String] {
-    static NAMES: OnceLock<Vec<String>> = OnceLock::new();
-    NAMES.get_or_init(|| {
-        // with no config of the user's: none is needed, and it could be broken
-        let out = Command::new("git")
-            .args(["rev-parse", "--local-env-vars"])
-            .env("GIT_CONFIG_GLOBAL", NO_CONFIG)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "git rev-parse --local-env-vars: {out:?}"
-        );
-        String::from_utf8(out.stdout)
-            .unwrap()
-            .lines()
-            .map(String::from)
-            .collect()
-    })
-}
-
 /// `let sandbox = isolated!();`: the sandbox of [`Sandbox::isolated`]; in
 /// the test as started, which only runs the copy, it returns.
 #[macro_export]
 macro_rules! isolated {
     () => {
-        match $crate::Sandbox::isolated() {
+        match $crate::testing::Sandbox::isolated() {
             Some(sandbox) => sandbox,
             None => return,
         }
     };
 }
+pub use crate::isolated;
 
+#[cfg(feature = "testing-git")]
 /// Whether git can make reftable repos (2.45 on); says why not when not.
 pub fn git_has_reftable() -> bool {
     let out = Command::new("git")

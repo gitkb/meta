@@ -4,15 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The workspace domain meta and its plugins share: config, repo selection, worktree sets, the dependency graph, and the processes meta starts"
+description = "The workspace domain meta and its plugins share: config, repo selection, worktree sets and the dependency graph"
 
 [dependencies]
+meta_plugin.workspace = true
 anyhow.workspace = true
-clap.workspace = true
-colored.workspace = true
-console = "0.15"
-shlex.workspace = true
-strsim = "0.11"
 dirs.workspace = true
 log.workspace = true
 serde.workspace = true
@@ -20,15 +16,8 @@ serde_json.workspace = true
 serde_yaml_ng.workspace = true
 walkdir = "2.3"
 
-[target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["process", "termios"] }
-signal-hook = { workspace = true, features = ["extended-siginfo"] }
-
-[target.'cfg(windows)'.dependencies]
-win32job = "2"
-
 [dev-dependencies]
-meta_test_support.workspace = true
+meta_plugin = { workspace = true, features = ["testing-git"] }
 tempfile.workspace = true
 
 [lints]

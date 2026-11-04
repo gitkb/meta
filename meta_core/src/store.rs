@@ -3,8 +3,8 @@
 //! Writes JSON files with atomic semantics (write to a temporary file, then
 //! rename).
 
-use crate::display::escape_path;
 use anyhow::{Context, Result};
+use meta_plugin::display::escape_path;
 use serde::Serialize;
 use std::path::Path;
 

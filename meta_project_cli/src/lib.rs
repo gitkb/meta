@@ -4,15 +4,15 @@
 
 use meta_core::config::{self, MetaTreeNode};
 use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
-use meta_core::display::{escape, escape_path};
-use meta_core::git::GitUrl;
-use meta_core::outln;
 use meta_core::worktree;
+use meta_plugin::display::{escape, escape_path};
+use meta_plugin::outln;
+use meta_plugin::RepoUrl;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use meta_plugin_protocol::{has_help_token, parse_args, CommandResult};
+use meta_plugin::{has_help_token, parse_args, CommandResult};
 
 /// Options passed to execute_command
 #[derive(Debug, Default, Clone)]
@@ -26,7 +26,7 @@ pub struct ExecuteOptions {
     /// chose, when one was given: the commands act on these only
     pub selected: Option<Vec<PathBuf>>,
     /// meta's options, for the tip when one is typed after the command
-    pub meta: meta_core::args::MetaOptions,
+    pub meta: meta_plugin::args::MetaOptions,
 }
 
 /// meta's options that choose repos, which list and dependents never take
@@ -74,7 +74,7 @@ pub struct ProjectTreeNode {
     pub path: String,
     /// Git remote URL. Should be present for all normal projects.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo: Option<GitUrl>,
+    pub repo: Option<RepoUrl>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     pub is_meta: bool,
@@ -91,7 +91,7 @@ pub struct ProjectTreeNode {
 pub struct ProjectListOutput {
     pub path: String,
     /// The root's remote, `""` when it has none.
-    pub repo: GitUrl,
+    pub repo: RepoUrl,
     pub root: String,
     pub cwd: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -220,7 +220,7 @@ pub fn execute_command(
                 .collect();
             let near = args
                 .first()
-                .and_then(|word| meta_core::args::nearest(word, SUBCOMMANDS.iter().copied()));
+                .and_then(|word| meta_plugin::args::nearest(word, SUBCOMMANDS.iter().copied()));
             let suggestion = match near {
                 Some(word) => format!(
                     "\n\nA command with a similar name exists:\n    meta project {}",
@@ -272,10 +272,10 @@ struct CheckProblem {
     state: &'static str,
     reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    repo: Option<GitUrl>,
+    repo: Option<RepoUrl>,
     /// The checkout's `origin`, for `wrong_remote` (`null` without one).
     #[serde(skip_serializing_if = "Option::is_none")]
-    actual: Option<Option<GitUrl>>,
+    actual: Option<Option<RepoUrl>>,
 }
 
 /// `meta project check`: every project of the workspace is a clone of its
@@ -575,8 +575,8 @@ fn to_project_tree_node(node: &MetaTreeNode) -> ProjectTreeNode {
 }
 
 /// A project's remote URL as shown in `meta project list`.
-fn remote_label(repo: Option<&GitUrl>) -> String {
-    repo.map_or_else(|| "no remote".to_string(), GitUrl::to_string)
+fn remote_label(repo: Option<&RepoUrl>) -> String {
+    repo.map_or_else(|| "no remote".to_string(), RepoUrl::to_string)
 }
 
 /// Format a project tree with box-drawing characters: each project's name, its
@@ -735,7 +735,7 @@ mod tests {
 
     #[test]
     fn test_execute_command_no_meta_file() {
-        let sandbox = meta_test_support::Sandbox::new();
+        let sandbox = meta_plugin::testing::Sandbox::new();
         let temp_dir = sandbox.work();
 
         let options = ExecuteOptions::default();
@@ -747,7 +747,7 @@ mod tests {
 
     #[test]
     fn test_unknown_command() {
-        let sandbox = meta_test_support::Sandbox::new();
+        let sandbox = meta_plugin::testing::Sandbox::new();
         let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file
@@ -763,7 +763,7 @@ mod tests {
 
     #[test]
     fn a_typo_of_a_project_command_names_the_command_and_gets_no_help() {
-        let sandbox = meta_test_support::Sandbox::new();
+        let sandbox = meta_plugin::testing::Sandbox::new();
         let temp_dir = sandbox.work();
         let options = ExecuteOptions::default();
         let typo = ["lsit".to_string(), "--json".to_string()];
@@ -777,7 +777,7 @@ mod tests {
 
     #[test]
     fn test_project_check_all_present() {
-        let sandbox = meta_test_support::Sandbox::new();
+        let sandbox = meta_plugin::testing::Sandbox::new();
         let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file with no projects
@@ -792,7 +792,7 @@ mod tests {
 
     #[test]
     fn meta_options_reach_list_and_dependents_and_each_config_counts_once() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         let root = temp_dir.canonicalize().unwrap();
         std::fs::write(
@@ -870,7 +870,7 @@ mod tests {
 
     #[test]
     fn recursive_dependents_cover_nested_projects_by_path() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         let root = temp_dir.canonicalize().unwrap();
         let config = |dir: &Path, yaml: &str| {
@@ -916,7 +916,7 @@ mod tests {
 
     #[test]
     fn check_names_a_wrong_remote_and_list_shows_the_roots_from_a_child() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         let root = temp_dir.canonicalize().unwrap();
         std::fs::write(
@@ -965,7 +965,7 @@ mod tests {
 
     #[test]
     fn test_project_sync_removed() {
-        let sandbox = meta_test_support::Sandbox::new();
+        let sandbox = meta_plugin::testing::Sandbox::new();
         let options = ExecuteOptions::default();
         let args = ["sync".to_string()];
         let result = execute_command("project", &args, &options, &[], &sandbox.work());
@@ -976,7 +976,7 @@ mod tests {
 
     #[test]
     fn test_project_list_basic() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
 
         // Create a .meta.yaml file with projects
@@ -997,7 +997,7 @@ mod tests {
 
     #[test]
     fn test_project_list_json() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
 
         std::fs::write(
@@ -1024,7 +1024,7 @@ mod tests {
 
     #[test]
     fn test_project_ls_alias() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
 
         std::fs::write(
@@ -1042,7 +1042,7 @@ mod tests {
 
     #[test]
     fn test_project_list_recursive() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
 
         // Create root .meta.yaml
@@ -1204,7 +1204,7 @@ mod tests {
 
     #[test]
     fn test_project_list_json_includes_cwd() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
 
         std::fs::write(
@@ -1241,7 +1241,7 @@ mod tests {
 
     #[test]
     fn test_project_list_json_includes_linked_worktree_context() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1309,7 +1309,7 @@ mod tests {
     fn test_project_list_json_root_differs_from_cwd_in_nested_recursive() {
         // Regression: when invoked from a child directory with -A,
         // `root` must point to the outermost workspace root, NOT to cwd.
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         let child = temp_dir.join("child");
         std::fs::create_dir_all(&child).unwrap();
@@ -1359,7 +1359,7 @@ mod tests {
     fn test_project_list_recursive_from_nested() {
         // root has child, child has grandchild
         // Running with -A from child should show root's tree
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         let child = temp_dir.join("child");
         let grandchild = child.join("grandchild");
@@ -1402,7 +1402,7 @@ mod tests {
     #[test]
     fn test_project_list_non_recursive_stays_local() {
         // Running non-recursive from child should only show child's projects
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         let child = temp_dir.join("child");
         let grandchild = child.join("grandchild");
@@ -1440,7 +1440,7 @@ mod tests {
 
     #[test]
     fn test_project_dependents_command() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1474,7 +1474,7 @@ projects:
     #[test]
     fn test_project_dependents_from_subdirectory() {
         // T8: running from a subdirectory should climb to the nearest .meta.yaml ancestor
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1509,7 +1509,7 @@ projects:
 
     #[test]
     fn test_project_dependents_json() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1547,7 +1547,7 @@ projects:
 
     #[test]
     fn test_project_dependents_json_is_metas() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1584,7 +1584,7 @@ projects:
 
     #[test]
     fn test_project_dependents_rejects_what_it_does_not_take() {
-        let sandbox = meta_test_support::Sandbox::new();
+        let sandbox = meta_plugin::testing::Sandbox::new();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
@@ -1613,7 +1613,7 @@ projects:
     #[test]
     fn test_project_dependents_unknown_project_error() {
         // T13: querying a nonexistent project name should error, not say "no dependents"
-        let sandbox = meta_test_support::Sandbox::new();
+        let sandbox = meta_plugin::testing::Sandbox::new();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),

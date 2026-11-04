@@ -274,7 +274,7 @@ fn git_sees(argv: &[&str], aliases: &BTreeMap<String, String>) -> String {
 #[test]
 fn arguments_reach_the_program_as_given() {
     // git, through loop, in this process: in a sandbox of its own
-    let _sandbox = meta_test_support::isolated!();
+    let _sandbox = meta_plugin::testing::isolated!();
     let hostile = [
         "one arg",
         "$(touch PWNED)",
@@ -298,7 +298,7 @@ fn arguments_reach_the_program_as_given() {
 #[test]
 fn aliases_expand_into_words_not_shell() {
     // git, through loop, in this process: in a sandbox of its own
-    let _sandbox = meta_test_support::isolated!();
+    let _sandbox = meta_plugin::testing::isolated!();
     let aliases = BTreeMap::from([(
         "q".to_string(),
         "git rev-parse --sq-quote 'two words' ;".to_string(),

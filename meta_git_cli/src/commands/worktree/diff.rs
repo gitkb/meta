@@ -1,7 +1,7 @@
 use anyhow::Result;
 use colored::*;
-use meta_core::display::{escape, escape_lines};
-use meta_core::outln;
+use meta_plugin::display::{escape, escape_lines};
+use meta_plugin::outln;
 use rayon::prelude::*;
 
 use meta_git_lib::worktree::git_ops::{git_diff_patch, git_diff_stat};

@@ -7,9 +7,9 @@
 use anyhow::{Context, Result};
 use colored::*;
 use meta_core::config;
-use meta_core::display::escape_path;
-use meta_core::outln;
-use meta_core::ExecutionMode;
+use meta_plugin::display::escape_path;
+use meta_plugin::outln;
+use meta_plugin::ExecutionMode;
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};

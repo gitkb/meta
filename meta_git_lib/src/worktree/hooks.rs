@@ -33,7 +33,7 @@ pub fn fire_worktree_hook(
     // From the directory whose config names the hook: a set removed from
     // inside it takes the caller's directory with it
     let mut command = meta_core::git::in_repo("sh", &owner.dir);
-    let status = meta_core::children::spawn(
+    let status = meta_plugin::process::spawn(
         command
             .args(["-c", cmd_str])
             .stdin(Stdio::piped())

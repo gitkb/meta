@@ -1,9 +1,9 @@
 use anyhow::Context;
 use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use meta_core::errln;
-use meta_core::git::GitUrl;
 use meta_git_lib::clone_queue::{CloneQueue, CloneTask, Outcome, Work};
+use meta_plugin::errln;
+use meta_plugin::RepoUrl;
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -151,33 +151,33 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
             Work::Clone(url) => errln!(
                 "{} {} ({url})",
                 "Failed to clone".red().bold(),
-                meta_core::display::escape(&failure.name),
+                meta_plugin::display::escape(&failure.name),
             ),
             Work::Pull => errln!(
                 "{} {}",
                 "Could not pull".red().bold(),
-                meta_core::display::escape(&failure.name),
+                meta_plugin::display::escape(&failure.name),
             ),
         }
         // git's error names paths from the filesystem
         for line in failure.error.lines() {
-            errln!("    {}", meta_core::display::escape(line));
+            errln!("    {}", meta_plugin::display::escape(line));
         }
     }
     for (name, _, why) in &refused {
         errln!(
             "{} {}: not a git repository ({}); move it away and run 'meta {command}' again",
             "Not cloned".red().bold(),
-            meta_core::display::escape(name),
-            meta_core::display::escape(why)
+            meta_plugin::display::escape(name),
+            meta_plugin::display::escape(why)
         );
     }
-    let chain = |names: &Vec<String>| meta_core::display::escape(&names.join(" → ")).into_owned();
+    let chain = |names: &Vec<String>| meta_plugin::display::escape(&names.join(" → ")).into_owned();
     for names in &cycles {
         errln!(
             "{} {}: it is a meta repo above it again; the meta repos list each other ({})",
             "Left out".red().bold(),
-            meta_core::display::escape(names.last().map_or("", String::as_str)),
+            meta_plugin::display::escape(names.last().map_or("", String::as_str)),
             chain(names)
         );
     }
@@ -185,7 +185,7 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
         errln!(
             "{} {}",
             "Cannot read nested .meta.yaml".red().bold(),
-            meta_core::display::escape_lines(line)
+            meta_plugin::display::escape_lines(line)
         );
     }
     let failed = |clone: bool| -> Vec<&str> {
@@ -269,7 +269,7 @@ fn upstream_is_missing(dir: &Path, ssh_cmd: Option<&str>) -> bool {
     if let Some(ssh) = ssh_cmd {
         ask.env("GIT_SSH_COMMAND", ssh);
     }
-    matches!(meta_core::children::output(&mut ask), Ok(out) if out.status.code() == Some(2))
+    matches!(meta_plugin::process::output(&mut ask), Ok(out) if out.status.code() == Some(2))
 }
 
 /// The git command `task` runs, `url` giving a clone's URL as git gets it
@@ -277,7 +277,7 @@ fn upstream_is_missing(dir: &Path, ssh_cmd: Option<&str>) -> bool {
 pub(crate) fn git_argv(
     task: &CloneTask,
     git_depth: Option<&str>,
-    url: impl Fn(&GitUrl) -> OsString,
+    url: impl Fn(&RepoUrl) -> OsString,
 ) -> Vec<OsString> {
     let path = task.target_path.clone().into_os_string();
     match &task.work {
@@ -319,7 +319,7 @@ pub(crate) fn nothing_to_pull(dir: &Path) -> Option<String> {
     match meta_core::git::lookup(dir, ["config", "--get", merge.as_str()]) {
         Ok(None) => Some(format!(
             "its branch {} has no upstream",
-            meta_core::display::escape(branch)
+            meta_plugin::display::escape(branch)
         )),
         _ => None,
     }
@@ -361,14 +361,17 @@ fn run_git(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
     let mut child =
-        meta_core::children::spawn(&mut cmd).map_err(|e| format!("Failed to run git: {e}"))?;
+        meta_plugin::process::spawn(&mut cmd).map_err(|e| format!("Failed to run git: {e}"))?;
     // Stream stderr for progress updates, and keep its last lines for
     // the failure report (the progress bar is hidden off a terminal).
     let pb = pb.clone();
     let task_name = task.name.clone();
     let tail = StderrTail::spawn(child.stderr(), move |line| {
         // git's progress names paths from the filesystem
-        pb.set_message(format!("{task_name}: {}", meta_core::display::escape(line)))
+        pb.set_message(format!(
+            "{task_name}: {}",
+            meta_plugin::display::escape(line)
+        ))
     });
     match child.wait() {
         Ok(status) if status.success() => Ok(()),

@@ -6,7 +6,7 @@
 #[path = "../examples/meta-hello.rs"]
 mod hello;
 
-use meta_plugin_protocol::{CommandResult, PluginRequest};
+use meta_plugin::{CommandResult, PluginRequest};
 
 fn request(args: &[&str]) -> PluginRequest {
     serde_json::from_value(serde_json::json!({

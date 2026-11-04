@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::config::ProjectInfo;
-use crate::git::GitUrl;
+use meta_plugin::RepoUrl;
 
 /// Represents a project with dependency information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,7 +27,7 @@ pub struct ProjectDependencies {
     pub path: String,
     /// Git remote URL. Should be present for all normal projects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo: Option<GitUrl>,
+    pub repo: Option<RepoUrl>,
     pub tags: Vec<String>,
     /// What this project provides (e.g., APIs, libraries)
     pub provides: Vec<String>,
@@ -78,7 +78,7 @@ pub enum DependencyProblem {
 
 impl std::fmt::Display for DependencyProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use crate::display::escape;
+        use meta_plugin::display::escape;
         match self {
             Self::Unresolved(dep) => {
                 write!(

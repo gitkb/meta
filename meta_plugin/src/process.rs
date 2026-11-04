@@ -45,6 +45,39 @@
 use std::io;
 use std::process::{Child, Command, ExitStatus, Output};
 
+/// The variables that tie git to one repository, which git itself clears
+/// when it runs in another (`git rev-parse --local-env-vars`, less the
+/// `-c`/`GIT_CONFIG_COUNT` settings git keeps for a submodule: they are the
+/// user's, not the repository's). A git hook or alias sets some of them
+/// (`GIT_DIR`, `GIT_INDEX_FILE`); left in place, git would act on that
+/// repository from every directory meta runs it in.
+pub const REPO_ENV_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+];
+
+/// Remove [`REPO_ENV_VARS`] from what `command` will inherit: every
+/// program started in a repository folder needs it, as does any program
+/// a git hook starts.
+pub fn clean_env(command: &mut Command) -> &mut Command {
+    for key in REPO_ENV_VARS {
+        command.env_remove(key);
+    }
+    command
+}
+
 /// A child started through [`spawn`] or [`spawn_group`]. Wait for it through [`Owned::wait`]
 /// or [`Owned::exchange`]. One dropped unwaited for is let go: a
 /// stop no longer waits for it (its process group still gets the signal).

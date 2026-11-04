@@ -1,10 +1,10 @@
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use meta_core::config::{self, find_meta_config, Workspace};
-use meta_core::display::{escape, escape_lines, escape_path};
 use meta_core::repo_filter::{Filters, Reach};
-use meta_core::ExecutionMode;
-use meta_core::{errln, out, outln};
+use meta_plugin::display::{escape, escape_lines, escape_path};
+use meta_plugin::ExecutionMode;
+use meta_plugin::{errln, out, outln};
 use std::path::{Path, PathBuf};
 
 mod context;
@@ -13,7 +13,7 @@ mod registry;
 mod run_list;
 mod subprocess_plugins;
 use meta_core::worktree;
-use meta_plugin_protocol::PluginRequestOptions;
+use meta_plugin::PluginRequestOptions;
 use subprocess_plugins::{SubprocessPlugin, SubprocessPluginManager};
 
 // === CLI Structs ===
@@ -359,9 +359,9 @@ fn help_with_plugins(plugins: &SubprocessPluginManager) -> String {
 // === Main Entry Point ===
 
 fn main() -> std::process::ExitCode {
-    meta_core::exit::run(|| {
-        if let Err(e) = meta_core::children::own() {
-            meta_core::out::warn(format!(
+    meta_plugin::exit::run(|| {
+        if let Err(e) = meta_plugin::process::own() {
+            meta_plugin::out::warn(format!(
                 "cannot pass signals on to the programs meta starts: {e}"
             ));
         }
@@ -397,9 +397,9 @@ fn run_cli() -> Result<()> {
             let plugins = SubprocessPluginManager::new(false)?;
             return Ok(out!("{}", help_with_plugins(&plugins))?);
         }
-        Err(_) => meta_core::args::parse()?,
+        Err(_) => meta_plugin::args::parse()?,
     };
-    meta_core::out::set_json(cli.json);
+    meta_plugin::out::set_json(cli.json);
 
     // Check for orphaned nested meta repo and warn the user
     check_and_warn_orphan();
@@ -483,7 +483,7 @@ fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Resul
             found = match found.find_subcommand_mut(word) {
                 Some(sub) => sub,
                 None => {
-                    return Err(meta_core::exit::Usage(format!(
+                    return Err(meta_plugin::exit::Usage(format!(
                         "meta {} has no command '{}'",
                         escape(&words.get(..i).unwrap_or_default().join(" ")),
                         escape(word)
@@ -521,7 +521,7 @@ fn plugin_command(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Resu
     let namespace_help =
         args.len() == 2 && matches!(args.get(1).map(String::as_str), Some("--help" | "-h"));
     if args.len() == 1 || namespace_help {
-        let help = meta_plugin_protocol::help_text(&plugin.word, &plugin.info);
+        let help = meta_plugin::help_text(&plugin.word, &plugin.info);
         return Ok(outln!("{}", help.trim_end())?);
     }
     if wants_help {
@@ -534,7 +534,7 @@ fn plugin_command(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Resu
 /// as the plugin's info declares it, then the command's help: the plugin's
 /// for one of its own, meta's for one it runs as typed.
 fn command_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Result<()> {
-    use meta_plugin_protocol::Verb;
+    use meta_plugin::Verb;
     let verb = args.get(1).map(String::as_str).unwrap_or_default();
     let named = loop_lib::display_command(&[plugin.word.clone(), verb.to_string()]);
     let named = escape(&named);
@@ -739,12 +739,12 @@ fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin
 }
 
 /// meta's options, and what of this process's arguments is them
-fn meta_options() -> meta_core::args::MetaOptions {
+fn meta_options() -> meta_plugin::args::MetaOptions {
     let args: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    meta_core::args::MetaOptions::of(&Cli::command(), &args)
+    meta_plugin::args::MetaOptions::of(&Cli::command(), &args)
 }
 
 /// meta, as the program that runs a command in each repo: its options, so a
@@ -803,7 +803,7 @@ fn target(cli: &Cli, start: &Path) -> Result<Target> {
             if cli.verbose {
                 match &workspace {
                     Some(w) => errln!("Using config {}", escape_path(&w.config_path)),
-                    None => meta_core::out::warn(format!(
+                    None => meta_plugin::out::warn(format!(
                         "No .meta.yaml found for worktree '{}'. Tags, plugins, and dependency features unavailable.",
                         escape(&name)
                     )),
@@ -1252,7 +1252,7 @@ fn unrecognized_command_error(
     let words = plugins.words();
     let near = (!subprocess_plugins::on_path(first_cmd))
         .then(|| {
-            meta_core::args::nearest(
+            meta_plugin::args::nearest(
                 first_cmd,
                 builtins
                     .iter()
@@ -1300,7 +1300,7 @@ fn unrecognized_command_error(
         true => "\n\nNo .meta.yaml here or above, so no workspace's own plugins were looked for.",
         false => "",
     };
-    meta_core::exit::Usage(format!(
+    meta_plugin::exit::Usage(format!(
         "unrecognized command '{}'{suggestion}{outside}\n\n\
          The commands there are, the ones plugins add too: meta --help",
         escape(first_cmd),
@@ -1339,7 +1339,7 @@ fn check_and_warn_orphan() {
         return;
     }
     if let Some(warning) = config::check_orphan_status(&meta_dir) {
-        meta_core::out::warn(format!(
+        meta_plugin::out::warn(format!(
             "This meta repo is not tracked by its parent.\n  \
              Current: {}\n  Parent:  {}\n\n  \
              To include it, add to {}:\n    {}:\n      repo: <git-url>\n      meta: true\n",

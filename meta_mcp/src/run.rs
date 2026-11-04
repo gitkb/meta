@@ -164,7 +164,7 @@ impl Calls {
             .stderr(Stdio::piped());
         // Its own process group (job on Windows), so cancelling stops what
         // it starts too
-        let mut child = meta_core::children::spawn_group(command)?;
+        let mut child = meta_plugin::process::spawn_group(command)?;
         let (Some(stdout), Some(mut stderr)) = (child.stdout(), child.stderr()) else {
             child.stop(true);
             return Err(std::io::Error::other("no pipe to the program"));
@@ -263,7 +263,7 @@ mod tests {
     #[cfg(unix)]
     use crate::test_support::{gone, wait_for};
     #[cfg(unix)]
-    use meta_test_support::Sandbox;
+    use meta_plugin::testing::Sandbox;
 
     /// The name of the program `pid` runs.
     #[cfg(unix)]

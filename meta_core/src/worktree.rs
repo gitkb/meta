@@ -5,8 +5,8 @@
 //! automatic worktree-scoped command dispatch, and by meta_git_lib
 //! for worktree management commands.
 
-use crate::display::{escape, escape_lines, escape_path};
 use anyhow::{Context, Result};
+use meta_plugin::display::{escape, escape_lines, escape_path};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -701,7 +701,7 @@ fn source_repo(checkout: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod recursive_tests {
     use super::*;
-    use meta_test_support::Sandbox;
+    use meta_plugin::testing::Sandbox;
 
     #[test]
     fn the_sets_own_nested_config_wins_over_the_workspaces() {
@@ -766,7 +766,7 @@ mod recursive_tests {
     #[test]
     /// Nested members have sorted, distinct, full aliases.
     fn members_include_nested_ones_with_sorted_full_aliases() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let root = &sandbox.work().join("set");
         for alias in [".", "open-source", "open-source/atc", "other/atc"] {
             member(&sandbox, root, alias);
@@ -792,7 +792,7 @@ mod recursive_tests {
 
     #[test]
     fn implicit_context_reaches_nested_members_without_collecting_branch_facts() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let root = sandbox.work().join(".worktrees/example");
         for alias in [".", "parent", "parent/nested"] {
             member(&sandbox, &root, alias);
@@ -826,7 +826,7 @@ mod recursive_tests {
     #[test]
     /// Malformed nested Git files fail instead of silently omitting members.
     fn recursive_malformed_member_is_error_instead_of_partial_inventory() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         member(&sandbox, &sandbox.work(), "parent");
         let child = sandbox.work().join("parent/broken");
         std::fs::create_dir_all(&child).unwrap();
@@ -841,7 +841,7 @@ mod recursive_tests {
     #[test]
     /// Missing roots cannot be represented as complete empty inventories.
     fn recursive_missing_root_is_error() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         assert!(discover_worktree_repos_strict(&sandbox.work().join("missing")).is_err());
     }
 
@@ -851,7 +851,7 @@ mod recursive_tests {
     /// member; others (an agent's own worktrees), a nested set and symlink
     /// cycles are not.
     fn recursive_finds_recorded_hidden_members_only() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let root = sandbox.work();
         member(&sandbox, &root, "visible");
         member(&sandbox, &root, ".deps/child");
@@ -874,7 +874,7 @@ mod recursive_tests {
     /// Relative Git links resolve against the checkout, independently of cwd.
     #[test]
     fn relative_gitdir_reports_absolute_source() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let root = sandbox.work().join("set");
         member(&sandbox, &root, ".");
         let source = sandbox
@@ -905,7 +905,7 @@ mod recursive_tests {
     /// Dangling and incomplete admin links must not produce successful members.
     #[test]
     fn recursive_rejects_missing_worktree_metadata() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         for missing in ["HEAD", "commondir", "gitdir", "entire-admin"] {
             let root = sandbox.work().join(missing);
             member(&sandbox, &root, "child");

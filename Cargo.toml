@@ -7,10 +7,9 @@ members = [
     "meta_git_cli",
     "meta_git_lib",
     "meta_mcp",
-    "meta_plugin_protocol",
+    "meta_plugin",
     "meta_rust_cli",
     "meta_project_cli",
-    "meta_test_support",
 ]
 exclude = ["agent"]
 resolver = "2"
@@ -27,8 +26,7 @@ loop_lib = { path = "loop_lib" }
 # the workspace version; release.yml pins it before publishing the crates
 # that depend on it
 meta_core = { path = "meta_core", version = "<1" }
-meta_plugin_protocol = { path = "meta_plugin_protocol" }
-meta_test_support = { path = "meta_test_support" }
+meta_plugin = { path = "meta_plugin" }
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = "4.3"
@@ -71,7 +69,7 @@ cast_lossless = "deny"
 large_stack_arrays = "deny"
 panic = "deny"
 unreachable = "deny"
-# output goes through meta_core::out, exits through meta_core::exit
+# output goes through meta_plugin::out, exits through meta_plugin::exit
 print_stdout = "deny"
 print_stderr = "deny"
 exit = "deny"

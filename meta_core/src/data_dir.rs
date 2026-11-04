@@ -40,7 +40,7 @@ pub fn create_private_dir(dir: &Path) -> Result<()> {
     builder.create(dir).with_context(|| {
         format!(
             "Failed to create meta data directory at {}",
-            crate::display::escape_path(dir)
+            meta_plugin::display::escape_path(dir)
         )
     })
 }

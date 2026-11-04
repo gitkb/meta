@@ -6,7 +6,7 @@
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
-use meta_test_support::Sandbox;
+use meta_plugin::testing::Sandbox;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;

@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use colored::*;
-use meta_core::display::{escape, escape_path};
-use meta_core::out;
-use meta_core::outln;
 use meta_core::set_record as record;
-use meta_core::ExecutionMode;
+use meta_plugin::display::{escape, escape_path};
+use meta_plugin::out;
+use meta_plugin::outln;
+use meta_plugin::ExecutionMode;
 
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::hooks::fire_post_destroy;
@@ -105,7 +105,7 @@ pub(crate) fn remove_set(
                 format!(
                     "\n  {}: {}",
                     escape_path(path),
-                    meta_core::display::escape_lines(&format!("{e:#}"))
+                    meta_plugin::display::escape_lines(&format!("{e:#}"))
                 )
             })
             .collect();
@@ -343,6 +343,6 @@ fn branch_fate(git_dir: &std::path::Path, branch: &str, preview: bool) -> Branch
         Ok(BranchFate::Deleted)
     };
     fate().unwrap_or_else(|e| {
-        BranchFate::Kept(meta_core::display::escape_lines(&format!("{e:#}")).into_owned())
+        BranchFate::Kept(meta_plugin::display::escape_lines(&format!("{e:#}")).into_owned())
     })
 }

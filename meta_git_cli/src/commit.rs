@@ -1,8 +1,8 @@
 use colored::Colorize;
 use meta_core::config;
-use meta_core::display::{escape, escape_lines, escape_path};
-use meta_core::outln;
-use meta_plugin_protocol::{CommandResult, PlannedCommand, PluginRequestOptions};
+use meta_plugin::display::{escape, escape_lines, escape_path};
+use meta_plugin::outln;
+use meta_plugin::{CommandResult, PlannedCommand, PluginRequestOptions};
 use std::path::Path;
 use std::process::Command;
 
@@ -140,7 +140,7 @@ fn staged_files(path: &std::path::Path) -> anyhow::Result<Vec<String>> {
 /// Execute commit with editor for per-repo messages
 fn execute_editor_commit(
     repos: &[(String, String, Vec<String>)],
-    mode: meta_core::ExecutionMode,
+    mode: meta_plugin::ExecutionMode,
 ) -> anyhow::Result<()> {
     use std::io::Write;
 
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn commit_passes_over_folders_with_nothing_of_gits_but_reports_a_broken_one() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         sandbox.git(&dir, &["init", "-q"]);
         let args = || CommitArgs {
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn a_workspace_root_that_is_no_repository_is_passed_over() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         // whatever the config is called (`meta -c meta.yml`)
         let root = dir;
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn a_staged_file_read_git_fails_is_an_error_not_nothing_staged() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         let repo = dir.join("broken");
         std::fs::create_dir(&repo).unwrap();
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn a_failed_commit_fails_the_command_after_the_others() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         // Each its own repository, so git never finds one around the
         // temporary directory; "a" has nothing staged, so its commit fails

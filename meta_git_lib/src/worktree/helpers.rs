@@ -1,7 +1,7 @@
 //! Utility functions for worktree management.
 
 use anyhow::{Context, Result};
-use meta_core::display::{escape, escape_path, program_output};
+use meta_plugin::display::{escape, escape_path, program_output};
 use std::path::{Path, PathBuf};
 
 use meta_core::config::Workspace;
@@ -255,7 +255,7 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
 pub fn repo_matches_spec(repo_path: &Path, spec: &str) -> bool {
     meta_core::git::run(repo_path, ["remote", "get-url", "origin"])
         .ok()
-        .and_then(|url| meta_core::git::GitUrl::from(url).owner_repo())
+        .and_then(|url| meta_plugin::RepoUrl::from(url).owner_repo())
         .is_some_and(|owner_repo| owner_repo.eq_ignore_ascii_case(spec))
 }
 
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn repo_matches_spec_requires_the_exact_repo() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q"]);
         sandbox.git(
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn worktrees_go_to_info_exclude_not_gitignore() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q"]);
         std::fs::create_dir(tmp.join(".worktrees")).unwrap();
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn a_gitignore_is_left_as_it_is() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q"]);
         std::fs::write(tmp.join(".gitignore"), "node_modules/").unwrap();
@@ -504,7 +504,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_worktrees_link_is_excluded_by_its_name() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         let repo = tmp.join("ws");
         std::fs::create_dir_all(tmp.join("elsewhere")).unwrap();
@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn worktrees_outside_or_without_a_repository_need_nothing() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         let ws = tmp.join("ws");
         std::fs::create_dir(&ws).unwrap();

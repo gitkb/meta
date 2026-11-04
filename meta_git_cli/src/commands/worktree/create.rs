@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::*;
-use meta_core::display::{escape, escape_path};
-use meta_core::out;
-use meta_core::ExecutionMode;
-use meta_core::{errln, outln};
+use meta_plugin::display::{escape, escape_path};
+use meta_plugin::out;
+use meta_plugin::ExecutionMode;
+use meta_plugin::{errln, outln};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
@@ -21,7 +21,7 @@ use meta_git_lib::worktree::types::{CreateOutput, CreateRepoEntry};
 use meta_git_lib::worktree::RepoSpec;
 
 use super::cli_types::CreateArgs;
-use meta_core::display::shell_quote;
+use meta_plugin::display::shell_quote;
 
 /// A set a create made: its directory, and its lease, held until dropped.
 pub(crate) struct Created {
@@ -1114,7 +1114,7 @@ fn not_cloned_error(repos: &[PlannedRepo], root: Option<std::path::PathBuf>) -> 
             if blocked.len() == 1 { "it" } else { "them" }
         ));
     } else if !missing.is_empty() {
-        let include = meta_core::display::shell_quote(&missing.join(","));
+        let include = meta_plugin::display::shell_quote(&missing.join(","));
         message.push_str(&format!(
             "\nTo clone just the missing ones, then run this create again:\n  meta {}--include {} git clone-missing",
             if root.is_some() { "-A " } else { "" },
@@ -1205,7 +1205,7 @@ mod tests {
 
     #[test]
     fn roll_back_deletes_a_set_whose_records_were_not_all_written() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         let set = tmp.join("set");
         for (repo, wt) in [("root", set.clone()), ("leaf", set.join("leaf"))] {
@@ -1240,7 +1240,7 @@ mod tests {
 
     #[test]
     fn journal_keeps_only_branches_this_call_created() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
         sandbox.git(&tmp, &["init", "-q"]);
         sandbox.git(&tmp, &["commit", "-q", "--allow-empty", "-m", "init"]);

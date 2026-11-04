@@ -3,12 +3,12 @@ use crate::ssh;
 use colored::Colorize;
 use indicatif::MultiProgress;
 use meta_core::config;
-use meta_core::display::{escape, escape_path};
-use meta_core::git::GitUrl;
 use meta_core::gitdir::Checkout;
-use meta_core::{errln, outln};
 use meta_git_lib::clone_queue::{CloneQueue, CloneTask, MetaRepo, Work};
-use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
+use meta_plugin::display::{escape, escape_path};
+use meta_plugin::RepoUrl;
+use meta_plugin::{errln, outln};
+use meta_plugin::{CommandResult, PluginRequestOptions};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -72,7 +72,7 @@ pub(crate) fn root_name(root: &Path) -> String {
 pub(crate) fn run(
     queue: &CloneQueue,
     tasks: Vec<CloneTask>,
-    urls: &[GitUrl],
+    urls: &[RepoUrl],
 ) -> anyhow::Result<()> {
     let mut parallel = 4_usize;
     let ssh_cmd = match ssh::establish_ssh_masters(urls) {
@@ -171,7 +171,7 @@ pub(crate) fn execute_git_update(
     // remotes this run contacts: a checkout's own origin (what it pulls
     // from, if it has something to pull from), the listed URL of a missing
     // project
-    let contacted = |dir: &Path, listed: Option<&GitUrl>| match Checkout::of(dir) {
+    let contacted = |dir: &Path, listed: Option<&RepoUrl>| match Checkout::of(dir) {
         Checkout::Repo { .. } if crate::clone_worker::nothing_to_pull(dir).is_none() => {
             meta_core::git::remote_url(dir).ok().flatten()
         }
@@ -265,7 +265,7 @@ impl Leftover {
             )),
             Err(e) => Self::Holds(format!(
                 "what it holds can't be told ({})",
-                meta_core::display::escape_lines(&format!("{e:#}"))
+                meta_plugin::display::escape_lines(&format!("{e:#}"))
             )),
         }
     }
@@ -320,6 +320,6 @@ fn report_unlisted(queue: &CloneQueue, root: &Path, cwd: &Path, recursive: bool)
             ),
             Leftover::Holds(why) => format!("{shown} isn't in .meta.yaml; {why}"),
         };
-        meta_core::out::warn(warning);
+        meta_plugin::out::warn(warning);
     }
 }

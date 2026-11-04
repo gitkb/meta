@@ -5,7 +5,7 @@
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
-use meta_test_support::Sandbox;
+use meta_plugin::testing::Sandbox;
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -299,7 +299,7 @@ fn diff_reports_failed_commands_and_malformed_numstat_instead_of_zero_counts() {
     let out = worktree(&sandbox, &ws, &["create", "t", "--repo", "a", "--no-deps"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let path = std::env::var("PATH").unwrap();
-    let quote = meta_core::display::shell_quote;
+    let quote = meta_plugin::display::shell_quote;
     let bin = root.join("bin");
     fs::create_dir(&bin).unwrap();
     for numstat in [

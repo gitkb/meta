@@ -1,7 +1,21 @@
-//! Shared plugin protocol types for meta subprocess plugins.
+//! The SDK for meta plugins: the plugin protocol, and the runtime every
+//! plugin (and meta itself) shares.
 //!
-//! This crate defines the communication protocol between the meta CLI host
-//! and its subprocess plugins (meta-git, meta-project, meta-cargo, etc.).
+//! - [`exit`], [`out`] and [`display`]: how a program ends (its exit codes,
+//!   one error reported once), what it prints (a closed stdout ends it with
+//!   141, colour as meta's), and escaping text that came from a repo or a
+//!   user (`escape`, `shell_quote`, `display_command`).
+//! - [`RepoUrl`]: a `.meta.yaml` `repo:` URL.
+//! - [`process`] (feature `process`, on by default): the one owner of the
+//!   processes a program starts, and what happens to them when it is told to
+//!   stop.
+//! - [`args`] and [`parse_args`] (feature `parse`): a plugin's own clap
+//!   parsing, with the tip for one of meta's options typed after the command.
+//! - `testing` (feature `testing`; git fixtures with `testing-git`): a
+//!   sandbox with its own home and config, a workspace builder, and requests
+//!   to send a plugin through the real transport.
+//!
+//! # The protocol
 //!
 //! A plugin is an executable named `meta-<word>` (`meta-<word>.exe` on
 //! Windows), and it serves `meta <word> ...`: its file name, not anything it
@@ -18,12 +32,40 @@
 //! 2. Host invokes the plugin via `--meta-plugin-exec` (sends `PluginRequest`
 //!    JSON on stdin)
 //! 3. Plugin responds with either a `PlanResponse` JSON (commands to execute) or direct output
+//!
+//! A plugin's exit code is meta's: 0, 1 for an error, 2 for a wrong command
+//! line, 128 + n when signal n ended it, 141 when meta stopped reading its
+//! output (see [`exit`]).
+//!
+//! Every program meta starts, a plugin included, gets `META_OWNER_DEPTH`: 1
+//! for what meta starts, one more for each program in between. On Unix a
+//! program that owns its children's signals ([`process::own`]) gives the
+//! ones it starts half the time to stop that its own owner gives it (2
+//! seconds in meta, 1 in a plugin, at least 250 ms), so a plugin has stopped
+//! what it started before meta stops the plugin. [`process`] sets the
+//! variable for every program it starts (its own depth plus one); a program
+//! that starts others some other way sets it the same way.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
+
+#[cfg(feature = "parse")]
+pub mod args;
+pub mod display;
+pub mod exit;
+mod mode;
+pub mod out;
+#[cfg(feature = "process")]
+pub mod process;
+mod repo_url;
+#[cfg(feature = "testing")]
+pub mod testing;
+
+pub use mode::ExecutionMode;
+pub use repo_url::RepoUrl;
 
 // ============================================================================
 // Plugin Discovery Types
@@ -135,8 +177,9 @@ pub struct PluginRequestOptions {
     /// meta's options and what was typed of them, for [`parse_args`]'s tip
     /// when one is typed after the command. A host older than this field
     /// sends none: then there is no tip.
+    #[cfg(feature = "parse")]
     #[serde(default)]
-    pub meta_options: meta_core::args::MetaOptions,
+    pub meta_options: crate::args::MetaOptions,
 }
 
 impl PluginRequestOptions {
@@ -151,8 +194,8 @@ impl PluginRequestOptions {
 
     /// `dry_run` as the mode a command runs in: read it here, once, and
     /// hand the mode to everything that changes something.
-    pub fn mode(&self) -> meta_core::ExecutionMode {
-        meta_core::ExecutionMode::from_dry_run(self.dry_run)
+    pub fn mode(&self) -> crate::ExecutionMode {
+        crate::ExecutionMode::from_dry_run(self.dry_run)
     }
 }
 
@@ -243,12 +286,12 @@ pub enum CommandResult {
 }
 
 /// An error as the plugin's result: with its causes (`{e:#}`), or as the
-/// ending it carries ([`meta_core::exit::ending`]).
+/// ending it carries ([`crate::exit::ending`]).
 impl From<anyhow::Error> for CommandResult {
     fn from(e: anyhow::Error) -> Self {
-        match meta_core::exit::ending(&e) {
+        match crate::exit::ending(&e) {
             Some(code) => CommandResult::Exit(code),
-            None if e.chain().any(|cause| cause.is::<meta_core::exit::Usage>()) => {
+            None if e.chain().any(|cause| cause.is::<crate::exit::Usage>()) => {
                 CommandResult::Usage(format!("{e:#}"))
             }
             None => CommandResult::Error(format!("{e:#}")),
@@ -281,11 +324,11 @@ fn simple_plan(commands: Vec<PlannedCommand>, parallel: Option<bool>) -> PlanRes
 }
 
 /// End the plugin as `result` says when it failed (see
-/// [`meta_core::exit`]); return when it succeeded.
+/// [`crate::exit`]); return when it succeeded.
 fn end(result: anyhow::Result<()>) {
-    let code = meta_core::exit::code(meta_core::exit::flushed(result));
+    let code = crate::exit::code(crate::exit::flushed(result));
     if code != 0 {
-        meta_core::exit::now(code);
+        crate::exit::now(code);
     }
 }
 
@@ -314,8 +357,8 @@ pub fn output_execution_plan_full(
 /// Write `text` to stdout, flushed: meta reads a plugin's stdout until the
 /// plugin ends.
 fn emit(text: &str) -> anyhow::Result<()> {
-    meta_core::out::stdout_bytes(text.as_bytes())?;
-    Ok(meta_core::out::flush()?)
+    crate::out::stdout_bytes(text.as_bytes())?;
+    Ok(crate::out::flush()?)
 }
 
 /// Write `value` to stdout as one line of JSON.
@@ -377,7 +420,7 @@ impl PluginHelp {
 /// The help of the plugin serving `meta <word>`, from its info. Every value
 /// comes from the plugin, so each is escaped onto its own line.
 pub fn help_text(word: &str, info: &PluginInfo) -> String {
-    use meta_core::display::escape;
+    use crate::display::escape;
     let mut out = String::new();
     let mut line = |text: &str| {
         out.push_str(text);
@@ -448,11 +491,12 @@ pub fn has_help_token(command: &str, args: &[String]) -> bool {
 /// as a message, its error, escaped, as an error. An option of meta's typed
 /// after the command that `P` rejects gets the tip with the line to run
 /// (`meta` sends its options in the request: `&request.options.meta_options`;
-/// [`meta_core::args::MetaOptions::refusing`] the ones the command never takes).
+/// [`crate::args::MetaOptions::refusing`] the ones the command never takes).
+#[cfg(feature = "parse")]
 pub fn parse_args<P: clap::Parser>(
     command: &str,
     args: &[String],
-    meta: &meta_core::args::MetaOptions,
+    meta: &crate::args::MetaOptions,
 ) -> Result<P, CommandResult> {
     let name = format!("meta {command}");
     let argv: Vec<String> = std::iter::once(name.clone())
@@ -467,7 +511,7 @@ pub fn parse_args<P: clap::Parser>(
                 CommandResult::Message(e.render().to_string().trim_end().to_string())
             }
             _ => {
-                let mut escaped = meta_core::args::escaped_error::<P>(&argv);
+                let mut escaped = crate::args::escaped_error::<P>(&argv);
                 let typed: Vec<String> = command
                     .split_whitespace()
                     .map(str::to_string)
@@ -476,7 +520,7 @@ pub fn parse_args<P: clap::Parser>(
                 let words = command.split_whitespace().count();
                 let check = |_: &[String], rest: &[String]| {
                     let args = rest.iter().skip(words).map(String::as_str);
-                    meta_core::args::verdict(P::try_parse_from(
+                    crate::args::verdict(P::try_parse_from(
                         std::iter::once(name.as_str()).chain(args),
                     ))
                 };
@@ -486,7 +530,7 @@ pub fn parse_args<P: clap::Parser>(
                         ContextValue::StyledStrs(vec![tip.into()]),
                     );
                 }
-                let mut message = meta_core::args::message(&escaped);
+                let mut message = crate::args::message(&escaped);
                 // a command that isn't one: the ones there are
                 if e.kind() == ErrorKind::InvalidSubcommand {
                     let help = P::command().bin_name(&name).render_help().to_string();
@@ -516,21 +560,21 @@ pub struct PluginDefinition {
 /// Plugins only need to define their `PluginInfo` and an execute function.
 ///
 /// Returns when the plugin succeeded; otherwise the plugin ends here, its
-/// error reported once and escaped (see [`meta_core::exit`]): 1 for an
+/// error reported once and escaped (see [`crate::exit`]): 1 for an
 /// error, 2 for a wrong command line, 141 when meta stopped reading.
 ///
 /// Initializes `env_logger` so plugins can use `log` macros with RUST_LOG.
 pub fn run_plugin(plugin: PluginDefinition) {
     // Initialize logger for subprocess - inherits RUST_LOG from parent
     env_logger::init();
-    meta_core::out::color();
+    crate::out::color();
     end(serve(&plugin));
 }
 
 fn serve(plugin: &PluginDefinition) -> anyhow::Result<()> {
-    use meta_core::display::escape;
+    use crate::display::escape;
     let usage = |problem: String| {
-        anyhow::Error::new(meta_core::exit::Usage(format!(
+        anyhow::Error::new(crate::exit::Usage(format!(
             "{problem}This binary is a meta plugin. Use via: meta {}",
             escape(&plugin.info.name)
         )))
@@ -552,13 +596,14 @@ fn serve(plugin: &PluginDefinition) -> anyhow::Result<()> {
 /// `--meta-plugin-exec`: answer the request on stdin.
 fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
     use anyhow::Context;
-    if let Err(e) = meta_core::children::own() {
-        meta_core::out::warn(format!(
+    #[cfg(feature = "process")]
+    if let Err(e) = crate::process::own() {
+        crate::out::warn(format!(
             "cannot pass signals on to the programs this plugin starts: {e}"
         ));
     }
     let mut request = read_request_from_stdin().context("Failed to parse plugin request")?;
-    meta_core::out::set_json(request.options.json_output);
+    crate::out::set_json(request.options.json_output);
     if request.cwd.as_os_str().is_empty() {
         request.cwd = std::env::current_dir().context("Failed to get working directory")?;
     }
@@ -568,11 +613,11 @@ fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
         CommandResult::Message(msg) if msg.is_empty() => Ok(()),
         CommandResult::Message(msg) => emit(&format!("{msg}\n")),
         CommandResult::Error(e) => Err(anyhow::anyhow!(e)),
-        CommandResult::Usage(e) => Err(meta_core::exit::Usage(e).into()),
-        CommandResult::Exit(code) => Err(meta_core::exit::ExitWith(code).into()),
+        CommandResult::Usage(e) => Err(crate::exit::Usage(e).into()),
+        CommandResult::Exit(code) => Err(crate::exit::ExitWith(code).into()),
         CommandResult::ShowHelp(None) => emit(&help_text(&plugin.info.name, &plugin.info)),
         // on stderr, so it's seen even though meta reads stdout
-        CommandResult::ShowHelp(Some(err)) => Err(meta_core::exit::Usage(format!(
+        CommandResult::ShowHelp(Some(err)) => Err(crate::exit::Usage(format!(
             "{err}\n\n{}",
             help_text(&plugin.info.name, &plugin.info).trim_end()
         ))
@@ -586,7 +631,7 @@ mod tests {
 
     #[test]
     fn an_error_becomes_the_result_its_ending_says() {
-        use meta_core::exit::{ExitWith, Usage};
+        use crate::exit::{ExitWith, Usage};
         let result = |e: anyhow::Error| CommandResult::from(e.context("on the way up"));
         assert!(
             matches!(result(Usage("bad".into()).into()), CommandResult::Usage(m) if m.contains("bad"))
@@ -750,8 +795,8 @@ mod tests {
                 exclude_filters: Some(vec!["b".to_string()]),
                 tag_filters: Some(vec!["t".to_string()]),
                 strict: true,
-                meta_options: meta_core::args::MetaOptions {
-                    options: vec![meta_core::args::MetaOption {
+                meta_options: crate::args::MetaOptions {
+                    options: vec![crate::args::MetaOption {
                         spellings: vec!["--json".to_string()],
                         takes_value: false,
                         repeats: false,

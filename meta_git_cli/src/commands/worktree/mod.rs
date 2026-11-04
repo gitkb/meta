@@ -12,8 +12,8 @@ mod status;
 
 use anyhow::Result;
 use clap::Parser;
-use meta_core::display::{escape, escape_path};
-use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
+use meta_plugin::display::{escape, escape_path};
+use meta_plugin::{CommandResult, PluginRequestOptions};
 use std::path::Path;
 
 use cli_types::WorktreeCommands;
@@ -124,7 +124,7 @@ pub fn execute_worktree_command(
             .collect();
         let said = "-A (--all) is meta's own option, the whole workspace, and goes before the \
                     command; every repo meta reaches is --every-repo";
-        return match meta_plugin_protocol::parse_args::<WorktreeParser>(name, &every, &meta) {
+        return match meta_plugin::parse_args::<WorktreeParser>(name, &every, &meta) {
             Err(CommandResult::Usage(why)) => CommandResult::Usage(format!("{said}.\n\n{why}")),
             Err(other) => other,
             Ok(_) => {
@@ -135,12 +135,12 @@ pub fn execute_worktree_command(
                     .collect();
                 CommandResult::Usage(format!(
                     "{said}, as in {}",
-                    escape(&meta_core::display::display_command(&line))
+                    escape(&meta_plugin::display::display_command(&line))
                 ))
             }
         };
     }
-    match meta_plugin_protocol::parse_args::<WorktreeParser>(name, &clap_args, &meta) {
+    match meta_plugin::parse_args::<WorktreeParser>(name, &clap_args, &meta) {
         Ok(parsed) => match handle_worktree_command(parsed.command, options, cwd) {
             Ok(()) => CommandResult::Message(String::new()),
             Err(e) => e.into(),

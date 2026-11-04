@@ -1,8 +1,8 @@
 use log::debug;
 use meta_core::config;
-use meta_core::display::escape_path;
-use meta_core::git::GitUrl;
 use meta_core::gitdir::Checkout;
+use meta_plugin::display::escape_path;
+use meta_plugin::RepoUrl;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Work {
     /// Clone the repository from this URL into the empty or missing folder.
-    Clone(GitUrl),
+    Clone(RepoUrl),
     /// Fast-forward the repository there (`git pull --ff-only`).
     Pull,
 }
@@ -23,13 +23,13 @@ pub enum Work {
 pub struct MetaRepo {
     pub name: String,
     pub dir: PathBuf,
-    pub url: Option<GitUrl>,
+    pub url: Option<RepoUrl>,
 }
 
 impl MetaRepo {
     /// The meta repo `name` at `dir`, from its checkout's origin if it has
     /// one, else from `url` (what .meta.yaml lists, or the URL given).
-    pub fn at(name: &str, dir: &Path, url: Option<GitUrl>) -> Self {
+    pub fn at(name: &str, dir: &Path, url: Option<RepoUrl>) -> Self {
         Self {
             name: name.to_string(),
             dir: resolved(dir),
@@ -47,7 +47,7 @@ pub struct CloneTask {
     /// The project's folder
     pub target_path: PathBuf,
     /// The URL `.meta.yaml` gives for it, if any
-    pub url: Option<GitUrl>,
+    pub url: Option<RepoUrl>,
     /// The level of the `.meta.yaml` inside it (the root's is 0)
     pub level: usize,
     /// Whether this project is itself a meta-repo (declared with `meta: true` in config)
@@ -162,7 +162,7 @@ impl CloneQueue {
 
     /// The task for the meta repo at `dir` itself, which is `name` and comes
     /// from `url`: its projects are found once it is done.
-    pub fn root(&self, name: &str, dir: &Path, url: Option<GitUrl>, work: Work) -> CloneTask {
+    pub fn root(&self, name: &str, dir: &Path, url: Option<RepoUrl>, work: Work) -> CloneTask {
         let task = CloneTask {
             name: name.to_string(),
             work,
@@ -355,9 +355,9 @@ impl CloneQueue {
         // Warn if the config declared meta: true but no nested .meta.yaml was found
         if task.is_meta && found.is_empty() && task.level > 0 && self.reads(task.level) {
             if let Ok(None) = config::find_meta_config_in(&task.target_path) {
-                meta_core::out::warn(format!(
+                meta_plugin::out::warn(format!(
                     "'{}' is declared with `meta: true` but no .meta.yaml was found inside it",
-                    meta_core::display::escape(&task.name)
+                    meta_plugin::display::escape(&task.name)
                 ));
             }
         }
@@ -455,7 +455,7 @@ fn below(above: &[MetaRepo], this: MetaRepo) -> Arc<[MetaRepo]> {
 }
 
 /// The origin URL of the repository at `dir`, if it is one and has one.
-fn origin(dir: &Path) -> Option<GitUrl> {
+fn origin(dir: &Path) -> Option<RepoUrl> {
     match Checkout::of(dir) {
         Checkout::Repo { .. } => meta_core::git::remote_url(dir).ok().flatten(),
         _ => None,
@@ -464,8 +464,8 @@ fn origin(dir: &Path) -> Option<GitUrl> {
 
 /// Whether two URLs name the same repository, local ones by the folder they
 /// lead to.
-fn same_repository((a, b): (&GitUrl, &GitUrl)) -> bool {
-    let local = |url: &GitUrl| {
+fn same_repository((a, b): (&RepoUrl, &RepoUrl)) -> bool {
+    let local = |url: &RepoUrl| {
         let text = url.as_git_arg().to_str()?;
         let text = text.strip_prefix("file://").unwrap_or(text);
         // file:///C:/x names C:/x on Windows
@@ -503,7 +503,7 @@ mod tests {
     use super::*;
 
     fn top(dir: &Path, url: Option<&str>) -> Arc<[MetaRepo]> {
-        Arc::from([MetaRepo::at("ws", dir, url.map(GitUrl::from))])
+        Arc::from([MetaRepo::at("ws", dir, url.map(RepoUrl::from))])
     }
 
     fn names(tasks: &[CloneTask]) -> Vec<&str> {
@@ -521,7 +521,7 @@ mod tests {
     fn discover_does_not_look_past_the_depth_limit() {
         // child exists with a dangling .meta.yaml; at depth limit 0 it is never
         // read, so the missing sibling is still found
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         std::fs::create_dir(dir.join("child")).unwrap();
         sandbox.git(&dir.join("child"), &["init", "-q"]);
@@ -540,7 +540,7 @@ mod tests {
     fn discover_fails_on_a_nested_config_it_cannot_read() {
         // child/.meta.yaml is a link to nowhere: its repos are unknown, which is
         // an error, not "no nested repos"
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         std::fs::create_dir(dir.join("child")).unwrap();
         sandbox.git(&dir.join("child"), &["init", "-q"]);
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn discover_clones_only_where_no_repository_is_and_pulls_the_rest() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         // a clone, an empty folder git can clone into, and a plain folder
         for name in ["cloned", "empty", "plain"] {
@@ -600,7 +600,7 @@ mod tests {
 
     #[test]
     fn a_nested_meta_repo_is_read_once_its_task_is_done() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         write_meta(
             &dir,
@@ -628,7 +628,7 @@ mod tests {
     #[test]
     fn a_meta_repo_that_lists_one_above_it_is_refused_by_name() {
         // ws lists kid, whose .meta.yaml lists ws's own URL
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         write_meta(
             &dir,
@@ -651,7 +651,7 @@ mod tests {
     #[test]
     fn two_meta_repos_listing_one_repo_is_no_cycle_and_local_urls_match_by_folder() {
         // b and c both list d; d lists the workspace by another spelling
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         let ws = &dir;
         let remote = ws.join("remote.git");
@@ -684,7 +684,7 @@ mod tests {
     fn without_recursion_a_repeated_repo_is_no_cycle() {
         // a second checkout of the workspace's own repo: its .meta.yaml is
         // never read, so it is cloned like any project
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         write_meta(
             &dir,
@@ -701,7 +701,7 @@ mod tests {
     #[test]
     fn an_undeclared_meta_repo_that_repeats_one_above_it_is_cloned_once_and_not_entered() {
         // ws lists kid, kid lists top (ws's own repo); neither says meta: true
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         let ws = &dir;
         write_meta(ws, r#"{"projects": {"kid": "kid.git"}}"#);
@@ -726,11 +726,11 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_file_url_with_a_drive_is_the_local_folder() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         let path = dir.to_string_lossy().into_owned();
-        let url = GitUrl::from(format!("file:///{}", path.replace('\\', "/")));
-        assert!(same_repository((&GitUrl::from(path), &url)));
+        let url = RepoUrl::from(format!("file:///{}", path.replace('\\', "/")));
+        assert!(same_repository((&RepoUrl::from(path), &url)));
     }
 
     #[cfg(unix)]
@@ -738,7 +738,7 @@ mod tests {
     fn a_project_whose_folder_leads_back_up_is_a_cycle() {
         // ws/kid leads out of the workspace, to a meta repo whose `back`
         // leads to ws again
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         let (ws, kid) = (dir.join("ws"), dir.join("kid"));
         for repo in [&ws, &kid] {
@@ -760,7 +760,7 @@ mod tests {
 
     #[test]
     fn repositories_the_config_does_not_list_are_recorded() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         for name in ["listed", "other", "plain"] {
             std::fs::create_dir(dir.join(name)).unwrap();
@@ -776,7 +776,7 @@ mod tests {
     #[test]
     fn a_repository_that_holds_a_listed_project_is_no_leftover() {
         // libs is a repo of its own, unlisted, but the project libs/x is in it
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         for name in ["libs", "libs/x", "stray"] {
             std::fs::create_dir(dir.join(name)).unwrap();
@@ -793,7 +793,7 @@ mod tests {
 
     #[test]
     fn failed_tasks_are_reported_with_their_error() {
-        let sandbox = meta_test_support::isolated!();
+        let sandbox = meta_plugin::testing::isolated!();
         let dir = sandbox.work();
         write_meta(&dir, r#"{"projects": {"missing": "u"}}"#);
         let queue = CloneQueue::new(None, None, true);

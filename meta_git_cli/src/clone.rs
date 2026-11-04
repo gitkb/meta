@@ -4,10 +4,10 @@ use anyhow::Context;
 use colored::Colorize;
 use indicatif::MultiProgress;
 use meta_core::config;
-use meta_core::git::GitUrl;
-use meta_core::{errln, outln};
 use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
-use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
+use meta_plugin::RepoUrl;
+use meta_plugin::{errln, outln};
+use meta_plugin::{CommandResult, PluginRequestOptions};
 use std::sync::Arc;
 
 /// Clone a meta repository, then the repos its .meta.yaml lists.
@@ -19,7 +19,7 @@ use std::sync::Arc;
 )]
 pub(crate) struct CloneArgs {
     /// The meta repository to clone
-    url: GitUrl,
+    url: RepoUrl,
     /// Where to clone it (default: the repository's name)
     dir: Option<String>,
     /// How many repos to clone at once
@@ -90,7 +90,7 @@ pub(crate) fn execute_git_clone(
     let inspect = || {
         format!(
             "Cannot inspect {}",
-            meta_core::display::escape_path(&clone_dir_path)
+            meta_plugin::display::escape_path(&clone_dir_path)
         )
     };
     // (a link is what it leads to, as git sees it; one that leads nowhere
@@ -110,7 +110,7 @@ pub(crate) fn execute_git_clone(
         let workspace = matches!(config::find_meta_config_in(&clone_dir_path), Ok(Some(_)));
         return Ok(CommandResult::Error(format!(
             "{} already exists{}",
-            meta_core::display::escape_path(&clone_dir_path),
+            meta_plugin::display::escape_path(&clone_dir_path),
             if workspace {
                 "; to clone the projects its .meta.yaml lists that aren't cloned yet (and \
                  fast-forward the others), run 'meta git update' in it"
@@ -126,7 +126,7 @@ pub(crate) fn execute_git_clone(
         // (Child repos are in .meta.yaml file which hasn't been cloned yet)
         outln!("{} Would clone meta repository:", "[DRY RUN]".cyan())?;
         let shown = loop_lib::display_command(&clone_argv(url.to_string()));
-        outln!("  {}", meta_core::display::escape(&shown))?;
+        outln!("  {}", meta_plugin::display::escape(&shown))?;
         return Ok(CommandResult::Message(String::new()));
     }
 
@@ -149,7 +149,7 @@ pub(crate) fn execute_git_clone(
         clone_cmd.env("GIT_SSH_COMMAND", ssh);
     }
     // a child meta owns: stopping meta stops the clone
-    let status = meta_core::children::status(&mut clone_cmd)?;
+    let status = meta_plugin::process::status(&mut clone_cmd)?;
     if !status.success() {
         return Ok(CommandResult::Error(
             "Failed to clone meta repository".to_string(),

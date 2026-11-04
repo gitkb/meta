@@ -5,7 +5,7 @@
 //!   `--json`, before any other output, a JSON object on stdout)
 //! - 2: the command line was wrong ([`Usage`], clap's usage errors)
 //! - 128 + n: a plugin was killed by signal n, or this program was
-//!   (see [`crate::children`])
+//!   (see [`crate::process`])
 //! - 141: stdout was closed (`meta … | head`), as a shell reports a
 //!   program SIGPIPE stopped
 //! - a plugin's own exit code passes through ([`ExitWith`])

@@ -8,10 +8,10 @@
 
 use log::debug;
 use meta_core::config::{ProjectInfo, Workspace};
-use meta_core::display::escape;
-use meta_core::display::shell_quote;
-use meta_core::errln;
-use meta_core::git::GitUrl;
+use meta_plugin::display::escape;
+use meta_plugin::display::shell_quote;
+use meta_plugin::errln;
+use meta_plugin::RepoUrl;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -37,7 +37,7 @@ struct SshTarget {
 
 impl SshTarget {
     /// The target of `url`, if git reaches it over SSH.
-    fn of(url: &GitUrl) -> Option<Self> {
+    fn of(url: &RepoUrl) -> Option<Self> {
         let (user, host, port) = url.ssh()?;
         Some(SshTarget {
             user: user.map(str::to_string),
@@ -91,8 +91,8 @@ impl SshTarget {
 }
 
 /// The distinct SSH remotes of `projects`.
-pub(crate) fn ssh_urls(projects: &[ProjectInfo]) -> Vec<GitUrl> {
-    let urls: BTreeSet<&GitUrl> = projects
+pub(crate) fn ssh_urls(projects: &[ProjectInfo]) -> Vec<RepoUrl> {
+    let urls: BTreeSet<&RepoUrl> = projects
         .iter()
         .filter_map(|p| p.repo.as_ref())
         .filter(|repo| SshTarget::of(repo).is_some())
@@ -106,11 +106,11 @@ pub(crate) fn ssh_urls(projects: &[ProjectInfo]) -> Vec<GitUrl> {
 /// - `SshMasters::OurSockets(dir)` if we established at least one master
 /// - `SshMasters::UserManaged` if all hosts already have active masters
 /// - `SshMasters::Failed` if sockets dir couldn't be created or all connections failed
-pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
+pub fn establish_ssh_masters(urls: &[RepoUrl]) -> SshMasters {
     let mut seen = BTreeSet::new();
     // what git will contact: a url.<base>.insteadOf rewrite (git@github.com:
     // to https://, say) leaves no SSH to share
-    let contacted: Vec<GitUrl> = urls.iter().map(contacted).collect();
+    let contacted: Vec<RepoUrl> = urls.iter().map(contacted).collect();
     let targets: Vec<SshTarget> = contacted
         .iter()
         .filter_map(SshTarget::of)
@@ -214,7 +214,7 @@ pub fn establish_ssh_masters(urls: &[GitUrl]) -> SshMasters {
 /// The URL git contacts for `url`, after its `url.<base>.insteadOf`
 /// rewrites (`git ls-remote --get-url` applies them without connecting);
 /// `url` itself where git can't say.
-fn contacted(url: &GitUrl) -> GitUrl {
+fn contacted(url: &RepoUrl) -> RepoUrl {
     let dir = std::env::temp_dir();
     let out = meta_core::git::git(&dir)
         .arg("ls-remote")
@@ -227,7 +227,7 @@ fn contacted(url: &GitUrl) -> GitUrl {
             if rewritten.is_empty() {
                 url.clone()
             } else {
-                GitUrl::from(rewritten)
+                RepoUrl::from(rewritten)
             }
         }
         _ => url.clone(),
@@ -266,7 +266,7 @@ fn ensure_ssh_sockets_dir(home: &Path) -> std::io::Result<PathBuf> {
 /// Warn about checkouts whose `origin` differs from the URL `workspace`
 /// lists for them (non-interactive).
 pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
-    let mismatches: Vec<(&ProjectInfo, &GitUrl, GitUrl)> = workspace
+    let mismatches: Vec<(&ProjectInfo, &RepoUrl, RepoUrl)> = workspace
         .projects
         .iter()
         .filter_map(|project| {
@@ -299,7 +299,7 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
             message.push_str("\n    (they differ only in their hidden credentials)");
         }
     }
-    meta_core::out::warn(message);
+    meta_plugin::out::warn(message);
     errln!("  Fix manually with:");
     for (project, expected, _) in &mismatches {
         // printed as a URL prints, escaped; hidden credentials would break

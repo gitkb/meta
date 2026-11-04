@@ -12,6 +12,7 @@ name = "meta-mcp"
 path = "src/main.rs"
 
 [dependencies]
+meta_plugin = { workspace = true, features = ["parse"] }
 meta_core.workspace = true
 loop_lib.workspace = true
 anyhow.workspace = true
@@ -25,7 +26,7 @@ serde_path_to_error = "0.1"
 signal-hook.workspace = true
 
 [dev-dependencies]
-meta_test_support.workspace = true
+meta_plugin = { workspace = true, features = ["testing-git"] }
 
 [lints]
 workspace = true

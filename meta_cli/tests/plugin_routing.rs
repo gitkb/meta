@@ -155,7 +155,7 @@ fn only_the_plugin_a_command_names_is_started() {
     let help = String::from_utf8_lossy(&help.stdout);
     assert!(help.contains("plugin: spy v1.0.0"), "{help}");
     assert!(help.contains("plugin: touchy v1.0.0"), "{help}");
-    let list = run_meta(&sandbox, &root, &["plugin", "list", "--json"]);
+    let list = run_meta(&sandbox, &root, &["--json", "plugin", "list"]);
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let names: Vec<_> = list
         .as_array()

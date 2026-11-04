@@ -86,7 +86,7 @@ fn bare_home_meta_directory_is_neither_workspace_nor_project_plugin_source() {
     assert!(!String::from_utf8_lossy(&help.stdout).contains("fake"));
     for args in [
         vec!["plugin", "list", "--local"],
-        vec!["plugin", "list", "--local", "--json"],
+        vec!["--json", "plugin", "list", "--local"],
         vec!["plugin", "install", "--local", "missing/repo"],
         vec!["plugin", "uninstall", "--local", "missing"],
         vec!["plugin", "update", "--local", "missing"],
@@ -117,7 +117,7 @@ fn discovery_stops_at_nearest_workspace_and_uses_global_data_dir() {
     plugin(&f.data.join("plugins/meta-local"), "local", "wrong-global");
     plugin(&f.bin.join("meta-local"), "local", "wrong-path");
     plugin(&f.bin.join("meta-global"), "global", "wrong-path");
-    let output = f.run(&["plugin", "list", "--json"]);
+    let output = f.run(&["--json", "plugin", "list"]);
     assert!(
         output.status.success(),
         "{}",
@@ -141,7 +141,7 @@ fn nested_meta_dir_reads_its_workspace_plugins_but_not_an_unlisting_parent() {
     );
     let listed = |yaml: &str| {
         fs::write(f.sandbox.work().join(".meta.yaml"), yaml).unwrap();
-        let output = f.run(&["plugin", "list", "--json"]);
+        let output = f.run(&["--json", "plugin", "list"]);
         assert!(output.status.success());
         String::from_utf8_lossy(&output.stdout).contains("parent")
     };
@@ -180,7 +180,7 @@ fn a_worktree_set_checkout_reads_its_own_and_its_origins_plugins() {
     plugin(&f.cwd.join(".meta/plugins/meta-main"), "main", "1");
     plugin(&set.join(".meta/plugins/meta-setlocal"), "setlocal", "1");
     let output = f
-        .command(&["plugin", "list", "--json"])
+        .command(&["--json", "plugin", "list"])
         .current_dir(&set)
         .output()
         .unwrap();
@@ -203,9 +203,9 @@ fn explicit_config_does_not_redirect_plugin_scope() {
     let output = f.run(&[
         "--config",
         other.join(".meta.yaml").to_str().unwrap(),
+        "--json",
         "plugin",
         "list",
-        "--json",
     ]);
     assert!(output.status.success());
     let text = String::from_utf8_lossy(&output.stdout);

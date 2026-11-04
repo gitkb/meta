@@ -714,7 +714,7 @@ EOF
 }
 
 @test "meta's own output to a closed stdout exits quietly without a panic" {
-    for args in "plugin list --json" "init --help" "--help"; do
+    for args in "--json plugin list" "init --help" "--help"; do
         run bash -c 'set -o pipefail; "$1" $2 2>"$3" | head -c0' _ "$META_BIN" "$args" "$TEST_DIR/stderr"
         [[ "$status" -eq 0 || "$status" -eq 141 ]]
         [ ! -s "$TEST_DIR/stderr" ]
@@ -850,8 +850,8 @@ sys.exit(subprocess.run(sys.argv[1:], stdout=w).returncode)' "$META_BIN" frag "$
     done
 }
 
-@test "a command's own --json makes its errors JSON; a .looprc's json_output keeps colour out" {
-    run bash -c '"$1" git worktree status missing --json 2>/dev/null' _ "$META_BIN"
+@test "meta's --json makes a plugin command's errors JSON; a .looprc's json_output keeps colour out" {
+    run bash -c '"$1" --json git worktree status missing 2>/dev/null' _ "$META_BIN"
     [ "$status" -eq 1 ]
     jq -e '.success == false' <<<"$output"
     echo '{"json_output": true}' > .looprc

@@ -121,14 +121,14 @@ preview() {
     git -C backend symbolic-ref HEAD refs/heads/main
 }
 
-@test "worktree create -r previews the nested repos when --dry-run comes first" {
+@test "worktree create -r previews the nested repos" {
     # backend is a meta repo of its own, with lib in it
     git init --quiet --initial-branch=main backend/lib
     echo lib > backend/lib/README.md
     git -C backend/lib add README.md
     git -C backend/lib commit --quiet -m lib
     printf '{"projects": {"lib": "file:///nowhere/lib.git"}}\n' > backend/.meta.yaml
-    preview 0 -r git worktree --dry-run create t --all
+    preview 0 -r git worktree create t --all
     [[ "$output" == *"backend/lib:"* ]]
 }
 
@@ -197,14 +197,6 @@ preview() {
     [[ "$output" == *"has work that removing it would lose"* ]]
 }
 
-@test "the worktree command's own --dry-run is the same preview" {
-    before="$(snapshot)"
-    run meta git worktree remove dirty --force --dry-run
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Would remove worktree 'dirty'"* ]]
-    [ "$(snapshot)" = "$before" ]
-}
-
 @test "worktree prune previews" {
     meta git worktree create old --repo backend --ephemeral --ttl 1s >/dev/null
     sleep 2
@@ -245,9 +237,9 @@ preview() {
     preview 1 git worktree create new nosuchref --all
     [[ "$output" == *"No selected repo has ref 'nosuchref'"* ]]
     # the set's own .meta.yaml, not yet made, names its repos for a filter
-    preview 1 git worktree exec eph --ephemeral --repo backend --include backend -- touch made-by-exec
+    preview 1 --include backend git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
     [[ "$output" == *"can't preview --include/--exclude of exec --ephemeral"* ]]
-    preview 1 git worktree exec eph --ephemeral --repo backend --exclude backend -- touch made-by-exec
+    preview 1 --exclude backend git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
     [[ "$output" == *"can't preview --include/--exclude of exec --ephemeral"* ]]
 }
 

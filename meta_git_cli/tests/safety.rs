@@ -82,9 +82,18 @@ fn meta_git_in(
     child.wait_with_output().unwrap()
 }
 
+/// `meta git worktree <args>`, with meta's `-r` and `--strict` among them
+/// sent as meta sends them: as options
 fn worktree(sandbox: &Sandbox, ws: &Path, args: &[&str]) -> Output {
     let (sub, rest) = args.split_first().unwrap();
-    meta_git(sandbox, ws, &format!("git worktree {sub}"), rest, json!({}))
+    let meta = |option: &str| rest.contains(&option);
+    let options = json!({"recursive": meta("-r"), "strict": meta("--strict")});
+    let rest: Vec<&str> = rest
+        .iter()
+        .copied()
+        .filter(|arg| !["-r", "--strict"].contains(arg))
+        .collect();
+    meta_git(sandbox, ws, &format!("git worktree {sub}"), &rest, options)
 }
 
 fn stderr(out: &Output) -> String {

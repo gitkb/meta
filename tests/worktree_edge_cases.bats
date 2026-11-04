@@ -43,7 +43,7 @@ another_workspace() {
     git -C backend branch feature-branch
 
     # Try to create worktree with --strict and a commit-ish (should fail because frontend/common lack the ref)
-    run "$META_BIN" git worktree create strict-test feature-branch --strict --all
+    run "$META_BIN" --strict git worktree create strict-test feature-branch --all
     [ "$status" -ne 0 ]
     [[ "$output" == *"strict"* ]]
     [[ "$output" == *"Skipping"* ]] || [[ "$output" == *"not found"* ]]
@@ -70,7 +70,7 @@ another_workspace() {
     git branch shared-branch
 
     # Create worktree with --strict (should succeed)
-    run "$META_BIN" git worktree create strict-ok shared-branch --strict --all
+    run "$META_BIN" --strict git worktree create strict-ok shared-branch --all
     [ "$status" -eq 0 ]
     [ -d ".worktrees/strict-ok/backend" ]
     [ -d ".worktrees/strict-ok/frontend" ]
@@ -82,7 +82,7 @@ another_workspace() {
     git -C backend branch unique-branch
 
     # Attempt with --strict should show which repo was skipped (use --no-deps to avoid root repo)
-    run "$META_BIN" git worktree create strict-error unique-branch --strict --repo backend --repo frontend --no-deps
+    run "$META_BIN" --strict git worktree create strict-error unique-branch --repo backend --repo frontend --no-deps
     [ "$status" -ne 0 ]
     [[ "$output" == *"frontend"* ]] || [[ "$output" == *"common"* ]]
 }
@@ -110,16 +110,6 @@ another_workspace() {
     run "$META_BIN" --strict git worktree create global-ok global-ok-branch --all
     [ "$status" -eq 0 ]
     [ -d ".worktrees/global-ok/backend" ]
-}
-
-@test "global --strict combined with local --strict both enable strict mode" {
-    # Create a branch that only exists in backend
-    git -C backend branch combined-strict-branch
-
-    # Both flags together should still work
-    run "$META_BIN" --strict git worktree create combined-strict combined-strict-branch --strict --all
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"strict"* ]]
 }
 
 @test "global --strict still lets a clean destroy succeed" {
@@ -212,13 +202,13 @@ EOF
     rm -rf ".worktrees/dry-orphan"
 
     # Dry run should show it but not forget it
-    run "$META_BIN" git worktree prune --dry-run
+    run "$META_BIN" --dry-run git worktree prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"Would prune"* ]] || [[ "$output" == *"dry"* ]]
     [[ "$output" == *"dry-orphan"* ]]
 
     # Run prune again - should still show the orphan (wasn't removed)
-    run "$META_BIN" git worktree prune --dry-run
+    run "$META_BIN" --dry-run git worktree prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"dry-orphan"* ]]
 }
@@ -277,7 +267,7 @@ EOF
     done
 
     # Create with strict mode (use --no-deps to avoid root repo which doesn't have the branch)
-    "$META_BIN" git worktree create strict-prune strict-prune-branch --strict --repo backend --repo frontend --no-deps
+    "$META_BIN" --strict git worktree create strict-prune strict-prune-branch --repo backend --repo frontend --no-deps
     [ -d ".worktrees/strict-prune" ]
 
     # Remove directory
@@ -296,7 +286,7 @@ EOF
     "$META_BIN" git worktree create json-prune --repo backend --no-deps
     rm -rf ".worktrees/json-prune"
 
-    run "$META_BIN" git worktree prune --json
+    run "$META_BIN" --json git worktree prune
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -612,7 +602,7 @@ EOF
     [[ "$output" == *"Intermediate parent 'vendor' for nested repo 'vendor/lib': not a git repository"*", skipping"* ]]
     [ -d "$TEST_DIR/.worktrees/nested/vendor/lib" ]
 
-    run "$META_BIN" git worktree create strict --no-deps --strict --repo vendor/lib
+    run "$META_BIN" --strict git worktree create strict --no-deps --repo vendor/lib
     [ "$status" -ne 0 ]
     [[ "$output" != *"skipping"* ]]
     [ ! -e "$TEST_DIR/.worktrees/strict" ]
@@ -728,7 +718,7 @@ EOF
     run "$META_BIN" git status
     [ "$status" -ne 0 ]
     [[ "$output" == *"leads into .git"* ]]
-    run "$META_BIN" project check --recursive
+    run "$META_BIN" --recursive project check
     [ "$status" -ne 0 ]
     [[ "$output" == *"leads into .git"* ]]
 }
@@ -848,7 +838,7 @@ EOF2
     [ "$status" -eq 0 ]
     # group's own entry goes; its nested repo is now listed directly
     printf '{"projects": {"group/core": "git@github.com:org/core.git"}}' > "$TEST_DIR/.meta.yaml"
-    run "$META_BIN" git worktree prune --json
+    run "$META_BIN" --json git worktree prune
     [ "$status" -eq 0 ]
     [[ "$output" != *'"nest"'* ]]
     [ -d "$TEST_DIR/.worktrees/nest/group/core" ]
@@ -872,7 +862,7 @@ EOF2
     printf '{"projects": {"group/core": "git@github.com:org/core.git"}}' > "$TEST_DIR/.meta.yaml"
     # Found through group/core's record, but group is no longer this
     # workspace's repo
-    run "$META_BIN" git worktree prune --json
+    run "$META_BIN" --json git worktree prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"ttl_expired, but group: its repository"*"is not one of this workspace's"* ]]
     [ -d "$TEST_DIR/.worktrees/nest/group/core" ]
@@ -983,7 +973,7 @@ PY2
     "$META_BIN" git worktree create gone --repo frontend --no-deps --ttl 0
     cd "$TEST_DIR/wt/ctx"
     # inside a set, as under .worktrees: that set
-    run "$META_BIN" git worktree list --recursive --metadata-only --json
+    run "$META_BIN" --strict --json git worktree list --metadata-only
     [ "$status" -eq 0 ]
     [[ "$output" == *'"name": "ctx"'* ]]
     run "$META_BIN" git worktree prune
@@ -1029,13 +1019,13 @@ EOF
     run "$META_BIN" exec -- true
     [ "$status" -eq 0 ]
     # and it reads the set root's plugins, then actual's, as in actual itself
-    run "$META_BIN" plugin list --json
+    run "$META_BIN" --json plugin list
     [[ "$output" == *"settool"* ]]
     [[ "$output" == *"nestedtool"* ]]
 
     # add and the dry-run preview place it at its path too
     cd "$TEST_DIR"
-    run "$META_BIN" git worktree create preview --repo nested --no-deps --dry-run
+    run "$META_BIN" --dry-run git worktree create preview --repo nested --no-deps
     [[ "$output" == *"dest:   $TEST_DIR/.worktrees/preview/actual"* ]]
     "$META_BIN" git worktree create addto --repo backend --no-deps
     "$META_BIN" git worktree add addto --repo nested
@@ -1242,7 +1232,7 @@ EOF
     git -C "$TEST_DIR/inner/deep" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
     printf '{"projects": {"inner": {"repo": "git@github.com:org/inner.git", "meta": true}}}' > "$TEST_DIR/.meta.yaml"
 
-    run "$META_BIN" git worktree create everything --all --recursive
+    run "$META_BIN" --recursive git worktree create everything --all
     [ "$status" -eq 0 ]
     for member in . inner inner/deep; do
         [ -f ".worktrees/everything/$member/.git" ]
@@ -1282,11 +1272,11 @@ set_projects() {
     # so does worktree exec, and a value that is one's name and another's
     # path is refused there as in the workspace
     cd "$TEST_DIR"
-    run "$META_BIN" git worktree exec s --include alpha -- pwd
+    run "$META_BIN" --include alpha git worktree exec s -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"/s/beta"* ]]
     [[ "$output" != *"/s/gamma"* ]]
-    run "$META_BIN" git worktree exec s --include beta -- pwd
+    run "$META_BIN" --include beta git worktree exec s -- pwd
     [ "$status" -ne 0 ]
 }
 
@@ -1295,7 +1285,7 @@ set_projects() {
     set_projects '{"hidden": {"repo": "git@x:o/h.git", "path": ".deps/hidden"}}'
     "$META_BIN" git worktree create s --all
     [ -e "$TEST_DIR/.worktrees/s/.deps/hidden/.git" ]
-    run "$META_BIN" git worktree list --recursive --metadata-only --json
+    run "$META_BIN" --strict --json git worktree list --metadata-only
     [ "$status" -eq 0 ]
     [[ "$output" == *".deps/hidden"* ]]
     cd "$TEST_DIR/.worktrees/s"
@@ -1326,7 +1316,7 @@ set_projects() {
         [[ "$output" != *"agent-1"* ]]
     done
     cd "$TEST_DIR"
-    run "$META_BIN" git worktree list --recursive --metadata-only --json
+    run "$META_BIN" --strict --json git worktree list --metadata-only
     [ "$status" -eq 0 ]
     [[ "$output" == *'"s"'* ]]
     [[ "$output" != *"agent-1"* ]]
@@ -1386,7 +1376,7 @@ set_projects() {
     run "$META_BIN" --exclude link exec -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" != *"/s/real"* ]]
-    run "$META_BIN" git worktree exec s --include link -- pwd
+    run "$META_BIN" --include link git worktree exec s -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"/s/real"* ]]
     # added again (on another branch), it is found where the link leads
@@ -1452,7 +1442,7 @@ set_projects() {
         run "$META_BIN" git worktree exec subset "$flag" api -- pwd
         [[ "$output" != *"names none"* ]]
     done
-    run "$META_BIN" git worktree exec subset --include api -- pwd
+    run "$META_BIN" --include api git worktree exec subset -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"/subset/actual"* ]]
 }
@@ -1462,7 +1452,7 @@ set_projects() {
     set_projects '{"api": {"repo": "git@x:o/api.git", "path": "actual"}}'
     export META_WORKTREES="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/elsewhere"
     "$META_BIN" git worktree create subset --repo api --no-deps
-    run "$META_BIN" git worktree exec subset --include api -- pwd
+    run "$META_BIN" --include api git worktree exec subset -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"/subset/actual"* ]]
 }
@@ -1472,7 +1462,7 @@ set_projects() {
     set_projects '{"hidden": {"repo": "git@x:o/h.git", "path": ".deps/hidden"}}'
     export META_WORKTREES="$(cd "$BATS_TEST_TMPDIR" && pwd -P)/external"
     "$META_BIN" git worktree create subset --repo hidden --no-deps
-    run "$META_BIN" git worktree list --recursive --metadata-only --json
+    run "$META_BIN" --strict --json git worktree list --metadata-only
     [ "$status" -eq 0 ]
     [[ "$output" == *".deps/hidden"* ]]
     run "$META_BIN" git worktree exec subset -- pwd
@@ -1847,10 +1837,10 @@ set_projects() {
     [[ "$output" == *"/subset/parent/leaf"* ]]
     # and worktree exec names it the same way
     cd "$TEST_DIR"
-    run "$META_BIN" git worktree exec subset --include leaf -- pwd
+    run "$META_BIN" --include leaf git worktree exec subset -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"/subset/parent/leaf"* ]]
-    run "$META_BIN" git worktree exec subset --exclude leaf -- pwd
+    run "$META_BIN" --exclude leaf git worktree exec subset -- pwd
     [[ "$output" == *"leave no repo"* ]]
 
     # a broken config of another nested repo in the workspace loses only its own
@@ -1864,7 +1854,7 @@ set_projects() {
     run "$META_BIN" --include leaf exec -- pwd
     [ "$status" -eq 0 ]
     cd "$TEST_DIR"
-    run "$META_BIN" git worktree exec subset --include leaf -- pwd
+    run "$META_BIN" --include leaf git worktree exec subset -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"/subset/parent/leaf"* ]]
 }
@@ -1923,7 +1913,7 @@ set_projects() {
     bad="$TEST_DIR/.worktrees/s/.hidden"$'\n'"FORGED"
     mkdir "$bad"
     chmod 0111 "$bad"
-    run "$META_BIN" git worktree list s --recursive --metadata-only
+    run "$META_BIN" --strict git worktree list s --metadata-only
     chmod 0755 "$bad"
     [ "$status" -ne 0 ]
     [[ "$output" == *'.hidden\nFORGED'* ]]

@@ -36,14 +36,14 @@ EOF
 }
 
 @test "meta project list --json outputs valid JSON" {
-    run "$META_BIN" project list --json
+    run "$META_BIN" --json project list
     [ "$status" -eq 0 ]
     # Validate it's parseable JSON
     echo "$output" | python3 -c "import sys, json; json.load(sys.stdin)"
 }
 
 @test "meta project list --json contains project data" {
-    run "$META_BIN" project list --json
+    run "$META_BIN" --json project list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -56,7 +56,7 @@ assert 'shared' in names, f'shared not in {names}'
 }
 
 @test "meta project list --json includes repo URLs" {
-    run "$META_BIN" project list --json
+    run "$META_BIN" --json project list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -94,7 +94,7 @@ EOF
 EOF
     mkdir -p "$TEST_DIR/frontend/frontend-lib"
 
-    run "$META_BIN" --recursive project list --json
+    run "$META_BIN" --recursive --json project list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -124,7 +124,7 @@ assert child['name'] == 'frontend-lib'
 }
 EOF
 
-    run "$META_BIN" project list --json
+    run "$META_BIN" --json project list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -154,7 +154,7 @@ projects:
     repo: "git@github.com:org/backend.git"
 EOF
 
-    run "$META_BIN" project list --json
+    run "$META_BIN" --json project list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -194,7 +194,7 @@ EOF
 EOF
     mkdir -p "$TEST_DIR/vendor"
 
-    run "$META_BIN" project list --json
+    run "$META_BIN" --json project list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -223,7 +223,7 @@ EOF
 {"projects": {"nested-lib": "git@github.com:org/nested-lib.git"}}
 EOF
 
-    run "$META_BIN" project list --recursive
+    run "$META_BIN" --recursive project list
     [ "$status" -eq 0 ]
     # Should show vendor's child project
     [[ "$output" == *"nested-lib"* ]]
@@ -244,7 +244,7 @@ EOF
 
     # Run from inside the nested meta-repo (frontend/)
     cd "$TEST_DIR/frontend"
-    run "$META_BIN" --recursive project list --json
+    run "$META_BIN" --recursive --json project list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -261,7 +261,7 @@ assert data['cwd'].startswith('/'), f'cwd should be absolute: {data[\"cwd\"]}'
 }
 
 @test "meta project list --json includes cwd field" {
-    run "$META_BIN" project list --json
+    run "$META_BIN" --json project list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -287,7 +287,7 @@ EOF
 {"projects": {"nested-lib": "git@github.com:org/nested-lib.git"}}
 EOF
 
-    run "$META_BIN" project list --recursive --json
+    run "$META_BIN" --recursive --json project list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -308,7 +308,7 @@ assert nested_lib is not None, f'nested-lib not found in vendor projects: {neste
 @test "meta project list takes a project path outside the workspace" {
     for path in "../../outside" "/abs/outside"; do
         printf '{"projects": {"sib": {"repo": "u", "path": "%s"}}}' "$path" > .meta.yaml
-        run "$META_BIN" project list --json
+        run "$META_BIN" --json project list
         [ "$status" -eq 0 ]
         [[ "$output" == *"\"path\": \"$path\""* ]]
     done
@@ -352,7 +352,7 @@ J
 
 @test "project list refuses include, exclude and tag instead of ignoring them" {
     printf 'projects:\n  frontend:\n    repo: git@github.com:org/frontend.git\n    tags: [ui]\n' > "$TEST_DIR/.meta.yaml"
-    run "$META_BIN" --tag ui project list --recursive --json
+    run "$META_BIN" --tag ui --recursive --json project list
     [ "$status" -ne 0 ]
     [[ "$output" == *"meta project list does not take --include/--exclude/--tag"* ]]
     for flag in --include --exclude; do

@@ -116,7 +116,7 @@ EOF
     # meta's --verbose lines, and a command's own --json
     json_run "$META_BIN" --json --verbose --include frontend exec -- true
     json_has '.success == true'
-    json_run "$META_BIN" --include nope context --json
+    json_run "$META_BIN" --include nope --json context
     json_has '.success == false'
 
     # a plugin's text, wrapped
@@ -315,7 +315,7 @@ within() {
     [ ! -e "$TEST_DIR/shared/inner" ]
     # what the pull of shared brings is read in the same run
     git -C "$TEST_DIR/shared" reset --quiet --hard HEAD~1
-    run "$META_BIN" git update -r
+    run "$META_BIN" -r git update
     [ "$status" -eq 0 ]
     [ -d "$TEST_DIR/shared/inner/.git" ]
     rm -rf "$TEST_DIR/shared/inner"
@@ -433,7 +433,7 @@ within() {
     printf '%s\n' "$added" > .meta.yaml
     git commit --quiet -am pages
     git push --quiet
-    run "$META_BIN" git update -r
+    run "$META_BIN" -r git update
     [ "$status" -eq 0 ]
     [[ "$output" != *"list each other"* ]]
     [[ "$output" == *"Update completed (5 pulled, 0 cloned)"* ]]
@@ -445,21 +445,21 @@ within() {
     create_meta_bare_repo "$KID_BARE" "{\"projects\": {\"top\": {\"repo\": \"file://$TOP_BARE\", \"meta\": true}}}"
     create_meta_bare_repo "$TOP_BARE" "{\"projects\": {\"kid\": {\"repo\": \"file://$KID_BARE\", \"meta\": true}}}"
     CYC="$(mktemp -d)/cyc"
-    run within 60 "$META_BIN" git clone -r "file://$TOP_BARE" "$CYC"
+    run within 60 "$META_BIN" -r git clone "file://$TOP_BARE" "$CYC"
     [ "$status" -eq 1 ]
     [[ "$output" == *"meta repos list each other: cyc → kid → top"* ]]
     [ -d "$CYC/kid/.git" ]
     [ ! -e "$CYC/kid/top" ]
     # the clone has no .meta/plugins: this build's plugin, not one installed
     cd "$CYC"
-    PATH="$(dirname "$META_GIT_BIN"):$PATH" run within 60 "$META_BIN" git update -r
+    PATH="$(dirname "$META_GIT_BIN"):$PATH" run within 60 "$META_BIN" -r git update
     [ "$status" -eq 1 ]
     [[ "$output" == *"meta repos list each other: cyc → kid → top"* ]]
     [ ! -e "$CYC/kid/top" ]
     # cloned by a relative URL, the top repo is the one git recorded
     rm -rf "$CYC"
     cd "$(dirname "$TOP_BARE")"
-    PATH="$(dirname "$META_GIT_BIN"):$PATH" run within 60 "$META_BIN" git clone -r top.git "$CYC"
+    PATH="$(dirname "$META_GIT_BIN"):$PATH" run within 60 "$META_BIN" -r git clone top.git "$CYC"
     [ "$status" -eq 1 ]
     [[ "$output" == *"meta repos list each other: cyc → kid → top"* ]]
     [ ! -e "$CYC/kid/top" ]
@@ -545,11 +545,10 @@ within() {
     [ "$status" -eq 0 ]
     [ -d shared/.git ]
     [ ! -e frontend ]
-    # the selection was made without nested projects: -r goes to meta
-    run "$META_BIN" --include frontend git clone-missing -r
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"give -r to meta, before the command"* ]]
-    [ ! -e frontend ]
+    # with meta's -r, the selection reaches the nested projects too
+    run "$META_BIN" --include frontend -r git clone-missing
+    [ "$status" -eq 0 ]
+    [ -d frontend/.git ]
 }
 
 @test "meta git clone-prune keeps each leftover that holds work, and removes a clean one" {
@@ -1132,7 +1131,7 @@ create_meta_bare_repo() {
     rm -rf "$CLONE_TARGET"
 
     cd "$TEST_DIR"
-    run "$META_BIN" git clone --recursive "file://$ROOT_BARE" "$CLONE_TARGET"
+    run "$META_BIN" --recursive git clone "file://$ROOT_BARE" "$CLONE_TARGET"
     [ "$status" -eq 0 ]
 
     # Root was cloned
@@ -1163,7 +1162,7 @@ create_meta_bare_repo() {
     rm -rf "$CLONE_TARGET"
 
     cd "$TEST_DIR"
-    run "$META_BIN" git clone --recursive "file://$ROOT_BARE" "$CLONE_TARGET"
+    run "$META_BIN" --recursive git clone "file://$ROOT_BARE" "$CLONE_TARGET"
     [ "$status" -eq 0 ]
 
     [ -d "$CLONE_TARGET/l1/.git" ]
@@ -1193,7 +1192,7 @@ create_meta_bare_repo() {
     cd "$TEST_DIR"
     # --meta-depth 1 means: level 0 (root's children) + level 1 (l1's children)
     # l2's children (l3) should NOT be cloned
-    run "$META_BIN" git clone --recursive --meta-depth 1 "file://$ROOT_BARE" "$CLONE_TARGET"
+    run "$META_BIN" --recursive --depth 1 git clone "file://$ROOT_BARE" "$CLONE_TARGET"
     [ "$status" -eq 0 ]
 
     [ -d "$CLONE_TARGET/l1/.git" ]
@@ -1464,7 +1463,7 @@ EOF
     printf '{"projects": {}}' > "$TEST_DIR/private/config.json"
     ln -s ../private/config.json "$TEST_DIR/frontend/.meta.yaml"
     chmod 000 "$TEST_DIR/private"
-    run "$META_BIN" git update -r
+    run "$META_BIN" -r git update
     chmod 700 "$TEST_DIR/private"
     [ "$status" -ne 0 ]
     [[ "$output" == *"Cannot read"*"frontend/.meta.yaml"* ]]
@@ -1485,7 +1484,7 @@ EOF
     bare_with_meta root "{\"projects\": {\"child\": {\"repo\": \"$UP/child.git\", \"meta\": true}, \"gone\": \"$UP/gone.git\"}}"
 
     cd "$TEST_DIR"
-    run "$META_BIN" git clone --recursive "$UP/root.git" "$UP/clone"
+    run "$META_BIN" --recursive git clone "$UP/root.git" "$UP/clone"
     [ "$status" -ne 0 ]
     [[ "$output" == *"Cannot read nested .meta.yaml"* ]]
     [[ "$output" == *"leads into .git"* ]]

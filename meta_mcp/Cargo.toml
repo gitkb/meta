@@ -22,7 +22,6 @@ serde_json.workspace = true
 serde_path_to_error = "0.1"
 
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["process"] }
 signal-hook.workspace = true
 
 [dev-dependencies]

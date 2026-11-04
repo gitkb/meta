@@ -24,6 +24,9 @@ walkdir = "2.3"
 rustix = { workspace = true, features = ["process", "termios"] }
 signal-hook = { workspace = true, features = ["extended-siginfo"] }
 
+[target.'cfg(windows)'.dependencies]
+win32job = "2"
+
 [dev-dependencies]
 meta_test_support.workspace = true
 tempfile.workspace = true

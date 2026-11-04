@@ -56,16 +56,12 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<PluginInfo, NoInfo> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let mut child = command
-        .spawn()
+    // its own process group (job on Windows): what a wrapper starts is
+    // stopped with it
+    let mut child = meta_core::children::spawn_group(&mut command)
         .map_err(|e| not_a_plugin(format!("it could not start ({e})")))?;
-    let Some(stdout) = child.stdout.take() else {
-        let _ = child.kill();
+    let Some(stdout) = child.stdout() else {
+        child.stop(true);
         let _ = child.wait();
         return Err(not_a_plugin("its output could not be read".to_string()));
     };
@@ -102,17 +98,9 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<PluginInfo, NoInfo> {
             }
         }
     }
-    // A wrapper may already have exited while its descendants hold stdout open.
-    // Kill its process group even when the wrapper itself has exited.
-    // The child was started as leader of its own process group.
-    #[cfg(unix)]
-    let _ = rustix::process::kill_process_group(
-        rustix::process::Pid::from_child(&child),
-        rustix::process::Signal::KILL,
-    );
-    // Elsewhere only the plugin itself is killed: a process it started that
-    // still holds stdout outlives it, but meta doesn't wait for that reader
-    let _ = child.kill();
+    // A wrapper may already have exited while its descendants hold stdout
+    // open: its whole group is killed even then
+    child.stop(true);
     let _ = child.wait();
     Err(NoInfo::NoAnswer(anyhow::anyhow!(
         "Plugin {} did not answer --meta-plugin-info within 5 seconds",

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -162,12 +162,11 @@ impl Calls {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        // Its own process group, so cancelling stops what it starts too
-        #[cfg(unix)]
-        std::os::unix::process::CommandExt::process_group(command, 0);
-        let mut child = command.spawn()?;
-        let (Some(stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
-            stop(&mut child, true);
+        // Its own process group (job on Windows), so cancelling stops what
+        // it starts too
+        let mut child = meta_core::children::spawn_group(command)?;
+        let (Some(stdout), Some(mut stderr)) = (child.stdout(), child.stderr()) else {
+            child.stop(true);
             return Err(std::io::Error::other("no pipe to the program"));
         };
         let stdout = std::thread::spawn(move || read_lines(stdout, max_lines));
@@ -190,7 +189,7 @@ impl Calls {
             let cancelled = self.cancelled.load(Ordering::SeqCst);
             let running = status.is_none()
                 || if cancelled {
-                    group_alive(&child)
+                    child.group_alive()
                 } else {
                     !stdout.is_finished() || !stderr.is_finished()
                 };
@@ -204,10 +203,10 @@ impl Calls {
             match terminated {
                 _ if !cancelled => {}
                 None => {
-                    stop(&mut child, false);
+                    child.stop(false);
                     terminated = Some(Instant::now());
                 }
-                Some(at) if at.elapsed() > GRACE => stop(&mut child, true),
+                Some(at) if at.elapsed() > GRACE => child.stop(true),
                 Some(_) => {}
             }
             std::thread::sleep(nap);
@@ -256,39 +255,6 @@ fn read_lines(pipe: impl Read, max: usize) -> std::io::Result<(Vec<u8>, bool)> {
         }
     }
     Ok((bytes, !reader.fill_buf()?.is_empty()))
-}
-
-/// Whether anything is left of the program's process group, after the
-/// program itself ended. Elsewhere than Unix there is no group to wait for.
-fn group_alive(child: &Child) -> bool {
-    // The group's id can't be another's while any of it lives. Accepted:
-    // once the group is empty its id could be reused before the next check,
-    // which needs pid wraparound within a few milliseconds.
-    #[cfg(unix)]
-    return rustix::process::test_kill_process_group(rustix::process::Pid::from_child(child))
-        .is_ok();
-    #[cfg(not(unix))]
-    {
-        let _ = child;
-        false
-    }
-}
-
-/// Asks the program and everything in its process group to stop, or kills
-/// them. Elsewhere than Unix only the program itself is killed.
-fn stop(child: &mut Child, kill: bool) {
-    #[cfg(unix)]
-    {
-        use rustix::process::{kill_process_group, Pid, Signal};
-        let signal = if kill { Signal::KILL } else { Signal::TERM };
-        // Its group lives on while the program or anything it started runs
-        let _ = kill_process_group(Pid::from_child(child), signal);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = kill;
-        let _ = child.kill();
-    }
 }
 
 #[cfg(test)]

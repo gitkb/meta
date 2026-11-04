@@ -4,8 +4,9 @@
 //! On Unix, [`own`] makes the calling program the one owner of SIGINT,
 //! SIGTERM and SIGHUP (those not already ignored when it started, as under
 //! `nohup`; where that can't be told without unsafe code, everywhere but
-//! Linux, SIGHUP is left as it was). Children started through [`spawn`] are registered. When one of
-//! those signals arrives, no new child starts, the signal is passed on to the
+//! Linux, SIGHUP is left as it was). Children started through [`spawn`] or
+//! [`spawn_group`] are registered. When one of those signals arrives, no new
+//! child starts, the signal is passed on to the
 //! children, and once they are gone the program ends the way the signal ends
 //! it, so a shell running it sees it was interrupted. Threads waiting on a
 //! child then never resume: nothing is printed or done after the signal. A
@@ -31,17 +32,28 @@
 //!
 //! Elsewhere (Windows), children start as they always did; Ctrl-C reaches
 //! every process attached to the console.
+//!
+//! A child started through [`spawn_group`] instead always gets a process
+//! group of its own (a job object on Windows), wherever the program runs, so
+//! the caller can tell whether anything it started still runs
+//! ([`Owned::group_alive`]) and stop all of it ([`Owned::stop`]): a tool
+//! call that is cancelled, a plugin that doesn't answer in time. It doesn't
+//! get the terminal's Ctrl-C directly; on Unix a signal this program owns is
+//! passed on to it as to any other group. On Windows a process the child
+//! starts in the instant before it is put in its job is not in it.
 
 use std::io;
 use std::process::{Child, Command, ExitStatus, Output};
 
-/// A child started through [`spawn`]. Wait for it through [`Owned::wait`]
+/// A child started through [`spawn`] or [`spawn_group`]. Wait for it through [`Owned::wait`]
 /// or [`Owned::exchange`]. One dropped unwaited for is let go: a
 /// stop no longer waits for it (its process group still gets the signal).
 pub struct Owned {
     child: Child,
     /// Off the list: waited for (its pid may now be another child's)
     waited: bool,
+    /// Its process group or job, when started through [`spawn_group`]
+    group: Option<imp::Group>,
 }
 
 impl Drop for Owned {
@@ -55,9 +67,21 @@ impl Drop for Owned {
 /// Start `command` as a child this program owns. Fails with
 /// [`io::ErrorKind::Interrupted`] once the program is stopping.
 pub fn spawn(command: &mut Command) -> io::Result<Owned> {
-    imp::spawn(command).map(|child| Owned {
+    start(command, false)
+}
+
+/// Start `command` as a child this program owns, in a process group of its
+/// own (a job object on Windows), so everything it starts can be stopped
+/// with it (see the module documentation).
+pub fn spawn_group(command: &mut Command) -> io::Result<Owned> {
+    start(command, true)
+}
+
+fn start(command: &mut Command, grouped: bool) -> io::Result<Owned> {
+    imp::spawn(command, grouped).map(|(child, group)| Owned {
         child,
         waited: false,
+        group,
     })
 }
 
@@ -78,6 +102,11 @@ pub fn output(command: &mut Command) -> io::Result<Output> {
 }
 
 impl Owned {
+    /// The child's stdout, if piped and not taken yet.
+    pub fn stdout(&mut self) -> Option<std::process::ChildStdout> {
+        self.child.stdout.take()
+    }
+
     /// The child's stderr, if piped and not taken yet.
     pub fn stderr(&mut self) -> Option<std::process::ChildStderr> {
         self.child.stderr.take()
@@ -92,6 +121,42 @@ impl Owned {
         let status = self.child.wait();
         imp::reaped();
         status
+    }
+
+    /// The child's exit status if it has exited, without waiting, as
+    /// [`Child::try_wait`] does.
+    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        if !self.waited {
+            if !imp::try_exited(&self.child) {
+                return Ok(None);
+            }
+            self.waited = true;
+        }
+        let status = self.child.try_wait();
+        imp::reaped();
+        status
+    }
+
+    /// Whether anything is left of the child's process group or job: the
+    /// child itself, or anything it started that is still running. A child
+    /// not started through [`spawn_group`] has no group of its own: `false`.
+    pub fn group_alive(&mut self) -> bool {
+        match &mut self.group {
+            Some(group) => imp::group_alive(group, &mut self.child),
+            None => false,
+        }
+    }
+
+    /// Ask the child and everything in its process group to stop (SIGTERM),
+    /// or kill them (`kill`). On Windows the whole job is killed either way.
+    /// A child not started through [`spawn_group`] is killed alone.
+    pub fn stop(&mut self, kill: bool) {
+        match &mut self.group {
+            Some(group) => imp::stop_group(group, &mut self.child, kill),
+            None => {
+                let _ = self.child.kill();
+            }
+        }
     }
 
     /// Write `input` to the child's piped stdin and close it, while reading
@@ -232,16 +297,36 @@ mod imp {
         })
     }
 
-    fn group_alive(group: Pid) -> bool {
-        // A group's id can't be another's while any of it lives. Accepted, as
-        // in meta-mcp: once it is empty its id could be reused before the
-        // next check (groups are checked whenever a child is started or
-        // reaped), which needs pid wraparound in between.
+    fn alive(group: Pid) -> bool {
+        // A group's id can't be another's while any of it lives. Accepted:
+        // once it is empty its id could be reused before the next check
+        // (groups are checked whenever a child is started or reaped, and
+        // while a stopped group is waited for), which needs pid wraparound
+        // in between.
         rustix::process::test_kill_process_group(group).is_ok()
     }
 
-    pub(super) fn spawn(command: &mut Command) -> io::Result<Child> {
-        let own_group = !shared();
+    /// The process group a child leads.
+    pub(super) type Group = Pid;
+
+    pub(super) fn group_alive(group: &mut Group, _child: &mut Child) -> bool {
+        alive(*group)
+    }
+
+    pub(super) fn stop_group(group: &mut Group, _child: &mut Child, kill: bool) {
+        let signal = if kill { Signal::KILL } else { Signal::TERM };
+        // its group lives on while the child or anything it started runs
+        let _ = rustix::process::kill_process_group(*group, signal);
+    }
+
+    /// Start `command`, in a process group of its own when there is no
+    /// terminal to share or `grouped` asks for one; the group is returned
+    /// only when asked for.
+    pub(super) fn spawn(
+        command: &mut Command,
+        grouped: bool,
+    ) -> io::Result<(Child, Option<Group>)> {
+        let own_group = grouped || !shared();
         let mut children = lock();
         if children.stopping {
             return Err(io::Error::new(
@@ -257,19 +342,19 @@ mod imp {
         let pid = Pid::from_child(&child);
         children.running.push((pid, own_group));
         if own_group {
-            children.groups.retain(|group| group_alive(*group));
+            children.groups.retain(|group| alive(*group));
             children.groups.push(pid);
         }
         // held from the check above to here: a signal that stops this
         // program either came first or sees the child
         drop(children);
-        Ok(child)
+        Ok((child, grouped.then_some(pid)))
     }
 
     /// Forget the process groups that have emptied: once one has, its id
     /// may become another's.
     pub(super) fn reaped() {
-        lock().groups.retain(|group| group_alive(*group));
+        lock().groups.retain(|group| alive(*group));
     }
 
     /// Take `child` off the list of running children, if it is still there.
@@ -301,6 +386,30 @@ mod imp {
                 _ => break,
             }
         }
+        gone(pid);
+    }
+
+    /// Whether `child` has exited, without waiting or reaping it; once it
+    /// has, as [`exited`].
+    pub(super) fn try_exited(child: &Child) -> bool {
+        use rustix::process::{waitid, WaitId, WaitIdOptions};
+        let pid = Pid::from_child(child);
+        match waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG,
+        ) {
+            // still running; macOS can answer for a child that is only stopped
+            Ok(None) | Err(rustix::io::Errno::INTR) => return false,
+            Ok(Some(status)) if status.stopped() || status.continued() => return false,
+            // ended, or not this program's to wait for: std's try_wait says
+            _ => {}
+        }
+        gone(pid);
+        true
+    }
+
+    /// Take the exited child `pid` off the list (see [`exited`]).
+    fn gone(pid: Pid) {
         let mut children = lock();
         children.running.retain(|(running, _)| *running != pid);
         registry().changed.notify_all();
@@ -368,7 +477,7 @@ mod imp {
         let sig = Signal::from_named_raw(signal).unwrap_or(Signal::TERM);
         // a group that emptied since its last spawn is not signalled: its id
         // may be another's by now
-        children.groups.retain(|group| group_alive(*group));
+        children.groups.retain(|group| alive(*group));
         // A hangup may have reached only this program (the session leader of
         // a terminal that went), so it is passed on too
         let hangup = signal == signal_hook::consts::SIGHUP;
@@ -388,7 +497,7 @@ mod imp {
         let mut deadline = (sent || hangup || !shared()).then(|| Instant::now() + grace());
         let mut killed = false;
         loop {
-            children.groups.retain(|group| group_alive(*group));
+            children.groups.retain(|group| alive(*group));
             if children.running.is_empty() && children.groups.is_empty() {
                 break;
             }
@@ -429,16 +538,88 @@ mod imp {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
+compile_error!("only Unix and Windows are supported");
+
+#[cfg(windows)]
 mod imp {
     use std::io;
+    use std::os::windows::io::AsRawHandle;
     use std::process::{Child, Command};
+    use win32job::{ExtendedLimitInfo, Job};
 
-    pub(super) fn spawn(command: &mut Command) -> io::Result<Child> {
-        command.spawn()
+    /// The jobs a child is put in. Closing a job leaves its processes
+    /// running, unless it was told to kill them first.
+    pub(super) struct Group {
+        /// Holds the child and everything it starts until they have exited:
+        /// what [`group_alive`] reads, during a stop too
+        pub(super) tracked: Job,
+        /// Nested in `tracked`: told to kill and closed by a stop
+        kill: Option<Job>,
+    }
+
+    fn job_of(child: &Child) -> Result<Job, win32job::JobError> {
+        let job = Job::create()?;
+        job.assign_process(child.as_raw_handle() as isize)?;
+        Ok(job)
+    }
+
+    pub(super) fn spawn(
+        command: &mut Command,
+        grouped: bool,
+    ) -> io::Result<(Child, Option<Group>)> {
+        let mut child = command.spawn()?;
+        if !grouped {
+            return Ok((child, None));
+        }
+        // the second assignment nests its job in the first
+        let jobs = job_of(&child).and_then(|tracked| Ok((tracked, job_of(&child)?)));
+        match jobs {
+            Ok((tracked, kill)) => Ok((
+                child,
+                Some(Group {
+                    tracked,
+                    kill: Some(kill),
+                }),
+            )),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                Err(io::Error::other(e))
+            }
+        }
+    }
+
+    pub(super) fn group_alive(group: &mut Group, _child: &mut Child) -> bool {
+        // what can't be told counts as alive, so it gets stopped
+        match group.tracked.query_process_id_list() {
+            Ok(ids) => !ids.is_empty(),
+            Err(_) => true,
+        }
+    }
+
+    pub(super) fn stop_group(group: &mut Group, child: &mut Child, _kill: bool) {
+        let Some(job) = group.kill.take() else {
+            return;
+        };
+        let mut limits = ExtendedLimitInfo::new();
+        limits.limit_kill_on_job_close();
+        if job.set_extended_limit_info(&limits).is_ok() {
+            // closed: everything in it is killed
+            drop(job);
+        } else {
+            // kept for the next stop to try again
+            group.kill = Some(job);
+            let _ = child.kill();
+        }
     }
 
     pub(super) fn exited(_child: &Child) {}
+
+    /// No list to take it off: [`Owned::try_wait`] asks std.
+    pub(super) fn try_exited(_child: &Child) -> bool {
+        true
+    }
 
     pub(super) fn reaped() {}
 
@@ -446,5 +627,43 @@ mod imp {
 
     pub(super) fn own() -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn stopping_a_group_ends_what_its_program_started() {
+        let running = |pid: usize| {
+            #[expect(clippy::disallowed_methods, reason = "not a program in a repo")]
+            let out = Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+        };
+        // cmd starts ping in the background and ends, a second after it
+        // started: by then it is in its jobs (see the module documentation)
+        #[expect(clippy::disallowed_methods, reason = "not a program in a repo")]
+        let mut command = Command::new("cmd");
+        command.args([
+            "/c",
+            "ping -n 2 127.0.0.1 >NUL & start /b ping -n 60 127.0.0.1 >NUL",
+        ]);
+        let mut owned = spawn_group(&mut command).unwrap();
+        owned.wait().unwrap();
+        let group = owned.group.as_ref().expect("a job");
+        let left = group.tracked.query_process_id_list().unwrap();
+        assert!(!left.is_empty(), "ping is still in the job");
+        assert!(owned.group_alive());
+        owned.stop(true);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while owned.group_alive() || left.iter().any(|pid| running(*pid)) {
+            assert!(Instant::now() < deadline, "{left:?} still run after stop");
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }

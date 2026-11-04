@@ -2,6 +2,35 @@ use super::*;
 use std::fs;
 use tempfile::TempDir;
 
+/// [`super::run`], failed when a command failed (as a caller that shows
+/// text ends)
+fn run(config: &LoopConfig, argv: &[String]) -> Result<()> {
+    super::run(config, argv)?.finish()
+}
+
+/// [`super::run_commands`], failed when a command failed
+fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> {
+    super::run_commands(config, commands)?.finish()
+}
+
+fn execute_command_in_directory(
+    dir: &Path,
+    argv: &[String],
+    config: &LoopConfig,
+    env: Option<&HashMap<String, String>>,
+) -> Result<CommandResult> {
+    execute_in_directory(dir, argv, config, env, &[0])
+}
+
+fn execute_command_in_directory_capturing(
+    dir: &Path,
+    argv: &[String],
+    config: &LoopConfig,
+    env: Option<&HashMap<String, String>>,
+) -> CommandResult {
+    capture_in_directory(dir, argv, config, env, &[0])
+}
+
 /// `script` run by the platform shell, the way a user asks for one
 fn sh(script: &str) -> Vec<String> {
     let shell: &[&str] = if cfg!(windows) {
@@ -431,12 +460,16 @@ fn test_run_commands_sequential() {
 
     let commands = vec![
         DirCommand {
+            project: None,
+            ok_codes: vec![0],
             dir: dir1.to_path_buf(),
             argv: sh("echo test1"),
             env: None,
             refused: None,
         },
         DirCommand {
+            project: None,
+            ok_codes: vec![0],
             dir: dir2.to_path_buf(),
             argv: sh("echo test2"),
             env: None,
@@ -464,12 +497,16 @@ fn test_run_commands_parallel() {
 
     let commands = vec![
         DirCommand {
+            project: None,
+            ok_codes: vec![0],
             dir: dir1.to_path_buf(),
             argv: sh("echo test1"),
             env: None,
             refused: None,
         },
         DirCommand {
+            project: None,
+            ok_codes: vec![0],
             dir: dir2.to_path_buf(),
             argv: sh("echo test2"),
             env: None,
@@ -484,6 +521,8 @@ fn test_run_commands_parallel() {
 /// `script` with `WHO` set for it, in `dir`
 fn command_with_who(dir: &Path, who: &str, script: &str) -> DirCommand {
     DirCommand {
+        project: None,
+        ok_codes: vec![0],
         dir: dir.to_path_buf(),
         argv: sh(script),
         env: Some(HashMap::from([("WHO".to_string(), who.to_string())])),
@@ -579,6 +618,8 @@ fn test_run_commands_dry_run() {
     };
 
     let commands = vec![DirCommand {
+        project: None,
+        ok_codes: vec![0],
         dir: temp_dir.path().to_path_buf(),
         argv: touch_cmd(&marker_file),
         env: None,
@@ -603,6 +644,8 @@ fn test_run_commands_failure_handling() {
     };
 
     let commands = vec![DirCommand {
+        project: None,
+        ok_codes: vec![0],
         dir: dir1.to_path_buf(),
         argv: fail_cmd(), // This command always fails
         env: None,
@@ -624,6 +667,8 @@ fn test_run_commands_failure_in_dry_run_succeeds() {
     };
 
     let commands = vec![DirCommand {
+        project: None,
+        ok_codes: vec![0],
         dir: temp_dir.path().to_path_buf(),
         argv: fail_cmd(),
         env: None,
@@ -768,6 +813,8 @@ fn starts_are_one_interval_apart_however_long_commands_take() {
 fn a_refused_command_is_a_failed_result_and_never_runs() {
     let temp_dir = TempDir::new().unwrap();
     let command = |refused: Option<&str>| DirCommand {
+        project: None,
+        ok_codes: vec![0],
         dir: temp_dir.path().to_path_buf(),
         argv: sh("echo ran > ran"),
         env: None,

@@ -3,6 +3,7 @@
 
 #![expect(
     clippy::unwrap_used,
+    clippy::panic,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 // Unix only: the plugins here are shell scripts
@@ -37,7 +38,7 @@ fn workspace(sandbox: &Sandbox, root: &Path) {
             r#"#!/bin/sh
 case "$1" in
   --meta-plugin-info) echo '{{"name":"touchy","version":"1.0.0","commands":["touch"]}}' ;;
-  --meta-plugin-exec) cat >> "{}" ;;
+  --meta-plugin-exec) cat "$META_REQUEST" >> "{}"; echo '{{"results":{{"records":[]}}}}' > "$META_RESPONSE" ;;
 esac
 "#,
             root.join("plugin.log").display()
@@ -159,12 +160,11 @@ fn only_the_plugin_a_command_names_is_started() {
     assert!(help.contains("plugin: spy v1.0.0"), "{help}");
     assert!(help.contains("plugin: touchy v1.0.0"), "{help}");
     let list = run_meta(&sandbox, &root, &["--json", "plugin", "list"]);
-    let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let list: meta_plugin::Envelope = serde_json::from_slice(&list.stdout).unwrap();
     let names: Vec<_> = list
-        .as_array()
-        .unwrap()
+        .results
         .iter()
-        .map(|plugin| plugin["name"].as_str().unwrap())
+        .map(|row| row.data.as_ref().unwrap()["name"].as_str().unwrap())
         .collect();
     assert!(
         names.contains(&"touchy") && names.contains(&"spy"),
@@ -187,7 +187,7 @@ fn a_workspace_plugin_comes_before_one_on_path() {
         &local,
         &format!(
             r#"[ "$1" = --meta-plugin-info ] && echo '{{"name":"touchy","version":"2.0.0","commands":[]}}'
-[ "$1" = --meta-plugin-exec ] && cat > "{}"
+[ "$1" = --meta-plugin-exec ] && cat "$META_REQUEST" > "{}" && echo '{{"message":""}}' > "$META_RESPONSE"
 exit 0"#,
             root.join("local.log").display()
         ),
@@ -228,14 +228,14 @@ fn a_plan_meta_cannot_read_fails_and_names_the_plugin() {
     let sandbox = Sandbox::new();
     let root = sandbox.work();
     workspace(&sandbox, &root);
-    // An older plugin that still plans `cmd` strings instead of `argv`
+    // A plugin that plans `cmd` strings instead of steps
     let plugin = root.join("bin").join("meta-oldplan");
     fs::write(
         &plugin,
         r#"#!/bin/sh
 case "$1" in
   --meta-plugin-info) echo '{"name":"oldplan","version":"1.0.0","commands":["oldplan"]}' ;;
-  --meta-plugin-exec) cat >/dev/null; echo '{"plan":{"commands":[{"dir":".","cmd":"touch ran"}]}}' ;;
+  --meta-plugin-exec) echo '{"plan":{"commands":[{"dir":".","cmd":"touch ran"}]}}' > "$META_RESPONSE" ;;
 esac
 "#,
     )
@@ -249,8 +249,9 @@ esac
         !output.status.success(),
         "an unreadable plan passed as success"
     );
-    assert!(stderr.contains("upgrade the plugin"), "{stderr}");
+    assert!(stderr.contains("an answer that is no response"), "{stderr}");
     assert!(stderr.contains(&plugin.display().to_string()), "{stderr}");
+    assert!(!root.join("ran").exists());
 }
 
 #[test]
@@ -264,7 +265,7 @@ fn a_plan_with_max_parallel_zero_is_refused_before_any_of_it_runs() {
         r#"#!/bin/sh
 case "$1" in
   --meta-plugin-info) echo '{"name":"zero","version":"1.0.0","commands":["zero"]}' ;;
-  --meta-plugin-exec) cat >/dev/null; echo '{"plan":{"pre_commands":[{"dir":".","argv":["touch","setup-ran"]}],"commands":[{"dir":".","argv":["touch","ran"]}],"max_parallel":0}}' ;;
+  --meta-plugin-exec) echo '{"plan":{"steps":[{"dir":".","argv":["touch","first"]},{"dir":".","argv":["touch","ran"]}],"max_parallel":0}}' > "$META_RESPONSE" ;;
 esac
 "#,
     )
@@ -276,7 +277,7 @@ esac
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "max_parallel 0 ran unlimited");
     assert!(stderr.contains("max_parallel"), "{stderr}");
-    assert!(!root.join("setup-ran").exists() && !root.join("ran").exists());
+    assert!(!root.join("first").exists() && !root.join("ran").exists());
 }
 
 #[test]
@@ -284,7 +285,7 @@ fn a_planned_commands_env_reaches_the_command_meta_runs() {
     let sandbox = Sandbox::new();
     let root = sandbox.work();
     workspace(&sandbox, &root);
-    let plan = serde_json::json!({"plan": {"commands": [{
+    let plan = serde_json::json!({"plan": {"steps": [{
         "dir": root.join("a"),
         "argv": ["sh", "-c", "printf '%s' \"$X\" > from-plan.txt"],
         "env": {"X": "from-plan"}
@@ -294,7 +295,7 @@ fn a_planned_commands_env_reaches_the_command_meta_runs() {
         &format!(
             r#"case "$1" in
   --meta-plugin-info) echo '{{"name":"envplan","version":"1","commands":["envplan"]}}' ;;
-  --meta-plugin-exec) cat >/dev/null; cat <<'PLAN'
+  --meta-plugin-exec) cat > "$META_RESPONSE" <<'PLAN'
 {plan}
 PLAN
     ;;
@@ -363,4 +364,165 @@ fn a_directory_name_that_is_not_utf8_runs_in_that_directory() {
     );
     assert!(raw.join("here").is_file() && raw.join("a/here").is_file());
     assert!(!twin.join("here").exists() && !twin.join("a/here").exists());
+    // the envelope names the folder by its bytes, which lead back to it
+    let out = sandbox
+        .command(env!("CARGO_BIN_EXE_meta"))
+        .args(["--json", "exec", "--", "true"])
+        .current_dir(&raw)
+        .output()
+        .unwrap();
+    let json: meta_plugin::Envelope = serde_json::from_slice(&out.stdout).unwrap();
+    let dirs: Vec<std::path::PathBuf> = json
+        .results
+        .iter()
+        .map(|row| meta_plugin::wire_path::from_bytes(row.path_bytes.as_deref().unwrap()).unwrap())
+        .collect();
+    assert_eq!(dirs, [raw.clone(), raw.join("a")]);
+}
+
+/// A plugin `meta-<word>` that answers every call with `response` (JSON)
+/// and keeps the request it got in `<word>.request.json`.
+fn answering(root: &Path, word: &str, response: &serde_json::Value) {
+    script(
+        &root.join(format!("bin/meta-{word}")),
+        &format!(
+            r#"case "$1" in
+  --meta-plugin-info) echo '{{"name":"{word}","version":"1","commands":["{word}"]}}' ;;
+  --meta-plugin-exec) cp "$META_REQUEST" "{}"; cat > "$META_RESPONSE" <<'ANSWER'
+{response}
+ANSWER
+  ;;
+esac"#,
+            root.join(format!("{word}.request.json")).display()
+        ),
+    );
+}
+
+fn envelope(output: &std::process::Output) -> meta_plugin::Envelope {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "not an envelope ({e}): {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
+#[test]
+fn every_kind_of_answer_is_one_envelope_under_json() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    let a = root.join("a").display().to_string();
+    let answers = [
+        (
+            serde_json::json!({"plan": {"steps": [{"project": "a", "dir": a, "argv": ["true"]}]}, "warnings": [{"message": "w"}]}),
+            true,
+        ),
+        (
+            serde_json::json!({"results": {"records": [{"project": "a", "data": {"n": 1}}]}, "skipped": [{"project": "b", "reason": "no x"}]}),
+            true,
+        ),
+        (serde_json::json!({"message": "words"}), true),
+        (
+            serde_json::json!({"delegate": ["exec", "--", "true"]}),
+            true,
+        ),
+        (
+            serde_json::json!({"error": {"code": "dirty", "message": "a has changes"}}),
+            false,
+        ),
+    ];
+    for (answer, success) in answers {
+        answering(&root, "kind", &answer);
+        let out = run_meta(&sandbox, &root, &["--json", "kind", "go"]);
+        let got = envelope(&out);
+        assert_eq!(got.success, success, "{answer}: {got:?}");
+        assert_eq!(out.status.success(), success, "{answer}");
+        assert!(got.command == "kind go" || got.command == "exec", "{got:?}");
+        match answer
+            .as_object()
+            .and_then(|o| o.keys().next())
+            .map(String::as_str)
+        {
+            Some("plan") => {
+                assert_eq!(got.results.len(), 1, "{got:?}");
+                assert_eq!(got.results[0].exit_code, Some(0));
+                assert_eq!(got.warnings[0].message, "w");
+            }
+            Some("results") => {
+                assert_eq!(got.results[0].data, Some(serde_json::json!({"n": 1})));
+                assert_eq!(got.skipped[0].project, "b");
+            }
+            Some("message") => assert_eq!(got.message.as_deref(), Some("words")),
+            // the delegate ran `meta exec -- true` in each repo
+            Some("delegate") => assert_eq!(got.results.len(), 3, "{got:?}"),
+            _ => assert_eq!(got.error.unwrap().code, meta_plugin::ErrorCode::Dirty),
+        }
+    }
+}
+
+#[test]
+fn the_config_meta_is_given_is_the_one_a_plugin_runs_in() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    fs::create_dir_all(root.join("other")).unwrap();
+    sandbox.git(&root.join("other"), &["init", "-q"]);
+    fs::write(
+        root.join("other.yaml"),
+        r#"{"projects":{"other":"https://example.invalid/other.git"}}"#,
+    )
+    .unwrap();
+    answering(&root, "seen", &serde_json::json!({"message": ""}));
+
+    // from inside a project: the config is looked for upwards
+    let out = sandbox
+        .command(env!("CARGO_BIN_EXE_meta"))
+        .args(["--config", "other.yaml", "seen", "go"])
+        .current_dir(root.join("a"))
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", root.join("bin").display()),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let request: meta_plugin::Request =
+        serde_json::from_slice(&fs::read(root.join("seen.request.json")).unwrap()).unwrap();
+    let workspace = request.workspace.unwrap();
+    assert_eq!(workspace.config.file_name().unwrap(), "other.yaml");
+    let paths: Vec<&str> = request.projects.iter().map(|p| p.path.as_str()).collect();
+    assert_eq!(paths, [".", "other"]);
+    assert_eq!(request.cwd, root.join("a"));
+}
+
+#[test]
+fn fields_keep_only_the_named_fields_of_each_row() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    let out = run_meta(
+        &sandbox,
+        &root,
+        &["--fields", "project", "--json", "exec", "--", "true"],
+    );
+    let shown: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        shown["results"],
+        serde_json::json!([{"project": "."}, {"project": "a"}, {"project": "b"}])
+    );
+    assert_eq!(shown["success"], true);
+    // without --json there is nothing to pick from
+    let out = run_meta(
+        &sandbox,
+        &root,
+        &["--fields", "project", "exec", "--", "true"],
+    );
+    assert_eq!(out.status.code(), Some(2));
 }

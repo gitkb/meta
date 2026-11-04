@@ -1,20 +1,16 @@
 //! Subprocess-based plugin system for meta.
 //!
-//! Plugins are standalone executables that communicate via JSON over stdin/stdout.
-//! This approach provides better isolation, language flexibility, and simpler debugging.
+//! Plugins are standalone executables: meta finds them, asks each for its
+//! info, and calls one with a request in a file (`meta_plugin`'s protocol).
 
 use anyhow::{Context, Result};
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::errln;
+use meta_plugin::{ErrorCode, ErrorInfo, PluginInfo, Request, Response};
 use std::io::Read;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-
-use meta_plugin::{
-    ExecutionPlan, PlanResponse, PlannedCommand, PluginInfo, PluginRequest, PluginRequestOptions,
-};
 
 /// Why a file gave no plugin info
 #[derive(Debug)]
@@ -304,7 +300,7 @@ impl SubprocessPlugin {
     /// plugin claims that is a whole-word prefix of `args`, else the word
     /// alone. Only claimed words are joined into the request's command; what
     /// the user typed stays separate args.
-    fn command_len(&self, args: &[String]) -> usize {
+    pub fn command_len(&self, args: &[String]) -> usize {
         self.info
             .commands
             .iter()
@@ -319,62 +315,29 @@ impl SubprocessPlugin {
             .unwrap_or(1)
     }
 
-    /// Run `args` (the command as typed after `meta`, starting with this
-    /// plugin's word) through the plugin, in `projects` (the selected repos
-    /// of the workspace or set at `root_dir`), from `cwd`.
-    pub fn execute(
-        &self,
-        args: &[String],
-        projects: &[PathBuf],
-        root_dir: Option<&Path>,
-        cwd: &Path,
-        options: PluginRequestOptions,
-    ) -> Result<()> {
-        // the protocol is JSON: a path that isn't UTF-8 can't be sent
-        let projects = projects
-            .iter()
-            .map(|dir| {
-                dir.to_str().map(str::to_string).with_context(|| {
-                    format!(
-                        "{} is not UTF-8, so plugin {} can't be sent it",
-                        escape_path(dir),
-                        escape(&self.word)
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let (command, remaining_args) = args
-            .split_at_checked(self.command_len(args))
-            .unwrap_or((args, &[]));
-        let command = command.join(" ");
-
-        let request = PluginRequest {
-            command,
-            args: remaining_args.to_vec(),
-            projects,
-            cwd: cwd.to_path_buf(),
-            options,
-        };
-
-        // the protocol is JSON: a path that isn't UTF-8 can't be sent
-        let request_json = serde_json::to_string(&request).with_context(|| {
-            format!(
-                "Cannot send the request to plugin {} (is a path not UTF-8?)",
-                escape_path(&self.path)
-            )
-        })?;
-
-        if request.options.verbose {
+    /// Call the plugin with `request`: the request in a file, its answer
+    /// read from another (see `meta_plugin`'s protocol). Its stdin and
+    /// stderr are meta's, and its stdout too, but under `--json` meta's
+    /// stderr, so meta's stdout holds the Envelope alone.
+    pub fn call(&self, request: &Request) -> Result<Response> {
+        let shown = escape_path(&self.path);
+        let dir = tempfile::Builder::new()
+            .prefix("meta-call-")
+            .tempdir()
+            .context("Cannot make a folder for the plugin call")?;
+        let (request_file, response_file) = (
+            dir.path().join("request.json"),
+            dir.path().join("response.json"),
+        );
+        std::fs::write(&request_file, serde_json::to_vec(request)?)
+            .context("Cannot write the plugin request")?;
+        if request.meta.verbose {
             errln!(
                 "Executing plugin {} for command '{}'",
                 escape(&self.word),
                 escape(&request.command)
             );
         }
-
-        // A plugin may answer without reading its request; then its output
-        // and exit status decide, not the pipe. Meta shows what it prints,
-        // so it colours as meta does.
         #[expect(
             clippy::disallowed_methods,
             reason = "a plugin is meta's own program, not one in a repo"
@@ -382,191 +345,38 @@ impl SubprocessPlugin {
         let mut plugin = Command::new(&self.path);
         plugin
             .arg("--meta-plugin-exec")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped()) // Capture stdout to parse response
-            .stderr(Stdio::inherit()); // Let stderr pass through for error messages
-        meta_plugin::out::pass_color(&mut plugin);
-        let output = meta_plugin::process::spawn(&mut plugin)
-            .and_then(|child| child.exchange(request_json.as_bytes()))
-            .with_context(|| format!("Failed to execute plugin {}", escape_path(&self.path)))?;
-
-        if !output.status.success() {
-            // Plugin already printed its error to stderr. What it printed
-            // before failing (say the worktrees it removed before a store
-            // error) is shown too; then its exit code is propagated.
-            let json = request.options.json_output.then_some(self.word.as_str());
-            relay(&output.stdout, json, false)?;
-            return Err(meta_plugin::exit::ExitWith::of(output.status).into());
-        }
-
-        // Try to parse the response as JSON
-        let stdout_str = String::from_utf8_lossy(&output.stdout);
-
-        // If stdout is empty, plugin handled execution silently
-        if stdout_str.trim().is_empty() {
-            return Ok(());
-        }
-
-        // If stdout doesn't look like JSON, print it (legacy plugin output),
-        // as the plugin wrote it
-        if !stdout_str.trim().starts_with('{') {
-            return relay(
-                &output.stdout,
-                request.options.json_output.then_some(""),
-                true,
-            );
-        }
-
-        // A plan meta cannot read must not pass for success: an older plugin
-        // still sends `cmd` strings, and printing them would run nothing
-        let is_plan = serde_json::from_str::<serde_json::Value>(&stdout_str)
-            .is_ok_and(|value| value.get("plan").is_some());
-        match serde_json::from_str::<PlanResponse>(&stdout_str) {
-            // Plugin returned an execution plan - execute it via loop_lib
-            Ok(response) => execute_plan(
-                &response.plan,
-                &request.projects,
-                root_dir,
-                &request.options,
-            ),
-            Err(e) if is_plan => anyhow::bail!(
-                "plugin {} sent an execution plan this meta cannot read ({e}); \
-                 upgrade the plugin to match this meta",
-                escape_path(&self.path)
-            ),
-            // Not a plan - print output as-is
-            Err(_) => relay(
-                &output.stdout,
-                request.options.json_output.then_some(""),
-                true,
-            ),
-        }
-    }
-}
-
-/// Show what a plugin printed, as it wrote it. With `--json` (`json`: the
-/// plugin's word), text that is no JSON goes into
-/// `{"success": .., "output": ..}`, and a failed plugin that printed
-/// nothing (its error is on stderr) leaves `{"success": false, "error": ..}`,
-/// so stdout stays JSON.
-fn relay(stdout: &[u8], json: Option<&str>, success: bool) -> Result<()> {
-    let Some(word) = json else {
-        return Ok(meta_plugin::out::stdout_bytes(stdout)?);
-    };
-    if stdout.trim_ascii().is_empty() {
-        if !success {
-            let failed = serde_json::json!({
-                "success": false,
-                "error": format!("plugin {word} failed"),
-            });
-            meta_plugin::outln!("{failed}")?;
-        }
-        return Ok(());
-    }
-    let is_json = serde_json::Deserializer::from_slice(stdout)
-        .into_iter::<serde::de::IgnoredAny>()
-        .all(|value| value.is_ok());
-    if is_json {
-        return Ok(meta_plugin::out::stdout_bytes(stdout)?);
-    }
-    let wrapped = serde_json::json!({
-        "success": success,
-        "output": String::from_utf8_lossy(stdout),
-    });
-    Ok(meta_plugin::outln!("{wrapped}")?)
-}
-
-/// Execute an execution plan via loop_lib
-fn execute_plan(
-    plan: &ExecutionPlan,
-    projects: &[String],
-    root_dir: Option<&Path>,
-    options: &PluginRequestOptions,
-) -> Result<()> {
-    use loop_lib::{run_commands, DirCommand, LoopConfig};
-
-    // Checked once, before any phase runs, so a plan never stops half done
-    // over them
-    let max_parallel = plan
-        .max_parallel
-        .map(|max| NonZeroUsize::new(max).context("The plugin's plan has max_parallel 0"))
-        .transpose()?;
-    let aliases = loop_lib::aliases()?;
-    let job = |c: &PlannedCommand| DirCommand {
-        dir: PathBuf::from(&c.dir),
-        argv: c.argv.clone(),
-        env: c.env.clone(),
-        refused: None,
-    };
-    // Setup and cleanup run one at a time and silently unless verbose;
-    // setup runs in a dry run too (it's required)
-    let phase_config = LoopConfig {
-        verbose: options.verbose,
-        silent: true,
-        aliases: aliases.clone(),
-        ..LoopConfig::default()
-    };
-
-    // Phase 1: Run pre_commands sequentially (setup tasks like SSH ControlMaster)
-    if !plan.pre_commands.is_empty() {
-        if !options.silent {
-            use colored::Colorize;
-            errln!("{} Preparing connections...", "⟳".cyan());
-        }
-
-        for pre_cmd in &plan.pre_commands {
-            // Ignore failures for pre_commands (e.g., SSH socket already exists)
-            // The main commands will fail if setup was actually needed
-            if let Err(e) = run_commands(&phase_config, &[job(pre_cmd)]) {
-                if options.verbose {
-                    errln!("Pre-command failed (continuing): {e}");
-                }
-            }
-        }
-    }
-
-    // Phase 2: Run main commands (may be parallel); with none, the report
-    // still says why (every repo it would run in isn't cloned, say)
-    {
-        let commands: Vec<DirCommand> = plan.commands.iter().map(job).collect();
-        // only in the selected projects that are repositories
-        let projects: Vec<PathBuf> = projects.iter().map(PathBuf::from).collect();
-        let commands = crate::run_list::in_repos(commands, &projects, root_dir);
-
-        // Repos are named by their path from the root (shown as "."). Without
-        // projects from meta_cli the plugin lists the root first.
-        let root_dir = root_dir
-            .map(Path::to_path_buf)
-            .or_else(|| commands.first().map(|c| c.dir.clone()));
-
-        let config = LoopConfig {
-            verbose: options.verbose,
-            silent: options.silent,
-            warnings: plan.warnings.clone(),
-            parallel: plan.parallel.unwrap_or(options.parallel),
-            dry_run: options.dry_run,
-            json_output: options.json_output,
-            spawn_stagger_ms: plan.spawn_stagger_ms.unwrap_or(0),
-            max_parallel,
-            aliases,
-            root_dir,
-            outer: Some(crate::outer(&[])),
-            ..LoopConfig::default()
+            .env(meta_plugin::REQUEST_VAR, &request_file)
+            .env(meta_plugin::RESPONSE_VAR, &response_file)
+            .stdin(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        match request.meta.json {
+            true => plugin.stdout(std::io::stderr()),
+            false => plugin.stdout(Stdio::inherit()),
         };
-
-        run_commands(&config, &commands)?;
-    }
-
-    // Phase 3: Run post_commands sequentially (cleanup tasks)
-    for post_cmd in &plan.post_commands {
-        if let Err(e) = run_commands(&phase_config, &[job(post_cmd)]) {
-            if options.verbose {
-                errln!("Post-command failed: {e}");
+        meta_plugin::out::pass_color(&mut plugin);
+        meta_plugin::out::flush()?;
+        let status = meta_plugin::process::status(&mut plugin)
+            .with_context(|| format!("Failed to execute plugin {shown}"))?;
+        let ended = meta_plugin::exit::ExitWith::of(status);
+        let failed = |why: String| {
+            let info = ErrorInfo::new(ErrorCode::PluginFailed, format!("plugin {shown} {why}"));
+            match ended.0 {
+                // its own ending: meta ends with it, as the plugin may
+                // have said why on stderr
+                0 => anyhow::Error::new(info),
+                _ => anyhow::Error::new(meta_plugin::exit::ExitWith(ended.0)).context(info),
             }
-        }
+        };
+        let bytes = match std::fs::read(&response_file) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(failed(format!("ended ({status}) without an answer")))
+            }
+            Err(e) => return Err(failed(format!("wrote an answer meta can't read ({e})"))),
+        };
+        serde_json::from_slice(&bytes)
+            .map_err(|e| failed(format!("wrote an answer that is no response ({e})")))
     }
-
-    Ok(())
 }
 
 /// The command word a plugin file serves: `meta-<word>` without the

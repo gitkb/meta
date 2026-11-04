@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The groups whose facts have one source now.
-const ENABLED: &[u8] = &[11, 18, 19, 24];
+const ENABLED: &[u8] = &[3, 8, 11, 12, 18, 19, 22, 24, 25];
 
 /// How a group is checked.
 enum Check {
@@ -52,7 +52,7 @@ const GROUPS: [(u8, &str, Check); 25] = [
     (
         3,
         "the commands that find their own repos: declared by their scope",
-        Check::Copies(&[("meta_cli/src/main.rs", r#"s == "clone" || s == "worktree""#)]),
+        Check::Rule(scope_once),
     ),
     (
         4,
@@ -77,7 +77,7 @@ const GROUPS: [(u8, &str, Check); 25] = [
     (
         8,
         "meta's option spellings: never in a plugin",
-        Check::Copies(&[("meta_git_cli/src/lib.rs", "const FILTERS")]),
+        Check::Rule(no_option_spellings),
     ),
     (
         9,
@@ -90,11 +90,7 @@ const GROUPS: [(u8, &str, Check); 25] = [
         Check::Copies(&[("claude-plugin/skills/meta-git/SKILL.md", "--parallel")]),
     ),
     (11, "exit codes: meta_plugin::exit", Check::Rule(exit_codes)),
-    (
-        12,
-        "--json output: one envelope",
-        Check::Copies(&[("loop_lib/src/lib.rs", "struct JsonOutput")]),
-    ),
+    (12, "--json output: one envelope", Check::Rule(one_envelope)),
     (
         13,
         "the build systems meta knows: one list",
@@ -142,7 +138,7 @@ const GROUPS: [(u8, &str, Check); 25] = [
     (
         22,
         "the plugin protocol's docs: the SDK's rustdoc",
-        Check::Copies(&[("docs/plugin_development.md", "--meta-plugin-exec")]),
+        Check::Rule(protocol_docs),
     ),
     (
         23,
@@ -157,7 +153,7 @@ const GROUPS: [(u8, &str, Check); 25] = [
     (
         25,
         "a request's fields: the SDK's rustdoc",
-        Check::Copies(&[("docs/plugin_development.md", "json_output")]),
+        Check::Rule(request_fields),
     ),
 ];
 
@@ -388,5 +384,135 @@ fn notes(repo: &Repo) -> Result<(), String> {
     match problems.is_empty() {
         true => Ok(()),
         false => Err(problems.join("\n")),
+    }
+}
+
+/// This file, which names what the rules look for.
+const THIS: &str = "meta_cli/tests/single_source.rs";
+
+/// Which commands find their repos themselves (and so take no
+/// `--include`/`--exclude`/`--tag`) is decided once, by the host's scope
+/// of each command: no plugin refuses the filters itself.
+fn scope_once(repo: &Repo) -> Result<(), String> {
+    let refusal = "it does not take --include/--exclude/--tag";
+    let found: Vec<&str> = repo
+        .texts()
+        .filter(|(file, _)| *file != THIS)
+        .filter(|(file, text)| file.ends_with(".rs") && text.contains(refusal))
+        .map(|(file, _)| file)
+        .collect();
+    match found.as_slice() {
+        ["meta_cli/src/main.rs"] => Ok(()),
+        found => Err(format!(
+            "the filter refusal is in {found:?}, not the host alone"
+        )),
+    }
+}
+
+/// Every `--json` output is the SDK's `Envelope`: no other JSON output type
+/// is defined, and each JSON example the docs show after a `meta … --json`
+/// line parses as one.
+fn one_envelope(repo: &Repo) -> Result<(), String> {
+    let mut problems = Vec::new();
+    for (file, text) in repo.texts() {
+        if file.ends_with(".rs") && file != THIS && text.contains("struct JsonOutput") {
+            problems.push(format!("{file} defines a JSON output of its own"));
+        }
+    }
+    let mut examples = 0;
+    for (file, text) in repo.texts().filter(|(file, _)| file.ends_with(".md")) {
+        let text = text.replace("\r\n", "\n");
+        let lines: Vec<&str> = text.lines().collect();
+        for (at, line) in lines.iter().enumerate() {
+            if line.trim() != "```json" {
+                continue;
+            }
+            // the example is meta's output when a line just above names a
+            // `meta … --json` command
+            let above = lines.get(at.saturating_sub(4)..at).unwrap_or_default();
+            if !above
+                .iter()
+                .any(|l| l.contains("meta ") && l.contains("--json") || l.contains("envelope"))
+            {
+                continue;
+            }
+            let block: Vec<&str> = lines
+                .iter()
+                .skip(at + 1)
+                .take_while(|l| l.trim() != "```")
+                .copied()
+                .collect();
+            examples += 1;
+            if let Err(e) = serde_json::from_str::<meta_plugin::Envelope>(&block.join("\n")) {
+                problems.push(format!("{file}:{}: not an envelope: {e}", at + 1));
+            }
+        }
+    }
+    // a renamed folder can't make it pass: the docs show some
+    if examples < 3 {
+        problems.push(format!("only {examples} envelope examples in the docs"));
+    }
+    match problems.is_empty() {
+        true => Ok(()),
+        false => Err(problems.join("\n")),
+    }
+}
+
+/// The protocol's documentation is the SDK's rustdoc: no Markdown file
+/// restates how a call is made.
+fn protocol_docs(repo: &Repo) -> Result<(), String> {
+    let restated = ["--meta-plugin-exec", "PlanResponse", "pre_commands"];
+    markdown_without(repo, &restated)
+}
+
+/// A request's fields are documented by `meta_plugin::Request`'s rustdoc
+/// alone: no Markdown file lists them.
+fn request_fields(repo: &Repo) -> Result<(), String> {
+    let fields = [
+        "include_filters",
+        "tag_filters",
+        "`listed_root`",
+        "`plugin_dir`",
+        "`data_dir`",
+        "\"plugin_dir\"",
+    ];
+    markdown_without(repo, &fields)
+}
+
+fn markdown_without(repo: &Repo, words: &[&str]) -> Result<(), String> {
+    let found: Vec<String> = repo
+        .texts()
+        // the old task notes are history, as the changelog is
+        .filter(|(file, _)| file.ends_with(".md") && !file.starts_with(".context/"))
+        .flat_map(|(file, text)| {
+            words
+                .iter()
+                .filter(|word| text.contains(**word))
+                .map(|word| format!("{file} has `{word}`"))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    match found.is_empty() {
+        true => Ok(()),
+        false => Err(found.join("\n")),
+    }
+}
+
+/// No plugin holds a list of meta's option spellings: selection reaches a
+/// plugin as its projects, the rest of meta's options as `request.meta`.
+fn no_option_spellings(repo: &Repo) -> Result<(), String> {
+    let found: Vec<&str> = repo
+        .texts()
+        .filter(|(file, _)| file.ends_with(".rs") && *file != THIS)
+        .filter(|(file, _)| !file.starts_with("meta_cli/") && !file.starts_with("meta_plugin/"))
+        .filter(|(_, text)| {
+            let code = text.split("#[cfg(test)]").next().unwrap_or_default();
+            code.contains(r#""--include", "--exclude""#) || code.contains("const FILTERS")
+        })
+        .map(|(file, _)| file)
+        .collect();
+    match found.is_empty() {
+        true => Ok(()),
+        false => Err(format!("meta's option spellings listed in {found:?}")),
     }
 }

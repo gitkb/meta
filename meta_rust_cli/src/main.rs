@@ -1,9 +1,7 @@
 //! meta-cargo subprocess plugin
 
 use indexmap::IndexMap;
-use meta_plugin::{
-    run_plugin, CommandResult, PluginDefinition, PluginHelp, PluginInfo, PluginRequest,
-};
+use meta_plugin::{run_plugin, Ctx, PluginDefinition, PluginHelp, PluginInfo, Request, Response};
 
 fn main() {
     run_plugin(PluginDefinition {
@@ -33,11 +31,6 @@ fn main() {
     });
 }
 
-fn execute(request: PluginRequest) -> CommandResult {
-    meta_rust_cli::execute_command(
-        &request.args,
-        &request.options,
-        &request.projects,
-        &request.cwd,
-    )
+fn execute(_ctx: &Ctx, request: Request) -> meta_plugin::Result<Response> {
+    Ok(meta_rust_cli::execute_command(&request))
 }

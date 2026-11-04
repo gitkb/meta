@@ -48,7 +48,8 @@ EOF
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-names = [p['name'] for p in data['projects']]
+projects = [r['data'] for r in data['results']]
+names = [p['name'] for p in projects]
 assert 'frontend' in names, f'frontend not in {names}'
 assert 'backend' in names, f'backend not in {names}'
 assert 'shared' in names, f'shared not in {names}'
@@ -61,7 +62,8 @@ assert 'shared' in names, f'shared not in {names}'
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-repos = {p['name']: p['repo'] for p in data['projects']}
+projects = [r['data'] for r in data['results']]
+repos = {p['name']: p.get('repo') for p in projects}
 assert repos['frontend'] == 'git@github.com:org/frontend.git'
 assert repos['backend'] == 'git@github.com:org/backend.git'
 "
@@ -99,12 +101,12 @@ EOF
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
+projects = [r['data'] for r in data['results']]
 # Find the frontend project
-frontend = next(p for p in data['projects'] if p['name'] == 'frontend')
+frontend = next(p for p in projects if p['name'] == 'frontend')
 assert frontend.get('is_meta') == True, 'frontend should be marked as meta'
-assert len(frontend.get('projects', [])) > 0, 'frontend should have sub-projects'
-child = frontend['projects'][0]
-assert child['name'] == 'frontend-lib'
+child = next(p for p in projects if p['name'] == 'frontend-lib')
+assert child['path'] == 'frontend/frontend-lib', child
 "
 }
 
@@ -129,19 +131,26 @@ EOF
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-frontend = next(p for p in data['projects'] if p['name'] == 'frontend')
+projects = [r['data'] for r in data['results']]
+frontend = next(p for p in projects if p['name'] == 'frontend')
 assert 'ui' in frontend['tags']
 assert 'react' in frontend['tags']
-backend = next(p for p in data['projects'] if p['name'] == 'backend')
+backend = next(p for p in projects if p['name'] == 'backend')
 assert 'api' in backend['tags']
 "
 }
 
 @test "meta project list with no .meta.yaml file shows error" {
+    bats_require_minimum_version 1.5.0
     rm "$TEST_DIR/.meta.yaml"
+    # outside a workspace its .meta/plugins don't count: meta-project from PATH
+    export PATH="$META_BIN_DIR:$PATH"
     run "$META_BIN" project list
     [ "$status" -ne 0 ]
     [[ "$output" == *".meta.yaml"* ]]
+    run --separate-stderr "$META_BIN" --json project list
+    [ "$status" -ne 0 ]
+    jq -e '.success == false and .error.code == "not-found"' <<<"$output"
 }
 
 @test "meta project list with YAML config" {
@@ -159,7 +168,8 @@ EOF
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-names = [p['name'] for p in data['projects']]
+projects = [r['data'] for r in data['results']]
+names = [p['name'] for p in projects]
 assert 'frontend' in names
 assert 'backend' in names
 "
@@ -199,11 +209,12 @@ EOF
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-names = [p['name'] for p in data['projects']]
+projects = [r['data'] for r in data['results']]
+names = [p['name'] for p in projects]
 assert 'vendor' in names, f'vendor not in {names}'
 assert 'backend' in names, f'backend not in {names}'
 # vendor should have a repo (nested meta repos are regular repos that happen to contain .meta.yaml)
-vendor = next(p for p in data['projects'] if p['name'] == 'vendor')
+vendor = next(p for p in projects if p['name'] == 'vendor')
 assert vendor.get('repo') == 'git@github.com:org/vendor.git', f'vendor should have repo: {vendor}'
 "
 }
@@ -249,14 +260,17 @@ EOF
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
+projects = [r['data'] for r in data['results']]
 # Should show ROOT's projects (frontend, backend, shared), not frontend's
-names = [p['name'] for p in data['projects']]
+names = [p['name'] for p in projects]
 assert 'frontend' in names, f'frontend not in root projects: {names}'
 assert 'backend' in names, f'backend not in root projects: {names}'
 assert 'shared' in names, f'shared not in root projects: {names}'
 # cwd field should be present and absolute
-assert 'cwd' in data, 'cwd field missing from output'
-assert data['cwd'].startswith('/'), f'cwd should be absolute: {data[\"cwd\"]}'
+root = projects[0]
+assert root['name'] == '.', root
+import os
+assert os.path.realpath(root['cwd']) == os.path.realpath(os.getcwd()), f'cwd should be where meta ran: {root}'
 "
 }
 
@@ -266,9 +280,11 @@ assert data['cwd'].startswith('/'), f'cwd should be absolute: {data[\"cwd\"]}'
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-assert 'cwd' in data, 'cwd field missing from JSON output'
-cwd = data['cwd']
+projects = [r['data'] for r in data['results']]
+assert projects[0]['name'] == '.', 'the root comes first'
+cwd = projects[0]['cwd']
 assert cwd.startswith('/'), f'cwd should be absolute path: {cwd}'
+assert all('cwd' not in p for p in projects[1:])
 "
 }
 
@@ -292,16 +308,14 @@ EOF
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
+projects = [r['data'] for r in data['results']]
 # Find vendor node
-vendor = next((p for p in data['projects'] if p['name'] == 'vendor'), None)
-assert vendor is not None, 'vendor not found'
-# Verify vendor has nested projects
-assert 'projects' in vendor, f'vendor should have projects: {vendor}'
-nested = vendor['projects']
-assert len(nested) > 0, f'vendor should have nested projects: {vendor}'
-# Verify nested-lib is in the nested projects
-nested_lib = next((p for p in nested if p['name'] == 'nested-lib'), None)
-assert nested_lib is not None, f'nested-lib not found in vendor projects: {nested}'
+vendor = next((p for p in projects if p['name'] == 'vendor'), None)
+assert vendor is not None and vendor['is_meta'], f'vendor not found: {projects}'
+# nested-lib is listed at its path under vendor
+nested_lib = next((p for p in projects if p['name'] == 'nested-lib'), None)
+assert nested_lib is not None, f'nested-lib not found: {projects}'
+assert nested_lib['path'] == 'vendor/nested-lib', nested_lib
 "
 }
 
@@ -354,12 +368,12 @@ J
     printf 'projects:\n  frontend:\n    repo: git@github.com:org/frontend.git\n    tags: [ui]\n' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" --tag ui --recursive --json project list
     [ "$status" -ne 0 ]
-    [[ "$output" == *"meta project list does not take --include/--exclude/--tag"* ]]
+    [[ "$output" == *"meta project list finds its repos itself"*"it does not take --include/--exclude/--tag"* ]]
     for flag in --include --exclude; do
         for command in list ls; do
             run "$META_BIN" "$flag" frontend project "$command" --recursive --json
             [ "$status" -ne 0 ]
-            [[ "$output" == *"meta project $command does not take --include/--exclude/--tag"* ]]
+            [[ "$output" == *"meta project $command"*"it does not take --include/--exclude/--tag"* ]]
             # after the subcommand too, and in --flag=value form: not one
             # of its arguments
             short="${flag:1:2}"
@@ -415,28 +429,28 @@ reach_tree() {
     done
 }
 
-paths() { jq -r '[.results[].path] | join(" ")'; }
+paths() { jq -r '[.results[].project] | join(" ")'; }
 
 @test "plain reaches the nearest .meta.yaml, -r the meta repos under it, -A the whole workspace" {
     bats_require_minimum_version 1.5.0
     reach_tree
     cd platform
     run --separate-stderr "$META_BIN" --json exec -- true
-    [ "$(paths <<<"$output")" = ". ./api ./infra" ]
+    [ "$(paths <<<"$output")" = ". api infra" ]
     # -r goes down from here, not up to the root; repos named from the root
     run --separate-stderr "$META_BIN" -r --json exec -- true
-    [ "$(paths <<<"$output")" = "./platform ./platform/api ./platform/infra ./platform/infra/tf" ]
+    [ "$(paths <<<"$output")" = "platform platform/api platform/infra platform/infra/tf" ]
     # --depth counts from where -r starts
     run --separate-stderr "$META_BIN" -r --depth 0 --json exec -- true
-    [ "$(paths <<<"$output")" = "./platform ./platform/api ./platform/infra" ]
+    [ "$(paths <<<"$output")" = "platform platform/api platform/infra" ]
     run --separate-stderr "$META_BIN" -A --json exec -- true
-    [[ "$(paths <<<"$output")" == ". ./backend ./frontend ./platform ./platform/api ./platform/infra ./platform/infra/tf ./shared" ]]
+    [[ "$(paths <<<"$output")" == ". backend frontend platform platform/api platform/infra platform/infra/tf shared" ]]
     # a repo outside where -r starts: the tip names -A, with the line
     run "$META_BIN" -r --include frontend exec -- true
     [ "$status" -ne 0 ]
     [[ "$output" == *"outside platform, where -r starts"*"as in meta -A --include frontend exec -- true"* ]]
     run --separate-stderr "$META_BIN" -r --include platform/infra/tf --json exec -- true
-    [ "$(paths <<<"$output")" = "./platform/infra/tf" ]
+    [ "$(paths <<<"$output")" = "platform/infra/tf" ]
     # past --depth is not outside: no -A tip; the -A line keeps --depth
     run "$META_BIN" -r --depth 0 --include platform/infra/tf exec -- true
     [ "$status" -ne 0 ]
@@ -448,7 +462,7 @@ paths() { jq -r '[.results[].path] | join(" ")'; }
     [[ "$output" == *"as in meta -A --include platform/api --exclude frontend exec -- true"* ]]
     # -r context names the first level as their config does, so depends_on holds
     run --separate-stderr "$META_BIN" -r --json context --no-status
-    [ "$(jq -c '.dependencies' <<<"$output")" = '{"api":["infra"]}' ]
+    [ "$(jq -c '.results[0].data.dependencies' <<<"$output")" = '{"api":["infra"]}' ]
     # -r in a cluster: the -A line has it as -A
     run "$META_BIN" -rs --include frontend exec -- true
     [[ "$output" == *"as in meta -As --include frontend exec -- true"* ]]
@@ -483,7 +497,7 @@ paths() { jq -r '[.results[].path] | join(" ")'; }
     cd "$TEST_DIR"
     # a nested project's depends_on names its siblings, by their paths here
     run --separate-stderr "$META_BIN" -r --json context --no-status
-    [ "$(jq -c '.dependencies' <<<"$output")" = '{"platform/api":["platform/infra"]}' ]
+    [ "$(jq -c '.results[0].data.dependencies' <<<"$output")" = '{"platform/api":["platform/infra"]}' ]
     run --separate-stderr "$META_BIN" -r --json exec -- true
     r="$(paths <<<"$output")"
     run --separate-stderr "$META_BIN" -A --json exec -- true

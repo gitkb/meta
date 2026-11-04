@@ -1,14 +1,16 @@
 //! Commands that delete or report must check what they act on.
 
 #![expect(
+    clippy::cast_possible_truncation,
+    clippy::indexing_slicing,
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
-use meta_plugin::testing::{call, Sandbox};
-use meta_plugin::PluginRequest;
+use meta_plugin::testing::{call, Called, Sandbox};
+use meta_plugin::{Answer, Meta, Request, Scope};
 use serde_json::{json, Value};
-use std::{fs, path::Path, process::Output};
+use std::{fs, path::Path};
 
 /// A meta project at `root/ws` (itself a repo) with the given projects cloned.
 fn workspace(sandbox: &Sandbox, projects: &[&str]) -> std::path::PathBuf {
@@ -17,7 +19,7 @@ fn workspace(sandbox: &Sandbox, projects: &[&str]) -> std::path::PathBuf {
 }
 
 /// Invoke the plugin protocol in `cwd` in the sandbox environment.
-fn meta_git(sandbox: &Sandbox, cwd: &Path, command: &str, args: &[&str], options: Value) -> Output {
+fn meta_git(sandbox: &Sandbox, cwd: &Path, command: &str, args: &[&str], options: Value) -> Ran {
     meta_git_in(sandbox, cwd, command, args, options, None)
 }
 
@@ -29,12 +31,7 @@ fn meta_git_in(
     args: &[&str],
     options: Value,
     worktrees: Option<&Path>,
-) -> Output {
-    let request = PluginRequest::builder(command)
-        .args(args.iter().copied())
-        .cwd(cwd)
-        .options(serde_json::from_value(options).unwrap())
-        .build();
+) -> Ran {
     let root = sandbox.work();
     let mut cmd = sandbox.command(env!("CARGO_BIN_EXE_meta-git"));
     if root.join("bin").is_dir() {
@@ -44,12 +41,37 @@ fn meta_git_in(
     }
     cmd.current_dir(cwd)
         .envs(worktrees.map(|dir| ("META_WORKTREES", dir)));
-    call(&mut cmd, &request)
+    meta_git_with(&mut cmd, cwd, command, args, options)
+}
+
+/// The `data` of each row of a `--json` answer.
+fn rows(out: &Ran) -> Vec<Value> {
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+    value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["data"].clone())
+        .collect()
+}
+
+/// A `--json` prune's rows, as the sets it removed and those it kept.
+fn prune_report(out: &Ran) -> Value {
+    let (mut removed, mut kept) = (Vec::new(), Vec::new());
+    for mut entry in rows(out).into_iter().filter(Value::is_object) {
+        let action = entry["action"].clone();
+        entry.as_object_mut().unwrap().remove("action");
+        match action.as_str() {
+            Some("removed") => removed.push(entry),
+            _ => kept.push(entry),
+        }
+    }
+    json!({"removed": removed, "kept": kept})
 }
 
 /// `meta git worktree <args>`, with meta's `-r` and `--strict` among them
 /// sent as meta sends them: as options
-fn worktree(sandbox: &Sandbox, ws: &Path, args: &[&str]) -> Output {
+fn worktree(sandbox: &Sandbox, ws: &Path, args: &[&str]) -> Ran {
     let (sub, rest) = args.split_first().unwrap();
     let meta = |option: &str| rest.contains(&option);
     let options = json!({"recursive": meta("-r"), "strict": meta("--strict")});
@@ -61,8 +83,170 @@ fn worktree(sandbox: &Sandbox, ws: &Path, args: &[&str]) -> Output {
     meta_git(sandbox, ws, &format!("git worktree {sub}"), &rest, options)
 }
 
-fn stderr(out: &Output) -> String {
+fn stderr(out: &Ran) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// meta's options, as a test gives them: `json!({"json": true, "strict":
+/// true, "dry_run": true, "recursive": true, "all": true, "depth": 2})`.
+/// `recursive`/`all`/`depth` are how meta resolves the workspace and how
+/// deep (meta sends those as `request.depth` and the workspace it found);
+/// the rest are `request.meta`.
+///
+/// A config meta refuses fails the command as meta fails it, except for a
+/// command that finds its repos itself (`git update`, `git worktree list`),
+/// which meta then sends no workspace.
+fn request(cwd: &Path, command: &str, args: &[&str], options: &Value) -> Result<Request, String> {
+    let flag = |name: &str| options[name].as_bool().unwrap_or(false);
+    let (recursive, all) = (flag("recursive"), flag("all"));
+    let mut request = Request::new(command, cwd);
+    request.args = args.iter().map(|a| a.to_string()).collect();
+    let verb = command.split_whitespace().nth(2).or(args.first().copied());
+    let named = args.first().is_some_and(|a| !a.starts_with('-'));
+    request.scope = match command.split_whitespace().nth(1) {
+        Some("clone") => Scope::None,
+        Some("worktree")
+            if named && matches!(verb, Some("exec" | "remove" | "status" | "diff" | "add")) =>
+        {
+            Scope::NamedSet
+        }
+        Some("update" | "worktree") => Scope::Workspace,
+        _ => Scope::Selection,
+    };
+    // with -r or -A, how deep (none: no limit); without, none of the nested
+    request.recursive = recursive || all;
+    request.depth = match recursive || all {
+        true => options["depth"].as_u64().map(|d| d as usize),
+        false => Some(0),
+    };
+    // the workspace meta finds from cwd: -A from its outermost config, -r
+    // naming its projects from the outermost that lists it
+    let found = meta_core::config::Workspace::find(cwd, None).and_then(|found| match all {
+        true => found.map(|w| w.root()).transpose(),
+        false => Ok(found),
+    });
+    let found = match (found, request.scope) {
+        (Ok(found), _) => found,
+        (Err(_), Scope::Workspace) => None,
+        (Err(e), _) => return Err(format!("{e:#}")),
+    };
+    request.workspace = found.map(|w| {
+        let listed_root = meta_core::config::listed_root(&w.dir);
+        meta_plugin::Workspace {
+            root: match recursive && !all {
+                true => listed_root.clone(),
+                false => w.dir.clone(),
+            },
+            config: w.config_path.clone(),
+            listed_root,
+            members: Vec::new(),
+            worktree: Default::default(),
+        }
+    });
+    request.meta = Meta {
+        json: flag("json"),
+        dry_run: flag("dry_run"),
+        strict: flag("strict"),
+        verbose: flag("verbose"),
+        ..Meta::default()
+    };
+    Ok(request)
+}
+
+/// How meta would end: its exit code.
+struct Status(Option<i32>);
+
+impl Status {
+    fn success(&self) -> bool {
+        self.0 == Some(0)
+    }
+    fn code(&self) -> Option<i32> {
+        self.0
+    }
+}
+
+/// What meta would make of a plugin's answer: the plugin's own output, then
+/// its warnings and error on stderr as meta says them (`warning: …`,
+/// `Error: …`), a message on stdout; under `--json`, stdout is the
+/// Envelope's parts (`results`, `warnings`, `message`, `error`); the code
+/// meta would end with (a failed record fails the command).
+struct Ran {
+    status: Status,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn ran(called: Called, json: bool) -> Ran {
+    let Called { output, response } = called;
+    let (mut stdout, mut stderr) = (output.stdout, output.stderr);
+    let mut code = output.status.code();
+    let Some(response) = response else {
+        return Ran {
+            status: Status(code),
+            stdout,
+            stderr,
+        };
+    };
+    let mut say = |text: String| stderr.extend(text.into_bytes());
+    for warning in &response.warnings {
+        say(format!("warning: {}\n", warning.message));
+    }
+    let (records, message, error) = match response.answer {
+        Answer::Results(results) => {
+            let error = results.records.iter().find_map(|r| r.error.clone());
+            (results.records, None, error)
+        }
+        Answer::Error(error) => (Vec::new(), None, Some(error)),
+        Answer::Message(message) => (Vec::new(), Some(message), None),
+        Answer::Plan(_) | Answer::Delegate(_) => (Vec::new(), None, None),
+    };
+    if let Some(error) = &error {
+        say(format!("Error: {}\n", error.message));
+        code = Some(error.code.exit_code());
+    }
+    match json {
+        true => {
+            let envelope = json!({
+                "success": error.is_none(),
+                "results": records,
+                "warnings": response.warnings,
+                "message": message,
+                "error": error,
+            });
+            stdout = envelope.to_string().into_bytes();
+        }
+        false => {
+            if let Some(message) = message.filter(|m| !m.is_empty()) {
+                stdout.extend(format!("{}\n", message.trim_end()).into_bytes());
+            }
+        }
+    }
+    Ran {
+        status: Status(code),
+        stdout,
+        stderr,
+    }
+}
+
+/// `meta <command> <args>` in `cwd`, with meta's `options`, the plugin
+/// started from `cmd` (a `sandbox.command(env!("CARGO_BIN_EXE_meta-git"))`
+/// with whatever else the test sets on it).
+fn meta_git_with(
+    cmd: &mut std::process::Command,
+    cwd: &Path,
+    command: &str,
+    args: &[&str],
+    options: Value,
+) -> Ran {
+    match request(cwd, command, args, &options) {
+        Ok(request) => ran(call(cmd, &request), request.meta.json),
+        // meta fails before it calls the plugin
+        Err(error) => Ran {
+            status: Status(Some(1)),
+            stdout: Vec::new(),
+            stderr: format!("Error: {error}\n").into_bytes(),
+        },
+    }
 }
 
 #[test]
@@ -85,15 +269,11 @@ fn unreadable_members_are_unknown_in_status_and_list() {
             &ws,
             &format!("git worktree {command}"),
             &args,
-            json!({"json_output": true}),
+            json!({"json": true}),
         );
         assert!(out.status.success(), "{}", stderr(&out));
-        let value: Value = serde_json::from_slice(&out.stdout).unwrap();
-        let repos = if command == "status" {
-            &value["repos"]
-        } else {
-            &value["worktrees"][0]["repos"]
-        };
+        let value = rows(&out).remove(0);
+        let repos = &value["repos"];
         let repos = repos.as_array().unwrap();
         let healthy = repos.iter().find(|r| r["alias"] == "r2").unwrap();
         assert_eq!(healthy["dirty"], false, "{command}: {value}");
@@ -121,9 +301,9 @@ fn status_names_a_missing_member_and_fails() {
         &ws,
         "git worktree status",
         &["w"],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
-    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let value = rows(&out).remove(0);
     assert_eq!(value["missing"], json!(["r2"]), "{value}");
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
 
@@ -210,11 +390,11 @@ fn diff_reports_a_missing_base_and_keeps_other_repos_including_binary_files() {
         &ws,
         "git worktree diff",
         &["t", "--base", "only-a"],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
-    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let repos = value["repos"].as_array().unwrap();
+    let repos = rows(&out);
+    let value = json!(repos);
     assert_eq!(repos.len(), 2, "{value}");
     let good = repos.iter().find(|r| r["alias"] == "a").unwrap();
     let bad = repos.iter().find(|r| r["alias"] == "b").unwrap();
@@ -225,8 +405,12 @@ fn diff_reports_a_missing_base_and_keeps_other_repos_including_binary_files() {
     assert!(good["files"].as_array().unwrap().contains(&json!("binary")));
     assert!(bad["error"].as_str().unwrap().contains("only-a"), "{value}");
     assert!(bad["files_changed"].is_null(), "{value}");
-    assert_eq!(value["totals"]["repos_changed"], 1, "{value}");
-    assert_eq!(value["totals"]["files_changed"], 2, "{value}");
+    let changed: Vec<u64> = repos
+        .iter()
+        .filter_map(|r| r["files_changed"].as_u64())
+        .filter(|&files| files > 0)
+        .collect();
+    assert_eq!(changed, [2], "{value}");
     let out = worktree(&sandbox, &ws, &["diff", "t", "--base", "only-a"]);
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     let text = String::from_utf8_lossy(&out.stdout);
@@ -288,17 +472,17 @@ fn diff_reports_failed_commands_and_malformed_numstat_instead_of_zero_counts() {
             &ws,
             "git worktree diff",
             &["t", "--base", "main"],
-            json!({"json_output": true}),
+            json!({"json": true}),
         );
         assert_eq!(out.status.code(), Some(1), "{numstat:?}: {}", stderr(&out));
-        let value: Value = serde_json::from_slice(&out.stdout).unwrap();
-        let error = value["repos"][0]["error"].as_str().unwrap();
+        let value = json!(rows(&out));
+        let error = value[0]["error"].as_str().unwrap();
         assert!(error.contains("numstat"), "{value}");
         assert!(error.contains(".worktrees/t/a"), "{value}");
         if numstat.is_none() {
             assert!(error.contains("diff failed"), "{value}");
         }
-        assert!(value["repos"][0]["files_changed"].is_null(), "{value}");
+        assert!(value[0]["files_changed"].is_null(), "{value}");
     }
 }
 
@@ -494,7 +678,7 @@ fn prune_keeps_worktrees_that_hold_work() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     mode(0o755);
     assert!(!out.status.success());
@@ -503,7 +687,7 @@ fn prune_keeps_worktrees_that_hold_work() {
         "{}",
         stderr(&out)
     );
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     let names = |key: &str| -> Vec<String> {
         let mut names: Vec<String> = report[key]
             .as_array()
@@ -875,10 +1059,10 @@ fn from_pr_applies_only_to_the_exact_repo() {
         &ws,
         "git worktree create",
         &["pr1", "--from-pr", "org/api#5", "--every-repo"],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let created: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let created = rows(&out).remove(0);
     let branch_of = |alias: &str| {
         created["repos"]
             .as_array()
@@ -1115,12 +1299,12 @@ fn prune_leaves_a_dangling_link_at_a_set_path() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
     // The record still names the path, but prune neither follows the link
     // nor takes the link for a missing set: it deletes and forgets nothing
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["removed"], json!([]), "{report}");
     assert!(set.symlink_metadata().is_ok());
     assert!(ws.join("a/.git/worktrees/a/meta-worktree.json").exists());
@@ -1174,11 +1358,11 @@ fn prune_keeps_a_worktree_it_cannot_inspect() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["removed"], json!([]), "{report}");
     let kept: Vec<&str> = report["kept"]
         .as_array()
@@ -1261,11 +1445,11 @@ fn records_live_beside_git_and_no_store_is_written() {
         &ws,
         "git worktree list",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let list: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let entry = &list["worktrees"][0];
+    let list = json!(rows(&out));
+    let entry = &list[0];
     assert_eq!(entry["custom"], json!({"k": "v"}), "{list}");
     assert!(
         entry["ttl_remaining_seconds"].as_i64().unwrap() > 3000,
@@ -1280,10 +1464,10 @@ fn records_live_beside_git_and_no_store_is_written() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["removed"][0]["name"], "t", "{report}");
     assert_eq!(
         report["removed"][0]["reason"],
@@ -1298,9 +1482,9 @@ fn records_live_beside_git_and_no_store_is_written() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["removed"], json!([]), "{report}");
 }
 
@@ -1317,10 +1501,10 @@ fn prune_keeps_and_reports_a_record_it_cannot_read() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     let reason = report["kept"][0]["reason"].as_str().unwrap_or_default();
     assert!(reason.contains("can't be read"), "{report}");
     let out = meta_git(
@@ -1369,10 +1553,10 @@ fn a_stale_record_does_not_expire_a_set_made_again_at_its_path() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["removed"], json!([]), "{report}");
     assert!(elsewhere.join("t/b/README").exists());
 }
@@ -1408,7 +1592,7 @@ fn prune_reports_a_repository_whose_worktrees_it_cannot_list() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     let strict = meta_git(
         &sandbox,
@@ -1419,7 +1603,7 @@ fn prune_reports_a_repository_whose_worktrees_it_cannot_list() {
     );
     mode(0o755);
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["kept"][0]["name"], "worktrees", "{report}");
     assert!(
         !strict.status.success(),
@@ -1455,10 +1639,10 @@ fn prune_reports_repositories_it_could_not_search() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["kept"][0]["name"], "ws", "{report}");
     let strict = meta_git(
         &sandbox,
@@ -1514,10 +1698,10 @@ fn prune_finds_sets_of_a_separate_git_dir_repository() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["removed"][0]["name"], "t", "{report}");
     assert!(!elsewhere.join("t").exists());
 }
@@ -1573,10 +1757,10 @@ fn prune_leaves_a_moved_set_and_stale_records_alone() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"strict": true, "json_output": true}),
+        json!({"strict": true, "json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["removed"], json!([]), "{report}");
     assert_eq!(report["kept"], json!([]), "{report}");
     // The moved set keeps its record, and says why remove refuses it
@@ -1650,7 +1834,7 @@ fn prune_reports_a_linked_checkout_whose_git_metadata_it_cannot_read() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     let strict = meta_git(
         &sandbox,
@@ -1661,7 +1845,7 @@ fn prune_reports_a_linked_checkout_whose_git_metadata_it_cannot_read() {
     );
     mode(0o644);
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["kept"][0]["name"], "a", "{report}");
     assert!(
         !strict.status.success(),
@@ -1699,10 +1883,10 @@ fn prune_finds_sets_of_a_bare_repository() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["removed"][0]["name"], "t", "{report}");
     assert!(!elsewhere.join("t").exists());
 }
@@ -1733,10 +1917,10 @@ fn prune_leaves_a_gone_set_alone_while_one_of_its_worktrees_lives_on() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["removed"], json!([]), "{report}");
     assert!(ws.join("a/.git/worktrees/a/meta-worktree.json").exists());
     assert!(moved.join("README").exists());
@@ -1766,10 +1950,10 @@ fn prune_finds_sets_of_a_repository_whose_git_dir_is_a_link() {
         &ws,
         "git worktree prune",
         &[],
-        json!({"strict": true, "json_output": true}),
+        json!({"strict": true, "json": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
-    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let report = prune_report(&out);
     assert_eq!(report["removed"][0]["name"], "t", "{report}");
     assert_eq!(report["kept"], json!([]), "{report}");
     assert!(!elsewhere.join("t").exists());

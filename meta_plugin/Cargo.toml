@@ -22,6 +22,7 @@ testing-git = ["testing"]
 
 [dependencies]
 anyhow.workspace = true
+base64 = "0.22"
 colored.workspace = true
 console = "0.15"
 env_logger.workspace = true

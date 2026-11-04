@@ -136,7 +136,7 @@ preview() {
     preview 0 git worktree add clean --repo frontend
     [[ "$output" == *"Would add to worktree set 'clean'"* ]]
     preview 0 --json git worktree add clean --repo frontend
-    python3 -c 'import json, sys; out = json.load(sys.stdin); assert out["dry_run"] and out["repos"][0]["alias"] == "frontend", out' <<< "$output"
+    jq -e '[.results[] | {project, alias: .data.alias, created_branch: .data.created_branch}] == [{"project": "frontend", "alias": "frontend", "created_branch": true}]' <<< "$output"
     # meta's own check of the checkout fails a preview as a run
     git -C frontend config core.bare true
     preview 1 git worktree add clean --repo frontend
@@ -203,7 +203,7 @@ preview() {
     preview 0 git worktree prune
     [[ "$output" == *"Would prune 1 worktree(s)"* ]]
     preview 0 --json git worktree prune
-    [[ "$output" == *'"dry_run": true'* ]]
+    jq -e '[.results[].data | {name, action}] == [{"name": "old", "action": "removed"}]' <<< "$output"
     # a set prune keeps fails --strict, in a preview as in a run
     meta git worktree create kept --repo backend --ephemeral --ttl 1s >/dev/null
     echo work > .worktrees/kept/backend/untracked
@@ -236,11 +236,11 @@ preview() {
     [[ "$output" == *"No selected repo has ref 'nosuchref'; no worktree was created"* ]]
     preview 1 git worktree create new nosuchref --every-repo
     [[ "$output" == *"No selected repo has ref 'nosuchref'"* ]]
-    # the set's own .meta.yaml, not yet made, names its repos for a filter
-    preview 1 --include backend git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
-    [[ "$output" == *"can't preview --include/--exclude of exec --ephemeral"* ]]
-    preview 1 --exclude backend git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
-    [[ "$output" == *"can't preview --include/--exclude of exec --ephemeral"* ]]
+    # the set it makes holds the repos it names: a filter is refused, as in a run
+    preview 2 --include backend git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
+    [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
+    preview 2 --exclude backend git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
+    [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
 }
 
 @test "exec previews" {

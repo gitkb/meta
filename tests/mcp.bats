@@ -69,10 +69,10 @@ call() {
     echo x >> r1/README
     run call meta_git_status '{"project":"r1"}'
     [[ "$output" == "isError=null"* ]]
-    [ "$(sed 1d <<<"$output" | jq -r '[.results[].directory] | join(" ")')" = "$WS/r1" ]
+    [ "$(sed 1d <<<"$output" | jq -r '[.results[].path] | join(" ")')" = "$WS/r1" ]
     [[ "$output" == *"modified:"* ]]
     run call meta_git_status '{"project":"."}'
-    [ "$(sed 1d <<<"$output" | jq -r '[.results[].directory] | join(" ")')" = "$WS" ]
+    [ "$(sed 1d <<<"$output" | jq -r '[.results[].path] | join(" ")')" = "$WS" ]
 }
 
 @test "meta-mcp meta_git_checkout refuses a branch git would read as an option, and never restores a file" {
@@ -101,7 +101,7 @@ call() {
     run call meta_git_push '{}'
     [[ "$output" == "isError=null"* ]]
     [ "$(git -C "$TEST_DIR/r1.git" log -1 --format=%s main)" = "ahead" ]
-    [ "$(sed 1d <<<"$output" | jq '[.results[] | select(.success | not)] | length')" -ge 1 ]
+    [ "$(sed 1d <<<"$output" | jq '[.results[] | select(.error)] | length')" -ge 1 ]
 }
 
 @test "meta-mcp meta_exec is an error only when every repo failed" {
@@ -117,5 +117,5 @@ call() {
 @test "meta-mcp meta_list_plugins lists the installed plugins" {
     run call meta_list_plugins '{}'
     [[ "$output" == "isError=null"* ]]
-    sed 1d <<<"$output" | jq -e 'type == "array"'
+    sed 1d <<<"$output" | jq -e '.success and ([.results[].data.name] | index("git") != null)'
 }

@@ -1,12 +1,11 @@
 use anyhow::{Context, Result};
 use colored::*;
 use meta_core::set_record as record;
+use meta_core::worktree::Configs;
 use meta_plugin::display::{escape, escape_path};
-use meta_plugin::out;
 use meta_plugin::outln;
-use meta_plugin::ExecutionMode;
+use meta_plugin::{Ctx, ProjectResult, Request, Response};
 
-use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::hooks::fire_post_destroy;
 use meta_git_lib::worktree::lease;
 use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
@@ -15,19 +14,14 @@ use meta_git_lib::worktree::workspace::Workspace;
 
 use super::cli_types::RemoveArgs;
 
-pub(crate) fn handle_remove(
-    args: RemoveArgs,
-    mode: ExecutionMode,
-    verbose: bool,
-    json: bool,
-    strict: bool,
-) -> Result<()> {
-    validate_worktree_name(&args.name)?;
+pub(crate) fn handle_remove(args: RemoveArgs, ctx: &Ctx, request: &Request) -> Result<Response> {
+    meta_core::worktree::validate_name(&args.name)?;
     // Hooks come from the owner: inside the set being removed, its own
     // config goes with it
-    let cwd = std::env::current_dir()?;
-    let configs = Configs::find(&cwd)?;
-    let wt_dir = resolve_worktree_root(Some(&configs.owner), &cwd)?.join(&args.name);
+    let cwd = request.cwd.as_path();
+    let configs = super::workspace_configs(request)?;
+    let wt_dir =
+        meta_core::worktree::resolve_worktree_root(Some(&configs.owner), cwd)?.join(&args.name);
     if !wt_dir.exists() {
         anyhow::bail!(
             "Worktree '{}' not found at {}",
@@ -35,19 +29,47 @@ pub(crate) fn handle_remove(
             escape_path(&wt_dir)
         );
     }
-    remove_set(&args, &wt_dir, &configs, mode, verbose, json, strict)
+    let how = How {
+        preview: ctx.dry_run(),
+        verbose: request.meta.verbose,
+        json: request.meta.json,
+        strict: ctx.meta().strict,
+    };
+    let mut records = Vec::new();
+    let removed = remove_set(&args, &wt_dir, &configs, ctx, how, &mut records);
+    crate::printed(ctx, records, removed.err())
 }
 
-/// Remove the set named `args.name` at `wt_dir`, after checking it.
+/// How a remove runs: meta's options, or what an ephemeral run's cleanup
+/// asks for.
+#[derive(Clone, Copy)]
+pub(crate) struct How {
+    /// `--dry-run`: only say what would be removed
+    pub preview: bool,
+    pub verbose: bool,
+    /// Say nothing: the record is for `--json`
+    pub json: bool,
+    /// A failing hook is an error
+    pub strict: bool,
+}
+
+/// Remove the set named `args.name` at `wt_dir`, after checking it; its
+/// record (what was removed) into `records`, also when the hook that
+/// follows fails.
 pub(crate) fn remove_set(
     args: &RemoveArgs,
     wt_dir: &std::path::Path,
     configs: &Configs,
-    mode: ExecutionMode,
-    verbose: bool,
-    json: bool,
-    strict: bool,
+    ctx: &Ctx,
+    how: How,
+    records: &mut Vec<ProjectResult>,
 ) -> Result<()> {
+    let How {
+        preview,
+        verbose,
+        json,
+        strict,
+    } = how;
     let name = &args.name;
     let force = args.force;
     let wt_dir = wt_dir.to_path_buf();
@@ -66,7 +88,7 @@ pub(crate) fn remove_set(
     let mine = found.as_ref().is_some_and(|found| found.is_mine());
     let held = match () {
         _ if mine => None,
-        _ if mode.is_preview() => match &found {
+        _ if preview => match &found {
             Some(found) if found.live => anyhow::bail!(
                 "Refusing to remove worktree '{name}': it is {}. Wait for that to finish, or \
                  stop it first.",
@@ -152,7 +174,6 @@ pub(crate) fn remove_set(
             escape(&made.name())
         );
     }
-    let preview = mode.is_preview();
     if !check.unsaved.is_empty() {
         let found = check.unsaved.join("\n  ");
         if !force {
@@ -161,7 +182,7 @@ pub(crate) fn remove_set(
                  Commit and push it, or use --force to discard it."
             );
         }
-        out::warn(format!(
+        ctx.warn(format!(
             "{} work in worktree '{name}':\n  {found}",
             if preview {
                 "would discard"
@@ -227,28 +248,20 @@ pub(crate) fn remove_set(
         reason: Some("no record says meta made it for this set".to_string()),
     }));
 
-    if json {
-        let output = DestroyOutput {
-            name: name.to_string(),
-            path: wt_dir.display().to_string(),
-            repos_removed: check.members.len(),
-            dry_run: preview,
-            branches: std::mem::take(&mut branches),
-        };
-        outln!("{}", serde_json::to_string_pretty(&output)?)?;
-    } else if preview {
-        outln!(
-            "[DRY RUN] Would remove worktree '{}' at {}:",
-            escape(name),
-            escape_path(&wt_dir)
-        )?;
-        for member in &check.members {
-            outln!("  {}", escape_path(&member.path))?;
-        }
-    } else {
-        outln!("{} Removed worktree '{}'", "✓".green(), name.bold())?;
-    }
+    // with --json the record says it
     if !json {
+        if preview {
+            outln!(
+                "[DRY RUN] Would remove worktree '{}' at {}:",
+                escape(name),
+                escape_path(&wt_dir)
+            )?;
+            for member in &check.members {
+                outln!("  {}", escape_path(&member.path))?;
+            }
+        } else {
+            outln!("{} Removed worktree '{}'", "✓".green(), name.bold())?;
+        }
         for report in &branches {
             let (verb, why) = match (report.action, preview) {
                 ("deleted", true) => ("would delete", None),
@@ -272,12 +285,24 @@ pub(crate) fn remove_set(
             }
         }
     }
+    let output = DestroyOutput {
+        name: name.to_string(),
+        path: wt_dir.display().to_string(),
+        repos_removed: check.members.len(),
+        dry_run: preview,
+        branches,
+    };
+    records.push(ProjectResult::about_workspace(output).at(&wt_dir));
     if preview {
         return Ok(());
     }
     // What was done is reported first: a failing hook doesn't undo it
-    fire_post_destroy(name, &wt_dir, force, Some(&configs.owner))
-        .or_else(|e| out::warn_or_bail(strict, format!("{e:#}")))
+    match fire_post_destroy(name, &wt_dir, force, Some(&configs.owner)) {
+        Err(e) if strict => anyhow::bail!("{e:#} (strict mode)"),
+        Err(e) => ctx.warn(format!("{e:#}")),
+        Ok(()) => {}
+    }
+    Ok(())
 }
 
 /// The checkout the git directory `git_dir` belongs to, as the user knows it.

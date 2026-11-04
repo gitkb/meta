@@ -2,6 +2,7 @@ use anyhow::Result;
 use colored::*;
 use meta_plugin::display::escape;
 use meta_plugin::outln;
+use meta_plugin::{Ctx, ProjectResult, Request, Response};
 use rayon::prelude::*;
 
 use meta_core::worktree::WorktreeMemberInfo;
@@ -12,9 +13,12 @@ use meta_git_lib::worktree::types::*;
 use super::cli_types::StatusArgs;
 
 /// Render a named set: every repo in it; with meta --strict, failing on what can't be read.
-pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
+/// Its record: the set's status.
+pub(crate) fn handle_status(args: StatusArgs, ctx: &Ctx, request: &Request) -> Result<Response> {
     let name = &args.name;
-    let wt_dir = resolve_existing_worktree(name)?;
+    let configs = super::configs(request)?;
+    let owner = configs.as_ref().map(|c| &c.owner);
+    let wt_dir = resolve_existing_worktree(name, owner, &request.cwd)?;
     // Membership without git; then one status per repo
     let members = if args.strict {
         meta_core::worktree::discover_worktree_members_strict(&wt_dir)?
@@ -61,14 +65,7 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
 
     let missing = missing_members(&wt_dir, &members);
 
-    if json {
-        let output = StatusOutput {
-            name: name.to_string(),
-            repos: statuses,
-            missing: missing.clone(),
-        };
-        outln!("{}", serde_json::to_string_pretty(&output)?)?;
-    } else {
+    if !request.meta.json {
         outln!("{}:", name.bold())?;
         for s in &statuses {
             let status_icon = match s.dirty {
@@ -111,14 +108,20 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
             )?;
         }
     }
-    anyhow::ensure!(
-        missing.is_empty(),
-        "worktree '{}' is missing the checkouts of {}",
-        escape(name),
-        escape(&missing.join(", "))
-    );
-
-    Ok(())
+    let failure = (!missing.is_empty()).then(|| {
+        anyhow::anyhow!(
+            "worktree '{}' is missing the checkouts of {}",
+            escape(name),
+            escape(&missing.join(", "))
+        )
+    });
+    let output = StatusOutput {
+        name: name.to_string(),
+        repos: statuses,
+        missing,
+    };
+    let record = ProjectResult::about_workspace(output).at(&wt_dir);
+    crate::printed(ctx, vec![record], failure)
 }
 
 /// The projects whose repository still records a checkout in the set at

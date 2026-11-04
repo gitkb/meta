@@ -61,17 +61,25 @@ pub fn parse<P: clap::Parser>() -> anyhow::Result<P> {
         verdict(P::try_parse_from(line))
     };
     let command = args.get(meta.typed.len()..).unwrap_or_default();
-    if let Some(tip) = meta.rejected(&e, command, &check) {
+    let tip = meta.rejected(&e, command, &check);
+    if let Some(tip) = &tip {
         e.insert(
             ContextKind::Suggested,
-            ContextValue::StyledStrs(vec![tip.into()]),
+            ContextValue::StyledStrs(vec![tip.clone().into()]),
         );
     }
-    // with --json, the JSON error report on stdout (crate::exit::code)
+    // with --json, the error in the envelope, its tip the hint
     let shown = matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion);
-    if !shown && meta.typed.iter().any(|word| word == "--json") {
+    if !shown
+        && meta
+            .typed
+            .iter()
+            .any(|word| word == "--json" || word == "--json-stream")
+    {
         crate::out::set_json(true);
-        return Err(crate::exit::Usage(message(&e)).into());
+        let mut error = crate::ErrorInfo::new(crate::ErrorCode::Usage, message(&e));
+        error.hint = tip;
+        return Err(error.into());
     }
     match e.print() {
         Err(io) if !e.use_stderr() => Err(StdoutError(io).into()),
@@ -98,8 +106,9 @@ pub struct MetaOption {
     /// Whether its value is a number (`--depth 2`): a tip moves no other
     #[serde(default)]
     pub number: bool,
-    /// The command at hand never takes it, before it or after it
-    #[serde(skip)]
+    /// The command at hand never takes it, before it or after it (the
+    /// host says so in the request: then no tip suggests it)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub refused: bool,
 }
 

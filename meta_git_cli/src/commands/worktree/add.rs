@@ -1,8 +1,8 @@
 use anyhow::Result;
 use colored::*;
 use meta_plugin::display::{escape, escape_path};
-use meta_plugin::ExecutionMode;
 use meta_plugin::{errln, outln};
+use meta_plugin::{Ctx, ProjectResult, Request, Response};
 
 use meta_core::set_record as record;
 use meta_core::worktree::discover_worktree_repos;
@@ -13,14 +13,12 @@ use meta_git_lib::worktree::types::*;
 
 use super::cli_types::AddArgs;
 
-pub(crate) fn handle_add(
-    args: AddArgs,
-    mode: ExecutionMode,
-    verbose: bool,
-    json: bool,
-) -> Result<()> {
+/// Add the repos `args` names to the set, in the workspace `request` runs
+/// in: one record per repo added (with `--dry-run`, that would be).
+pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<Response> {
+    let (mode, verbose, json) = (request.meta.mode(), request.meta.verbose, request.meta.json);
     let name = &args.name;
-    validate_worktree_name(name)?;
+    meta_core::worktree::validate_name(name)?;
     let from_ref = args.commit_ish.as_deref();
 
     let repo_specs = &args.repos;
@@ -33,10 +31,10 @@ pub(crate) fn handle_add(
         );
     }
 
-    let cwd = std::env::current_dir()?;
-    let configs = Configs::find(&cwd)?;
+    let cwd = request.cwd.as_path();
+    let configs = super::workspace_configs(request)?;
     let meta_dir = &configs.here.dir;
-    let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
+    let worktree_root = meta_core::worktree::resolve_worktree_root(Some(&configs.owner), cwd)?;
     let wt_dir = worktree_root.join(name);
 
     if !wt_dir.exists() {
@@ -70,7 +68,7 @@ pub(crate) fn handle_add(
                 places.join(", "),
                 escape(name)
             )?;
-            return Ok(());
+            return Ok(Response::done());
         }
         super::create::clone_missing(&index, &parents)?;
         index = Index::new(&configs.here);
@@ -98,7 +96,7 @@ pub(crate) fn handle_add(
                 places.join(", "),
                 escape(name)
             )?;
-            return Ok(());
+            return Ok(Response::done());
         }
         super::create::clone_missing(&index, &missing)?;
     }
@@ -180,14 +178,7 @@ pub(crate) fn handle_add(
                 branch,
             });
         }
-        if json {
-            let output = AddOutput {
-                name: name.to_string(),
-                repos,
-                dry_run: true,
-            };
-            outln!("{}", serde_json::to_string_pretty(&output)?)?;
-        } else {
+        if !json {
             outln!("[DRY RUN] Would add to worktree set '{}':", escape(name))?;
             for r in &repos {
                 outln!(
@@ -199,7 +190,7 @@ pub(crate) fn handle_add(
                 )?;
             }
         }
-        return Ok(());
+        return Ok(Response::printed(records_of(&wt_dir, &repos)));
     }
 
     let mut added = Vec::new();
@@ -279,14 +270,7 @@ pub(crate) fn handle_add(
         });
     }
 
-    if json {
-        let output = AddOutput {
-            name: name.to_string(),
-            repos: added,
-            dry_run: false,
-        };
-        outln!("{}", serde_json::to_string_pretty(&output)?)?;
-    } else {
+    if !json {
         for r in &added {
             outln!(
                 "{} Added '{}' to worktree '{}' (branch: {}){}",
@@ -299,7 +283,27 @@ pub(crate) fn handle_add(
         }
     }
 
-    failed.map_or(Ok(()), Err)
+    crate::printed(ctx, records_of(&wt_dir, &added), failed)
+}
+
+/// One record per repo of the set at `wt_dir`: its place in the set names
+/// it, as the set's checkouts are named.
+pub(super) fn records_of(
+    wt_dir: &std::path::Path,
+    repos: &[CreateRepoEntry],
+) -> Vec<ProjectResult> {
+    repos
+        .iter()
+        .map(|r| {
+            let path = std::path::Path::new(&r.path);
+            let place = match path.strip_prefix(wt_dir) {
+                Ok(place) if place.as_os_str().is_empty() => ".".to_string(),
+                Ok(place) => place.to_string_lossy().into_owned(),
+                Err(_) => r.alias.clone(),
+            };
+            ProjectResult::record(place, r).at(path)
+        })
+        .collect()
 }
 
 /// Whether two places in a set name the same directory. Discovery spells a

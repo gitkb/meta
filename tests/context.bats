@@ -82,7 +82,7 @@ setup() {
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
-data = json.load(sys.stdin)
+data = json.load(sys.stdin)['results'][0]['data']
 assert 'name' in data, 'missing name'
 assert data['repo_count'] == 2, f'expected 2 repos, got {data[\"repo_count\"]}'
 "
@@ -94,7 +94,7 @@ assert data['repo_count'] == 2, f'expected 2 repos, got {data[\"repo_count\"]}'
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-repos = data['repos']
+repos = [r['data'] for r in data['results'][1:]]
 names = [r['name'] for r in repos]
 assert 'backend' in names, f'backend not in {names}'
 assert 'frontend' in names, f'frontend not in {names}'
@@ -110,7 +110,7 @@ for r in repos:
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-for r in data['repos']:
+for r in [r['data'] for r in data['results'][1:]]:
     for key in ('branch', 'dirty', 'detached', 'head', 'untracked_count', 'upstream'):
         assert key not in r, f'{key} should be omitted for {r[\"name\"]}'
 "
@@ -175,7 +175,7 @@ EOF
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
-data = json.load(sys.stdin)
+data = json.load(sys.stdin)['results'][0]['data']
 assert 'dependencies' in data, 'missing dependencies'
 assert 'backend' in data['dependencies'], 'backend not in dependencies'
 "
@@ -205,7 +205,7 @@ projects:
 YAML
     run "$META_BIN" -t api --json context
     [ "$status" -eq 0 ]
-    [ "$(python3 -c 'import json,sys; print(",".join(r["name"] for r in json.load(sys.stdin)["repos"]))' <<<"$output")" = "backend" ]
+    [ "$(python3 -c 'import json,sys; print(",".join(r["name"] for r in [r["data"] for r in json.load(sys.stdin)["results"][1:]]))' <<<"$output")" = "backend" ]
     run "$META_BIN" -i frontend context
     [ "$status" -eq 0 ]
     [[ "$output" == *"frontend"* ]]
@@ -231,7 +231,7 @@ YAML
     [[ "$output" == *"3 repos"* ]]
     grep -Eq '^\| backend/lib \|.*modified' <<<"$output"
     run "$META_BIN" -r --json context
-    [ "$(jq -r '.repos[] | select(.path == "backend/lib") | .dirty' <<<"$output")" = true ]
+    [ "$(jq -r '.results[1:][].data | select(.path == "backend/lib") | .dirty' <<<"$output")" = true ]
     run "$META_BIN" -r --depth 0 context
     [[ "$output" != *"backend/lib"* ]]
 }
@@ -260,14 +260,14 @@ YAML
     [ "$status" -eq 0 ]
     python3 -c '
 import json, sys
-repos = {r["name"]: r for r in json.load(sys.stdin)["repos"]}
+repos = {r["name"]: r for r in [r["data"] for r in json.load(sys.stdin)["results"][1:]]}
 assert repos["backend"]["dirty"] and repos["backend"]["behind"] == 1, repos["backend"]
 assert repos["frontend"]["dirty"], repos["frontend"]
 assert "extra" in repos, repos
 ' <<<"$output"
     git -C frontend switch --quiet -c topic
     run "$META_BIN" --json context
-    [ "$(jq -r '.repos[] | select(.name == "frontend") | "\(.branch) \(.modified_count) \(.upstream)"' <<<"$output")" = "topic 1 null" ]
+    [ "$(jq -r '.results[1:][].data | select(.name == "frontend") | "\(.branch) \(.modified_count) \(.upstream)"' <<<"$output")" = "topic 1 null" ]
     [ -z "$(ls -A "$META_DATA_DIR")" ]
 }
 
@@ -278,7 +278,7 @@ assert "extra" in repos, repos
     ahead_behind() {
         run "$META_BIN" --json context
         [ "$status" -eq 0 ]
-        jq -r '.repos[] | select(.name == "backend") | "\(.ahead) \(.behind)"' <<<"$output"
+        jq -r '.results[1:][].data | select(.name == "backend") | "\(.ahead) \(.behind)"' <<<"$output"
     }
     [ "$(ahead_behind)" = "0 0" ]
     # two commits here, one there
@@ -318,7 +318,7 @@ assert "extra" in repos, repos
     [ "$status" -eq 0 ]
     python3 -c '
 import json, sys
-repos = {r["name"]: r for r in json.load(sys.stdin)["repos"]}
+repos = {r["name"]: r for r in [r["data"] for r in json.load(sys.stdin)["results"][1:]]}
 b, f = repos["backend"], repos["frontend"]
 assert (b["operation"], b["rebasing"], b["detached"]) == ("rebase", "main", True), b
 assert "branch" not in b and len(b["head"]) >= 40, b
@@ -332,7 +332,7 @@ assert (f["upstream"], f["upstream_gone"], f["detached"]) == ("origin/frontend",
     run "$META_BIN" --json context
     python3 -c '
 import json, sys
-repos = {r["name"]: r for r in json.load(sys.stdin)["repos"]}
+repos = {r["name"]: r for r in [r["data"] for r in json.load(sys.stdin)["results"][1:]]}
 b, f = repos["backend"], repos["frontend"]
 assert b["detached"] and "operation" not in b and "upstream" not in b, b
 assert not f["detached"] and "upstream" not in f and "upstream_gone" not in f, f

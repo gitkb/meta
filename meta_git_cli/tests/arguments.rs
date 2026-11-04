@@ -6,13 +6,152 @@
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
-use meta_plugin::testing::{call, Sandbox};
-use meta_plugin::PluginRequest;
+use meta_plugin::testing::{call, Called, Sandbox};
+use meta_plugin::{Answer, Meta, Request, Scope};
 use serde_json::{json, Value};
 use std::path::Path;
-use std::process::{Output, Stdio};
+use std::process::Stdio;
 
-fn meta_git(sandbox: &Sandbox, cwd: &Path, command: &str, args: &[&str], options: Value) -> Output {
+/// meta's options, as a test gives them: `json!({"json": true, "strict":
+/// true, "dry_run": true, "recursive": true, "all": true, "depth": 2})`.
+/// `recursive`/`all`/`depth` are how meta resolves the workspace and how
+/// deep (meta sends those as `request.depth` and the workspace it found);
+/// the rest are `request.meta`.
+fn request(cwd: &Path, command: &str, args: &[&str], options: &Value) -> Request {
+    let flag = |name: &str| options[name].as_bool().unwrap_or(false);
+    let (recursive, all) = (flag("recursive"), flag("all"));
+    let mut request = Request::new(command, cwd);
+    request.args = args.iter().map(|a| a.to_string()).collect();
+    request.scope = match command.split_whitespace().nth(1) {
+        Some("clone") => Scope::None,
+        Some("update" | "worktree") => Scope::Workspace,
+        _ => Scope::Selection,
+    };
+    // with -r or -A, how deep (none: no limit); without, none of the nested
+    request.recursive = recursive || all;
+    request.depth = match recursive || all {
+        true => options["depth"]
+            .as_u64()
+            .map(|d| usize::try_from(d).unwrap()),
+        false => Some(0),
+    };
+    // the workspace meta finds from cwd: -A from its outermost config, -r
+    // naming its projects from the outermost that lists it
+    let found = meta_core::config::Workspace::find(cwd, None).unwrap();
+    let found = match all {
+        true => found.map(|w| w.root().unwrap()),
+        false => found,
+    };
+    request.workspace = found.map(|w| {
+        let listed_root = meta_core::config::listed_root(&w.dir);
+        meta_plugin::Workspace {
+            root: match recursive && !all {
+                true => listed_root.clone(),
+                false => w.dir.clone(),
+            },
+            config: w.config_path.clone(),
+            listed_root,
+            members: Vec::new(),
+            worktree: Default::default(),
+        }
+    });
+    request.meta = Meta {
+        json: flag("json"),
+        dry_run: flag("dry_run"),
+        strict: flag("strict"),
+        verbose: flag("verbose"),
+        ..Meta::default()
+    };
+    request
+}
+
+/// How meta would end: its exit code.
+struct Status(Option<i32>);
+
+impl Status {
+    fn success(&self) -> bool {
+        self.0 == Some(0)
+    }
+}
+
+/// What meta would make of a plugin's answer: the plugin's own output, then
+/// its warnings and error on stderr as meta says them (`warning: …`,
+/// `Error: …`), a message on stdout; under `--json`, stdout is the
+/// Envelope's parts (`results`, `warnings`, `message`, `error`); the code
+/// meta would end with (a failed record fails the command).
+struct Ran {
+    status: Status,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn ran(called: Called, json: bool) -> Ran {
+    let Called { output, response } = called;
+    let (mut stdout, mut stderr) = (output.stdout, output.stderr);
+    let mut code = output.status.code();
+    let Some(response) = response else {
+        return Ran {
+            status: Status(code),
+            stdout,
+            stderr,
+        };
+    };
+    let mut say = |text: String| stderr.extend(text.into_bytes());
+    for warning in &response.warnings {
+        say(format!("warning: {}\n", warning.message));
+    }
+    let (records, message, error) = match response.answer {
+        Answer::Results(results) => {
+            let error = results.records.iter().find_map(|r| r.error.clone());
+            (results.records, None, error)
+        }
+        Answer::Error(error) => (Vec::new(), None, Some(error)),
+        Answer::Message(message) => (Vec::new(), Some(message), None),
+        Answer::Plan(_) | Answer::Delegate(_) => (Vec::new(), None, None),
+    };
+    if let Some(error) = &error {
+        say(format!("Error: {}\n", error.message));
+        code = Some(error.code.exit_code());
+    }
+    match json {
+        true => {
+            let envelope = json!({
+                "success": error.is_none(),
+                "results": records,
+                "warnings": response.warnings,
+                "message": message,
+                "error": error,
+            });
+            stdout = envelope.to_string().into_bytes();
+        }
+        false => {
+            if let Some(message) = message.filter(|m| !m.is_empty()) {
+                stdout.extend(format!("{}\n", message.trim_end()).into_bytes());
+            }
+        }
+    }
+    Ran {
+        status: Status(code),
+        stdout,
+        stderr,
+    }
+}
+
+/// `meta <command> <args>` in `cwd`, with meta's `options`, the plugin
+/// started from `cmd` (a `sandbox.command(env!("CARGO_BIN_EXE_meta-git"))`
+/// with whatever else the test sets on it).
+fn meta_git_with(
+    cmd: &mut std::process::Command,
+    cwd: &Path,
+    command: &str,
+    args: &[&str],
+    options: Value,
+) -> Ran {
+    let request = request(cwd, command, args, &options);
+    ran(call(cmd, &request), request.meta.json)
+}
+
+fn meta_git(sandbox: &Sandbox, cwd: &Path, command: &str, args: &[&str], options: Value) -> Ran {
     meta_git_from(sandbox, cwd, cwd, command, args, options)
 }
 
@@ -24,21 +163,19 @@ fn meta_git_from(
     command: &str,
     args: &[&str],
     options: Value,
-) -> Output {
-    let request = PluginRequest::builder(command)
-        .args(args.iter().copied())
-        .cwd(cwd)
-        .options(serde_json::from_value(options).unwrap())
-        .build();
-    call(
+) -> Ran {
+    meta_git_with(
         sandbox
             .command(env!("CARGO_BIN_EXE_meta-git"))
             .current_dir(process_dir),
-        &request,
+        cwd,
+        command,
+        args,
+        options,
     )
 }
 
-fn text(out: &Output) -> String {
+fn text(out: &Ran) -> String {
     String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr)
 }
 
@@ -152,7 +289,7 @@ fn clone_history_depth_is_the_commands_own() {
             &tmp,
             "git clone",
             args,
-            json!({"dry_run": true, "depth": 3}),
+            json!({"dry_run": true, "recursive": true, "depth": 3}),
         );
         assert!(out.status.success(), "{}", text(&out));
         text(&out)
@@ -219,11 +356,11 @@ fn worktree_list_finds_the_workspace_of_the_requests_directory() {
         &workspace,
         "git worktree list",
         &[],
-        json!({"json_output": true}),
+        json!({"json": true}),
     );
     assert!(out.status.success(), "{}", text(&out));
     let listed: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(listed["worktrees"][0]["name"], "s", "{listed}");
+    assert_eq!(listed["results"][0]["data"]["name"], "s", "{listed}");
 }
 
 /// A plugin whose stdout meta no longer reads (meta was killed) ends

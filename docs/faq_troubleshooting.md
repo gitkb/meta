@@ -146,7 +146,7 @@ meta's own commands change nothing in preview: they print what they would do. A 
 **A:** Use the `--json` flag:
 
 ```bash
-meta --json git status | jq '.results[] | select(.success == false)'
+meta --json git status | jq '.results[] | select(.error)'
 ```
 
 ---
@@ -337,7 +337,7 @@ meta --verbose git status
 
 ### Q: How do I check which config file is being used?
 
-**A:** The nearest `.meta.yaml` at or above the current directory (`--config <name>` looks for another name the same way). `meta --json project list` prints its folder as `root`.
+**A:** The nearest `.meta.yaml` at or above the current directory (`--config <name>` looks for another name the same way). `meta --json project list` prints its folder as the root row's `path`.
 
 ---
 

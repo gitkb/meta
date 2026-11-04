@@ -6,96 +6,16 @@ use std::path::{Path, PathBuf};
 
 use meta_core::config::Workspace;
 
-pub fn validate_worktree_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        anyhow::bail!("Worktree name cannot be empty");
-    }
-    let shown = escape(name);
-    if name.starts_with('.') {
-        anyhow::bail!("Invalid worktree name '{shown}': cannot start with '.'");
-    }
-    if name.contains('/') || name.contains('\\') {
-        anyhow::bail!("Invalid worktree name '{shown}': cannot contain path separators");
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        anyhow::bail!("Invalid worktree name '{shown}': only ASCII alphanumeric characters, hyphens, and underscores allowed");
-    }
-    Ok(())
-}
-
-/// The configs a worktree command reads, each loaded once: `here`, the
-/// nearest at or above where it runs, and `owner`, whose sets and settings
-/// (`worktrees_dir`, hooks) these are: inside a set, the checkout the set
-/// stands for, which outlives it; else `here`.
-#[derive(Debug, Clone)]
-pub struct Configs {
-    pub here: Workspace,
-    pub owner: Workspace,
-}
-
-impl Configs {
-    /// The configs of the workspace at or above `start`; an error outside one.
-    pub fn find(start: &Path) -> Result<Self> {
-        Self::find_optional(start)?
-            .ok_or_else(|| anyhow::anyhow!("Not inside a meta project (no .meta.yaml found)"))
-    }
-
-    /// Like [`Configs::find`], `None` outside a workspace.
-    pub fn find_optional(start: &Path) -> Result<Option<Self>> {
-        Workspace::find(start, None)?.map(Self::of).transpose()
-    }
-
-    /// The configs for `here`. A source checkout without a config is still
-    /// the owner, with no settings of its own.
-    pub fn of(here: Workspace) -> Result<Self> {
-        let Some(source) = meta_core::config::set_source(&here.dir)?.filter(|s| s.is_dir()) else {
-            return Ok(Self {
-                owner: here.clone(),
-                here,
-            });
-        };
-        let owner = Workspace::in_dir(&source)?.unwrap_or_else(|| Workspace {
-            config_path: source.join(meta_core::config::META_CONFIG_NAME),
-            dir: source,
-            projects: Vec::new(),
-            defaults: Default::default(),
-            worktrees_dir: None,
-            worktree: Default::default(),
-        });
-        Ok(Self { here, owner })
-    }
-}
-
-/// Where worktree sets go: `META_WORKTREES`, else the `worktrees_dir` of
-/// `owner`'s config (anywhere; checked when it was loaded), else its
-/// `.worktrees`; outside a workspace, `.worktrees` in `cwd`.
-pub fn resolve_worktree_root(owner: Option<&Workspace>, cwd: &Path) -> Result<PathBuf> {
-    if let Ok(env_path) = std::env::var("META_WORKTREES") {
-        return Ok(PathBuf::from(env_path));
-    }
-    let Some(owner) = owner else {
-        return Ok(cwd.join(".worktrees"));
-    };
-    // A link there is followed, wherever it leads (removal checks what is in
-    // a set, not where it is), but not into git's data; a configured
-    // worktrees_dir was checked when it was loaded
-    let Some(configured) = &owner.worktrees_dir else {
-        meta_core::config::check_location(&owner.dir, ".worktrees", false)
-            .map_err(|why| anyhow::anyhow!("Refusing to keep worktrees in .worktrees: {why}"))?;
-        return Ok(owner.dir.join(".worktrees"));
-    };
-    Ok(owner.dir.join(configured))
-}
-
-/// The directory of the existing worktree set `name`.
-pub fn resolve_existing_worktree(name: &str) -> Result<PathBuf> {
-    validate_worktree_name(name)?;
-    let cwd = std::env::current_dir()?;
-    let configs = Configs::find_optional(&cwd)?;
-    let worktree_root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
+/// The directory of the existing worktree set `name` of `owner` (the
+/// workspace whose sets these are; none outside one), for a command run
+/// from `cwd`.
+pub fn resolve_existing_worktree(
+    name: &str,
+    owner: Option<&Workspace>,
+    cwd: &Path,
+) -> Result<PathBuf> {
+    meta_core::worktree::validate_name(name)?;
+    let worktree_root = meta_core::worktree::resolve_worktree_root(owner, cwd)?;
     let wt_dir = worktree_root.join(name);
     if !wt_dir.exists() {
         anyhow::bail!("Worktree '{}' not found at {}", name, escape_path(&wt_dir));
@@ -107,8 +27,10 @@ pub fn resolve_existing_worktree(name: &str) -> Result<PathBuf> {
 /// doesn't exist or holds none.
 pub fn discover_and_validate_worktree(
     name: &str,
+    owner: Option<&Workspace>,
+    cwd: &Path,
 ) -> Result<(PathBuf, Vec<meta_core::worktree::WorktreeRepoInfo>)> {
-    let wt_dir = resolve_existing_worktree(name)?;
+    let wt_dir = resolve_existing_worktree(name, owner, cwd)?;
     let repos = meta_core::worktree::discover_worktree_repos(&wt_dir)?;
     if repos.is_empty() {
         anyhow::bail!("No repos found in worktree '{}'", escape(name));
@@ -336,51 +258,51 @@ pub fn exclude_worktrees(owner: &Path, worktree_root: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    // ── validate_worktree_name ──────────────────────────────
+    // ── meta_core::worktree::validate_name ──────────────────────────────
 
     #[test]
     fn validate_name_accepts_simple_alphanumeric() {
-        assert!(validate_worktree_name("feature1").is_ok());
+        assert!(meta_core::worktree::validate_name("feature1").is_ok());
     }
 
     #[test]
     fn validate_name_accepts_hyphens_and_underscores() {
-        assert!(validate_worktree_name("my-feature_v2").is_ok());
+        assert!(meta_core::worktree::validate_name("my-feature_v2").is_ok());
     }
 
     #[test]
     fn validate_name_rejects_empty() {
-        let err = validate_worktree_name("").unwrap_err();
+        let err = meta_core::worktree::validate_name("").unwrap_err();
         assert!(err.to_string().contains("cannot be empty"));
     }
 
     #[test]
     fn validate_name_rejects_leading_dot() {
-        let err = validate_worktree_name(".hidden").unwrap_err();
+        let err = meta_core::worktree::validate_name(".hidden").unwrap_err();
         assert!(err.to_string().contains("cannot start with '.'"));
     }
 
     #[test]
     fn validate_name_rejects_forward_slash() {
-        let err = validate_worktree_name("a/b").unwrap_err();
+        let err = meta_core::worktree::validate_name("a/b").unwrap_err();
         assert!(err.to_string().contains("path separators"));
     }
 
     #[test]
     fn validate_name_rejects_backslash() {
-        let err = validate_worktree_name("a\\b").unwrap_err();
+        let err = meta_core::worktree::validate_name("a\\b").unwrap_err();
         assert!(err.to_string().contains("path separators"));
     }
 
     #[test]
     fn validate_name_rejects_special_characters() {
-        let err = validate_worktree_name("feat@work").unwrap_err();
+        let err = meta_core::worktree::validate_name("feat@work").unwrap_err();
         assert!(err.to_string().contains("only ASCII alphanumeric"));
     }
 
     #[test]
     fn validate_name_rejects_spaces() {
-        let err = validate_worktree_name("my feature").unwrap_err();
+        let err = meta_core::worktree::validate_name("my feature").unwrap_err();
         assert!(err.to_string().contains("only ASCII alphanumeric"));
     }
 
@@ -410,7 +332,7 @@ mod tests {
             "a/\x1b]0;x\x07",
             "bad\x1b[2J",
         ] {
-            assert_escaped(validate_worktree_name(name).unwrap_err());
+            assert_escaped(meta_core::worktree::validate_name(name).unwrap_err());
         }
     }
 

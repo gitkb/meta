@@ -38,7 +38,7 @@ impl std::str::FromStr for RepoSpec {
     }
 }
 
-// ==================== JSON Output Structures ====================
+// ==================== Records (the data of each --json row) ====================
 
 #[derive(Debug, Serialize)]
 pub struct CreateOutput {
@@ -65,19 +65,6 @@ pub struct CreateRepoEntry {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ListOutput {
-    pub worktrees: Vec<ListEntry>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AddOutput {
-    pub name: String,
-    pub repos: Vec<CreateRepoEntry>,
-    /// A preview: nothing was added
-    pub dry_run: bool,
-}
-
-#[derive(Debug, Serialize)]
 pub struct DestroyOutput {
     pub name: String,
     pub path: String,
@@ -99,20 +86,6 @@ pub struct BranchReport {
     pub action: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ListEntry {
-    pub name: String,
-    pub root: String,
-    pub has_meta_root: bool,
-    pub repos: Vec<ListRepoEntry>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ephemeral: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ttl_remaining_seconds: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub custom: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -151,14 +124,6 @@ pub struct StatusRepoEntry {
 }
 
 #[derive(Debug, Serialize)]
-pub struct DiffOutput {
-    pub name: String,
-    pub base: String,
-    pub repos: Vec<DiffRepoEntry>,
-    pub totals: DiffTotals,
-}
-
-#[derive(Debug, Serialize)]
 pub struct DiffRepoEntry {
     pub alias: String,
     pub base_ref: String,
@@ -169,22 +134,6 @@ pub struct DiffRepoEntry {
     pub files: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DiffTotals {
-    pub repos_changed: usize,
-    pub files_changed: usize,
-    pub insertions: usize,
-    pub deletions: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub struct PruneOutput {
-    pub removed: Vec<PruneEntry>,
-    /// Candidates kept because deleting them would lose work.
-    pub kept: Vec<PruneEntry>,
-    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

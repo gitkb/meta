@@ -41,12 +41,8 @@ mod tests {
         let root = tmp.path().to_path_buf();
         let plain = root.join("plain");
         std::fs::create_dir(&plain).unwrap();
-        let command = |dir: &Path| DirCommand {
-            dir: dir.to_path_buf(),
-            argv: vec!["git".into(), "status".into()],
-            env: None,
-            refused: None,
-        };
+        let command =
+            |dir: &Path| DirCommand::new(dir.to_path_buf(), vec!["git".into(), "status".into()]);
         let elsewhere = root.join("elsewhere");
         let commands = in_repos(
             vec![command(&root), command(&plain), command(&elsewhere)],

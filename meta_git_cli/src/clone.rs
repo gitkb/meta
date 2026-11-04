@@ -7,7 +7,7 @@ use meta_core::config;
 use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
 use meta_plugin::RepoUrl;
 use meta_plugin::{errln, outln};
-use meta_plugin::{CommandResult, PluginRequestOptions};
+use meta_plugin::{Ctx, Request, Response};
 use std::sync::Arc;
 
 /// Clone a meta repository, then the repos its .meta.yaml lists.
@@ -32,15 +32,16 @@ pub(crate) struct CloneArgs {
 
 pub(crate) fn execute_git_clone(
     args: CloneArgs,
-    options: &PluginRequestOptions,
-    cwd: &std::path::Path,
-) -> anyhow::Result<CommandResult> {
+    ctx: &Ctx,
+    request: &Request,
+) -> anyhow::Result<Response> {
+    let cwd = request.cwd.as_path();
     // meta's -r and --depth (how deep into nested meta repos); the
-    // command's --depth is git's history depth
-    // a new workspace is its own root: -A is -r
-    let recursive = options.recursive || options.all;
+    // command's --depth is git's history depth. A new workspace is its own
+    // root: -A is -r
+    let meta_depth = request.depth;
+    let recursive = meta_depth != Some(0);
     let depth = args.depth.map(|d| d.to_string());
-    let meta_depth = options.depth;
     let mut parallel = args.parallel.get();
     let url = args.url;
     let git_clone_args: Vec<String> = depth
@@ -108,7 +109,7 @@ pub(crate) fn execute_git_clone(
     };
     if occupied {
         let workspace = matches!(config::find_meta_config_in(&clone_dir_path), Ok(Some(_)));
-        return Ok(CommandResult::Error(format!(
+        anyhow::bail!(
             "{} already exists{}",
             meta_plugin::display::escape_path(&clone_dir_path),
             if workspace {
@@ -118,16 +119,16 @@ pub(crate) fn execute_git_clone(
                 " and is not an empty directory; clone somewhere else, or name another \
                  directory"
             }
-        )));
+        );
     }
 
-    if options.mode().is_preview() {
+    if ctx.dry_run() {
         // Output what we know - just the meta repo clone command
         // (Child repos are in .meta.yaml file which hasn't been cloned yet)
         outln!("{} Would clone meta repository:", "[DRY RUN]".cyan())?;
         let shown = loop_lib::display_command(&clone_argv(url.to_string()));
         outln!("  {}", meta_plugin::display::escape(&shown))?;
-        return Ok(CommandResult::Message(String::new()));
+        return Ok(Response::done());
     }
 
     // Set up SSH ControlMaster for the meta repo's host before cloning
@@ -150,22 +151,17 @@ pub(crate) fn execute_git_clone(
     }
     // a child meta owns: stopping meta stops the clone
     let status = meta_plugin::process::status(&mut clone_cmd)?;
-    if !status.success() {
-        return Ok(CommandResult::Error(
-            "Failed to clone meta repository".to_string(),
-        ));
-    }
+    anyhow::ensure!(status.success(), "Failed to clone meta repository");
 
     // Parse meta config inside cloned repo
     if config::find_meta_config_in(&clone_dir_path)?.is_none() {
-        return Ok(CommandResult::Message(
-            "No .meta.yaml found in cloned repository".to_string(),
+        return Ok(Response::message(
+            "No .meta.yaml found in cloned repository",
         ));
     }
 
     // For non-recursive mode, read only the cloned repo's own .meta.yaml
-    let effective_meta_depth = if recursive { meta_depth } else { Some(0) };
-    let queue = CloneQueue::new(depth.clone(), effective_meta_depth, false);
+    let queue = CloneQueue::new(depth.clone(), meta_depth, false);
     let name = clone_dir_path
         .file_name()
         .map_or_else(|| clone_dir.clone(), |n| n.to_string_lossy().into_owned());
@@ -176,11 +172,9 @@ pub(crate) fn execute_git_clone(
 
     if initial_count == 0 {
         if let Some(error) = crate::clone_worker::report_failures(&queue, "git clone-missing") {
-            return Ok(CommandResult::Error(error));
+            anyhow::bail!("{error}");
         }
-        return Ok(CommandResult::Message(
-            "No child repositories to clone".to_string(),
-        ));
+        return Ok(Response::message("No child repositories to clone"));
     }
 
     // Establish SSH masters for any additional hosts in the queue
@@ -217,7 +211,7 @@ pub(crate) fn execute_git_clone(
 
     clone_with_queue(&queue, tasks, parallel, &mp, ssh_cmd.as_deref())?;
     if let Some(error) = crate::clone_worker::report_failures(&queue, "git clone-missing") {
-        return Ok(CommandResult::Error(error));
+        anyhow::bail!("{error}");
     }
 
     let (completed, total) = queue.get_counts();
@@ -231,5 +225,5 @@ pub(crate) fn execute_git_clone(
         outln!("Meta-repo clone completed ({completed} repos cloned)")?;
     }
 
-    Ok(CommandResult::Message(String::new()))
+    Ok(Response::done())
 }

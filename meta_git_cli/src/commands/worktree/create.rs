@@ -8,7 +8,7 @@ use meta_core::{errln, outln};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
-use meta_cli::dependency_graph::{DependencyGraph, DependencyProblem, ProjectDependencies};
+use meta_core::dependency_graph::{DependencyGraph, DependencyProblem, ProjectDependencies};
 use meta_core::duration::format_duration;
 use meta_core::set_record::{self as record, SetRecord};
 use meta_git_lib::worktree::git_ops::*;

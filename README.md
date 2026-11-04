@@ -516,10 +516,10 @@ Meta is a Rust workspace of 10 crates:
 
 | Crate | Purpose |
 |-------|---------|
-| `meta_cli` | Main CLI — config loading, plugin routing, filtering |
+| `meta_cli` | Main CLI — plugin routing, `exec`, `context`, `init`, plugin registry |
 | `loop_lib` | Core execution engine — runs commands across directories |
 | `loop_cli` | Standalone loop CLI (usable without meta) |
-| `meta_core` | Shared infrastructure — `~/.meta/` directory, atomic JSON store |
+| `meta_core` | The workspace domain — config, repo filtering, worktree sets, dependency graph, the children a program starts |
 | `meta_plugin_protocol` | Shared types for the plugin contract |
 | `meta_git_cli` | Git plugin — clone, update, status, commit |
 | `meta_git_lib` | Shared git library utilities |

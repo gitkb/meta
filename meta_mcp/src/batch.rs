@@ -172,11 +172,16 @@ impl McpServer {
             .args(args);
         let output = match on_cancel {
             OnCancel::Stop => self.calls.output(&mut command),
-            OnCancel::Finish => {
-                #[cfg(unix)]
-                std::os::unix::process::CommandExt::process_group(&mut command, 0);
-                command.output()
-            }
+            // in a group of its own, out of reach of a signal to the server's
+            // (meta-mcp handles its signals itself and never calls
+            // children::own, which would pass them on to this group)
+            OnCancel::Finish => meta_core::children::spawn_group(
+                command
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped()),
+            )
+            .and_then(|child| child.exchange(&[])),
         }
         .with_context(|| {
             format!(

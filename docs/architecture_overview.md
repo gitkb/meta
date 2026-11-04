@@ -20,8 +20,8 @@ meta/
 └── loop_lib/              # Runs a command in many directories
 ```
 
-- **meta_cli**: parses the command line, selects repos (`repo_filter.rs`), finds and runs plugins (`subprocess_plugins.rs`), and holds `meta exec`, `meta context` (`context.rs`), `meta init claude` (`init.rs`), the plugin registry (`registry.rs`), worktree detection (`worktree.rs`), the query language (`query.rs`) and the dependency graph (`dependency_graph.rs`) the MCP server uses.
-- **meta_core**: reading `.meta.yaml` (`config.rs`), running git (`git/`), everything printed and how a program exits, with its exit codes (`out.rs`, `exit.rs`), escaping untrusted text (`display.rs`), the `~/.meta/` data directory and atomic JSON writes (`data_dir.rs`, `store.rs`), and the records of worktree sets (`set_record.rs`).
+- **meta_cli**: the `meta` binary. It parses the command line, finds and runs plugins (`subprocess_plugins.rs`), and holds `meta exec`, `meta context` (`context.rs`), `meta init claude` (`init.rs`) and the plugin registry (`registry.rs`).
+- **meta_core**: reading `.meta.yaml` (`config.rs`), running git (`git/`), everything printed and how a program exits, with its exit codes (`out.rs`, `exit.rs`), escaping untrusted text (`display.rs`), the `~/.meta/` data directory and atomic JSON writes (`data_dir.rs`, `store.rs`), the records of worktree sets (`set_record.rs`), worktree detection (`worktree.rs`), repo selection (`repo_filter.rs`), the dependency graph (`dependency_graph.rs`), the query language the MCP server uses (`query.rs`), and the children a program starts and how they are stopped (`children.rs`).
 - **meta_plugin_protocol**: `PluginInfo` and `PluginHelp` (what a plugin says about itself), `PluginRequest` (what meta sends it), `PlanResponse` (the commands it asks meta to run), and `run_plugin()`, which a Rust plugin's `main` calls.
 - **meta_git_cli**: `meta git clone`, `update`, `commit` and `worktree`; any other `meta git <cmd>` runs `git <cmd>` in each repo. SSH multiplexing for parallel remote commands is set up internally.
 - **meta_git_lib**: the clone queue and the worktree set building blocks (plans, leases, TTLs, removal safety checks).

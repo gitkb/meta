@@ -1,16 +1,18 @@
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use meta_cli::repo_filter::{Filters, Reach};
 use meta_core::config::{self, find_meta_config, Workspace};
 use meta_core::display::{escape, escape_lines, escape_path};
+use meta_core::repo_filter::{Filters, Reach};
 use meta_core::ExecutionMode;
 use meta_core::{errln, out, outln};
 use std::path::{Path, PathBuf};
 
+mod context;
 mod init;
 mod registry;
+mod run_list;
 mod subprocess_plugins;
-use meta_cli::{run_list, worktree};
+use meta_core::worktree;
 use meta_plugin_protocol::PluginRequestOptions;
 use subprocess_plugins::{SubprocessPlugin, SubprocessPluginManager};
 
@@ -426,7 +428,7 @@ fn run_cli() -> Result<()> {
         Some(Commands::Context(args)) => {
             let workspace = Workspace::find(&cli.start_dir()?, None)?
                 .ok_or_else(|| anyhow::anyhow!("Not a meta workspace (no .meta.yaml found)"))?;
-            meta_cli::context::handle_context(
+            context::handle_context(
                 cli.json,
                 args.no_status,
                 cli.verbose,

@@ -1,8 +1,8 @@
 //! `--include`, `--exclude` and `--tag`: which repos a command runs in.
 
+use crate::config::{self, MetaTreeNode, ProjectInfo, Workspace};
+use crate::display::{escape, escape_path};
 use anyhow::{bail, Result};
-use meta_core::config::{self, MetaTreeNode, ProjectInfo, Workspace};
-use meta_core::display::{escape, escape_path};
 use std::path::{Component, Path, PathBuf};
 
 /// What `--include`, `--exclude` and `--tag` ask for.

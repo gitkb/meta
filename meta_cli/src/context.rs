@@ -10,11 +10,11 @@ use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
 
-use crate::dependency_graph::DependencyGraph;
-use crate::repo_filter::{Filters, Reach};
 use meta_core::config::{self, ProjectInfo};
+use meta_core::dependency_graph::DependencyGraph;
 use meta_core::display::{escape, escape_path};
 use meta_core::git::{GitUrl, Operation, RepoStatus};
+use meta_core::repo_filter::{Filters, Reach};
 
 // ── Public API ──────────────────────────────────────────
 

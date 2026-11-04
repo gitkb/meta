@@ -4,7 +4,7 @@ use meta_core::display::escape;
 use meta_core::outln;
 use rayon::prelude::*;
 
-use meta_cli::worktree::WorktreeMemberInfo;
+use meta_core::worktree::WorktreeMemberInfo;
 use meta_git_lib::worktree::git_ops::repo_status;
 use meta_git_lib::worktree::helpers::resolve_existing_worktree;
 use meta_git_lib::worktree::types::*;
@@ -17,9 +17,9 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
     let wt_dir = resolve_existing_worktree(name)?;
     // Membership without git; then one status per repo
     let members = if args.strict {
-        meta_cli::worktree::discover_worktree_members_strict(&wt_dir)?
+        meta_core::worktree::discover_worktree_members_strict(&wt_dir)?
     } else {
-        meta_cli::worktree::discover_worktree_members(&wt_dir)?
+        meta_core::worktree::discover_worktree_members(&wt_dir)?
     };
     anyhow::ensure!(
         !members.is_empty(),

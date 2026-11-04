@@ -7,12 +7,12 @@ use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
 
-use meta_cli::worktree::{
+use meta_core::duration::format_duration;
+use meta_core::set_record::{self as record, SetRecord};
+use meta_core::worktree::{
     detect_worktree_location, discover_worktree_members, discover_worktree_members_strict,
     discover_worktree_repos, discover_worktree_repos_strict, WorktreeMemberInfo,
 };
-use meta_core::duration::format_duration;
-use meta_core::set_record::{self as record, SetRecord};
 use meta_git_lib::worktree::git_ops::repo_status;
 use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::ttl;

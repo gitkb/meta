@@ -5,8 +5,8 @@ use meta_core::{errln, outln};
 use meta_plugin_protocol::PluginRequestOptions;
 use std::path::{Path, PathBuf};
 
-use meta_cli::repo_filter;
-use meta_cli::worktree::{discover_worktree_repos, WorktreeRepoInfo};
+use meta_core::repo_filter;
+use meta_core::worktree::{discover_worktree_repos, WorktreeRepoInfo};
 use meta_git_lib::worktree::helpers::*;
 
 use super::cli_types::{CreateArgs, ExecArgs, RemoveArgs};
@@ -37,12 +37,12 @@ fn build_loop_config(
     let workspace = if filters.is_empty() {
         None
     } else {
-        meta_cli::worktree::set_config(wt_dir, &paths, None)?
+        meta_core::worktree::set_config(wt_dir, &paths, None)?
             .map(|config| meta_core::config::Workspace::load(&config))
             .transpose()?
     };
     Ok(loop_lib::LoopConfig {
-        directories: meta_cli::worktree::select_in_set(
+        directories: meta_core::worktree::select_in_set(
             wt_dir,
             &paths,
             workspace.as_ref(),

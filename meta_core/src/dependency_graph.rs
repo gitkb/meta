@@ -17,8 +17,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use meta_core::config::ProjectInfo;
-use meta_core::git::GitUrl;
+use crate::config::ProjectInfo;
+use crate::git::GitUrl;
 
 /// Represents a project with dependency information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,7 +78,7 @@ pub enum DependencyProblem {
 
 impl std::fmt::Display for DependencyProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use meta_core::display::escape;
+        use crate::display::escape;
         match self {
             Self::Unresolved(dep) => {
                 write!(

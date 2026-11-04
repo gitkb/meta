@@ -8,20 +8,19 @@ publish = false
 description = "Reusable git operations for meta plugins"
 
 [dependencies]
-meta_core = { path = "../meta_core" }
-meta_cli = { path = "../meta_cli", package = "meta" }
-anyhow = "1"
-chrono = { version = "0.4", features = ["serde"] }
-log = "0.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+meta_core.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(not(unix))'.dependencies]
 same-file = "1"
 
 [dev-dependencies]
-meta_test_support = { path = "../meta_test_support" }
-tempfile = "3.3"
+meta_test_support.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

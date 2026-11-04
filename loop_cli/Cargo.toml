@@ -8,15 +8,15 @@ publish = false
 description = "Run commands across multiple directories"
 
 [dependencies]
-anyhow = "1.0"
-clap = { version = "4.3", features = ["derive"] }
-colored = "2.0"
-loop_lib = { path = "../loop_lib" }
-meta_core = { path = "../meta_core" }
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+colored.workspace = true
+loop_lib.workspace = true
+meta_core.workspace = true
 
 [dev-dependencies]
-meta_test_support = { path = "../meta_test_support" }
-serde_json = "1.0"
+meta_test_support.workspace = true
+serde_json.workspace = true
 
 [[bin]]
 name = "loop"

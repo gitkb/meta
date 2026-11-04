@@ -21,7 +21,6 @@
     clippy::unwrap_used,
     clippy::print_stdout,
     clippy::print_stderr,
-    clippy::panic,
     reason = "test support: a panic is a failed test, and tests start the programs they test"
 )]
 
@@ -415,6 +414,7 @@ macro_rules! isolated {
 pub use crate::isolated;
 
 #[cfg(feature = "testing-git")]
+#[expect(clippy::panic, reason = "a git this can't read fails the test")]
 /// Whether git can make reftable repos (2.45 on); says why not when not.
 pub fn git_has_reftable() -> bool {
     let out = Command::new("git")

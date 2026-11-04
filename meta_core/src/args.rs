@@ -95,6 +95,9 @@ pub struct MetaOption {
     /// Whether it may be given more than once (`--include a --include b`)
     #[serde(default)]
     pub repeats: bool,
+    /// Whether its value is a number (`--depth 2`): a tip moves no other
+    #[serde(default)]
+    pub number: bool,
     /// The command at hand never takes it, before it or after it
     #[serde(skip)]
     pub refused: bool,
@@ -131,6 +134,7 @@ impl MetaOptions {
                     arg.get_action(),
                     clap::ArgAction::Append | clap::ArgAction::Count
                 ),
+                number: arg.get_value_parser().type_id() == std::any::TypeId::of::<usize>(),
                 refused: false,
             })
             .collect();
@@ -242,6 +246,14 @@ impl MetaOptions {
             let Some((at, word)) = at.and_then(|at| Some((at, rest.get(at)?))) else {
                 return Some(rule);
             };
+            // a value meta wouldn't take makes a line that fails again
+            let value = match word.split_once('=') {
+                Some((_, value)) => Some(value),
+                None => rest.get(at + 1).map(String::as_str),
+            };
+            if option.number && value.is_some_and(|v| v.parse::<usize>().is_err()) {
+                return Some(rule);
+            }
             let taken = match (option.takes_value && !word.contains('='), rest.get(at + 1)) {
                 (true, Some(_)) => 2,
                 (true, None) => return Some(rule),

@@ -261,6 +261,8 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
         &["exec", "--parallel", "8", "--", "pwd"],
         // two values for one that takes one: which was meant can't be told
         &["--depth", "1", "project", "list", "--depth", "2"],
+        // a value meta wouldn't take
+        &["project", "list", "--depth", "nope"],
         &["git", "clone", url, "d", "--depth", "5", "--typo"],
     ] {
         let out = workspace.meta(typed);

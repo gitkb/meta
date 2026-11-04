@@ -65,7 +65,7 @@ The `meta_query_repos` MCP tool filters repos by state:
 
 ## Global Strict Mode
 
-Use `meta --strict` to turn worktree warnings into errors for CI/automation. It applies to the `meta git worktree` checks listed below (and `meta --strict git worktree list` and `status` fail on what they can't read), and to `meta git` commands, where a project that isn't cloned fails the command; not to `meta exec`. It is not a transaction: repos already changed before the error stay changed.
+Use `meta --strict` to turn worktree warnings into errors for CI/automation. It applies to the `meta git worktree` checks listed below (and `meta --strict git worktree list` and `status` fail on what they can't read), and to the per-repo `meta git` commands (`pull`, `status`, …), where a project that isn't cloned fails the command; not to `meta exec`. It is not a transaction: repos already changed before the error stay changed.
 
 ```bash
 meta --strict git worktree create feature-test v2.0.0 --every-repo

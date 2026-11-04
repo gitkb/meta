@@ -755,6 +755,7 @@ mod tests {
                         spellings: vec!["--json".to_string()],
                         takes_value: false,
                         repeats: false,
+                        number: false,
                         refused: false,
                     }],
                     typed: vec!["--json".to_string()],
@@ -776,7 +777,7 @@ mod tests {
                     "include_filters": ["a"], "exclude_filters": ["b"],
                     "tag_filters": ["t"], "strict": true,
                     "meta_options": {
-                        "options": [{"spellings": ["--json"], "takes_value": false, "repeats": false}],
+                        "options": [{"spellings": ["--json"], "takes_value": false, "repeats": false, "number": false}],
                         "typed": ["--json"],
                     },
                 },

@@ -56,7 +56,7 @@ struct Cli {
         short,
         long,
         value_delimiter = ',',
-        help = "Skip these repos: each value is a repo's .meta.yaml name or its whole path from the workspace root (. for the root), never part of one"
+        help = "Skip these repos: each value is a repo's .meta.yaml name or its whole path from the nearest .meta.yaml (with -r or -A, from the workspace root; . for that root), never part of one"
     )]
     exclude: Option<Vec<String>>,
 
@@ -64,7 +64,7 @@ struct Cli {
         short,
         long,
         value_delimiter = ',',
-        help = "Run in these repos (and in those --tag selects): each value is a repo's .meta.yaml name or its whole path from the workspace root (. for the root), never part of one"
+        help = "Run in these repos (and in those --tag selects): each value is a repo's .meta.yaml name or its whole path from the nearest .meta.yaml (with -r or -A, from the workspace root; . for that root), never part of one"
     )]
     include: Option<Vec<String>>,
 

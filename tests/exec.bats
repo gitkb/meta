@@ -401,17 +401,16 @@ SCRIPT
 
 # ============ Unrecognized command handling (meta-7) ============
 
-@test "unrecognized top-level command shows help" {
+@test "unrecognized top-level command names the line to run and where the commands are" {
     run "$META_BIN" blablabla
     [ "$status" -eq 2 ]
     [[ "$output" == *"unrecognized command"* ]]
     [[ "$output" == *"blablabla"* ]]
-    [[ "$output" == *"meta exec"* ]]
-    # Must show ACTUAL help content (not just a reference to --help)
-    # This ensures LLMs can self-correct without a second command
-    [[ "$output" == *"Usage"* ]]
-    [[ "$output" == *"exec"* ]]
-    [[ "$output" == *"init"* ]] || [[ "$output" == *"worktree"* ]]
+    [[ "$output" == *"meta exec -- blablabla"* ]]
+    # meta --help, which lists plugins' commands too, not a copy of meta's
+    # own help without them
+    [[ "$output" == *"meta --help"* ]]
+    [[ "$output" != *"Usage"* ]]
 }
 
 @test "unrecognized plugin subcommand shows plugin help" {

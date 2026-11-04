@@ -1182,8 +1182,7 @@ fn handle_plugin_command(
 
 // === Helpers ===
 
-/// The usage error for a command meta doesn't know, with meta's help and a
-/// suggestion made by changing the line as typed at the command word alone,
+/// The usage error for a command meta doesn't know, with a suggestion made by changing the line as typed at the command word alone,
 /// so everything else typed stays as it was: the command its first word is
 /// a typo of, else (unless `meta help` was asked) `exec --` before it, to run
 /// it in each repo. A program on PATH (`cp`) is no typo, and a plugin word is
@@ -1195,7 +1194,7 @@ fn unrecognized_command_error(
     run_it: bool,
 ) -> anyhow::Error {
     let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
-    let mut cli = Cli::command();
+    let cli = Cli::command();
     let builtins: Vec<&str> = cli.get_subcommands().map(|sub| sub.get_name()).collect();
     // Plugins by their file names: none is started to list them
     let words = plugins.words();
@@ -1228,6 +1227,8 @@ fn unrecognized_command_error(
         escape(&loop_lib::display_command(&argv)).into_owned()
     };
     let suggestion = match near {
+        // help takes the command to explain, not the typo's arguments
+        Some("help") => "\n\nA command with a similar name exists:\n    meta help".to_string(),
         Some(word) => format!(
             "\n\nA command with a similar name exists:\n    meta {}",
             edited(&[word])
@@ -1239,11 +1240,18 @@ fn unrecognized_command_error(
         ),
         None => String::new(),
     };
+    // a workspace's own plugins are found from its .meta.yaml
+    let outside = std::env::current_dir()
+        .ok()
+        .is_some_and(|cwd| matches!(find_meta_config(&cwd, None), Ok(None)));
+    let outside = match outside {
+        true => "\n\nNo .meta.yaml here or above, so no workspace's own plugins were looked for.",
+        false => "",
+    };
     meta_core::exit::Usage(format!(
-        "unrecognized command '{}'{suggestion}\n\n\
-         Plugins add more commands: meta --help lists them.\n\n{}",
+        "unrecognized command '{}'{suggestion}{outside}\n\n\
+         The commands there are, the ones plugins add too: meta --help",
         escape(first_cmd),
-        cli.render_help().to_string().trim_end()
     ))
     .into()
 }

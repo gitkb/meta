@@ -147,7 +147,7 @@ fn only_the_plugin_a_command_names_is_started() {
     let typo = run_meta(&sandbox, &root, &["touhcy"]);
     assert!(!typo.status.success());
     let stderr = String::from_utf8_lossy(&typo.stderr);
-    assert!(stderr.contains("meta --help lists them"), "{stderr}");
+    assert!(stderr.contains("the ones plugins add too: meta --help"), "{stderr}");
     assert_eq!(spy_starts(&root), "", "an unrelated plugin was started");
 
     // Help and the plugin list ask every plugin, and name each by its file

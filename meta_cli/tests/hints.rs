@@ -357,6 +357,20 @@ fn meta_owned_commands_take_no_copy_of_meta_options() {
 }
 
 #[test]
+fn an_unknown_command_names_no_arguments_and_dumps_no_help() {
+    let workspace = Workspace::new();
+    let out = workspace.meta(&["hlep", "git", "status"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert_eq!(suggested(&out), ["help"], "{}", text(&out));
+    for words in [&["hlep", "git"][..], &["query", "x"]] {
+        let said = text(&workspace.meta(words));
+        assert!(!said.contains("Usage:"), "{said}");
+        assert!(!said.contains("Options:"), "{said}");
+        assert!(said.contains("meta --help"), "{said}");
+    }
+}
+
+#[test]
 fn one_argument_with_a_space_is_told_to_be_two_words() {
     let workspace = Workspace::new();
     let out = workspace.meta(&["--include", "api", "exec", "git status"]);

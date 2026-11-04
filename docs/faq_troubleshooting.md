@@ -159,7 +159,7 @@ meta --json git status | jq '.results[] | select(.success == false)'
 
 1. Clones the parent repo
 2. Reads its meta config
-3. Clones each repo it lists; the repos of nested meta repos (`meta: true`) only with `meta git clone -r <url>`
+3. Clones each repo it lists; the repos of nested meta repos (`meta: true`) only with `meta -r git clone <url>`
 
 If child repos aren't cloning, the meta config may be missing or malformed. `meta git clone-missing` in the clone clones whatever is still missing.
 
@@ -337,7 +337,7 @@ meta --verbose git status
 
 ### Q: How do I check which config file is being used?
 
-**A:** The nearest `.meta.yaml` at or above the current directory (`--config <name>` looks for another name the same way). `meta project list --json` prints its folder as `root`.
+**A:** The nearest `.meta.yaml` at or above the current directory (`--config <name>` looks for another name the same way). `meta --json project list` prints its folder as `root`.
 
 ---
 

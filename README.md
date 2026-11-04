@@ -302,15 +302,26 @@ projects:
     meta: true
 ```
 
-When `meta: true` is set, commands with `--recursive` will descend into the nested meta repo and process its children too:
+When `meta: true` is set, commands run with meta's `-r` (`--recursive`, before the command) descend into the nested meta repo and process its children too:
 
 ```bash
 # Clone everything, including nested meta repos
-meta git clone -r https://github.com/org/top-level.git
+meta -r git clone https://github.com/org/top-level.git
 
 # Pull what's cloned and clone what's missing, nested meta repos included
-meta git update -r
+meta -r git update
 ```
+
+What `-r` does, by command:
+
+| Command | With `meta -r` |
+|---------|----------------|
+| loop commands (`meta -r git status`, `meta -r exec -- …`) and `project` | the projects of nested meta repos too (`--depth N` limits how deep) |
+| `git clone`, `git update`, `clone-missing`, `clone-prune`, `clone-sync` | clone, pull or prune in nested meta repos too (`--depth N` before the command: how many levels; `git clone --depth N` after it is git's history depth) |
+| `git worktree create` | find `--repo` across the whole tree, and resolve dependencies there |
+| `context` | rows for the projects of nested meta repos |
+| `git worktree list`, `status` | refused: they always show nested repos; the scan that fails on folders it can't read is `meta --strict git worktree list` |
+| any command inside a worktree set | nothing: the set is the scope, its nested members included |
 
 Keeping the clones to what the `.meta.yaml` files list:
 
@@ -321,11 +332,11 @@ Keeping the clones to what the `.meta.yaml` files list:
 | `meta git clone-prune` | Remove the repos no `.meta.yaml` lists that hold nothing unpushed; keep and name the others |
 | `meta git clone-sync` | `clone-missing`, then `clone-prune` |
 
-Each takes `-r` (or meta's `--recursive`) for nested meta repos, and `--dry-run` before the command. `clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files as they are on disk and pull nothing; they take `--include`, `--exclude` and `--tag` (the projects cloned, the meta repos searched for leftovers) and `--json` (`{"dry_run", "repos": [{"path", "action", "reason"?}]}`, `action` being `cloned`, `removed`, `kept` or `failed`; a removed repo's `reason` names the ignored files deleted with it). `clone-prune` removes a repo only when git shows nothing in it that isn't on a remote: no uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it (bare ones too). Files git ignores (`.env`, `target/`) are deleted with it and named first, as `git worktree remove` deletes them; commits only a reflog holds are not kept.
+Each takes meta's `-r` for nested meta repos and `--dry-run`, before the command (`meta -r --dry-run git clone-sync`). `clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files as they are on disk and pull nothing; they take meta's `--include`, `--exclude` and `--tag` (the projects cloned, the meta repos searched for leftovers) and `--json` (`{"dry_run", "repos": [{"path", "action", "reason"?}]}`, `action` being `cloned`, `removed`, `kept` or `failed`; a removed repo's `reason` names the ignored files deleted with it). `clone-prune` removes a repo only when git shows nothing in it that isn't on a remote: no uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it (bare ones too). Files git ignores (`.env`, `target/`) are deleted with it and named first, as `git worktree remove` deletes them; commits only a reflog holds are not kept.
 
 ```bash
 # List entire tree
-meta project list --recursive
+meta -r project list
 ```
 
 ### Dependency Tracking
@@ -380,7 +391,7 @@ meta -r --tag cli-tools exec -- cargo build               # nested projects by t
 
 Meta runs every command as a program with its arguments, never through a shell. Each argument meta receives reaches the program unchanged, so quotes, spaces, `$()`, `;`, globs and `%` stay literal (`meta git log --format='%h %s'` works, and text pasted into a commit message can't run commands). Your own shell still parses the line before meta runs, so `"$(...)"` in double quotes runs there: pass untrusted text in single quotes. When you want a shell, ask for one: `meta exec -- sh -c 'npm ci && npm test'`. `meta git commit`, `clone`, `update` and `worktree` are meta's own commands with their own options; for git's native behavior, `meta exec -- git ...`. Every other `meta git` command, `status` included, passes its arguments to git.
 
-Meta's own options go before the command: `meta --dry-run git update`, `meta --json git worktree list`. Everything after the command word belongs to the command, so `meta git pull --tag v1` gives `--tag v1` to git, and `--dry-run` after `meta exec` is refused with a tip to write `meta --dry-run exec -- rm x`. The commands that print data take their own `--json` too (`meta context --json`, `meta plugin list --json`, `meta git worktree list --json`, `meta project list --json`).
+Meta's own options go before the command, for every command, the ones meta and its plugins own included: `meta --dry-run git update`, `meta --json git worktree list`, `meta -r --json project list`, `meta --include api git worktree exec t -- make`. Everything after the command word belongs to the command, so `meta git pull --tag v1` gives `--tag v1` to git. A meta option typed after a command that rejects it gets one tip with the line to run: `--dry-run` after `meta exec` is refused with a tip to write `meta --dry-run exec -- rm x`. With `--json`, that usage error is a JSON document on stdout carrying the same line.
 
 ### Recursive Processing
 
@@ -481,10 +492,10 @@ Installs purpose-built skills that teach Claude Code how to work with multi-repo
 ```bash
 meta --json git status
 meta --json exec -- git rev-parse HEAD
-meta project list --json
+meta --json project list
 ```
 
-See [Advanced Usage](docs/advanced_usage.md#json-output-mode) for the format.
+A command run in each repo reports `{"success", "results", "summary", "warnings", "hint"}`. Each result names its repo by `path`, its path from the workspace root as the human output shows it (`.` for the root, `./api`), which `--include` takes as is (`./` makes it a path only; a bare value also matches project names); `stdout` and `stderr` are always there, `""` for no output. `warnings` lists what the human output warns of (a project that isn't cloned), and `hint` is the tip it ends with (an option of meta's typed after the command), or `null`. See [Advanced Usage](docs/advanced_usage.md#json-output-mode) for the format.
 
 ---
 

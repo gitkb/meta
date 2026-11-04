@@ -186,3 +186,9 @@ meta-worktree/SKILL.md e2cb08e259de5b2072d75a1fb4969be66f410741
 meta-worktree/SKILL.md 7dda373db270aeaa17092b54c42751e0172bdda7
 meta-worktree/SKILL.md dd2bea779fbfbf996618d47c852a0c0c575d26b4
 meta-git/SKILL.md b0137e9e0e7f01eb893fa90c0c56b8362bcb620b
+meta-exec/SKILL.md 23b540e07e9c5c3900c94facd7ac3918fc25c066
+meta-git/SKILL.md 31272abdcf852d44df06240a0cd409c0c3b90a05
+meta-plugins/SKILL.md e2cd752296f1fcc5ac7fbfcd49860152272dc48f
+meta-safety/SKILL.md db221f85a37c1e8753a7be9743aa79096c34c6c8
+meta-workspace/SKILL.md 0d26fc3cb1d84325e70bf4b86c3ac933c55f504e
+meta-worktree/SKILL.md beabc454ba25185d97a063f99407dc7aafa16aaf

@@ -104,7 +104,7 @@ They run one project at a time, in project-name order (`meta_build` the root fir
 
 `meta_get_file_tree` (`project`, `tag`, `depth`, a non-negative integer, default 3) gives each project's files and folders. Hidden entries, `node_modules` and `target` are left out; a symbolic link is listed as `{"type": "symlink", "name": ...}` and not followed.
 
-`meta_list_plugins` (no arguments) gives `meta plugin list --json`.
+`meta_list_plugins` (no arguments) gives `meta --json plugin list`.
 
 ### Workspace analysis
 

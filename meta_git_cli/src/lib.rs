@@ -32,7 +32,8 @@ pub fn plugin_info() -> PluginInfo {
     let mut adapted = IndexMap::new();
     adapted.insert(
         "clone".to_string(),
-        "Clone a meta repo and the repos its .meta.yaml lists (-r: nested ones too)".to_string(),
+        "Clone a meta repo and the repos its .meta.yaml lists (meta -r: nested ones too)"
+            .to_string(),
     );
     adapted.insert(
         "clone-missing".to_string(),

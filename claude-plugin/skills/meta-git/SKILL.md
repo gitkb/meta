@@ -28,7 +28,7 @@ Any other git subcommand passes through to git in each repo. Meta passes the arg
 meta git clone <url>
 
 # Clone recursively (if child repos are also meta repos)
-meta git clone <url> --recursive
+meta -r git clone <url>
 
 # Control parallelism
 meta git clone <url> --parallel 8
@@ -37,7 +37,7 @@ meta git clone <url> --parallel 8
 meta git clone <url> --depth 1
 ```
 
-**How it works**: Meta clones the parent, reads `.meta.yaml`, then queues and clones all children in parallel. With `--recursive`, it repeats for any child that has its own `.meta.yaml`.
+**How it works**: Meta clones the parent, reads `.meta.yaml`, then queues and clones all children in parallel. With meta's `-r`, it repeats for any child that has its own `.meta.yaml`.
 
 ## Updating All Repos
 
@@ -55,7 +55,7 @@ meta git update    # Fast-forward cloned repos, clone the missing ones
 
 `clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files on disk and pull nothing. `clone-prune` keeps any repo that holds uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it, and says what it holds. Files git ignores (`.env`) are deleted with a removed repo, and named first; preview with `meta --dry-run git clone-prune`. A project that isn't cloned yet is a warning in `meta git pull` and the other per-repo commands, not a failure.
 
-`meta git update` pulls the workspace repo first, then runs `git pull --ff-only` in each cloned repo and clones each missing one, so projects added upstream are cloned in one run. A repo git can't fast-forward is named and the command exits 1; nothing is merged or rebased. A repo on no branch, or on a branch without an upstream, is named and left alone. `meta git update -r` does the same in nested meta repos, each pulled before its `.meta.yaml` is read.
+`meta git update` pulls the workspace repo first, then runs `git pull --ff-only` in each cloned repo and clones each missing one, so projects added upstream are cloned in one run. A repo git can't fast-forward is named and the command exits 1; nothing is merged or rebased. A repo on no branch, or on a branch without an upstream, is named and left alone. `meta -r git update` does the same in nested meta repos, each pulled before its `.meta.yaml` is read.
 
 ## Before Batch Operations (Critical)
 
@@ -97,8 +97,8 @@ meta git log --oneline -5
 Target specific repos, with meta's options before `git`. `--tag` selects the tagged repos, never the meta root (add it with `--include .`); `--include`/`--exclude` take whole repos (a `.meta.yaml` name or the path from the workspace root, `.` for the root), never part of a path. A value or tag that names nothing is an error.
 
 ```bash
-# By tag
-meta --tag backend git status
+# By tag (-r: the tags of nested meta repos' projects too)
+meta -r --tag backend git status
 
 # By repo: .meta.yaml name or path from the root (`api` does not match `api-tests`)
 meta --include api,web git push
@@ -148,6 +148,6 @@ When the meta MCP server is available, these tools provide structured JSON outpu
 ## Efficiency Tips
 
 - **Targeted commits**: `meta --include repo1,repo2 git commit -m "msg"` commits only in the named repos
-- **Tag-based push**: `meta --tag backend git push` pushes the tagged repos only
+- **Tag-based push**: `meta -r --tag backend git push` pushes the tagged repos only
 - **Per-repo messages**: Use `meta_git_multi_commit` when changes in different repos need different commit messages
 - **One-call status**: `meta git status` replaces N individual `cd && git status` sequences

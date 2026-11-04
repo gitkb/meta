@@ -12,7 +12,7 @@ This project is a **meta repository** - a parent repo that manages a graph of ch
 When you begin working in a meta repo, discover its structure:
 
 ```bash
-meta project list --recursive --json
+meta -r --json project list
 ```
 
 This returns repos, paths, and tags. Use this to:
@@ -61,11 +61,12 @@ meta git status
 When projects have tags, filter operations:
 
 ```bash
-# Frontend repos (not the root: it has no tags; add it with --include .)
-meta --tag frontend git status
+# Frontend repos (not the root: it has no tags; add it with --include .;
+# -r: the tags of nested meta repos' projects too)
+meta -r --tag frontend git status
 
 # Multiple tags (comma-separated)
-meta --tag backend,api exec -- make test
+meta -r --tag backend,api exec -- make test
 
 # Exclude specific repos
 meta --exclude legacy-service git pull
@@ -73,17 +74,17 @@ meta --exclude legacy-service git pull
 
 ## Nested Meta Repos
 
-Meta repos can contain other meta repos. Use `--recursive` to operate on the entire graph:
+Meta repos can contain other meta repos. Use meta's `-r` (before the command) to operate on the entire graph:
 
 ```bash
 # Clone a meta repo and ALL nested meta repos
-meta git clone <url> --recursive
+meta -r git clone <url>
 
 # Status across entire graph
 meta --recursive git status
 ```
 
-The global `--depth N` flag limits recursion depth. For `meta git clone`, `--depth` is the shallow-clone depth; use `--meta-depth N` there.
+meta's `--depth N`, before the command, limits how deep into nested meta repos it goes (`meta -r --depth 1 git clone <url>`); after `git clone`, `--depth N` is git's history depth.
 
 ## MCP Tools for Workspace Discovery
 
@@ -100,6 +101,6 @@ When the meta MCP server is available, these tools provide structured JSON for p
 
 - **One command, all repos**: `meta git status` replaces N individual `cd && git status` calls
 - **Targeted operations**: `meta --include repo1,repo2 exec -- cmd` operates on only the named repos (`.meta.yaml` name or path from the workspace root)
-- **Tag-based filtering**: `meta --tag backend exec -- cargo test` scopes to tagged repos
+- **Tag-based filtering**: `meta -r --tag backend exec -- cargo test` scopes to tagged repos
 - **Dependency awareness**: `meta_analyze_impact <repo>` shows who depends on a repo before you modify it — prevents cascading fix-up commits
-- **Session start**: Always run `meta project list --recursive --json` first to get the workspace map
+- **Session start**: Always run `meta -r --json project list` first to get the workspace map

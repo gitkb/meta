@@ -144,7 +144,7 @@ meta git pull && meta exec -- npm install && meta exec -- npm test
 meta --json exec -- git rev-parse HEAD | jq -j '.results[] | .directory + " " + (.stdout // "\n")'
 
 # Project names, one per line
-meta project list --json | jq -r '.projects[].name'
+meta --json project list | jq -r '.projects[].name'
 ```
 
 ### Exit Codes
@@ -267,18 +267,22 @@ meta plugin list --local
 
 ```sh
 # Outside a worktree: list all sets, with branch and dirty/clean summaries.
-meta git worktree list --recursive
+meta git worktree list
 
 # Select one set explicitly.
-meta git worktree list example --recursive
+meta git worktree list example
 
 # Inside .worktrees/example/ or any descendant: select the enclosing set.
-meta git worktree list --recursive
+meta git worktree list
+
+# Fail on what can't be read instead of skipping it.
+meta --strict git worktree list
 ```
 
 An explicit name overrides the enclosing set. Every repository of the set is
 listed, those nested beneath other repositories of the set (`clients/desktop`
-inside `clients`) too. `--recursive` fails on a folder that can't be scanned,
+inside `clients`) too, so `-r` changes nothing here and is refused, before or
+after the command. meta's `--strict` fails on a folder that can't be scanned,
 a checkout whose git files are broken, or a repository git can't read, instead
 of skipping it or marking it unknown.
 
@@ -287,10 +291,10 @@ of skipping it or marking it unknown.
 Tools that collect their own git facts can ask for the set's members only:
 
 ```sh
-meta git worktree list example --recursive --metadata-only --json
+meta --strict --json git worktree list example --metadata-only
 
 # From inside the worktree, omit the name:
-meta git worktree list --recursive --metadata-only --json
+meta --strict --json git worktree list --metadata-only
 ```
 
 Both print the usual `worktrees` list, with the one set:

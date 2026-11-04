@@ -49,6 +49,7 @@ struct Line {
 fn documents(root: &Path) -> Vec<PathBuf> {
     let mut files = vec![
         root.join("README.md"),
+        root.join("CLAUDE.md"),
         root.join("loop_cli/README.md"),
         root.join("claude-plugin/hooks/hooks.json"),
     ];
@@ -673,6 +674,101 @@ fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
         rejected.len(),
         lines.len(),
         rejected.join("\n")
+    );
+}
+
+/// The commands meta or its plugins own, as the words that name them: their
+/// arguments are theirs, and none of them is one of meta's options.
+const OWNED: &[&[&str]] = &[
+    &["context"],
+    &["exec"],
+    &["plugin", "list"],
+    &["plugin", "search"],
+    &["project"],
+    &["git", "update"],
+    &["git", "clone"],
+    &["git", "clone-missing"],
+    &["git", "clone-prune"],
+    &["git", "clone-sync"],
+    &["git", "commit"],
+    &["git", "worktree"],
+];
+
+/// meta's options that a meta-owned command once had a copy of, by their
+/// long names and `-r`; `git clone`'s own `--depth` (history) and
+/// `--parallel N` (a count) are git clone's.
+const META_OPTIONS: &[&str] = &[
+    "--json",
+    "-r",
+    "--recursive",
+    "--dry-run",
+    "--strict",
+    "--include",
+    "--exclude",
+    "--tag",
+    "--depth",
+    "--parallel",
+];
+
+/// The option of meta's that `words` (after `meta`) types after a
+/// meta-owned command, before any `--`, if it does.
+fn option_after_owned_command(words: &[String]) -> Option<&str> {
+    let at = command_word(words);
+    let command = words.get(at..).unwrap_or_default();
+    let owned = OWNED.iter().find(|owned| {
+        owned.len() <= command.len() && command.iter().zip(owned.iter()).all(|(w, o)| w == o)
+    })?;
+    let clone = owned == &["git", "clone"];
+    command
+        .iter()
+        .skip(owned.len())
+        .take_while(|word| *word != "--")
+        .map(|word| word.split('=').next().unwrap_or(word))
+        .find(|word| {
+            META_OPTIONS.contains(word) && !(clone && ["--depth", "--parallel"].contains(word))
+        })
+}
+
+#[test]
+fn no_meta_option_follows_a_meta_owned_command() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let words = |line: &str| line.split(' ').map(str::to_string).collect::<Vec<_>>();
+    // what it looks for, and what it leaves alone
+    assert_eq!(
+        option_after_owned_command(&words("project list -r")),
+        Some("-r")
+    );
+    assert_eq!(
+        option_after_owned_command(&words("exec --include api -- pwd")),
+        Some("--include")
+    );
+    for fine in [
+        "-r --json project list",
+        "git pull -r",
+        "git pull --tag v1",
+        "exec -- make --json",
+        "git clone URL d --depth 1 --parallel 8",
+        "--include api git worktree exec t -- make --dry-run",
+    ] {
+        assert_eq!(option_after_owned_command(&words(fine)), None, "{fine}");
+    }
+    let mut found = Vec::new();
+    for file in documents(root) {
+        let at = file.strip_prefix(root).unwrap().display().to_string();
+        for line in markdown_lines(&fs::read_to_string(&file).unwrap(), &at) {
+            if let Some(option) = option_after_owned_command(&line.words) {
+                found.push(format!(
+                    "{}: meta {} ({option})",
+                    line.at,
+                    line.words.join(" ")
+                ));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "meta's options go before the command:\n{}",
+        found.join("\n")
     );
 }
 

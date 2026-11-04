@@ -84,7 +84,7 @@ pub struct ProjectTreeNode {
     pub projects: Vec<ProjectTreeNode>,
 }
 
-/// Top-level output for `meta project list --json`
+/// Top-level output for `meta --json project list`
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectListOutput {
     pub path: String,

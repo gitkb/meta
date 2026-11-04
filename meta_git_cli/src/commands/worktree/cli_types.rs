@@ -9,13 +9,12 @@ use meta_git_lib::worktree::RepoSpec;
 #[derive(Subcommand)]
 pub enum WorktreeCommands {
     /// Create a new worktree set
-    #[command(after_help = "meta's options go before the command:\n  \
-        meta -r git worktree create NAME --repo PATH   finds --repo across the whole nested \
+    #[command(after_help = "meta's options go before the command. \
+        `meta -r git worktree create <name> --repo <path>` finds --repo across the whole nested \
         meta tree (aliases are full paths from the root, as open-source/gitkb) and resolves \
-        dependencies there\n  \
-        meta --strict git worktree create NAME ...     fails, and makes nothing, where a repo \
-        would be skipped with a warning (no start commit-ish; with --all, not cloned); a \
-        failing post-create hook fails it too, after the set was made")]
+        dependencies there. `meta --strict git worktree create <name> --all` fails, and makes \
+        nothing, where a repo would be skipped with a warning (no start commit-ish; with --all, \
+        not cloned); a failing post-create hook fails it too, after the set was made.")]
     Create(CreateArgs),
     /// Add a repo to an existing worktree set
     Add(AddArgs),
@@ -30,31 +29,30 @@ pub enum WorktreeCommands {
     Remove(RemoveArgs),
     /// List worktree sets (defaults to the current set when inside one)
     #[command(
-        after_help = "meta --json git worktree list prints JSON (with --metadata-only, \
-        the members without git). Repos nested in others are listed either way. meta --strict \
-        (before the command) fails on a folder that can't be scanned, a checkout whose git files \
-        are broken, or a repo git can't read, instead of skipping it or marking it unknown."
+        after_help = "`meta --json git worktree list` prints JSON (with --metadata-only, \
+        the members without git). Repos nested in others are listed either way. \
+        `meta --strict git worktree list` fails on a folder that can't be scanned, a checkout \
+        whose git files are broken, or a repo git can't read, instead of skipping it or marking \
+        it unknown."
     )]
     List(ListArgs),
     /// Show detailed status of a worktree set
-    #[command(after_help = STRICT_SCAN)]
+    #[command(after_help = "Repos nested in others are listed either way. \
+        `meta --strict git worktree status <name>` fails on a folder that can't be scanned, a \
+        checkout whose git files are broken, or a repo git can't read, instead of skipping it or \
+        marking it unknown.")]
     Status(StatusArgs),
     /// Show cross-repo diff vs base branch
     Diff(DiffArgs),
     /// Run a command across worktree repos
     #[command(after_help = "meta's options go before the command: \
-        meta --include api,web git worktree exec NAME -- make chooses the set's repos (by name, \
-        or path in the set, . for the root; --exclude and --tag too), meta --parallel runs them \
-        at once.")]
+        `meta --include api,web git worktree exec <name> -- make` chooses the set's repos (by \
+        name, or path in the set, . for the root; --exclude and --tag too), and \
+        `meta --parallel git worktree exec <name> -- make` runs them at once.")]
     Exec(ExecArgs),
     /// Remove expired/orphaned worktree sets of this workspace
     Prune,
 }
-
-/// What `meta --strict` does for list and status, which take no -r
-const STRICT_SCAN: &str = "Repos nested in others are listed either way. meta --strict (before \
-    the command) fails on a folder that can't be scanned, a checkout whose git files are broken, \
-    or a repo git can't read, instead of skipping it or marking it unknown.";
 
 #[derive(Args)]
 pub struct CreateArgs {

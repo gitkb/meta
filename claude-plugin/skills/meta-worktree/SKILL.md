@@ -55,10 +55,10 @@ meta git worktree create incident-42 v2.3.1 --repo api
 meta git worktree create review --from-pr org/api#42 --repo api
 
 # Nested meta repos: resolve across the whole tree, aliases are root-relative paths
-meta git worktree create sdk-fix --recursive --repo open-source/sdk/core
+meta -r git worktree create sdk-fix --repo open-source/sdk/core
 
 # Preview without creating anything
-meta git worktree create auth-fix --repo backend --dry-run
+meta --dry-run git worktree create auth-fix --repo backend
 ```
 
 Add a repo to an existing set with `meta git worktree add auth-fix --repo another-service`
@@ -90,7 +90,7 @@ check out its branch directly:
 
 ```bash
 git fetch origin my-feature:my-feature   # create or fast-forward the local branch
-meta git worktree create review --repo .:my-feature --repo backend --strict
+meta --strict git worktree create review --repo .:my-feature --repo backend
 ```
 
 Don't pass `origin/my-feature` as the commit-ish here: with a commit-ish, create
@@ -143,23 +143,25 @@ meta git worktree diff auth-fix --stat        # the summary only
 ```
 
 `list` and `status` show every repo of the set, those nested beneath other
-worktree repos too; `--recursive` makes them fail on what they can't read
-instead of skipping it.
+worktree repos too (`-r` changes nothing there and is refused);
+`meta --strict git worktree list` fails on what it can't read instead of
+skipping it.
 
 ## Running Commands
 
 ```bash
 meta git worktree exec auth-fix -- cargo test
-meta git worktree exec auth-fix --include backend -- make build
-meta git worktree exec auth-fix --exclude frontend -- npm test
-meta git worktree exec auth-fix --parallel -- cargo build
+meta --include backend git worktree exec auth-fix -- make build
+meta --exclude frontend git worktree exec auth-fix -- npm test
+meta --parallel git worktree exec auth-fix -- cargo build
 ```
 
-`--include`/`--exclude` name whole repos as in the workspace: a project's name
-or its path in the set (`.` for the root repo), never part of a path. A value that names no repo in
-the set is an error. They go after the set name: `meta --include x git
-worktree ...` is refused. The command's arguments reach it as
-typed, with no shell; use `-- sh -c '...'` when you want one.
+meta's `--include`/`--exclude`/`--tag`, before the command as always, choose
+among the set's repos, nested ones included: a project's name or its path in
+the set (`.` for the root repo), never part of a path. A value that names no
+repo in the set is an error. The other worktree commands refuse them. The
+command's arguments reach it as typed, with no shell; use `-- sh -c '...'`
+when you want one.
 
 ## Context Detection
 
@@ -173,11 +175,10 @@ meta git status
 meta --tag cli exec -- pwd
 ```
 
-Detection relies on the `.worktrees/<name>` path. It, and
-`meta git worktree exec`, only find repos down to the first nested repo: repos
-created with `--recursive` inside another repo of the set (e.g.
-`open-source/sdk/core` inside `open-source`) are skipped. `list` shows
-them; run the tool itself (`cargo`, `git`) in their directory, not `meta exec`, which still scopes to the set's top-level repos there. The root repo is part of a set
+Detection relies on the `.worktrees/<name>` path. Every repo of the set is in
+scope, those nested inside another repo of the set (e.g. `open-source/sdk/core`
+inside `open-source`) too, as `list` shows them; `-r` adds nothing inside a
+set. The root repo is part of a set
 by default, so the set has its own `.meta.yaml` config; otherwise meta walks up to
 the primary checkout's config. `meta --primary <command>` bypasses detection and acts on the
 workspace the set was made from (found through meta's records in the set's
@@ -188,8 +189,8 @@ checkouts), from wherever you are in the set.
 ```bash
 meta git worktree remove auth-fix          # refuses a set with work it would lose
 meta git worktree remove auth-fix --force  # discards that work
-meta git worktree remove auth-fix --force --dry-run  # what it would delete
-meta git worktree prune --dry-run          # preview
+meta --dry-run git worktree remove auth-fix --force  # what it would delete
+meta --dry-run git worktree prune          # preview
 meta git worktree prune                    # remove expired (TTL), ephemeral, half-made and orphaned sets of this workspace
 ```
 
@@ -257,7 +258,7 @@ worktrees not recorded yet included.
 
 ## Strict Mode
 
-`--strict` on `create` (or global `meta --strict`) turns warnings such as a
+`meta --strict git worktree create …` turns warnings such as a
 missing commit-ish in one repo, or (with `--all`) a repo that isn't cloned, into errors. A create that fails is rolled back:
 the worktrees and branches it made are deleted again. If the rollback itself
 can't delete something, the error says what was left behind. A failing hook

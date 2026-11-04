@@ -9,7 +9,7 @@ Multi-repo workspaces are powerful but require awareness. Meta gives you precisi
 
 ## Session Start
 
-1. `meta project list --recursive --json` — workspace map, including nested meta repos, in one call
+1. `meta -r --json project list` — workspace map, including nested meta repos, in one call
 2. `meta git status` — see state of every repo at once (`meta --recursive git status` for nested ones)
 3. Note which repos provide shared dependencies (check `.meta.yaml` for `provides`/`depends_on`)
 
@@ -21,14 +21,14 @@ Instead of cd-ing into repos one by one, use meta flags to target what you need.
 # Target specific repos
 meta --include repo1,repo2 exec -- command
 
-# Target by tag
-meta --tag backend exec -- cargo test
+# Target by tag (-r: the tags of nested meta repos' projects too)
+meta -r --tag backend exec -- cargo test
 
 # Exclude repos
 meta --exclude legacy exec -- npm update
 
 # Combine: tagged repos, excluding one, one at a time
-meta --tag backend --exclude legacy --sequential exec -- make deploy
+meta -r --tag backend --exclude legacy --sequential exec -- make deploy
 ```
 
 ## Before Modifying Shared Code
@@ -46,7 +46,7 @@ When modifying a repo that other repos depend on:
 meta --include repo1,repo2 git commit -m "feat: update shared API"
 
 # Push the tagged repos (not the root; add it with --include .)
-meta --tag backend git push
+meta -r --tag backend git push
 
 # Per-repo commit messages (when changes differ)
 # Use meta_git_multi_commit MCP tool
@@ -98,11 +98,11 @@ meta --strict git worktree prune
 
 If cleanup fails, meta prints the error and exits non-zero even when the command itself succeeded, and the set may be left in place. Check with `meta git worktree list` and remove it with `meta git worktree remove <name>`.
 
-`meta git worktree create` also takes `--strict` itself (`meta git worktree create feature-test v2.0.0 --all --strict`); either one turns strict mode on.
+For `meta git worktree create`, meta's `--strict` goes before the command like every meta option: `meta --strict git worktree create feature-test v2.0.0 --all`.
 
 ## Efficiency Tips
 
 - One `meta git status` replaces N individual `git status` calls
-- One `meta --tag X exec -- cmd` replaces N `cd && cmd` sequences
+- One `meta -r --tag X exec -- cmd` replaces N `cd && cmd` sequences
 - `meta_analyze_impact` before modifying providers prevents cascading fix-up commits
 - `meta --dry-run exec -- dangerous-cmd` previews before executing

@@ -215,13 +215,25 @@ YAML
     [[ "$output" == *"--tag 'nope' is no project's tag"* ]]
 }
 
-@test "context refuses --recursive instead of ignoring it" {
+@test "-r context shows a modified nested repo" {
+    # backend is a meta repo of its own, with lib in it
+    git init --quiet --initial-branch=main backend/lib
+    echo lib > backend/lib/README.md
+    git -C backend/lib add README.md
+    git -C backend/lib commit --quiet -m lib
+    printf '{"projects": {"lib": "file:///nowhere/lib.git"}}\n' > backend/.meta.yaml
+    echo changed >> backend/lib/README.md
+    run "$META_BIN" context
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"backend/lib"* ]]
     run "$META_BIN" -r context
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"does not take --recursive"* ]]
-    run "$META_BIN" --depth 1 context
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"or --depth"* ]]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"3 repos"* ]]
+    grep -Eq '^\| backend/lib \|.*modified' <<<"$output"
+    run "$META_BIN" -r --json context
+    [ "$(jq -r '.repos[] | select(.path == "backend/lib") | .dirty' <<<"$output")" = true ]
+    run "$META_BIN" -r --depth 0 context
+    [[ "$output" != *"backend/lib"* ]]
 }
 
 # ============ Always read fresh ============

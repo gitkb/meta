@@ -20,13 +20,17 @@ use meta_core::git::{GitUrl, Operation, RepoStatus};
 // ── Public API ──────────────────────────────────────────
 
 /// Entry point for `meta context`: the workspace of the nearest config at or
-/// above `start`, with the projects `filters` select.
+/// above `start`, with the projects `filters` select; with `recursive`, the
+/// projects of its nested meta repos too (`depth` levels of them), each
+/// named by its path from the workspace root.
 pub fn handle_context(
     json: bool,
     no_status: bool,
     verbose: bool,
     start: &Path,
     filters: &Filters,
+    recursive: bool,
+    depth: Option<usize>,
 ) -> Result<()> {
     let workspace = config::Workspace::find(start, None)?
         .ok_or_else(|| anyhow::anyhow!("Not a meta workspace (no .meta.yaml found)"))?;
@@ -37,18 +41,23 @@ pub fn handle_context(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
+    let tree = match recursive {
+        true => config::walk_projects(&meta_dir, &workspace.projects, depth)?,
+        false => Vec::new(),
+    };
     let selected = Scope::workspace(
         &meta_dir,
         Some(&workspace.config_path),
         &workspace.projects,
-        &[],
+        &tree,
     )
     .select(filters)?;
-    let projects: Vec<ProjectInfo> = workspace
-        .projects
-        .into_iter()
-        .filter(|p| selected.contains(&meta_dir.join(&p.path)))
-        .collect();
+    let mut projects = Vec::new();
+    match recursive {
+        true => flatten(&tree, "", &mut projects),
+        false => projects = workspace.projects,
+    }
+    projects.retain(|p| selected.contains(&meta_dir.join(&p.path)));
 
     if verbose {
         errln!(
@@ -120,6 +129,24 @@ pub fn handle_context(
     }
 
     Ok(())
+}
+
+/// The projects of `nodes`, nested ones after their parent, each at its
+/// path from the root; a nested one is named by that path too.
+fn flatten(nodes: &[config::MetaTreeNode], prefix: &str, out: &mut Vec<ProjectInfo>) {
+    for node in nodes {
+        let path = config::nested_path(prefix, &node.info.path);
+        let name = match prefix.is_empty() {
+            true => node.info.name.clone(),
+            false => path.clone(),
+        };
+        out.push(ProjectInfo {
+            name,
+            path: path.clone(),
+            ..node.info.clone()
+        });
+        flatten(&node.children, &path, out);
+    }
 }
 
 // ── Types ───────────────────────────────────────────────

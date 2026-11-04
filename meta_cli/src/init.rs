@@ -426,6 +426,7 @@ fn hooks_in(path: &Path) -> Vec<String> {
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
         .map(|mut settings| {
             upgrade_guard(&mut settings);
+            upgrade_context(&mut settings);
             installed_hooks(&settings)
         })
         .unwrap_or_default()
@@ -800,6 +801,8 @@ fn prepare_settings(path: &Path, init: &Init) -> Result<SettingsPlan> {
     let mut existing = existing.unwrap_or_else(|| json!({}));
     // an older meta's guard hook ran any `agent`; it now runs only gitkb's
     let upgraded = upgrade_guard(&mut existing);
+    // and its context hooks left nested repos out
+    let context = upgrade_context(&mut existing);
     let before = installed_hooks(&existing);
     let merged = merge_hooks_into_settings(existing, build_meta_hooks(init.guard), path)?;
     let hooks = installed_hooks(&merged);
@@ -814,13 +817,16 @@ fn prepare_settings(path: &Path, init: &Init) -> Result<SettingsPlan> {
     } else if upgraded && added.is_empty() {
         let verb = if preview { "Would make" } else { "Made" };
         format!("{verb} the PreToolUse hook run only gitkb's agent, never block on its failure, in")
+    } else if context && added.is_empty() {
+        let verb = if preview { "Would make" } else { "Made" };
+        format!("{verb} the context hooks show nested meta repos too (meta -r context) in")
     } else if added.is_empty() {
         "Already has meta's hooks (no write):".to_string()
     } else {
         let verb = if preview { "Would add" } else { "Added" };
         format!("{verb} {} hooks to", added.join(", "))
     };
-    let content = if created || upgraded || !added.is_empty() {
+    let content = if created || upgraded || context || !added.is_empty() {
         Some(serde_json::to_string_pretty(&merged)?)
     } else {
         None
@@ -905,7 +911,7 @@ fn build_meta_hooks(guard: bool) -> Map<String, Value> {
         json!([{
             "hooks": [{
                 "type": "command",
-                "command": "meta context 2>/dev/null",
+                "command": CONTEXT_COMMAND,
                 "timeout": 10
             }]
         }]),
@@ -932,7 +938,7 @@ fn build_meta_hooks(guard: bool) -> Map<String, Value> {
         json!([{
             "hooks": [{
                 "type": "command",
-                "command": "meta context 2>/dev/null",
+                "command": CONTEXT_COMMAND,
                 "timeout": 10
             }]
         }]),
@@ -1024,20 +1030,47 @@ fn agent_cli_available() -> bool {
         })
 }
 
+/// The SessionStart and PreCompact command: the workspace's context, nested
+/// meta repos' projects included
+const CONTEXT_COMMAND: &str = "meta -r context 2>/dev/null";
+
+/// The command older versions of meta wrote, which left nested repos out.
+const OLD_CONTEXT_COMMAND: &str = "meta context 2>/dev/null";
+
 /// Rewrite, in `settings`, each PreToolUse hook running the command an older
 /// meta wrote ([`OLD_GUARD_COMMAND`]) to [`GUARD_COMMAND`]. Whether any was.
 fn upgrade_guard(settings: &mut Value) -> bool {
+    rewrite_hooks(settings, &["PreToolUse"], OLD_GUARD_COMMAND, GUARD_COMMAND)
+}
+
+/// Rewrite, in `settings`, each context hook running the command an older
+/// meta wrote ([`OLD_CONTEXT_COMMAND`]) to [`CONTEXT_COMMAND`], so a merge
+/// adds no second one. Whether any was.
+fn upgrade_context(settings: &mut Value) -> bool {
+    rewrite_hooks(
+        settings,
+        &["SessionStart", "PreCompact"],
+        OLD_CONTEXT_COMMAND,
+        CONTEXT_COMMAND,
+    )
+}
+
+/// Rewrite each hook of `events` in `settings` running `old` to run `new`.
+/// Whether any was.
+fn rewrite_hooks(settings: &mut Value, events: &[&str], old: &str, new: &str) -> bool {
     let mut upgraded = false;
-    let groups = settings
-        .get_mut("hooks")
-        .and_then(|hooks| hooks.get_mut("PreToolUse"))
-        .and_then(Value::as_array_mut);
-    for group in groups.into_iter().flatten() {
-        let hooks = group.get_mut("hooks").and_then(Value::as_array_mut);
-        for hook in hooks.into_iter().flatten() {
-            if hook.get("command").and_then(Value::as_str) == Some(OLD_GUARD_COMMAND) {
-                hook["command"] = json!(GUARD_COMMAND);
-                upgraded = true;
+    for event in events {
+        let groups = settings
+            .get_mut("hooks")
+            .and_then(|hooks| hooks.get_mut(*event))
+            .and_then(Value::as_array_mut);
+        for group in groups.into_iter().flatten() {
+            let hooks = group.get_mut("hooks").and_then(Value::as_array_mut);
+            for hook in hooks.into_iter().flatten() {
+                if hook.get("command").and_then(Value::as_str) == Some(old) {
+                    hook["command"] = json!(new);
+                    upgraded = true;
+                }
             }
         }
     }
@@ -1235,6 +1268,25 @@ mod tests {
         assert_eq!(merged["theme"], "dark");
     }
 
+    #[test]
+    fn an_older_meta_s_context_hooks_become_one_nested_context_hook_each() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut old = json!({"hooks": build_meta_hooks(true)});
+        for event in ["SessionStart", "PreCompact"] {
+            old["hooks"][event][0]["hooks"][0]["command"] = json!(OLD_CONTEXT_COMMAND);
+        }
+        fs::write(&path, old.to_string()).unwrap();
+        let plan = prepare_settings(&path, &RUN).unwrap();
+        assert!(plan.message.contains("meta -r context"), "{}", plan.message);
+        let merged: Value = serde_json::from_str(&plan.content.unwrap()).unwrap();
+        for event in ["SessionStart", "PreCompact"] {
+            let groups = merged["hooks"][event].as_array().unwrap();
+            assert_eq!(groups.len(), 1, "{event}: {groups:?}");
+            assert_eq!(groups[0]["hooks"][0]["command"], CONTEXT_COMMAND);
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_guard_command_never_blocks_and_runs_only_gitkb_s_agent() {
@@ -1382,7 +1434,7 @@ mod tests {
         assert!(settings_content.contains("SessionStart"));
         assert!(settings_content.contains("PreToolUse"));
         assert!(settings_content.contains("PreCompact"));
-        assert!(settings_content.contains("meta context"));
+        assert!(settings_content.contains(CONTEXT_COMMAND));
         assert!(settings_content.contains("agent guard"));
     }
 
@@ -2043,7 +2095,7 @@ mod tests {
                 "SessionStart": [{
                     "hooks": [{
                         "type": "command",
-                        "command": "meta context 2>/dev/null",
+                        "command": CONTEXT_COMMAND,
                         "timeout": 10
                     }]
                 }]
@@ -2102,7 +2154,7 @@ mod tests {
         assert!(session[0]["hooks"][0]["command"]
             .as_str()
             .unwrap()
-            .contains("meta context"));
+            .contains("meta -r context"));
 
         // PreToolUse should have Bash matcher and call agent guard
         let pre_tool = &hooks["PreToolUse"];
@@ -2117,6 +2169,6 @@ mod tests {
         assert!(pre_compact[0]["hooks"][0]["command"]
             .as_str()
             .unwrap()
-            .contains("meta context"));
+            .contains("meta -r context"));
     }
 }

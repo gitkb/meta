@@ -172,7 +172,7 @@ impl Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show workspace context summary
+    /// Show workspace context summary (meta -r context: nested meta repos' projects too)
     Context(ContextArgs),
     /// Run a command in each selected repo, as typed (no shell, no plugin)
     #[command(
@@ -410,16 +410,14 @@ fn run_cli() -> Result<()> {
     match &cli.command {
         None => Ok(out!("{}", help_with_plugins(&subprocess_plugins))?),
         Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins),
-        // it reads the nearest workspace only, so -r would go unheard
-        Some(Commands::Context(_)) if cli.recursive || cli.depth.is_some() => anyhow::bail!(
-            "`meta context` shows the nearest workspace only; it does not take --recursive or --depth"
-        ),
         Some(Commands::Context(args)) => meta_cli::context::handle_context(
             cli.json,
             args.no_status,
             cli.verbose,
             &cli.start_dir()?,
             &cli.filters(),
+            cli.recursive,
+            cli.depth,
         ),
         Some(Commands::Init(InitArgs {
             command: InitCommands::Claude { force, update },

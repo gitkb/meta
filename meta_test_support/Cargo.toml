@@ -8,7 +8,7 @@ description = "One sandbox for meta's tests: its own home, config and git"
 publish = false
 
 [dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 [lints]
 workspace = true

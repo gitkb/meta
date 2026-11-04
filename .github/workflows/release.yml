@@ -239,16 +239,14 @@ jobs:
         run: |
           out=$(cargo publish -p meta_core 2>&1) && echo "$out" || { echo "$out"; grep -q "already exists on crates.io index" <<<"$out"; }
 
-      # meta_plugin_protocol's and loop_lib's meta_core requirement is "<1" so
-      # the workspace resolves whatever its version; publish them with an
-      # ordinary requirement on the meta_core released alongside them.
-      # (its own step, so a failed rewrite fails the release)
+      # The workspace's meta_core requirement (root Cargo.toml) is "<1" so
+      # the workspace resolves whatever its version; publish meta_plugin_protocol
+      # and loop_lib with an ordinary requirement on the meta_core released
+      # alongside them. (its own step, so a failed rewrite fails the release)
       - name: Pin the meta_core requirement
         run: |
-          for crate in meta_plugin_protocol loop_lib; do
-            sed -i 's|meta_core = { path = "../meta_core", version = "<1" }|meta_core = { path = "../meta_core", version = "'"$(cat VERSION)"'" }|' "$crate/Cargo.toml"
-            grep -qF "meta_core = { path = \"../meta_core\", version = \"$(cat VERSION)\" }" "$crate/Cargo.toml"
-          done
+          sed -i 's|meta_core = { path = "meta_core", version = "<1" }|meta_core = { path = "meta_core", version = "'"$(cat VERSION)"'" }|' Cargo.toml
+          grep -qF "meta_core = { path = \"meta_core\", version = \"$(cat VERSION)\" }" Cargo.toml
 
       - name: Publish meta_plugin_protocol
         env:

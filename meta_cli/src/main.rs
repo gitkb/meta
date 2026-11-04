@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use meta_cli::repo_filter::{Filters, Scope};
+use meta_cli::repo_filter::{Filters, Reach};
 use meta_core::config::{self, find_meta_config, Workspace};
 use meta_core::display::{escape, escape_lines, escape_path};
 use meta_core::ExecutionMode;
@@ -56,7 +56,7 @@ struct Cli {
         short,
         long,
         value_delimiter = ',',
-        help = "Skip these repos: each value is a repo's .meta.yaml name or its whole path from the workspace root (. for the root), never part of one"
+        help = "Skip these repos: each value is a repo's .meta.yaml name or its whole path from the nearest .meta.yaml (with -r or -A, from the workspace root; . for that root), never part of one"
     )]
     exclude: Option<Vec<String>>,
 
@@ -64,7 +64,7 @@ struct Cli {
         short,
         long,
         value_delimiter = ',',
-        help = "Run in these repos (and in those --tag selects): each value is a repo's .meta.yaml name or its whole path from the workspace root (. for the root), never part of one"
+        help = "Run in these repos (and in those --tag selects): each value is a repo's .meta.yaml name or its whole path from the nearest .meta.yaml (with -r or -A, from the workspace root; . for that root), never part of one"
     )]
     include: Option<Vec<String>>,
 
@@ -85,13 +85,24 @@ struct Cli {
     )]
     tag: Option<String>,
 
-    #[arg(long, short = 'r', help = "Recursively process nested meta repos")]
+    #[arg(
+        long,
+        short = 'r',
+        help = "Also the meta repos nested under the nearest .meta.yaml (at the workspace root, the same as -A)"
+    )]
     recursive: bool,
 
     #[arg(
         long,
+        short = 'A',
+        help = "The whole workspace, from its outermost .meta.yaml, wherever you are (inside a worktree set: no wider than the set)"
+    )]
+    all: bool,
+
+    #[arg(
+        long,
         value_name = "N",
-        help = "Maximum depth for recursive processing (default: unlimited)"
+        help = "How many levels of nested meta repos -r or -A goes down, from where it starts (default: unlimited)"
     )]
     depth: Option<usize>,
 
@@ -148,12 +159,15 @@ impl Cli {
             parallel,
             dry_run: self.dry_run,
             silent: self.silent,
-            recursive: self.recursive,
+            // an older plugin, which knows no `all`, reaches at least -r's
+            recursive: self.recursive || self.all,
+            all: self.all,
             depth: self.depth,
             include_filters: self.include.clone(),
             exclude_filters: self.exclude.clone(),
             tag_filters: (!tags.is_empty()).then_some(tags),
             strict: self.strict,
+            meta_options: meta_options(),
         }
     }
 
@@ -171,7 +185,7 @@ impl Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show workspace context summary
+    /// Show workspace context summary (meta -r context: nested meta repos' projects too)
     Context(ContextArgs),
     /// Run a command in each selected repo, as typed (no shell, no plugin)
     #[command(
@@ -202,10 +216,6 @@ struct ContextArgs {
     /// Skip git status queries (structure only, faster)
     #[arg(long)]
     no_status: bool,
-
-    /// Output the context as JSON
-    #[arg(long)]
-    json: bool,
 }
 
 /// Arguments for `meta exec`
@@ -266,9 +276,6 @@ enum PluginCommands {
     Search {
         /// Search query
         query: String,
-        /// Output the matches as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Install a plugin (by registry name, owner/repo[@version] or URL)
     Install {
@@ -281,12 +288,10 @@ enum PluginCommands {
     /// List the plugins meta finds, and the tool extensions on PATH they run
     #[command(after_help = PLUGIN_KINDS)]
     List {
-        /// List only project-local plugins
+        /// List only project-local plugins (meta --json: name, version,
+        /// description and path of each)
         #[arg(long)]
         local: bool,
-        /// Output name, version, description and path of each as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Uninstall a plugin
     Uninstall {
@@ -392,16 +397,7 @@ fn run_cli() -> Result<()> {
         }
         Err(_) => meta_core::args::parse()?,
     };
-    // meta's own --json, or the --json of a command meta answers itself
-    let command_json = match &cli.command {
-        Some(Commands::Context(args)) => args.json,
-        Some(Commands::Plugin(args)) => matches!(
-            args.command,
-            PluginCommands::Search { json: true, .. } | PluginCommands::List { json: true, .. }
-        ),
-        _ => false,
-    };
-    meta_core::out::set_json(cli.json || command_json);
+    meta_core::out::set_json(cli.json);
 
     // Check for orphaned nested meta repo and warn the user
     check_and_warn_orphan();
@@ -427,17 +423,18 @@ fn run_cli() -> Result<()> {
     match &cli.command {
         None => Ok(out!("{}", help_with_plugins(&subprocess_plugins))?),
         Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins),
-        // it reads the nearest workspace only, so -r would go unheard
-        Some(Commands::Context(_)) if cli.recursive || cli.depth.is_some() => anyhow::bail!(
-            "`meta context` shows the nearest workspace only; it does not take --recursive or --depth"
-        ),
-        Some(Commands::Context(args)) => meta_cli::context::handle_context(
-            cli.json || args.json,
-            args.no_status,
-            cli.verbose,
-            &cli.start_dir()?,
-            &cli.filters(),
-        ),
+        Some(Commands::Context(args)) => {
+            let workspace = Workspace::find(&cli.start_dir()?, None)?
+                .ok_or_else(|| anyhow::anyhow!("Not a meta workspace (no .meta.yaml found)"))?;
+            meta_cli::context::handle_context(
+                cli.json,
+                args.no_status,
+                cli.verbose,
+                Reach::of(workspace, cli.recursive, cli.all, cli.depth)?,
+                &cli.filters(),
+                with_all,
+            )
+        }
         Some(Commands::Init(InitArgs {
             command: InitCommands::Claude { force, update },
         })) => init::init_claude(*force, *update, cli.mode(), cli.verbose),
@@ -682,11 +679,17 @@ struct Target {
 /// serving their first word.
 fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin>) -> Result<()> {
     let start = cli.start_dir()?;
-    // `git clone` makes the workspace, so it needs none
-    let is_git_clone = command_args.first().is_some_and(|s| s == "git")
-        && command_args.get(1).is_some_and(|s| s == "clone");
-    if let Some(plugin) = plugin.filter(|_| is_git_clone) {
-        return plugin.execute(command_args, &[], None, &start, cli.request_options(false));
+    // `git clone` makes the workspace, so it needs none; worktree commands
+    // find their repos in the set they name (exec applies meta's selection
+    // there)
+    let finds_its_repos = command_args.first().is_some_and(|s| s == "git")
+        && command_args
+            .get(1)
+            .is_some_and(|s| s == "clone" || s == "worktree");
+    // (meta's --parallel as typed: no config's default applies to them)
+    if let Some(plugin) = plugin.filter(|_| finds_its_repos) {
+        let options = cli.request_options(cli.parallel);
+        return plugin.execute(command_args, &[], None, &start, options);
     }
 
     let target = target(cli, &start)?;
@@ -733,23 +736,22 @@ fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin
     }
 }
 
+/// meta's options, and what of this process's arguments is them
+fn meta_options() -> meta_core::args::MetaOptions {
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    meta_core::args::MetaOptions::of(&Cli::command(), &args)
+}
+
 /// meta, as the program that runs a command in each repo: its options, so a
 /// command that rejected one is told it goes before the command (`before`:
 /// the words between meta's options and the command).
 fn outer(before: &[&str]) -> loop_lib::Outer {
-    let options = Cli::command()
-        .get_arguments()
-        .flat_map(|arg| {
-            let value = arg.get_action().takes_values();
-            let long = arg.get_long().map(|long| (format!("--{long}"), value));
-            let short = arg.get_short().map(|short| (format!("-{short}"), value));
-            long.into_iter().chain(short)
-        })
-        .collect();
     loop_lib::Outer {
-        program: "meta".to_string(),
+        meta: meta_options(),
         before: before.iter().map(ToString::to_string).collect(),
-        options,
     }
 }
 
@@ -831,24 +833,56 @@ fn target(cli: &Cli, start: &Path) -> Result<Target> {
             escape_path(&workspace.config_path)
         );
     }
-    // From the config already loaded (the default or --config's), into the
-    // nested meta repos
-    let tree = if cli.recursive {
-        config::walk_projects(&workspace.dir, &workspace.projects, cli.depth)?
-    } else {
-        Vec::new()
-    };
-    let scope = Scope::workspace(
-        &workspace.dir,
-        Some(&workspace.config_path),
-        &workspace.projects,
-        &tree,
-    );
+    // From the config already loaded (the default or --config's): -r into
+    // the meta repos nested under it, -A from the outermost one
+    let parallel = parallel(Some(&workspace));
+    let reach = Reach::of(workspace, cli.recursive, cli.all, cli.depth)?;
     Ok(Target {
-        dirs: scope.select(&filters)?,
-        parallel: parallel(Some(&workspace)),
-        root: workspace.dir,
+        dirs: reach.select(&filters, with_all)?,
+        parallel,
+        root: reach.root,
     })
+}
+
+/// The line as typed with meta's `-r` in it as `-A`, which reaches the
+/// whole workspace (in a cluster too: `-rv` as `-Av`).
+fn with_all() -> String {
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let meta = meta_options();
+    let valued = |c: char| {
+        let short = format!("-{c}");
+        meta.options
+            .iter()
+            .any(|o| o.takes_value && o.spellings.contains(&short))
+    };
+    // the r of a cluster, up to its first short option that takes a value
+    let cluster = |shorts: &str| -> String {
+        let mut seen_value = false;
+        let swapped: String = shorts
+            .chars()
+            .map(|c| {
+                seen_value |= valued(c);
+                match c == 'r' && !seen_value {
+                    true => 'A',
+                    false => c,
+                }
+            })
+            .collect();
+        format!("-{swapped}")
+    };
+    let line: Vec<String> = std::iter::once("meta".to_string())
+        .chain(args.iter().enumerate().map(|(i, arg)| {
+            match (i < meta.typed.len(), arg.strip_prefix('-')) {
+                (true, _) if arg == "--recursive" => "-A".to_string(),
+                (true, Some(shorts)) if !shorts.starts_with('-') => cluster(shorts),
+                _ => arg.clone(),
+            }
+        }))
+        .collect();
+    loop_lib::display_command(&line)
 }
 
 // === Plugin Management ===
@@ -925,11 +959,11 @@ fn handle_plugin_command(
     }
 
     match command {
-        PluginCommands::Search { query, json: own } => {
+        PluginCommands::Search { query } => {
             let client = RegistryClient::new()?;
             let results = client.search(query)?;
 
-            if json || *own {
+            if json {
                 outln!("{}", serde_json::to_string_pretty(&results)?)?;
             } else if results.is_empty() {
                 outln!("No plugins found matching '{}'", escape(query))?;
@@ -1008,8 +1042,7 @@ fn handle_plugin_command(
                 }
             }
         }
-        PluginCommands::List { local, json: own } => {
-            let json = json || *own;
+        PluginCommands::List { local } => {
             if *local {
                 let installer = PluginInstaller::new_local()?;
                 let plugins = installer.list_plugins_detailed()?;
@@ -1199,8 +1232,7 @@ fn handle_plugin_command(
 
 // === Helpers ===
 
-/// The usage error for a command meta doesn't know, with meta's help and a
-/// suggestion made by changing the line as typed at the command word alone,
+/// The usage error for a command meta doesn't know, with a suggestion made by changing the line as typed at the command word alone,
 /// so everything else typed stays as it was: the command its first word is
 /// a typo of, else (unless `meta help` was asked) `exec --` before it, to run
 /// it in each repo. A program on PATH (`cp`) is no typo, and a plugin word is
@@ -1212,7 +1244,7 @@ fn unrecognized_command_error(
     run_it: bool,
 ) -> anyhow::Error {
     let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
-    let mut cli = Cli::command();
+    let cli = Cli::command();
     let builtins: Vec<&str> = cli.get_subcommands().map(|sub| sub.get_name()).collect();
     // Plugins by their file names: none is started to list them
     let words = plugins.words();
@@ -1245,6 +1277,8 @@ fn unrecognized_command_error(
         escape(&loop_lib::display_command(&argv)).into_owned()
     };
     let suggestion = match near {
+        // help takes the command to explain, not the typo's arguments
+        Some("help") => "\n\nA command with a similar name exists:\n    meta help".to_string(),
         Some(word) => format!(
             "\n\nA command with a similar name exists:\n    meta {}",
             edited(&[word])
@@ -1256,11 +1290,18 @@ fn unrecognized_command_error(
         ),
         None => String::new(),
     };
+    // a workspace's own plugins are found from its .meta.yaml
+    let outside = std::env::current_dir()
+        .ok()
+        .is_some_and(|cwd| matches!(find_meta_config(&cwd, None), Ok(None)));
+    let outside = match outside {
+        true => "\n\nNo .meta.yaml here or above, so no workspace's own plugins were looked for.",
+        false => "",
+    };
     meta_core::exit::Usage(format!(
-        "unrecognized command '{}'{suggestion}\n\n\
-         Plugins add more commands: meta --help lists them.\n\n{}",
+        "unrecognized command '{}'{suggestion}{outside}\n\n\
+         The commands there are, the ones plugins add too: meta --help",
         escape(first_cmd),
-        cli.render_help().to_string().trim_end()
     ))
     .into()
 }

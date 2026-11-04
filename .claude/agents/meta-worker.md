@@ -25,7 +25,7 @@ If the worktree name or repos are not specified, infer them from the task descri
 Before creating a worktree, understand what repos are available:
 
 ```bash
-meta project list --jsons
+meta --json project list
 ```
 
 This returns the project tree for the current meta-repo level, including names, paths, nested meta-repos (`is_meta: true`), and dependencies. Use this to:
@@ -38,7 +38,7 @@ If repos are not specified in your task, use this output to determine which repo
 ### Phase 1: Create Worktree
 
 ```bash
-meta git worktree create <name> --repo . --repo <repo1> [--repo <repo2>...] --json
+meta --json git worktree create <name> --repo . --repo <repo1> [--repo <repo2>...]
 ```
 
 **Always include `--repo .`** — this makes the worktree root a full meta-repo checkout, enabling context detection (all `meta exec`, `meta git` commands auto-scope to worktree repos).
@@ -115,7 +115,7 @@ Return a structured summary:
 4. **Commit before reporting.** All changes must be committed so the orchestrator can review them.
 5. **Run tests.** Never report success without running the test suite (or explaining why tests couldn't run).
 6. **Use meta commands.** Prefer `meta exec`, `meta git` over raw `git` or `cd`-ing into individual repos.
-7. **Discover, don't assume.** Use `meta project list --json` to understand repo structure. Never hardcode repo names or dependency graphs.
+7. **Discover, don't assume.** Use `meta --json project list` to understand repo structure. Never hardcode repo names or dependency graphs.
 
 ## Error Handling
 

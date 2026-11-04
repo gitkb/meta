@@ -97,6 +97,11 @@ pub fn escape_path(path: &std::path::Path) -> String {
     escape(&path.to_string_lossy()).into_owned()
 }
 
+/// `argv` as one line, quoted so that it reads back as the same words.
+pub fn display_command(argv: &[String]) -> String {
+    shlex::try_join(argv.iter().map(String::as_str)).unwrap_or_else(|_| argv.join(" "))
+}
+
 /// `value` quoted for a POSIX shell, for commands meta prints for the user
 /// to paste: plain words stay as they are. A NUL byte, which no shell word
 /// can hold, leaves nothing to quote.

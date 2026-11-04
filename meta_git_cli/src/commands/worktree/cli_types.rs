@@ -9,6 +9,14 @@ use meta_git_lib::worktree::RepoSpec;
 #[derive(Subcommand)]
 pub enum WorktreeCommands {
     /// Create a new worktree set
+    #[command(after_help = "meta's options go before the command. \
+        `meta -r git worktree create <name> --repo <path>` finds --repo across the meta repos \
+        nested under the nearest .meta.yaml (aliases are full paths from there) and resolves \
+        dependencies there; `meta -A git worktree create <name> --repo <path>` does so across \
+        the whole workspace, from its root (as open-source/gitkb), wherever you are. \
+        `meta --strict git worktree create <name> --every-repo` fails, and makes nothing, where \
+        a repo would be skipped with a warning (no start commit-ish; with --every-repo, not \
+        cloned); a failing post-create hook fails it too, after the set was made.")]
     Create(CreateArgs),
     /// Add a repo to an existing worktree set
     Add(AddArgs),
@@ -22,12 +30,27 @@ pub enum WorktreeCommands {
     /// Branches the set only checked out are left.
     Remove(RemoveArgs),
     /// List worktree sets (defaults to the current set when inside one)
+    #[command(
+        after_help = "`meta --json git worktree list` prints JSON (with --metadata-only, \
+        the members without git). Repos nested in others are listed either way. \
+        `meta --strict git worktree list` fails on a folder that can't be scanned, a checkout \
+        whose git files are broken, or a repo git can't read, instead of skipping it or marking \
+        it unknown."
+    )]
     List(ListArgs),
     /// Show detailed status of a worktree set
+    #[command(after_help = "Repos nested in others are listed either way. \
+        `meta --strict git worktree status <name>` fails on a folder that can't be scanned, a \
+        checkout whose git files are broken, or a repo git can't read, instead of skipping it or \
+        marking it unknown.")]
     Status(StatusArgs),
     /// Show cross-repo diff vs base branch
     Diff(DiffArgs),
     /// Run a command across worktree repos
+    #[command(after_help = "meta's options go before the command: \
+        `meta --include api,web git worktree exec <name> -- make` chooses the set's repos (by \
+        name, or path in the set, . for the root; --exclude and --tag too), and \
+        `meta --parallel git worktree exec <name> -- make` runs them at once.")]
     Exec(ExecArgs),
     /// Remove expired/orphaned worktree sets of this workspace
     Prune,
@@ -51,10 +74,12 @@ pub struct CreateArgs {
     #[arg(long = "repo", value_name = "ALIAS[:BRANCH]")]
     pub repos: Vec<RepoSpec>,
 
-    /// Add all repos from .meta.yaml (one that isn't cloned is skipped with
-    /// a warning; an error with --strict)
+    /// Add every repo meta reaches: those of the nearest .meta.yaml, with
+    /// meta -r the nested meta repos' too, with meta -A the whole workspace's
+    /// (one that isn't cloned is skipped with a warning; an error with meta
+    /// --strict)
     #[arg(long, conflicts_with = "repos")]
-    pub all: bool,
+    pub every_repo: bool,
 
     /// Start from a PR's head branch (owner/repo#N)
     #[arg(long, value_name = "OWNER/REPO#N", conflicts_with = "commit_ish")]
@@ -72,35 +97,30 @@ pub struct CreateArgs {
     #[arg(long = "meta", value_name = "KEY=VALUE")]
     pub custom_meta: Vec<String>,
 
-    /// Fail where a repo would be skipped (errors instead of warnings)
-    ///
-    /// Repos are normally skipped with a warning when they don't have the
-    /// commit-ish to start from, or (with --all) aren't cloned; any other
-    /// repo the set needs that isn't cloned is cloned first. With --strict,
-    /// the entire operation fails
-    /// instead, and nothing is made. A failing post-create hook fails it
-    /// too, after the set was made: that set stays.
-    #[arg(long)]
-    pub strict: bool,
-
     /// Skip automatic dependency resolution
     ///
     /// By default, worktree create includes the root repo and resolves
     /// dependencies via provides/depends_on from .meta.yaml.
     /// Use --no-deps to include only the named repos (and, for a repo nested
     /// inside another project's path, that parent project), and to leave
-    /// their depends_on unchecked (with --all too).
+    /// their depends_on unchecked (with --every-repo too).
     #[arg(long)]
     pub no_deps: bool,
 
-    /// Resolve dependencies across the full nested meta tree
-    ///
-    /// By default, dependencies are resolved from the current .meta.yaml level.
-    /// With --recursive, walks up to the root meta directory and resolves
-    /// dependencies across all nested .meta.yaml workspaces. Repo aliases
-    /// use full paths from root (e.g., open-source/gitkb/core).
-    #[arg(long, short = 'r')]
+    /// meta's -r: resolve dependencies across the meta repos nested under
+    /// the nearest .meta.yaml; repo aliases are full paths from there
+    #[arg(skip)]
     pub recursive: bool,
+
+    /// meta's -A: the same across the whole workspace, from its outermost
+    /// .meta.yaml; repo aliases are full paths from there
+    /// (open-source/gitkb/core)
+    #[arg(skip)]
+    pub from_root: bool,
+
+    /// meta's --depth: how many levels of nested meta repos -r or -A goes
+    #[arg(skip)]
+    pub depth: Option<usize>,
 }
 
 #[derive(Args)]
@@ -132,11 +152,9 @@ pub struct ListArgs {
     /// Worktree name (defaults to the current set inside .worktrees/<name>)
     pub name: Option<String>,
 
-    /// Fail on a folder that can't be scanned, a checkout whose git files
-    /// are broken, or a repo git can't read, instead of skipping it or
-    /// marking it unknown (repos nested in others are listed either way)
-    #[arg(long, short = 'r')]
-    pub recursive: bool,
+    /// meta's --strict: fail on what can't be scanned or read
+    #[arg(skip)]
+    pub strict: bool,
 
     /// Return membership paths without observing branches or Git status
     #[arg(long)]
@@ -145,11 +163,9 @@ pub struct ListArgs {
 
 #[derive(Args)]
 pub struct StatusArgs {
-    /// Fail on a folder that can't be scanned, a checkout whose git files
-    /// are broken, or a repo git can't read, instead of skipping it or
-    /// marking it unknown (repos nested in others are listed either way)
-    #[arg(long, short = 'r')]
-    pub recursive: bool,
+    /// meta's --strict: fail on what can't be scanned or read
+    #[arg(skip)]
+    pub strict: bool,
     /// Worktree name
     pub name: String,
 }
@@ -177,20 +193,7 @@ pub struct ExecArgs {
     /// Start from a specific commit-ish (ephemeral only)
     pub commit_ish: Option<String>,
 
-    /// Only run in these repos (comma-separated): each value is a repo's name,
-    /// or its whole path in the set (. for the root), never part of one
-    #[arg(long, value_delimiter = ',')]
-    pub include: Vec<String>,
-
-    /// Skip these repos (comma-separated), named like --include
-    #[arg(long, value_delimiter = ',')]
-    pub exclude: Vec<String>,
-
-    /// Run commands in parallel
-    #[arg(long)]
-    pub parallel: bool,
-
-    /// Atomic create+exec+remove (requires --all or --repo, and -- <cmd>)
+    /// Atomic create+exec+remove (requires --every-repo or --repo, and -- <cmd>)
     #[arg(long)]
     pub ephemeral: bool,
 
@@ -199,9 +202,9 @@ pub struct ExecArgs {
     #[arg(long = "repo", value_name = "ALIAS[:BRANCH]")]
     pub repos: Vec<RepoSpec>,
 
-    /// Add all repos for ephemeral worktree
+    /// Add every repo meta reaches to the ephemeral worktree (see create)
     #[arg(long)]
-    pub all: bool,
+    pub every_repo: bool,
 
     /// Record custom metadata for ephemeral worktree (key=value)
     #[arg(long = "meta", value_name = "KEY=VALUE")]

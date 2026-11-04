@@ -17,7 +17,7 @@ starts only it:
 2. **None** → an error that suggests the nearest command (for `gti status`, `meta git status`), else `meta exec -- <words>`
 
 Example:
-- `meta git status` → git plugin runs `git status` in every repo at this meta level (`--recursive` for nested ones)
+- `meta git status` → git plugin runs `git status` in every repo at this meta level (`meta -r` for the meta repos nested under it, `meta -A` for the whole workspace)
 - `meta git clone <url>` → git plugin clones parent + all children from `.meta.yaml`
 - npm has no plugin: run it with `meta exec -- npm install`
 
@@ -29,8 +29,8 @@ Handles all `meta git *` commands with special cases:
 
 | Command | Behavior |
 |---------|----------|
-| `meta git clone <url>` | Clone parent, read `.meta.yaml`, clone its children (`-r`: nested meta repos' too) |
-| `meta git update` | Fast-forward cloned repos (`git pull --ff-only`) and clone missing ones; `-r` for nested meta repos |
+| `meta git clone <url>` | Clone parent, read `.meta.yaml`, clone its children (`meta -r git clone <url>`: nested meta repos' too) |
+| `meta git update` | Fast-forward cloned repos (`git pull --ff-only`) and clone missing ones; `meta -r git update` for nested meta repos |
 | `meta git clone-missing` | Clone the missing projects; change no repo that is cloned |
 | `meta git clone-prune` | Remove the repos no `.meta.yaml` lists that hold nothing unpushed |
 | `meta git clone-sync` | `clone-missing`, then `clone-prune` |
@@ -129,6 +129,8 @@ meta git status
 ```
 
 For commands with special handling (like `clone`), the plugin does the work directly instead of returning an execution plan.
+
+meta's own options (`-r`, `-A`, `--json`, `--dry-run`, `--include`, …) go before the command and reach a plugin in the request's `options`, never in `args` (`meta -r --json project list`). A plugin defines no option of meta's; it parses its arguments with `meta_plugin_protocol::parse_args` and refuses the rest with exit 2, so a meta option typed after its command gets the tip with the line that has it before (see `docs/plugin_development.md`).
 
 ## Why This Matters
 

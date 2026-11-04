@@ -638,52 +638,6 @@ fn test_run_commands_failure_in_dry_run_succeeds() {
 }
 
 #[test]
-fn test_json_output_structures() {
-    // Test JsonOutput serialization
-    let output = JsonOutput {
-        success: true,
-        results: vec![JsonCommandResult {
-            directory: "/test".to_string(),
-            command: "echo hello".to_string(),
-            success: true,
-            exit_code: Some(0),
-            signal: None,
-            stdout: "hello\n".to_string(),
-            stderr: String::new(),
-        }],
-        summary: JsonSummary {
-            total: 1,
-            succeeded: 1,
-            failed: 0,
-            dry_run: false,
-        },
-    };
-
-    let json = serde_json::to_string(&output).unwrap();
-    assert!(json.contains("\"success\":true"));
-    assert!(json.contains("\"directory\":\"/test\""));
-    assert!(json.contains("\"total\":1"));
-}
-
-#[test]
-fn test_json_output_skips_empty_strings() {
-    let result = JsonCommandResult {
-        directory: "/test".to_string(),
-        command: "echo".to_string(),
-        success: true,
-        exit_code: Some(0),
-        signal: None,
-        stdout: String::new(),
-        stderr: String::new(),
-    };
-
-    let json = serde_json::to_string(&result).unwrap();
-    // Empty stdout/stderr should be skipped due to skip_serializing_if
-    assert!(!json.contains("\"stdout\":\"\""));
-    assert!(!json.contains("\"stderr\":\"\""));
-}
-
-#[test]
 fn test_display_name_is_path_from_root() {
     let root = Path::new("/ws/harmony");
     assert_eq!(display_name(root, Some(root)), ".");

@@ -50,11 +50,7 @@ const NO_GIT_OPTIONS: &str = "Git options: none; git has no command of this name
         no_pull!()
     )
 )]
-pub(crate) struct CloneMissingArgs {
-    /// Also clone the missing projects of nested meta repos
-    #[arg(short, long)]
-    recursive: bool,
-}
+pub(crate) struct CloneMissingArgs {}
 
 /// `meta git clone-prune`
 #[derive(clap::Parser)]
@@ -67,11 +63,7 @@ pub(crate) struct CloneMissingArgs {
         prune!()
     )
 )]
-pub(crate) struct ClonePruneArgs {
-    /// Also search the folders of nested meta repos
-    #[arg(short, long)]
-    recursive: bool,
-}
+pub(crate) struct ClonePruneArgs {}
 
 /// `meta git clone-sync`
 #[derive(clap::Parser)]
@@ -85,11 +77,7 @@ pub(crate) struct ClonePruneArgs {
         prune!()
     )
 )]
-pub(crate) struct CloneSyncArgs {
-    /// Also act on nested meta repos
-    #[arg(short, long)]
-    recursive: bool,
-}
+pub(crate) struct CloneSyncArgs {}
 
 /// What a command does: clone, prune, or both.
 #[derive(Clone, Copy)]
@@ -115,36 +103,21 @@ impl Steps {
     }
 }
 
-/// What a command was asked: its steps and -r.
-pub(crate) struct Request {
-    steps: Steps,
-    recursive: bool,
-}
-
-impl From<CloneMissingArgs> for Request {
-    fn from(args: CloneMissingArgs) -> Self {
-        Self {
-            steps: Steps::Clone,
-            recursive: args.recursive,
-        }
+impl From<CloneMissingArgs> for Steps {
+    fn from(CloneMissingArgs {}: CloneMissingArgs) -> Self {
+        Self::Clone
     }
 }
 
-impl From<ClonePruneArgs> for Request {
-    fn from(args: ClonePruneArgs) -> Self {
-        Self {
-            steps: Steps::Prune,
-            recursive: args.recursive,
-        }
+impl From<ClonePruneArgs> for Steps {
+    fn from(ClonePruneArgs {}: ClonePruneArgs) -> Self {
+        Self::Prune
     }
 }
 
-impl From<CloneSyncArgs> for Request {
-    fn from(args: CloneSyncArgs) -> Self {
-        Self {
-            steps: Steps::Sync,
-            recursive: args.recursive,
-        }
+impl From<CloneSyncArgs> for Steps {
+    fn from(CloneSyncArgs {}: CloneSyncArgs) -> Self {
+        Self::Sync
     }
 }
 
@@ -159,26 +132,24 @@ struct Record {
     reason: Option<String>,
 }
 
-/// Run `steps` (`-r`: `recursive`) in the workspace at or above `cwd`, on
-/// the selected `projects` when meta's options filter them.
+/// Run `steps` (meta's `-r`: nested meta repos too) in the workspace at or
+/// above `cwd`, on the selected `projects` when meta's options filter them.
 pub(crate) fn execute(
-    Request { steps, recursive }: Request,
+    steps: Steps,
     projects: &[String],
     options: &PluginRequestOptions,
     cwd: &Path,
 ) -> anyhow::Result<CommandResult> {
-    // meta chose the selection without the nested projects
-    if recursive && !options.recursive && options.filtered() {
-        anyhow::bail!(
-            "with --include, --exclude or --tag, give -r to meta, before the command, so the \
-             selection reaches the nested projects: `meta -r ... {}`",
-            steps.command()
-        );
-    }
-    let recursive = recursive || options.recursive;
+    let recursive = options.recursive || options.all;
     // Without -r only the workspace's own .meta.yaml is read
     let meta_depth = if recursive { options.depth } else { Some(0) };
     let workspace = update::workspace(cwd, steps.command(), "")?;
+    // -A: from the outermost workspace
+    let workspace = if options.all {
+        workspace.root()?
+    } else {
+        workspace
+    };
     let root = workspace.dir.as_path();
     let mut queue = CloneQueue::new(None, meta_depth, false);
     if options.filtered() {

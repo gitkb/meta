@@ -21,7 +21,7 @@ fn request(
     sandbox: &Sandbox,
     root: &Path,
     command: &str,
-    recursive: bool,
+    strict: bool,
     explicit: bool,
 ) -> std::process::Output {
     let args = if command == "status" {
@@ -29,22 +29,21 @@ fn request(
     } else {
         vec![]
     };
-    request_args(sandbox, root, command, args, recursive, explicit)
+    request_args(sandbox, root, command, args, strict, explicit)
 }
 
 fn request_args(
     sandbox: &Sandbox,
     root: &Path,
     command: &str,
-    mut args: Vec<&str>,
-    recursive: bool,
+    args: Vec<&str>,
+    strict: bool,
     explicit: bool,
 ) -> std::process::Output {
-    if explicit {
-        args.push("--recursive");
-    }
+    // the strict scan is meta's --strict, whether the caller asked for it
+    // through the option or typed it (before the command, as meta sends it)
     let request = json!({"command": format!("git worktree {command}"), "args": args,
-        "cwd": root, "options": {"json_output": true, "recursive": recursive}});
+        "cwd": root, "options": {"json_output": true, "strict": strict || explicit}});
     let mut executable = sandbox.command(env!("CARGO_BIN_EXE_meta-git"));
     if root.join("bin").is_dir() {
         executable.env("PATH", root.join("bin"));
@@ -96,6 +95,8 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
         );
     }
     fs::write(set.join("open-source/atc/untracked.txt"), "dirty").unwrap();
+    // a repo nested in a member is one of its .meta.yaml's projects
+    fs::write(set.join("open-source/.meta.yaml"), "projects:\n  atc: u\n").unwrap();
     for command in ["list", "status"] {
         for (recursive, explicit) in [(false, false), (true, false), (false, true), (true, true)] {
             let out = request(&sandbox, root, command, recursive, explicit);
@@ -355,7 +356,7 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
             .spawn()
             .unwrap();
         let request = json!({"command": "git worktree list", "args": args,
-            "cwd": cwd, "options": {"json_output": true, "recursive": recursive}});
+            "cwd": cwd, "options": {"json_output": true, "strict": recursive}});
         child
             .stdin
             .take()
@@ -367,7 +368,7 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
     for cwd in [&set, &nested] {
         for (args, recursive) in [
             (vec!["--metadata-only"], true),
-            (vec!["--metadata-only", "--recursive"], false),
+            (vec!["--metadata-only"], false),
         ] {
             let out = invoke(cwd, args, recursive);
             assert!(

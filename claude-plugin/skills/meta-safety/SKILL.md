@@ -9,26 +9,26 @@ Multi-repo workspaces are powerful but require awareness. Meta gives you precisi
 
 ## Session Start
 
-1. `meta project list --recursive --json` — workspace map, including nested meta repos, in one call
-2. `meta git status` — see state of every repo at once (`meta --recursive git status` for nested ones)
+1. `meta -A --json project list` — the whole workspace map, nested meta repos included, from wherever you are, in one call
+2. `meta git status` — see state of every repo at once (`meta -r git status`: the meta repos nested below here too; `meta -A git status`: the whole workspace)
 3. Note which repos provide shared dependencies (check `.meta.yaml` for `provides`/`depends_on`)
 
 ## Precision Operations
 
-Instead of cd-ing into repos one by one, use meta flags to target what you need. Include/exclude take whole repos (a `.meta.yaml` name or the path from the workspace root), never part of a path, and a value that names no repo is an error; `--tag` selects only the tagged repos, never the meta root (`--include .` adds it):
+Instead of cd-ing into repos one by one, use meta flags to target what you need. Include/exclude take whole repos (a `.meta.yaml` name or the path from the nearest `.meta.yaml`, with `-r` or `-A` from the workspace root), never part of a path, and a value that names no repo is an error; `--tag` selects only the tagged repos, never the meta root (`--include .` adds it):
 
 ```bash
 # Target specific repos
 meta --include repo1,repo2 exec -- command
 
-# Target by tag
-meta --tag backend exec -- cargo test
+# Target by tag (-r: the tags of nested meta repos' projects too)
+meta -r --tag backend exec -- cargo test
 
 # Exclude repos
 meta --exclude legacy exec -- npm update
 
 # Combine: tagged repos, excluding one, one at a time
-meta --tag backend --exclude legacy --sequential exec -- make deploy
+meta -r --tag backend --exclude legacy --sequential exec -- make deploy
 ```
 
 ## Before Modifying Shared Code
@@ -46,7 +46,7 @@ When modifying a repo that other repos depend on:
 meta --include repo1,repo2 git commit -m "feat: update shared API"
 
 # Push the tagged repos (not the root; add it with --include .)
-meta --tag backend git push
+meta -r --tag backend git push
 
 # Per-repo commit messages (when changes differ)
 # Use meta_git_multi_commit MCP tool
@@ -65,10 +65,10 @@ The `meta_query_repos` MCP tool filters repos by state:
 
 ## Global Strict Mode
 
-Use `meta --strict` to turn worktree warnings into errors for CI/automation. It applies to the `meta git worktree` checks listed below, not to `meta exec`. It is not a transaction: repos already changed before the error stay changed.
+Use `meta --strict` to turn worktree warnings into errors for CI/automation. It applies to the `meta git worktree` checks listed below (and `meta --strict git worktree list` and `status` fail on what they can't read), and to the per-repo `meta git` commands (`pull`, `status`, …), where a project that isn't cloned fails the command; not to `meta exec`. It is not a transaction: repos already changed before the error stay changed.
 
 ```bash
-meta --strict git worktree create feature-test v2.0.0 --all
+meta --strict git worktree create feature-test v2.0.0 --every-repo
 meta --strict git worktree prune
 ```
 
@@ -98,11 +98,11 @@ meta --strict git worktree prune
 
 If cleanup fails, meta prints the error and exits non-zero even when the command itself succeeded, and the set may be left in place. Check with `meta git worktree list` and remove it with `meta git worktree remove <name>`.
 
-`meta git worktree create` also takes `--strict` itself (`meta git worktree create feature-test v2.0.0 --all --strict`); either one turns strict mode on.
+For `meta git worktree create`, meta's `--strict` goes before the command like every meta option: `meta --strict git worktree create feature-test v2.0.0 --every-repo`.
 
 ## Efficiency Tips
 
 - One `meta git status` replaces N individual `git status` calls
-- One `meta --tag X exec -- cmd` replaces N `cd && cmd` sequences
+- One `meta -r --tag X exec -- cmd` replaces N `cd && cmd` sequences
 - `meta_analyze_impact` before modifying providers prevents cascading fix-up commits
 - `meta --dry-run exec -- dangerous-cmd` previews before executing

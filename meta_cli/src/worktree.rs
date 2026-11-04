@@ -380,8 +380,7 @@ pub fn holds_meta_checkout(dir: &Path) -> bool {
     false
 }
 
-/// Discover repos within a worktree task directory by scanning for .git files.
-/// Results are sorted by alias for deterministic output.
+/// [`discover_worktree_members`] with each one's branch.
 pub fn discover_worktree_repos(task_dir: &Path) -> Result<Vec<WorktreeRepoInfo>> {
     Ok(discover_worktree_members(task_dir)?
         .into_iter()
@@ -404,31 +403,13 @@ fn with_branch(member: WorktreeMemberInfo) -> WorktreeRepoInfo {
     }
 }
 
-/// Legacy discovery boundaries without branch probes. Implicit command scoping
-/// only needs repository paths; it must not start Git for each member.
+/// Every member of the set at `task_dir`, nested ones (`clients/desktop`
+/// inside `clients`) too, without branch probes (command scoping needs only
+/// their paths, and starts no git for each): the one member list, as a
+/// listing of the set shows it. What can't be read is skipped; a checkout
+/// found inside a member counts only if git's linked-worktree layout holds
+/// (a submodule doesn't).
 pub fn discover_worktree_members(task_dir: &Path) -> Result<Vec<WorktreeMemberInfo>> {
-    discover_members(task_dir, false)
-}
-
-/// Every member of the set, nested ones (`clients/desktop` inside
-/// `clients`) too, without branch probes: what a listing of the set shows.
-/// As in legacy discovery, what can't be read is skipped; a checkout found
-/// inside a member counts only if git's linked-worktree layout holds (a
-/// submodule doesn't).
-pub fn discover_worktree_members_nested(task_dir: &Path) -> Result<Vec<WorktreeMemberInfo>> {
-    discover_members(task_dir, true)
-}
-
-/// [`discover_worktree_members_nested`] with each one's branch.
-pub fn discover_worktree_repos_nested(task_dir: &Path) -> Result<Vec<WorktreeRepoInfo>> {
-    Ok(discover_worktree_members_nested(task_dir)?
-        .into_iter()
-        .map(with_branch)
-        .collect())
-}
-
-/// The members of the set at `task_dir`; `nested`: those inside members too.
-fn discover_members(task_dir: &Path, nested: bool) -> Result<Vec<WorktreeMemberInfo>> {
     let mut repos = Vec::new();
 
     // Check if the task dir itself is a worktree (the "." alias)
@@ -451,7 +432,7 @@ fn discover_members(task_dir: &Path, nested: bool) -> Result<Vec<WorktreeMemberI
     // dependencies have paths with intermediate directories.
     if task_dir.is_dir() {
         let scanned = ScannedDirs::of(task_dir);
-        discover_repos_recursive(task_dir, task_dir, &scanned, nested, false, &mut repos)?;
+        discover_repos_recursive(task_dir, task_dir, &scanned, &mut repos)?;
     }
 
     // Sort by alias for deterministic output ("." sorts first)
@@ -463,17 +444,13 @@ fn discover_members(task_dir: &Path, nested: bool) -> Result<Vec<WorktreeMemberI
 /// Recursively scan `dir` for git worktree repos, recording aliases as
 /// relative paths from `root` (the worktree task directory).
 ///
-/// A directory with a `.git` file is a worktree repo — record it and, unless
-/// `nested`, stop recursing into it. A directory without `.git` is an
-/// intermediate directory (e.g., `vendor/`) — recurse into it to find nested
-/// repos. `in_checkout`: `dir` is inside a member, where only a checkout in
-/// git's linked-worktree layout counts (a submodule doesn't).
+/// A directory with a `.git` file is a worktree repo: recorded, with the
+/// repos nested in it ([`add_member`]). A directory without `.git` is an
+/// intermediate directory (e.g., `vendor/`): recursed into.
 fn discover_repos_recursive(
     root: &Path,
     dir: &Path,
     scanned: &ScannedDirs,
-    nested: bool,
-    in_checkout: bool,
     repos: &mut Vec<WorktreeMemberInfo>,
 ) -> Result<()> {
     let entries = match std::fs::read_dir(dir) {
@@ -496,53 +473,89 @@ fn discover_repos_recursive(
         if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
             continue;
         }
-
         if !ScannedDirs::searched(&sub_path) {
             continue;
         }
+        match is_checkout(&sub_path) {
+            true => add_member(root, &sub_path, scanned, false, repos)?,
+            // an unreadable one is skipped there; a record that can't be
+            // read is an error
+            false => discover_repos_recursive(root, &sub_path, scanned, repos)?,
+        }
+    }
+    Ok(())
+}
 
-        let sub_git = sub_path.join(".git");
-        if sub_git
-            .symlink_metadata()
-            .map(|m| m.is_file())
-            .unwrap_or(false)
-        {
-            if nested {
-                discover_repos_recursive(root, &sub_path, scanned, nested, true, repos)?;
-            }
-            if in_checkout && gitdir::linked(&sub_path).is_err() {
-                continue;
-            }
-            if !scanned.member(root, &sub_path)? {
-                continue;
-            }
-            // This is a worktree repo — use relative path from root as alias
-            let source = match source_repo(&sub_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::debug!(
-                        "Skipping {}: {}",
-                        escape_path(&sub_path),
-                        escape_lines(&format!("{e:#}"))
-                    );
-                    continue;
-                }
-            };
-            let alias = sub_path
-                .strip_prefix(root)
-                .unwrap_or(&sub_path)
-                .to_string_lossy()
-                .to_string();
-            repos.push(WorktreeMemberInfo {
-                alias,
-                path: sub_path,
-                source_path: source,
-            });
-        } else {
-            // Not a repo — recurse into intermediate directory (an
-            // unreadable one is skipped there; a record that can't be read
-            // is an error)
-            discover_repos_recursive(root, &sub_path, scanned, nested, in_checkout, repos)?;
+/// Whether `dir` has a `.git` file: a worktree's (or a submodule's).
+fn is_checkout(dir: &Path) -> bool {
+    dir.join(".git")
+        .symlink_metadata()
+        .is_ok_and(|m| m.is_file())
+}
+
+/// Record the checkout at `dir` as a member when it is one, then the
+/// members nested in it. A set lays its repos out as the workspace does, so
+/// those sit where its own `.meta.yaml` puts its projects: only there is
+/// looked, not through its whole tree (a build folder can hold thousands of
+/// folders), and a worktree made by hand inside it is no member. `nested`:
+/// `dir` is one of those, where only a checkout in git's linked-worktree
+/// layout counts (a submodule doesn't).
+fn add_member(
+    root: &Path,
+    dir: &Path,
+    scanned: &ScannedDirs,
+    nested: bool,
+    repos: &mut Vec<WorktreeMemberInfo>,
+) -> Result<()> {
+    if nested && gitdir::linked(dir).is_err() {
+        return Ok(());
+    }
+    if !scanned.member(root, dir)? {
+        return Ok(());
+    }
+    let source = match source_repo(dir) {
+        Ok(s) => s,
+        Err(e) => {
+            log::debug!(
+                "Skipping {}: {}",
+                escape_path(dir),
+                escape_lines(&format!("{e:#}"))
+            );
+            return Ok(());
+        }
+    };
+    repos.push(WorktreeMemberInfo {
+        alias: dir
+            .strip_prefix(root)
+            .unwrap_or(dir)
+            .to_string_lossy()
+            .to_string(),
+        path: dir.to_path_buf(),
+        source_path: source.clone(),
+    });
+    // the projects of its .meta.yaml as checked out, and of its source's as
+    // it is on disk, which create planned from (a config that can't be read
+    // lists none: the strict scan says why)
+    let listed = |checkout: &Path| {
+        meta_core::config::Workspace::in_dir(checkout)
+            .ok()
+            .flatten()
+            .map(|workspace| workspace.projects)
+            .unwrap_or_default()
+    };
+    let mut projects = listed(dir);
+    projects.extend(listed(&source));
+    projects.sort_by(|a, b| a.path.cmp(&b.path));
+    projects.dedup_by(|a, b| a.path == b.path);
+    for project in projects {
+        let place = Path::new(&project.path);
+        // a project outside the checkout is no repo nested in it
+        let inside = place
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)));
+        let nested = dir.join(place);
+        if inside && is_checkout(&nested) {
+            add_member(root, &nested, scanned, true, repos)?;
         }
     }
     Ok(())
@@ -554,8 +567,8 @@ fn discover_repos_recursive(
 /// `ScannedDirs`); directory symlinks are not followed, so traversal never
 /// leaves the set.
 /// A finite entry budget prevents unbounded scans of generated directory trees.
-pub fn discover_worktree_repos_recursive(task_dir: &Path) -> Result<Vec<WorktreeRepoInfo>> {
-    Ok(discover_worktree_members_recursive(task_dir)?
+pub fn discover_worktree_repos_strict(task_dir: &Path) -> Result<Vec<WorktreeRepoInfo>> {
+    Ok(discover_worktree_members_strict(task_dir)?
         .into_iter()
         .map(with_branch)
         .collect())
@@ -606,7 +619,7 @@ impl ScannedDirs {
     }
 }
 
-pub fn discover_worktree_members_recursive(task_dir: &Path) -> Result<Vec<WorktreeMemberInfo>> {
+pub fn discover_worktree_members_strict(task_dir: &Path) -> Result<Vec<WorktreeMemberInfo>> {
     let mut repos = Vec::new();
     let scanned = ScannedDirs::of(task_dir);
     let entries = walkdir::WalkDir::new(task_dir)
@@ -751,43 +764,57 @@ mod recursive_tests {
     }
 
     #[test]
-    /// Nested members keep sorted distinct aliases and default boundaries.
-    fn recursive_members_preserve_legacy_boundaries_and_sorted_full_aliases() {
+    /// Nested members have sorted, distinct, full aliases.
+    fn members_include_nested_ones_with_sorted_full_aliases() {
         let sandbox = meta_test_support::isolated!();
         let root = &sandbox.work().join("set");
         for alias in [".", "open-source", "open-source/atc", "other/atc"] {
             member(&sandbox, root, alias);
         }
+        // a repo nested in a member is one of its .meta.yaml's projects
+        std::fs::write(
+            root.join("open-source/.meta.yaml"),
+            "projects:\n  atc: u\n  absent: u\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(root.join("configured-but-absent")).unwrap();
-        assert_eq!(
-            aliases(discover_worktree_repos(root).unwrap()),
-            [".", "open-source", "other/atc"]
-        );
-        assert_eq!(
-            aliases(discover_worktree_repos_recursive(root).unwrap()),
-            [".", "open-source", "open-source/atc", "other/atc"]
-        );
-        // a listing shows every member without -r
-        assert_eq!(
-            aliases(discover_worktree_repos_nested(root).unwrap()),
-            [".", "open-source", "open-source/atc", "other/atc"]
-        );
+        // the strict scan finds the same members
+        for repos in [
+            discover_worktree_repos(root),
+            discover_worktree_repos_strict(root),
+        ] {
+            assert_eq!(
+                aliases(repos.unwrap()),
+                [".", "open-source", "open-source/atc", "other/atc"]
+            );
+        }
     }
 
     #[test]
-    fn implicit_context_keeps_legacy_scope_without_collecting_branch_facts() {
+    fn implicit_context_reaches_nested_members_without_collecting_branch_facts() {
         let sandbox = meta_test_support::isolated!();
         let root = sandbox.work().join(".worktrees/example");
         for alias in [".", "parent", "parent/nested"] {
             member(&sandbox, &root, alias);
         }
+        // listed by the source's .meta.yaml on disk (create plans from it),
+        // though not by the one checked out in the set
+        let source = source_repo(&root.join("parent")).unwrap();
+        std::fs::write(source.join(".meta.yaml"), "projects:\n  nested: u\n").unwrap();
         let (name, observed_root, paths) = detect_worktree_context(&root.join("parent/nested"))
             .unwrap()
             .unwrap();
         assert_eq!(name, "example");
         assert_eq!(observed_root, root);
-        assert_eq!(paths, vec![root.clone(), root.join("parent")]);
-        let metadata = discover_worktree_members_recursive(&root).unwrap();
+        assert_eq!(
+            paths,
+            vec![
+                root.clone(),
+                root.join("parent"),
+                root.join("parent/nested")
+            ]
+        );
+        let metadata = discover_worktree_members_strict(&root).unwrap();
         assert_eq!(metadata.len(), 3);
         for row in metadata {
             let json = serde_json::to_value(row).unwrap();
@@ -804,13 +831,9 @@ mod recursive_tests {
         let child = sandbox.work().join("parent/broken");
         std::fs::create_dir_all(&child).unwrap();
         std::fs::write(child.join(".git"), "invalid").unwrap();
-        assert!(discover_worktree_repos_recursive(sandbox.work().as_path()).is_err());
+        assert!(discover_worktree_repos_strict(sandbox.work().as_path()).is_err());
         assert_eq!(
             aliases(discover_worktree_repos(sandbox.work().as_path()).unwrap()),
-            ["parent"]
-        );
-        assert_eq!(
-            aliases(discover_worktree_repos_nested(sandbox.work().as_path()).unwrap()),
             ["parent"]
         );
     }
@@ -819,7 +842,7 @@ mod recursive_tests {
     /// Missing roots cannot be represented as complete empty inventories.
     fn recursive_missing_root_is_error() {
         let sandbox = meta_test_support::isolated!();
-        assert!(discover_worktree_repos_recursive(&sandbox.work().join("missing")).is_err());
+        assert!(discover_worktree_repos_strict(&sandbox.work().join("missing")).is_err());
     }
 
     #[cfg(unix)]
@@ -844,7 +867,7 @@ mod recursive_tests {
         member(&sandbox, &root, ".worktrees/other");
         std::os::unix::fs::symlink(&root, root.join("visible/cycle")).unwrap();
         assert_eq!(
-            aliases(discover_worktree_repos_recursive(&root).unwrap()),
+            aliases(discover_worktree_repos_strict(&root).unwrap()),
             [".deps/child", "visible"]
         );
     }
@@ -870,7 +893,7 @@ mod recursive_tests {
         .unwrap();
         assert_eq!(source_repo(&root).unwrap(), source);
         assert_eq!(
-            discover_worktree_repos_recursive(&root).unwrap()[0].source_path,
+            discover_worktree_repos_strict(&root).unwrap()[0].source_path,
             source
         );
         assert_eq!(
@@ -893,10 +916,7 @@ mod recursive_tests {
             } else {
                 std::fs::remove_file(admin.join(missing)).unwrap();
             }
-            assert!(
-                discover_worktree_repos_recursive(&root).is_err(),
-                "{missing}"
-            );
+            assert!(discover_worktree_repos_strict(&root).is_err(), "{missing}");
         }
     }
 }

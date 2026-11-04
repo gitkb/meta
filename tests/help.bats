@@ -34,7 +34,7 @@ setup() {
 
     run "$META_BIN" plugin search --help
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Usage: meta plugin search [OPTIONS] <QUERY>"* ]]
+    [[ "$output" == *"Usage: meta plugin search <QUERY>"* ]]
     [[ "$output" != *"required arguments were not provided"* ]]
 
     run "$META_BIN" plugin list --help
@@ -55,7 +55,9 @@ setup() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"create"* ]]
-    [[ "$output" == *"--dry-run"* ]]
+    # meta's options it reads, named before the command
+    [[ "$output" == *"meta -r git worktree create"* ]]
+    [[ "$output" == *"meta --strict git worktree create"* ]]
     [[ "$output" == *"[COMMIT_ISH]"* ]]
     [[ "$output" != *"--from-ref"* ]]
 
@@ -115,7 +117,7 @@ setup() {
     run "$META_BIN" project list --help
     [ "$status" -eq 0 ]
     [[ "$output" == *"meta project list"* ]]
-    [[ "$output" == *"--recursive"* && "$output" == *"--json"* ]]
+    [[ "$output" == *"meta -r --json project list"* ]]
 
     run "$META_BIN" project check --help
     [ "$status" -eq 0 ]
@@ -213,9 +215,9 @@ setup() {
 @test "worktree list help documents the options atc relies on" {
     run "$META_BIN" git worktree list --help
     [ "$status" -eq 0 ]
-    [[ "$output" == *"--recursive"* ]]
+    [[ "$output" == *"meta --strict"* ]]
     [[ "$output" == *"--metadata-only"* ]]
-    [[ "$output" == *"--json"* ]]
+    [[ "$output" == *"meta --json git worktree list"* ]]
 }
 
 @test "meta --help lists the plugins whatever name meta was started by" {

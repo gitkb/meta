@@ -72,13 +72,13 @@ setup() {
 # ============ --json ============
 
 @test "context --json outputs valid JSON" {
-    run "$META_BIN" context --json
+    run "$META_BIN" --json context
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "import sys, json; json.load(sys.stdin)"
 }
 
 @test "context --json contains workspace name and repo count" {
-    run "$META_BIN" context --json
+    run "$META_BIN" --json context
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -89,7 +89,7 @@ assert data['repo_count'] == 2, f'expected 2 repos, got {data[\"repo_count\"]}'
 }
 
 @test "context --json contains repo details" {
-    run "$META_BIN" context --json
+    run "$META_BIN" --json context
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -105,7 +105,7 @@ for r in repos:
 }
 
 @test "context --json --no-status omits branch and dirty" {
-    run "$META_BIN" context --json --no-status
+    run "$META_BIN" --json context --no-status
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -171,7 +171,7 @@ EOF
 }
 EOF
 
-    run "$META_BIN" context --json
+    run "$META_BIN" --json context
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -203,7 +203,7 @@ projects:
     repo: git@github.com:org/frontend.git
     tags: [ui]
 YAML
-    run "$META_BIN" -t api context --json
+    run "$META_BIN" -t api --json context
     [ "$status" -eq 0 ]
     [ "$(python3 -c 'import json,sys; print(",".join(r["name"] for r in json.load(sys.stdin)["repos"]))' <<<"$output")" = "backend" ]
     run "$META_BIN" -i frontend context
@@ -215,13 +215,25 @@ YAML
     [[ "$output" == *"--tag 'nope' is no project's tag"* ]]
 }
 
-@test "context refuses --recursive instead of ignoring it" {
+@test "-r context shows a modified nested repo" {
+    # backend is a meta repo of its own, with lib in it
+    git init --quiet --initial-branch=main backend/lib
+    echo lib > backend/lib/README.md
+    git -C backend/lib add README.md
+    git -C backend/lib commit --quiet -m lib
+    printf '{"projects": {"lib": "file:///nowhere/lib.git"}}\n' > backend/.meta.yaml
+    echo changed >> backend/lib/README.md
+    run "$META_BIN" context
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"backend/lib"* ]]
     run "$META_BIN" -r context
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"does not take --recursive"* ]]
-    run "$META_BIN" --depth 1 context
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"or --depth"* ]]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"3 repos"* ]]
+    grep -Eq '^\| backend/lib \|.*modified' <<<"$output"
+    run "$META_BIN" -r --json context
+    [ "$(jq -r '.repos[] | select(.path == "backend/lib") | .dirty' <<<"$output")" = true ]
+    run "$META_BIN" -r --depth 0 context
+    [[ "$output" != *"backend/lib"* ]]
 }
 
 # ============ Always read fresh ============
@@ -231,7 +243,7 @@ YAML
     git -C backend remote add origin "$TEST_DIR/backend.git"
     git -C backend push --quiet -u origin HEAD
     git clone --quiet "$TEST_DIR/backend.git" "$TEST_DIR/mate"
-    run "$META_BIN" context --json
+    run "$META_BIN" --json context
     [ "$status" -eq 0 ]
     # an edit, a staged new file, a fetched commit and a new project: none
     # of them moves a HEAD or a branch, which was all a cached context saw
@@ -244,7 +256,7 @@ YAML
     git -C mate push --quiet
     git -C backend fetch --quiet
     printf 'projects:\n  backend: git@github.com:org/backend.git\n  frontend: git@github.com:org/frontend.git\n  extra: git@github.com:org/extra.git\n' > .meta.yaml
-    run "$META_BIN" context --json
+    run "$META_BIN" --json context
     [ "$status" -eq 0 ]
     python3 -c '
 import json, sys
@@ -254,7 +266,7 @@ assert repos["frontend"]["dirty"], repos["frontend"]
 assert "extra" in repos, repos
 ' <<<"$output"
     git -C frontend switch --quiet -c topic
-    run "$META_BIN" context --json
+    run "$META_BIN" --json context
     [ "$(jq -r '.repos[] | select(.name == "frontend") | "\(.branch) \(.modified_count) \(.upstream)"' <<<"$output")" = "topic 1 null" ]
     [ -z "$(ls -A "$META_DATA_DIR")" ]
 }
@@ -264,7 +276,7 @@ assert "extra" in repos, repos
     git -C backend remote add origin "$TEST_DIR/backend.git"
     git -C backend push --quiet -u origin main
     ahead_behind() {
-        run "$META_BIN" context --json
+        run "$META_BIN" --json context
         [ "$status" -eq 0 ]
         jq -r '.repos[] | select(.name == "backend") | "\(.ahead) \(.behind)"' <<<"$output"
     }
@@ -302,7 +314,7 @@ assert "extra" in repos, repos
     # frontend: its upstream deleted and pruned
     git -C frontend push --quiet origin --delete frontend
     git -C frontend fetch --quiet --prune
-    run "$META_BIN" context --json
+    run "$META_BIN" --json context
     [ "$status" -eq 0 ]
     python3 -c '
 import json, sys
@@ -317,7 +329,7 @@ assert (f["upstream"], f["upstream_gone"], f["detached"]) == ("origin/frontend",
     git -C backend rebase --abort
     git -C backend switch --quiet --detach HEAD
     git -C frontend switch --quiet -c local
-    run "$META_BIN" context --json
+    run "$META_BIN" --json context
     python3 -c '
 import json, sys
 repos = {r["name"]: r for r in json.load(sys.stdin)["repos"]}

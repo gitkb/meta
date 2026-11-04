@@ -71,7 +71,12 @@ fn clone_and_commit_refuse_what_they_do_not_take() {
     let tmp = sandbox.work();
     for (command, args, problem) in [
         ("git clone", &["--parallel", "0", "u"][..], "invalid value"),
-        ("git clone", &["--meta-depth", "x", "u"], "invalid value"),
+        // meta's nesting depth is meta's own: meta --depth N, before
+        (
+            "git clone",
+            &["--meta-depth", "1", "u"],
+            "as in meta -r --depth 1 git clone u",
+        ),
         ("git clone", &["u", "--branch", "b"], "unexpected argument"),
         ("git commit", &["--amend"], "unexpected argument"),
     ] {
@@ -144,7 +149,7 @@ fn clone_and_commit_have_their_own_help() {
 }
 
 #[test]
-fn clone_depth_comes_from_meta_unless_given() {
+fn clone_history_depth_is_the_commands_own() {
     let sandbox = Sandbox::new();
     let tmp = sandbox.work();
     let dry_run = |args: &[&str]| {
@@ -158,7 +163,8 @@ fn clone_depth_comes_from_meta_unless_given() {
         assert!(out.status.success(), "{}", text(&out));
         text(&out)
     };
-    assert!(dry_run(&["u"]).contains("git clone --depth 3 -- u u"));
+    // meta's --depth is how deep into nested meta repos, never git's
+    assert!(dry_run(&["u"]).contains("git clone -- u u"));
     assert!(dry_run(&["--depth", "1", "u", "d"]).contains("git clone --depth 1 -- u d"));
     // the directory git would name, for an IPv6 host too
     assert!(dry_run(&["git@[::1]:repo.git"]).contains(":repo.git' repo"));

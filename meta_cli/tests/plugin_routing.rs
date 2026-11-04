@@ -147,7 +147,10 @@ fn only_the_plugin_a_command_names_is_started() {
     let typo = run_meta(&sandbox, &root, &["touhcy"]);
     assert!(!typo.status.success());
     let stderr = String::from_utf8_lossy(&typo.stderr);
-    assert!(stderr.contains("meta --help lists them"), "{stderr}");
+    assert!(
+        stderr.contains("the ones plugins add too: meta --help"),
+        "{stderr}"
+    );
     assert_eq!(spy_starts(&root), "", "an unrelated plugin was started");
 
     // Help and the plugin list ask every plugin, and name each by its file
@@ -155,7 +158,7 @@ fn only_the_plugin_a_command_names_is_started() {
     let help = String::from_utf8_lossy(&help.stdout);
     assert!(help.contains("plugin: spy v1.0.0"), "{help}");
     assert!(help.contains("plugin: touchy v1.0.0"), "{help}");
-    let list = run_meta(&sandbox, &root, &["plugin", "list", "--json"]);
+    let list = run_meta(&sandbox, &root, &["--json", "plugin", "list"]);
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     let names: Vec<_> = list
         .as_array()

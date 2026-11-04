@@ -46,8 +46,8 @@ impl<'a> Index<'a> {
     }
 
     /// The index of the whole tree under `workspace`.
-    pub fn recursive(workspace: &'a Workspace) -> Result<Self> {
-        let nodes = meta_core::config::walk_projects(&workspace.dir, &workspace.projects, None)?;
+    pub fn recursive(workspace: &'a Workspace, depth: Option<usize>) -> Result<Self> {
+        let nodes = meta_core::config::walk_projects(&workspace.dir, &workspace.projects, depth)?;
         let tree = meta_core::config::build_project_map(&nodes, &workspace.dir, "");
         Ok(Index {
             workspace,
@@ -151,7 +151,7 @@ impl<'a> Index<'a> {
         let tree = match &self.tree {
             Some(tree) => Some(tree),
             None => {
-                walked = Index::recursive(self.workspace).ok();
+                walked = Index::recursive(self.workspace, None).ok();
                 walked.as_ref().and_then(|index| index.tree.as_ref())
             }
         };
@@ -217,7 +217,10 @@ mod tests {
         let found = Index::new(&ws).find("actual-api").unwrap();
         assert_eq!(found.source, tmp.path().join("actual-api"));
         assert_eq!(found.key, "group/api");
-        let found = Index::recursive(&ws).unwrap().find("group/api").unwrap();
+        let found = Index::recursive(&ws, None)
+            .unwrap()
+            .find("group/api")
+            .unwrap();
         assert_eq!(found.source, tmp.path().join("actual-api"));
         assert_eq!(found.key, "actual-api");
     }
@@ -266,7 +269,7 @@ mod tests {
         );
         write(&tmp.path().join("b"), r#"{"projects": {"core": "u"}}"#);
         let ws = workspace(tmp.path());
-        let index = Index::recursive(&ws).unwrap();
+        let index = Index::recursive(&ws, None).unwrap();
         assert_eq!(index.find("x").unwrap().key, "a/x");
         let err = index.find("core").unwrap_err().to_string();
         assert!(err.contains("a/core, b/core"), "{err}");

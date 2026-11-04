@@ -124,7 +124,7 @@ meta --tag backend --include . git status
 meta --tag backend --exclude legacy exec -- cargo test
 ```
 
-`--include` and `--tag` each add repos, and `--exclude` then removes some (see [Filtering](../README.md#filtering)). With `--recursive`, a nested project is selected by its own tags, whatever its parent's.
+`--include` and `--tag` each add repos, and `--exclude` then removes some (see [Filtering](../README.md#filtering)). With `-r` or `-A`, a nested project is selected by its own tags, whatever its parent's, and by its path from the workspace root.
 
 ---
 
@@ -144,7 +144,7 @@ meta git pull && meta exec -- npm install && meta exec -- npm test
 meta --json exec -- git rev-parse HEAD | jq -j '.results[] | .directory + " " + (.stdout // "\n")'
 
 # Project names, one per line
-meta project list --json | jq -r '.projects[].name'
+meta --json project list | jq -r '.projects[].name'
 ```
 
 ### Exit Codes
@@ -188,10 +188,12 @@ meta --json exec -- git rev-parse HEAD
   "results": [
     {
       "directory": "/work/ws/api",
+      "path": "./api",
       "command": "git rev-parse HEAD",
       "success": true,
       "exit_code": 0,
-      "stdout": "abc123...\n"
+      "stdout": "abc123...\n",
+      "stderr": ""
     }
   ],
   "summary": {
@@ -199,14 +201,16 @@ meta --json exec -- git rev-parse HEAD
     "succeeded": 5,
     "failed": 0,
     "dry_run": false
-  }
+  },
+  "warnings": [],
+  "hint": null
 }
 ```
 
-A result has `"stderr"` when the command wrote any. A command a signal ended has `"exit_code": null` and the signal's number in
+`path` is the repo as the human output names it, from the nearest workspace (with `-r` or `-A`, from the workspace root; `.` for that root), and `--include` takes it as is. `stdout` and `stderr` are always there, `""` for no output. `warnings` lists what the human output warns of (a project that isn't cloned); `hint` is the tip it ends with (an option of meta's typed after the command), or `null`. A command a signal ended has `"exit_code": null` and the signal's number in
 `"signal"` (`9` for `SIGKILL`); `signal` is left out otherwise.
 
-With `--json`, a command with a JSON result prints only JSON on stdout: one document, or the documents a plugin writes (help and `meta init claude` have no JSON form). A command line clap can't parse is reported before meta knows about `--json`, so it is text on stderr (exit 2). After that, an error before any output is `{"success": false, "error": "…"}` (an unknown command exits 2, other errors 1); one after a report was printed goes to stderr, so the report stays the only document. A plugin's output that isn't JSON comes as `{"success": …, "output": "…"}`, and a plugin that fails without printing anything leaves `{"success": false, "error": "plugin … failed"}`. Warnings and `--verbose` lines go to stderr.
+With `--json`, a command with a JSON result prints only JSON on stdout: one document, or the documents a plugin writes (help and `meta init claude` have no JSON form). A command line that can't be parsed is one JSON document on stdout too (`{"success": false, "error": "…"}`, exit 2) when `--json` is among meta's options before the command, its error carrying the line to run; without, it is text on stderr. After that, an error before any output is `{"success": false, "error": "…"}` (an unknown command exits 2, other errors 1); one after a report was printed goes to stderr, so the report stays the only document. A plugin's output that isn't JSON comes as `{"success": …, "output": "…"}`, and a plugin that fails without printing anything leaves `{"success": false, "error": "plugin … failed"}`. A loop report lists warnings in `warnings`; without `--json` they go to stderr, as `--verbose` lines always do.
 
 ### Parsing with jq
 
@@ -267,18 +271,22 @@ meta plugin list --local
 
 ```sh
 # Outside a worktree: list all sets, with branch and dirty/clean summaries.
-meta git worktree list --recursive
+meta git worktree list
 
 # Select one set explicitly.
-meta git worktree list example --recursive
+meta git worktree list example
 
 # Inside .worktrees/example/ or any descendant: select the enclosing set.
-meta git worktree list --recursive
+meta git worktree list
+
+# Fail on what can't be read instead of skipping it.
+meta --strict git worktree list
 ```
 
 An explicit name overrides the enclosing set. Every repository of the set is
 listed, those nested beneath other repositories of the set (`clients/desktop`
-inside `clients`) too. `--recursive` fails on a folder that can't be scanned,
+inside `clients`) too, so `-r` and `-A` change nothing here and are refused, before or
+after the command. meta's `--strict` fails on a folder that can't be scanned,
 a checkout whose git files are broken, or a repository git can't read, instead
 of skipping it or marking it unknown.
 
@@ -287,10 +295,10 @@ of skipping it or marking it unknown.
 Tools that collect their own git facts can ask for the set's members only:
 
 ```sh
-meta git worktree list example --recursive --metadata-only --json
+meta --strict --json git worktree list example --metadata-only
 
 # From inside the worktree, omit the name:
-meta git worktree list --recursive --metadata-only --json
+meta --strict --json git worktree list --metadata-only
 ```
 
 Both print the usual `worktrees` list, with the one set:

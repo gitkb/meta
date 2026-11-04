@@ -107,8 +107,14 @@ pub struct PluginRequestOptions {
     pub dry_run: bool,
     #[serde(default)]
     pub silent: bool,
+    /// `-r`: the meta repos nested under the nearest `.meta.yaml` too
     #[serde(default)]
     pub recursive: bool,
+    /// `-A`: the whole graph, from the outermost `.meta.yaml` (the
+    /// workspace root), wherever the command runs. A host older than this
+    /// field never sends it.
+    #[serde(default)]
+    pub all: bool,
     #[serde(default)]
     pub depth: Option<usize>,
     /// `--include` as the user typed it. The host has already applied it
@@ -126,6 +132,11 @@ pub struct PluginRequestOptions {
     /// Convert warnings to errors for all-or-nothing behavior (CI/automation)
     #[serde(default)]
     pub strict: bool,
+    /// meta's options and what was typed of them, for [`parse_args`]'s tip
+    /// when one is typed after the command. A host older than this field
+    /// sends none: then there is no tip.
+    #[serde(default)]
+    pub meta_options: meta_core::args::MetaOptions,
 }
 
 impl PluginRequestOptions {
@@ -181,6 +192,12 @@ pub struct ExecutionPlan {
     /// socket saturation. A value of 25ms with 13 repos spreads spawns over ~325ms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawn_stagger_ms: Option<u64>,
+
+    /// Warnings about the run (a project that isn't cloned): meta prints
+    /// them, or with `--json` lists them in its report's `warnings`. A host
+    /// older than this field doesn't show them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// A single command to be executed by the host via loop_lib.
@@ -211,7 +228,7 @@ pub enum CommandResult {
     /// A plan of commands to execute via loop_lib (simple form, no pre/post commands)
     Plan(Vec<PlannedCommand>, Option<bool>),
     /// A full execution plan with pre/post commands
-    FullPlan(ExecutionPlan),
+    FullPlan(Box<ExecutionPlan>),
     /// A message to display (no commands to execute)
     Message(String),
     /// An error occurred: the plugin exits 1 (the host escapes the message)
@@ -258,6 +275,7 @@ fn simple_plan(commands: Vec<PlannedCommand>, parallel: Option<bool>) -> PlanRes
             parallel,
             max_parallel: None,
             spawn_stagger_ms: None,
+            warnings: vec![],
         },
     }
 }
@@ -288,6 +306,7 @@ pub fn output_execution_plan_full(
         parallel,
         max_parallel,
         spawn_stagger_ms,
+        warnings: vec![],
     };
     end(emit_json(&PlanResponse { plan }));
 }
@@ -426,14 +445,21 @@ pub fn has_help_token(command: &str, args: &[String]) -> bool {
 }
 
 /// Parse the arguments of `meta <command>` with `P`: its help (or version)
-/// as a message, its error, escaped, as an error.
-pub fn parse_args<P: clap::Parser>(command: &str, args: &[String]) -> Result<P, CommandResult> {
+/// as a message, its error, escaped, as an error. An option of meta's typed
+/// after the command that `P` rejects gets the tip with the line to run
+/// (`meta` sends its options in the request: `&request.options.meta_options`;
+/// [`meta_core::args::MetaOptions::refusing`] the ones the command never takes).
+pub fn parse_args<P: clap::Parser>(
+    command: &str,
+    args: &[String],
+    meta: &meta_core::args::MetaOptions,
+) -> Result<P, CommandResult> {
     let name = format!("meta {command}");
     let argv: Vec<String> = std::iter::once(name.clone())
         .chain(args.iter().cloned())
         .collect();
     P::try_parse_from(&argv).map_err(|e| {
-        use clap::error::ErrorKind;
+        use clap::error::{ContextKind, ContextValue, ErrorKind};
         match e.kind() {
             ErrorKind::DisplayHelp
             | ErrorKind::DisplayVersion
@@ -441,9 +467,26 @@ pub fn parse_args<P: clap::Parser>(command: &str, args: &[String]) -> Result<P, 
                 CommandResult::Message(e.render().to_string().trim_end().to_string())
             }
             _ => {
-                let message = meta_core::args::escaped_error::<P>(&argv).to_string();
-                let message = message.strip_prefix("error: ").unwrap_or(&message);
-                let mut message = message.trim_end().to_string();
+                let mut escaped = meta_core::args::escaped_error::<P>(&argv);
+                let typed: Vec<String> = command
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .chain(args.iter().cloned())
+                    .collect();
+                let words = command.split_whitespace().count();
+                let check = |_: &[String], rest: &[String]| {
+                    let args = rest.iter().skip(words).map(String::as_str);
+                    meta_core::args::verdict(P::try_parse_from(
+                        std::iter::once(name.as_str()).chain(args),
+                    ))
+                };
+                if let Some(tip) = meta.rejected(&e, &typed, &check) {
+                    escaped.insert(
+                        ContextKind::Suggested,
+                        ContextValue::StyledStrs(vec![tip.into()]),
+                    );
+                }
+                let mut message = meta_core::args::message(&escaped);
                 // a command that isn't one: the ones there are
                 if e.kind() == ErrorKind::InvalidSubcommand {
                     let help = P::command().bin_name(&name).render_help().to_string();
@@ -521,7 +564,7 @@ fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
     }
     match (plugin.execute)(request) {
         CommandResult::Plan(commands, parallel) => emit_json(&simple_plan(commands, parallel)),
-        CommandResult::FullPlan(plan) => emit_json(&PlanResponse { plan }),
+        CommandResult::FullPlan(plan) => emit_json(&PlanResponse { plan: *plan }),
         CommandResult::Message(msg) if msg.is_empty() => Ok(()),
         CommandResult::Message(msg) => emit(&format!("{msg}\n")),
         CommandResult::Error(e) => Err(anyhow::anyhow!(e)),
@@ -701,11 +744,22 @@ mod tests {
                 dry_run: true,
                 silent: true,
                 recursive: true,
+                all: true,
                 depth: Some(2),
                 include_filters: Some(vec!["a".to_string()]),
                 exclude_filters: Some(vec!["b".to_string()]),
                 tag_filters: Some(vec!["t".to_string()]),
                 strict: true,
+                meta_options: meta_core::args::MetaOptions {
+                    options: vec![meta_core::args::MetaOption {
+                        spellings: vec!["--json".to_string()],
+                        takes_value: false,
+                        repeats: false,
+                        number: false,
+                        refused: false,
+                    }],
+                    typed: vec!["--json".to_string()],
+                },
             },
         };
         // the keys as a plugin reads them
@@ -719,9 +773,13 @@ mod tests {
                 "cwd": "/work space",
                 "options": {
                     "json_output": true, "verbose": true, "parallel": true,
-                    "dry_run": true, "silent": true, "recursive": true, "depth": 2,
+                    "dry_run": true, "silent": true, "recursive": true, "all": true, "depth": 2,
                     "include_filters": ["a"], "exclude_filters": ["b"],
                     "tag_filters": ["t"], "strict": true,
+                    "meta_options": {
+                        "options": [{"spellings": ["--json"], "takes_value": false, "repeats": false, "number": false}],
+                        "typed": ["--json"],
+                    },
                 },
             })
         );
@@ -731,6 +789,10 @@ mod tests {
             (sent.command, sent.args, sent.projects)
         );
         assert_eq!(got.cwd, sent.cwd);
+        assert_eq!(
+            got.options.meta_options.typed,
+            sent.options.meta_options.typed
+        );
         let (o, s) = (got.options, sent.options);
         assert_eq!(
             [
@@ -740,9 +802,10 @@ mod tests {
                 o.dry_run,
                 o.silent,
                 o.recursive,
+                o.all,
                 o.strict
             ],
-            [true; 7]
+            [true; 8]
         );
         assert_eq!(o.depth, s.depth);
         assert!(o.mode().is_preview());

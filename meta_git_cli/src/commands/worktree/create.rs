@@ -37,8 +37,7 @@ pub(crate) fn handle_create(
     json: bool,
     global_strict: bool,
 ) -> Result<Option<Created>> {
-    // Merge global --strict with local --strict (either enables strict mode)
-    let strict = args.strict || global_strict;
+    let strict = global_strict;
 
     let name = &args.name;
     validate_worktree_name(name)?;
@@ -63,18 +62,21 @@ pub(crate) fn handle_create(
     let from_ref = args.commit_ish.as_deref();
     let from_pr_spec = args.from_pr.as_deref();
 
-    let recursive = args.recursive;
+    let recursive = args.recursive || args.from_root;
 
-    if args.repos.is_empty() && !args.all {
-        anyhow::bail!("Specify repos with --repo <alias> or use --all");
+    if args.repos.is_empty() && !args.every_repo {
+        anyhow::bail!("Specify repos with --repo <alias> or use --every-repo");
     }
     let cwd = std::env::current_dir()?;
     let configs = Configs::find(&cwd)?;
-    // --recursive works from the root of the workspace tree
-    let configs = match recursive {
+    // meta's -A works from the root of the workspace tree, -r from the
+    // nearest .meta.yaml down
+    let configs = match args.from_root {
         true => Configs::of(configs.here.root()?)?,
         false => configs,
     };
+    // with -r or -A, meta names repos by their path from here
+    let root = meta_core::config::listed_root(&configs.here.dir);
     let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
 
     // Check if worktree already exists
@@ -96,7 +98,7 @@ pub(crate) fn handle_create(
     // projects (the whole tree, walked once, with --recursive)
     let index_of = || -> Result<Index> {
         Ok(match recursive {
-            true => Index::recursive(&configs.here)?,
+            true => Index::recursive(&configs.here, args.depth)?,
             false => Index::new(&configs.here),
         })
     };
@@ -129,7 +131,11 @@ pub(crate) fn handle_create(
                 )?;
                 return Ok(None);
             }
-            anyhow::ensure!(rounds < 16, "{}", not_cloned_error(&parents, recursive));
+            anyhow::ensure!(
+                rounds < 16,
+                "{}",
+                not_cloned_error(&parents, recursive.then(|| root.clone()))
+            );
             clone_missing(&index, &parents)?;
             rounds += 1;
             index = index_of()?;
@@ -153,7 +159,12 @@ pub(crate) fn handle_create(
         anyhow::ensure!(
             rounds < 16,
             "{}",
-            not_cloned_error(&planned.missing, index.tree().is_some())
+            not_cloned_error(
+                &planned.missing,
+                index
+                    .tree()
+                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
+            )
         );
         clone_missing(&index, &planned.missing)?;
         rounds += 1;
@@ -635,7 +646,7 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
 }
 
 /// Why a repo is in a set being made. A project that isn't cloned is an
-/// error when it was asked for or is needed; with `--all`, or as a parent
+/// error when it was asked for or is needed; with `--every-repo`, or as a parent
 /// on the way to a nested repo, it is skipped with a warning (an error
 /// with `--strict`).
 #[derive(Debug, Clone, PartialEq)]
@@ -705,11 +716,11 @@ fn plan_repos(
         asked: HashMap::new(),
     };
 
-    if args.all {
+    if args.every_repo {
         // the root, when something is there for git (one git can't use is
         // skipped with the rest, saying why), and every project: by name,
         // or with --recursive, every place of the tree
-        // (exec --ephemeral --all may give a repo its branch: --repo name:branch)
+        // (exec --ephemeral --every-repo may give a repo its branch: --repo name:branch)
         // (each such --repo is asked for, so two branches for one repo are refused)
         let mut all = |found: Found| {
             let specs: Vec<_> = args.repos.iter().filter(|r| r.alias == found.key).collect();
@@ -744,10 +755,10 @@ fn plan_repos(
             }
         }
     }
-    // The projects whose depends_on this create follows: with --all every
+    // The projects whose depends_on this create follows: with --every-repo every
     // one, else those asked for and what they need. Only theirs are checked.
     let mut followed: Vec<String> = Vec::new();
-    if args.all {
+    if args.every_repo {
         followed.extend(plan.repos.iter().map(|(repo, _)| repo.project.clone()));
     } else {
         let mut asked_keys = Vec::new();
@@ -884,7 +895,15 @@ fn plan_repos(
     }
     if !not_cloned.is_empty() {
         not_cloned.extend(missing);
-        anyhow::bail!("{}", not_cloned_error(&not_cloned, index.tree().is_some()));
+        anyhow::bail!(
+            "{}",
+            not_cloned_error(
+                &not_cloned,
+                index
+                    .tree()
+                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
+            )
+        );
     }
     repos.sort_by(|a, b| {
         let order = |r: &PlannedRepo| (r.place != ".", r.place.split('/').count());
@@ -1021,11 +1040,21 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
         }
         Ok(_) => anyhow::bail!(
             "{}\n(cloning cloned none of them)",
-            not_cloned_error(&still, index.tree().is_some())
+            not_cloned_error(
+                &still,
+                index
+                    .tree()
+                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
+            )
         ),
         Err(why) => anyhow::bail!(
             "{}\nCloning failed: {}",
-            not_cloned_error(&still, index.tree().is_some()),
+            not_cloned_error(
+                &still,
+                index
+                    .tree()
+                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
+            ),
             why
         ),
     }
@@ -1035,7 +1064,7 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
 /// because they aren't cloned, with the command that clones exactly the
 /// missing ones (`recursive`: places are of the whole tree, so the command
 /// needs -r).
-fn not_cloned_error(repos: &[PlannedRepo], recursive: bool) -> String {
+fn not_cloned_error(repos: &[PlannedRepo], root: Option<std::path::PathBuf>) -> String {
     use meta_core::gitdir::Checkout;
     let mut message = format!(
         "{} the set needs can't be used; no worktree was created:",
@@ -1049,7 +1078,16 @@ fn not_cloned_error(repos: &[PlannedRepo], recursive: bool) -> String {
     for repo in repos {
         let why = match Checkout::of(&repo.source) {
             Checkout::Missing => {
-                missing.push(repo.place.as_str());
+                // with -A, from anywhere, by its path from the root
+                missing.push(
+                    match root
+                        .as_deref()
+                        .and_then(|root| repo.source.strip_prefix(root).ok())
+                    {
+                        Some(path) => path.to_string_lossy().into_owned(),
+                        None => repo.place.clone(),
+                    },
+                );
                 "not cloned".to_string()
             }
             checkout => {
@@ -1079,7 +1117,7 @@ fn not_cloned_error(repos: &[PlannedRepo], recursive: bool) -> String {
         let include = meta_core::display::shell_quote(&missing.join(","));
         message.push_str(&format!(
             "\nTo clone just the missing ones, then run this create again:\n  meta {}--include {} git clone-missing",
-            if recursive { "-r " } else { "" },
+            if root.is_some() { "-A " } else { "" },
             escape(&include)
         ));
     }

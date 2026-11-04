@@ -1,7 +1,7 @@
 //! `--include`, `--exclude` and `--tag`: which repos a command runs in.
 
 use anyhow::{bail, Result};
-use meta_core::config::{MetaTreeNode, ProjectInfo};
+use meta_core::config::{self, MetaTreeNode, ProjectInfo, Workspace};
 use meta_core::display::{escape, escape_path};
 use std::path::{Component, Path, PathBuf};
 
@@ -64,6 +64,94 @@ impl Candidate {
             dir,
             name: None,
             tags: vec![],
+        }
+    }
+}
+
+/// How far a command reaches from where it runs: the nearest workspace (no
+/// option), with `-r` the meta repos nested under it too, with `-A` the whole
+/// graph from the outermost workspace. With `-r` or `-A`, repos are named by
+/// their path from the outermost workspace (`root`).
+pub struct Reach {
+    /// Where the command starts: the nearest workspace, or the outermost
+    /// with `-A`
+    pub workspace: Workspace,
+    /// The outermost workspace's folder, which names the repos (with no
+    /// option: the nearest's, as before)
+    pub root: PathBuf,
+    /// The nested meta repos under `workspace`, `depth` levels of them
+    /// (`-r`, `-A`); empty without
+    pub tree: Vec<MetaTreeNode>,
+    /// `--depth`, as given
+    depth: Option<usize>,
+}
+
+impl Reach {
+    /// The reach of `workspace` (the nearest one) for `-r` (`recursive`)
+    /// and `-A` (`all`), `depth` levels down from where it starts.
+    pub fn of(
+        workspace: Workspace,
+        recursive: bool,
+        all: bool,
+        depth: Option<usize>,
+    ) -> Result<Self> {
+        let workspace = if all { workspace.root()? } else { workspace };
+        let root = match recursive && !all {
+            true => config::listed_root(&workspace.dir),
+            false => workspace.dir.clone(),
+        };
+        let tree = match recursive || all {
+            true => config::walk_projects(&workspace.dir, &workspace.projects, depth)?,
+            false => Vec::new(),
+        };
+        Ok(Self {
+            workspace,
+            root,
+            tree,
+            depth,
+        })
+    }
+
+    /// The repos it reaches, named from `root`.
+    pub fn scope(&self) -> Scope {
+        let mut scope = Scope::workspace(
+            &self.workspace.dir,
+            Some(&self.workspace.config_path),
+            &self.workspace.projects,
+            &self.tree,
+        );
+        scope.root = self.root.clone();
+        scope
+    }
+
+    /// The repos of it `filters` select. One that names a repo outside
+    /// where `-r` starts, but that `-A` (with the same `--depth`) reaches,
+    /// says so, as in `with_a` (the line to run).
+    pub fn select(
+        &self,
+        filters: &Filters,
+        with_a: impl FnOnce() -> String,
+    ) -> Result<Vec<PathBuf>> {
+        let selected = self.scope().select(filters);
+        let Err(e) = selected else {
+            return selected;
+        };
+        if self.root == self.workspace.dir {
+            return Err(e);
+        }
+        let whole = Workspace::in_dir(&self.root)?
+            .map(|root| Reach::of(root, false, true, self.depth))
+            .transpose()?;
+        // -A from the root reaches no deeper below here than -r: what it
+        // takes that -r doesn't is outside (an --exclude of a repo there too)
+        match whole.map(|whole| whole.scope().select(filters)) {
+            Some(Ok(_)) => bail!(
+                "{e:#}\nThat names a repo outside {}, where -r starts; -A reaches the whole \
+                 workspace, as in {}",
+                escape(&repo_path(&self.workspace.dir, &self.root)),
+                escape(&with_a())
+            ),
+            _ => Err(e),
         }
     }
 }
@@ -206,11 +294,16 @@ impl Scope {
             }
             let hits = if by_path.is_empty() { by_name } else { by_path };
             if hits.is_empty() {
+                let hint = if nested {
+                    ""
+                } else {
+                    " --recursive adds the repos of nested meta repos."
+                };
                 bail!(
                     "{flag} '{value}' names none of the repos this command runs in{read_from}. Use a \
                      repo's name from .meta.yaml or its path from the workspace root (`.` for the \
-                     root), as `meta project list` shows it; in a worktree set, the same, from the \
-                     set's root. --recursive adds the repos of nested meta repos."
+                     root; without -r or -A, from the nearest .meta.yaml), as `meta project list` \
+                     shows it; in a worktree set, the same, from the set's root.{hint}"
                 );
             }
             Ok(hits.iter().map(|r| r.id.as_path()).collect())

@@ -37,8 +37,8 @@ fn main() {
                 runs_as_typed: None,
                 examples: vec![
                     "meta project list".to_string(),
-                    "meta project list --json".to_string(),
-                    "meta project list --recursive".to_string(),
+                    "meta --json project list".to_string(),
+                    "meta -r project list".to_string(),
                     "meta project check".to_string(),
                 ],
                 note: Some("To clone missing projects, use: meta git clone-missing".to_string()),
@@ -52,12 +52,14 @@ fn execute(request: PluginRequest) -> CommandResult {
     let options = meta_project_cli::ExecuteOptions {
         json_output: request.options.json_output,
         recursive: request.options.recursive,
+        all: request.options.all,
         depth: request.options.depth,
         // meta sent only the repos its filters chose
         selected: request
             .options
             .filtered()
             .then(|| meta_project_cli::ExecuteOptions::selection_from(&request.projects)),
+        meta: request.options.meta_options,
     };
 
     meta_project_cli::execute_command(

@@ -82,10 +82,10 @@ test-meta-git-clone: rm-meta
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo run --release --bin meta -- git clone git@github.com:mateodelnorte/meta.git
 
 test-meta-git-clone-depth-1-recursive: rm-meta
-	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo run --release --bin meta -- git clone git@github.com:mateodelnorte/meta.git --depth 1 --recursive
+	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo run --release --bin meta -- -r git clone git@github.com:mateodelnorte/meta.git --depth 1
 
 test-meta-git-clone-parallel-recursive: rm-meta
-	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo run --release --bin meta -- git clone git@github.com:mateodelnorte/meta.git --parallel 4 --recursive
+	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo run --release --bin meta -- -r git clone git@github.com:mateodelnorte/meta.git --parallel 4
 
 # Parallel jobs - defaults to CPU count
 # Override with JOBS=N, or disable with JOBS=1

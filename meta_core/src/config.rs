@@ -365,6 +365,14 @@ fn listed_chain(meta_dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// The outermost meta directory whose project lists lead down to
+/// `meta_dir`: `meta_dir` itself when the one above doesn't list it.
+pub fn listed_root(meta_dir: &Path) -> PathBuf {
+    listed_chain(meta_dir)
+        .pop()
+        .unwrap_or_else(|| meta_dir.to_path_buf())
+}
+
 /// The root of the workspace `meta_dir` belongs to (see [`workspace_meta_dirs`]).
 pub fn workspace_root(meta_dir: &Path) -> anyhow::Result<PathBuf> {
     Ok(workspace_meta_dirs(meta_dir)?
@@ -522,10 +530,12 @@ impl Workspace {
             .transpose()
     }
 
-    /// The workspace at the top of the tree this one is nested in (see
-    /// [`find_root_meta_dir`]); this one at the top.
+    /// The workspace at the top of the tree this one is nested in: the
+    /// outermost one whose project lists lead down to it ([`listed_root`]);
+    /// this one at the top, or when the one above doesn't list it (a
+    /// worktree set inside a workspace's `.worktrees`, an orphan).
     pub fn root(self) -> anyhow::Result<Self> {
-        let root = find_root_meta_dir(&self.dir)?;
+        let root = listed_root(&self.dir);
         if root == self.dir {
             return Ok(self);
         }
@@ -1236,31 +1246,6 @@ pub fn find_parent_meta_config(meta_dir: &Path) -> anyhow::Result<Option<PathBuf
     match meta_dir.parent() {
         Some(parent) => find_meta_config(parent, None),
         None => Ok(None),
-    }
-}
-
-/// Find the root (topmost) meta directory by walking up through parent .meta.yaml files.
-///
-/// Starting from `meta_dir`, repeatedly calls `find_parent_meta_config` until
-/// no more parents are found. Returns the topmost meta directory in the hierarchy.
-/// If `meta_dir` is already the root, returns it unchanged.
-pub fn find_root_meta_dir(meta_dir: &Path) -> anyhow::Result<PathBuf> {
-    let mut current = meta_dir.to_path_buf();
-    loop {
-        match find_parent_meta_config(&current)? {
-            Some(parent_config_path) => {
-                current = parent_config_path
-                    .parent()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Config path has no parent: {}",
-                            escape_path(&parent_config_path)
-                        )
-                    })?
-                    .to_path_buf();
-            }
-            None => break Ok(current),
-        }
     }
 }
 
@@ -2565,21 +2550,20 @@ mod tests {
     }
 
     // ============================================================================
-    // find_root_meta_dir tests
+    // listed_root tests
     // ============================================================================
 
     #[test]
-    fn test_find_root_meta_dir_no_parent() {
+    fn test_listed_root_no_parent() {
         // Single-level meta dir (no parent) → returns self
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
 
-        let root = find_root_meta_dir(dir.path()).unwrap();
-        assert_eq!(root, dir.path());
+        assert_eq!(listed_root(dir.path()), dir.path());
     }
 
     #[test]
-    fn test_find_root_meta_dir_two_levels() {
+    fn test_listed_root_two_levels_and_an_unlisted_one() {
         // root → child: from child, should return root
         let dir = tempfile::tempdir().unwrap();
         let child = dir.path().join("child");
@@ -2592,12 +2576,17 @@ mod tests {
         .unwrap();
         std::fs::write(child.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
 
-        let root = find_root_meta_dir(&child).unwrap();
-        assert_eq!(root, dir.path());
+        assert_eq!(listed_root(&child), dir.path());
+        // a meta repo the one above doesn't list (a worktree set in its
+        // .worktrees, an orphan) is its own root
+        let unlisted = dir.path().join(".worktrees/set");
+        std::fs::create_dir_all(&unlisted).unwrap();
+        std::fs::write(unlisted.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        assert_eq!(listed_root(&unlisted), unlisted);
     }
 
     #[test]
-    fn test_find_root_meta_dir_three_levels() {
+    fn test_listed_root_three_levels() {
         // root → child → grandchild: from grandchild, should return root
         let dir = tempfile::tempdir().unwrap();
         let child = dir.path().join("child");
@@ -2616,8 +2605,7 @@ mod tests {
         .unwrap();
         std::fs::write(grandchild.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
 
-        let root = find_root_meta_dir(&grandchild).unwrap();
-        assert_eq!(root, dir.path());
+        assert_eq!(listed_root(&grandchild), dir.path());
     }
 
     // ============================================================================

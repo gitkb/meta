@@ -84,14 +84,14 @@ EOF
     [ "$status" -eq 0 ]
     git -C backend config --local core.bare true
 
-    run "$META_BIN" git worktree status bare-member --json
+    run "$META_BIN" --json git worktree status bare-member
     git -C backend config --local core.bare false
     [ "$status" -eq 0 ]
     [ "$(printf '%s' "$output" | jq -r '.repos[] | select(.alias == "backend") | .branch')" = "bare-member" ]
 }
 
-@test "worktree create --all creates worktrees for all repos" {
-    run "$META_BIN" git worktree create full-task --all
+@test "worktree create --every-repo creates worktrees for all repos" {
+    run "$META_BIN" git worktree create full-task --every-repo
     [ "$status" -eq 0 ]
     [ -d ".worktrees/full-task/backend" ]
     [ -d ".worktrees/full-task/frontend" ]
@@ -148,8 +148,8 @@ EOF
     run "$META_BIN" --strict --dry-run git worktree create front --repo frontend
     [ "$status" -eq 0 ]
     [[ "$output" != *"depends on 'db'"* ]]
-    # --all holds backend: its problems count too
-    run "$META_BIN" --strict --dry-run git worktree create every --all
+    # --every-repo holds backend: its problems count too
+    run "$META_BIN" --strict --dry-run git worktree create every --every-repo
     [ "$status" -ne 0 ]
     [[ "$output" == *"'backend' depends on 'db', which 'frontend'"*"(strict mode)"* ]]
     # a project named db is what the name means, whoever provides one
@@ -170,7 +170,7 @@ EOF
     bad=$'bad\nwarning: FORGED'
     mkdir -p ".worktrees/$bad/r"
     echo "gitdir: /does-not-exist" > ".worktrees/$bad/r/.git"
-    run "$META_BIN" git worktree list --recursive --metadata-only
+    run "$META_BIN" --strict git worktree list --metadata-only
     [[ "$output" == *'bad\nwarning: FORGED'* ]]
     [[ "$output" != *$'\nwarning: FORGED'* ]]
 }
@@ -239,11 +239,11 @@ projects:
   clients: {repo: "file://$TEST_DIR/clients.git", meta: true}
   backend: "git@github.com:org/backend.git"
 EOF
-    run "$META_BIN" --dry-run git worktree create t -r --repo clients/desktop
+    run "$META_BIN" --dry-run -r git worktree create t --repo clients/desktop
     [ "$status" -eq 0 ]
     [[ "$output" == *"Would clone the meta repos on the way to the repos asked for (clients)"* ]]
     [ ! -e clients ]
-    run "$META_BIN" git worktree create t -r --repo clients/desktop
+    run "$META_BIN" -r git worktree create t --repo clients/desktop
     [ "$status" -eq 0 ]
     [[ "$output" == *"Cloning 1 repo the set needs: clients"* ]]
     [[ "$output" == *"Cloning 1 repo the set needs: clients/desktop"* ]]
@@ -295,7 +295,7 @@ projects:
   open-source: {repo: "file://$TEST_DIR/open-source.git", meta: true}
   backend: "git@github.com:org/backend.git"
 EOF
-    run "$META_BIN" git worktree create t -r --repo clients/desktop
+    run "$META_BIN" -r git worktree create t --repo clients/desktop
     [ "$status" -eq 0 ]
     [[ "$output" != *"warning"* ]]
     for repo in clients clients/desktop open-source open-source/sdk open-source/gitkb open-source/gitkb/core; do
@@ -324,7 +324,7 @@ projects:
   vendor: {repo: "file://$TEST_DIR/vendor.git", meta: true}
   backend: "git@github.com:org/backend.git"
 EOF
-    run "$META_BIN" git worktree create t -r --strict --repo app
+    run "$META_BIN" -r --strict git worktree create t --repo app
     [ "$status" -eq 0 ]
     [[ "$output" != *"warning"* ]]
     for repo in app service vendor vendor/sdk; do
@@ -347,13 +347,13 @@ projects:
   clients: {repo: "file://$TEST_DIR/clients.git", meta: true}
   backend: "git@github.com:org/backend.git"
 EOF
-    run "$META_BIN" git worktree create t -r --strict --repo clients/desktop
+    run "$META_BIN" -r --strict git worktree create t --repo clients/desktop
     [ "$status" -ne 0 ]
     [[ "$output" == *"Cloned clients"* ]]
     [[ "$output" == *"'clients/desktop' depends on 'clients/nowhere'"*"(strict mode)"* ]]
     [ ! -e .worktrees/t ]
     # without --strict, the same is a warning, once
-    run "$META_BIN" git worktree create t -r --repo clients/desktop
+    run "$META_BIN" -r git worktree create t --repo clients/desktop
     [ "$status" -eq 0 ]
     [ "$(grep -c "depends on 'clients/nowhere'" <<<"$output")" -eq 1 ]
 }
@@ -379,18 +379,18 @@ EOF
     [ ! -e ".worktrees/denied" ]
 }
 
-@test "worktree create --all skips a repo that is not cloned; --repo and add refuse it when it can't be cloned" {
+@test "worktree create --every-repo skips a repo that is not cloned; --repo and add refuse it when it can't be cloned" {
     rm -rf frontend
     # a remote that can't be cloned (as without access), kept offline
     sed -i.bak "s#git@github.com:org/frontend.git#file://$TEST_DIR/nowhere.git#" .meta.yaml
-    run "$META_BIN" git worktree create some --all
+    run "$META_BIN" git worktree create some --every-repo
     [ "$status" -eq 0 ]
     [[ "$output" == *"'frontend' at $TEST_DIR/frontend: not cloned"*"skipping"* ]]
     [ -d ".worktrees/some/backend" ]
     [ ! -e ".worktrees/some/frontend" ]
 
     # all or nothing with --strict
-    run "$META_BIN" git worktree create strict --all --strict
+    run "$META_BIN" --strict git worktree create strict --every-repo
     [ "$status" -ne 0 ]
     [[ "$output" == *"'frontend' at $TEST_DIR/frontend: not cloned"* ]]
     [[ "$output" != *"skipping"* ]]
@@ -437,7 +437,7 @@ EOF
 }
 
 @test "worktree create --json emits structured output" {
-    run "$META_BIN" git worktree create json-test --repo backend --json
+    run "$META_BIN" --json git worktree create json-test --repo backend
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['name']=='json-test'"
 }
@@ -540,7 +540,7 @@ EOF
 
 @test "worktree add --json emits structured output" {
     "$META_BIN" git worktree create add-json --repo backend
-    run "$META_BIN" git worktree add add-json --repo frontend --json
+    run "$META_BIN" --json git worktree add add-json --repo frontend
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['name']=='add-json'"
 }
@@ -558,7 +558,7 @@ EOF
 
 @test "worktree list --json outputs valid JSON" {
     "$META_BIN" git worktree create list-json --repo backend
-    run "$META_BIN" git worktree list --json
+    run "$META_BIN" --json git worktree list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json,sys
@@ -604,7 +604,7 @@ assert any(w['name'] == 'list-json' for w in data['worktrees'])
 @test "worktree status --json includes modified files" {
     "$META_BIN" git worktree create status-json --repo backend
     echo "change" >> ".worktrees/status-json/backend/README.md"
-    run "$META_BIN" git worktree status status-json --json
+    run "$META_BIN" --json git worktree status status-json
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json,sys
@@ -639,7 +639,7 @@ assert repo['modified_count'] >= 1
     git -C ".worktrees/diff-json/backend" add -A
     git -C ".worktrees/diff-json/backend" commit --quiet -m "change" \
         --author "Test <test@test.com>"
-    run "$META_BIN" git worktree diff diff-json --json
+    run "$META_BIN" --json git worktree diff diff-json
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json,sys
@@ -682,7 +682,7 @@ assert d['totals']['files_changed'] >= 1
 
 @test "worktree exec --include filters repos" {
     "$META_BIN" git worktree create exec-filter --repo backend --repo frontend
-    run "$META_BIN" git worktree exec exec-filter --include backend -- echo found
+    run "$META_BIN" --include backend git worktree exec exec-filter -- echo found
     [ "$status" -eq 0 ]
     MATCH_COUNT=$(echo "$output" | grep -c "found" || true)
     [ "$MATCH_COUNT" -eq 1 ]
@@ -690,7 +690,7 @@ assert d['totals']['files_changed'] >= 1
 
 @test "worktree exec --exclude filters repos" {
     "$META_BIN" git worktree create exec-excl --repo backend --repo frontend
-    run "$META_BIN" git worktree exec exec-excl --exclude frontend -- pwd
+    run "$META_BIN" --exclude frontend git worktree exec exec-excl -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"backend"* ]]
     [[ "$output" != *"exec-excl/frontend"* ]]
@@ -698,11 +698,11 @@ assert d['totals']['files_changed'] >= 1
 
 @test "worktree exec --include names whole repos, never parts of paths" {
     "$META_BIN" git worktree create exec-whole --repo backend --repo frontend
-    run "$META_BIN" git worktree exec exec-whole --include end -- touch ran
+    run "$META_BIN" --include end git worktree exec exec-whole -- touch ran
     [ "$status" -ne 0 ]
     [[ "$output" == *"--include 'end' names none of the repos"* ]]
     [ -z "$(find .worktrees/exec-whole -name ran)" ]
-    run "$META_BIN" git worktree exec exec-whole --exclude ./backend/ -- pwd
+    run "$META_BIN" --exclude ./backend/ git worktree exec exec-whole -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"exec-whole/frontend"* ]]
     [[ "$output" != *"exec-whole/backend"* ]]
@@ -710,14 +710,14 @@ assert d['totals']['files_changed'] >= 1
 
 @test "worktree exec --parallel runs concurrently" {
     "$META_BIN" git worktree create exec-par --repo backend --repo frontend
-    run "$META_BIN" git worktree exec exec-par --parallel -- echo parallel-ok
+    run "$META_BIN" --parallel git worktree exec exec-par -- echo parallel-ok
     [ "$status" -eq 0 ]
     [[ "$output" == *"parallel-ok"* ]]
 }
 
 @test "worktree exec --json produces structured output" {
     "$META_BIN" git worktree create exec-json --repo backend
-    run "$META_BIN" git worktree exec exec-json --json -- echo json-out
+    run "$META_BIN" --json git worktree exec exec-json -- echo json-out
     [ "$status" -eq 0 ]
     [[ "$output" == *"json-out"* ]]
 }
@@ -948,7 +948,7 @@ assert d['totals']['files_changed'] >= 1
 
 @test "an unknown recursive repo alias is escaped on one line" {
     cd "$TEST_DIR"
-    run "$META_BIN" git worktree create badrepo --recursive --repo $'a\033[2J\nFORGED'
+    run "$META_BIN" --recursive git worktree create badrepo --repo $'a\033[2J\nFORGED'
     [ "$status" -ne 0 ]
     [[ "$output" != *$'\033'* ]]
     [[ "$output" != *$'\nFORGED'* ]]
@@ -966,9 +966,9 @@ assert d['totals']['files_changed'] >= 1
     # The dry-run preview echoes them too
     for args in "probe" "--from-pr" "--meta"; do
         case "$args" in
-            probe) run "$META_BIN" git worktree create preview $'bad\033[2J\nFORGED' --repo . --no-deps --dry-run ;;
-            --from-pr) run "$META_BIN" git worktree create preview --from-pr $'o/r#1\033[2J\nFORGED' --repo . --no-deps --dry-run ;;
-            --meta) run "$META_BIN" git worktree create preview --meta $'k=v\033[2J\nFORGED' --repo . --no-deps --dry-run ;;
+            probe) run "$META_BIN" --dry-run git worktree create preview $'bad\033[2J\nFORGED' --repo . --no-deps ;;
+            --from-pr) run "$META_BIN" --dry-run git worktree create preview --from-pr $'o/r#1\033[2J\nFORGED' --repo . --no-deps ;;
+            --meta) run "$META_BIN" --dry-run git worktree create preview --meta $'k=v\033[2J\nFORGED' --repo . --no-deps ;;
         esac
         [[ "$output" != *$'\033'* ]]
         [[ "$output" != *$'\nFORGED'* ]]
@@ -993,7 +993,7 @@ assert d['totals']['files_changed'] >= 1
     run "$META_BIN" git worktree exec "$E" -- true; check
     run "$META_BIN" git worktree status "$E"; check
     run "$META_BIN" git worktree diff "$E"; check
-    run "$META_BIN" git worktree create okb --all --branch "$E"; check
+    run "$META_BIN" git worktree create okb --every-repo --branch "$E"; check
     # A real set, compared against a bad base
     "$META_BIN" git worktree create based --repo backend
     run "$META_BIN" git worktree diff based --base "$E"
@@ -1063,7 +1063,7 @@ assert d['totals']['files_changed'] >= 1
 
 @test "worktree diff with no changes shows zero" {
     "$META_BIN" git worktree create diff-clean --repo backend
-    run "$META_BIN" git worktree diff diff-clean --json
+    run "$META_BIN" --json git worktree diff diff-clean
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
@@ -1082,7 +1082,7 @@ assert d['totals']['deletions'] == 0
     echo "dirty change" >> ".worktrees/mixed-status/backend/README.md"
     # Leave frontend clean
 
-    run "$META_BIN" git worktree status mixed-status --json
+    run "$META_BIN" --json git worktree status mixed-status
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
@@ -1093,10 +1093,10 @@ assert repos['frontend']['dirty'] == False, f'frontend should be clean: {repos[\
 "
 }
 
-# ============ Edge Cases: --all and --repo mutually exclusive ============
+# ============ Edge Cases: --every-repo and --repo mutually exclusive ============
 
-@test "worktree create --all --repo rejects combination" {
-    run "$META_BIN" git worktree create all-repo-combo --all --repo backend
+@test "worktree create --every-repo --repo rejects combination" {
+    run "$META_BIN" git worktree create all-repo-combo --every-repo --repo backend
     [ "$status" -ne 0 ]
     [[ "$output" == *"cannot be used with"* ]] || [[ "$output" == *"conflict"* ]]
 }
@@ -1129,11 +1129,11 @@ EOF
     setup_nested_meta
     sed -i.bak 's#"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}#"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true, "depends_on": ["missing"]}#' .meta.yaml
     grep -q '"missing"' .meta.yaml
-    run "$META_BIN" --dry-run git worktree create parent-check --recursive --repo vendor/nested-lib
+    run "$META_BIN" --dry-run --recursive git worktree create parent-check --repo vendor/nested-lib
     [ "$status" -eq 0 ]
     [[ "$output" != *"depends on 'missing'"* ]]
     # asked for, its depends_on is followed, and checked
-    run "$META_BIN" --strict --dry-run git worktree create parent-check --recursive --repo vendor
+    run "$META_BIN" --strict --dry-run --recursive git worktree create parent-check --repo vendor
     [ "$status" -ne 0 ]
     [[ "$output" == *"'vendor' depends on 'missing'"*"(strict mode)"* ]]
 }
@@ -1156,7 +1156,7 @@ EOF
 @test "worktree create refuses a repo named twice by short and full alias on two branches" {
     setup_nested_meta
 
-    run "$META_BIN" git worktree create two-names --recursive --repo nested-lib:one --repo vendor/nested-lib:two
+    run "$META_BIN" --recursive git worktree create two-names --repo nested-lib:one --repo vendor/nested-lib:two
     [ "$status" -ne 0 ]
     [[ "$output" == *"is given twice"* ]]
     [ ! -e ".worktrees/two-names" ]
@@ -1169,7 +1169,7 @@ EOF
     git -C vendor init --quiet --initial-branch=main
     git -C vendor add .gitignore .meta.yaml
     git -C vendor commit --quiet -m "vendor"
-    "$META_BIN" git worktree create nest --recursive --repo vendor --repo vendor/nested-lib
+    "$META_BIN" --recursive git worktree create nest --repo vendor --repo vendor/nested-lib
     [ -e .worktrees/nest/vendor/nested-lib/.git ]
     run "$META_BIN" git worktree list nest
     [ "$status" -eq 0 ]
@@ -1179,6 +1179,79 @@ EOF
     run "$META_BIN" --json git worktree status nest
     [ "$status" -eq 0 ]
     [[ "$output" == *'"alias": "vendor/nested-lib"'* ]]
+}
+
+@test "loop commands in a set reach its nested members" {
+    bats_require_minimum_version 1.5.0
+    setup_nested_meta
+    echo "nested-lib/" > vendor/.gitignore
+    git -C vendor init --quiet --initial-branch=main
+    git -C vendor add .gitignore .meta.yaml
+    git -C vendor commit --quiet -m "vendor"
+    "$META_BIN" -r git worktree create nest --repo vendor --repo vendor/nested-lib
+    echo changed >> .worktrees/nest/vendor/nested-lib/README.md
+    cd .worktrees/nest
+    run "$META_BIN" git status -s
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"vendor/nested-lib"*"M README.md"* ]]
+    run "$META_BIN" git add -u
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git commit -m "nested change"
+    [ "$status" -eq 0 ]
+    [ "$(git -C vendor/nested-lib log -1 --format=%s)" = "nested change" ]
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree exec nest -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".worktrees/nest/vendor/nested-lib"* ]]
+    # a nested member is chosen by its path in the set
+    run "$META_BIN" --include vendor/nested-lib git worktree exec nest -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"1 commands complete"* ]]
+    # the set is the scope: -r adds nothing, so no hint names it; -A is the
+    # whole set, not the workspace around it
+    cd .worktrees/nest
+    # (the set's own .meta.yaml, from before vendor was added to the
+    # workspace's, which -A would show from the workspace)
+    run --separate-stderr "$META_BIN" -A --json context --no-status
+    [ "$(jq -r .name <<<"$output")" = nest ]
+    [[ "$(jq -r '[.repos[].path] | join(" ")' <<<"$output")" != *"vendor"* ]]
+    run "$META_BIN" -r --include nope git status
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--include 'nope' names none"* ]]
+    [[ "$output" != *"--recursive"* ]]
+    # a dirty nested member stops remove without --force, by name
+    echo again >> vendor/nested-lib/README.md
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree remove nest
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nested-lib"* ]]
+    [ -e .worktrees/nest/vendor/nested-lib/README.md ]
+}
+
+@test "meta's --include before worktree exec picks the set's repos" {
+    "$META_BIN" git worktree create pick --repo backend --repo frontend
+    run "$META_BIN" --include backend git worktree exec pick -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".worktrees/pick/backend"* ]]
+    [[ "$output" != *".worktrees/pick/frontend"* ]]
+    run "$META_BIN" --exclude backend git worktree exec pick -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".worktrees/pick/frontend"* ]]
+    [[ "$output" != *".worktrees/pick/backend"* ]]
+    # a name the set doesn't hold is an error naming the set
+    run "$META_BIN" --include nope git worktree exec pick -- pwd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--include 'nope' names none"* ]]
+    [[ "$output" != *"--recursive"* ]]
+    # by the set's own names: . is the set's root
+    run "$META_BIN" --include . git worktree exec pick -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".worktrees/pick"* ]]
+    [[ "$output" != *".worktrees/pick/backend"* ]]
+    # other worktree commands refuse a selection
+    run "$META_BIN" --include backend git worktree status pick
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --include"* ]]
 }
 
 @test "worktree add with nested repo alias succeeds" {
@@ -1258,17 +1331,22 @@ EOF
     [[ "$output" == *"list-nested"* ]]
 }
 
-@test "--include before git worktree is refused, not ignored" {
+@test "meta's --exclude and --tag before git worktree exec select the set's repos" {
     "$META_BIN" git worktree create global-filter --repo backend --repo frontend
-    run "$META_BIN" --exclude frontend git worktree exec global-filter -- touch ran
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"does not take --include/--exclude/--tag before it"* ]]
-    # --tag too, though the tag is real
-    echo '{"projects": {"backend": {"repo": "git@github.com:org/backend.git", "tags": ["api"]}, "frontend": "git@github.com:org/frontend.git"}}' > .meta.yaml
+    run "$META_BIN" --exclude frontend --exclude . git worktree exec global-filter -- touch ran
+    [ "$status" -eq 0 ]
+    [ "$(find .worktrees/global-filter -name ran)" = .worktrees/global-filter/backend/ran ]
+    rm .worktrees/global-filter/backend/ran
+    # --tag by the tags of the set's own .meta.yaml
+    echo '{"projects": {"backend": {"repo": "git@github.com:org/backend.git", "tags": ["api"]}, "frontend": "git@github.com:org/frontend.git"}}' > .worktrees/global-filter/.meta.yaml
     run "$META_BIN" --tag api git worktree exec global-filter -- touch ran
+    [ "$status" -eq 0 ]
+    [ "$(find .worktrees/global-filter -name ran)" = .worktrees/global-filter/backend/ran ]
+    # other worktree commands refuse a selection rather than ignore it
+    run "$META_BIN" --tag api git worktree remove global-filter --force
     [ "$status" -ne 0 ]
-    [[ "$output" == *"does not take --include/--exclude/--tag before it"* ]]
-    [ -z "$(find .worktrees/global-filter -name ran)" ]
+    [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
+    [ -d .worktrees/global-filter ]
 }
 
 @test "inside a worktree set, a filter typo is an error" {
@@ -1312,7 +1390,7 @@ EOF
 
 @test "worktree exec --include works with a relative META_WORKTREES" {
     "$META_BIN" git worktree create rel-root --repo backend --repo frontend
-    run env META_WORKTREES=.worktrees "$META_BIN" git worktree exec rel-root --include backend -- pwd
+    run env META_WORKTREES=.worktrees "$META_BIN" --include backend git worktree exec rel-root -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"rel-root/backend"* ]]
     [[ "$output" != *"rel-root/frontend"* ]]
@@ -1329,7 +1407,7 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"$TEST_DIR/frontend"* ]]
     [[ "$output" != *".worktrees"* ]]
-    run "$META_BIN" --primary context --json
+    run "$META_BIN" --primary --json context
     [ "$status" -eq 0 ]
     [[ "$output" == *"\"name\": \"$(basename "$TEST_DIR")\""* ]]
     [[ "$output" == *"\"frontend\""* ]]

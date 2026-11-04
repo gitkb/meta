@@ -537,8 +537,9 @@ fn execute_plan(
         }
     }
 
-    // Phase 2: Run main commands (may be parallel)
-    if !plan.commands.is_empty() {
+    // Phase 2: Run main commands (may be parallel); with none, the report
+    // still says why (every repo it would run in isn't cloned, say)
+    {
         let commands: Vec<DirCommand> = plan.commands.iter().map(job).collect();
         // only in the selected projects that are repositories
         let projects: Vec<PathBuf> = projects.iter().map(PathBuf::from).collect();
@@ -553,6 +554,7 @@ fn execute_plan(
         let config = LoopConfig {
             verbose: options.verbose,
             silent: options.silent,
+            warnings: plan.warnings.clone(),
             parallel: plan.parallel.unwrap_or(options.parallel),
             dry_run: options.dry_run,
             json_output: options.json_output,

@@ -22,13 +22,18 @@ use std::path::Path;
 
 use helpers::get_project_directories_with_fallback;
 
+/// meta's options that choose repos, which commands that find their repos
+/// themselves never take
+pub(crate) const FILTERS: [&str; 3] = ["--include", "--exclude", "--tag"];
+
 /// What meta-git says about itself: the commands it routes, and its help.
 pub fn plugin_info() -> PluginInfo {
     // The git commands meta adapts; every other one runs as typed
     let mut adapted = IndexMap::new();
     adapted.insert(
         "clone".to_string(),
-        "Clone a meta repo and the repos its .meta.yaml lists (-r: nested ones too)".to_string(),
+        "Clone a meta repo and the repos its .meta.yaml lists (meta -r: nested ones too)"
+            .to_string(),
     );
     adapted.insert(
         "clone-missing".to_string(),
@@ -121,12 +126,6 @@ pub fn execute_command(
     // Worktree commands (meta worktree * and meta git worktree *)
     // Checked before --help intercept so worktree subcommands can handle their own --help via clap
     if command.starts_with("worktree") || command.starts_with("git worktree") {
-        // They find their repos in the set; worktree exec takes its own filters
-        if options.filtered() {
-            return CommandResult::Error(format!(
-                "meta {command} does not take --include/--exclude/--tag before it; use `meta git worktree exec <name> --include <repo> -- <command>`"
-            ));
-        }
         return commands::worktree::execute_worktree_command(command, args, options, cwd);
     }
 
@@ -138,41 +137,50 @@ pub fn execute_command(
     }
 
     // Commands meta adapts parse their own arguments, help included
+    let meta = &options.meta_options;
+    let all_but_filters = meta.refusing(&FILTERS);
     match command {
         "git clone" => {
-            return match meta_plugin_protocol::parse_args(command, args) {
+            if let Some(line) = meta_depth_line(args, meta) {
+                return CommandResult::Usage(format!(
+                    "--meta-depth is gone: how deep into nested meta repos is meta's own --depth, \
+                     before the command with -r (after `git clone`, --depth is git's history \
+                     depth), as in {line}"
+                ));
+            }
+            return match meta_plugin_protocol::parse_args(command, args, &all_but_filters) {
                 Ok(args) => finish(clone::execute_git_clone(args, options, cwd)),
                 Err(result) => result,
-            }
+            };
         }
         "git update" => {
-            return match meta_plugin_protocol::parse_args(command, args) {
+            return match meta_plugin_protocol::parse_args(command, args, &all_but_filters) {
                 Ok(args) => finish(update::execute_git_update(args, options, cwd)),
-                Err(result) => own_options_go_first(command, result),
+                Err(result) => result,
             };
         }
         "git clone-missing" => {
             return match meta_plugin_protocol::parse_args::<clone_missing::CloneMissingArgs>(
-                command, args,
+                command, args, meta,
             ) {
                 Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
-                Err(result) => own_options_go_first(command, result),
+                Err(result) => result,
             };
         }
         "git clone-prune" => {
             return match meta_plugin_protocol::parse_args::<clone_missing::ClonePruneArgs>(
-                command, args,
+                command, args, meta,
             ) {
                 Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
-                Err(result) => own_options_go_first(command, result),
+                Err(result) => result,
             };
         }
         "git clone-sync" => {
             return match meta_plugin_protocol::parse_args::<clone_missing::CloneSyncArgs>(
-                command, args,
+                command, args, meta,
             ) {
                 Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
-                Err(result) => own_options_go_first(command, result),
+                Err(result) => result,
             };
         }
         "git commit" => {
@@ -180,7 +188,7 @@ pub fn execute_command(
             // makes of the arguments, it never commits
             let help = ["--help".to_string()];
             let args = if help_requested { &help[..] } else { args };
-            return match meta_plugin_protocol::parse_args(command, args) {
+            return match meta_plugin_protocol::parse_args(command, args, meta) {
                 Ok(args) => finish(commit::execute_git_commit(args, projects, options, cwd)),
                 Err(result) => result,
             };
@@ -197,18 +205,42 @@ pub fn execute_command(
     execute_raw_git_command(command, args, projects, options, cwd)
 }
 
-/// A usage error of `command`, with where meta's own options go when one
-/// was given after it.
-fn own_options_go_first(command: &str, result: CommandResult) -> CommandResult {
-    match result {
-        CommandResult::Usage(e) if e.starts_with("unexpected argument '-") => {
-            CommandResult::Usage(format!(
-                "{e}\n\nmeta's own options (--dry-run, --depth, ...) go before the command, as \
-                 in `meta --dry-run {command}`"
-            ))
-        }
-        result => result,
+/// For a clone typed with the `--meta-depth N` it no longer takes, the line
+/// with `-r --depth N` before the command (meta's -r after it moved there
+/// too), when that line parses.
+fn meta_depth_line(args: &[String], meta: &meta_core::args::MetaOptions) -> Option<String> {
+    let at = args
+        .iter()
+        .position(|a| a == "--meta-depth" || a.starts_with("--meta-depth="))?;
+    let word = args.get(at)?;
+    let (depth, taken) = match word.split_once('=') {
+        Some((_, depth)) => (depth.to_string(), 1),
+        None => (args.get(at + 1)?.clone(), 2),
+    };
+    let typed_depth = meta
+        .typed
+        .iter()
+        .any(|w| w == "--depth" || w.starts_with("--depth="));
+    if depth.parse::<usize>().is_err() || typed_depth {
+        return None;
     }
+    let recursive = |a: &String| a == "-r" || a == "--recursive";
+    let rest: Vec<String> = args
+        .iter()
+        .enumerate()
+        .filter(|(i, a)| (*i < at || *i >= at + taken) && !recursive(a))
+        .map(|(_, a)| a.clone())
+        .collect();
+    meta_plugin_protocol::parse_args::<clone::CloneArgs>("git clone", &rest, meta).ok()?;
+    let already = meta.typed.iter().any(recursive);
+    let line: Vec<String> = std::iter::once("meta".to_string())
+        .chain(meta.typed.iter().cloned())
+        .chain((!already).then(|| "-r".to_string()))
+        .chain(["--depth".to_string(), depth])
+        .chain(["git".to_string(), "clone".to_string()])
+        .chain(rest)
+        .collect();
+    Some(meta_core::display::escape(&meta_core::display::display_command(&line)).into_owned())
 }
 
 fn finish(result: anyhow::Result<CommandResult>) -> CommandResult {
@@ -246,14 +278,28 @@ fn execute_raw_git_command(
             meta_core::gitdir::Checkout::Missing
         )
     });
+    let mut warnings = Vec::new();
     for dir in &missing {
         let shown = Path::new(dir);
         let shown = meta_core::display::escape_path(shown.strip_prefix(cwd).unwrap_or(shown));
         let warning = format!("{shown} is not cloned; `meta git clone-missing` clones it");
-        if let Err(e) = meta_core::out::warn_or_bail(options.strict, warning) {
-            return CommandResult::Error(format!("{e:#}"));
+        if options.strict {
+            return CommandResult::Error(format!("{warning} (strict mode)"));
         }
+        // meta shows them, or lists them in its --json report
+        warnings.push(warning);
     }
+    let plan = |commands, parallel, max_parallel, spawn_stagger_ms| {
+        CommandResult::FullPlan(Box::new(ExecutionPlan {
+            pre_commands: vec![],
+            commands,
+            post_commands: vec![],
+            parallel: Some(parallel),
+            max_parallel,
+            spawn_stagger_ms,
+            warnings: warnings.clone(),
+        }))
+    };
 
     // The git argv: the command words (e.g. "git" or "git add") and the
     // user's args exactly as given
@@ -287,7 +333,7 @@ fn execute_raw_git_command(
 
         // HTTPS-only workspaces don't need SSH multiplexing
         if urls.is_empty() {
-            return CommandResult::Plan(commands, Some(true));
+            return plan(commands, true, None, None);
         }
 
         let (ssh_env, parallel_ok) = match ssh::establish_ssh_masters(&urls) {
@@ -320,20 +366,18 @@ fn execute_raw_git_command(
         const SSH_SPAWN_STAGGER_MS: u64 = 25;
 
         if parallel_ok {
-            CommandResult::FullPlan(ExecutionPlan {
-                pre_commands: vec![],
+            plan(
                 commands,
-                post_commands: vec![],
-                parallel: Some(true),
-                max_parallel: Some(SSH_MAX_SESSIONS),
-                spawn_stagger_ms: Some(SSH_SPAWN_STAGGER_MS),
-            })
+                true,
+                Some(SSH_MAX_SESSIONS),
+                Some(SSH_SPAWN_STAGGER_MS),
+            )
         } else {
             // SSH setup failed — fall back to sequential
-            CommandResult::Plan(commands, Some(false))
+            plan(commands, false, None, None)
         }
     } else {
-        CommandResult::Plan(commands, Some(options.parallel))
+        plan(commands, options.parallel, None, None)
     }
 }
 
@@ -400,8 +444,8 @@ mod tests {
         // Unknown git subcommands should fall through to raw git execution
         let options = PluginRequestOptions::default();
         let result = execute_command("git unknown", &[], &[], &options, Path::new("."));
-        // Should return a Plan (to run `git unknown` in all repos), not ShowHelp
-        assert!(matches!(result, CommandResult::Plan(_, _)));
+        // Should return a plan (to run `git unknown` in all repos), not ShowHelp
+        assert!(matches!(result, CommandResult::FullPlan(_)));
     }
 
     #[test]

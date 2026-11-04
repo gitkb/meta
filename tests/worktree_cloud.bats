@@ -42,7 +42,7 @@ assert entry['custom']['run_id'] == 'abc123'
 }
 
 @test "worktree create --meta appears in --json output" {
-    run "$META_BIN" git worktree create meta-json --repo backend --meta env=ci --json
+    run "$META_BIN" --json git worktree create meta-json --repo backend --meta env=ci
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
@@ -72,7 +72,7 @@ assert entry['ephemeral'] == True
 }
 
 @test "worktree create --ephemeral in --json output" {
-    run "$META_BIN" git worktree create eph-json --repo backend --ephemeral --json
+    run "$META_BIN" --json git worktree create eph-json --repo backend --ephemeral
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
@@ -96,7 +96,7 @@ assert entry['ttl_seconds'] == 7200, f'got: {entry[\"ttl_seconds\"]}'
 }
 
 @test "worktree create --ttl in --json output" {
-    run "$META_BIN" git worktree create ttl-json --repo backend --ttl 30m --json
+    run "$META_BIN" --json git worktree create ttl-json --repo backend --ttl 30m
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
@@ -107,21 +107,21 @@ assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
 
 @test "worktree create --ttl various formats" {
     # Seconds
-    run "$META_BIN" git worktree create ttl-s --repo backend --ttl 30s --json
+    run "$META_BIN" --json git worktree create ttl-s --repo backend --ttl 30s
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "import json,sys; assert json.load(sys.stdin)['ttl_seconds'] == 30"
 
     "$META_BIN" git worktree remove ttl-s --force
 
     # Minutes
-    run "$META_BIN" git worktree create ttl-m --repo backend --ttl 5m --json
+    run "$META_BIN" --json git worktree create ttl-m --repo backend --ttl 5m
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "import json,sys; assert json.load(sys.stdin)['ttl_seconds'] == 300"
 
     "$META_BIN" git worktree remove ttl-m --force
 
     # Days
-    run "$META_BIN" git worktree create ttl-d --repo backend --ttl 2d --json
+    run "$META_BIN" --json git worktree create ttl-d --repo backend --ttl 2d
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "import json,sys; assert json.load(sys.stdin)['ttl_seconds'] == 172800"
 }
@@ -211,7 +211,7 @@ assert 'created_at' in entry
 @test "worktree remove --json outputs structured result" {
     "$META_BIN" git worktree create destroy-json --repo backend --repo frontend --no-deps
 
-    run "$META_BIN" git worktree remove destroy-json --json
+    run "$META_BIN" --json git worktree remove destroy-json
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
@@ -245,7 +245,7 @@ assert d['repos_removed'] == 2, f'expected 2 repos, got: {d.get(\"repos_removed\
 
 @test "worktree list shows store metadata" {
     "$META_BIN" git worktree create list-meta --repo backend --ephemeral --ttl 1h --meta env=staging
-    run "$META_BIN" git worktree list --json
+    run "$META_BIN" --json git worktree list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
@@ -411,7 +411,7 @@ assert payload['custom']['env'] == 'yaml'
     # Wait for TTL to expire
     sleep 2
 
-    run "$META_BIN" git worktree prune --dry-run
+    run "$META_BIN" --dry-run git worktree prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"prune-ttl"* ]]
     [[ "$output" == *"ttl_expired"* ]] || [[ "$output" == *"Would prune"* ]]
@@ -438,7 +438,7 @@ assert payload['custom']['env'] == 'yaml'
     # Manually remove the directory without going through destroy
     rm -rf ".worktrees/prune-orphan"
 
-    run "$META_BIN" git worktree prune --dry-run
+    run "$META_BIN" --dry-run git worktree prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"prune-orphan"* ]]
     [[ "$output" == *"orphaned"* ]] || [[ "$output" == *"Would prune"* ]]
@@ -464,7 +464,7 @@ assert payload['custom']['env'] == 'yaml'
     "$META_BIN" git worktree create prune-json --repo backend --ttl 1s
     sleep 2
 
-    run "$META_BIN" git worktree prune --json
+    run "$META_BIN" --json git worktree prune
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
@@ -479,7 +479,7 @@ assert any(e['name'] == 'prune-json' for e in d['removed'])
     "$META_BIN" git worktree create prune-dj --repo backend --ttl 1s
     sleep 2
 
-    run "$META_BIN" git worktree prune --dry-run --json
+    run "$META_BIN" --dry-run --json git worktree prune
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
@@ -605,7 +605,7 @@ assert 'removed' in payload
 # ============ Combined Flags ============
 
 @test "worktree create with all cloud flags" {
-    run "$META_BIN" git worktree create full-cloud --repo backend --ephemeral --ttl 30m --meta agent=ci --meta run_id=123 --json
+    run "$META_BIN" --json git worktree create full-cloud --repo backend --ephemeral --ttl 30m --meta agent=ci --meta run_id=123
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
@@ -625,7 +625,7 @@ assert d['custom']['run_id'] == '123'
     [ "$status" -eq 0 ]
 
     # List should show metadata
-    run "$META_BIN" git worktree list --json
+    run "$META_BIN" --json git worktree list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
@@ -698,7 +698,7 @@ assert wt['ephemeral'] == True
     run "$META_BIN" git worktree create aaa-sorted --repo frontend
     [ "$status" -eq 0 ]
 
-    run "$META_BIN" git worktree list --json
+    run "$META_BIN" --json git worktree list
     [ "$status" -eq 0 ]
 
     # Verify aaa comes before zzz in JSON output

@@ -5,7 +5,7 @@ description: Execute commands across all repos — parallel, filtered, dry-run m
 
 # Meta Exec Skill
 
-Execute any command in the root repo and every project at this meta level (add `--recursive` for nested meta repos). Meta extends `loop`, a tool for running commands across directories.
+Execute any command in the root repo and every project at this meta level (add `-r` for the meta repos nested under it, `-A` for the whole workspace from anywhere). Meta extends `loop`, a tool for running commands across directories.
 
 ## The Execution Model
 
@@ -63,16 +63,16 @@ Control which repos run the command:
 # Only these repos: each value is a repo's .meta.yaml name or its path from the workspace root
 meta --include api,worker git status
 meta --include services/api,. git status   # services/api: the path of a project this .meta.yaml lists; `.` is the root repo
-meta -r --include open-source/sdk/core git status   # a repo of a nested meta repo (sdk/core in open-source/.meta.yaml) needs -r
+meta -r --include open-source/sdk/core git status   # a repo of a nested meta repo (sdk/core in open-source/.meta.yaml) needs -r (from the root) or -A (from anywhere)
 
 # Skip these repos
 meta --exclude legacy-service git push
 
 # The repos with a tag (never the root repo: it has no tags)
-meta --tag backend exec -- make deploy
+meta -r --tag backend exec -- make deploy
 
 # The backend repos and the root
-meta --tag backend --include . git status
+meta -r --tag backend --include . git status
 ```
 
 **Filters:** `--include` and `--tag` each add repos: the ones `--include` names, and the ones with any of the `--tag` tags (with neither, every repo). `--exclude` then removes the repos it names. The root repo has no tags, so `--tag` alone never selects it; add it with `--include .`. A tag no project has is an error that lists the tags there are.
@@ -146,7 +146,7 @@ meta exec -- cargo test
 ### Update Dependencies Selectively
 ```bash
 # Repos tagged frontend (not the root: it has no tags)
-meta --tag frontend exec -- npm update
+meta -r --tag frontend exec -- npm update
 
 # Exclude slow repos (meta options go before `exec`)
 meta --exclude large-monorepo exec -- cargo update

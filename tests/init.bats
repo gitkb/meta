@@ -136,7 +136,7 @@ teardown() {
 @test "init claude settings references meta context" {
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    run grep "meta context" .claude/settings.json
+    run grep "meta -r context" .claude/settings.json
     [ "$status" -eq 0 ]
 }
 

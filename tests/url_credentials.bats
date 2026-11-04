@@ -63,7 +63,7 @@ EOF
     meta_without_token --dry-run git update
     [ "$status" -eq 0 ]
     [[ "$output" == *"git clone -- 'https://***@example.invalid/org/lib.git'"* ]] || false
-    meta_without_token project check --json
+    meta_without_token --json project check
     [[ "$output" == *'"repo": "https://***@example.invalid/org/lib.git"'* ]] || false
     meta_without_token git update
     [ "$status" -eq 0 ]
@@ -72,13 +72,13 @@ EOF
     # insteadOf matches a prefix: the origin shows the URL git got
     [ "$(git -C lib config remote.origin.url)" = "https://$TOKEN@example.invalid/org/lib.git" ]
     [ "$(git -C svc config remote.origin.url)" = "https://alice:$TOKEN@example.invalid/org/svc.git" ]
-    for command in "project list" "project list --json" "--recursive project list --json" \
-        "project check" "context --json" "git status" "exec -- true"; do
+    for command in "project list" "--json project list" "--recursive --json project list" \
+        "project check" "--json context" "git status" "exec -- true"; do
         # shellcheck disable=SC2086
         meta_without_token $command
         [ "$status" -eq 0 ]
     done
-    meta_without_token project list --json
+    meta_without_token --json project list
     [[ "$output" == *'"repo": "https://***@example.invalid/org/svc.git"'* ]] || false
 
     # a checkout from another URL: the fix can't print the hidden URL (the
@@ -122,7 +122,7 @@ EOF
     meta_without_token project list
     [ "$status" -eq 0 ]
     [[ "$output" == *". (https://***@example.invalid/org/ws.git)"* ]] || false
-    meta_without_token project list --json
+    meta_without_token --json project list
     [ "$status" -eq 0 ]
     [ "$(jq -r .repo <<< "$output")" = "https://***@example.invalid/org/ws.git" ]
     meta_without_token git update

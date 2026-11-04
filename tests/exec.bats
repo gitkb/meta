@@ -401,17 +401,16 @@ SCRIPT
 
 # ============ Unrecognized command handling (meta-7) ============
 
-@test "unrecognized top-level command shows help" {
+@test "unrecognized top-level command names the line to run and where the commands are" {
     run "$META_BIN" blablabla
     [ "$status" -eq 2 ]
     [[ "$output" == *"unrecognized command"* ]]
     [[ "$output" == *"blablabla"* ]]
-    [[ "$output" == *"meta exec"* ]]
-    # Must show ACTUAL help content (not just a reference to --help)
-    # This ensures LLMs can self-correct without a second command
-    [[ "$output" == *"Usage"* ]]
-    [[ "$output" == *"exec"* ]]
-    [[ "$output" == *"init"* ]] || [[ "$output" == *"worktree"* ]]
+    [[ "$output" == *"meta exec -- blablabla"* ]]
+    # meta --help, which lists plugins' commands too, not a copy of meta's
+    # own help without them
+    [[ "$output" == *"meta --help"* ]]
+    [[ "$output" != *"Usage"* ]]
 }
 
 @test "unrecognized plugin subcommand shows plugin help" {
@@ -714,7 +713,7 @@ EOF
 }
 
 @test "meta's own output to a closed stdout exits quietly without a panic" {
-    for args in "plugin list --json" "init --help" "--help"; do
+    for args in "--json plugin list" "init --help" "--help"; do
         run bash -c 'set -o pipefail; "$1" $2 2>"$3" | head -c0' _ "$META_BIN" "$args" "$TEST_DIR/stderr"
         [[ "$status" -eq 0 || "$status" -eq 141 ]]
         [ ! -s "$TEST_DIR/stderr" ]
@@ -850,8 +849,8 @@ sys.exit(subprocess.run(sys.argv[1:], stdout=w).returncode)' "$META_BIN" frag "$
     done
 }
 
-@test "a command's own --json makes its errors JSON; a .looprc's json_output keeps colour out" {
-    run bash -c '"$1" git worktree status missing --json 2>/dev/null' _ "$META_BIN"
+@test "meta's --json makes a plugin command's errors JSON; a .looprc's json_output keeps colour out" {
+    run bash -c '"$1" --json git worktree status missing 2>/dev/null' _ "$META_BIN"
     [ "$status" -eq 1 ]
     jq -e '.success == false' <<<"$output"
     echo '{"json_output": true}' > .looprc
@@ -967,6 +966,50 @@ YAML
     [ "$status" -eq 1 ]
     [[ "$output" != *"option of meta itself"* ]]
     [[ "$output" == *"-no-such-program"*"exit code"* ]]
+}
+
+@test "json usage errors are one JSON document" {
+    bats_require_minimum_version 1.5.0
+    # meta's own parse error, with the line to run
+    run --separate-stderr "$META_BIN" --json exec --include api -- pwd
+    [ "$status" -eq 2 ]
+    [ "$(jq -r .success <<<"$output")" = false ]
+    [[ "$(jq -r .error <<<"$output")" == *"as in meta --json --include api exec -- pwd"* ]]
+    [ "$(jq -s length <<<"$output")" -eq 1 ]
+    # a plugin's, relayed as it printed it
+    run --separate-stderr "$META_BIN" --json git update --dry-run
+    [ "$status" -eq 2 ]
+    [ "$(jq -s length <<<"$output")" -eq 1 ]
+    [[ "$(jq -r .error <<<"$output")" == *"as in meta --json --dry-run git update"* ]]
+    # --json that isn't meta's, before the command, prints no JSON
+    run --separate-stderr "$META_BIN" exec --json-x -- pwd
+    [ "$status" -eq 2 ]
+    [ -z "$output" ]
+    run "$META_BIN" exec -- echo --json --bad
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--json --bad"* ]]
+    [[ "$output" != *'"success"'* ]]
+}
+
+@test "json results name each repo by path and list warnings" {
+    bats_require_minimum_version 1.5.0
+    rm -rf frontend
+    run --separate-stderr "$META_BIN" --json --exclude . git diff --quiet
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '[.results[].path] | join(" ")' <<<"$output")" = "./api ./worker" ]
+    # empty output is "", never a missing key
+    [ "$(jq -r '[.results[] | has("stdout") and has("stderr")] | all' <<<"$output")" = true ]
+    [ "$(jq -r '.results[0].stdout' <<<"$output")" = "" ]
+    [[ "$(jq -r '.warnings[0]' <<<"$output")" == "frontend is not cloned"* ]]
+    [ "$(jq -r .hint <<<"$output")" = null ]
+    # each path selects its repo as it is
+    path="$(jq -r '.results[0].path' <<<"$output")"
+    run --separate-stderr "$META_BIN" --json --include "$path" exec -- true
+    [ "$(jq -r '[.results[].path] | join(" ")' <<<"$output")" = "./api" ]
+    # the tip the human output ends with
+    run --separate-stderr "$META_BIN" --json --include api git status -r
+    [ "$status" -eq 1 ]
+    [[ "$(jq -r .hint <<<"$output")" == *"as in meta --json --include api -r git status" ]]
 }
 
 @test "--help with --add-aliases-to-global-looprc only prints help" {

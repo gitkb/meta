@@ -23,17 +23,13 @@ use std::sync::Arc;
                   upstream are cloned in the same run. A repo that can't be pulled \
                   (fast-forward only) is named with git's error and the command exits 1; \
                   nothing is merged or rebased. A repo on no branch, or whose branch has no \
-                  upstream, is named and left alone. With -r the same goes for the meta repos \
+                  upstream, is named and left alone. With meta's -r (`meta -r git update`) the same goes for the meta repos \
                   nested in it, each pulled before its .meta.yaml is read.\n\n\
                   To clone the missing projects and touch nothing else, run \
                   `meta git clone-missing`.",
     after_help = "Git options: none of git pull's; each repo is pulled with `git pull --ff-only`."
 )]
-pub(crate) struct UpdateArgs {
-    /// Also update the projects of nested meta repos
-    #[arg(short, long)]
-    recursive: bool,
-}
+pub(crate) struct UpdateArgs {}
 
 /// The workspace at or above `cwd` that `meta <command>` acts on. Refused
 /// inside a worktree set meta made: the workspace around the set is not
@@ -100,15 +96,21 @@ pub(crate) fn run(
 }
 
 pub(crate) fn execute_git_update(
-    args: UpdateArgs,
+    UpdateArgs {}: UpdateArgs,
     options: &PluginRequestOptions,
     cwd: &Path,
 ) -> anyhow::Result<CommandResult> {
-    let recursive = args.recursive || options.recursive;
-    // Without -r only the workspace's own .meta.yaml is read
+    let recursive = options.recursive || options.all;
+    // Without -r or -A only the workspace's own .meta.yaml is read
     let meta_depth = if recursive { options.depth } else { Some(0) };
     // A worktree set's checkouts are pulled with `meta git pull`
     let workspace = workspace(cwd, "git update", ", or 'meta git pull' in the set")?;
+    // -A: from the outermost workspace
+    let workspace = if options.all {
+        workspace.root()?
+    } else {
+        workspace
+    };
     ssh::warn_remote_mismatches(&workspace);
 
     let queue = CloneQueue::new(None, meta_depth, true); // No git depth for update

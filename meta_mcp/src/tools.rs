@@ -1090,7 +1090,7 @@ impl McpServer {
         let scope = Scope::of(None, args.tag)?;
 
         // Each project once, the ones nested in a meta project too (as
-        // `meta project list --recursive`), named by its path in the
+        // `meta -r project list`), named by its path in the
         // workspace. A project whose nested config can't be read is an
         // error of its own.
         let mut targets = Vec::new();
@@ -1245,7 +1245,7 @@ impl McpServer {
 
     fn list_plugins(&self, _args: NoArgs) -> Result<String> {
         let mut meta = self.meta(&self.workspace()?);
-        meta.args(["plugin", "list", "--json"]);
+        meta.args(["--json", "plugin", "list"]);
         let output = self
             .calls
             .output(&mut meta)

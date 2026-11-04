@@ -37,8 +37,8 @@ fn main() {
                 runs_as_typed: None,
                 examples: vec![
                     "meta project list".to_string(),
-                    "meta project list --json".to_string(),
-                    "meta project list --recursive".to_string(),
+                    "meta --json project list".to_string(),
+                    "meta -r project list".to_string(),
                     "meta project check".to_string(),
                 ],
                 note: Some("To clone missing projects, use: meta git clone-missing".to_string()),

@@ -1204,6 +1204,42 @@ create_meta_bare_repo() {
     rm -rf "$L3_BARE" "$L2_BARE" "$L1_BARE" "$ROOT_BARE" "$CLONE_TARGET"
 }
 
+@test "clone routes nesting and history depth apart" {
+    # root -> l1 (meta, two commits) -> l2 (meta) -> l3
+    L3_BARE="$(mktemp -d)/l3.git"
+    create_meta_bare_repo "$L3_BARE" '{"projects": {}}'
+    L2_BARE="$(mktemp -d)/l2.git"
+    create_meta_bare_repo "$L2_BARE" "{\"projects\": {\"l3\": \"file://$L3_BARE\"}}"
+    L1_BARE="$(mktemp -d)/l1.git"
+    create_meta_bare_repo "$L1_BARE" "{\"projects\": {\"l2\": {\"repo\": \"file://$L2_BARE\", \"meta\": true}}}"
+    local work
+    work="$(mktemp -d)"
+    git clone --quiet "$L1_BARE" "$work/l1"
+    git -C "$work/l1" commit --quiet --allow-empty -m second
+    git -C "$work/l1" push --quiet origin main
+    ROOT_BARE="$(mktemp -d)/root.git"
+    create_meta_bare_repo "$ROOT_BARE" "{\"projects\": {\"l1\": {\"repo\": \"file://$L1_BARE\", \"meta\": true}}}"
+    CLONE_TARGET="$(mktemp -d)/clone-depths"
+    rm -rf "$CLONE_TARGET"
+
+    cd "$TEST_DIR"
+    # meta's --depth: one nested level; git clone's: one commit of history
+    run "$META_BIN" -r --depth 1 git clone "file://$ROOT_BARE" "$CLONE_TARGET" --depth 1
+    [ "$status" -eq 0 ]
+    [ -d "$CLONE_TARGET/l1/l2/.git" ]
+    [ ! -d "$CLONE_TARGET/l1/l2/l3" ]
+    [ "$(git -C "$CLONE_TARGET/l1" rev-list --count HEAD)" -eq 1 ]
+    # the old spellings are refused, with the line to run
+    run "$META_BIN" git clone "file://$ROOT_BARE" other --meta-depth 1
+    [ "$status" -eq 2 ]
+    run "$META_BIN" git clone "file://$ROOT_BARE" other -r
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"as in meta -r git clone file://$ROOT_BARE other"* ]]
+    [ ! -e other ]
+
+    rm -rf "$L3_BARE" "$L2_BARE" "$L1_BARE" "$ROOT_BARE" "$CLONE_TARGET" "$work"
+}
+
 @test "meta git clone without --recursive clones only first level" {
     # Setup: root -> child (meta:true) -> grandchild
     GRANDCHILD_BARE="$(mktemp -d)/grandchild.git"

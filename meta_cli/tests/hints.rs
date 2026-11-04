@@ -262,6 +262,101 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
 }
 
 #[test]
+fn meta_owned_commands_take_no_copy_of_meta_options() {
+    let workspace = Workspace::new();
+    for (typed, line) in [
+        (
+            &["project", "list", "-r"][..],
+            &["-r", "project", "list"][..],
+        ),
+        (
+            &["project", "list", "--json"],
+            &["--json", "project", "list"],
+        ),
+        (
+            &["project", "check", "--json"],
+            &["--json", "project", "check"],
+        ),
+        (
+            &["project", "dependents", "api", "-r"],
+            &["-r", "project", "dependents", "api"],
+        ),
+        (&["git", "update", "-r"], &["-r", "git", "update"]),
+        (
+            &["git", "clone-missing", "-r"],
+            &["-r", "git", "clone-missing"],
+        ),
+        (&["context", "--json"], &["--json", "context"]),
+        (&["plugin", "list", "--json"], &["--json", "plugin", "list"]),
+        (
+            &["git", "worktree", "create", "t", "--repo", "api", "-r"],
+            &["-r", "git", "worktree", "create", "t", "--repo", "api"],
+        ),
+        (
+            &[
+                "git", "worktree", "create", "u", "--repo", "api", "--strict",
+            ],
+            &[
+                "--strict", "git", "worktree", "create", "u", "--repo", "api",
+            ],
+        ),
+        (
+            &["git", "worktree", "list", "--json"],
+            &["--json", "git", "worktree", "list"],
+        ),
+        (
+            &["git", "worktree", "remove", "t", "--dry-run"],
+            &["--dry-run", "git", "worktree", "remove", "t"],
+        ),
+        (
+            &[
+                "git",
+                "worktree",
+                "exec",
+                "t",
+                "--include",
+                "api",
+                "--",
+                "pwd",
+            ],
+            &[
+                "--include",
+                "api",
+                "git",
+                "worktree",
+                "exec",
+                "t",
+                "--",
+                "pwd",
+            ],
+        ),
+    ] {
+        let out = workspace.meta(typed);
+        assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
+        assert_eq!(tip_line(&out), line, "{}", text(&out));
+        let again = workspace.meta(line);
+        assert_ne!(again.status.code(), Some(2), "{line:?}: {}", text(&again));
+    }
+    // -r on list and status is refused before or after: the strict scan is
+    // --strict's, and nested repos are listed either way
+    for typed in [
+        &["git", "worktree", "list", "-r"][..],
+        &["-r", "git", "worktree", "list"],
+        &["--recursive", "git", "worktree", "status", "t"],
+    ] {
+        let out = workspace.meta(typed);
+        assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
+        assert!(
+            text(&out).contains("meta --strict git worktree"),
+            "{}",
+            text(&out)
+        );
+    }
+    let strict = workspace.meta(&["--strict", "git", "worktree", "status", "t"]);
+    assert!(strict.status.success(), "{}", text(&strict));
+}
+
+#[test]
 fn one_argument_with_a_space_is_told_to_be_two_words() {
     let workspace = Workspace::new();
     let out = workspace.meta(&["--include", "api", "exec", "git status"]);

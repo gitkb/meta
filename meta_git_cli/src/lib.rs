@@ -125,12 +125,6 @@ pub fn execute_command(
     // Worktree commands (meta worktree * and meta git worktree *)
     // Checked before --help intercept so worktree subcommands can handle their own --help via clap
     if command.starts_with("worktree") || command.starts_with("git worktree") {
-        // They find their repos in the set; worktree exec takes its own filters
-        if options.filtered() {
-            return CommandResult::Error(format!(
-                "meta {command} does not take --include/--exclude/--tag before it; use `meta git worktree exec <name> --include <repo> -- <command>`"
-            ));
-        }
         return commands::worktree::execute_worktree_command(command, args, options, cwd);
     }
 

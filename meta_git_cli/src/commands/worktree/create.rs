@@ -37,8 +37,7 @@ pub(crate) fn handle_create(
     json: bool,
     global_strict: bool,
 ) -> Result<Option<Created>> {
-    // Merge global --strict with local --strict (either enables strict mode)
-    let strict = args.strict || global_strict;
+    let strict = global_strict;
 
     let name = &args.name;
     validate_worktree_name(name)?;

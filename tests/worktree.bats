@@ -1202,6 +1202,10 @@ EOF
     run "$META_BIN" git worktree exec nest -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *".worktrees/nest/vendor/nested-lib"* ]]
+    # a nested member is chosen by its path in the set
+    run "$META_BIN" --include vendor/nested-lib git worktree exec nest -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"1 commands complete"* ]]
     # the set is the scope: -r adds nothing, so no hint names it
     cd .worktrees/nest
     run "$META_BIN" -r --include nope git status
@@ -1215,6 +1219,32 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"nested-lib"* ]]
     [ -e .worktrees/nest/vendor/nested-lib/README.md ]
+}
+
+@test "meta's --include before worktree exec picks the set's repos" {
+    "$META_BIN" git worktree create pick --repo backend --repo frontend
+    run "$META_BIN" --include backend git worktree exec pick -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".worktrees/pick/backend"* ]]
+    [[ "$output" != *".worktrees/pick/frontend"* ]]
+    run "$META_BIN" --exclude backend git worktree exec pick -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".worktrees/pick/frontend"* ]]
+    [[ "$output" != *".worktrees/pick/backend"* ]]
+    # a name the set doesn't hold is an error naming the set
+    run "$META_BIN" --include nope git worktree exec pick -- pwd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--include 'nope' names none"* ]]
+    [[ "$output" != *"--recursive"* ]]
+    # by the set's own names: . is the set's root
+    run "$META_BIN" --include . git worktree exec pick -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *".worktrees/pick"* ]]
+    [[ "$output" != *".worktrees/pick/backend"* ]]
+    # other worktree commands refuse a selection
+    run "$META_BIN" --include backend git worktree status pick
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"does not take --include"* ]]
 }
 
 @test "worktree add with nested repo alias succeeds" {

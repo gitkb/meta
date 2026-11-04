@@ -8,8 +8,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 use meta_cli::worktree::{
-    detect_worktree_location, discover_worktree_members, discover_worktree_members_recursive,
-    discover_worktree_repos, discover_worktree_repos_recursive, WorktreeMemberInfo,
+    detect_worktree_location, discover_worktree_members, discover_worktree_members_strict,
+    discover_worktree_repos, discover_worktree_repos_strict, WorktreeMemberInfo,
 };
 use meta_core::duration::format_duration;
 use meta_core::set_record::{self as record, SetRecord};
@@ -63,8 +63,8 @@ fn repo_entries(
     selected: bool,
 ) -> Result<(Vec<RepoEntry>, Option<SetRecord>)> {
     if args.metadata_only {
-        let members = if args.recursive {
-            discover_worktree_members_recursive(path)?
+        let members = if args.strict {
+            discover_worktree_members_strict(path)?
         } else {
             discover_worktree_members(path)?
         };
@@ -74,8 +74,8 @@ fn repo_entries(
             record,
         ));
     }
-    let repos = if args.recursive {
-        discover_worktree_repos_recursive(path)?
+    let repos = if args.strict {
+        discover_worktree_repos_strict(path)?
     } else {
         discover_worktree_repos(path)?
     };
@@ -84,7 +84,7 @@ fn repo_entries(
         .par_iter()
         .map(|repo| {
             let status = repo_status(&repo.path);
-            let status = if args.recursive || selected {
+            let status = if args.strict || selected {
                 Some(status?)
             } else {
                 status.ok()
@@ -144,7 +144,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
             for entry in std::fs::read_dir(root)? {
                 let entry = match entry {
                     Ok(entry) => entry,
-                    Err(error) if args.recursive || args.metadata_only => return Err(error.into()),
+                    Err(error) if args.strict || args.metadata_only => return Err(error.into()),
                     Err(_) => continue,
                 };
                 match entry.file_type() {
@@ -154,7 +154,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
                             entry.file_name().to_string_lossy().into_owned(),
                             entry.path(),
                         )),
-                    Err(error) if args.recursive || args.metadata_only => return Err(error.into()),
+                    Err(error) if args.strict || args.metadata_only => return Err(error.into()),
                     _ => {}
                 }
             }

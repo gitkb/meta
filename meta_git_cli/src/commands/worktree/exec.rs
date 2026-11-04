@@ -2,6 +2,7 @@ use anyhow::Result;
 use meta_core::display::escape;
 use meta_core::ExecutionMode;
 use meta_core::{errln, outln};
+use meta_plugin_protocol::PluginRequestOptions;
 use std::path::{Path, PathBuf};
 
 use meta_cli::repo_filter;
@@ -11,18 +12,26 @@ use meta_git_lib::worktree::helpers::*;
 use super::cli_types::{CreateArgs, ExecArgs, RemoveArgs};
 use crate::git_env;
 
-/// Runs in each of `repos` that `args`' `--include`/`--exclude` select (by
-/// alias: its path from `wt_dir`), naming them by that path.
+/// meta's `--include`, `--exclude` and `--tag`
+fn filters(options: &PluginRequestOptions) -> repo_filter::Filters {
+    repo_filter::Filters {
+        include: options.include_filters.clone().unwrap_or_default(),
+        exclude: options.exclude_filters.clone().unwrap_or_default(),
+        tags: options.tag_filters.clone().unwrap_or_default(),
+    }
+}
+
+/// Runs in each of `repos` that meta's `--include`/`--exclude`/`--tag`
+/// select (by name, or alias: its path from `wt_dir`), naming them by that
+/// path; at once only with meta's `--parallel` typed (the config's default
+/// is for meta's own loop).
 fn build_loop_config(
     wt_dir: &Path,
     repos: &[WorktreeRepoInfo],
-    args: &ExecArgs,
-    mode: ExecutionMode,
-    verbose: bool,
-    json: bool,
+    options: &PluginRequestOptions,
 ) -> Result<loop_lib::LoopConfig> {
-    let filters =
-        repo_filter::Filters::new(Some(args.include.clone()), Some(args.exclude.clone()), None);
+    let filters = filters(options);
+    let parallel = options.meta_options.typed.iter().any(|w| w == "--parallel");
     let paths: Vec<PathBuf> = repos.iter().map(|r| r.path.clone()).collect();
     // A set lays its repos out as the workspace, so the set's config names
     // them, by project name or path; only a filter reads it
@@ -40,10 +49,10 @@ fn build_loop_config(
             workspace.as_ref(),
             &filters,
         )?,
-        verbose,
-        parallel: args.parallel,
-        dry_run: mode.is_preview(),
-        json_output: json,
+        verbose: options.verbose,
+        parallel,
+        dry_run: options.mode().is_preview(),
+        json_output: options.json_output,
         env: Some(git_env::git_env()),
         aliases: loop_lib::aliases()?,
         root_dir: Some(wt_dir.to_path_buf()),
@@ -105,29 +114,20 @@ impl Drop for EphemeralGuard {
     }
 }
 
-pub(crate) fn handle_exec(
-    args: ExecArgs,
-    mode: ExecutionMode,
-    verbose: bool,
-    json: bool,
-) -> Result<()> {
+pub(crate) fn handle_exec(args: ExecArgs, options: &PluginRequestOptions) -> Result<()> {
     if args.ephemeral {
-        return handle_ephemeral_exec(args, mode, verbose, json);
+        return handle_ephemeral_exec(args, options);
     }
 
     let (wt_dir, repos) = discover_and_validate_worktree(&args.name)?;
-    let config = build_loop_config(&wt_dir, &repos, &args, mode, verbose, json)?;
+    let config = build_loop_config(&wt_dir, &repos, options)?;
 
     loop_lib::run(&config, &args.command)?;
     Ok(())
 }
 
-fn handle_ephemeral_exec(
-    args: ExecArgs,
-    mode: ExecutionMode,
-    verbose: bool,
-    json: bool,
-) -> Result<()> {
+fn handle_ephemeral_exec(args: ExecArgs, options: &PluginRequestOptions) -> Result<()> {
+    let (mode, verbose, json) = (options.mode(), options.verbose, options.json_output);
     let name = args.name.clone();
     validate_worktree_name(&name)?;
 
@@ -138,7 +138,7 @@ fn handle_ephemeral_exec(
     // A run names the set's repos by the .meta.yaml checked out in it, which
     // a preview hasn't made (a start commit or an existing branch may hold
     // another): it can't tell what a filter selects
-    if mode.is_preview() && (!args.include.is_empty() || !args.exclude.is_empty()) {
+    if mode.is_preview() && !filters(options).is_empty() {
         anyhow::bail!(
             "--dry-run can't preview --include/--exclude of exec --ephemeral: the set's own \
              .meta.yaml names its repos; nothing was changed"
@@ -156,8 +156,7 @@ fn handle_ephemeral_exec(
         ephemeral: true,
         ttl: None,
         custom_meta: args.custom_meta.clone(),
-        strict: false,  // Exec creates ephemeral worktrees, don't fail on skipped repos
-        no_deps: false, // Include dependencies by default
+        no_deps: false,   // Include dependencies by default
         recursive: false, // Ephemeral exec uses current meta level
     };
 
@@ -189,7 +188,7 @@ fn handle_ephemeral_exec(
     // Run the command in the set just made; whatever fails, the cleanup
     // below runs
     let exec_result = discover_worktree_repos(&created.dir)
-        .and_then(|repos| build_loop_config(&created.dir, &repos, &args, mode, verbose, json))
+        .and_then(|repos| build_loop_config(&created.dir, &repos, options))
         .and_then(|config| loop_lib::run(&config, cmd_parts));
 
     // Clean up before propagating the result; a failed cleanup (such as a

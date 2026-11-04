@@ -11,13 +11,13 @@ use meta_git_lib::worktree::types::*;
 
 use super::cli_types::StatusArgs;
 
-/// Render a named set: every repo in it; with -r, failing on what can't be read.
+/// Render a named set: every repo in it; with meta --strict, failing on what can't be read.
 pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
     let name = &args.name;
     let wt_dir = resolve_existing_worktree(name)?;
     // Membership without git; then one status per repo
-    let members = if args.recursive {
-        meta_cli::worktree::discover_worktree_members_recursive(&wt_dir)?
+    let members = if args.strict {
+        meta_cli::worktree::discover_worktree_members_strict(&wt_dir)?
     } else {
         meta_cli::worktree::discover_worktree_members(&wt_dir)?
     };
@@ -35,7 +35,7 @@ pub(crate) fn handle_status(args: StatusArgs, json: bool) -> Result<()> {
             // has the branch and upstream git names
             let (status, refs) = match observed {
                 Ok(status) => (Some(status.clone()), Some(status)),
-                Err(e) if args.recursive => return Err(e),
+                Err(e) if args.strict => return Err(e),
                 Err(_) => (
                     None,
                     meta_core::git::RepoStatus::refs(&r.path).ok().flatten(),

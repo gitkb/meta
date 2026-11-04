@@ -12,18 +12,16 @@ use std::sync::Arc;
 
 /// Clone a meta repository, then the repos its .meta.yaml lists.
 #[derive(clap::Parser)]
-#[command(after_help = "Git options: of git clone's own, only --depth, given to each clone.")]
+#[command(
+    after_help = "Git options: of git clone's own, only --depth, given to each clone. \
+                         meta's options go before the command: -r also clones the repos of the \
+                         meta repos nested in it, --depth N (before) follows N levels of them."
+)]
 pub(crate) struct CloneArgs {
     /// The meta repository to clone
     url: GitUrl,
     /// Where to clone it (default: the repository's name)
     dir: Option<String>,
-    /// Also clone the repos of the meta repos nested in it
-    #[arg(short, long)]
-    recursive: bool,
-    /// How many levels of nested meta repos to follow with --recursive
-    #[arg(long, value_name = "N")]
-    meta_depth: Option<usize>,
     /// How many repos to clone at once
     #[arg(long, value_name = "N", default_value = "4")]
     parallel: std::num::NonZeroUsize,
@@ -37,10 +35,11 @@ pub(crate) fn execute_git_clone(
     options: &PluginRequestOptions,
     cwd: &std::path::Path,
 ) -> anyhow::Result<CommandResult> {
-    // meta's own --recursive and --depth, taken before the plugin ran
-    let recursive = args.recursive || options.recursive;
-    let depth = args.depth.or(options.depth).map(|d| d.to_string());
-    let meta_depth = args.meta_depth;
+    // meta's -r and --depth (how deep into nested meta repos); the
+    // command's --depth is git's history depth
+    let recursive = options.recursive;
+    let depth = args.depth.map(|d| d.to_string());
+    let meta_depth = options.depth;
     let mut parallel = args.parallel.get();
     let url = args.url;
     let git_clone_args: Vec<String> = depth

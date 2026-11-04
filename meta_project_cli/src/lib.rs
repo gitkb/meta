@@ -114,26 +114,20 @@ pub struct ProjectListWorktree {
 #[derive(clap::Parser)]
 #[command(
     about = "Inspect the meta repo graph",
-    after_help = "Agent hints:
-  Use `meta project list --recursive --json` before broad changes to discover the full repo graph.
+    after_help = "meta's options go before the command: -r includes the projects of nested meta \
+repos (--depth N limits how deep); --json emits a structured tree with root, cwd, project paths, \
+repo URLs, tags, and nested projects.
+
+Agent hints:
+  Use `meta -r --json project list` before broad changes to discover the full repo graph.
   Use non-recursive output for a quick human-readable view of the current meta repo.
 
 Examples:
   meta project list
-  meta project list --recursive
-  meta project list --recursive --json"
+  meta -r project list
+  meta -r --json project list"
 )]
-struct ListArgs {
-    /// Emit a structured tree with root, cwd, project paths, repo URLs, tags, and nested projects
-    #[arg(long)]
-    json: bool,
-    /// Include projects from nested meta repos
-    #[arg(short, long)]
-    recursive: bool,
-    /// Limit recursive traversal depth
-    #[arg(long, value_name = "N")]
-    depth: Option<usize>,
-}
+struct ListArgs {}
 
 /// `meta project check`
 #[derive(clap::Parser)]
@@ -145,15 +139,12 @@ struct ListArgs {
 
 Examples:
   meta project check
-  meta project check --json
-  meta --recursive project check"
+  meta --json project check
+  meta -r project check
+
+meta's --json emits one record per project that is not a clone of its configured repository."
 )]
-struct CheckArgs {
-    /// Emit one record per project that is not a clone of its configured
-    /// repository
-    #[arg(long)]
-    json: bool,
-}
+struct CheckArgs {}
 
 /// `meta project dependents`
 #[derive(clap::Parser)]
@@ -161,21 +152,19 @@ struct CheckArgs {
     about = "Find projects that depend on another project",
     after_help = "Agent hints:
   Use this before changing shared libraries or APIs to identify likely blast radius.
-  Pair with `meta project list --recursive --json` when working across nested meta repos.
+  Pair with `meta -r --json project list` when working across nested meta repos.
 
 Examples:
   meta project dependents meta_core
-  meta project dependents auth --json"
+  meta --json project dependents auth
+  meta -r project dependents auth
+
+meta's -r looks in the root workspace of nested meta repos; --json emits the dependent project \
+records."
 )]
 struct DependentsArgs {
     /// Project name or provided capability to search for
     project: String,
-    /// Emit machine-readable dependent project records
-    #[arg(long)]
-    json: bool,
-    /// Look in the root workspace of nested meta repos
-    #[arg(short, long)]
-    recursive: bool,
 }
 
 /// Execute a project command and return the result
@@ -191,8 +180,8 @@ pub fn execute_command(
 ) -> CommandResult {
     let meta = &options.meta;
     match command {
-        // These read the workspace tree themselves, with their own
-        // --recursive, so meta's selection isn't theirs to apply
+        // These read the workspace tree themselves, with meta's -r, so
+        // meta's selection isn't theirs to apply
         "project list" | "project ls" | "project dependents" if options.selected.is_some() => {
             CommandResult::Error(format!(
                 "meta {command} does not take --include/--exclude/--tag; it reads the .meta.yaml \
@@ -201,16 +190,7 @@ pub fn execute_command(
         }
         "project list" | "project ls" => {
             match parse_args::<ListArgs>(command, args, &meta.refusing(&FILTERS)) {
-                Ok(list) => handle_project_list(
-                    cwd,
-                    &ExecuteOptions {
-                        json_output: meta_core::out::set_json(options.json_output || list.json),
-                        recursive: options.recursive || list.recursive,
-                        depth: list.depth.or(options.depth),
-                        selected: None,
-                        meta: Default::default(),
-                    },
-                ),
+                Ok(ListArgs {}) => handle_project_list(cwd, options),
                 Err(result) => result,
             }
         }
@@ -218,21 +198,16 @@ pub fn execute_command(
             match parse_args::<DependentsArgs>(command, args, &meta.refusing(&FILTERS)) {
                 Ok(dependents) => handle_project_dependents(
                     &dependents.project,
-                    meta_core::out::set_json(options.json_output || dependents.json),
-                    options.recursive || dependents.recursive,
+                    options.json_output,
+                    options.recursive,
                     cwd,
                 ),
                 Err(result) => result,
             }
         }
         "project check" => match parse_args::<CheckArgs>(command, args, meta) {
-            Ok(CheckArgs { json }) => check(
-                meta_core::out::set_json(options.json_output || json),
-                options,
-                provided_projects,
-                cwd,
-            )
-            .unwrap_or_else(Into::into),
+            Ok(CheckArgs {}) => check(options.json_output, options, provided_projects, cwd)
+                .unwrap_or_else(Into::into),
             Err(result) => result,
         },
         // meta_cli sends an unclaimed `project <word>` as `project` plus
@@ -282,11 +257,11 @@ Commands:
   dependents    List projects that depend on a project or capability
 
 Agent hints:
-  Prefer `meta project list --recursive --json` for codebase discovery.
-  Use `meta --recursive project check` before assuming a repo is intentionally absent.
+  Prefer `meta -r --json project list` for codebase discovery.
+  Use `meta -r project check` before assuming a repo is intentionally absent.
 
 Examples:
-  meta project list --recursive --json
+  meta -r --json project list
   meta project check
   meta project dependents meta_core";
 
@@ -809,7 +784,7 @@ mod tests {
     }
 
     #[test]
-    fn arguments_after_the_command_and_each_config_once() {
+    fn meta_options_reach_list_and_dependents_and_each_config_counts_once() {
         let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         let root = temp_dir.canonicalize().unwrap();
@@ -854,16 +829,35 @@ mod tests {
             .unwrap()
             .contains("unexpected argument"));
 
-        // list's own -r and --depth
-        let listed = |a: &[&str]| message(run("project list", a, &root)).unwrap();
-        assert!(!listed(&[]).contains(" g "), "{}", listed(&[]));
-        assert!(listed(&["-r"]).contains(" g "), "{}", listed(&["-r"]));
-        assert!(!listed(&["-r", "--depth", "0"]).contains(" g "));
+        // meta's -r and --depth
+        let listed = |options: ExecuteOptions| {
+            message(execute_command("project list", &[], &options, &[], &root)).unwrap()
+        };
+        let depth = |depth| ExecuteOptions {
+            depth,
+            ..recursive.clone()
+        };
+        assert!(!listed(ExecuteOptions::default()).contains(" g "));
+        assert!(
+            listed(depth(None)).contains(" g "),
+            "{}",
+            listed(depth(None))
+        );
+        assert!(!listed(depth(Some(0))).contains(" g "));
+        // they are meta's: after the command, a usage error
+        assert!(error(run("project list", &["-r"], &root)).is_some());
 
-        // dependents' own -r: the root workspace, from inside a nested one
+        // meta's -r: the root workspace, from inside a nested one
         assert!(error(run("project dependents", &["c"], &nested)).is_some());
         assert_eq!(
-            message(run("project dependents", &["c", "-r"], &nested)).unwrap(),
+            message(execute_command(
+                "project dependents",
+                &args(&["c"]),
+                &recursive,
+                &[],
+                &nested
+            ))
+            .unwrap(),
             "user"
         );
     }
@@ -894,11 +888,15 @@ mod tests {
             "projects:\n  cli:\n    repo: git@x:o/cli.git\n    depends_on: [utils-api]\n",
         );
         let dependents = |project: &str, cwd: &Path| {
-            let args = [project.to_string(), "-r".to_string()];
+            let args = [project.to_string()];
+            let recursive = ExecuteOptions {
+                recursive: true,
+                ..Default::default()
+            };
             message(execute_command(
                 "project dependents",
                 &args,
-                &ExecuteOptions::default(),
+                &recursive,
                 &[],
                 cwd,
             ))
@@ -1542,7 +1540,7 @@ projects:
     }
 
     #[test]
-    fn test_project_dependents_json_flag_in_args() {
+    fn test_project_dependents_json_is_metas() {
         let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         std::fs::write(
@@ -1558,22 +1556,24 @@ projects:
         )
         .unwrap();
 
-        for args in [
-            vec!["a".to_string(), "--json".to_string()],
-            vec!["--json".to_string(), "a".to_string()],
-        ] {
-            let result = execute_command(
-                "project dependents",
-                &args,
-                &ExecuteOptions::default(),
-                &[],
-                &temp_dir,
-            );
-
-            let msg = message(result).unwrap();
-            let parsed: Vec<String> = serde_json::from_str(&msg).unwrap();
-            assert_eq!(parsed, vec!["b"], "for args: {args:?}");
-        }
+        let json = ExecuteOptions {
+            json_output: true,
+            ..Default::default()
+        };
+        let args = ["a".to_string()];
+        let result = execute_command("project dependents", &args, &json, &[], &temp_dir);
+        let parsed: Vec<String> = serde_json::from_str(&message(result).unwrap()).unwrap();
+        assert_eq!(parsed, vec!["b"]);
+        // meta's --json after the command is a usage error
+        let args = ["a".to_string(), "--json".to_string()];
+        let result = execute_command(
+            "project dependents",
+            &args,
+            &ExecuteOptions::default(),
+            &[],
+            &temp_dir,
+        );
+        assert!(matches!(result, CommandResult::Usage(_)));
     }
 
     #[test]

@@ -203,10 +203,6 @@ struct ContextArgs {
     /// Skip git status queries (structure only, faster)
     #[arg(long)]
     no_status: bool,
-
-    /// Output the context as JSON
-    #[arg(long)]
-    json: bool,
 }
 
 /// Arguments for `meta exec`
@@ -267,9 +263,6 @@ enum PluginCommands {
     Search {
         /// Search query
         query: String,
-        /// Output the matches as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Install a plugin (by registry name, owner/repo[@version] or URL)
     Install {
@@ -282,12 +275,10 @@ enum PluginCommands {
     /// List the plugins meta finds, and the tool extensions on PATH they run
     #[command(after_help = PLUGIN_KINDS)]
     List {
-        /// List only project-local plugins
+        /// List only project-local plugins (meta --json: name, version,
+        /// description and path of each)
         #[arg(long)]
         local: bool,
-        /// Output name, version, description and path of each as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Uninstall a plugin
     Uninstall {
@@ -393,16 +384,7 @@ fn run_cli() -> Result<()> {
         }
         Err(_) => meta_core::args::parse()?,
     };
-    // meta's own --json, or the --json of a command meta answers itself
-    let command_json = match &cli.command {
-        Some(Commands::Context(args)) => args.json,
-        Some(Commands::Plugin(args)) => matches!(
-            args.command,
-            PluginCommands::Search { json: true, .. } | PluginCommands::List { json: true, .. }
-        ),
-        _ => false,
-    };
-    meta_core::out::set_json(cli.json || command_json);
+    meta_core::out::set_json(cli.json);
 
     // Check for orphaned nested meta repo and warn the user
     check_and_warn_orphan();
@@ -433,7 +415,7 @@ fn run_cli() -> Result<()> {
             "`meta context` shows the nearest workspace only; it does not take --recursive or --depth"
         ),
         Some(Commands::Context(args)) => meta_cli::context::handle_context(
-            cli.json || args.json,
+            cli.json,
             args.no_status,
             cli.verbose,
             &cli.start_dir()?,
@@ -683,10 +665,14 @@ struct Target {
 /// serving their first word.
 fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin>) -> Result<()> {
     let start = cli.start_dir()?;
-    // `git clone` makes the workspace, so it needs none
-    let is_git_clone = command_args.first().is_some_and(|s| s == "git")
-        && command_args.get(1).is_some_and(|s| s == "clone");
-    if let Some(plugin) = plugin.filter(|_| is_git_clone) {
+    // `git clone` makes the workspace, so it needs none; worktree commands
+    // find their repos in the set they name (exec applies meta's selection
+    // there)
+    let finds_its_repos = command_args.first().is_some_and(|s| s == "git")
+        && command_args
+            .get(1)
+            .is_some_and(|s| s == "clone" || s == "worktree");
+    if let Some(plugin) = plugin.filter(|_| finds_its_repos) {
         return plugin.execute(command_args, &[], None, &start, cli.request_options(false));
     }
 
@@ -925,11 +911,11 @@ fn handle_plugin_command(
     }
 
     match command {
-        PluginCommands::Search { query, json: own } => {
+        PluginCommands::Search { query } => {
             let client = RegistryClient::new()?;
             let results = client.search(query)?;
 
-            if json || *own {
+            if json {
                 outln!("{}", serde_json::to_string_pretty(&results)?)?;
             } else if results.is_empty() {
                 outln!("No plugins found matching '{}'", escape(query))?;
@@ -1008,8 +994,7 @@ fn handle_plugin_command(
                 }
             }
         }
-        PluginCommands::List { local, json: own } => {
-            let json = json || *own;
+        PluginCommands::List { local } => {
             if *local {
                 let installer = PluginInstaller::new_local()?;
                 let plugins = installer.list_plugins_detailed()?;

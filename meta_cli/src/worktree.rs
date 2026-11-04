@@ -532,8 +532,8 @@ fn discover_repos_recursive(
 /// `ScannedDirs`); directory symlinks are not followed, so traversal never
 /// leaves the set.
 /// A finite entry budget prevents unbounded scans of generated directory trees.
-pub fn discover_worktree_repos_recursive(task_dir: &Path) -> Result<Vec<WorktreeRepoInfo>> {
-    Ok(discover_worktree_members_recursive(task_dir)?
+pub fn discover_worktree_repos_strict(task_dir: &Path) -> Result<Vec<WorktreeRepoInfo>> {
+    Ok(discover_worktree_members_strict(task_dir)?
         .into_iter()
         .map(with_branch)
         .collect())
@@ -584,7 +584,7 @@ impl ScannedDirs {
     }
 }
 
-pub fn discover_worktree_members_recursive(task_dir: &Path) -> Result<Vec<WorktreeMemberInfo>> {
+pub fn discover_worktree_members_strict(task_dir: &Path) -> Result<Vec<WorktreeMemberInfo>> {
     let mut repos = Vec::new();
     let scanned = ScannedDirs::of(task_dir);
     let entries = walkdir::WalkDir::new(task_dir)
@@ -740,7 +740,7 @@ mod recursive_tests {
         // the strict scan finds the same members
         for repos in [
             discover_worktree_repos(root),
-            discover_worktree_repos_recursive(root),
+            discover_worktree_repos_strict(root),
         ] {
             assert_eq!(
                 aliases(repos.unwrap()),
@@ -769,7 +769,7 @@ mod recursive_tests {
                 root.join("parent/nested")
             ]
         );
-        let metadata = discover_worktree_members_recursive(&root).unwrap();
+        let metadata = discover_worktree_members_strict(&root).unwrap();
         assert_eq!(metadata.len(), 3);
         for row in metadata {
             let json = serde_json::to_value(row).unwrap();
@@ -786,7 +786,7 @@ mod recursive_tests {
         let child = sandbox.work().join("parent/broken");
         std::fs::create_dir_all(&child).unwrap();
         std::fs::write(child.join(".git"), "invalid").unwrap();
-        assert!(discover_worktree_repos_recursive(sandbox.work().as_path()).is_err());
+        assert!(discover_worktree_repos_strict(sandbox.work().as_path()).is_err());
         assert_eq!(
             aliases(discover_worktree_repos(sandbox.work().as_path()).unwrap()),
             ["parent"]
@@ -797,7 +797,7 @@ mod recursive_tests {
     /// Missing roots cannot be represented as complete empty inventories.
     fn recursive_missing_root_is_error() {
         let sandbox = meta_test_support::isolated!();
-        assert!(discover_worktree_repos_recursive(&sandbox.work().join("missing")).is_err());
+        assert!(discover_worktree_repos_strict(&sandbox.work().join("missing")).is_err());
     }
 
     #[cfg(unix)]
@@ -822,7 +822,7 @@ mod recursive_tests {
         member(&sandbox, &root, ".worktrees/other");
         std::os::unix::fs::symlink(&root, root.join("visible/cycle")).unwrap();
         assert_eq!(
-            aliases(discover_worktree_repos_recursive(&root).unwrap()),
+            aliases(discover_worktree_repos_strict(&root).unwrap()),
             [".deps/child", "visible"]
         );
     }
@@ -848,7 +848,7 @@ mod recursive_tests {
         .unwrap();
         assert_eq!(source_repo(&root).unwrap(), source);
         assert_eq!(
-            discover_worktree_repos_recursive(&root).unwrap()[0].source_path,
+            discover_worktree_repos_strict(&root).unwrap()[0].source_path,
             source
         );
         assert_eq!(
@@ -871,10 +871,7 @@ mod recursive_tests {
             } else {
                 std::fs::remove_file(admin.join(missing)).unwrap();
             }
-            assert!(
-                discover_worktree_repos_recursive(&root).is_err(),
-                "{missing}"
-            );
+            assert!(discover_worktree_repos_strict(&root).is_err(), "{missing}");
         }
     }
 }

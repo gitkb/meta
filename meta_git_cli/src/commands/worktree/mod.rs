@@ -13,7 +13,6 @@ mod status;
 use anyhow::Result;
 use clap::Parser;
 use meta_core::display::{escape, escape_path};
-use meta_core::ExecutionMode;
 use meta_plugin_protocol::{CommandResult, PluginRequestOptions};
 use std::path::Path;
 
@@ -23,15 +22,11 @@ use cli_types::WorktreeCommands;
 #[derive(Parser)]
 #[command(
     arg_required_else_help = true,
-    after_help = "Git options: none of git worktree's; these commands are meta's own."
+    after_help = "Git options: none of git worktree's; these commands are meta's own. \
+                  meta's options go before them: meta --dry-run git worktree remove NAME, \
+                  meta --json git worktree list."
 )]
 struct WorktreeParser {
-    /// Show what would be created, run or removed, and change nothing
-    #[arg(long, global = true)]
-    dry_run: bool,
-    /// Output results in JSON format
-    #[arg(long, global = true)]
-    json: bool,
     #[command(subcommand)]
     command: WorktreeCommands,
 }
@@ -55,7 +50,7 @@ pub fn execute_worktree_command(
         .unwrap_or("");
 
     // Build args for clap
-    let mut clap_args: Vec<String> = if subcommand.is_empty() {
+    let clap_args: Vec<String> = if subcommand.is_empty() {
         // Bare "worktree" or "git worktree" — args already contains the subcommand (if any)
         args.to_vec()
     } else {
@@ -65,45 +60,42 @@ pub fn execute_worktree_command(
             .collect()
     };
 
-    // Inject --recursive if the protocol option was set but the flag wasn't in the
-    // command args (the host strips global flags like --recursive before forwarding).
-    // Inject only for subcommands that explicitly support recursive behavior.
-    // The subcommand: the first word that isn't a flag (`--dry-run create`)
-    let supports_recursive = matches!(
-        clap_args
-            .iter()
-            .find(|a| !a.starts_with('-'))
-            .map(String::as_str),
-        Some("create" | "list" | "status")
-    );
-    if options.recursive
-        && supports_recursive
-        && !clap_args.iter().any(|a| a == "--recursive" || a == "-r")
-    {
-        clap_args.push("--recursive".to_string());
+    // The subcommand: the first word that isn't a flag
+    let subcommand = clap_args
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .map(String::as_str);
+    // list and status always show nested repos: -r would only have been the
+    // strict scan, which is --strict's
+    if let Some(list @ ("list" | "status")) = subcommand {
+        if options.recursive || clap_args.iter().any(|a| a == "-r" || a == "--recursive") {
+            return CommandResult::Usage(format!(
+                "worktree {list} always shows nested repos; -r changes nothing here. For the \
+                 scan that fails on folders it can't read: meta --strict git worktree {list}"
+            ));
+        }
     }
+    // They find their repos in the set; exec applies meta's selection to
+    // the set's members
+    let exec = subcommand == Some("exec");
+    if options.filtered() && !exec {
+        return CommandResult::Error(format!(
+            "meta {command} does not take --include/--exclude/--tag; use `meta --include <repo> \
+             git worktree exec <name> -- <command>`"
+        ));
+    }
+    let meta = match exec {
+        true => options.meta_options.clone(),
+        false => options.meta_options.refusing(&crate::FILTERS),
+    };
 
     let name = if command.starts_with("git ") {
         "git worktree"
     } else {
         "worktree"
     };
-    // only exec takes meta's --include/--exclude/--tag
-    let meta = match clap_args.iter().find(|a| !a.starts_with('-')) {
-        Some(exec) if exec == "exec" => options.meta_options.clone(),
-        _ => options.meta_options.refusing(&crate::FILTERS),
-    };
     match meta_plugin_protocol::parse_args::<WorktreeParser>(name, &clap_args, &meta) {
-        Ok(parsed) => match handle_worktree_command(
-            parsed.command,
-            // meta's --dry-run, or the worktree command's own
-            ExecutionMode::from_dry_run(options.dry_run || parsed.dry_run),
-            options.verbose,
-            // meta's --json, or the command's own: its errors are JSON too
-            meta_core::out::set_json(options.json_output || parsed.json),
-            options.strict,
-            cwd,
-        ) {
+        Ok(parsed) => match handle_worktree_command(parsed.command, options, cwd) {
             Ok(()) => CommandResult::Message(String::new()),
             Err(e) => e.into(),
         },
@@ -114,14 +106,14 @@ pub fn execute_worktree_command(
 /// Dispatch parsed worktree commands while retaining command-specific policies.
 fn handle_worktree_command(
     command: WorktreeCommands,
-    mode: ExecutionMode,
-    verbose: bool,
-    json: bool,
-    global_strict: bool,
+    options: &PluginRequestOptions,
     cwd: &Path,
 ) -> Result<()> {
+    let (mode, verbose, json) = (options.mode(), options.verbose, options.json_output);
+    let global_strict = options.strict;
     match command {
-        WorktreeCommands::Create(args) => {
+        WorktreeCommands::Create(mut args) => {
+            args.recursive = options.recursive;
             // An ephemeral set is the next prune's: its lease stays beside it
             let ephemeral = args.ephemeral;
             let created = create::handle_create(args, mode, verbose, json, global_strict)?;
@@ -134,10 +126,16 @@ fn handle_worktree_command(
         WorktreeCommands::Remove(args) => {
             remove::handle_remove(args, mode, verbose, json, global_strict)
         }
-        WorktreeCommands::List(args) => list::handle_list(args, json, cwd),
-        WorktreeCommands::Status(args) => status::handle_status(args, json),
+        WorktreeCommands::List(mut args) => {
+            args.strict = global_strict;
+            list::handle_list(args, json, cwd)
+        }
+        WorktreeCommands::Status(mut args) => {
+            args.strict = global_strict;
+            status::handle_status(args, json)
+        }
         WorktreeCommands::Diff(args) => diff::handle_diff(args, json),
-        WorktreeCommands::Exec(args) => exec::handle_exec(args, mode, verbose, json),
+        WorktreeCommands::Exec(args) => exec::handle_exec(args, options),
         WorktreeCommands::Prune => prune::handle_prune(mode, json, global_strict),
     }
 }

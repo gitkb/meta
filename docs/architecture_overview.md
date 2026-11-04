@@ -9,8 +9,8 @@ How the `meta` CLI is put together: its crates, its plugins, and what happens wh
 ```
 meta/
 ├── meta_cli/              # The CLI (binary: meta)
-├── meta_core/             # What every meta program shares
-├── meta_plugin_protocol/  # The plugin request and response types
+├── meta_core/             # The workspace domain meta and its plugins share
+├── meta_plugin/           # The plugin SDK: protocol, runtime, process owner, test kit
 ├── meta_git_cli/          # Git plugin (binary: meta-git)
 ├── meta_git_lib/          # Clone queue and worktree sets
 ├── meta_project_cli/      # Project plugin (binary: meta-project)
@@ -21,8 +21,8 @@ meta/
 ```
 
 - **meta_cli**: the `meta` binary. It parses the command line, finds and runs plugins (`subprocess_plugins.rs`), and holds `meta exec`, `meta context` (`context.rs`), `meta init claude` (`init.rs`) and the plugin registry (`registry.rs`).
-- **meta_core**: reading `.meta.yaml` (`config.rs`), running git (`git/`), everything printed and how a program exits, with its exit codes (`out.rs`, `exit.rs`), escaping untrusted text (`display.rs`), the `~/.meta/` data directory and atomic JSON writes (`data_dir.rs`, `store.rs`), the records of worktree sets (`set_record.rs`), worktree detection (`worktree.rs`), repo selection (`repo_filter.rs`), the dependency graph (`dependency_graph.rs`), the query language the MCP server uses (`query.rs`), and the children a program starts and how they are stopped (`children.rs`).
-- **meta_plugin_protocol**: `PluginInfo` and `PluginHelp` (what a plugin says about itself), `PluginRequest` (what meta sends it), `PlanResponse` (the commands it asks meta to run), and `run_plugin()`, which a Rust plugin's `main` calls.
+- **meta_core**: reading `.meta.yaml` (`config.rs`), running git (`git/`), the `~/.meta/` data directory and atomic JSON writes (`data_dir.rs`, `store.rs`), the records of worktree sets (`set_record.rs`), worktree detection (`worktree.rs`), repo selection (`repo_filter.rs`), the dependency graph (`dependency_graph.rs`) and the query language the MCP server uses (`query.rs`).
+- **meta_plugin**: the plugin SDK, which meta, loop and every plugin use. The protocol: `PluginInfo` and `PluginHelp` (what a plugin says about itself), `PluginRequest` (what meta sends it), `PlanResponse` (the commands it asks meta to run), and `run_plugin()`, which a Rust plugin's `main` calls. The runtime: everything printed and how a program exits, with its exit codes (`out.rs`, `exit.rs`), escaping untrusted text (`display.rs`), `RepoUrl` (`repo_url.rs`), and the one owner of the processes a program starts and how they are stopped (`process.rs`). Opt-in features: `parse` (a plugin's clap parsing and the tip for meta's options), `testing` and `testing-git` (the sandbox and workspace builder plugin tests use).
 - **meta_git_cli**: `meta git clone`, `update`, `commit` and `worktree`; any other `meta git <cmd>` runs `git <cmd>` in each repo. SSH multiplexing for parallel remote commands is set up internally.
 - **meta_git_lib**: the clone queue and the worktree set building blocks (plans, leases, TTLs, removal safety checks).
 - **meta_project_cli**: `meta project list`, `check` and `dependents`.

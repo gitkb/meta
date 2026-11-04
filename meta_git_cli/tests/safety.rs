@@ -5,41 +5,15 @@
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
-use meta_plugin::testing::Sandbox;
+use meta_plugin::testing::{call, Sandbox};
+use meta_plugin::PluginRequest;
 use serde_json::{json, Value};
-use std::{
-    fs,
-    io::Write,
-    path::Path,
-    process::{Output, Stdio},
-};
+use std::{fs, path::Path, process::Output};
 
 /// A meta project at `root/ws` (itself a repo) with the given projects cloned.
 fn workspace(sandbox: &Sandbox, projects: &[&str]) -> std::path::PathBuf {
-    let root = sandbox.work();
-    let ws = root.join("ws");
-    fs::create_dir_all(&ws).unwrap();
-    sandbox.git(&ws, &["init", "-q", "-b", "main"]);
-    let mut config = serde_json::Map::new();
-    for name in projects {
-        let url = root.join("up").join(format!("{name}.git"));
-        sandbox.bare(&url);
-        sandbox.git(&ws, &["clone", "-q", url.to_str().unwrap(), name]);
-        config.insert(name.to_string(), json!(url));
-    }
-    fs::write(
-        ws.join(".meta.yaml"),
-        json!({ "projects": config }).to_string(),
-    )
-    .unwrap();
-    fs::write(
-        ws.join(".gitignore"),
-        format!("{}\n.worktrees/\n", projects.join("\n")),
-    )
-    .unwrap();
-    sandbox.git(&ws, &["add", "."]);
-    sandbox.git(&ws, &["commit", "-qm", "meta"]);
-    ws
+    let ws = sandbox.workspace(&sandbox.work().join("ws"));
+    projects.iter().fold(ws, |ws, name| ws.repo(name)).build()
 }
 
 /// Invoke the plugin protocol in `cwd` in the sandbox environment.
@@ -56,7 +30,11 @@ fn meta_git_in(
     options: Value,
     worktrees: Option<&Path>,
 ) -> Output {
-    let request = json!({"command": command, "args": args, "cwd": cwd, "options": options});
+    let request = PluginRequest::builder(command)
+        .args(args.iter().copied())
+        .cwd(cwd)
+        .options(serde_json::from_value(options).unwrap())
+        .build();
     let root = sandbox.work();
     let mut cmd = sandbox.command(env!("CARGO_BIN_EXE_meta-git"));
     if root.join("bin").is_dir() {
@@ -64,22 +42,9 @@ fn meta_git_in(
         let paths = std::iter::once(root.join("bin")).chain(std::env::split_paths(&path));
         cmd.env("PATH", std::env::join_paths(paths).unwrap());
     }
-    let mut child = cmd
-        .arg("--meta-plugin-exec")
-        .current_dir(cwd)
-        .envs(worktrees.map(|dir| ("META_WORKTREES", dir)))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(request.to_string().as_bytes())
-        .unwrap();
-    child.wait_with_output().unwrap()
+    cmd.current_dir(cwd)
+        .envs(worktrees.map(|dir| ("META_WORKTREES", dir)));
+    call(&mut cmd, &request)
 }
 
 /// `meta git worktree <args>`, with meta's `-r` and `--strict` among them
@@ -420,33 +385,11 @@ fn remove_checks_repos_nested_in_other_repos() {
     let sandbox = Sandbox::new();
     let root = &sandbox.work();
     // ws -> sub (a nested meta repo) -> leaf
-    let up = root.join("up");
-    for name in ["sub", "leaf"] {
-        sandbox.bare(&up.join(format!("{name}.git")));
-    }
-    let ws = workspace(&sandbox, &[]);
-    sandbox.git(
-        &ws,
-        &["clone", "-q", up.join("sub.git").to_str().unwrap(), "sub"],
-    );
+    let ws = sandbox
+        .workspace(&root.join("ws"))
+        .nested("sub", |sub| sub.repo("leaf"))
+        .build();
     let sub = ws.join("sub");
-    sandbox.git(
-        &sub,
-        &["clone", "-q", up.join("leaf.git").to_str().unwrap(), "leaf"],
-    );
-    let leaf_url = up.join("leaf.git");
-    fs::write(
-        sub.join(".meta.yaml"),
-        json!({"projects": {"leaf": leaf_url}}).to_string(),
-    )
-    .unwrap();
-    fs::write(sub.join(".gitignore"), "leaf/\n").unwrap();
-    sandbox.git(&sub, &["add", "."]);
-    sandbox.git(&sub, &["commit", "-qm", "meta"]);
-    let config = json!({"projects": {"sub": {"repo": up.join("sub.git"), "meta": true}}});
-    fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
-    fs::write(ws.join(".gitignore"), "sub/\n.worktrees/\n").unwrap();
-    sandbox.git(&ws, &["commit", "-qam", "sub"]);
 
     let out = meta_git(
         &sandbox,

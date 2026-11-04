@@ -34,4 +34,4 @@ A `.looprc` (JSON) in the current directory, or the file `-c` names, sets defaul
 
 ## Contributing
 
-loop's code is in `loop_lib/src/` (the library) and `loop_cli/src/` (the CLI); see the [contribution guide](contributing.md).
+loop's code is in `loop_lib/src/` (the library) and `loop_cli/src/` (the CLI); see the [contribution guide](../CONTRIBUTING.md).

@@ -21,7 +21,7 @@ use subprocess_plugins::{SubprocessPlugin, SubprocessPluginManager};
 const VERSION: &str = include_str!("../../VERSION");
 
 /// The version, and for a build from a git checkout its commit and date:
-/// `0.2.22 (git 1c96c7e 2026-11-03)`
+/// `<version> (git 1c96c7e 2026-11-03)`
 fn version() -> String {
     format!("{}{}", VERSION.trim(), env!("META_BUILD_COMMIT"))
 }

@@ -33,9 +33,8 @@
 //!    JSON on stdin)
 //! 3. Plugin responds with either a `PlanResponse` JSON (commands to execute) or direct output
 //!
-//! A plugin's exit code is meta's: 0, 1 for an error, 2 for a wrong command
-//! line, 128 + n when signal n ended it, 141 when meta stopped reading its
-//! output (see [`exit`]).
+//! A plugin ends with one of meta's exit codes ([`exit::CODES`]); meta ends
+//! with the plugin's.
 //!
 //! Every program meta starts, a plugin included, gets `META_OWNER_DEPTH`: 1
 //! for what meta starts, one more for each program in between. On Unix a

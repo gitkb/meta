@@ -83,7 +83,8 @@ pub fn clean_env(command: &mut Command) -> &mut Command {
 /// stop no longer waits for it (its process group still gets the signal).
 pub struct Owned {
     child: Child,
-    /// Off the list: waited for (its pid may now be another child's)
+    /// Off the list: waited for (its pid may now be another child's), or
+    /// never on it ([`spawn_finishing`])
     waited: bool,
     /// Its process group or job, when started through [`spawn_group`]
     group: Option<imp::Group>,
@@ -108,6 +109,21 @@ pub fn spawn(command: &mut Command) -> io::Result<Owned> {
 /// with it (see the module documentation).
 pub fn spawn_group(command: &mut Command) -> io::Result<Owned> {
     start(command, true)
+}
+
+/// Start `command`, cleanup that must finish (a rollback, removing what a
+/// cancelled command made), out of reach of a stop: in a process group of
+/// its own (on Windows, a console process group of its own, out of the
+/// jobs of [`spawn_group`] where they let it), which the terminal's Ctrl-C
+/// and every signal this program passes on miss. It starts even once the
+/// program is stopping, and waiting for it is waiting for it alone: if the
+/// program ends first, the cleanup runs on to its end.
+pub fn spawn_finishing(command: &mut Command) -> io::Result<Owned> {
+    imp::spawn_finishing(command).map(|child| Owned {
+        child,
+        waited: true,
+        group: None,
+    })
 }
 
 fn start(command: &mut Command, grouped: bool) -> io::Result<Owned> {
@@ -384,6 +400,14 @@ mod imp {
         Ok((child, grouped.then_some(pid)))
     }
 
+    /// Start `command` in a process group of its own, off the lists: no
+    /// stop signals it, and it starts while the program is stopping.
+    pub(super) fn spawn_finishing(command: &mut Command) -> io::Result<Child> {
+        command.process_group(0);
+        command.env(DEPTH, (depth() + 1).to_string());
+        command.spawn()
+    }
+
     /// Forget the process groups that have emptied: once one has, its id
     /// may become another's.
     pub(super) fn reaped() {
@@ -490,7 +514,7 @@ mod imp {
             for origin in signals.forever() {
                 if stopping {
                     kill_all();
-                    crate::exit::now(128 + origin.signal);
+                    crate::exit::now(crate::exit::signalled(origin.signal));
                 }
                 stopping = true;
                 std::thread::spawn(move || stop(origin.signal, origin.process.is_some()));
@@ -551,7 +575,7 @@ mod imp {
         drop(children);
         let _ = signal_hook::low_level::emulate_default_handler(signal);
         // SIGHUP, SIGINT and SIGTERM all end a program by default
-        crate::exit::now(128 + signal);
+        crate::exit::now(crate::exit::signalled(signal));
     }
 
     /// Kill every child and every group this program made.
@@ -593,6 +617,8 @@ mod imp {
 
     fn job_of(child: &Child) -> Result<Job, win32job::JobError> {
         let job = Job::create()?;
+        // what must finish may leave it (spawn_finishing)
+        job.set_extended_limit_info(ExtendedLimitInfo::new().limit_breakaway_ok())?;
         job.assign_process(child.as_raw_handle() as isize)?;
         Ok(job)
     }
@@ -636,7 +662,7 @@ mod imp {
             return;
         };
         let mut limits = ExtendedLimitInfo::new();
-        limits.limit_kill_on_job_close();
+        limits.limit_kill_on_job_close().limit_breakaway_ok();
         if job.set_extended_limit_info(&limits).is_ok() {
             // closed: everything in it is killed
             drop(job);
@@ -644,6 +670,23 @@ mod imp {
             // kept for the next stop to try again
             group.kill = Some(job);
             let _ = child.kill();
+        }
+    }
+
+    /// In a console process group of its own (Ctrl-C misses it), and out
+    /// of this program's jobs when every one of them lets it go.
+    pub(super) fn spawn_finishing(command: &mut Command) -> io::Result<Child> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        const ERROR_ACCESS_DENIED: i32 = 5;
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
+        match command.spawn() {
+            // a job that doesn't let it go (not one of spawn_group's) keeps it
+            Err(e) if e.raw_os_error() == Some(ERROR_ACCESS_DENIED) => {
+                command.creation_flags(CREATE_NEW_PROCESS_GROUP).spawn()
+            }
+            started => started,
         }
     }
 

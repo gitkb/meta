@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use meta_core::git::git;
 
 /// What a cancel does to a git command of the batch: the pre-check stops,
-/// the rollback finishes, in a process group of its own so that a signal to
-/// the server's group can't cut it short either.
+/// the rollback finishes ([`meta_plugin::process::spawn_finishing`]), so a
+/// signal to the server's group can't cut it short either.
 #[derive(Clone, Copy)]
 enum OnCancel {
     Stop,
@@ -172,10 +172,7 @@ impl McpServer {
             .args(args);
         let output = match on_cancel {
             OnCancel::Stop => self.calls.output(&mut command),
-            // in a group of its own, out of reach of a signal to the server's
-            // (meta-mcp handles its signals itself and never calls
-            // children::own, which would pass them on to this group)
-            OnCancel::Finish => meta_plugin::process::spawn_group(
+            OnCancel::Finish => meta_plugin::process::spawn_finishing(
                 command
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::piped())

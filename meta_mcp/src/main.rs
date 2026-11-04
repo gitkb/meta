@@ -178,12 +178,12 @@ impl McpServer {
                     let mut stopping = false;
                     for signal in signals.forever() {
                         if stopping {
-                            meta_plugin::exit::now(128 + signal);
+                            meta_plugin::exit::now(meta_plugin::exit::signalled(signal));
                         }
                         stopping = true;
                         scope.spawn(move || {
                             self.calls.stop_running();
-                            meta_plugin::exit::now(128 + signal);
+                            meta_plugin::exit::now(meta_plugin::exit::signalled(signal));
                         });
                     }
                 });

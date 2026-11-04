@@ -394,7 +394,13 @@ fn list(request: &Request) -> anyhow::Result<Found> {
             .unwrap_or_else(|| config.dir.clone());
         ListedWorktree {
             linked: true,
-            physical_root: set.dir.to_string_lossy().into_owned(),
+            // the set's folder as the file system names it, as cwd is
+            physical_root: set
+                .dir
+                .canonicalize()
+                .unwrap_or_else(|_| set.dir.clone())
+                .to_string_lossy()
+                .into_owned(),
             canonical_root: canonical_root.to_string_lossy().into_owned(),
             name: set.name.clone(),
         }

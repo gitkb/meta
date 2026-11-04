@@ -52,11 +52,20 @@ impl Report {
     /// meta, if it failed. In text mode a failure not yet told is reported
     /// as meta's error (`Error: …`); `silent` says a told one once more,
     /// as the summary was not shown.
-    pub fn finish(self, json: bool, silent: bool, fields: &[String]) -> anyhow::Result<()> {
+    pub fn finish(
+        self,
+        show: crate::events::Show,
+        silent: bool,
+        fields: &[String],
+    ) -> anyhow::Result<()> {
+        use crate::events::Show;
         let told = self.told;
+        let json = show != Show::Text;
         let envelope = self.envelope();
-        if json {
-            envelope.print(fields)?;
+        match show {
+            Show::Text => {}
+            Show::Json => envelope.print(fields)?,
+            Show::Stream => envelope.print_last(fields)?,
         }
         let Some(error) = envelope.error else {
             return Ok(());

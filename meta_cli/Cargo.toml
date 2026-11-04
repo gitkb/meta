@@ -28,6 +28,11 @@ zip = { version = "9.0.4", default-features = false, features = ["aes-crypto", "
 
 tempfile.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# mkfifo: rustix has no mkfifoat on macOS
+nix = { version = "0.31", default-features = false, features = ["fs"] }
+rustix = { workspace = true, features = ["fs"] }
+
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { workspace = true, features = ["process"] }
 

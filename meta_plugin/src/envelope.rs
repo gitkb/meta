@@ -337,6 +337,15 @@ impl Envelope {
         crate::out::document(&text)
     }
 
+    /// Print it as the last line of `--json-stream`: `{"envelope": …}`.
+    pub fn print_last(&self, fields: &[String]) -> Result<(), crate::out::StdoutError> {
+        let value = match fields.is_empty() {
+            true => serde_json::to_value(self).unwrap_or_default(),
+            false => self.select(fields),
+        };
+        crate::out::document(&serde_json::json!({ "envelope": value }).to_string())
+    }
+
     /// The envelope as `meta --fields a,b.c` prints it: each row keeps only
     /// the fields named (a dotted name reaches into `data`). Every other
     /// part stays, so a caller still sees success and errors.

@@ -319,7 +319,11 @@ impl SubprocessPlugin {
     /// read from another (see `meta_plugin`'s protocol). Its stdin and
     /// stderr are meta's, and its stdout too, but under `--json` meta's
     /// stderr, so meta's stdout holds the Envelope alone.
-    pub fn call(&self, request: &Request) -> Result<Response> {
+    pub fn call(
+        &self,
+        request: &Request,
+        show: crate::events::Show,
+    ) -> Result<(Response, crate::events::Received)> {
         let shown = escape_path(&self.path);
         let dir = tempfile::Builder::new()
             .prefix("meta-call-")
@@ -353,10 +357,14 @@ impl SubprocessPlugin {
             true => plugin.stdout(std::io::stderr()),
             false => plugin.stdout(Stdio::inherit()),
         };
+        let events = crate::events::Channel::open(dir.path(), show)
+            .context("Cannot make the plugin's events channel")?;
+        plugin.env(meta_plugin::event::EVENTS_VAR, events.path());
         meta_plugin::out::pass_color(&mut plugin);
         meta_plugin::out::flush()?;
-        let status = meta_plugin::process::status(&mut plugin)
-            .with_context(|| format!("Failed to execute plugin {shown}"))?;
+        let status = meta_plugin::process::status(&mut plugin);
+        let received = events.finish();
+        let status = status.with_context(|| format!("Failed to execute plugin {shown}"))?;
         let ended = meta_plugin::exit::ExitWith::of(status);
         let failed = |why: String| {
             let info = ErrorInfo::new(ErrorCode::PluginFailed, format!("plugin {shown} {why}"));
@@ -374,8 +382,12 @@ impl SubprocessPlugin {
             }
             Err(e) => return Err(failed(format!("wrote an answer meta can't read ({e})"))),
         };
-        serde_json::from_slice(&bytes)
-            .map_err(|e| failed(format!("wrote an answer that is no response ({e})")))
+        if let Some(problem) = &received.problem {
+            return Err(failed(problem.clone()));
+        }
+        let response = serde_json::from_slice(&bytes)
+            .map_err(|e| failed(format!("wrote an answer that is no response ({e})")))?;
+        Ok((response, received))
     }
 }
 

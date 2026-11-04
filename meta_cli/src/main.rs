@@ -8,6 +8,7 @@ use meta_plugin::{errln, out, outln};
 use std::path::PathBuf;
 
 mod context;
+mod events;
 mod init;
 mod invoke;
 mod registry;
@@ -81,6 +82,13 @@ pub struct Cli {
 
     #[arg(
         long,
+        conflicts_with = "json",
+        help = "Print each event as one JSON line as it happens ({\"event\": …}), then the envelope --json prints as the last line ({\"envelope\": …})"
+    )]
+    json_stream: bool,
+
+    #[arg(
+        long,
         value_name = "FIELDS",
         value_delimiter = ',',
         help = "With --json, keep only these fields of each result (comma-separated; a.b reaches into a field, as data.name)"
@@ -151,6 +159,15 @@ pub struct Cli {
 }
 
 impl Cli {
+    /// How events are shown as they arrive.
+    pub fn show(&self) -> events::Show {
+        match (self.json_stream, self.json) {
+            (true, _) => events::Show::Stream,
+            (false, true) => events::Show::Json,
+            (false, false) => events::Show::Text,
+        }
+    }
+
     /// `--dry-run`, resolved once for every command
     fn mode(&self) -> ExecutionMode {
         ExecutionMode::from_dry_run(self.dry_run)
@@ -374,6 +391,9 @@ pub fn running(name: &str) {
     }
 }
 
+/// `--json-stream`: an error that ends meta is the stream's last line.
+static STREAM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn main() -> std::process::ExitCode {
     meta_plugin::exit::run(|| {
         if let Err(e) = meta_plugin::process::own() {
@@ -389,7 +409,11 @@ fn main() -> std::process::ExitCode {
                 let error = meta_plugin::envelope::info_of(&e);
                 let code = meta_plugin::exit::ending(&e).unwrap_or(error.code.exit_code());
                 let command = COMMAND.lock().map(|c| c.clone()).unwrap_or_default();
-                meta_plugin::Envelope::failed(command, error).print(&[])?;
+                let envelope = meta_plugin::Envelope::failed(command, error);
+                match STREAM.load(std::sync::atomic::Ordering::Relaxed) {
+                    true => envelope.print_last(&[])?,
+                    false => envelope.print(&[])?,
+                }
                 Err(meta_plugin::exit::ExitWith(code).into())
             }
             result => result,
@@ -428,7 +452,7 @@ fn run_cli() -> Result<()> {
     // meta's own --help also lists the commands plugins add, so it is
     // answered here, before anything else runs; every other result of
     // parsing is reported as usual
-    let cli: Cli = match Cli::try_parse() {
+    let mut cli: Cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(e) if is_root_help(&e) => {
             check_and_warn_orphan();
@@ -437,6 +461,10 @@ fn run_cli() -> Result<()> {
         }
         Err(_) => meta_plugin::args::parse()?,
     };
+    // the stream is JSON too: every command reads `json` for it, and only
+    // the printing tells the two apart
+    cli.json |= cli.json_stream;
+    STREAM.store(cli.json_stream, std::sync::atomic::Ordering::Relaxed);
     meta_plugin::out::set_json(cli.json);
     let fields = cli.fields.clone().unwrap_or_default();
     anyhow::ensure!(
@@ -513,7 +541,7 @@ fn run_cli() -> Result<()> {
             external(&cli, args, &subprocess_plugins, &mut report, false)?
         }
     }
-    report.finish(cli.json, cli.silent, &fields)
+    report.finish(cli.show(), cli.silent, &fields)
 }
 
 /// `meta <word> ...`, served by the plugin of `word`; `delegated` when a

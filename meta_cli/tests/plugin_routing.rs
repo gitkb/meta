@@ -526,3 +526,121 @@ fn fields_keep_only_the_named_fields_of_each_row() {
     );
     assert_eq!(out.status.code(), Some(2));
 }
+
+/// A plugin `meta-<word>` running `body` for a call (sh; `$META_EVENTS` is
+/// where its events go, `$META_RESPONSE` its answer).
+fn streaming(root: &Path, word: &str, body: &str) {
+    script(
+        &root.join(format!("bin/meta-{word}")),
+        &format!(
+            r#"case "$1" in
+  --meta-plugin-info) echo '{{"name":"{word}","version":"1","commands":["{word}"]}}' ;;
+  --meta-plugin-exec)
+{body}
+  ;;
+esac"#
+        ),
+    );
+}
+
+#[test]
+fn a_record_a_plugin_streams_is_shown_before_it_ends() {
+    use std::io::BufRead;
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    let go = root.join("go");
+    streaming(
+        &root,
+        "live",
+        &format!(
+            r#"printf '%s\n' '{{"type":"record","project":"a","data":"first match"}}' >> "$META_EVENTS"
+i=0; while [ ! -e "{}" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done
+echo '{{"message":""}}' > "$META_RESPONSE""#,
+            go.display()
+        ),
+    );
+    let mut meta = sandbox
+        .command(env!("CARGO_BIN_EXE_meta"))
+        .args(["live", "go"])
+        .current_dir(&root)
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", root.join("bin").display()),
+        )
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = std::io::BufReader::new(meta.stdout.take().unwrap()).lines();
+    let seen = lines.find(|line| line.as_ref().unwrap().contains("first match"));
+    // shown while the plugin still waits for the go
+    let running = meta.try_wait().unwrap().is_none() && !go.exists();
+    fs::write(&go, "").unwrap();
+    assert!(seen.is_some() && running);
+    assert!(meta.wait().unwrap().success());
+}
+
+#[test]
+fn json_folds_what_a_plugin_streamed_into_its_one_envelope() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    streaming(
+        &root,
+        "folds",
+        r#"printf '%s\n' '{"type":"record","project":"a","data":1}' '{"type":"progress","done":1,"total":2}' '{"type":"warning","message":"slow"}' >> "$META_EVENTS"
+echo '{"results":{"records":[{"project":"b","data":2}]}}' > "$META_RESPONSE""#,
+    );
+    let got = envelope(&run_meta(&sandbox, &root, &["--json", "folds", "go"]));
+    let data: Vec<_> = got
+        .results
+        .iter()
+        .map(|r| r.data.clone().unwrap())
+        .collect();
+    assert_eq!(
+        data,
+        [serde_json::json!(1), serde_json::json!(2)],
+        "{got:?}"
+    );
+    assert_eq!(got.warnings[0].message, "slow");
+    // a step is meta's: a plugin that sends one fails
+    streaming(
+        &root,
+        "steps",
+        r#"printf '%s\n' '{"type":"step","project":"a"}' >> "$META_EVENTS"; echo '{"message":""}' > "$META_RESPONSE""#,
+    );
+    let got = envelope(&run_meta(&sandbox, &root, &["--json", "steps", "go"]));
+    assert_eq!(
+        got.error.unwrap().code,
+        meta_plugin::ErrorCode::PluginFailed
+    );
+}
+
+#[test]
+fn json_stream_is_a_line_per_event_then_the_envelope_json_prints() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    let line = ["exec", "--", "true"];
+    let streamed = run_meta(&sandbox, &root, &[&["--json-stream"][..], &line].concat());
+    let lines: Vec<serde_json::Value> = String::from_utf8_lossy(&streamed.stdout)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let (last, events) = lines.split_last().unwrap();
+    let steps: Vec<&str> = events
+        .iter()
+        .map(|e| {
+            assert_eq!(e["event"]["type"], "step", "{e}");
+            e["event"]["project"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(steps.len(), 3, "{lines:?}");
+    let json = envelope(&run_meta(
+        &sandbox,
+        &root,
+        &[&["--json"][..], &line].concat(),
+    ));
+    let last: meta_plugin::Envelope = serde_json::from_value(last["envelope"].clone()).unwrap();
+    assert_eq!(last, json);
+}

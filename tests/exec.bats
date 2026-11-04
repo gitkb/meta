@@ -273,6 +273,7 @@ EOF
 }
 
 @test "a failure every repo shares prints once; different failures print per repo" {
+    bats_require_minimum_version 1.5.0
     run "$META_BIN" --parallel exec -- sh -c 'echo shared failure >&2; exit 3'
     [ "$status" -eq 1 ]
     [ "$(grep -cx 'shared failure' <<<"$output")" -eq 1 ]
@@ -287,8 +288,8 @@ EOF
     done
 
     # JSON keeps every repo's record
-    run "$META_BIN" --json --parallel exec -- sh -c 'echo shared failure >&2; exit 3'
-    [ "$(grep -c '"directory"' <<<"$output")" -eq 4 ]
+    run --separate-stderr "$META_BIN" --json --parallel exec -- sh -c 'echo shared failure >&2; exit 3'
+    jq -e '[.results[] | select(.error and .stderr == "shared failure\n")] | length == 4' <<<"$output"
 }
 
 @test "loop captures stdout from commands" {
@@ -342,9 +343,9 @@ SCRIPT
     # one that exits has its code and no signal
     run sh -c '"$1" --json --include api exec -- sh -c "exit 3" 2>/dev/null' _ "$META_BIN"
     echo "$output" | jq -e '.results[0] | .exit_code == 3 and (has("signal") | not)'
-    # one that never started keeps -1
+    # one that never started has no exit code or signal, and fails
     run sh -c '"$1" --json --include api exec -- meta-no-such-program 2>/dev/null' _ "$META_BIN"
-    echo "$output" | jq -e '.results[0] | .exit_code == -1 and (has("signal") | not)'
+    echo "$output" | jq -e '.results[0] | (has("exit_code") or has("signal") | not) and .error.code == "tool-failed"'
 }
 
 @test "meta exec expands ./.looprc aliases over ~/.looprc ones" {
@@ -775,18 +776,19 @@ EOF
     done
 }
 
-@test "a plugin plan's setup and cleanup under --json --verbose leave stdout JSON" {
+@test "a plugin plan under --json --verbose leaves stdout the envelope alone" {
     mkdir -p .meta/plugins
     printf '%s\n' '#!/bin/sh' \
         'if [ "$1" = --meta-plugin-info ]; then' \
         '    echo '"'"'{"name":"plan","version":"1","commands":["plan"]}'"'"'' \
         'else' \
-        '    echo '"'"'{"plan":{"pre_commands":[{"dir":".","argv":["true"]}],"commands":[{"dir":".","argv":["true"]}],"post_commands":[{"dir":".","argv":["true"]}]}}'"'"'' \
+        '    echo '"'"'{"plan":{"steps":[{"dir":".","argv":["echo","from-step"]}]}}'"'"' > "$META_RESPONSE"' \
         'fi' > .meta/plugins/meta-plan
     chmod +x .meta/plugins/meta-plan
     run bash -c '"$1" --json --verbose plan go 2>/dev/null' _ "$META_BIN"
     [ "$status" -eq 0 ]
-    jq -e '.success == true' <<<"$output"
+    jq -e '.success == true and .results[0].stdout == "from-step\n"' <<<"$output"
+    [ "$(jq -s length <<<"$output")" -eq 1 ]
 }
 
 @test "a plugin killed by a signal ends meta by it; one that fails silently under --json leaves JSON" {
@@ -795,7 +797,7 @@ EOF
 #!/bin/sh
 if [ "$1" = --meta-plugin-info ]; then
     echo '{"name":"die","version":"1","commands":["die","die quiet"]}'
-elif cat | grep -q '"command":"die quiet"'; then
+elif grep -q quiet "$META_REQUEST"; then
     echo boom >&2; exit 3
 else
     kill -TERM $$
@@ -806,7 +808,7 @@ EOF
     [ "$status" -eq 143 ]
     run bash -c '"$1" --json die quiet 2>/dev/null' _ "$META_BIN"
     [ "$status" -eq 3 ]
-    jq -e '.success == false and (.error | contains("plugin die failed"))' <<<"$output"
+    jq -e '.success == false and .error.code == "plugin-failed"' <<<"$output"
 }
 
 @test "a plugin's own argument that isn't UTF-8 is a usage error, not a panic" {
@@ -837,7 +839,7 @@ sys.stderr.buffer.write(p.stderr); sys.exit(p.returncode)' "$@"; }
     printf '%s\n' '#!/bin/sh' \
         'if [ "$1" = --meta-plugin-info ]; then' \
         '    echo '"'"'{"name":"frag","version":"1","commands":["frag"]}'"'"'' \
-        'elif grep -q fail; then printf fragment; exit 3' \
+        'elif grep -q fail "$META_REQUEST"; then printf fragment; exit 3' \
         'else printf fragment; fi' > .meta/plugins/meta-frag
     chmod +x .meta/plugins/meta-frag
     # whether the plugin succeeded or failed
@@ -898,26 +900,6 @@ sys.exit(subprocess.run(sys.argv[1:], stdout=w).returncode)' "$META_BIN" frag "$
     done
 }
 
-@test "a plugin closing stdin decides the result itself, not SIGPIPE" {
-    cat > .meta/plugins/meta-close <<'SH'
-#!/bin/sh
-if [ "$1" = --meta-plugin-info ]; then
-    printf '%s\n' '{"name":"close","version":"1","commands":["close"]}'
-else
-    exec 0<&-
-    exit 3
-fi
-SH
-    chmod +x .meta/plugins/meta-close
-    # Exceed the pipe buffer so the write cannot finish before the reader closes.
-    local large
-    large="$(python3 -c 'print("x" * 100000)')"
-    run "$META_BIN" close "$large"
-    # the plugin's status, not death by SIGPIPE (141) or a panic
-    [ "$status" -eq 3 ]
-    [[ "$output" != *"panicked"* ]]
-}
-
 # ============ One selection ============
 
 @test "-r --tag selects a nested project by its own tag under an untagged parent" {
@@ -974,13 +956,13 @@ YAML
     run --separate-stderr "$META_BIN" --json exec --include api -- pwd
     [ "$status" -eq 2 ]
     [ "$(jq -r .success <<<"$output")" = false ]
-    [[ "$(jq -r .error <<<"$output")" == *"as in meta --json --include api exec -- pwd"* ]]
+    [[ "$(jq -r .error.hint <<<"$output")" == *"as in meta --json --include api exec -- pwd"* ]]
     [ "$(jq -s length <<<"$output")" -eq 1 ]
     # a plugin's, relayed as it printed it
     run --separate-stderr "$META_BIN" --json git update --dry-run
     [ "$status" -eq 2 ]
     [ "$(jq -s length <<<"$output")" -eq 1 ]
-    [[ "$(jq -r .error <<<"$output")" == *"as in meta --json --dry-run git update"* ]]
+    [[ "$(jq -r .error.hint <<<"$output")" == *"as in meta --json --dry-run git update"* ]]
     # --json that isn't meta's, before the command, prints no JSON
     run --separate-stderr "$META_BIN" exec --json-x -- pwd
     [ "$status" -eq 2 ]
@@ -996,20 +978,21 @@ YAML
     rm -rf frontend
     run --separate-stderr "$META_BIN" --json --exclude . git diff --quiet
     [ "$status" -eq 0 ]
-    [ "$(jq -r '[.results[].path] | join(" ")' <<<"$output")" = "./api ./worker" ]
+    [ "$(jq -r '[.results[].project] | join(" ")' <<<"$output")" = "api worker" ]
     # empty output is "", never a missing key
     [ "$(jq -r '[.results[] | has("stdout") and has("stderr")] | all' <<<"$output")" = true ]
     [ "$(jq -r '.results[0].stdout' <<<"$output")" = "" ]
-    [[ "$(jq -r '.warnings[0]' <<<"$output")" == "frontend is not cloned"* ]]
-    [ "$(jq -r .hint <<<"$output")" = null ]
-    # each path selects its repo as it is
-    path="$(jq -r '.results[0].path' <<<"$output")"
-    run --separate-stderr "$META_BIN" --json --include "$path" exec -- true
-    [ "$(jq -r '[.results[].path] | join(" ")' <<<"$output")" = "./api" ]
+    [[ "$(jq -r '.warnings[0].message' <<<"$output")" == "frontend is not cloned"* ]]
+    [ "$(jq -r '.warnings[0].project' <<<"$output")" = frontend ]
+    [ "$(jq -r .error <<<"$output")" = null ]
+    # each project name selects its repo as it is
+    project="$(jq -r '.results[0].project' <<<"$output")"
+    run --separate-stderr "$META_BIN" --json --include "$project" exec -- true
+    [ "$(jq -r '[.results[].project] | join(" ")' <<<"$output")" = "api" ]
     # the tip the human output ends with
     run --separate-stderr "$META_BIN" --json --include api git status -r
     [ "$status" -eq 1 ]
-    [[ "$(jq -r .hint <<<"$output")" == *"as in meta --json --include api -r git status" ]]
+    [[ "$(jq -r .error.hint <<<"$output")" == *"as in meta --json --include api -r git status" ]]
 }
 
 @test "--help with --add-aliases-to-global-looprc only prints help" {

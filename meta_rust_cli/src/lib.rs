@@ -2,64 +2,46 @@
 //!
 //! Runs any cargo command across the Rust repos of a meta workspace.
 
-use meta_plugin::errln;
-pub use meta_plugin::{CommandResult, PlannedCommand, PluginRequestOptions};
-use std::path::Path;
+use meta_plugin::{Plan, Project, Request, Response, Skipped, Step};
 
-/// Plan `cargo <args>` in every selected repo that has a `Cargo.toml`.
-///
-/// `projects` is the repo list from meta_cli (it includes the meta root);
-/// when it is empty the plan runs in `cwd` only. A Cargo workspace that spans
-/// repos runs in each of them; plain `cargo` in its root runs it once.
-pub fn execute_command(
-    args: &[String],
-    options: &PluginRequestOptions,
-    projects: &[String],
-    cwd: &Path,
-) -> CommandResult {
-    let dirs: Vec<String> = if projects.is_empty() {
-        vec![".".to_string()]
-    } else {
-        projects.to_vec()
-    };
-    let (rust_dirs, other_dirs): (Vec<String>, Vec<String>) = dirs
+/// Plan `cargo <args>` in every selected repo that has a `Cargo.toml`; the
+/// others are skipped, and with none left the command is done. A Cargo
+/// workspace that spans repos runs in each of them; plain `cargo` in its
+/// root runs it once.
+pub fn execute_command(request: &Request) -> Response {
+    let (rust, other): (Vec<&Project>, Vec<&Project>) = request
+        .projects
+        .iter()
+        .partition(|project| project.abs.join("Cargo.toml").is_file());
+    let skipped = other
         .into_iter()
-        .partition(|dir| cwd.join(dir).join("Cargo.toml").is_file());
-
-    if !options.silent && !other_dirs.is_empty() {
-        // meta_cli sends only the selected repos, so name them from the cwd
-        let names: Vec<String> = other_dirs.iter().map(|dir| display(dir, cwd)).collect();
-        errln!("meta-cargo: skipping {} (no Cargo.toml)", names.join(", "));
-    }
-
-    if rust_dirs.is_empty() {
-        return CommandResult::Message("No Rust projects found (no Cargo.toml files)".to_string());
-    }
-
-    let commands = rust_dirs
-        .into_iter()
-        .map(|dir| PlannedCommand {
-            dir,
-            argv: std::iter::once("cargo".to_string())
-                .chain(args.iter().cloned())
-                .collect(),
-            env: None,
+        .map(|project| Skipped {
+            project: project.path.clone(),
+            reason: "no Cargo.toml".to_string(),
+            quiet: false,
         })
         .collect();
-    CommandResult::Plan(commands, Some(options.parallel))
-}
-
-fn display(dir: &str, root: &Path) -> String {
-    match root.join(dir).strip_prefix(root) {
-        Ok(rel) if rel.as_os_str().is_empty() => ".".to_string(),
-        Ok(rel) => rel.display().to_string(),
-        Err(_) => dir.to_string(),
+    if rust.is_empty() {
+        return Response::message("No Rust projects found (no Cargo.toml files)").skipping(skipped);
     }
+    let argv: Vec<String> = std::iter::once("cargo".to_string())
+        .chain(request.args.iter().cloned())
+        .collect();
+    let steps = rust
+        .into_iter()
+        .map(|project| Step::new(Some(&project.path), &project.abs, argv.clone()))
+        .collect();
+    Response::plan(Plan {
+        steps,
+        ..Plan::default()
+    })
+    .skipping(skipped)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::TempDir;
 
     fn write(dir: &Path, file: &str, contents: &str) {
@@ -68,19 +50,25 @@ mod tests {
         std::fs::write(path, contents).unwrap();
     }
 
-    /// The planned commands as `dir: argv`, or `None` for any other result.
-    fn plan(
-        args: &[&str],
-        projects: &[&Path],
-        options: &PluginRequestOptions,
-    ) -> Option<Vec<String>> {
-        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        let projects: Vec<String> = projects.iter().map(|p| p.display().to_string()).collect();
-        match execute_command(&args, options, &projects, Path::new(".")) {
-            CommandResult::Plan(commands, _) => Some(
-                commands
+    /// The planned steps as `dir: argv`, or `None` for any other answer.
+    fn plan(args: &[&str], projects: &[&Path]) -> Option<Vec<String>> {
+        let mut request = Request::new("cargo", ".");
+        request.args = args.iter().map(|a| a.to_string()).collect();
+        request.projects = projects
+            .iter()
+            .map(|dir| Project {
+                name: dir.display().to_string(),
+                path: dir.display().to_string(),
+                abs: dir.to_path_buf(),
+                present: true,
+                ..Project::default()
+            })
+            .collect();
+        match execute_command(&request).answer {
+            meta_plugin::Answer::Plan(plan) => Some(
+                plan.steps
                     .into_iter()
-                    .map(|c| format!("{}: {:?}", c.dir, c.argv))
+                    .map(|s| format!("{}: {:?}", s.dir.display(), s.argv))
                     .collect(),
             ),
             _ => None,
@@ -99,7 +87,7 @@ mod tests {
         write(&docs, "README.md", "");
 
         let args = ["fmt", "--check", "--", "--config", "a b"];
-        let commands = plan(&args, &[root, &rust, &docs], &Default::default()).unwrap();
+        let commands = plan(&args, &[root, &rust, &docs]).unwrap();
 
         let expected = format!(
             "{}: {:?}",
@@ -117,8 +105,8 @@ mod tests {
         write(&member, "Cargo.toml", "[package]\nname = \"member\"\n");
 
         // meta_cli sends only the repos --include/--exclude select
-        let all = plan(&["run"], &[root, &member], &Default::default()).unwrap();
-        let only_member = plan(&["run"], &[&member], &Default::default()).unwrap();
+        let all = plan(&["run"], &[root, &member]).unwrap();
+        let only_member = plan(&["run"], &[&member]).unwrap();
 
         let run_in = |dir: &Path| format!("{}: {:?}", dir.display(), ["cargo", "run"]);
         assert_eq!(all, [run_in(root), run_in(&member)]);
@@ -129,12 +117,7 @@ mod tests {
     fn help_after_double_dash_goes_to_cargo() {
         let temp = TempDir::new().unwrap();
         write(temp.path(), "Cargo.toml", "[package]\nname = \"x\"\n");
-        let commands = plan(
-            &["test", "--", "--help"],
-            &[temp.path()],
-            &Default::default(),
-        )
-        .unwrap();
+        let commands = plan(&["test", "--", "--help"], &[temp.path()]).unwrap();
         let expected = format!(
             "{}: {:?}",
             temp.path().display(),

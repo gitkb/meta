@@ -5,7 +5,7 @@
 //! Claude Code SessionStart hook).
 
 use anyhow::Result;
-use meta_plugin::{errln, out, outln};
+use meta_plugin::{errln, out};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -30,10 +30,15 @@ pub fn handle_context(
     reach: Reach,
     filters: &Filters,
     with_all: impl FnOnce() -> String,
+    report: &mut crate::report::Report,
 ) -> Result<()> {
     // with -r or -A: the walked tree, named from the workspace root
     let nested = !reach.tree.is_empty();
-    let selected = reach.select(filters, with_all)?;
+    let selected: Vec<_> = reach
+        .select(filters, with_all)?
+        .into_iter()
+        .map(|repo| repo.dir)
+        .collect();
     let Reach {
         workspace,
         root,
@@ -124,12 +129,26 @@ pub fn handle_context(
         dependencies,
     };
 
-    if json {
-        outln!("{}", serde_json::to_string_pretty(&ctx)?)?;
-    } else {
+    if !json {
         out!("{}", format_markdown(&ctx))?;
     }
-
+    // a row for the workspace, then one for each repo
+    report
+        .results
+        .push(meta_plugin::ProjectResult::about_workspace(
+            serde_json::json!({
+                "name": ctx.name,
+                "description": ctx.description,
+                "repo_count": ctx.repo_count,
+                "commands": ctx.commands,
+                "dependencies": ctx.dependencies,
+            }),
+        ));
+    for repo in &ctx.repos {
+        report
+            .results
+            .push(meta_plugin::ProjectResult::record(repo.path.clone(), repo));
+    }
     Ok(())
 }
 

@@ -47,7 +47,7 @@ fn a_hooks_repository_variables_do_not_reach_metas_git() {
     // A query meta makes itself
     let context: serde_json::Value =
         serde_json::from_slice(&meta(&["--json", "context"]).stdout).unwrap();
-    assert_eq!(context["repos"][0]["branch"], "on-a", "{context}");
+    assert_eq!(context["results"][1]["data"]["branch"], "on-a", "{context}");
 
     // A command meta runs in each repo, with the user's settings
     let out = meta(&["exec", "--", "git", "branch", "--show-current"]);
@@ -90,7 +90,7 @@ fn context_shows_the_branch_of_a_bare_project() {
         String::from_utf8_lossy(&out.stderr)
     );
     let context: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(context["repos"][0]["branch"], "main", "{context}");
+    assert_eq!(context["results"][1]["data"]["branch"], "main", "{context}");
 }
 
 #[test]
@@ -124,6 +124,12 @@ fn context_shows_the_branch_of_a_checkout_git_calls_bare() {
     );
     let context: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     // its branch, and no word on changes git can't report
-    assert_eq!(context["repos"][0]["branch"], "on-checkout", "{context}");
-    assert!(context["repos"][0].get("dirty").is_none(), "{context}");
+    assert_eq!(
+        context["results"][1]["data"]["branch"], "on-checkout",
+        "{context}"
+    );
+    assert!(
+        context["results"][1]["data"].get("dirty").is_none(),
+        "{context}"
+    );
 }

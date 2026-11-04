@@ -103,15 +103,15 @@ EOF
     json_has() { jq -e "$1" >/dev/null <<<"$output"; }
     json_run "$META_BIN" --json nosuchcmd
     [ "$status" -eq 2 ]
-    json_has '.success == false and (.error | contains("unrecognized command"))'
+    json_has '.success == false and .error.code == "usage" and (.error.message | contains("unrecognized command"))'
 
     json_run "$META_BIN" --json --include nope exec -- true
     [ "$status" -eq 1 ]
-    json_has '.success == false and (.error | contains("--include"))'
+    json_has '.success == false and (.error.message | contains("--include"))'
 
     json_run "$META_BIN" --json git commit --amend
     [ "$status" -eq 2 ]
-    json_has '.success == false and (.error | contains("--amend"))'
+    json_has '.success == false and .error.code == "usage" and (.error.message | contains("--amend"))'
 
     # meta's --verbose lines, and a command's own --json
     json_run "$META_BIN" --json --verbose --include frontend exec -- true
@@ -122,14 +122,13 @@ EOF
     # a plugin's text, wrapped
     json_run "$META_BIN" --json git commit -m x
     [ "$status" -eq 0 ]
-    json_has '.success == true and (.output | contains("No staged changes"))'
+    json_has '.success == true and (.message | contains("No staged changes"))'
 
     # a report, then a failure: the report stays the only document
     cp "$META_BIN_DIR/meta-project" .meta/plugins/
     json_run "$META_BIN" --json project check
     [ "$status" -eq 1 ]
-    json_has '.problems | length > 0'
-    grep -q "not clones of their configured repository" "$TEST_DIR/stderr"
+    json_has '.success == false and (.error | type) == "object" and ([.results[] | select(.error)] | length > 0)'
 }
 
 @test "meta git status shows clean repos" {
@@ -615,7 +614,7 @@ within() {
     # --json names them too, in the preview and the run, for both commands
     local json_check='
 import json, sys
-[r] = [r for r in json.load(sys.stdin)["repos"] if r["path"] == "local-data"]
+[r] = [r["data"] for r in json.load(sys.stdin)["results"] if r["project"] == "local-data"]
 assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored files: .env, data/ deleted with it", r
 '
     run "$META_BIN" --json --dry-run git clone-prune
@@ -646,8 +645,8 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     [[ "$output" == *"git clone"* ]]
     run "$META_BIN" --json git clone-sync
     [ "$status" -eq 0 ]
-    [[ "$output" == *'{"action":"cloned","path":"shared"}'* ]]
-    [[ "$output" == *'{"action":"removed","path":"old"}'* ]]
+    jq -e '[.results[] | select(.project == "shared") | .data.action] == ["cloned"]' <<<"$output"
+    jq -e '[.results[] | select(.project == "old") | .data.action] == ["removed"]' <<<"$output"
     [ -d shared/.git ]
     [ ! -e old ]
     # with everything cloned, the preview says so, not an empty list
@@ -661,10 +660,11 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     rm -rf shared
     mkdir -p frontend-notes && echo mine > frontend-notes/notes.txt
     echo '{"projects": {"api": {"repo": "file://'"$TEST_DIR"'/nowhere.git", "path": "services/api"}, "notes": {"repo": "u", "path": "frontend-notes"}}}' > .meta.yaml
-    run "$META_BIN" --json git clone-missing
+    bats_require_minimum_version 1.5.0
+    run --separate-stderr "$META_BIN" --json git clone-missing
     [ "$status" -eq 1 ]
-    [[ "$output" == *'"path":"services/api"'* ]]
-    [[ "$output" == *'{"action":"failed","path":"frontend-notes","reason":"not a git repository (folder exists, no .git)"}'* ]]
+    jq -e '.results[] | select(.project == "services/api") | .data.action == "failed" and (.error | type) == "object"' <<<"$output"
+    jq -e '.results[] | select(.project == "frontend-notes") | .data == {"action": "failed", "reason": "not a git repository (folder exists, no .git)"} and .error.message == .data.reason' <<<"$output"
 }
 
 @test "meta git clone-missing in a worktree set refuses instead of cloning into the workspace" {
@@ -696,7 +696,7 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     [[ "$output" != *"as in meta"* ]]
     # typed before too: said once
     run sh -c '"$1" --json git status --json 2>/dev/null' _ "$META_BIN"
-    [[ "$(jq -r .hint <<<"$output")" == *"as in meta --json git status" ]]
+    [[ "$(jq -r .error.hint <<<"$output")" == *"as in meta --json git status" ]]
     # -s is meta's and git's: git rejected the other one
     run "$META_BIN" git status -s --no-such-option
     [ "$status" -eq 1 ]
@@ -728,7 +728,7 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     [ "$status" -eq 0 ]
     [[ "$output" == *"warning: shared is not cloned"* ]]
     run sh -c '"$1" --json --include shared git status 2>/dev/null' _ "$META_BIN"
-    [[ "$(jq -r '.warnings[0]' <<<"$output")" == "shared is not cloned"* ]]
+    [[ "$(jq -r '.warnings[0].message' <<<"$output")" == "shared is not cloned"* ]]
     [ "$(jq '.results | length' <<<"$output")" -eq 0 ]
     run "$META_BIN" exec -- git status
     [ "$status" -eq 1 ]
@@ -1464,6 +1464,9 @@ EOF
     git init --quiet -b main "$WS/api"
     git -C "$WS/api" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
     printf '{"projects": {"api": "git@github.com:org/api.git"}}' > "$WS/.meta.yaml"
+    # this build's plugin, not one on PATH
+    mkdir -p "$WS/.meta/plugins"
+    cp "$META_BIN_DIR/meta-git" "$WS/.meta/plugins/"
     echo x > "$WS/api/file"
     git -C "$WS/api" add file
     cd "$WS"

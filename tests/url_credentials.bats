@@ -124,7 +124,7 @@ EOF
     [[ "$output" == *". (https://***@example.invalid/org/ws.git)"* ]] || false
     meta_without_token --json project list
     [ "$status" -eq 0 ]
-    [ "$(jq -r .repo <<< "$output")" = "https://***@example.invalid/org/ws.git" ]
+    [ "$(jq -r '.results[0].data.repo' <<< "$output")" = "https://***@example.invalid/org/ws.git" ]
     meta_without_token git update
     [ "$status" -eq 0 ]
     [[ "$output" == *"actual:   https://***@example.invalid/org/other.git"* ]] || false

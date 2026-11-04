@@ -8,7 +8,7 @@ use meta_git_lib::clone_queue::{CloneQueue, CloneTask, MetaRepo, Work};
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::RepoUrl;
 use meta_plugin::{errln, outln};
-use meta_plugin::{CommandResult, PluginRequestOptions};
+use meta_plugin::{Ctx, Request, Response};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,20 +31,22 @@ use std::sync::Arc;
 )]
 pub(crate) struct UpdateArgs {}
 
-/// The workspace at or above `cwd` that `meta <command>` acts on. Refused
-/// inside a worktree set meta made: the workspace around the set is not
-/// the command's to change from in it (`in_set`: what to run there
-/// instead). A plain git worktree of a meta repo under .worktrees is a
-/// workspace of its own: one that meta didn't make, whose .meta.yaml is its
-/// own.
+/// The workspace `request` runs in that `meta <command>` acts on (with
+/// `-A`, the outermost). Refused inside a worktree set meta made: the
+/// workspace around the set is not the command's to change from in it
+/// (`in_set`: what to run there instead). A plain git worktree of a meta
+/// repo under .worktrees is a workspace of its own: one that meta didn't
+/// make, whose .meta.yaml is its own.
 pub(crate) fn workspace(
-    cwd: &Path,
+    request: &Request,
     command: &str,
     in_set: &str,
 ) -> anyhow::Result<config::Workspace> {
-    let Some(workspace) = config::Workspace::find(cwd, None)? else {
+    let cwd = request.cwd.as_path();
+    let Some(found) = &request.workspace else {
         anyhow::bail!("No .meta.yaml found in {} or above it", escape_path(cwd));
     };
+    let workspace = config::Workspace::load(&found.config)?;
     if let Some((set, set_dir)) = meta_core::worktree::detect_worktree_location(cwd)? {
         let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         if !real(&workspace.dir).starts_with(real(&set_dir))
@@ -97,21 +99,18 @@ pub(crate) fn run(
 
 pub(crate) fn execute_git_update(
     UpdateArgs {}: UpdateArgs,
-    options: &PluginRequestOptions,
-    cwd: &Path,
-) -> anyhow::Result<CommandResult> {
-    let recursive = options.recursive || options.all;
+    ctx: &Ctx,
+    request: &Request,
+) -> anyhow::Result<Response> {
+    let cwd = request.cwd.as_path();
     // Without -r or -A only the workspace's own .meta.yaml is read
-    let meta_depth = if recursive { options.depth } else { Some(0) };
+    let meta_depth = request.depth;
+    let recursive = meta_depth != Some(0);
     // A worktree set's checkouts are pulled with `meta git pull`
-    let workspace = workspace(cwd, "git update", ", or 'meta git pull' in the set")?;
-    // -A: from the outermost workspace
-    let workspace = if options.all {
-        workspace.root()?
-    } else {
-        workspace
-    };
-    ssh::warn_remote_mismatches(&workspace);
+    let workspace = workspace(request, "git update", ", or 'meta git pull' in the set")?;
+    if let Some(mismatches) = ssh::remote_mismatches(&workspace) {
+        ctx.warn(mismatches);
+    }
 
     let queue = CloneQueue::new(None, meta_depth, true); // No git depth for update
     let root = workspace.dir.as_path();
@@ -126,7 +125,7 @@ pub(crate) fn execute_git_update(
         _ => queue.discover_in(&workspace, 0, &top())?,
     };
 
-    if options.mode().is_preview() {
+    if ctx.dry_run() {
         // The .meta.yaml files as they are now: nothing is pulled, so what
         // the pulls would add isn't known
         outln!(
@@ -152,11 +151,11 @@ pub(crate) fn execute_git_update(
                 },
             }
         }
-        report_unlisted(&queue, root, cwd, recursive);
+        report_unlisted(ctx, &queue, root, cwd, recursive);
         if let Some(error) = crate::clone_worker::report_failures(&queue, "git update") {
-            return Ok(CommandResult::Error(error));
+            anyhow::bail!("{error}");
         }
-        return Ok(CommandResult::Message(String::new()));
+        return Ok(Response::done());
     }
 
     // Progress counts to the repos the .meta.yaml files on disk list, the
@@ -187,13 +186,13 @@ pub(crate) fn execute_git_update(
         .flatten()
         .collect();
     run(&queue, tasks, &urls)?;
-    report_unlisted(&queue, root, cwd, recursive);
+    report_unlisted(ctx, &queue, root, cwd, recursive);
     let outcome = queue.outcome();
     for (name, why) in &outcome.not_pulled {
         errln!("{} {}: {why}", "Not pulled".yellow(), escape(name));
     }
     if let Some(error) = crate::clone_worker::report_failures(&queue, "git update") {
-        return Ok(CommandResult::Error(error));
+        anyhow::bail!("{error}");
     }
     let (pulled, cloned) = (outcome.pulled, outcome.cloned.len());
     let not_pulled = match outcome.not_pulled.len() {
@@ -201,7 +200,7 @@ pub(crate) fn execute_git_update(
         n => format!(", {n} with nothing to pull from"),
     };
     outln!("Update completed ({pulled} pulled, {cloned} cloned{not_pulled})")?;
-    Ok(CommandResult::Message(String::new()))
+    Ok(Response::done())
 }
 
 /// What deleting a repository no `.meta.yaml` lists would lose.
@@ -302,7 +301,7 @@ pub(crate) fn shown(path: &Path, cwd: &Path) -> String {
 /// Name each repository in a meta repo's folder that no `.meta.yaml` lists,
 /// with what deleting it would lose (`root`: the workspace's folder; `-r`:
 /// whether nested meta repos were read).
-fn report_unlisted(queue: &CloneQueue, root: &Path, cwd: &Path, recursive: bool) {
+fn report_unlisted(ctx: &Ctx, queue: &CloneQueue, root: &Path, cwd: &Path, recursive: bool) {
     let prune = if recursive {
         "meta -r git clone-prune"
     } else {
@@ -320,6 +319,6 @@ fn report_unlisted(queue: &CloneQueue, root: &Path, cwd: &Path, recursive: bool)
             ),
             Leftover::Holds(why) => format!("{shown} isn't in .meta.yaml; {why}"),
         };
-        meta_plugin::out::warn(warning);
+        ctx.warn(warning);
     }
 }

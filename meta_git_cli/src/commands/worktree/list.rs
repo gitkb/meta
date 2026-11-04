@@ -3,6 +3,7 @@ use chrono::Utc;
 use colored::*;
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::outln;
+use meta_plugin::{Ctx, ProjectResult, Request, Response};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -14,26 +15,13 @@ use meta_core::worktree::{
     discover_worktree_repos, discover_worktree_repos_strict, WorktreeMemberInfo,
 };
 use meta_git_lib::worktree::git_ops::repo_status;
-use meta_git_lib::worktree::helpers::*;
 use meta_git_lib::worktree::ttl;
 use meta_git_lib::worktree::types::ListRepoEntry;
 
 use super::cli_types::ListArgs;
 
-#[derive(Serialize)]
-struct ListWarning {
-    name: String,
-    root: String,
-    message: String,
-}
-
-#[derive(Serialize)]
-struct ListOutput {
-    worktrees: Vec<ListEntry>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    warnings: Vec<ListWarning>,
-}
-
+/// One set, as listed: the record of each set (`meta --json git worktree
+/// list` gives one row per set).
 #[derive(Serialize)]
 struct ListEntry {
     name: String,
@@ -100,8 +88,9 @@ fn repo_entries(
 }
 
 /// A selected set fails closed. All-set listing retains healthy sets and warnings.
-pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> Result<()> {
-    let cwd = cwd.canonicalize()?;
+pub(crate) fn handle_list(args: ListArgs, ctx: &Ctx, request: &Request) -> Result<Response> {
+    let json = request.meta.json;
+    let cwd = request.cwd.canonicalize()?;
     let location = detect_worktree_location(&cwd)?;
     let worktree_root = match (&location, std::env::var_os("META_WORKTREES")) {
         (Some((_, root)), None) => root
@@ -109,8 +98,11 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
             .context("The worktree set has no parent folder")?
             .to_path_buf(),
         _ => {
-            let configs = Configs::find_optional(&cwd)?;
-            let root = resolve_worktree_root(configs.as_ref().map(|c| &c.owner), &cwd)?;
+            let configs = super::configs(request)?;
+            let root = meta_core::worktree::resolve_worktree_root(
+                configs.as_ref().map(|c| &c.owner),
+                &cwd,
+            )?;
             if root.is_absolute() {
                 root
             } else {
@@ -120,7 +112,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
     };
     let selected = match args.name.as_ref() {
         Some(name) => {
-            validate_worktree_name(name)?;
+            meta_core::worktree::validate_name(name)?;
             let path = worktree_root.join(name);
             anyhow::ensure!(
                 path.is_dir(),
@@ -132,7 +124,7 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
         None => location,
     };
     if let Some((name, _)) = &selected {
-        validate_worktree_name(name)?;
+        meta_core::worktree::validate_name(name)?;
     }
     let is_selected = selected.is_some();
     let sets = if let Some(selected) = selected {
@@ -162,7 +154,9 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
         sets
     };
     let now = Utc::now().timestamp();
-    let results: Vec<Result<Option<ListEntry>>> = sets
+    // (with a warning found on the way, said once all are read)
+    type Listed = Option<(ListEntry, Option<String>)>;
+    let results: Vec<Result<Listed>> = sets
         .par_iter()
         .map(|(name, path)| {
             let (repos, record) = repo_entries(path, &args, is_selected)?;
@@ -174,18 +168,19 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
                 RepoEntry::Observed(repo) => repo.alias == ".",
                 RepoEntry::Metadata(repo) => repo.alias == ".",
             });
+            let mut warning = None;
             let (ephemeral, ttl_remaining_seconds, custom) = match record {
                 Some(record) => (
                     Some(record.ephemeral),
                     ttl::remaining(&record, now).unwrap_or_else(|e| {
-                        meta_plugin::out::warn(format!("{e:#}"));
+                        warning = Some(format!("{e:#}"));
                         None
                     }),
                     (!record.custom.is_empty()).then_some(record.custom),
                 ),
                 None => (None, None, None),
             };
-            Ok(Some(ListEntry {
+            let entry = ListEntry {
                 name: name.clone(),
                 root: path.display().to_string(),
                 has_meta_root,
@@ -193,36 +188,44 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
                 ephemeral,
                 ttl_remaining_seconds,
                 custom,
-            }))
+            };
+            Ok(Some((entry, warning)))
         })
         .collect();
     let mut worktrees = Vec::new();
+    // (name, message)
     let mut warnings = Vec::new();
-    for ((name, path), result) in sets.iter().zip(results) {
+    for ((name, _), result) in sets.iter().zip(results) {
         match result {
-            Ok(Some(entry)) => worktrees.push(entry),
+            Ok(Some((entry, warning))) => {
+                if let Some(warning) = warning {
+                    ctx.warn(warning);
+                }
+                worktrees.push(entry);
+            }
             Ok(None) => {}
             // a set that can't be read is named with why, the others listed
-            Err(error) if !is_selected => warnings.push(ListWarning {
-                name: name.clone(),
-                root: path.display().to_string(),
-                message: format!("{error:#}"),
-            }),
+            Err(error) if !is_selected => warnings.push((name.clone(), format!("{error:#}"))),
             Err(error) => return Err(error),
         }
     }
     worktrees.sort_by(|a, b| a.name.cmp(&b.name));
-    warnings.sort_by(|a, b| a.name.cmp(&b.name));
-    if json {
-        outln!(
-            "{}",
-            serde_json::to_string_pretty(&ListOutput {
-                worktrees,
-                warnings
-            })?
-        )?;
-        return Ok(());
+    warnings.sort();
+    for (name, message) in &warnings {
+        ctx.warn(format!("{}: {}", escape(name), escape(message)));
     }
+    let records = |worktrees: &[ListEntry]| -> Vec<ProjectResult> {
+        worktrees
+            .iter()
+            .map(|entry| {
+                ProjectResult::about_workspace(entry).at(std::path::Path::new(&entry.root))
+            })
+            .collect()
+    };
+    if json {
+        return Ok(Response::printed(records(&worktrees)));
+    }
+    let listed = records(&worktrees);
     if worktrees.is_empty() {
         outln!(
             "{}",
@@ -273,12 +276,5 @@ pub(crate) fn handle_list(args: ListArgs, json: bool, cwd: &std::path::Path) -> 
         }
         outln!()?;
     }
-    for warning in warnings {
-        meta_plugin::out::warn(format!(
-            "{}: {}",
-            escape(&warning.name),
-            escape(&warning.message)
-        ));
-    }
-    Ok(())
+    Ok(Response::printed(listed))
 }

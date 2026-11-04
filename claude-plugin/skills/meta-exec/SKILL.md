@@ -99,27 +99,27 @@ Get structured output for parsing:
 meta --json exec -- git rev-parse HEAD
 ```
 
-Returns JSON with:
+Returns the envelope every `meta --json` command prints, one row per repo:
 ```json
 {
   "success": true,
+  "command": "exec",
   "results": [
     {
-      "directory": "/path/to/workspace/api",
-      "command": "git rev-parse HEAD",
-      "success": true,
+      "project": "api",
+      "path": "/path/to/workspace/api",
+      "argv": ["git", "rev-parse", "HEAD"],
       "exit_code": 0,
-      "stdout": "abc123...\n"
+      "stdout": "abc123...\n",
+      "stderr": ""
     }
   ],
-  "summary": {
-    "total": 5,
-    "succeeded": 5,
-    "failed": 0,
-    "dry_run": false
-  }
+  "skipped": [],
+  "warnings": []
 }
 ```
+
+A row that failed has an `error` (`{"code", "message"}`), and so does the whole envelope when anything failed (`success: false`).
 
 ## Silent Mode
 

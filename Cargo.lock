@@ -892,7 +892,6 @@ version = "0.2.22"
 dependencies = [
  "anyhow",
  "clap",
- "loop_lib",
  "meta_core",
  "meta_plugin",
  "schemars",
@@ -961,6 +960,7 @@ name = "meta_plugin"
 version = "0.2.22"
 dependencies = [
  "anyhow",
+ "base64",
  "clap",
  "colored",
  "console",

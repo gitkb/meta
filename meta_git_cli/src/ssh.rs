@@ -10,7 +10,6 @@ use log::debug;
 use meta_core::config::{ProjectInfo, Workspace};
 use meta_plugin::display::escape;
 use meta_plugin::display::shell_quote;
-use meta_plugin::errln;
 use meta_plugin::RepoUrl;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -90,14 +89,15 @@ impl SshTarget {
     }
 }
 
-/// The distinct SSH remotes of `projects`.
-pub(crate) fn ssh_urls(projects: &[ProjectInfo]) -> Vec<RepoUrl> {
-    let urls: BTreeSet<&RepoUrl> = projects
+/// The distinct SSH remotes of `projects` (their `repo:` URLs).
+pub(crate) fn ssh_urls(projects: &[meta_plugin::Project]) -> Vec<RepoUrl> {
+    let urls: BTreeSet<RepoUrl> = projects
         .iter()
-        .filter_map(|p| p.repo.as_ref())
+        .filter_map(|p| p.repo.as_deref())
+        .map(RepoUrl::from)
         .filter(|repo| SshTarget::of(repo).is_some())
         .collect();
-    urls.into_iter().cloned().collect()
+    urls.into_iter().collect()
 }
 
 /// Establish SSH ControlMaster connections for the SSH remotes among `urls`.
@@ -263,9 +263,9 @@ fn ensure_ssh_sockets_dir(home: &Path) -> std::io::Result<PathBuf> {
     Ok(sockets_dir)
 }
 
-/// Warn about checkouts whose `origin` differs from the URL `workspace`
-/// lists for them (non-interactive).
-pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
+/// The warning about checkouts whose `origin` differs from the URL
+/// `workspace` lists for them, with how to fix each, if there are any.
+pub(crate) fn remote_mismatches(workspace: &Workspace) -> Option<String> {
     let mismatches: Vec<(&ProjectInfo, &RepoUrl, RepoUrl)> = workspace
         .projects
         .iter()
@@ -280,7 +280,7 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
         })
         .collect();
     if mismatches.is_empty() {
-        return;
+        return None;
     }
 
     let mut message = format!(
@@ -299,8 +299,7 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
             message.push_str("\n    (they differ only in their hidden credentials)");
         }
     }
-    meta_plugin::out::warn(message);
-    errln!("  Fix manually with:");
+    message.push_str("\n  Fix manually with:");
     for (project, expected, _) in &mismatches {
         // printed as a URL prints, escaped; hidden credentials would break
         // the command, so the reader fills those in
@@ -309,13 +308,14 @@ pub(crate) fn warn_remote_mismatches(workspace: &Workspace) {
         } else {
             shell_quote(&expected.to_string())
         };
-        errln!(
-            "    git -C {} remote set-url origin {url}",
+        message.push_str(&format!(
+            "\n    git -C {} remote set-url origin {url}",
             escape(&shell_quote(
                 &workspace.dir.join(&project.path).to_string_lossy()
             ))
-        );
+        ));
     }
+    Some(message)
 }
 
 #[cfg(test)]

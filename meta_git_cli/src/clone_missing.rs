@@ -6,9 +6,9 @@
 use crate::update::{self, Leftover};
 use colored::Colorize;
 use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
-use meta_plugin::display::{escape, escape_path};
+use meta_plugin::display::escape;
 use meta_plugin::outln;
-use meta_plugin::{CommandResult, PluginRequestOptions};
+use meta_plugin::{Ctx, ErrorCode, ErrorInfo, ProjectResult, Request, Response};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -121,53 +121,66 @@ impl From<CloneSyncArgs> for Steps {
     }
 }
 
-/// What became of one repo, for `--json`.
+/// What became of one repo, for `--json`: the record of the repo at its
+/// path from the workspace root.
 #[derive(serde::Serialize)]
 struct Record {
-    /// From the workspace root
-    path: String,
     /// cloned, removed, kept or failed (with --dry-run: what would be)
     action: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
 }
 
-/// Run `steps` (meta's `-r`: nested meta repos too) in the workspace at or
-/// above `cwd`, on the selected `projects` when meta's options filter them.
-pub(crate) fn execute(
-    steps: Steps,
-    projects: &[String],
-    options: &PluginRequestOptions,
-    cwd: &Path,
-) -> anyhow::Result<CommandResult> {
-    let recursive = options.recursive || options.all;
+/// Run `steps` (meta's `-r`: nested meta repos too) in the workspace
+/// `request` runs in, on the selected projects when meta's options filter
+/// them.
+pub(crate) fn execute(steps: Steps, ctx: &Ctx, request: &Request) -> anyhow::Result<Response> {
+    let cwd = request.cwd.as_path();
     // Without -r only the workspace's own .meta.yaml is read
-    let meta_depth = if recursive { options.depth } else { Some(0) };
-    let workspace = update::workspace(cwd, steps.command(), "")?;
-    // -A: from the outermost workspace
-    let workspace = if options.all {
-        workspace.root()?
-    } else {
-        workspace
-    };
+    let meta_depth = request.depth;
+    let workspace = update::workspace(request, steps.command(), "")?;
     let root = workspace.dir.as_path();
     let mut queue = CloneQueue::new(None, meta_depth, false);
-    if options.filtered() {
-        queue = queue.only(projects.iter().map(PathBuf::from));
+    // a selection that leaves out a project the workspace has: only those
+    if filtered(request) {
+        queue = queue.only(request.projects.iter().map(|p| p.abs.clone()));
     }
     let top = Arc::from([MetaRepo::at(&update::root_name(root), root, None)]);
     // The whole tree on disk is read here; only clones add to it
     let tasks = queue.discover_in(&workspace, 0, &top)?;
     let tasks = if steps.clones() { tasks } else { Vec::new() };
-    let preview = options.mode().is_preview();
-    let json = options.json_output;
+    let preview = ctx.dry_run();
+    let json = ctx.meta().json;
     let say = |line: String| -> anyhow::Result<()> {
         if !json {
             outln!("{line}")?;
         }
         Ok(())
     };
-    let from_root = |path: &Path| escape_path(path.strip_prefix(root).unwrap_or(path));
+    // records name each repo by its path from the workspace root, as meta does
+    let named = request
+        .workspace
+        .as_ref()
+        .map_or(root, |w| w.root.as_path());
+    let project = |path: &Path| match path.strip_prefix(named) {
+        Ok(inside) if inside.as_os_str().is_empty() => ".".to_string(),
+        Ok(inside) => inside.to_string_lossy().into_owned(),
+        Err(_) => path.to_string_lossy().into_owned(),
+    };
+    let record = |path: &Path, action: &'static str, reason: Option<String>| {
+        let data = Record { action, reason };
+        match action {
+            "failed" => ProjectResult {
+                error: Some(ErrorInfo::new(
+                    ErrorCode::Failed,
+                    data.reason.clone().unwrap_or_default(),
+                )),
+                ..ProjectResult::record(project(path), data)
+            },
+            _ => ProjectResult::record(project(path), data),
+        }
+        .at(path)
+    };
     let mut records = Vec::new();
 
     if preview && steps.clones() && tasks.is_empty() {
@@ -184,11 +197,7 @@ pub(crate) fn execute(
             let argv = crate::clone_worker::git_argv(task, None, |url| url.to_string().into());
             let argv: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into()).collect();
             say(format!("  {}", escape(&loop_lib::display_command(&argv))))?;
-            records.push(Record {
-                path: from_root(&task.target_path),
-                action: "cloned",
-                reason: None,
-            });
+            records.push(record(&task.target_path, "cloned", None));
         }
     } else if !tasks.is_empty() {
         let urls: Vec<_> = tasks
@@ -202,21 +211,25 @@ pub(crate) fn execute(
     }
     let outcome = queue.outcome();
     if !preview {
-        records.extend(outcome.cloned.iter().map(|path| Record {
-            path: from_root(path),
-            action: "cloned",
-            reason: None,
-        }));
+        records.extend(
+            outcome
+                .cloned
+                .iter()
+                .map(|path| record(path, "cloned", None)),
+        );
     }
-    records.extend(outcome.failures.iter().map(|failure| Record {
-        path: from_root(&failure.path),
-        action: "failed",
-        reason: Some(failure.error.clone()),
-    }));
-    records.extend(outcome.refused.iter().map(|(_, path, why)| Record {
-        path: from_root(path),
-        action: "failed",
-        reason: Some(format!("not a git repository ({why})")),
+    records.extend(
+        outcome
+            .failures
+            .iter()
+            .map(|failure| record(&failure.path, "failed", Some(failure.error.clone()))),
+    );
+    records.extend(outcome.refused.iter().map(|(_, path, why)| {
+        record(
+            path,
+            "failed",
+            Some(format!("not a git repository ({why})")),
+        )
     }));
 
     let (mut removed, mut kept, mut failed_removals) = (0, 0, 0);
@@ -264,29 +277,20 @@ pub(crate) fn execute(
                 "kept" => kept += 1,
                 _ => failed_removals += 1,
             }
-            records.push(Record {
-                path: from_root(path),
-                action,
-                reason,
-            });
+            records.push(record(path, action, reason));
         }
     }
 
-    if json {
-        let report = serde_json::json!({"dry_run": preview, "repos": records});
-        outln!("{report}")?;
-    }
     let failed = steps
         .clones()
         .then(|| crate::clone_worker::report_failures(&queue, steps.command()))
         .flatten();
     if let Some(error) = failed {
-        return Ok(CommandResult::Error(error));
+        return crate::printed(ctx, records, Some(anyhow::anyhow!("{error}")));
     }
     if failed_removals > 0 {
-        return Ok(CommandResult::Error(format!(
-            "{failed_removals} repositories could not be removed"
-        )));
+        let error = anyhow::anyhow!("{failed_removals} repositories could not be removed");
+        return crate::printed(ctx, records, Some(error));
     }
     if !preview {
         let cloned = format!("{} cloned", outcome.cloned.len());
@@ -297,7 +301,20 @@ pub(crate) fn execute(
             Steps::Sync => format!("Sync completed ({cloned}, {pruned})"),
         })?;
     }
-    Ok(CommandResult::Message(String::new()))
+    Ok(Response::printed(records))
+}
+
+/// Whether meta's selection left out a project of the workspace (an
+/// `--include`, `--exclude` or `--tag`): then only the selected ones are
+/// cloned, and none the new clones list.
+fn filtered(request: &Request) -> bool {
+    let Some(workspace) = &request.workspace else {
+        return false;
+    };
+    workspace
+        .members
+        .iter()
+        .any(|member| !request.projects.iter().any(|p| p.abs == member.abs))
 }
 
 /// Clone the projects at `dirs` that the `.meta.yaml` files of `workspace`

@@ -39,13 +39,12 @@ impl Filters {
     }
 }
 
-/// A repo a command may run in: its directory, and the `.meta.yaml` name and
-/// tags of its project (none for the workspace root).
+/// A repo a command may run in: its directory, and its project in
+/// `.meta.yaml` (none for the workspace root).
 #[derive(Debug, Clone)]
 pub struct Candidate {
     pub dir: PathBuf,
-    pub name: Option<String>,
-    pub tags: Vec<String>,
+    pub info: Option<ProjectInfo>,
 }
 
 impl Candidate {
@@ -53,18 +52,23 @@ impl Candidate {
     pub fn project(dir: PathBuf, info: &ProjectInfo) -> Self {
         Self {
             dir,
-            name: Some(info.name.clone()),
-            tags: info.tags.clone(),
+            info: Some(info.clone()),
         }
     }
 
     /// `dir` as a repo of no project: the root of a workspace or a set
     pub fn root(dir: PathBuf) -> Self {
-        Self {
-            dir,
-            name: None,
-            tags: vec![],
-        }
+        Self { dir, info: None }
+    }
+
+    /// Its `.meta.yaml` name
+    pub fn name(&self) -> Option<&str> {
+        self.info.as_ref().map(|info| info.name.as_str())
+    }
+
+    /// Its project's tags (the root has none)
+    pub fn tags(&self) -> &[String] {
+        self.info.as_ref().map_or(&[], |info| &info.tags)
     }
 }
 
@@ -131,8 +135,8 @@ impl Reach {
         &self,
         filters: &Filters,
         with_a: impl FnOnce() -> String,
-    ) -> Result<Vec<PathBuf>> {
-        let selected = self.scope().select(filters);
+    ) -> Result<Vec<Candidate>> {
+        let selected = self.scope().select_repos(filters);
         let Err(e) = selected else {
             return selected;
         };
@@ -144,7 +148,7 @@ impl Reach {
             .transpose()?;
         // -A from the root reaches no deeper below here than -r: what it
         // takes that -r doesn't is outside (an --exclude of a repo there too)
-        match whole.map(|whole| whole.scope().select(filters)) {
+        match whole.map(|whole| whole.scope().select_repos(filters)) {
             Some(Ok(_)) => bail!(
                 "{e:#}\nThat names a repo outside {}, where -r starts; -A reaches the whole \
                  workspace, as in {}",
@@ -198,7 +202,7 @@ impl Scope {
         } else {
             walk(tree, root, &mut repos);
         }
-        let tags = repos.iter().flat_map(|r| r.tags.clone()).collect();
+        let tags = repos.iter().flat_map(|r| r.tags().to_vec()).collect();
         Self {
             root: root.to_path_buf(),
             config: config.map(Path::to_path_buf),
@@ -224,6 +228,15 @@ impl Scope {
     /// leave out; so is a tag no project has, a value that names several
     /// repos, and a selection that leaves no repo.
     pub fn select(self, filters: &Filters) -> Result<Vec<PathBuf>> {
+        Ok(self
+            .select_repos(filters)?
+            .into_iter()
+            .map(|c| c.dir)
+            .collect())
+    }
+
+    /// [`Scope::select`], each repo with its project.
+    pub fn select_repos(self, filters: &Filters) -> Result<Vec<Candidate>> {
         let Scope {
             root,
             config,
@@ -233,7 +246,7 @@ impl Scope {
         } = self;
         let (root, config) = (root.as_path(), config.as_deref());
         if filters.is_empty() {
-            return Ok(repos.into_iter().map(|r| r.dir).collect());
+            return Ok(repos);
         }
         let repos: Vec<Repo> = repos
             .into_iter()
@@ -261,11 +274,7 @@ impl Scope {
             let by_name = if value.starts_with("./") {
                 vec![]
             } else {
-                distinct(
-                    repos
-                        .iter()
-                        .filter(|r| r.candidate.name.as_deref() == Some(value)),
-                )
+                distinct(repos.iter().filter(|r| r.candidate.name() == Some(value)))
             };
             let listed = |repos: &[&Repo]| -> String {
                 repos
@@ -341,7 +350,7 @@ impl Scope {
             chosen.extend(
                 repos
                     .iter()
-                    .filter(|r| r.candidate.tags.contains(tag))
+                    .filter(|r| r.candidate.tags().contains(tag))
                     .map(|r| r.id.as_path()),
             );
         }
@@ -350,11 +359,11 @@ impl Scope {
             excluded.extend(named("--exclude", value)?);
         }
         let everything = filters.include.is_empty() && filters.tags.is_empty();
-        let selected: Vec<PathBuf> = repos
+        let selected: Vec<Candidate> = repos
             .iter()
             .filter(|r| everything || chosen.contains(&r.id.as_path()))
             .filter(|r| !excluded.contains(&r.id.as_path()))
-            .map(|r| r.candidate.dir.clone())
+            .map(|r| r.candidate.clone())
             .collect();
         if selected.is_empty() {
             bail!("--include/--exclude/--tag leave no repo to run in{read_from}");
@@ -386,7 +395,7 @@ fn distinct<'a>(repos: impl Iterator<Item = &'a Repo>) -> Vec<&'a Repo> {
 /// `..` parts for a directory outside `root` (`../shared`); `dir` as given
 /// when the two share no prefix (another drive). Relative paths are taken from
 /// the current directory.
-fn repo_path(dir: &Path, root: &Path) -> String {
+pub fn repo_path(dir: &Path, root: &Path) -> String {
     let absolute = |path: &Path| {
         std::env::current_dir()
             .map(|cwd| cwd.join(path))
@@ -469,7 +478,7 @@ mod tests {
         let scope = Scope {
             root: root.to_path_buf(),
             config: config.map(Path::to_path_buf),
-            tags: repos.iter().flat_map(|r| r.tags.clone()).collect(),
+            tags: repos.iter().flat_map(|r| r.tags().to_vec()).collect(),
             repos: repos.to_vec(),
             nested: false,
         };
@@ -577,7 +586,7 @@ mod tests {
             root: root.clone(),
             config: None,
             repos: repos[..3].to_vec(),
-            tags: repos.iter().flat_map(|r| r.tags.clone()).collect(),
+            tags: repos.iter().flat_map(|r| r.tags().to_vec()).collect(),
             nested: true,
         };
         let set_pick = |tag: &str| {

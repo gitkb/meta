@@ -60,20 +60,22 @@ fn exec_runs_only_in_projects_that_are_their_own_repository() {
     // and each is a failed result in the JSON, never left out of it
     let out = meta(&["--json", "exec", "--", "git", "status"]);
     assert!(!out.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(json["success"], false, "{json}");
-    assert_eq!(json["summary"]["failed"], 3, "{json}");
+    let json: meta_plugin::Envelope = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(!json.success, "{json:?}");
+    let failed: Vec<_> = json.results.iter().filter(|r| r.is_failure()).collect();
+    assert_eq!(failed.len(), 3, "{json:?}");
     for (project, reason) in why {
-        let result = json["results"]
-            .as_array()
-            .unwrap()
+        let result = failed
             .iter()
-            .find(|r| r["directory"].as_str().unwrap().ends_with(project))
+            .find(|r| r.project.as_deref() == Some(project))
             .unwrap();
-        assert_eq!(result["success"], false, "{result}");
         assert!(
-            result["stderr"].as_str().unwrap().contains(reason),
-            "{result}"
+            result
+                .stderr
+                .as_deref()
+                .unwrap_or_default()
+                .contains(reason),
+            "{result:?}"
         );
     }
 }

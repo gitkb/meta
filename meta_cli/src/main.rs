@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use meta_cli::repo_filter::{Filters, Scope};
+use meta_cli::repo_filter::{Filters, Reach};
 use meta_core::config::{self, find_meta_config, Workspace};
 use meta_core::display::{escape, escape_lines, escape_path};
 use meta_core::ExecutionMode;
@@ -85,13 +85,24 @@ struct Cli {
     )]
     tag: Option<String>,
 
-    #[arg(long, short = 'r', help = "Recursively process nested meta repos")]
+    #[arg(
+        long,
+        short = 'r',
+        help = "Also the meta repos nested under the nearest .meta.yaml (at the workspace root, the same as -A)"
+    )]
     recursive: bool,
 
     #[arg(
         long,
+        short = 'A',
+        help = "The whole workspace, from its outermost .meta.yaml, wherever you are (in a worktree set: the whole set)"
+    )]
+    all: bool,
+
+    #[arg(
+        long,
         value_name = "N",
-        help = "Maximum depth for recursive processing (default: unlimited)"
+        help = "How many levels of nested meta repos -r or -A goes down, from where it starts (default: unlimited)"
     )]
     depth: Option<usize>,
 
@@ -149,6 +160,7 @@ impl Cli {
             dry_run: self.dry_run,
             silent: self.silent,
             recursive: self.recursive,
+            all: self.all,
             depth: self.depth,
             include_filters: self.include.clone(),
             exclude_filters: self.exclude.clone(),
@@ -410,15 +422,18 @@ fn run_cli() -> Result<()> {
     match &cli.command {
         None => Ok(out!("{}", help_with_plugins(&subprocess_plugins))?),
         Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins),
-        Some(Commands::Context(args)) => meta_cli::context::handle_context(
-            cli.json,
-            args.no_status,
-            cli.verbose,
-            &cli.start_dir()?,
-            &cli.filters(),
-            cli.recursive,
-            cli.depth,
-        ),
+        Some(Commands::Context(args)) => {
+            let workspace = Workspace::find(&cli.start_dir()?, None)?
+                .ok_or_else(|| anyhow::anyhow!("Not a meta workspace (no .meta.yaml found)"))?;
+            meta_cli::context::handle_context(
+                cli.json,
+                args.no_status,
+                cli.verbose,
+                Reach::of(workspace, cli.recursive, cli.all, cli.depth)?,
+                &cli.filters(),
+                with_all,
+            )
+        }
         Some(Commands::Init(InitArgs {
             command: InitCommands::Claude { force, update },
         })) => init::init_claude(*force, *update, cli.mode(), cli.verbose),
@@ -815,24 +830,34 @@ fn target(cli: &Cli, start: &Path) -> Result<Target> {
             escape_path(&workspace.config_path)
         );
     }
-    // From the config already loaded (the default or --config's), into the
-    // nested meta repos
-    let tree = if cli.recursive {
-        config::walk_projects(&workspace.dir, &workspace.projects, cli.depth)?
-    } else {
-        Vec::new()
-    };
-    let scope = Scope::workspace(
-        &workspace.dir,
-        Some(&workspace.config_path),
-        &workspace.projects,
-        &tree,
-    );
+    // From the config already loaded (the default or --config's): -r into
+    // the meta repos nested under it, -A from the outermost one
+    let parallel = parallel(Some(&workspace));
+    let reach = Reach::of(workspace, cli.recursive, cli.all, cli.depth)?;
     Ok(Target {
-        dirs: scope.select(&filters)?,
-        parallel: parallel(Some(&workspace)),
-        root: workspace.dir,
+        dirs: reach.select(&filters, with_all)?,
+        parallel,
+        root: reach.root,
     })
+}
+
+/// The line as typed with meta's `-r` in it as `-A`, which reaches the
+/// whole workspace.
+fn with_all() -> String {
+    let args: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let typed = meta_options().typed.len();
+    let line: Vec<String> = std::iter::once("meta".to_string())
+        .chain(args.iter().enumerate().map(|(i, arg)| {
+            match i < typed && (arg == "-r" || arg == "--recursive") {
+                true => "-A".to_string(),
+                false => arg.clone(),
+            }
+        }))
+        .collect();
+    loop_lib::display_command(&line)
 }
 
 // === Plugin Management ===

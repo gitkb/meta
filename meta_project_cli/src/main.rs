@@ -52,6 +52,7 @@ fn execute(request: PluginRequest) -> CommandResult {
     let options = meta_project_cli::ExecuteOptions {
         json_output: request.options.json_output,
         recursive: request.options.recursive,
+        all: request.options.all,
         depth: request.options.depth,
         // meta sent only the repos its filters chose
         selected: request

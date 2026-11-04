@@ -10,11 +10,13 @@ use meta_git_lib::worktree::RepoSpec;
 pub enum WorktreeCommands {
     /// Create a new worktree set
     #[command(after_help = "meta's options go before the command. \
-        `meta -r git worktree create <name> --repo <path>` finds --repo across the whole nested \
-        meta tree (aliases are full paths from the root, as open-source/gitkb) and resolves \
-        dependencies there. `meta --strict git worktree create <name> --all` fails, and makes \
-        nothing, where a repo would be skipped with a warning (no start commit-ish; with --all, \
-        not cloned); a failing post-create hook fails it too, after the set was made.")]
+        `meta -r git worktree create <name> --repo <path>` finds --repo across the meta repos \
+        nested under the nearest .meta.yaml (aliases are full paths from there) and resolves \
+        dependencies there; `meta -A git worktree create <name> --repo <path>` does so across \
+        the whole workspace, from its root (as open-source/gitkb), wherever you are. \
+        `meta --strict git worktree create <name> --every-repo` fails, and makes nothing, where \
+        a repo would be skipped with a warning (no start commit-ish; with --every-repo, not \
+        cloned); a failing post-create hook fails it too, after the set was made.")]
     Create(CreateArgs),
     /// Add a repo to an existing worktree set
     Add(AddArgs),
@@ -72,10 +74,12 @@ pub struct CreateArgs {
     #[arg(long = "repo", value_name = "ALIAS[:BRANCH]")]
     pub repos: Vec<RepoSpec>,
 
-    /// Add all repos from .meta.yaml (one that isn't cloned is skipped with
-    /// a warning; an error with meta --strict)
+    /// Add every repo meta reaches: those of the nearest .meta.yaml, with
+    /// meta -r the nested meta repos' too, with meta -A the whole workspace's
+    /// (one that isn't cloned is skipped with a warning; an error with meta
+    /// --strict)
     #[arg(long, conflicts_with = "repos")]
-    pub all: bool,
+    pub every_repo: bool,
 
     /// Start from a PR's head branch (owner/repo#N)
     #[arg(long, value_name = "OWNER/REPO#N", conflicts_with = "commit_ish")]
@@ -99,15 +103,20 @@ pub struct CreateArgs {
     /// dependencies via provides/depends_on from .meta.yaml.
     /// Use --no-deps to include only the named repos (and, for a repo nested
     /// inside another project's path, that parent project), and to leave
-    /// their depends_on unchecked (with --all too).
+    /// their depends_on unchecked (with --every-repo too).
     #[arg(long)]
     pub no_deps: bool,
 
-    /// meta's -r: resolve dependencies across the full nested meta tree,
-    /// from its root; repo aliases are full paths from root
-    /// (open-source/gitkb/core)
+    /// meta's -r: resolve dependencies across the meta repos nested under
+    /// the nearest .meta.yaml; repo aliases are full paths from there
     #[arg(skip)]
     pub recursive: bool,
+
+    /// meta's -A: the same across the whole workspace, from its outermost
+    /// .meta.yaml; repo aliases are full paths from there
+    /// (open-source/gitkb/core)
+    #[arg(skip)]
+    pub from_root: bool,
 }
 
 #[derive(Args)]
@@ -180,7 +189,7 @@ pub struct ExecArgs {
     /// Start from a specific commit-ish (ephemeral only)
     pub commit_ish: Option<String>,
 
-    /// Atomic create+exec+remove (requires --all or --repo, and -- <cmd>)
+    /// Atomic create+exec+remove (requires --every-repo or --repo, and -- <cmd>)
     #[arg(long)]
     pub ephemeral: bool,
 
@@ -189,9 +198,9 @@ pub struct ExecArgs {
     #[arg(long = "repo", value_name = "ALIAS[:BRANCH]")]
     pub repos: Vec<RepoSpec>,
 
-    /// Add all repos for ephemeral worktree
+    /// Add every repo meta reaches to the ephemeral worktree (see create)
     #[arg(long)]
-    pub all: bool,
+    pub every_repo: bool,
 
     /// Record custom metadata for ephemeral worktree (key=value)
     #[arg(long = "meta", value_name = "KEY=VALUE")]

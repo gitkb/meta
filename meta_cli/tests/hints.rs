@@ -352,6 +352,15 @@ fn meta_owned_commands_take_no_copy_of_meta_options() {
             text(&out)
         );
     }
+    // create's own --all became --every-repo
+    let out = workspace.meta(&["git", "worktree", "create", "e", "--all"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    assert_eq!(
+        tip_line(&out),
+        ["git", "worktree", "create", "e", "--every-repo"],
+        "{}",
+        text(&out)
+    );
     let strict = workspace.meta(&["--strict", "git", "worktree", "status", "t"]);
     assert!(strict.status.success(), "{}", text(&strict));
 }

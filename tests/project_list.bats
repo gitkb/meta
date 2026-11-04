@@ -231,7 +231,7 @@ EOF
     [[ "$output" == *"backend"* ]]
 }
 
-@test "meta project list --recursive from nested meta-repo shows root tree" {
+@test "meta -A project list from nested meta-repo shows root tree" {
     # Create a nested .meta.yaml inside frontend
     cat > "$TEST_DIR/frontend/.meta.yaml" <<'EOF'
 {
@@ -244,7 +244,7 @@ EOF
 
     # Run from inside the nested meta-repo (frontend/)
     cd "$TEST_DIR/frontend"
-    run "$META_BIN" --recursive --json project list
+    run "$META_BIN" -A --json project list
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import sys, json
@@ -400,4 +400,66 @@ YAML
     run "$META_BIN" --tag api project dependents frontend
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
+}
+
+# root (frontend backend shared, platform) > platform (api, infra) > infra (tf)
+reach_tree() {
+    cp "$META_BIN_DIR/meta-git" .meta/plugins/meta-git
+    printf '{"projects": {"frontend": "git@github.com:org/frontend.git", "backend": "git@github.com:org/backend.git", "shared": "git@github.com:org/shared.git", "platform": {"repo": "git@github.com:org/platform.git", "meta": true}}}\n' > .meta.yaml
+    mkdir -p platform/api platform/infra/tf
+    printf '{"projects": {"api": "git@github.com:org/api.git", "infra": {"repo": "git@github.com:org/infra.git", "meta": true}}}\n' > platform/.meta.yaml
+    printf '{"projects": {"tf": "git@github.com:org/tf.git"}}\n' > platform/infra/.meta.yaml
+    for repo in . frontend platform platform/api platform/infra platform/infra/tf; do
+        git init --quiet "$repo"
+        git -C "$repo" commit --quiet --allow-empty -m init
+    done
+}
+
+paths() { jq -r '[.results[].path] | join(" ")'; }
+
+@test "plain reaches the nearest .meta.yaml, -r the meta repos under it, -A the whole workspace" {
+    bats_require_minimum_version 1.5.0
+    reach_tree
+    cd platform
+    run --separate-stderr "$META_BIN" --json exec -- true
+    [ "$(paths <<<"$output")" = ". ./api ./infra" ]
+    # -r goes down from here, not up to the root; repos named from the root
+    run --separate-stderr "$META_BIN" -r --json exec -- true
+    [ "$(paths <<<"$output")" = "./platform ./platform/api ./platform/infra ./platform/infra/tf" ]
+    # --depth counts from where -r starts
+    run --separate-stderr "$META_BIN" -r --depth 0 --json exec -- true
+    [ "$(paths <<<"$output")" = "./platform ./platform/api ./platform/infra" ]
+    run --separate-stderr "$META_BIN" -A --json exec -- true
+    [[ "$(paths <<<"$output")" == ". ./backend ./frontend ./platform ./platform/api ./platform/infra ./platform/infra/tf ./shared" ]]
+    # a repo outside where -r starts: the tip names -A, with the line
+    run "$META_BIN" -r --include frontend exec -- true
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"outside platform, where -r starts"*"as in meta -A --include frontend exec -- true"* ]]
+    run --separate-stderr "$META_BIN" -r --include platform/infra/tf --json exec -- true
+    [ "$(paths <<<"$output")" = "./platform/infra/tf" ]
+    # the plugins that find their repos themselves reach as far
+    run "$META_BIN" -r project list
+    [[ "$output" == *"tf"* ]]
+    [[ "$output" != *"frontend"* ]]
+    run "$META_BIN" -A project list
+    [[ "$output" == *"frontend"* && "$output" == *"tf"* ]]
+    run "$META_BIN" project list
+    [[ "$output" != *"tf"* && "$output" != *"frontend"* ]]
+    run "$META_BIN" -A --dry-run git update
+    [[ "$output" == *"frontend"* ]]
+    run "$META_BIN" -r --dry-run git update
+    [[ "$output" != *"frontend"* ]]
+    # worktree create: --repo across the meta repos -r or -A reaches
+    run "$META_BIN" -r --dry-run git worktree create t --repo infra/tf --no-deps
+    [ "$status" -eq 0 ]
+    run "$META_BIN" -r --dry-run git worktree create t --repo frontend --no-deps
+    [ "$status" -ne 0 ]
+    run "$META_BIN" -A --dry-run git worktree create t --repo frontend --no-deps
+    [ "$status" -eq 0 ]
+    # at the root, -r and -A reach the same repos
+    cd "$TEST_DIR"
+    run --separate-stderr "$META_BIN" -r --json exec -- true
+    r="$(paths <<<"$output")"
+    run --separate-stderr "$META_BIN" -A --json exec -- true
+    [ "$(paths <<<"$output")" = "$r" ]
 }

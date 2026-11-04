@@ -40,7 +40,7 @@ meta git worktree create auth-fix --repo backend --repo frontend
 meta git worktree create auth-fix --repo backend --no-deps
 
 # Every repo configured at this meta level
-meta git worktree create full-task --all
+meta git worktree create full-task --every-repo
 
 # Branch name other than the set name
 meta git worktree create my-task --repo api --branch feature/my-feature
@@ -54,8 +54,9 @@ meta git worktree create incident-42 v2.3.1 --repo api
 # Continue a GitHub PR on a child repo: checks out its head branch
 meta git worktree create review --from-pr org/api#42 --repo api
 
-# Nested meta repos: resolve across the whole tree, aliases are root-relative paths
-meta -r git worktree create sdk-fix --repo open-source/sdk/core
+# Nested meta repos: resolve across the whole workspace, aliases are root-relative paths
+# (-A from anywhere; -r from the nearest .meta.yaml down, aliases from there)
+meta -A git worktree create sdk-fix --repo open-source/sdk/core
 
 # Preview without creating anything
 meta --dry-run git worktree create auth-fix --repo backend
@@ -77,7 +78,7 @@ parent on the way to a nested repo) is cloned first, as
 `meta git clone-missing` would, and named: `Cloning 2 repos the set needs: web, db`.
 `add` does the same for the repos it adds. Nothing else is cloned. When a clone
 fails (no access, say), no set is made (the repos it did clone stay cloned), and
-the error names every repo the set needs that still isn't there. `--all` skips the projects that aren't cloned instead.
+the error names every repo the set needs that still isn't there. `--every-repo` skips the projects that aren't cloned instead.
 
 A set lays its repos out as the workspace does: each repo sits at its `path`
 from the meta config, so relative references between repos keep working.
@@ -104,13 +105,13 @@ pull it in the new worktree.
 
 ```bash
 # Expire after a TTL (30s, 5m, 1h, 2d, 1w); `prune` removes expired sets
-meta git worktree create ci-check --all --ttl 1h
+meta git worktree create ci-check --every-repo --ttl 1h
 
 # Mark as ephemeral and store metadata for tooling
-meta git worktree create ci-check --all --ephemeral --meta agent=review-bot --meta run_id=abc123
+meta git worktree create ci-check --every-repo --ephemeral --meta agent=review-bot --meta run_id=abc123
 
 # Create, run a command, then force-remove, in one step
-meta git worktree exec --ephemeral lint-check --all -- make lint
+meta git worktree exec --ephemeral lint-check --every-repo -- make lint
 ```
 
 `prune` removes sets whose TTL has expired, ephemeral sets whose run has
@@ -259,7 +260,7 @@ worktrees not recorded yet included.
 ## Strict Mode
 
 `meta --strict git worktree create …` turns warnings such as a
-missing commit-ish in one repo, or (with `--all`) a repo that isn't cloned, into errors. A create that fails is rolled back:
+missing commit-ish in one repo, or (with `--every-repo`) a repo that isn't cloned, into errors. A create that fails is rolled back:
 the worktrees and branches it made are deleted again. If the rollback itself
 can't delete something, the error says what was left behind. A failing hook
 fails the command too, but only after the set was made (or removed): that is

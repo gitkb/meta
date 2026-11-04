@@ -37,7 +37,8 @@ pub(crate) fn execute_git_clone(
 ) -> anyhow::Result<CommandResult> {
     // meta's -r and --depth (how deep into nested meta repos); the
     // command's --depth is git's history depth
-    let recursive = options.recursive;
+    // a new workspace is its own root: -A is -r
+    let recursive = options.recursive || options.all;
     let depth = args.depth.map(|d| d.to_string());
     let meta_depth = options.depth;
     let mut parallel = args.parallel.get();

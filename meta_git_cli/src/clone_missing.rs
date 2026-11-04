@@ -140,10 +140,16 @@ pub(crate) fn execute(
     options: &PluginRequestOptions,
     cwd: &Path,
 ) -> anyhow::Result<CommandResult> {
-    let recursive = options.recursive;
+    let recursive = options.recursive || options.all;
     // Without -r only the workspace's own .meta.yaml is read
     let meta_depth = if recursive { options.depth } else { Some(0) };
     let workspace = update::workspace(cwd, steps.command(), "")?;
+    // -A: from the outermost workspace
+    let workspace = if options.all {
+        workspace.root()?
+    } else {
+        workspace
+    };
     let root = workspace.dir.as_path();
     let mut queue = CloneQueue::new(None, meta_depth, false);
     if options.filtered() {

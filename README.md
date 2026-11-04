@@ -302,7 +302,15 @@ projects:
     meta: true
 ```
 
-When `meta: true` is set, commands run with meta's `-r` (`--recursive`, before the command) descend into the nested meta repo and process its children too:
+When `meta: true` is set, a command can reach into the nested meta repo too. How far a command reaches is meta's choice, before the command, at three levels:
+
+| Typed | Reaches |
+|-------|---------|
+| `meta git status` | the repos of the nearest `.meta.yaml` at or above the current folder |
+| `meta -r git status` (`--recursive`) | those, and the meta repos nested under that same `.meta.yaml`, all the way down (`--depth N`: N levels down from there) |
+| `meta -A git status` (`--all`) | the whole workspace, from its outermost `.meta.yaml`, wherever you are |
+
+At the workspace root, `-r` and `-A` reach the same repos; from a nested meta repo, `-r` stays below it and `-A` reaches the whole workspace. With `-r` or `-A`, `--include`, `--exclude`, `--tag` and the output name repos by their path from the workspace root (`platform/api`), and a value that names a repo outside where `-r` starts is an error whose tip gives the line with `-A`. Inside a worktree set, the set is the scope: `-r` and `-A` add nothing to it.
 
 ```bash
 # Clone everything, including nested meta repos
@@ -312,13 +320,14 @@ meta -r git clone https://github.com/org/top-level.git
 meta -r git update
 ```
 
-What `-r` does, by command:
+What `-r` and `-A` do, by command (`-r` from the nearest `.meta.yaml` down, `-A` from the workspace root):
 
-| Command | With `meta -r` |
+| Command | With `meta -r` or `meta -A` |
 |---------|----------------|
-| loop commands (`meta -r git status`, `meta -r exec -- …`) and `project` | the projects of nested meta repos too (`--depth N` limits how deep) |
-| `git clone`, `git update`, `clone-missing`, `clone-prune`, `clone-sync` | clone, pull or prune in nested meta repos too (`--depth N` before the command: how many levels; `git clone --depth N` after it is git's history depth) |
-| `git worktree create` | find `--repo` across the whole tree, and resolve dependencies there |
+| loop commands (`meta -r git status`, `meta -A exec -- …`) and `project` | the projects of nested meta repos too (`--depth N` limits how deep) |
+| `git update`, `clone-missing`, `clone-prune`, `clone-sync` | pull, clone or prune in nested meta repos too (`--depth N` before the command: how many levels) |
+| `git clone` | clone the nested meta repos too; the new workspace is its own root, so `-r` and `-A` are the same (`git clone --depth N` after the command is git's history depth) |
+| `git worktree create` | find `--repo` across the nested meta repos, and resolve dependencies there (`--every-repo`: every repo reached) |
 | `context` | rows for the projects of nested meta repos |
 | `git worktree list`, `status` | refused: they always show nested repos; the scan that fails on folders it can't read is `meta --strict git worktree list` |
 | any command inside a worktree set | nothing: the set is the scope, its nested members included |
@@ -385,19 +394,21 @@ A value names a whole repo: its `.meta.yaml` name or its path from the workspace
 ```bash
 meta --tag backend --include . git checkout -b release   # the backend repos and the root
 meta -r --tag cli-tools exec -- cargo build               # nested projects by their own tags
+meta -A --include platform/api git status                 # by path from the root, from anywhere
 ```
 
 ### Arguments
 
 Meta runs every command as a program with its arguments, never through a shell. Each argument meta receives reaches the program unchanged, so quotes, spaces, `$()`, `;`, globs and `%` stay literal (`meta git log --format='%h %s'` works, and text pasted into a commit message can't run commands). Your own shell still parses the line before meta runs, so `"$(...)"` in double quotes runs there: pass untrusted text in single quotes. When you want a shell, ask for one: `meta exec -- sh -c 'npm ci && npm test'`. `meta git commit`, `clone`, `update` and `worktree` are meta's own commands with their own options; for git's native behavior, `meta exec -- git ...`. Every other `meta git` command, `status` included, passes its arguments to git.
 
-Meta's own options go before the command, for every command, the ones meta and its plugins own included: `meta --dry-run git update`, `meta --json git worktree list`, `meta -r --json project list`, `meta --include api git worktree exec t -- make`. Everything after the command word belongs to the command, so `meta git pull --tag v1` gives `--tag v1` to git. A meta option typed after a command that rejects it gets one tip with the line to run: `--dry-run` after `meta exec` is refused with a tip to write `meta --dry-run exec -- rm x`. With `--json`, that usage error is a JSON document on stdout carrying the same line.
+Meta's own options go before the command, for every command, the ones meta and its plugins own included: `meta --dry-run git update`, `meta --json git worktree list`, `meta -r --json project list`, `meta -A git status`, `meta --include api git worktree exec t -- make`. Everything after the command word belongs to the command, so `meta git pull --tag v1` gives `--tag v1` to git. A meta option typed after a command that rejects it gets one tip with the line to run: `--dry-run` after `meta exec` is refused with a tip to write `meta --dry-run exec -- rm x`. With `--json`, that usage error is a JSON document on stdout carrying the same line.
 
 ### Recursive Processing
 
 ```bash
-meta --recursive git status
-meta --recursive --depth 2 git pull
+meta --recursive git status          # here and the meta repos nested below
+meta --recursive --depth 2 git pull  # two levels down from here
+meta -A git status                   # the whole workspace, from anywhere
 ```
 
 ---

@@ -9,31 +9,35 @@ use meta_core::{errln, out, outln};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::Path;
 
 use crate::dependency_graph::DependencyGraph;
-use crate::repo_filter::{Filters, Scope};
+use crate::repo_filter::{Filters, Reach};
 use meta_core::config::{self, ProjectInfo};
 use meta_core::display::{escape, escape_path};
 use meta_core::git::{GitUrl, Operation, RepoStatus};
 
 // ── Public API ──────────────────────────────────────────
 
-/// Entry point for `meta context`: the workspace of the nearest config at or
-/// above `start`, with the projects `filters` select; with `recursive`, the
-/// projects of its nested meta repos too (`depth` levels of them), each
-/// named by its path from the workspace root.
+/// Entry point for `meta context`: the projects `reach` reaches (with `-r`
+/// or `-A` each named by its path from the workspace root) that `filters`
+/// select (`with_all`: the line with `-A`, for a filter naming a repo
+/// outside where `-r` starts).
 pub fn handle_context(
     json: bool,
     no_status: bool,
     verbose: bool,
-    start: &Path,
+    reach: Reach,
     filters: &Filters,
-    recursive: bool,
-    depth: Option<usize>,
+    with_all: impl FnOnce() -> String,
 ) -> Result<()> {
-    let workspace = config::Workspace::find(start, None)?
-        .ok_or_else(|| anyhow::anyhow!("Not a meta workspace (no .meta.yaml found)"))?;
+    // with -r or -A: the walked tree, named from the workspace root
+    let nested = !reach.tree.is_empty();
+    let selected = reach.select(filters, with_all)?;
+    let Reach {
+        workspace,
+        root,
+        tree,
+    } = reach;
     let meta_dir = workspace.dir.clone();
 
     let workspace_name = meta_dir
@@ -41,23 +45,19 @@ pub fn handle_context(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let tree = match recursive {
-        true => config::walk_projects(&meta_dir, &workspace.projects, depth)?,
-        false => Vec::new(),
-    };
-    let selected = Scope::workspace(
-        &meta_dir,
-        Some(&workspace.config_path),
-        &workspace.projects,
-        &tree,
-    )
-    .select(filters)?;
+    // with -r or -A, each named by its path from the outermost workspace
     let mut projects = Vec::new();
-    match recursive {
-        true => flatten(&tree, "", &mut projects),
+    match nested {
+        true => {
+            let prefix = meta_dir
+                .strip_prefix(&root)
+                .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            flatten(&tree, &prefix, &mut projects);
+        }
         false => projects = workspace.projects,
     }
-    projects.retain(|p| selected.contains(&meta_dir.join(&p.path)));
+    projects.retain(|p| selected.contains(&root.join(&p.path)));
 
     if verbose {
         errln!(
@@ -74,7 +74,7 @@ pub fn handle_context(
             .par_iter()
             .map(|p| {
                 let mut ctx = RepoContext::from_project(p);
-                let repo_path = meta_dir.join(&p.path);
+                let repo_path = root.join(&p.path);
                 let read = |dir| anyhow::Ok((RepoStatus::read(dir)?, Operation::read(dir)?));
                 match read(&repo_path) {
                     Ok((status, operation)) => {

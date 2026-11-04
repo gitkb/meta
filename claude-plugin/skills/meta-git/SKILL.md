@@ -5,7 +5,7 @@ description: Git operations across multiple repositories — status, commit, pus
 
 # Meta Git Skill
 
-Git operations across multiple repositories. One command operates on the root repo and every project in this meta level; add `--recursive` (`meta --recursive git status`) to include nested meta repos.
+Git operations across multiple repositories. One command operates on the root repo and every project in this meta level; add `-r` (`meta -r git status`) to include the meta repos nested under it, or `-A` for the whole workspace from anywhere.
 
 ## The Core Insight
 
@@ -65,7 +65,7 @@ Before making sweeping changes, commit or stash uncommitted work in every repo:
 # See which repos have uncommitted changes
 meta git status
 
-# Commit them at this meta level (`meta --recursive git …` for nested ones); `meta git commit` commits only staged changes
+# Commit them at this meta level (`meta -r git …` for nested ones, `meta -A git …` for the whole workspace); `meta git commit` commits only staged changes
 meta git add -A
 meta git commit -m "wip: before refactor"
 

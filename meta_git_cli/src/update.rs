@@ -100,11 +100,17 @@ pub(crate) fn execute_git_update(
     options: &PluginRequestOptions,
     cwd: &Path,
 ) -> anyhow::Result<CommandResult> {
-    let recursive = options.recursive;
-    // Without -r only the workspace's own .meta.yaml is read
+    let recursive = options.recursive || options.all;
+    // Without -r or -A only the workspace's own .meta.yaml is read
     let meta_depth = if recursive { options.depth } else { Some(0) };
     // A worktree set's checkouts are pulled with `meta git pull`
     let workspace = workspace(cwd, "git update", ", or 'meta git pull' in the set")?;
+    // -A: from the outermost workspace
+    let workspace = if options.all {
+        workspace.root()?
+    } else {
+        workspace
+    };
     ssh::warn_remote_mismatches(&workspace);
 
     let queue = CloneQueue::new(None, meta_depth, true); // No git depth for update

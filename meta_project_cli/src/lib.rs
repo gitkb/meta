@@ -19,6 +19,8 @@ use meta_plugin_protocol::{has_help_token, parse_args, CommandResult};
 pub struct ExecuteOptions {
     pub json_output: bool,
     pub recursive: bool,
+    /// meta's -A: from the outermost workspace
+    pub all: bool,
     pub depth: Option<usize>,
     /// The project directories meta's `--include`, `--exclude` or `--tag`
     /// chose, when one was given: the commands act on these only
@@ -200,6 +202,7 @@ pub fn execute_command(
                     &dependents.project,
                     options.json_output,
                     options.recursive,
+                    options.all,
                     cwd,
                 ),
                 Err(result) => result,
@@ -332,7 +335,7 @@ fn check_projects(
         return check_selected(options, cwd);
     }
     let mut workspaces = Vec::new();
-    if !options.recursive || provided_projects.is_empty() {
+    if !(options.recursive || options.all) || provided_projects.is_empty() {
         workspaces.push(
             config::Workspace::find(cwd, None)?
                 .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?,
@@ -427,7 +430,12 @@ fn check_selected(options: &ExecuteOptions, cwd: &Path) -> anyhow::Result<Vec<Ch
     }
     let workspace = config::Workspace::find(cwd, None)?
         .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
-    let depth = if options.recursive {
+    let workspace = if options.all {
+        workspace.root()?
+    } else {
+        workspace
+    };
+    let depth = if options.recursive || options.all {
         options.depth
     } else {
         Some(0)
@@ -444,14 +452,14 @@ fn check_selected(options: &ExecuteOptions, cwd: &Path) -> anyhow::Result<Vec<Ch
 
 /// Handle `meta project list` / `meta project ls`
 fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
-    let max_depth = if options.recursive {
+    let max_depth = if options.recursive || options.all {
         options.depth
     } else {
         Some(0)
     };
 
-    // When recursive, walk up to the root ancestor meta-repo
-    let start_dir = if options.recursive {
+    // -A: from the outermost workspace; -r: down from the nearest
+    let start_dir = if options.all {
         match config::find_meta_config(cwd, None) {
             Ok(Some(config_path)) => {
                 let nearest_meta_dir = config_path
@@ -496,10 +504,10 @@ fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
 
     if options.json_output {
         // `root` = the .meta.yaml directory relevant to this invocation:
-        //   - recursive: the outermost workspace root (same as start_dir)
-        //   - non-recursive: the nearest ancestor .meta.yaml dir
-        // In both cases start_dir is wrong for non-recursive (it equals cwd).
-        let root_dir = if options.recursive {
+        //   - -A: the outermost workspace root (same as start_dir)
+        //   - otherwise: the nearest ancestor .meta.yaml dir
+        // start_dir is wrong for those (it equals cwd).
+        let root_dir = if options.all {
             start_dir.clone()
         } else {
             match config::find_meta_config(cwd, None) {
@@ -640,9 +648,10 @@ fn handle_project_dependents(
     project_name: &str,
     json: bool,
     recursive: bool,
+    all: bool,
     cwd: &Path,
 ) -> CommandResult {
-    match dependents(project_name, recursive, cwd) {
+    match dependents(project_name, recursive, all, cwd) {
         Err(e) => CommandResult::from(e),
         Ok(dependents) if json => match serde_json::to_string(&dependents) {
             Ok(json) => CommandResult::Message(json),
@@ -659,10 +668,16 @@ fn handle_project_dependents(
 }
 
 /// The projects that depend directly on `project_name`, among those of the
-/// nearest workspace by name; with `recursive`, among every project in the
-/// tree of the root workspace, its own by name and nested ones by their path
-/// from it (two nested repos may share a name).
-fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result<Vec<String>> {
+/// nearest workspace by name; with `recursive` (meta's -r), among every
+/// project in its tree, its own by name and nested ones by their path from it
+/// (two nested repos may share a name); with `all` (-A), in the tree of the
+/// outermost workspace.
+fn dependents(
+    project_name: &str,
+    recursive: bool,
+    all: bool,
+    cwd: &Path,
+) -> anyhow::Result<Vec<String>> {
     fn walk(nodes: Vec<MetaTreeNode>, prefix: &str, out: &mut Vec<ProjectDependencies>) {
         for node in nodes {
             let path = format!("{prefix}/{}", node.info.path);
@@ -678,8 +693,10 @@ fn dependents(project_name: &str, recursive: bool, cwd: &Path) -> anyhow::Result
     let mut workspace = config::Workspace::find(cwd, None)?
         .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
     let mut projects = Vec::new();
-    if recursive {
+    if all {
         workspace = workspace.root()?;
+    }
+    if recursive || all {
         for node in config::walk_projects(&workspace.dir, &workspace.projects, None)? {
             walk(node.children, &node.info.path, &mut projects);
             projects.push(node.info.into());
@@ -847,19 +864,18 @@ mod tests {
         // they are meta's: after the command, a usage error
         assert!(error(run("project list", &["-r"], &root)).is_some());
 
-        // meta's -r: the root workspace, from inside a nested one
+        // meta's -A: the root workspace, from inside a nested one; -r
+        // goes down from there only
+        let all = ExecuteOptions {
+            all: true,
+            ..Default::default()
+        };
+        let from_nested = |options: &ExecuteOptions| {
+            execute_command("project dependents", &args(&["c"]), options, &[], &nested)
+        };
         assert!(error(run("project dependents", &["c"], &nested)).is_some());
-        assert_eq!(
-            message(execute_command(
-                "project dependents",
-                &args(&["c"]),
-                &recursive,
-                &[],
-                &nested
-            ))
-            .unwrap(),
-            "user"
-        );
+        assert!(error(from_nested(&recursive)).is_some());
+        assert_eq!(message(from_nested(&all)).unwrap(), "user");
     }
 
     #[test]
@@ -890,7 +906,7 @@ mod tests {
         let dependents = |project: &str, cwd: &Path| {
             let args = [project.to_string()];
             let recursive = ExecuteOptions {
-                recursive: true,
+                all: true,
                 ..Default::default()
             };
             message(execute_command(
@@ -1301,7 +1317,7 @@ mod tests {
 
     #[test]
     fn test_project_list_json_root_differs_from_cwd_in_nested_recursive() {
-        // Regression: when invoked from a child directory with --recursive,
+        // Regression: when invoked from a child directory with -A,
         // `root` must point to the outermost workspace root, NOT to cwd.
         let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
@@ -1323,7 +1339,7 @@ mod tests {
         .unwrap();
 
         let options = ExecuteOptions {
-            recursive: true,
+            all: true,
             json_output: true,
             ..Default::default()
         };
@@ -1352,7 +1368,7 @@ mod tests {
     #[test]
     fn test_project_list_recursive_from_nested() {
         // root has child, child has grandchild
-        // Running recursive from child should show root's tree
+        // Running with -A from child should show root's tree
         let sandbox = meta_test_support::isolated!();
         let temp_dir = sandbox.work();
         let child = temp_dir.join("child");
@@ -1374,7 +1390,7 @@ mod tests {
         .unwrap();
 
         let options = ExecuteOptions {
-            recursive: true,
+            all: true,
             json_output: true,
             ..Default::default()
         };

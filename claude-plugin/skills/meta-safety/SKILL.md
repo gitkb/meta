@@ -9,8 +9,8 @@ Multi-repo workspaces are powerful but require awareness. Meta gives you precisi
 
 ## Session Start
 
-1. `meta -r --json project list` — workspace map, including nested meta repos, in one call
-2. `meta git status` — see state of every repo at once (`meta --recursive git status` for nested ones)
+1. `meta -A --json project list` — the whole workspace map, nested meta repos included, from wherever you are, in one call
+2. `meta git status` — see state of every repo at once (`meta -r git status`: the meta repos nested below here too; `meta -A git status`: the whole workspace)
 3. Note which repos provide shared dependencies (check `.meta.yaml` for `provides`/`depends_on`)
 
 ## Precision Operations
@@ -68,7 +68,7 @@ The `meta_query_repos` MCP tool filters repos by state:
 Use `meta --strict` to turn worktree warnings into errors for CI/automation. It applies to the `meta git worktree` checks listed below, not to `meta exec`. It is not a transaction: repos already changed before the error stay changed.
 
 ```bash
-meta --strict git worktree create feature-test v2.0.0 --all
+meta --strict git worktree create feature-test v2.0.0 --every-repo
 meta --strict git worktree prune
 ```
 
@@ -98,7 +98,7 @@ meta --strict git worktree prune
 
 If cleanup fails, meta prints the error and exits non-zero even when the command itself succeeded, and the set may be left in place. Check with `meta git worktree list` and remove it with `meta git worktree remove <name>`.
 
-For `meta git worktree create`, meta's `--strict` goes before the command like every meta option: `meta --strict git worktree create feature-test v2.0.0 --all`.
+For `meta git worktree create`, meta's `--strict` goes before the command like every meta option: `meta --strict git worktree create feature-test v2.0.0 --every-repo`.
 
 ## Efficiency Tips
 

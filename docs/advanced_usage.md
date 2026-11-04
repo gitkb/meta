@@ -124,7 +124,7 @@ meta --tag backend --include . git status
 meta --tag backend --exclude legacy exec -- cargo test
 ```
 
-`--include` and `--tag` each add repos, and `--exclude` then removes some (see [Filtering](../README.md#filtering)). With `--recursive`, a nested project is selected by its own tags, whatever its parent's.
+`--include` and `--tag` each add repos, and `--exclude` then removes some (see [Filtering](../README.md#filtering)). With `-r` or `-A`, a nested project is selected by its own tags, whatever its parent's, and by its path from the workspace root.
 
 ---
 

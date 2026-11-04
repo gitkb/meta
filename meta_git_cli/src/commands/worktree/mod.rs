@@ -68,12 +68,34 @@ pub fn execute_worktree_command(
     // list and status always show nested repos: -r would only have been the
     // strict scan, which is --strict's
     if let Some(list @ ("list" | "status")) = subcommand {
-        if options.recursive || clap_args.iter().any(|a| a == "-r" || a == "--recursive") {
+        let typed = |a: &String| ["-r", "--recursive", "-A"].contains(&a.as_str());
+        if options.recursive || options.all || clap_args.iter().any(typed) {
             return CommandResult::Usage(format!(
-                "worktree {list} always shows nested repos; -r changes nothing here. For the \
-                 scan that fails on folders it can't read: meta --strict git worktree {list}"
+                "worktree {list} always shows nested repos; -r and -A change nothing here. For \
+                 the scan that fails on folders it can't read: meta --strict git worktree {list}"
             ));
         }
+    }
+    // create's and exec's own --all became --every-repo: meta's --all
+    // (-A) before the command is the whole workspace, not every repo here
+    let words = || clap_args.iter().take_while(|a| *a != "--");
+    if matches!(subcommand, Some("create" | "exec")) && words().any(|a| a == "--all") {
+        let line: Vec<String> = std::iter::once("meta".to_string())
+            .chain(options.meta_options.typed.iter().cloned())
+            .chain(["git".to_string(), "worktree".to_string()])
+            .chain(clap_args.iter().enumerate().map(|(i, a)| {
+                let before = clap_args.iter().take(i).all(|w| w != "--");
+                match before && a == "--all" {
+                    true => "--every-repo".to_string(),
+                    false => a.clone(),
+                }
+            }))
+            .collect();
+        return CommandResult::Usage(format!(
+            "--all is meta's own option (-A, the whole workspace) and goes before the command; \
+             every repo meta reaches is --every-repo, as in {}",
+            escape(&meta_core::display::display_command(&line))
+        ));
     }
     // They find their repos in the set; exec applies meta's selection to
     // the set's members
@@ -114,6 +136,7 @@ fn handle_worktree_command(
     match command {
         WorktreeCommands::Create(mut args) => {
             args.recursive = options.recursive;
+            args.from_root = options.all;
             // An ephemeral set is the next prune's: its lease stays beside it
             let ephemeral = args.ephemeral;
             let created = create::handle_create(args, mode, verbose, json, global_strict)?;

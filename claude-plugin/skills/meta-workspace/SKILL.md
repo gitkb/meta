@@ -12,7 +12,7 @@ This project is a **meta repository** - a parent repo that manages a graph of ch
 When you begin working in a meta repo, discover its structure:
 
 ```bash
-meta -r --json project list
+meta -A --json project list
 ```
 
 This returns repos, paths, and tags. Use this to:
@@ -20,7 +20,7 @@ This returns repos, paths, and tags. Use this to:
 - Identify available tags for filtering operations
 - Understand the project graph
 
-Run `meta git status` to see the current state of every repo at this level (`meta --recursive git status` for nested meta repos).
+Run `meta git status` to see the current state of every repo at this level (`meta -r git status`: the meta repos nested below it too; `meta -A git status`: the whole workspace, from anywhere).
 
 ## Why This Matters for You (Claude)
 
@@ -74,14 +74,17 @@ meta --exclude legacy-service git pull
 
 ## Nested Meta Repos
 
-Meta repos can contain other meta repos. Use meta's `-r` (before the command) to operate on the entire graph:
+Meta repos can contain other meta repos. meta reaches them at three levels, chosen before the command: no option, the nearest `.meta.yaml`; `-r`, that one and the meta repos nested under it; `-A`, the whole workspace from its outermost `.meta.yaml`, wherever you are (at the root, `-r` and `-A` are the same). With `-r` or `-A`, repos are named by their path from the workspace root.
 
 ```bash
 # Clone a meta repo and ALL nested meta repos
 meta -r git clone <url>
 
-# Status across entire graph
-meta --recursive git status
+# Status across the meta repos nested below here
+meta -r git status
+
+# Status across the whole workspace, from anywhere
+meta -A git status
 ```
 
 meta's `--depth N`, before the command, limits how deep into nested meta repos it goes (`meta -r --depth 1 git clone <url>`); after `git clone`, `--depth N` is git's history depth.
@@ -103,4 +106,4 @@ When the meta MCP server is available, these tools provide structured JSON for p
 - **Targeted operations**: `meta --include repo1,repo2 exec -- cmd` operates on only the named repos (`.meta.yaml` name or path from the workspace root)
 - **Tag-based filtering**: `meta -r --tag backend exec -- cargo test` scopes to tagged repos
 - **Dependency awareness**: `meta_analyze_impact <repo>` shows who depends on a repo before you modify it — prevents cascading fix-up commits
-- **Session start**: Always run `meta -r --json project list` first to get the workspace map
+- **Session start**: Always run `meta -A --json project list` first to get the workspace map

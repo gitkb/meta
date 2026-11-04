@@ -105,7 +105,7 @@ fn unreadable_members_are_unknown_in_status_and_list() {
     let sandbox = Sandbox::new();
     let root = &sandbox.work();
     let ws = workspace(&sandbox, &["r1", "r2"]);
-    let out = worktree(&sandbox, &ws, &["create", "w", "--all"]);
+    let out = worktree(&sandbox, &ws, &["create", "w", "--every-repo"]);
     assert!(out.status.success(), "{}", stderr(&out));
     fs::write(
         ws.join(".worktrees/w/r1/.git"),
@@ -147,7 +147,7 @@ fn unreadable_members_are_unknown_in_status_and_list() {
 fn status_names_a_missing_member_and_fails() {
     let sandbox = Sandbox::new();
     let ws = workspace(&sandbox, &["r1", "r2"]);
-    let out = worktree(&sandbox, &ws, &["create", "w", "--all"]);
+    let out = worktree(&sandbox, &ws, &["create", "w", "--every-repo"]);
     assert!(out.status.success(), "{}", stderr(&out));
     fs::remove_dir_all(ws.join(".worktrees/w/r2")).unwrap();
 
@@ -177,7 +177,7 @@ fn text_list_warns_about_an_unreadable_set_and_lists_healthy_sets() {
     let sandbox = Sandbox::new();
     let ws = workspace(&sandbox, &["r1"]);
     for name in ["broken", "healthy"] {
-        let out = worktree(&sandbox, &ws, &["create", name, "--all"]);
+        let out = worktree(&sandbox, &ws, &["create", name, "--every-repo"]);
         assert!(out.status.success(), "{}", stderr(&out));
     }
     fs::write(ws.join(".worktrees/broken/.git"), "garbage\n").unwrap();
@@ -204,7 +204,7 @@ fn create_all_warns_about_broken_git_entries_and_creates_healthy_members() {
     fs::remove_dir_all(ws.join("r2/.git")).unwrap();
     fs::create_dir(ws.join("r2/.git")).unwrap();
 
-    let out = worktree(&sandbox, &ws, &["create", "w", "--all"]);
+    let out = worktree(&sandbox, &ws, &["create", "w", "--every-repo"]);
     let error = stderr(&out);
     assert_eq!(out.status.code(), Some(0), "{error}");
     for name in ["r1", "r2"] {
@@ -720,7 +720,7 @@ fn with_recursive_all_every_place_is_a_place_whatever_it_names() {
         "bar": {"repo": url("baz"), "path": "baz"},
     }});
     fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
-    let out = worktree(&sandbox, &ws, &["create", "x", "--all", "-r"]);
+    let out = worktree(&sandbox, &ws, &["create", "x", "--every-repo", "-r"]);
     assert!(out.status.success(), "{}", stderr(&out));
     // each place holds the checkout of its own repository
     for place in ["bar", "baz"] {
@@ -786,7 +786,7 @@ fn an_ephemeral_exec_of_all_keeps_a_branch_given_for_one_repo() {
         &[
             "run",
             "--ephemeral",
-            "--all",
+            "--every-repo",
             "--repo",
             "a:asked",
             "--",
@@ -798,7 +798,7 @@ fn an_ephemeral_exec_of_all_keeps_a_branch_given_for_one_repo() {
     let plan = String::from_utf8_lossy(&out.stdout);
     assert!(plan.contains("branch: asked"), "{plan}");
     assert!(plan.contains("branch: run"), "{plan}");
-    // and one repo on two branches is refused, as without --all
+    // and one repo on two branches is refused, as without --every-repo
     let out = meta_git(
         &sandbox,
         &ws,
@@ -806,7 +806,7 @@ fn an_ephemeral_exec_of_all_keeps_a_branch_given_for_one_repo() {
         &[
             "run",
             "--ephemeral",
-            "--all",
+            "--every-repo",
             "--repo",
             "a:x",
             "--repo",
@@ -833,8 +833,8 @@ fn a_root_git_cannot_use_is_no_reason_to_fail_a_create_without_it() {
     .unwrap();
     let out = worktree(&sandbox, &ws, &["create", "n", "--repo", "a", "--no-deps"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    // --all names the root it skips
-    let out = worktree(&sandbox, &ws, &["create", "l", "--all"]);
+    // --every-repo names the root it skips
+    let out = worktree(&sandbox, &ws, &["create", "l", "--every-repo"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stderr(&out).contains("'.' at"), "{}", stderr(&out));
     for set in ["n", "l"] {
@@ -931,7 +931,7 @@ fn from_pr_applies_only_to_the_exact_repo() {
         &sandbox,
         &ws,
         "git worktree create",
-        &["pr1", "--from-pr", "org/api#5", "--all"],
+        &["pr1", "--from-pr", "org/api#5", "--every-repo"],
         json!({"json_output": true}),
     );
     assert!(out.status.success(), "{}", stderr(&out));
@@ -1847,7 +1847,7 @@ fn a_project_outside_the_workspace_gets_a_worktree_at_its_name() {
     )
     .unwrap();
 
-    let out = worktree(&sandbox, &ws, &["create", "w", "--all"]);
+    let out = worktree(&sandbox, &ws, &["create", "w", "--every-repo"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(ws.join(".worktrees/w/sib/.git").is_file());
     assert!(!ws.join(".worktrees/sib").exists());

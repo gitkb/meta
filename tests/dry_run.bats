@@ -106,7 +106,7 @@ preview() {
 }
 
 @test "worktree create previews" {
-    preview 0 git worktree create new --all
+    preview 0 git worktree create new --every-repo
     [[ "$output" == *"Would create worktree set 'new'"* ]]
     # meta's own checks of each checkout fail a preview as a run
     git -C backend config core.bare true
@@ -128,7 +128,7 @@ preview() {
     git -C backend/lib add README.md
     git -C backend/lib commit --quiet -m lib
     printf '{"projects": {"lib": "file:///nowhere/lib.git"}}\n' > backend/.meta.yaml
-    preview 0 -r git worktree create t --all
+    preview 0 -r git worktree create t --every-repo
     [[ "$output" == *"backend/lib:"* ]]
 }
 
@@ -155,9 +155,9 @@ preview() {
     mkdir "$SANDBOX/empty"
     printf '{"projects": {}}\n' > "$SANDBOX/empty/.meta.yaml"
     cd "$SANDBOX/empty"
-    preview 1 git worktree create e --all
+    preview 1 git worktree create e --every-repo
     [[ "$output" == *"No repos selected; no worktree was created"* ]]
-    preview 1 git worktree exec e --ephemeral --all -- true
+    preview 1 git worktree exec e --ephemeral --every-repo -- true
     [[ "$output" == *"No repos selected; no worktree was created"* ]]
 }
 
@@ -227,14 +227,14 @@ preview() {
     rm "$WS/frontend/.meta.yaml"
     # a repo without the start commit is skipped, as in a run
     git -C "$WS/frontend" tag only-in-frontend
-    preview 0 git worktree exec eph only-in-frontend --ephemeral --all -- touch made-by-exec
+    preview 0 git worktree exec eph only-in-frontend --ephemeral --every-repo -- touch made-by-exec
     [[ "$output" == *"Skipping 'backend': ref 'only-in-frontend' not found"* ]]
     [[ "$output" == *"frontend:"* ]]
     [[ "$output" != *"backend:"* ]]
     # a ref no repo has fails as in a run
-    preview 1 git worktree exec eph nosuchref --ephemeral --all -- touch made-by-exec
+    preview 1 git worktree exec eph nosuchref --ephemeral --every-repo -- touch made-by-exec
     [[ "$output" == *"No selected repo has ref 'nosuchref'; no worktree was created"* ]]
-    preview 1 git worktree create new nosuchref --all
+    preview 1 git worktree create new nosuchref --every-repo
     [[ "$output" == *"No selected repo has ref 'nosuchref'"* ]]
     # the set's own .meta.yaml, not yet made, names its repos for a filter
     preview 1 --include backend git worktree exec eph --ephemeral --repo backend -- touch made-by-exec

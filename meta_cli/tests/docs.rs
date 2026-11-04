@@ -701,6 +701,8 @@ const META_OPTIONS: &[&str] = &[
     "--json",
     "-r",
     "--recursive",
+    "-A",
+    "--all",
     "--dry-run",
     "--strict",
     "--include",

@@ -90,8 +90,8 @@ EOF
     [ "$(printf '%s' "$output" | jq -r '.repos[] | select(.alias == "backend") | .branch')" = "bare-member" ]
 }
 
-@test "worktree create --all creates worktrees for all repos" {
-    run "$META_BIN" git worktree create full-task --all
+@test "worktree create --every-repo creates worktrees for all repos" {
+    run "$META_BIN" git worktree create full-task --every-repo
     [ "$status" -eq 0 ]
     [ -d ".worktrees/full-task/backend" ]
     [ -d ".worktrees/full-task/frontend" ]
@@ -148,8 +148,8 @@ EOF
     run "$META_BIN" --strict --dry-run git worktree create front --repo frontend
     [ "$status" -eq 0 ]
     [[ "$output" != *"depends on 'db'"* ]]
-    # --all holds backend: its problems count too
-    run "$META_BIN" --strict --dry-run git worktree create every --all
+    # --every-repo holds backend: its problems count too
+    run "$META_BIN" --strict --dry-run git worktree create every --every-repo
     [ "$status" -ne 0 ]
     [[ "$output" == *"'backend' depends on 'db', which 'frontend'"*"(strict mode)"* ]]
     # a project named db is what the name means, whoever provides one
@@ -379,18 +379,18 @@ EOF
     [ ! -e ".worktrees/denied" ]
 }
 
-@test "worktree create --all skips a repo that is not cloned; --repo and add refuse it when it can't be cloned" {
+@test "worktree create --every-repo skips a repo that is not cloned; --repo and add refuse it when it can't be cloned" {
     rm -rf frontend
     # a remote that can't be cloned (as without access), kept offline
     sed -i.bak "s#git@github.com:org/frontend.git#file://$TEST_DIR/nowhere.git#" .meta.yaml
-    run "$META_BIN" git worktree create some --all
+    run "$META_BIN" git worktree create some --every-repo
     [ "$status" -eq 0 ]
     [[ "$output" == *"'frontend' at $TEST_DIR/frontend: not cloned"*"skipping"* ]]
     [ -d ".worktrees/some/backend" ]
     [ ! -e ".worktrees/some/frontend" ]
 
     # all or nothing with --strict
-    run "$META_BIN" --strict git worktree create strict --all
+    run "$META_BIN" --strict git worktree create strict --every-repo
     [ "$status" -ne 0 ]
     [[ "$output" == *"'frontend' at $TEST_DIR/frontend: not cloned"* ]]
     [[ "$output" != *"skipping"* ]]
@@ -993,7 +993,7 @@ assert d['totals']['files_changed'] >= 1
     run "$META_BIN" git worktree exec "$E" -- true; check
     run "$META_BIN" git worktree status "$E"; check
     run "$META_BIN" git worktree diff "$E"; check
-    run "$META_BIN" git worktree create okb --all --branch "$E"; check
+    run "$META_BIN" git worktree create okb --every-repo --branch "$E"; check
     # A real set, compared against a bad base
     "$META_BIN" git worktree create based --repo backend
     run "$META_BIN" git worktree diff based --base "$E"
@@ -1093,10 +1093,10 @@ assert repos['frontend']['dirty'] == False, f'frontend should be clean: {repos[\
 "
 }
 
-# ============ Edge Cases: --all and --repo mutually exclusive ============
+# ============ Edge Cases: --every-repo and --repo mutually exclusive ============
 
-@test "worktree create --all --repo rejects combination" {
-    run "$META_BIN" git worktree create all-repo-combo --all --repo backend
+@test "worktree create --every-repo --repo rejects combination" {
+    run "$META_BIN" git worktree create all-repo-combo --every-repo --repo backend
     [ "$status" -ne 0 ]
     [[ "$output" == *"cannot be used with"* ]] || [[ "$output" == *"conflict"* ]]
 }

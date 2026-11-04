@@ -17,7 +17,7 @@ starts only it:
 2. **None** → an error that suggests the nearest command (for `gti status`, `meta git status`), else `meta exec -- <words>`
 
 Example:
-- `meta git status` → git plugin runs `git status` in every repo at this meta level (`--recursive` for nested ones)
+- `meta git status` → git plugin runs `git status` in every repo at this meta level (`meta -r` for the meta repos nested under it, `meta -A` for the whole workspace)
 - `meta git clone <url>` → git plugin clones parent + all children from `.meta.yaml`
 - npm has no plugin: run it with `meta exec -- npm install`
 
@@ -130,7 +130,7 @@ meta git status
 
 For commands with special handling (like `clone`), the plugin does the work directly instead of returning an execution plan.
 
-meta's own options (`-r`, `--json`, `--dry-run`, `--include`, …) go before the command and reach a plugin in the request's `options`, never in `args` (`meta -r --json project list`). A plugin defines no option of meta's; it parses its arguments with `meta_plugin_protocol::parse_args` and refuses the rest with exit 2, so a meta option typed after its command gets the tip with the line that has it before (see `docs/plugin_development.md`).
+meta's own options (`-r`, `-A`, `--json`, `--dry-run`, `--include`, …) go before the command and reach a plugin in the request's `options`, never in `args` (`meta -r --json project list`). A plugin defines no option of meta's; it parses its arguments with `meta_plugin_protocol::parse_args` and refuses the rest with exit 2, so a meta option typed after its command gets the tip with the line that has it before (see `docs/plugin_development.md`).
 
 ## Why This Matters
 

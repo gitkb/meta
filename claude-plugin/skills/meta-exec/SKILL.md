@@ -5,7 +5,7 @@ description: Execute commands across all repos — parallel, filtered, dry-run m
 
 # Meta Exec Skill
 
-Execute any command in the root repo and every project at this meta level (add `--recursive` for nested meta repos). Meta extends `loop`, a tool for running commands across directories.
+Execute any command in the root repo and every project at this meta level (add `-r` for the meta repos nested under it, `-A` for the whole workspace from anywhere). Meta extends `loop`, a tool for running commands across directories.
 
 ## The Execution Model
 
@@ -63,7 +63,7 @@ Control which repos run the command:
 # Only these repos: each value is a repo's .meta.yaml name or its path from the workspace root
 meta --include api,worker git status
 meta --include services/api,. git status   # services/api: the path of a project this .meta.yaml lists; `.` is the root repo
-meta -r --include open-source/sdk/core git status   # a repo of a nested meta repo (sdk/core in open-source/.meta.yaml) needs -r
+meta -r --include open-source/sdk/core git status   # a repo of a nested meta repo (sdk/core in open-source/.meta.yaml) needs -r (from the root) or -A (from anywhere)
 
 # Skip these repos
 meta --exclude legacy-service git push

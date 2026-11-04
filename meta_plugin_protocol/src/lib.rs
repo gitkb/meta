@@ -107,8 +107,14 @@ pub struct PluginRequestOptions {
     pub dry_run: bool,
     #[serde(default)]
     pub silent: bool,
+    /// `-r`: the meta repos nested under the nearest `.meta.yaml` too
     #[serde(default)]
     pub recursive: bool,
+    /// `-A`: the whole graph, from the outermost `.meta.yaml` (the
+    /// workspace root), wherever the command runs. A host older than this
+    /// field never sends it.
+    #[serde(default)]
+    pub all: bool,
     #[serde(default)]
     pub depth: Option<usize>,
     /// `--include` as the user typed it. The host has already applied it
@@ -731,6 +737,7 @@ mod tests {
                 dry_run: true,
                 silent: true,
                 recursive: true,
+                all: true,
                 depth: Some(2),
                 include_filters: Some(vec!["a".to_string()]),
                 exclude_filters: Some(vec!["b".to_string()]),
@@ -757,7 +764,7 @@ mod tests {
                 "cwd": "/work space",
                 "options": {
                     "json_output": true, "verbose": true, "parallel": true,
-                    "dry_run": true, "silent": true, "recursive": true, "depth": 2,
+                    "dry_run": true, "silent": true, "recursive": true, "all": true, "depth": 2,
                     "include_filters": ["a"], "exclude_filters": ["b"],
                     "tag_filters": ["t"], "strict": true,
                     "meta_options": {
@@ -786,9 +793,10 @@ mod tests {
                 o.dry_run,
                 o.silent,
                 o.recursive,
+                o.all,
                 o.strict
             ],
-            [true; 7]
+            [true; 8]
         );
         assert_eq!(o.depth, s.depth);
         assert!(o.mode().is_preview());

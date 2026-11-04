@@ -50,14 +50,14 @@ The types are in [`meta_plugin_protocol`](../meta_plugin_protocol/src/lib.rs); a
   "projects": ["/home/me/ws", "/home/me/ws/api", "/home/me/ws/apps/web"],
   "cwd": "/home/me/ws",
   "options": {"json_output": false, "dry_run": false, "parallel": true, "recursive": false,
-              "verbose": false, "silent": false, "strict": false, "depth": null,
+              "verbose": false, "silent": false, "strict": false, "all": false, "depth": null,
               "include_filters": null, "exclude_filters": null, "tag_filters": ["backend"]}
 }
 ```
 
-`projects` are the selected repos' directories, `--include`, `--exclude` and `--tag` already applied (the root included unless they left it out). The filters are passed too: a plugin that finds its repos itself must refuse filters it can't honour.
+`recursive` is meta's `-r` (the meta repos nested under the nearest `.meta.yaml` too) and `all` its `-A` (the whole workspace, from its outermost `.meta.yaml`); a plugin that finds its repos itself starts where they say. `projects` are the selected repos' directories, `--include`, `--exclude` and `--tag` already applied (the root included unless they left it out). The filters are passed too: a plugin that finds its repos itself must refuse filters it can't honour.
 
-meta's options go before the command, and `options` is where a plugin reads them: never define a `--json`, `-r`, `--dry-run`, `--strict`, `--depth`, `--include`, `--exclude`, `--tag` or `--parallel` of your own. Parse your arguments with `meta_plugin_protocol::parse_args(command, args, &request.options.meta_options)` and refuse the rest with exit 2; meta's options typed after your command then get the tip with the line that has them before it (`options.meta_options`, which meta sends, lists meta's options and what was typed of them; `MetaOptions::refusing` marks the ones your command never takes, so no tip suggests a line that fails again).
+meta's options go before the command, and `options` is where a plugin reads them: never define a `--json`, `-r`, `-A`/`--all`, `--dry-run`, `--strict`, `--depth`, `--include`, `--exclude`, `--tag` or `--parallel` of your own. Parse your arguments with `meta_plugin_protocol::parse_args(command, args, &request.options.meta_options)` and refuse the rest with exit 2; meta's options typed after your command then get the tip with the line that has them before it (`options.meta_options`, which meta sends, lists meta's options and what was typed of them; `MetaOptions::refusing` marks the ones your command never takes, so no tip suggests a line that fails again).
 
 It answers on stdout with one of:
 

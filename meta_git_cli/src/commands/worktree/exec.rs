@@ -151,13 +151,14 @@ fn handle_ephemeral_exec(args: ExecArgs, options: &PluginRequestOptions) -> Resu
         commit_ish: args.commit_ish.clone(),
         branch: args.branch.clone(),
         repos: args.repos.clone(),
-        all: args.all,
+        every_repo: args.every_repo,
         from_pr: args.from_pr.clone(),
         ephemeral: true,
         ttl: None,
         custom_meta: args.custom_meta.clone(),
         no_deps: false,   // Include dependencies by default
         recursive: false, // Ephemeral exec uses current meta level
+        from_root: false,
     };
 
     if verbose {

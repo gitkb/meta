@@ -754,6 +754,7 @@ mod tests {
                     options: vec![meta_core::args::MetaOption {
                         spellings: vec!["--json".to_string()],
                         takes_value: false,
+                        repeats: false,
                         refused: false,
                     }],
                     typed: vec!["--json".to_string()],
@@ -775,7 +776,7 @@ mod tests {
                     "include_filters": ["a"], "exclude_filters": ["b"],
                     "tag_filters": ["t"], "strict": true,
                     "meta_options": {
-                        "options": [{"spellings": ["--json"], "takes_value": false}],
+                        "options": [{"spellings": ["--json"], "takes_value": false, "repeats": false}],
                         "typed": ["--json"],
                     },
                 },

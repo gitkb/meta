@@ -92,6 +92,9 @@ pub struct MetaOption {
     pub spellings: Vec<String>,
     /// Whether a value follows it (`--include api`)
     pub takes_value: bool,
+    /// Whether it may be given more than once (`--include a --include b`)
+    #[serde(default)]
+    pub repeats: bool,
     /// The command at hand never takes it, before it or after it
     #[serde(skip)]
     pub refused: bool,
@@ -124,6 +127,10 @@ impl MetaOptions {
                     .chain(arg.get_short().map(|short| format!("-{short}")))
                     .collect(),
                 takes_value: arg.get_action().takes_values(),
+                repeats: matches!(
+                    arg.get_action(),
+                    clap::ArgAction::Append | clap::ArgAction::Count
+                ),
                 refused: false,
             })
             .collect();
@@ -241,11 +248,18 @@ impl MetaOptions {
                 (false, Some(next)) if !next.starts_with('-') => return Some(rule),
                 (false, _) => 1,
             };
-            // a flag already before the command is said once
-            let said = |w: &String| option.spellings.contains(&spelling(w));
-            let again = !option.takes_value && self.typed.iter().chain(&moved).any(said);
-            if !again {
-                moved.extend(rest.iter().skip(at).take(taken).cloned());
+            // one already before the command that can't be given twice: a
+            // flag is said once; a second value can't be told from the first
+            let again = !option.repeats
+                && self
+                    .typed
+                    .iter()
+                    .chain(&moved)
+                    .any(|w| self.names(option, w));
+            match (again, option.takes_value) {
+                (true, true) => return Some(rule),
+                (true, false) => {}
+                (false, _) => moved.extend(rest.iter().skip(at).take(taken).cloned()),
             }
             rest = rest
                 .iter()
@@ -270,6 +284,35 @@ impl MetaOptions {
             }
         }
         Some(rule)
+    }
+}
+
+impl MetaOptions {
+    /// Whether `word`, typed among meta's options, gives `option`: one of
+    /// its spellings (`--depth=2` too), or a cluster of short options
+    /// holding it (`-rv`) before one that takes a value.
+    fn names(&self, option: &MetaOption, word: &str) -> bool {
+        let spelling = word.split('=').next().unwrap_or(word);
+        if option.spellings.iter().any(|s| s == spelling) {
+            return true;
+        }
+        let Some(shorts) = word.strip_prefix('-').filter(|s| !s.starts_with('-')) else {
+            return false;
+        };
+        for short in shorts.chars() {
+            let short = format!("-{short}");
+            if option.spellings.contains(&short) {
+                return true;
+            }
+            let valued = self
+                .options
+                .iter()
+                .any(|o| o.takes_value && o.spellings.contains(&short));
+            if valued {
+                return false;
+            }
+        }
+        false
     }
 }
 

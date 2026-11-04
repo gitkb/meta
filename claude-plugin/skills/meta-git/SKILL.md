@@ -94,7 +94,7 @@ meta git log --oneline -5
 
 ## Filtering
 
-Target specific repos, with meta's options before `git`. `--tag` selects the tagged repos, never the meta root (add it with `--include .`); `--include`/`--exclude` take whole repos (a `.meta.yaml` name or the path from the workspace root, `.` for the root), never part of a path. A value or tag that names nothing is an error.
+Target specific repos, with meta's options before `git`. `--tag` selects the tagged repos, never the meta root (add it with `--include .`); `--include`/`--exclude` take whole repos (a `.meta.yaml` name or the path from the nearest `.meta.yaml`, with `-r` or `-A` from the workspace root; `.` for that root), never part of a path. A value or tag that names nothing is an error.
 
 ```bash
 # By tag (-r: the tags of nested meta repos' projects too)

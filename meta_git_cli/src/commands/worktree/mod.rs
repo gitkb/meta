@@ -81,32 +81,6 @@ pub fn execute_worktree_command(
             ));
         }
     }
-    // create's and exec's own --all became --every-repo: meta's --all
-    // (-A) before the command is the whole workspace, not every repo here;
-    // with no --repo, it is the old --all that was meant
-    let words = || clap_args.iter().take_while(|a| *a != "--");
-    let all = |a: &String| a == "--all" || a == "-A";
-    if matches!(subcommand, Some("create" | "exec"))
-        && words().any(all)
-        && !words().any(|a| a == "--repo" || a.starts_with("--repo="))
-    {
-        let line: Vec<String> = std::iter::once("meta".to_string())
-            .chain(options.meta_options.typed.iter().cloned())
-            .chain(["git".to_string(), "worktree".to_string()])
-            .chain(clap_args.iter().enumerate().map(|(i, a)| {
-                let before = clap_args.iter().take(i).all(|w| w != "--");
-                match before && all(a) {
-                    true => "--every-repo".to_string(),
-                    false => a.clone(),
-                }
-            }))
-            .collect();
-        return CommandResult::Usage(format!(
-            "-A (--all) is meta's own option, the whole workspace, and goes before the command; \
-             every repo meta reaches is --every-repo, as in {}",
-            escape(&meta_core::display::display_command(&line))
-        ));
-    }
     // They find their repos in the set; exec applies meta's selection to
     // the set's members
     let exec = subcommand == Some("exec");
@@ -126,6 +100,46 @@ pub fn execute_worktree_command(
     } else {
         "worktree"
     };
+    // create's and exec's own --all became --every-repo: meta's --all
+    // (-A) before the command is the whole workspace, not every repo here;
+    // with no --repo, it is the old --all that was meant. The line with
+    // --every-repo is checked as any other (another option of meta's after
+    // the command moves too).
+    let words = || clap_args.iter().take_while(|a| *a != "--");
+    let all = |a: &String| a == "--all" || a == "-A";
+    if matches!(subcommand, Some("create" | "exec"))
+        && words().any(all)
+        && !words().any(|a| a == "--repo" || a.starts_with("--repo="))
+    {
+        let every: Vec<String> = clap_args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let before = clap_args.iter().take(i).all(|w| w != "--");
+                match before && all(a) {
+                    true => "--every-repo".to_string(),
+                    false => a.clone(),
+                }
+            })
+            .collect();
+        let said = "-A (--all) is meta's own option, the whole workspace, and goes before the \
+                    command; every repo meta reaches is --every-repo";
+        return match meta_plugin_protocol::parse_args::<WorktreeParser>(name, &every, &meta) {
+            Err(CommandResult::Usage(why)) => CommandResult::Usage(format!("{said}.\n\n{why}")),
+            Err(other) => other,
+            Ok(_) => {
+                let line: Vec<String> = std::iter::once("meta".to_string())
+                    .chain(options.meta_options.typed.iter().cloned())
+                    .chain(name.split(' ').map(str::to_string))
+                    .chain(every)
+                    .collect();
+                CommandResult::Usage(format!(
+                    "{said}, as in {}",
+                    escape(&meta_core::display::display_command(&line))
+                ))
+            }
+        };
+    }
     match meta_plugin_protocol::parse_args::<WorktreeParser>(name, &clap_args, &meta) {
         Ok(parsed) => match handle_worktree_command(parsed.command, options, cwd) {
             Ok(()) => CommandResult::Message(String::new()),

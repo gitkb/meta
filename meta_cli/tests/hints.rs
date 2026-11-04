@@ -191,10 +191,14 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
             &["project", "list", "--json", "-r"],
             &["--json", "-r", "project", "list"],
         ),
-        // typed before it too: said once
+        // typed before it too: said once, in a cluster too
         (
             &["--verbose", "project", "list", "--verbose"],
             &["--verbose", "project", "list"],
+        ),
+        (
+            &["-rs", "project", "list", "--recursive"],
+            &["-rs", "project", "list"],
         ),
         (
             &["project", "check", "--include", "api"],
@@ -255,6 +259,8 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
         &["git", "worktree", "create", "t", "--tag", "backend"],
         &["git", "clone", url, "d", "--exclude", "api"],
         &["exec", "--parallel", "8", "--", "pwd"],
+        // two values for one that takes one: which was meant can't be told
+        &["--depth", "1", "project", "list", "--depth", "2"],
         &["git", "clone", url, "d", "--depth", "5", "--typo"],
     ] {
         let out = workspace.meta(typed);
@@ -381,6 +387,14 @@ fn meta_owned_commands_take_no_copy_of_meta_options() {
     assert_eq!(
         tip_line(&out),
         ["git", "worktree", "create", "e", "--every-repo"],
+        "{}",
+        text(&out)
+    );
+    // and another of meta's after it moves too
+    let out = workspace.meta(&["git", "worktree", "create", "e", "--all", "--json"]);
+    assert_eq!(
+        tip_line(&out),
+        ["--json", "git", "worktree", "create", "e", "--every-repo"],
         "{}",
         text(&out)
     );

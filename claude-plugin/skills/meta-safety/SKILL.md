@@ -15,7 +15,7 @@ Multi-repo workspaces are powerful but require awareness. Meta gives you precisi
 
 ## Precision Operations
 
-Instead of cd-ing into repos one by one, use meta flags to target what you need. Include/exclude take whole repos (a `.meta.yaml` name or the path from the workspace root), never part of a path, and a value that names no repo is an error; `--tag` selects only the tagged repos, never the meta root (`--include .` adds it):
+Instead of cd-ing into repos one by one, use meta flags to target what you need. Include/exclude take whole repos (a `.meta.yaml` name or the path from the nearest `.meta.yaml`, with `-r` or `-A` from the workspace root), never part of a path, and a value that names no repo is an error; `--tag` selects only the tagged repos, never the meta root (`--include .` adds it):
 
 ```bash
 # Target specific repos
@@ -65,7 +65,7 @@ The `meta_query_repos` MCP tool filters repos by state:
 
 ## Global Strict Mode
 
-Use `meta --strict` to turn worktree warnings into errors for CI/automation. It applies to the `meta git worktree` checks listed below, not to `meta exec`. It is not a transaction: repos already changed before the error stay changed.
+Use `meta --strict` to turn worktree warnings into errors for CI/automation. It applies to the `meta git worktree` checks listed below (and `meta --strict git worktree list` and `status` fail on what they can't read), and to `meta git` commands, where a project that isn't cloned fails the command; not to `meta exec`. It is not a transaction: repos already changed before the error stay changed.
 
 ```bash
 meta --strict git worktree create feature-test v2.0.0 --every-repo

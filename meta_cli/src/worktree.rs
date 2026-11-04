@@ -531,14 +531,22 @@ fn add_member(
             .to_string_lossy()
             .to_string(),
         path: dir.to_path_buf(),
-        source_path: source,
+        source_path: source.clone(),
     });
-    // a config that can't be read lists none (the strict scan says why)
-    let projects = meta_core::config::Workspace::in_dir(dir)
-        .ok()
-        .flatten()
-        .map(|workspace| workspace.projects)
-        .unwrap_or_default();
+    // the projects of its .meta.yaml as checked out, and of its source's as
+    // it is on disk, which create planned from (a config that can't be read
+    // lists none: the strict scan says why)
+    let listed = |checkout: &Path| {
+        meta_core::config::Workspace::in_dir(checkout)
+            .ok()
+            .flatten()
+            .map(|workspace| workspace.projects)
+            .unwrap_or_default()
+    };
+    let mut projects = listed(dir);
+    projects.extend(listed(&source));
+    projects.sort_by(|a, b| a.path.cmp(&b.path));
+    projects.dedup_by(|a, b| a.path == b.path);
     for project in projects {
         let place = Path::new(&project.path);
         // a project outside the checkout is no repo nested in it
@@ -789,7 +797,10 @@ mod recursive_tests {
         for alias in [".", "parent", "parent/nested"] {
             member(&sandbox, &root, alias);
         }
-        std::fs::write(root.join("parent/.meta.yaml"), "projects:\n  nested: u\n").unwrap();
+        // listed by the source's .meta.yaml on disk (create plans from it),
+        // though not by the one checked out in the set
+        let source = source_repo(&root.join("parent")).unwrap();
+        std::fs::write(source.join(".meta.yaml"), "projects:\n  nested: u\n").unwrap();
         let (name, observed_root, paths) = detect_worktree_context(&root.join("parent/nested"))
             .unwrap()
             .unwrap();

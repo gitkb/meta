@@ -95,7 +95,7 @@ struct Cli {
     #[arg(
         long,
         short = 'A',
-        help = "The whole workspace, from its outermost .meta.yaml, wherever you are (in a worktree set: the whole set)"
+        help = "The whole workspace, from its outermost .meta.yaml, wherever you are (inside a worktree set: no wider than the set)"
     )]
     all: bool,
 

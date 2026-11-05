@@ -394,6 +394,28 @@ fn help_with_plugins(plugins: &SubprocessPluginManager) -> String {
 /// ends meta names.
 static COMMAND: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
+/// The words of meta's own command typed after meta's options (`project
+/// dependents`, `plugin install`), each by its name (an alias by the command
+/// it stands for), as far as they name commands; empty when the first word
+/// is no command of meta's.
+fn typed_command() -> String {
+    let typed: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let skip = meta_options().typed.len();
+    let mut command = Cli::command();
+    let mut words = Vec::new();
+    for word in typed.iter().skip(skip) {
+        let Some(sub) = command.find_subcommand(word).cloned() else {
+            break;
+        };
+        words.push(sub.get_name().to_string());
+        command = sub;
+    }
+    words.join(" ")
+}
+
 /// The command being run is `name` (the Envelope of an error names it).
 pub fn running(name: &str) {
     if let Ok(mut command) = COMMAND.lock() {
@@ -489,10 +511,14 @@ fn run_cli() -> Result<()> {
             let plugins = SubprocessPluginManager::new(false)?;
             return Ok(out!("{}", help_with_plugins(&plugins))?);
         }
-        Err(e) => match project::usage_error(&e) {
-            Some(error) => return Err(error),
-            None => meta_plugin::args::parse()?,
-        },
+        Err(e) => {
+            // the Envelope of a usage error names the command it is about
+            running(&typed_command());
+            match project::usage_error(&e) {
+                Some(error) => return Err(error),
+                None => meta_plugin::args::parse()?,
+            }
+        }
     };
     // the stream is JSON too: every command reads `json` for it, and only
     // the printing tells the two apart

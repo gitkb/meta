@@ -393,6 +393,7 @@ J
 }
 
 @test "project check checks only the projects a filter selects" {
+    bats_require_minimum_version 1.5.0
     cat > "$TEST_DIR/.meta.yaml" <<'YAML'
 projects:
   frontend:
@@ -412,6 +413,10 @@ YAML
     run "$META_BIN" --tag api project dependents frontend
     [ "$status" -ne 0 ]
     [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
+    # a usage error's envelope names the command it is about
+    run --separate-stderr "$META_BIN" --json project dependents
+    [ "$status" -eq 2 ]
+    [ "$(jq -r '.command + " " + .error.code' <<<"$output")" = "project dependents usage" ]
 }
 
 # root (frontend backend shared, platform) > platform (api, infra) > infra (tf)

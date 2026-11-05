@@ -92,6 +92,8 @@ impl Channel {
     /// The events, once the plugin ended: what is left is read first.
     pub fn finish(self) -> Received {
         self.ended.store(true, Ordering::Release);
+        // it may be waiting for more: wake it now
+        self.reader.thread().unpark();
         self.reader.join().unwrap_or_else(|_| Received {
             problem: Some("meta's reader of its events failed".to_string()),
             ..Received::default()
@@ -148,7 +150,7 @@ fn read(mut file: std::fs::File, ended: &AtomicBool, how: Show) -> Received {
         if finished {
             break;
         }
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::park_timeout(Duration::from_millis(10));
     }
     if !pending.is_empty() {
         received

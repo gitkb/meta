@@ -61,6 +61,7 @@ fn projects(repos: &[Candidate], root: &Path) -> Vec<Project> {
                     .map(|r| r.raw().to_string()),
                 tags: repo.tags().to_vec(),
                 depends_on: info.map(|i| i.depends_on.clone()).unwrap_or_default(),
+                dependency_problems: Vec::new(),
                 meta: info.is_some_and(|i| i.meta),
                 level: None,
                 present: repo.dir.exists(),
@@ -86,7 +87,16 @@ fn projects(repos: &[Candidate], root: &Path) -> Vec<Project> {
 
 /// The workspace of `config` as a plugin is told it: its repos are
 /// `members`, named from `root`.
-fn workspace(config: &Config, root: &Path, members: &[Candidate]) -> meta_plugin::Workspace {
+fn workspace(
+    config: &Config,
+    root: &Path,
+    members: &[Candidate],
+    reach: Option<&Reach>,
+) -> meta_plugin::Workspace {
+    let mut members = projects(members, root);
+    if let Some(reach) = reach {
+        resolve_dependencies(reach, root, &mut members);
+    }
     let owner = worktree::Configs::of(config.clone())
         .map(|configs| configs.owner)
         .unwrap_or_else(|_| config.clone());
@@ -95,7 +105,7 @@ fn workspace(config: &Config, root: &Path, members: &[Candidate]) -> meta_plugin
         root: root.to_path_buf(),
         config: config.config_path.clone(),
         listed_root: config::listed_root(&config.dir),
-        members: projects(members, root),
+        members,
         worktree: meta_plugin::Worktree {
             dir: sets_dir.as_ref().ok().cloned(),
             // refused here, the worktree commands say why
@@ -108,6 +118,91 @@ fn workspace(config: &Config, root: &Path, members: &[Candidate]) -> meta_plugin
                 .collect(),
             home: Some(owner.dir.clone()),
         },
+    }
+}
+
+/// Resolve the `depends_on` of `members` (named from `root`) within
+/// `reach`, as `meta git worktree create` follows them: by name among the
+/// config's own projects, or with `-r`/`-A` by place through the whole tree
+/// it walks (an entry qualified with the place of the meta repo that lists
+/// it), through what a project provides too. A member outside the reach
+/// keeps its entries as written.
+fn resolve_dependencies(reach: &Reach, root: &Path, members: &mut [Project]) {
+    use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
+    let repos = reach.scope().repos;
+    let flat = reach.tree.is_empty();
+    // each project of the reach: its folder, its key in the graph, its info
+    let keyed: Vec<(PathBuf, String, &config::ProjectInfo)> = repos
+        .iter()
+        .filter_map(|repo| {
+            let info = repo.info.as_ref()?;
+            let key = match flat {
+                true => info.name.clone(),
+                false => repo_path(&repo.dir, root),
+            };
+            Some((repo.dir.clone(), key, info))
+        })
+        .collect();
+    let keys: std::collections::HashSet<&str> = keyed.iter().map(|(_, k, _)| k.as_str()).collect();
+    let mut nodes: Vec<ProjectDependencies> = keyed
+        .iter()
+        .map(|(_, key, info)| {
+            // "open-source/gitkb/core" listed as "core": "open-source/gitkb/"
+            let prefix = match flat {
+                true => "",
+                false => key
+                    .strip_suffix(info.path.as_str())
+                    .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
+                    .unwrap_or(""),
+            };
+            let qualify = |name: &String| match keys.contains(name.as_str()) || name == "." {
+                true => name.clone(),
+                false => format!("{prefix}{name}"),
+            };
+            ProjectDependencies {
+                name: key.clone(),
+                path: key.clone(),
+                repo: info.repo.clone(),
+                tags: info.tags.clone(),
+                provides: info.provides.iter().map(qualify).collect(),
+                depends_on: info.depends_on.iter().map(qualify).collect(),
+            }
+        })
+        .collect();
+    // in the order of the keys, so a run picks the provider the last did
+    nodes.sort_by(|a, b| a.name.cmp(&b.name));
+    let graph = DependencyGraph::build(nodes);
+    let path_of = |key: &str| {
+        keyed
+            .iter()
+            .find(|(_, k, _)| k == key)
+            .map(|(dir, _, _)| repo_path(dir, root))
+    };
+    for member in members.iter_mut() {
+        let Some((_, key, _)) = keyed.iter().find(|(dir, _, _)| *dir == member.abs) else {
+            continue;
+        };
+        let resolved = graph.get_dependencies(key);
+        let problems = graph.problems_of(key);
+        // the resolved ones, then those that name nothing, as qualified
+        let unresolved = problems.iter().filter_map(|p| match p {
+            meta_core::dependency_graph::DependencyProblem::Unresolved(dep) => Some(dep.clone()),
+            _ => None,
+        });
+        member.depends_on = resolved
+            .iter()
+            .filter_map(|dep| path_of(dep))
+            .chain(unresolved)
+            .collect();
+        member.dependency_problems = problems
+            .iter()
+            .map(|problem| match problem {
+                meta_core::dependency_graph::DependencyProblem::Unresolved(_) if flat => {
+                    format!("{problem} (nested projects count with -r)")
+                }
+                _ => problem.to_string(),
+            })
+            .collect();
     }
 }
 
@@ -174,7 +269,7 @@ fn target_with(
         false => Some(0),
     };
     Ok(Target {
-        workspace: Some(workspace(&reach.workspace, &root, &members)),
+        workspace: Some(workspace(&reach.workspace, &root, &members, Some(&reach))),
         repos,
         parallel,
         root: reach.root,
@@ -250,7 +345,10 @@ fn in_set(
     };
     Ok(Some(Target {
         parallel: parallel(config.as_ref()),
-        workspace: config.as_ref().map(|c| workspace(c, set_dir, &all)),
+        workspace: config.as_ref().map(|c| {
+            let reach = Reach::of(c.clone(), cli.recursive, cli.all, cli.depth).ok();
+            workspace(c, set_dir, &all, reach.as_ref())
+        }),
         set: Some(set),
         root: set_dir.to_path_buf(),
         repos,

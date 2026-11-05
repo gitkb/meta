@@ -17,9 +17,8 @@ path = "src/lib.rs"
 
 [dependencies]
 tempfile.workspace = true
-meta_plugin = { workspace = true, features = ["parse", "sets"] }
+meta_plugin = { workspace = true, features = ["parse", "sets", "client"] }
 meta_core.workspace = true
-loop_lib.workspace = true
 clap = { workspace = true, features = ["derive"] }
 anyhow.workspace = true
 serde.workspace = true
@@ -31,6 +30,7 @@ log.workspace = true
 colored.workspace = true
 indexmap.workspace = true
 dirs.workspace = true
+walkdir = "2.3"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process", "termios"] }

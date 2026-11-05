@@ -140,7 +140,10 @@ pub(crate) fn execute(steps: Steps, ctx: &Ctx, request: &Request) -> anyhow::Res
     let meta_depth = request.depth;
     let workspace = update::workspace(request, steps.command(), "")?;
     let root = workspace.dir.as_path();
-    let mut queue = CloneQueue::new(None, meta_depth, false);
+    // the workspace's own projects as --config lists them, and those its
+    // default config lists counted as listed too
+    let config = request.workspace()?.config.clone();
+    let mut queue = CloneQueue::new(None, meta_depth, false).config(root, &config);
     // a selection that leaves out a project the workspace has: only those
     if filtered(request) {
         queue = queue.only(request.projects.iter().map(|p| p.abs.clone()));
@@ -158,10 +161,7 @@ pub(crate) fn execute(steps: Steps, ctx: &Ctx, request: &Request) -> anyhow::Res
         Ok(())
     };
     // records name each repo by its path from the workspace root, as meta does
-    let named = request
-        .workspace
-        .as_ref()
-        .map_or(root, |w| w.root.as_path());
+    let named = update::named(request, root);
     let project = |path: &Path| match path.strip_prefix(named) {
         Ok(inside) if inside.as_os_str().is_empty() => ".".to_string(),
         Ok(inside) => inside.to_string_lossy().into_owned(),
@@ -196,7 +196,10 @@ pub(crate) fn execute(steps: Steps, ctx: &Ctx, request: &Request) -> anyhow::Res
         for task in &tasks {
             let argv = crate::clone_worker::git_argv(task, None, |url| url.to_string().into());
             let argv: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into()).collect();
-            say(format!("  {}", escape(&loop_lib::display_command(&argv))))?;
+            say(format!(
+                "  {}",
+                escape(&meta_plugin::display::display_command(&argv))
+            ))?;
             records.push(record(&task.target_path, "cloned", None));
         }
     } else if !tasks.is_empty() {
@@ -218,12 +221,11 @@ pub(crate) fn execute(steps: Steps, ctx: &Ctx, request: &Request) -> anyhow::Res
                 .map(|path| record(path, "cloned", None)),
         );
     }
-    records.extend(
-        outcome
-            .failures
-            .iter()
-            .map(|failure| record(&failure.path, "failed", Some(failure.error.clone()))),
-    );
+    // each with git's stderr, as `meta --json exec` gives a failed step's
+    records.extend(outcome.failures.iter().map(|failure| ProjectResult {
+        stderr: Some(failure.error.clone()),
+        ..record(&failure.path, "failed", Some(failure.error.clone()))
+    }));
     records.extend(outcome.refused.iter().map(|(_, path, why)| {
         record(
             path,
@@ -308,13 +310,13 @@ pub(crate) fn execute(steps: Steps, ctx: &Ctx, request: &Request) -> anyhow::Res
 /// `--include`, `--exclude` or `--tag`): then only the selected ones are
 /// cloned, and none the new clones list.
 fn filtered(request: &Request) -> bool {
-    let Some(workspace) = &request.workspace else {
+    let Some(here) = crate::here::Here::of(request) else {
         return false;
     };
-    workspace
-        .members
-        .iter()
-        .any(|member| !request.projects.iter().any(|p| p.abs == member.abs))
+    // the projects meta's -r, -A and --depth reach, which it selected from
+    here.tree()
+        .within(request.depth)
+        .any(|node| !request.projects.iter().any(|p| p.abs == node.project.abs))
 }
 
 /// Clone the projects at `dirs` that the `.meta.yaml` files of `workspace`
@@ -322,7 +324,7 @@ fn filtered(request: &Request) -> bool {
 /// `clone-missing` does, for `command` (`git worktree create`). The folders
 /// it cloned, or the error naming each clone that failed.
 pub(crate) fn clone_dirs(
-    workspace: &meta_core::config::Workspace,
+    workspace: &crate::here::Listing,
     dirs: &[PathBuf],
     command: &str,
 ) -> anyhow::Result<Result<Vec<PathBuf>, String>> {

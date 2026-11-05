@@ -41,6 +41,10 @@ pub const DEPTH_VAR: &str = "META_DEPTH";
 pub const MAX_DEPTH: u32 = 8;
 /// The most a call's Envelope may hold: a bigger one is refused, not cut.
 pub const MAX_ENVELOPE: u64 = 64 << 20;
+/// The flag a plugin built with [`crate::run_plugin`] answers by waiting for
+/// its stdin to close, then running the command after it (see
+/// [`Meta::finishing`]).
+pub const FINISH_FLAG: &str = "--meta-plugin-finish";
 
 /// How many meta calls are around this program (0 when none).
 pub fn depth() -> Result<u32> {
@@ -61,6 +65,7 @@ pub struct Meta {
     cwd: Option<PathBuf>,
     args: Vec<OsString>,
     lease: Option<String>,
+    env: Vec<(OsString, OsString)>,
 }
 
 impl Meta {
@@ -90,6 +95,7 @@ impl Meta {
             cwd: None,
             args: Vec::new(),
             lease: None,
+            env: Vec::new(),
         })
     }
 
@@ -107,6 +113,12 @@ impl Meta {
         S: Into<OsString>,
     {
         self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
+    /// Set the variable `key` to `value` for it (`META_WORKTREES`, say).
+    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.env.push((key.into(), value.into()));
         self
     }
 
@@ -129,6 +141,7 @@ impl Meta {
         }
         command
             .args(&self.args)
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
             .env(DEPTH_VAR, self.depth.to_string());
         match &self.lease {
             Some(token) => command.env(crate::LEASE_VAR, token),
@@ -168,6 +181,86 @@ impl Meta {
         crate::process::spawn_group(&mut command)
             .and_then(|mut child| child.wait())
             .with_context(|| format!("Cannot run {}", escape_path(&self.exe)))
+    }
+}
+
+impl Meta {
+    /// Start it now, to run once this program has ended, however it ends
+    /// (a Ctrl-C, SIGTERM, even SIGKILL), or once [`Finishing::run`] says
+    /// so: cleanup that must finish, such as removing what a cancelled
+    /// command made. A copy of this program (it must be built with
+    /// [`crate::run_plugin`]) waits, out of reach of every stop
+    /// ([`crate::process::spawn_finishing`]), until this program's end of
+    /// its stdin closes, then runs the command, its output this program's.
+    pub fn finishing(self) -> Result<Finishing> {
+        use std::process::Stdio;
+        let waiter = std::env::current_exe().context("Cannot tell which program this is")?;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "this program itself, which runs meta, with no repository's git env"
+        )]
+        let mut command = Command::new(&waiter);
+        crate::process::clean_env(&mut command);
+        command
+            .arg(FINISH_FLAG)
+            .arg(&self.exe)
+            .args(&self.args)
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .env(DEPTH_VAR, self.depth.to_string())
+            .stdin(Stdio::piped());
+        match &self.lease {
+            Some(token) => command.env(crate::LEASE_VAR, token),
+            None => command.env_remove(crate::LEASE_VAR),
+        };
+        if let Some(dir) = &self.cwd {
+            command.current_dir(dir);
+        }
+        let mut child = crate::process::spawn_finishing(&mut command)
+            .with_context(|| format!("Cannot start {}", escape_path(&waiter)))?;
+        let stdin = child.stdin();
+        Ok(Finishing { child, stdin })
+    }
+}
+
+/// A command waiting to run once this program ends (see [`Meta::finishing`]).
+pub struct Finishing {
+    child: crate::process::Owned,
+    /// Held open until it is time: closed, the command runs
+    stdin: Option<std::process::ChildStdin>,
+}
+
+impl Finishing {
+    /// Run it now and wait for it: its exit status. A stop that comes
+    /// meanwhile ends this program, not the command.
+    pub fn run(mut self) -> Result<ExitStatus> {
+        drop(self.stdin.take());
+        self.child.wait().context("Cannot wait for meta")
+    }
+}
+
+/// The waiter of [`Meta::finishing`]: wait for stdin to close, then run the
+/// command `args` names (a program, then its arguments) and end as it ends.
+pub(crate) fn finish(args: &[std::ffi::OsString]) -> Result<()> {
+    let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+    let Some((program, args)) = args.split_first() else {
+        anyhow::bail!("{FINISH_FLAG} takes the command to run");
+    };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "meta, which its caller named, with the env it was given"
+    )]
+    let mut command = Command::new(program);
+    command.args(args).stdin(std::process::Stdio::null());
+    // the lease its caller passed on is the command's (a child doesn't get
+    // one unless given it)
+    if let Some(token) = std::env::var_os(crate::LEASE_VAR) {
+        command.env(crate::LEASE_VAR, token);
+    }
+    let status = crate::process::status(&mut command)
+        .with_context(|| format!("Cannot run {}", escape_path(std::path::Path::new(program))))?;
+    match status.success() {
+        true => Ok(()),
+        false => Err(crate::exit::ExitWith::of(status).into()),
     }
 }
 
@@ -268,6 +361,7 @@ mod tests {
             cwd: Some(PathBuf::from("/w")),
             args: vec!["exec".into()],
             lease: None,
+            env: Vec::new(),
         };
         let envs = |command: &Command| -> Vec<(String, Option<String>)> {
             command

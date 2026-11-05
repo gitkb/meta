@@ -8,6 +8,7 @@ pub mod helpers;
 pub mod hooks;
 pub mod plan;
 pub mod safety;
+pub mod scan;
 pub mod ttl;
 pub mod types;
 pub mod workspace;

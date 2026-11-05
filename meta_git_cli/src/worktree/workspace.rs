@@ -6,7 +6,8 @@
 //! workspace) doesn't change that.
 
 use meta_plugin::display::escape_path;
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::safety::{relative_label, RemovalCheck};
@@ -24,28 +25,32 @@ pub struct Workspace {
     git_dirs: HashSet<PathBuf>,
     /// `root`, resolved, to compare other workspaces' roots with.
     canonical_root: PathBuf,
+    /// The root of each meta directory asked about, resolved (`None`: it
+    /// can't be told)
+    roots: RefCell<HashMap<PathBuf, Option<PathBuf>>>,
 }
 
 impl Workspace {
-    /// The workspace `here` belongs to (see
-    /// [`meta_core::config::workspace_root`]); `here`'s config, already
-    /// loaded, when it is the root.
-    pub fn of(here: &meta_core::config::Workspace) -> anyhow::Result<Workspace> {
-        let root = meta_core::config::workspace_root(&here.dir)?;
-        let mut paths = vec![root.clone()];
-        let mut unreadable = Vec::new();
-        let tree = match root == here.dir {
-            true => meta_core::config::walk_projects(&here.dir, &here.projects, None),
-            false => meta_core::config::walk_meta_tree(&root, None),
-        };
-        match tree {
-            Ok(tree) => paths.extend(
-                meta_core::config::build_project_map(&tree, &root, "")
-                    .into_values()
-                    .map(|(path, _)| path),
+    /// The workspace `home` (the folder whose sets these are) belongs to,
+    /// from its outermost config, as meta reads the configs (`meta -A
+    /// project list` there).
+    pub fn of(home: &Path) -> anyhow::Result<Workspace> {
+        let (paths, mut unreadable) = match crate::here::whole_tree(home) {
+            Ok((paths, unreadable)) => (
+                paths,
+                unreadable
+                    .into_iter()
+                    .map(|(path, why)| (path, anyhow::anyhow!("{why}")))
+                    .collect(),
             ),
-            Err(e) => unreadable.push((root.clone(), e)),
-        }
+            Err(e) => (Vec::new(), vec![(home.to_path_buf(), e)]),
+        };
+        // a folder with no config of its own is a workspace of itself alone
+        let root = paths.first().cloned().unwrap_or_else(|| home.to_path_buf());
+        let paths = match paths.is_empty() {
+            true => vec![root.clone()],
+            false => paths,
+        };
         let mut repos = Vec::new();
         for path in paths {
             match meta_core::gitdir::common_dir(&path) {
@@ -64,6 +69,7 @@ impl Workspace {
             repos,
             unreadable,
             git_dirs,
+            roots: RefCell::new(HashMap::new()),
         })
     }
 
@@ -82,10 +88,23 @@ impl Workspace {
     /// its sets of unknown ownership: not this workspace's, and so does
     /// one whose workspace can't be told.
     pub fn made_here(&self, project: &Path) -> bool {
-        let Ok(root) = meta_core::config::workspace_root(project) else {
+        if !project.exists() {
             return false;
-        };
-        project.exists() && root.canonicalize().unwrap_or(root) == self.canonical_root
+        }
+        let root = self
+            .roots
+            .borrow_mut()
+            .entry(project.to_path_buf())
+            .or_insert_with(|| {
+                let (paths, _) = crate::here::whole_tree(project).ok()?;
+                let root = paths
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| project.to_path_buf());
+                Some(root.canonicalize().unwrap_or(root))
+            })
+            .clone();
+        root.as_ref() == Some(&self.canonical_root)
     }
 
     /// The worktrees of the set at `wt_dir` (checked as `check`) that come

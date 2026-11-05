@@ -914,7 +914,6 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "tempfile",
- "walkdir",
 ]
 
 [[package]]
@@ -929,7 +928,6 @@ dependencies = [
  "indexmap",
  "indicatif",
  "log",
- "loop_lib",
  "meta_core",
  "meta_plugin",
  "rayon",
@@ -939,6 +937,7 @@ dependencies = [
  "serde_json",
  "shlex",
  "tempfile",
+ "walkdir",
 ]
 
 [[package]]

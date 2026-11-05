@@ -7,8 +7,8 @@ use rayon::prelude::*;
 
 use crate::worktree::git_ops::repo_status;
 use crate::worktree::helpers::resolve_existing_worktree;
+use crate::worktree::scan::WorktreeMemberInfo;
 use crate::worktree::types::*;
-use meta_core::worktree::WorktreeMemberInfo;
 
 use super::cli_types::StatusArgs;
 
@@ -16,14 +16,13 @@ use super::cli_types::StatusArgs;
 /// Its record: the set's status.
 pub(crate) fn handle_status(args: StatusArgs, ctx: &Ctx, request: &Request) -> Result<Response> {
     let name = &args.name;
-    let configs = super::configs(request)?;
-    let owner = configs.as_ref().map(|c| &c.owner);
-    let wt_dir = resolve_existing_worktree(name, owner, &request.cwd)?;
+    let wt_dir = resolve_existing_worktree(name, request)?;
     // Membership without git; then one status per repo
     let members = if args.strict {
-        meta_core::worktree::discover_worktree_members_strict(&wt_dir)?
+        crate::worktree::scan::discover_worktree_members_strict(&wt_dir)?
     } else {
-        meta_core::worktree::discover_worktree_members(&wt_dir)?
+        let places = crate::worktree::helpers::places(request);
+        crate::worktree::scan::discover_worktree_members(&wt_dir, &places)?
     };
     anyhow::ensure!(
         !members.is_empty(),
@@ -134,7 +133,8 @@ fn missing_members(wt_dir: &std::path::Path, members: &[WorktreeMemberInfo]) -> 
     let Some(made) = record::find(wt_dir, members.iter().map(|m| &m.path)) else {
         return Vec::new();
     };
-    let Ok(Some(workspace)) = meta_core::config::Workspace::in_dir(&made.project) else {
+    // what the config of the workspace that made it lists, as meta reads it
+    let Ok(Some(workspace)) = crate::here::Listing::of(&made.project, None) else {
         return Vec::new();
     };
     let projects = std::iter::once((".".to_string(), made.project.clone())).chain(

@@ -51,7 +51,7 @@ pub(crate) fn execute_git_commit(args: CommitArgs, request: &Request) -> anyhow:
 
     if use_editor {
         // Open editor for per-repo messages (interactive, cannot use ExecutionPlan)
-        execute_editor_commit(&repos_with_changes, request.meta.mode())?;
+        execute_editor_commit(&repos_with_changes, request.meta.mode(), &request.data_dir)?;
     } else if let Some(msg) = message {
         // Apply same message to all repos: a plan, which meta previews
         let steps = repos_with_changes
@@ -103,6 +103,7 @@ fn staged_files(path: &std::path::Path) -> anyhow::Result<Vec<String>> {
 fn execute_editor_commit(
     repos: &[(String, String, Vec<String>)],
     mode: meta_plugin::ExecutionMode,
+    data_dir: &std::path::Path,
 ) -> anyhow::Result<()> {
     use std::io::Write;
 
@@ -162,9 +163,9 @@ fn execute_editor_commit(
     }
 
     // Write to a new temp file (created exclusively, mode 0600, removed on
-    // drop) in meta's private data dir, never in a shared directory like /tmp;
-    // named absolutely, as the editor runs in the repo
-    let dir = std::path::absolute(meta_core::data_dir::data_subdir("tmp")?)?;
+    // drop) in the plugin's private data dir meta made, never in a shared
+    // directory like /tmp; named absolutely, as the editor runs in the repo
+    let dir = std::path::absolute(data_dir)?;
     let mut file = tempfile::Builder::new()
         .prefix("META_COMMIT_EDITMSG-")
         .tempfile_in(dir)?;

@@ -14,7 +14,6 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true
-walkdir = "2.3"
 
 [dev-dependencies]
 meta_plugin = { workspace = true, features = ["testing-git"] }

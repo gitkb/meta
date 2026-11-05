@@ -1411,7 +1411,8 @@ EOF
     second="$(sed -n 2p "$LOG" | cut -d' ' -f1)"
     [ "$first" != "$second" ]
     for path in "$first" "$second"; do
-        [[ "$path" == "$META_DATA_DIR/tmp/META_COMMIT_EDITMSG-"* ]]
+        # in meta-git's own data dir, which meta makes private
+        [[ "$path" == "$META_DATA_DIR/data/git/META_COMMIT_EDITMSG-"* ]]
         [ ! -e "$path" ]
     done
     [ "$(grep -c -- ' -rw-------$' "$LOG")" -eq 2 ]

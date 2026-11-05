@@ -8,8 +8,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use meta_core::set_record::{self as record, SetRecord};
-use meta_core::worktree::discover_worktree_members;
-use meta_core::worktree::Configs;
 
 use crate::worktree::hooks::fire_post_prune;
 use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
@@ -141,10 +139,10 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
 
     // Hooks come from the owner: inside a set being pruned, its own config
     // goes with it
-    let cwd = request.cwd.as_path();
-    let configs: Configs = super::workspace_configs(request)?;
-    let workspace = Workspace::of(&configs.here)?;
-    let worktree_root = meta_core::worktree::resolve_worktree_root(Some(&configs.owner), cwd)?;
+    let here = crate::here::Here::need(request)?;
+    let workspace = Workspace::of(&here.home)?;
+    let worktree_root = here.worktrees()?;
+    let places = here.places();
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
     // A set whose lease is held is being created, or is an ephemeral set
     // whose run goes on: prune leaves it. One whose creator is gone without
@@ -231,7 +229,8 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
 
         // The record the set's own worktrees hold decides, not an older one
         // left in a repository; the removal check must see this one again
-        let members = discover_worktree_members(set).unwrap_or_default();
+        let members =
+            crate::worktree::scan::discover_worktree_members(set, &places).unwrap_or_default();
         let record = match record::find(set, members.iter().map(|m| &m.path)) {
             Some(record) => record,
             // None of its worktrees holds a record (or prune can't read
@@ -379,7 +378,7 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
     records.extend(kept.iter().map(|entry| record(entry, "kept")));
     // What was done is reported first: a failing hook doesn't undo it
     let hook = match attempted {
-        true => fire_post_prune(&removed, Some(&configs.owner)),
+        true => fire_post_prune(&removed, Some(&here.workspace.worktree)),
         false => Ok(()),
     };
     // a removal that failed is the error; a failing hook then only warns

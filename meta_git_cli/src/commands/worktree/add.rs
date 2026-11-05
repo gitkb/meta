@@ -4,12 +4,13 @@ use meta_plugin::display::{escape, escape_path};
 use meta_plugin::{errln, outln};
 use meta_plugin::{Ctx, ProjectResult, Request, Response};
 
+use crate::here::Here;
 use crate::worktree::git_ops::{git_worktree_add, worktree_start};
 use crate::worktree::helpers::*;
 use crate::worktree::plan::{Index, PlannedRepo};
+use crate::worktree::scan::discover_worktree_repos;
 use crate::worktree::types::*;
 use meta_core::set_record as record;
-use meta_core::worktree::discover_worktree_repos;
 
 use super::cli_types::AddArgs;
 
@@ -18,7 +19,7 @@ use super::cli_types::AddArgs;
 pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<Response> {
     let (mode, verbose, json) = (request.meta.mode(), request.meta.verbose, request.meta.json);
     let name = &args.name;
-    meta_core::worktree::validate_name(name)?;
+    meta_plugin::sets::validate_name(name)?;
     let from_ref = args.commit_ish.as_deref();
 
     let repo_specs = &args.repos;
@@ -31,11 +32,9 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
         );
     }
 
-    let cwd = request.cwd.as_path();
-    let configs = super::workspace_configs(request)?;
-    let meta_dir = &configs.here.dir;
-    let worktree_root = meta_core::worktree::resolve_worktree_root(Some(&configs.owner), cwd)?;
-    let wt_dir = worktree_root.join(name);
+    let here = Here::need(request)?;
+    let meta_dir = &here.dir;
+    let wt_dir = here.worktrees()?.join(name);
 
     if !wt_dir.exists() {
         anyhow::bail!(
@@ -46,7 +45,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
     }
 
     // Check existing repos in the worktree
-    let existing = discover_worktree_repos(&wt_dir)?;
+    let existing = discover_worktree_repos(&wt_dir, &here.places())?;
 
     // What is added joins the set's record, if meta made the set; one it
     // didn't make stays unrecorded, so `remove` keeps refusing it.
@@ -54,7 +53,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
 
     // Check every repo before adding any: one refused after others were
     // added would leave a set the caller didn't ask for
-    let mut index = Index::new(&configs.here);
+    let index = Index::new(&here);
     // As in create: a meta repo that isn't cloned on the way to a repo asked
     // for is cloned first, and a repo asked for that isn't cloned too
     let wanted: Vec<String> = repo_specs.iter().map(|r| r.alias.clone()).collect();
@@ -70,8 +69,9 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
             )?;
             return Ok(Response::done());
         }
+        // the clones list more: from the top again
         super::create::clone_missing(&index, &parents)?;
-        index = Index::new(&configs.here);
+        return crate::again(ctx, request);
     }
     let mut missing: Vec<PlannedRepo> = Vec::new();
     for spec in repo_specs {

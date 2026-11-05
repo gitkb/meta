@@ -17,9 +17,7 @@ pub(crate) fn handle_diff(args: DiffArgs, ctx: &Ctx, request: &Request) -> Resul
     let name = &args.name;
     let base_ref = &args.base;
 
-    let configs = super::configs(request)?;
-    let owner = configs.as_ref().map(|c| &c.owner);
-    let (_, repos) = discover_and_validate_worktree(name, owner, &request.cwd)?;
+    let (_, repos) = discover_and_validate_worktree(name, request)?;
 
     let diff_entries: Vec<DiffRepoEntry> = repos
         .par_iter()

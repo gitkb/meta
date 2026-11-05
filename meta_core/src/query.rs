@@ -106,7 +106,7 @@ impl Query {
             "branch" => Ok(QueryCondition::Branch(value.to_string())),
             "tag" => Ok(QueryCondition::Tag(value.to_string())),
             "modified_in" | "modified" => {
-                let secs = crate::duration::parse_duration(value)?;
+                let secs = meta_plugin::duration::parse_duration(value)?;
                 Ok(QueryCondition::ModifiedIn(Duration::from_secs(secs)))
             }
             "language" | "lang" => Ok(QueryCondition::Language(value.to_lowercase())),

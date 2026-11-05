@@ -14,7 +14,13 @@ use std::{fs, path::Path};
 /// `recursive`/`all`/`depth` are how meta resolves the workspace and how
 /// deep (meta sends those as `request.depth` and the workspace it found);
 /// the rest are `request.meta`.
-fn request(cwd: &Path, command: &str, args: &[&str], options: &Value) -> Request {
+fn request(
+    cwd: &Path,
+    command: &str,
+    args: &[&str],
+    options: &Value,
+    worktrees: Option<&Path>,
+) -> Request {
     let flag = |name: &str| options[name].as_bool().unwrap_or(false);
     let (recursive, all) = (flag("recursive"), flag("all"));
     let mut request = Request::new(command, cwd);
@@ -39,19 +45,8 @@ fn request(cwd: &Path, command: &str, args: &[&str], options: &Value) -> Request
         true => found.map(|w| w.root().unwrap()),
         false => found,
     };
-    request.workspace = found.map(|w| {
-        let listed_root = meta_core::config::listed_root(&w.dir);
-        meta_plugin::Workspace {
-            root: match recursive && !all {
-                true => listed_root.clone(),
-                false => w.dir.clone(),
-            },
-            config: w.config_path.clone(),
-            listed_root,
-            members: Vec::new(),
-            worktree: Default::default(),
-        }
-    });
+    request.workspace = found.map(|w| as_meta_sends(w, worktrees));
+    request.set = set_of(cwd);
     request.meta = Meta {
         json: flag("json"),
         dry_run: flag("dry_run"),
@@ -60,6 +55,102 @@ fn request(cwd: &Path, command: &str, args: &[&str], options: &Value) -> Request
         ..Meta::default()
     };
     request
+}
+
+/// The workspace `found` as meta sends it: its whole tree (from the
+/// outermost config) as members, and where its sets go (`worktrees`, as
+/// `META_WORKTREES` gives it, else its config's), their hooks and home.
+fn as_meta_sends(
+    found: meta_core::config::Workspace,
+    worktrees: Option<&Path>,
+) -> meta_plugin::Workspace {
+    use meta_core::{config, repo_filter, worktree};
+    let (root, repos) = match repo_filter::Reach::of(found.clone(), true, true, None) {
+        Ok(reach) => (reach.root.clone(), reach.scope().repos),
+        Err(_) => (found.dir.clone(), Vec::new()),
+    };
+    let owner = worktree::Configs::of(found.clone()).map_or_else(|_| found.clone(), |c| c.owner);
+    let members = repos
+        .iter()
+        .map(|repo| {
+            let info = repo.info.as_ref();
+            meta_plugin::Project {
+                name: repo.name().unwrap_or(".").to_string(),
+                path: repo_filter::repo_path(&repo.dir, &root),
+                abs: repo.dir.clone(),
+                repo: info
+                    .and_then(|i| i.repo.as_ref())
+                    .map(|r| r.raw().to_string()),
+                tags: repo.tags().to_vec(),
+                depends_on: info.map(|i| i.depends_on.clone()).unwrap_or_default(),
+                meta: info.is_some_and(|i| i.meta),
+                present: repo.dir.exists(),
+                ..meta_plugin::Project::default()
+            }
+        })
+        .collect();
+    let placed = worktree::resolve_worktree_root(Some(&owner), &found.dir);
+    meta_plugin::Workspace {
+        root,
+        config: found.config_path.clone(),
+        listed_root: config::listed_root(&found.dir),
+        members,
+        worktree: meta_plugin::Worktree {
+            dir: worktrees
+                .map(Path::to_path_buf)
+                .or(placed.as_ref().ok().cloned()),
+            refused: match (worktrees, &placed) {
+                (None, Err(why)) => Some(format!("{why:#}")),
+                _ => None,
+            },
+            hooks: owner
+                .worktree
+                .hooks
+                .iter()
+                .map(|(event, command)| (event.name().to_string(), command.clone()))
+                .collect(),
+            home: Some(owner.dir.clone()),
+        },
+    }
+}
+
+/// The set `cwd` is in, as meta finds it.
+fn set_of(cwd: &Path) -> Option<meta_plugin::Set> {
+    let (name, dir) = meta_core::worktree::detect_worktree_location(cwd).ok()??;
+    Some(meta_plugin::Set {
+        name,
+        dir,
+        members: Vec::new(),
+        provider: "git".to_string(),
+        leased: false,
+    })
+}
+
+/// `cmd` as meta starts a plugin: it can call meta back (the `meta` built
+/// beside it: `cargo build --workspace --bins` first); and the
+/// `META_WORKTREES` set on it, which meta reads for the request.
+fn as_meta_starts(cmd: &mut std::process::Command) -> Option<std::path::PathBuf> {
+    let bin = Path::new(env!("CARGO_BIN_EXE_meta-git")).parent().unwrap();
+    let meta = bin.join(format!("meta{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        meta.is_file(),
+        "{} is not built: cargo build --workspace --bins first",
+        meta.display()
+    );
+    cmd.env(meta_plugin::client::EXE_VAR, meta);
+    // and meta finds this meta-git, as the plugin of `meta git`
+    let path = cmd
+        .get_envs()
+        .find(|(key, _)| *key == "PATH")
+        .and_then(|(_, value)| value.map(std::ffi::OsStr::to_os_string))
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    let paths = std::iter::once(bin.to_path_buf()).chain(std::env::split_paths(&path));
+    cmd.env("PATH", std::env::join_paths(paths).unwrap());
+    cmd.get_envs()
+        .find(|(key, _)| *key == "META_WORKTREES")
+        .and_then(|(_, value)| value)
+        .map(std::path::PathBuf::from)
 }
 
 /// How meta would end: its exit code.
@@ -144,7 +235,8 @@ fn meta_git_with(
     args: &[&str],
     options: Value,
 ) -> Ran {
-    let request = request(cwd, command, args, &options);
+    let worktrees = as_meta_starts(cmd);
+    let request = request(cwd, command, args, &options, worktrees.as_deref());
     ran(call(cmd, &request), request.meta.json)
 }
 

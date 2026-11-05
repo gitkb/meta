@@ -64,11 +64,13 @@ pub mod args;
 #[cfg(feature = "client")]
 pub mod client;
 pub mod display;
+pub mod duration;
 pub mod envelope;
 pub mod event;
 pub mod exit;
 mod mode;
 pub mod out;
+pub mod path;
 #[cfg(feature = "process")]
 pub mod process;
 mod repo_url;
@@ -346,6 +348,7 @@ mod tests {
             repo: Some("git@x:api.git".to_string()),
             tags: vec!["rust".to_string()],
             depends_on: vec!["core".to_string()],
+            dependency_problems: vec![],
             meta: false,
             level: None,
             present: true,

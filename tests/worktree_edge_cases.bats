@@ -804,7 +804,7 @@ add_backend_origin() {
     git -C backend fetch --quiet origin
 }
 
-@test "the git plugin run directly holds worktrees_dir to the config rules" {
+@test "the git plugin run directly with a project as the worktrees dir deletes nothing" {
     cat > "$TEST_DIR/.meta.yaml" <<'J'
 {"projects": {"backend": "git@github.com:org/backend.git"}, "worktrees_dir": "backend"}
 J
@@ -819,7 +819,8 @@ J
 J
     META_REQUEST="$TEST_DIR/request.json" META_RESPONSE="$TEST_DIR/response.json" \
         run "$META_GIT_BIN" --meta-plugin-exec
-    [[ "$(cat "$TEST_DIR/response.json")" == *"Invalid project 'backend'"* ]]
+    # meta-git reads no config: remove's own checks refuse what meta didn't make
+    [[ "$(cat "$TEST_DIR/response.json")" == *"meta has no record of creating a worktree set there"* ]]
     [ -f backend/src/file ]
 }
 
@@ -2051,19 +2052,21 @@ wait_for() {
     [ -d .worktrees/busy/backend ]
 }
 
-@test "prune removes an ephemeral set whose run was stopped" {
+@test "an ephemeral set whose run was stopped is removed all the same" {
     "$META_BIN" git worktree exec --ephemeral eph-stopped --repo backend -- \
         sh -c 'touch "$0/started"; sleep 30' "$TEST_DIR" &
     local pid=$!
     wait_for "$TEST_DIR/started"
     kill -TERM "$pid"
     wait "$pid" || true
-    [ -d .worktrees/eph-stopped/backend ]
+    # its removal was armed before the run: it finishes after the stop
+    local i=0
+    while [ -e .worktrees/eph-stopped ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+    [ ! -e .worktrees/eph-stopped ]
 
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
-    [[ "$output" == *"eph-stopped (ephemeral, the run that made it"* ]]
-    [ ! -e .worktrees/eph-stopped ]
+    [[ "$output" != *"eph-stopped"* ]]
 }
 
 @test "prune and remove leave a running ephemeral set alone" {

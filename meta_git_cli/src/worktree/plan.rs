@@ -1,11 +1,10 @@
 //! What a create or add puts in a worktree set: each repo, where its
 //! checkout goes, and on which branch.
 
+use crate::here::{Here, Node, Tree};
 use anyhow::Result;
-use meta_core::config::Workspace;
 use meta_plugin::display::escape;
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// One repo of a set being made.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,36 +27,64 @@ pub struct Found {
     pub source: PathBuf,
 }
 
-/// The projects of a workspace by name or by place. Shallow, it reads only
-/// the configs of the meta repos on the way to a place it is asked about;
-/// recursive, it walks the whole tree, once.
+/// The projects of a workspace by name or by place, as meta read its
+/// configs. Shallow, its keys are the names of the config's own projects
+/// (a nested one is found by its place); recursive (meta's `-r`/`-A`), every
+/// place of the tree, `depth` meta repos down.
 pub struct Index<'a> {
-    pub workspace: &'a Workspace,
-    /// Every project of the tree by its place, with `--recursive`.
-    tree: Option<HashMap<String, (PathBuf, meta_core::config::ProjectInfo)>>,
+    /// The config's folder: places start here
+    pub dir: PathBuf,
+    /// The outermost folder whose configs list the way to `dir`
+    pub listed_root: PathBuf,
+    /// `dir`'s place from the workspace root, with a `/` (empty at the
+    /// root): what meta's names of nested projects start with
+    pub prefix: String,
+    tree: Tree<'a>,
+    /// With `--recursive`: how deep (none: no limit)
+    depth: Option<Option<usize>>,
 }
 
 impl<'a> Index<'a> {
-    pub fn new(workspace: &'a Workspace) -> Self {
+    pub fn new(here: &Here<'a>) -> Self {
         Index {
-            workspace,
-            tree: None,
+            dir: here.dir.clone(),
+            listed_root: here.workspace.listed_root.clone(),
+            prefix: crate::here::place(&here.dir, &here.workspace.root)
+                .map(|place| format!("{place}/"))
+                .unwrap_or_default(),
+            tree: here.tree(),
+            depth: None,
         }
     }
 
-    /// The index of the whole tree under `workspace`.
-    pub fn recursive(workspace: &'a Workspace, depth: Option<usize>) -> Result<Self> {
-        let nodes = meta_core::config::walk_projects(&workspace.dir, &workspace.projects, depth)?;
-        let tree = meta_core::config::build_project_map(&nodes, &workspace.dir, "");
-        Ok(Index {
-            workspace,
-            tree: Some(tree),
-        })
+    /// The index of the whole tree under `here`'s config, `depth` deep.
+    pub fn recursive(here: &Here<'a>, depth: Option<usize>) -> Self {
+        Index {
+            depth: Some(depth),
+            ..Index::new(here)
+        }
     }
 
-    /// Every project of the tree by its place, if this index walked it.
-    pub fn tree(&self) -> Option<&HashMap<String, (PathBuf, meta_core::config::ProjectInfo)>> {
-        self.tree.as_ref()
+    /// Whether this index is of the whole tree (its keys are places).
+    pub fn is_recursive(&self) -> bool {
+        self.depth.is_some()
+    }
+
+    /// The projects it keys: the config's own, or with `--recursive` every
+    /// one within its depth.
+    pub fn nodes(&self) -> Vec<&Node<'a>> {
+        match self.depth {
+            Some(depth) => self.tree.within(depth).collect(),
+            None => self.tree.top().collect(),
+        }
+    }
+
+    /// The key of `node` here: its name (a top-level project), else its place.
+    pub fn key(&self, node: &Node<'_>) -> String {
+        match self.depth.is_none() && node.level == 0 {
+            true => node.project.name.clone(),
+            false => node.place.clone(),
+        }
     }
 
     /// The project `key` names: `.` is the workspace's own repo; else a
@@ -65,44 +92,42 @@ impl<'a> Index<'a> {
     /// With `--recursive`, a place anywhere in the tree, or the end of one
     /// (`core` for `open-source/gitkb/core`) if only one place ends so.
     pub fn find(&self, key: &str) -> Result<Found> {
-        let found = |key: &str, source: PathBuf| Found {
+        let found = |key: &str, source: &Path| Found {
             key: key.to_string(),
-            source,
+            source: source.to_path_buf(),
         };
         if key == "." {
-            return Ok(found(".", self.workspace.dir.clone()));
+            return Ok(found(".", &self.dir));
         }
-        let Some(tree) = &self.tree else {
+        let top: Vec<&Node<'_>> = self.tree.top().collect();
+        let by_name = top.iter().find(|n| n.project.name == key);
+        if self.depth.is_none() {
             // a top-level project by its name, else by its path: keyed by
             // its name either way, as its dependencies name it
-            let projects = &self.workspace.projects;
-            let top = projects.iter().find(|p| p.name == key);
-            if let Some(p) = top.or_else(|| projects.iter().find(|p| p.path == key)) {
-                return Ok(found(&p.name, self.workspace.dir.join(&p.path)));
+            let by_path = top.iter().find(|n| n.own == key);
+            if let Some(n) = by_name.or(by_path) {
+                return Ok(found(&n.project.name, &n.project.abs));
             }
-            return match project_at(self.workspace, key)? {
-                Some(source) => Ok(found(key, source)),
+            return match self.tree.at(key) {
+                Some(n) => Ok(found(key, &n.project.abs)),
                 None => Err(self.unknown(key)),
             };
-        };
-        if let Some(p) = self.workspace.projects.iter().find(|p| p.name == key) {
-            let place = p.path.as_str();
-            if let Some((source, _)) = tree.get(place) {
-                return Ok(found(place, source.clone()));
-            }
         }
-        if let Some((source, _)) = tree.get(key) {
-            return Ok(found(key, source.clone()));
+        if let Some(n) = by_name.filter(|n| self.at_place(&n.place).is_some()) {
+            return Ok(found(&n.place, &n.project.abs));
+        }
+        if let Some(source) = self.at_place(key) {
+            return Ok(found(key, &source));
         }
         let suffix = format!("/{key}");
-        let mut ends: Vec<(&String, &PathBuf)> = tree
-            .iter()
-            .filter(|(place, _)| place.ends_with(&suffix))
-            .map(|(place, (source, _))| (place, source))
+        let mut ends: Vec<&Node<'_>> = self
+            .nodes()
+            .into_iter()
+            .filter(|n| n.place.ends_with(&suffix))
             .collect();
-        ends.sort();
+        ends.sort_by(|a, b| a.place.cmp(&b.place));
         match ends.as_slice() {
-            [(place, source)] => Ok(found(place, source.to_path_buf())),
+            [n] => Ok(found(&n.place, &n.project.abs)),
             [] => Err(self.unknown(key)),
             _ => anyhow::bail!(
                 "Repo '{}' is ambiguous: it ends {}. Use the whole path.",
@@ -110,7 +135,7 @@ impl<'a> Index<'a> {
                 escape(
                     &ends
                         .iter()
-                        .map(|(place, _)| place.as_str())
+                        .map(|n| n.place.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -118,18 +143,20 @@ impl<'a> Index<'a> {
         }
     }
 
-    /// The project at `place`, if one is there.
-    pub fn at_place(&self, place: &str) -> Result<Option<PathBuf>> {
-        match &self.tree {
-            Some(tree) => Ok(tree.get(place).map(|(source, _)| source.clone())),
-            None => project_at(self.workspace, place),
+    /// The project at `place`, if one is there (with `--recursive`, within
+    /// its depth).
+    pub fn at_place(&self, place: &str) -> Option<PathBuf> {
+        let node = self.tree.at(place)?;
+        match self.depth {
+            Some(Some(depth)) if node.level > depth => None,
+            _ => Some(node.project.abs.clone()),
         }
     }
 
     /// The project at `place`, which a project list named (with
     /// `--recursive`, every key is a place): never one whose name it is.
     pub fn place(&self, place: &str) -> Result<Found> {
-        match self.at_place(place)? {
+        match self.at_place(place) {
             Some(source) => Ok(Found {
                 key: place.to_string(),
                 source,
@@ -138,25 +165,60 @@ impl<'a> Index<'a> {
         }
     }
 
+    /// What the config lists, for cloning what of it isn't cloned.
+    pub fn listing(&self) -> crate::here::Listing {
+        self.tree.listing()
+    }
+
+    /// The node `key` (as [`Index::find`] keys it) names.
+    pub fn node(&self, key: &str) -> Option<&Node<'a>> {
+        self.nodes().into_iter().find(|n| self.key(n) == key)
+    }
+
+    /// The keys of the projects `key` depends on, as meta resolved them,
+    /// and theirs, each once: those this index keys.
+    pub fn dependencies(&self, key: &str) -> Vec<String> {
+        let mut found: Vec<String> = Vec::new();
+        let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+        queue.push_back(key.to_string());
+        while let Some(current) = queue.pop_front() {
+            let Some(node) = self.node(&current) else {
+                continue;
+            };
+            for dep in &node.project.depends_on {
+                let target = self
+                    .nodes()
+                    .into_iter()
+                    .find(|n| n.project.path == *dep)
+                    .map(|n| self.key(n));
+                if let Some(target) = target.filter(|t| t != key && !found.contains(t)) {
+                    found.push(target.clone());
+                    queue.push_back(target);
+                }
+            }
+        }
+        found
+    }
+
+    /// The `depends_on` entries of the project `key` that name no project
+    /// meta found (as meta qualified them: from the workspace root).
+    pub fn unresolved(&self, key: &str) -> Vec<String> {
+        let Some(node) = self.node(key) else {
+            return Vec::new();
+        };
+        node.project
+            .depends_on
+            .iter()
+            .filter(|dep| !self.tree.nodes.iter().any(|n| n.project.path == **dep))
+            .cloned()
+            .collect()
+    }
+
     /// The error for a key no project has, with the names and places there
     /// are (nested ones as far as their configs can be read).
     fn unknown(&self, key: &str) -> anyhow::Error {
-        let mut valid: Vec<String> = self
-            .workspace
-            .projects
-            .iter()
-            .map(|p| p.name.clone())
-            .collect();
-        let walked;
-        let tree = match &self.tree {
-            Some(tree) => Some(tree),
-            None => {
-                walked = Index::recursive(self.workspace, None).ok();
-                walked.as_ref().and_then(|index| index.tree.as_ref())
-            }
-        };
-        let tree = tree.map(|tree| tree.keys().cloned().collect::<Vec<_>>());
-        valid.extend(tree.into_iter().flatten());
+        let mut valid: Vec<String> = self.tree.top().map(|n| n.project.name.clone()).collect();
+        valid.extend(self.tree.nodes.iter().map(|n| n.place.clone()));
         valid.sort();
         valid.dedup();
         anyhow::anyhow!(
@@ -167,109 +229,97 @@ impl<'a> Index<'a> {
     }
 }
 
-/// The checkout of the project at `place` in `workspace`, reading only the
-/// configs of the meta repos on the way to it.
-fn project_at(workspace: &Workspace, place: &str) -> Result<Option<PathBuf>> {
-    for project in &workspace.projects {
-        let path = workspace.dir.join(&project.path);
-        if project.path == place {
-            return Ok(Some(path));
-        }
-        if let Some(rest) = place.strip_prefix(&format!("{}/", project.path)) {
-            if let Some(nested) = Workspace::in_dir(&path)? {
-                if let Some(found) = project_at(&nested, rest)? {
-                    return Ok(Some(found));
-                }
-            }
-        }
-    }
-    Ok(None)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use meta_plugin::Project;
 
-    fn workspace(dir: &Path) -> Workspace {
-        Workspace::in_dir(dir).unwrap().unwrap()
+    /// A workspace at `/w` with `members` (path, name, meta).
+    fn workspace(members: &[(&str, &str, bool)]) -> meta_plugin::Workspace {
+        let root = Path::new("/w");
+        meta_plugin::Workspace {
+            root: root.to_path_buf(),
+            config: root.join(".meta.yaml"),
+            listed_root: root.to_path_buf(),
+            members: members
+                .iter()
+                .map(|(path, name, meta)| Project {
+                    name: name.to_string(),
+                    path: path.to_string(),
+                    abs: root.join(path),
+                    meta: *meta,
+                    present: true,
+                    ..Project::default()
+                })
+                .collect(),
+            worktree: Default::default(),
+        }
     }
 
-    fn write(path: &Path, config: &str) {
-        std::fs::create_dir_all(path).unwrap();
-        std::fs::write(path.join(".meta.yaml"), config).unwrap();
+    fn here(workspace: &meta_plugin::Workspace) -> Here<'_> {
+        Here {
+            workspace,
+            dir: PathBuf::from("/w"),
+            home: PathBuf::from("/w"),
+        }
     }
 
     #[test]
     fn a_name_is_found_before_a_place_whatever_it_holds() {
-        let tmp = tempfile::tempdir().unwrap();
-        write(
-            tmp.path(),
-            r#"{"projects": {"group/api": {"repo": "u", "path": "actual-api"},
-                             "web": {"repo": "u", "path": "group/api"}}}"#,
-        );
-        let ws = workspace(tmp.path());
-        let found = Index::new(&ws).find("group/api").unwrap();
-        assert_eq!(found.source, tmp.path().join("actual-api"));
+        let ws = workspace(&[
+            ("actual-api", "group/api", false),
+            ("group/api", "web", false),
+        ]);
+        let here = here(&ws);
+        let found = Index::new(&here).find("group/api").unwrap();
+        assert_eq!(found.source, Path::new("/w/actual-api"));
         assert_eq!(found.key, "group/api");
         // and a place, when no project has that name, keyed by the name
         // of the project there
-        let found = Index::new(&ws).find("actual-api").unwrap();
-        assert_eq!(found.source, tmp.path().join("actual-api"));
+        let found = Index::new(&here).find("actual-api").unwrap();
+        assert_eq!(found.source, Path::new("/w/actual-api"));
         assert_eq!(found.key, "group/api");
-        let found = Index::recursive(&ws, None)
-            .unwrap()
-            .find("group/api")
-            .unwrap();
-        assert_eq!(found.source, tmp.path().join("actual-api"));
+        let found = Index::recursive(&here, None).find("group/api").unwrap();
+        assert_eq!(found.source, Path::new("/w/actual-api"));
         assert_eq!(found.key, "actual-api");
     }
 
     #[test]
-    fn nested_projects_are_found_by_place_reading_only_the_way_there() {
-        let tmp = tempfile::tempdir().unwrap();
-        write(
-            tmp.path(),
-            r#"{"projects": {"vendor": {"repo": "u", "meta": true},
-                             "broken": {"repo": "u", "meta": true}}}"#,
-        );
-        write(
-            &tmp.path().join("vendor"),
-            r#"{"projects": {"mylib": {"repo": "u", "path": "packages/mylib"},
-                             "sub": {"repo": "u", "meta": true}}}"#,
-        );
-        write(
-            &tmp.path().join("vendor/sub"),
-            r#"{"projects": {"deep": "u"}}"#,
-        );
-        write(&tmp.path().join("broken"), "{not yaml");
-        let ws = workspace(tmp.path());
-        let index = Index::new(&ws);
-        for (place, source) in [
-            ("vendor/packages/mylib", "vendor/packages/mylib"),
-            ("vendor/sub/deep", "vendor/sub/deep"),
-        ] {
-            assert_eq!(index.find(place).unwrap().source, tmp.path().join(source));
+    fn nested_projects_are_found_by_place() {
+        let ws = workspace(&[
+            ("vendor", "vendor", true),
+            ("vendor/packages/mylib", "mylib", false),
+            ("vendor/sub", "sub", true),
+            ("vendor/sub/deep", "deep", false),
+        ]);
+        let here = here(&ws);
+        let index = Index::new(&here);
+        for place in ["vendor/packages/mylib", "vendor/sub/deep"] {
+            assert_eq!(
+                index.find(place).unwrap().source,
+                Path::new("/w").join(place)
+            );
         }
         assert!(index.find("vendor/nope").is_err());
         // a nested project's name alone is no key without --recursive
         assert!(index.find("deep").is_err());
+        // nor beyond --depth
+        assert!(Index::recursive(&here, Some(1))
+            .find("vendor/sub/deep")
+            .is_err());
     }
 
     #[test]
     fn recursive_finds_the_one_place_that_ends_with_a_key() {
-        let tmp = tempfile::tempdir().unwrap();
-        write(
-            tmp.path(),
-            r#"{"projects": {"a": {"repo": "u", "meta": true}, "b": {"repo": "u", "meta": true}}}"#,
-        );
-        write(
-            &tmp.path().join("a"),
-            r#"{"projects": {"core": "u", "x": "u"}}"#,
-        );
-        write(&tmp.path().join("b"), r#"{"projects": {"core": "u"}}"#);
-        let ws = workspace(tmp.path());
-        let index = Index::recursive(&ws, None).unwrap();
+        let ws = workspace(&[
+            ("a", "a", true),
+            ("a/core", "core", false),
+            ("a/x", "x", false),
+            ("b", "b", true),
+            ("b/core", "core", false),
+        ]);
+        let here = here(&ws);
+        let index = Index::recursive(&here, None);
         assert_eq!(index.find("x").unwrap().key, "a/x");
         let err = index.find("core").unwrap_err().to_string();
         assert!(err.contains("a/core, b/core"), "{err}");
@@ -277,15 +327,26 @@ mod tests {
 
     #[test]
     fn errors_escape_the_names_they_show() {
-        let tmp = tempfile::tempdir().unwrap();
-        write(
-            tmp.path(),
-            r#"{"projects": {"vendor": {"repo": "u", "meta": true}}}"#,
-        );
-        let ws = workspace(tmp.path());
+        let ws = workspace(&[("vendor", "vendor", true)]);
+        let here = here(&ws);
         for key in ["a\nFORGED", "vendor/\nFORGED", "vendor/\x1b[2J"] {
-            let err = Index::new(&ws).find(key).unwrap_err().to_string();
+            let err = Index::new(&here).find(key).unwrap_err().to_string();
             assert!(!err.contains('\n') && !err.contains('\x1b'), "{err:?}");
         }
+    }
+
+    #[test]
+    fn dependencies_follow_what_meta_resolved() {
+        let mut ws = workspace(&[
+            ("app", "app", false),
+            ("api", "api", false),
+            ("db", "db", false),
+        ]);
+        ws.members[0].depends_on = vec!["api".to_string(), "nowhere".to_string()];
+        ws.members[1].depends_on = vec!["db".to_string()];
+        let here = here(&ws);
+        let index = Index::new(&here);
+        assert_eq!(index.dependencies("app"), ["api", "db"]);
+        assert_eq!(index.unresolved("app"), ["nowhere"]);
     }
 }

@@ -223,9 +223,18 @@ pub struct Project {
     pub repo: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
-    /// What its config says it depends on
+    /// What it depends on, resolved by the host within the command's reach
+    /// (the config's own projects; with `-r`/`-A`, the tree it walks): each
+    /// entry of its config's `depends_on` as the `path` of the project it
+    /// names (by name, by place, or through what a project `provides`), or,
+    /// when it names none there, as written (qualified with the place of
+    /// the meta repo that lists it, with `-r`/`-A`): no member's path
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// What resolving its `depends_on` ran into, one sentence each ("depends
+    /// on 'db', which 'a' and 'b' provide; 'b' is used")
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependency_problems: Vec<String>,
     /// Whether its config says it is a meta repo (`meta: true`): one with a
     /// `.meta.yaml` of its own listing projects
     #[serde(default)]

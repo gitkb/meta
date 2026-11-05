@@ -178,6 +178,11 @@ impl Owned {
         self.child.stderr.take()
     }
 
+    /// The child's stdin, if piped and not taken yet.
+    pub fn stdin(&mut self) -> Option<std::process::ChildStdin> {
+        self.child.stdin.take()
+    }
+
     /// Wait for the child to exit.
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         if !self.waited {

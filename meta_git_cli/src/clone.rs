@@ -4,7 +4,6 @@ use crate::ssh;
 use anyhow::Context;
 use colored::Colorize;
 use indicatif::MultiProgress;
-use meta_core::config;
 use meta_plugin::RepoUrl;
 use meta_plugin::{errln, outln};
 use meta_plugin::{Ctx, Request, Response};
@@ -108,7 +107,7 @@ pub(crate) fn execute_git_clone(
         Err(e) => return Err(e).with_context(inspect),
     };
     if occupied {
-        let workspace = matches!(config::find_meta_config_in(&clone_dir_path), Ok(Some(_)));
+        let workspace = clone_dir_path.join(".meta.yaml").is_file();
         anyhow::bail!(
             "{} already exists{}",
             meta_plugin::display::escape_path(&clone_dir_path),
@@ -126,7 +125,7 @@ pub(crate) fn execute_git_clone(
         // Output what we know - just the meta repo clone command
         // (Child repos are in .meta.yaml file which hasn't been cloned yet)
         outln!("{} Would clone meta repository:", "[DRY RUN]".cyan())?;
-        let shown = loop_lib::display_command(&clone_argv(url.to_string()));
+        let shown = meta_plugin::display::display_command(&clone_argv(url.to_string()));
         outln!("  {}", meta_plugin::display::escape(&shown))?;
         return Ok(Response::done());
     }
@@ -149,16 +148,40 @@ pub(crate) fn execute_git_clone(
     if let Some(ref ssh) = ssh_cmd {
         clone_cmd.env("GIT_SSH_COMMAND", ssh);
     }
-    // a child meta owns: stopping meta stops the clone
-    let status = meta_plugin::process::status(&mut clone_cmd)?;
-    anyhow::ensure!(status.success(), "Failed to clone meta repository");
+    // a child meta owns: stopping meta stops the clone. Under --json git's
+    // stderr is kept for the row of the failure; in text the user sees it
+    if ctx.meta().json {
+        let out = meta_plugin::process::output(&mut clone_cmd)?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            let row = meta_plugin::ProjectResult {
+                stderr: Some(stderr),
+                ..meta_plugin::ProjectResult::error(
+                    ".",
+                    meta_plugin::ErrorInfo::new(
+                        meta_plugin::ErrorCode::ToolFailed,
+                        format!("Failed to clone meta repository ({})", out.status),
+                    ),
+                )
+                .at(&clone_dir_path)
+            };
+            return crate::printed(
+                ctx,
+                vec![row],
+                Some(anyhow::anyhow!("Failed to clone meta repository")),
+            );
+        }
+    } else {
+        let status = meta_plugin::process::status(&mut clone_cmd)?;
+        anyhow::ensure!(status.success(), "Failed to clone meta repository");
+    }
 
-    // Parse meta config inside cloned repo
-    if config::find_meta_config_in(&clone_dir_path)?.is_none() {
+    // The projects the clone's config lists, as meta reads them
+    let Some(listing) = crate::here::Listing::of(&clone_dir_path, None)? else {
         return Ok(Response::message(
             "No .meta.yaml found in cloned repository",
         ));
-    }
+    };
 
     // For non-recursive mode, read only the cloned repo's own .meta.yaml
     let queue = CloneQueue::new(depth.clone(), meta_depth, false);
@@ -167,7 +190,7 @@ pub(crate) fn execute_git_clone(
         .map_or_else(|| clone_dir.clone(), |n| n.to_string_lossy().into_owned());
     // (its origin as git recorded it: a relative URL resolved)
     let top = MetaRepo::at(&name, &clone_dir_path, Some(url.clone()));
-    let tasks = queue.discover(&clone_dir_path, 0, &Arc::from([top]))?;
+    let tasks = queue.discover_in(&listing, 0, &Arc::from([top]))?;
     let initial_count = tasks.len();
 
     if initial_count == 0 {
@@ -211,7 +234,8 @@ pub(crate) fn execute_git_clone(
 
     clone_with_queue(&queue, tasks, parallel, &mp, ssh_cmd.as_deref())?;
     if let Some(error) = crate::clone_worker::report_failures(&queue, "git clone-missing") {
-        anyhow::bail!("{error}");
+        let rows = crate::clone_worker::failure_rows(&queue, &clone_dir_path);
+        return crate::printed(ctx, rows, Some(anyhow::anyhow!("{error}")));
     }
 
     let (completed, total) = queue.get_counts();

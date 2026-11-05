@@ -4,19 +4,13 @@ use anyhow::{Context, Result};
 use meta_plugin::display::{escape, escape_path, program_output};
 use std::path::{Path, PathBuf};
 
-use meta_core::config::Workspace;
+use meta_plugin::Request;
 
-/// The directory of the existing worktree set `name` of `owner` (the
-/// workspace whose sets these are; none outside one), for a command run
-/// from `cwd`.
-pub fn resolve_existing_worktree(
-    name: &str,
-    owner: Option<&Workspace>,
-    cwd: &Path,
-) -> Result<PathBuf> {
-    meta_core::worktree::validate_name(name)?;
-    let worktree_root = meta_core::worktree::resolve_worktree_root(owner, cwd)?;
-    let wt_dir = worktree_root.join(name);
+/// The directory of the existing worktree set `name` of the workspace
+/// `request` runs in (outside one, where sets go there).
+pub fn resolve_existing_worktree(name: &str, request: &Request) -> Result<PathBuf> {
+    meta_plugin::sets::validate_name(name)?;
+    let wt_dir = crate::here::worktree_root(request)?.join(name);
     if !wt_dir.exists() {
         anyhow::bail!("Worktree '{}' not found at {}", name, escape_path(&wt_dir));
     }
@@ -27,15 +21,22 @@ pub fn resolve_existing_worktree(
 /// doesn't exist or holds none.
 pub fn discover_and_validate_worktree(
     name: &str,
-    owner: Option<&Workspace>,
-    cwd: &Path,
-) -> Result<(PathBuf, Vec<meta_core::worktree::WorktreeRepoInfo>)> {
-    let wt_dir = resolve_existing_worktree(name, owner, cwd)?;
-    let repos = meta_core::worktree::discover_worktree_repos(&wt_dir)?;
+    request: &Request,
+) -> Result<(PathBuf, Vec<super::scan::WorktreeRepoInfo>)> {
+    let wt_dir = resolve_existing_worktree(name, request)?;
+    let repos = super::scan::discover_worktree_repos(&wt_dir, &places(request))?;
     if repos.is_empty() {
         anyhow::bail!("No repos found in worktree '{}'", escape(name));
     }
     Ok((wt_dir, repos))
+}
+
+/// Where the workspace's projects sit in a set (see
+/// [`crate::here::Here::places`]); none outside a workspace.
+pub fn places(request: &Request) -> Vec<String> {
+    crate::here::Here::of(request)
+        .map(|here| here.places())
+        .unwrap_or_default()
 }
 
 /// Where the repo at `source`, found from `meta_dir` under `alias`, goes in
@@ -57,7 +58,7 @@ pub fn place_in_set(meta_dir: &Path, alias: &str, source: &Path) -> String {
         })
         .ok()
         // a source outside the meta dir (`../sib`) sits at its alias, as
-        // [`meta_core::config::ProjectInfo::set_place`] has it
+        // meta's own place for it in a set has it
         .filter(|place| {
             !place.as_os_str().is_empty()
                 && place
@@ -78,7 +79,7 @@ pub fn place_in_set(meta_dir: &Path, alias: &str, source: &Path) -> String {
 /// there, or where a link a checkout already put there leads, as in the
 /// workspace. Refused when a link leads outside the set.
 pub fn dest_in_set(wt_dir: &Path, place: &str) -> Result<PathBuf, String> {
-    let resolved = meta_core::config::resolve_inside(wt_dir, place)?;
+    let resolved = meta_plugin::path::resolve_inside(wt_dir, place)?;
     let plain = wt_dir.canonicalize().map(|dir| dir.join(place)).ok();
     Ok(if plain.as_ref() == Some(&resolved) {
         wt_dir.join(place)
@@ -258,51 +259,51 @@ pub fn exclude_worktrees(owner: &Path, worktree_root: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    // ── meta_core::worktree::validate_name ──────────────────────────────
+    // ── meta_plugin::sets::validate_name ──────────────────────────────
 
     #[test]
     fn validate_name_accepts_simple_alphanumeric() {
-        assert!(meta_core::worktree::validate_name("feature1").is_ok());
+        assert!(meta_plugin::sets::validate_name("feature1").is_ok());
     }
 
     #[test]
     fn validate_name_accepts_hyphens_and_underscores() {
-        assert!(meta_core::worktree::validate_name("my-feature_v2").is_ok());
+        assert!(meta_plugin::sets::validate_name("my-feature_v2").is_ok());
     }
 
     #[test]
     fn validate_name_rejects_empty() {
-        let err = meta_core::worktree::validate_name("").unwrap_err();
+        let err = meta_plugin::sets::validate_name("").unwrap_err();
         assert!(err.to_string().contains("cannot be empty"));
     }
 
     #[test]
     fn validate_name_rejects_leading_dot() {
-        let err = meta_core::worktree::validate_name(".hidden").unwrap_err();
+        let err = meta_plugin::sets::validate_name(".hidden").unwrap_err();
         assert!(err.to_string().contains("cannot start with '.'"));
     }
 
     #[test]
     fn validate_name_rejects_forward_slash() {
-        let err = meta_core::worktree::validate_name("a/b").unwrap_err();
+        let err = meta_plugin::sets::validate_name("a/b").unwrap_err();
         assert!(err.to_string().contains("path separators"));
     }
 
     #[test]
     fn validate_name_rejects_backslash() {
-        let err = meta_core::worktree::validate_name("a\\b").unwrap_err();
+        let err = meta_plugin::sets::validate_name("a\\b").unwrap_err();
         assert!(err.to_string().contains("path separators"));
     }
 
     #[test]
     fn validate_name_rejects_special_characters() {
-        let err = meta_core::worktree::validate_name("feat@work").unwrap_err();
+        let err = meta_plugin::sets::validate_name("feat@work").unwrap_err();
         assert!(err.to_string().contains("only ASCII alphanumeric"));
     }
 
     #[test]
     fn validate_name_rejects_spaces() {
-        let err = meta_core::worktree::validate_name("my feature").unwrap_err();
+        let err = meta_plugin::sets::validate_name("my feature").unwrap_err();
         assert!(err.to_string().contains("only ASCII alphanumeric"));
     }
 
@@ -332,7 +333,7 @@ mod tests {
             "a/\x1b]0;x\x07",
             "bad\x1b[2J",
         ] {
-            assert_escaped(meta_core::worktree::validate_name(name).unwrap_err());
+            assert_escaped(meta_plugin::sets::validate_name(name).unwrap_err());
         }
     }
 

@@ -8,6 +8,7 @@ mod clone_queue;
 mod clone_worker;
 mod commit;
 mod git_env;
+mod here;
 mod ssh;
 mod update;
 
@@ -240,6 +241,42 @@ pub(crate) fn printed(
         });
     }
     Ok(Response::printed(records))
+}
+
+/// Run the command `request` is again, from the top, through meta (as typed,
+/// meta's options first), for a command whose plan changed under it (it
+/// cloned a meta repo whose config lists more): meta reads the configs
+/// anew. In text it shows as it runs; under `--json` its rows are this
+/// call's.
+pub(crate) fn again(ctx: &Ctx, request: &Request) -> anyhow::Result<Response> {
+    let json = ctx.meta().json;
+    let args: Vec<String> = request
+        .meta_options
+        .typed
+        .iter()
+        .filter(|word| !(json && *word == "--json"))
+        .cloned()
+        .chain(request.command.split_whitespace().map(str::to_string))
+        .chain(request.args.iter().cloned())
+        .collect();
+    let meta = meta_plugin::client::Meta::from_env()?
+        .cwd(&request.cwd)
+        .args(args);
+    if !json {
+        let status = meta.inherit()?;
+        return match status.success() {
+            true => Ok(Response::done()),
+            false => Err(meta_plugin::exit::ExitWith::of(status).into()),
+        };
+    }
+    let envelope = meta.json()?.wait()?;
+    for warning in envelope.warnings {
+        ctx.warn(warning);
+    }
+    match envelope.error {
+        Some(error) => printed(ctx, envelope.results, Some(error.into())),
+        None => Ok(Response::printed(envelope.results)),
+    }
 }
 
 /// Check if a git command accesses remote repositories

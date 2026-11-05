@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use colored::*;
 use meta_core::set_record as record;
-use meta_core::worktree::Configs;
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::outln;
 use meta_plugin::{Ctx, ProjectResult, Request, Response};
@@ -15,13 +14,11 @@ use meta_plugin::sets::lease;
 use super::cli_types::RemoveArgs;
 
 pub(crate) fn handle_remove(args: RemoveArgs, ctx: &Ctx, request: &Request) -> Result<Response> {
-    meta_core::worktree::validate_name(&args.name)?;
+    meta_plugin::sets::validate_name(&args.name)?;
     // Hooks come from the owner: inside the set being removed, its own
     // config goes with it
-    let cwd = request.cwd.as_path();
-    let configs = super::workspace_configs(request)?;
-    let wt_dir =
-        meta_core::worktree::resolve_worktree_root(Some(&configs.owner), cwd)?.join(&args.name);
+    let here = crate::here::Here::need(request)?;
+    let wt_dir = here.worktrees()?.join(&args.name);
     if !wt_dir.exists() {
         anyhow::bail!(
             "Worktree '{}' not found at {}",
@@ -37,7 +34,7 @@ pub(crate) fn handle_remove(args: RemoveArgs, ctx: &Ctx, request: &Request) -> R
         lease: request.lease.as_deref(),
     };
     let mut records = Vec::new();
-    let removed = remove_set(&args, &wt_dir, &configs, ctx, how, &mut records);
+    let removed = remove_set(&args, &wt_dir, &here, ctx, how, &mut records);
     crate::printed(ctx, records, removed.err())
 }
 
@@ -63,7 +60,7 @@ pub(crate) struct How<'a> {
 pub(crate) fn remove_set(
     args: &RemoveArgs,
     wt_dir: &std::path::Path,
-    configs: &Configs,
+    here: &crate::here::Here<'_>,
     ctx: &Ctx,
     how: How<'_>,
     records: &mut Vec<ProjectResult>,
@@ -79,7 +76,7 @@ pub(crate) fn remove_set(
     let force = args.force;
     let wt_dir = wt_dir.to_path_buf();
 
-    let workspace = Workspace::of(&configs.here)?;
+    let workspace = Workspace::of(&here.home)?;
     // A set being made is its creator's, and one in use by its ephemeral
     // run is the run's (a run removing its own set holds its lease itself).
     // Otherwise the set's lease is held until the set is deleted, so no
@@ -302,7 +299,7 @@ pub(crate) fn remove_set(
         return Ok(());
     }
     // What was done is reported first: a failing hook doesn't undo it
-    match fire_post_destroy(name, &wt_dir, force, Some(&configs.owner)) {
+    match fire_post_destroy(name, &wt_dir, force, Some(&here.workspace.worktree)) {
         Err(e) if strict => anyhow::bail!("{e:#} (strict mode)"),
         Err(e) => ctx.warn(format!("{e:#}")),
         Ok(()) => {}

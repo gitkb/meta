@@ -129,6 +129,48 @@ impl<'a> Worker<'a> {
     }
 }
 
+/// A row for each clone or pull that failed, with git's stderr, as `meta
+/// --json exec` gives a failed step's: named by its path from `root`.
+pub(crate) fn failure_rows(queue: &CloneQueue, root: &Path) -> Vec<meta_plugin::ProjectResult> {
+    queue
+        .outcome()
+        .failures
+        .iter()
+        .map(|failure| {
+            let failed = match failure.work {
+                Work::Clone(_) => "could not be cloned",
+                Work::Pull => "could not be pulled (fast-forward only)",
+            };
+            let last = failure
+                .error
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("no stderr");
+            let project = match failure.path.strip_prefix(root) {
+                Ok(inside) if inside.as_os_str().is_empty() => ".".to_string(),
+                Ok(inside) => inside.to_string_lossy().into_owned(),
+                Err(_) => failure.path.to_string_lossy().into_owned(),
+            };
+            meta_plugin::ProjectResult {
+                stderr: Some(failure.error.clone()),
+                ..meta_plugin::ProjectResult::error(
+                    project,
+                    meta_plugin::ErrorInfo::new(
+                        meta_plugin::ErrorCode::ToolFailed,
+                        format!(
+                            "{} {failed}: {}",
+                            meta_plugin::display::escape(&failure.name),
+                            meta_plugin::display::escape(last)
+                        ),
+                    ),
+                )
+                .at(&failure.path)
+            }
+        })
+        .collect()
+}
+
 /// Print each failed clone or pull with git's error, each project left
 /// uncloned because its folder holds something else, each meta repo that
 /// lists one above it, and each nested `.meta.yaml` that can't be read, to

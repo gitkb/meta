@@ -210,5 +210,5 @@ pub struct ExecArgs {
 
 /// Parse a human-friendly duration string for clap value_parser.
 fn parse_duration_clap(s: &str) -> std::result::Result<u64, String> {
-    meta_core::duration::parse_duration(s).map_err(|e| e.to_string())
+    meta_plugin::duration::parse_duration(s).map_err(|e| e.to_string())
 }

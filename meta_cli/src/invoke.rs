@@ -90,14 +90,16 @@ fn workspace(config: &Config, root: &Path, members: &[Candidate]) -> meta_plugin
     let owner = worktree::Configs::of(config.clone())
         .map(|configs| configs.owner)
         .unwrap_or_else(|_| config.clone());
+    let sets_dir = worktree::resolve_worktree_root(Some(&owner), &config.dir);
     meta_plugin::Workspace {
         root: root.to_path_buf(),
         config: config.config_path.clone(),
         listed_root: config::listed_root(&config.dir),
         members: projects(members, root),
         worktree: meta_plugin::Worktree {
+            dir: sets_dir.as_ref().ok().cloned(),
             // refused here, the worktree commands say why
-            dir: worktree::resolve_worktree_root(Some(&owner), &config.dir).ok(),
+            refused: sets_dir.as_ref().err().map(|e| format!("{e:#}")),
             hooks: owner
                 .worktree
                 .hooks

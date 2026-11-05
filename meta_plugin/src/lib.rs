@@ -363,6 +363,7 @@ mod tests {
                 dir: Some(PathBuf::from("/w/.worktrees")),
                 hooks: [("post-create".to_string(), "make".to_string())].into(),
                 home: None,
+                refused: None,
             },
         });
         sent.projects = vec![project.clone()];

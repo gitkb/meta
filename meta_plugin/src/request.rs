@@ -169,6 +169,11 @@ pub struct Worktree {
     /// for them is refused (the worktree commands say why)
     #[serde(default, with = "wire_path::option")]
     pub dir: Option<PathBuf>,
+    /// Why there is no `dir`: the config's place for sets was refused (a
+    /// `.worktrees` link into `.git`, say), in words a command shows as its
+    /// error
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
     /// The shell command for each worktree event (`post-create`,
     /// `post-destroy`, `post-prune`), from `worktree.hooks`
     #[serde(default)]

@@ -36,7 +36,7 @@ Other repos run and read meta, so these are contracts: CLI arguments and option 
 
 Before merging a change to one, find its callers and test the real pair:
 
-1. Search every repo in the harmony checkout, scripts, workflows and skills included. Child repos are gitignored, so plain `rg` skips them: use `rg --no-ignore`.
+1. Search every repo in the harmony checkout, scripts, workflows and skills included. Child repos are gitignored, so plain `rg` skips them, and it skips `.github` too: use `rg --no-ignore --hidden -g '!.git'`.
 2. Additive change that callers can ignore (a new field or flag): say so in the PR.
 3. Breaking change: put `!` in the PR title. List every caller repo in the PR body with its companion PR, or "none found" and the search you ran.
 4. Each companion PR moves the caller's pin of the producer to this PR's head, so its CI runs the real pair. A caller with no pin runs against a build of this PR's head instead, and its PR shows the result. A fake `meta` script alone proves nothing.

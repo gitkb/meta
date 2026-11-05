@@ -1138,6 +1138,53 @@ EOF
     [[ "$output" == *"'vendor' depends on 'missing'"*"(strict mode)"* ]]
 }
 
+@test "inside a set, -r reaches the meta repos checked out in it, as outside one" {
+    bats_require_minimum_version 1.5.0
+    cp "$META_BIN_DIR/meta-project" .meta/plugins/meta-project
+    setup_nested_meta
+    git -C vendor init --quiet -b main
+    printf '/nested-lib/\n' > vendor/.gitignore
+    git -C vendor add -A
+    git -C vendor commit --quiet -m init
+    printf '/vendor/\n/backend/\n/frontend/\n.worktrees/\n' >> .gitignore
+    git add -A && git commit --quiet -m vendor
+    run "$META_BIN" -r git worktree create deep --every-repo
+    [ "$status" -eq 0 ]
+    [ -d .worktrees/deep/vendor/nested-lib/.git ] || [ -f .worktrees/deep/vendor/nested-lib/.git ]
+    cd .worktrees/deep/backend
+    local rows='[.results[] | "\(.project)=\(.path)=\(.data.repo)"] | join(" ")'
+    run --separate-stderr "$META_BIN" -r --json project list
+    [ "$status" -eq 0 ]
+    # the nested repo, at the set's checkout, with the URL a PR names it by
+    [[ " $(jq -r "$rows" <<<"$output") " == *" vendor/nested-lib=$TEST_DIR/.worktrees/deep/vendor/nested-lib=git@github.com:org/nested-lib.git "* ]]
+    run --separate-stderr "$META_BIN" -A --json project list
+    [[ " $(jq -r "$rows" <<<"$output") " == *" vendor/nested-lib="* ]]
+    # without -r, the first level only, as outside a set
+    run --separate-stderr "$META_BIN" --json project list
+    [ "$status" -eq 0 ]
+    [[ " $(jq -r "$rows" <<<"$output") " != *" vendor/nested-lib="* ]]
+    [[ " $(jq -r "$rows" <<<"$output") " == *" vendor=$TEST_DIR/.worktrees/deep/vendor="* ]]
+    # dependents reach as far
+    run "$META_BIN" -r project dependents nested-lib
+    [ "$status" -eq 0 ]
+}
+
+@test "a set of a workspace whose root is no repo names its own folder as the root" {
+    bats_require_minimum_version 1.5.0
+    cp "$META_BIN_DIR/meta-project" .meta/plugins/meta-project
+    rm -rf .git
+    run "$META_BIN" git worktree create loose-root --repo backend
+    [ "$status" -eq 0 ]
+    [ ! -e .worktrees/loose-root/.meta.yaml ]
+    cd .worktrees/loose-root/backend
+    run --separate-stderr "$META_BIN" --json project list
+    [ "$status" -eq 0 ]
+    local set="$TEST_DIR/.worktrees/loose-root"
+    [ "$(jq -r '.results[0].path' <<<"$output")" = "$set" ]
+    [ "$(jq -r '.results[0].data.worktree.physical_root' <<<"$output")" = "$set" ]
+    [ "$(jq -r '.results[] | select(.data.name == "backend") | "\(.project)=\(.path)"' <<<"$output")" = "backend=$set/backend" ]
+}
+
 @test "worktree create with nested repo alias succeeds" {
     setup_nested_meta
 

@@ -374,7 +374,8 @@ fn check_project(project: &Project, cwd: &Path) -> Option<CheckProblem> {
 fn list(request: &Request) -> anyhow::Result<Found> {
     let workspace = request.workspace()?;
     let config = config::Workspace::load(&workspace.config)?;
-    let tree = config::walk_projects(&config.dir, &config.projects, request.depth)?;
+    let dir = listed_in(request, &config);
+    let tree = config::walk_projects(&dir, &config.projects, request.depth)?;
 
     // The remote of the workspace whose projects these are, not of the
     // repository the command runs in (a project's, from inside it); none
@@ -416,7 +417,7 @@ fn list(request: &Request) -> anyhow::Result<Found> {
         .cwd
         .canonicalize()
         .unwrap_or_else(|_| request.cwd.clone());
-    let root_path = repo_path(&config.dir, &workspace.root);
+    let root_path = repo_path(&dir, &workspace.root);
     let mut records = vec![ProjectResult::record(
         &root_path,
         ListedProject {
@@ -430,9 +431,19 @@ fn list(request: &Request) -> anyhow::Result<Found> {
             worktree,
         },
     )
-    .at(&config.dir)];
-    list_records(&tree, &config.dir, &workspace.root, &mut records);
+    .at(&dir)];
+    list_records(&tree, &dir, &workspace.root, &mut records);
     Ok(Found { text, records })
+}
+
+/// Where the projects of `config` are checked out: in a worktree set, the
+/// set's folder (whose config may be the workspace's, when the set holds no
+/// checkout of the root); elsewhere the config's own.
+fn listed_in(request: &Request, config: &config::Workspace) -> PathBuf {
+    match &request.set {
+        Some(set) => set.dir.clone(),
+        None => config.dir.clone(),
+    }
 }
 
 /// A record for each of `nodes` (listed in `dir`) and the nodes under it,
@@ -556,6 +567,7 @@ fn dependents(request: &Request, project_name: &str) -> anyhow::Result<Found> {
     }
     let root = &request.workspace()?.root;
     let workspace = config::Workspace::load(&request.workspace()?.config)?;
+    let dir = listed_in(request, &workspace);
     let mut projects = Vec::new();
     let mut dirs = HashMap::new();
     let top = match request.depth {
@@ -565,13 +577,13 @@ fn dependents(request: &Request, project_name: &str) -> anyhow::Result<Found> {
             .cloned()
             .map(|info| (info, Vec::new()))
             .collect::<Vec<_>>(),
-        depth => config::walk_projects(&workspace.dir, &workspace.projects, depth)?
+        depth => config::walk_projects(&dir, &workspace.projects, depth)?
             .into_iter()
             .map(|node| (node.info, node.children))
             .collect(),
     };
     for (info, children) in top {
-        let abs = workspace.dir.join(&info.path);
+        let abs = dir.join(&info.path);
         walk(children, &info.path, &abs, &mut projects, &mut dirs);
         dirs.insert(info.name.clone(), abs);
         projects.push(info.into());

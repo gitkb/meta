@@ -185,7 +185,12 @@ fn target_with(
                 set: Some(set),
                 root: set_dir,
                 repos,
-                depth: Some(0),
+                // the set is the scope; -r, -A and --depth say how deep
+                // into the meta repos checked out in it, as outside a set
+                depth: match cli.recursive || cli.all {
+                    true => cli.depth,
+                    false => Some(0),
+                },
             });
         }
     }

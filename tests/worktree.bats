@@ -1269,6 +1269,13 @@ EOF
     run --separate-stderr "$META_BIN" --json exec -- pwd
     [ "$status" -eq 0 ]
     [ "$(jq -c '[.results[].project]' <<<"$output")" = '[".","vendor","vendor/nested-lib"]' ]
+    # moved by hand, the set keeps its checkouts as members
+    cd "$TEST_DIR"
+    mv .worktrees/full .worktrees/moved
+    cd .worktrees/moved
+    run --separate-stderr "$META_BIN" -r --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '[".","vendor","vendor/nested-lib"]' ]
     # a set made for the nested repo (create checks vendor out to hold it)
     cd "$TEST_DIR"
     "$META_BIN" -r git worktree create leaf --repo vendor/nested-lib --no-deps

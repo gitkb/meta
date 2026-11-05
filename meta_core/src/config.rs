@@ -2334,15 +2334,18 @@ mod tests {
     }
 
     #[test]
-    fn a_set_a_provider_made_belongs_to_its_sources_workspace() {
+    fn a_set_belongs_to_the_workspace_whose_worktrees_folder_holds_it() {
         let tmp = tempfile::tempdir().unwrap();
         let top = tmp.path().canonicalize().unwrap();
         meta_yaml(&top, r#""a": "x""#);
         let set = top.join(".worktrees/s1");
         meta_yaml(&set, r#""a": "x""#);
-        // Nothing says who made it: a workspace of its own
-        assert_eq!(workspace_meta_dirs(&set).unwrap(), vec![set.clone()]);
-        // Its owner file says it was made from top
+        // In top's worktrees folder: top's set, owner file or not
+        assert_eq!(
+            workspace_meta_dirs(&set).unwrap(),
+            vec![set.clone(), top.clone()]
+        );
+        // Its owner file says the same
         meta_plugin::sets::create(&set, "git", &top).unwrap();
         assert_eq!(
             workspace_meta_dirs(&set).unwrap(),

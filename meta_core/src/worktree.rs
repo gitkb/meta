@@ -47,27 +47,32 @@ pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>>
     Ok(None)
 }
 
-/// The workspace the set at `set_dir` was made from, as its owner file
-/// says: only while the file is the one made for this very folder. One made
-/// for another (copied, with a copy of the workspace, or moved) is refused:
-/// meta never acts on another workspace through it.
+/// The workspace the set at `set_dir` belongs to: the one its owner file
+/// names while the file was made for this very folder (a set made with
+/// `META_WORKTREES` elsewhere); else the workspace whose worktrees folder
+/// holds it, nearest above it (in a copied or moved workspace, the copy:
+/// an owner file made elsewhere is stale, never followed). None when no
+/// workspace's sets are there (a set that stands for itself).
 fn set_origin(set_dir: &Path) -> Result<Option<PathBuf>> {
-    let Some(owner) = meta_plugin::sets::owner(set_dir)? else {
+    let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    if let Some(owner) = meta_plugin::sets::owner(set_dir)? {
+        if owner.set == real(set_dir) && owner.workspace.is_dir() {
+            return Ok(Some(owner.workspace));
+        }
+    }
+    let Some(sets) = set_dir.parent() else {
         return Ok(None);
     };
-    let here = set_dir
-        .canonicalize()
-        .unwrap_or_else(|_| set_dir.to_path_buf());
-    if owner.set != here {
-        anyhow::bail!(
-            "the owner file of worktree set {} was made for {}: a copy of a workspace, or a \
-             moved one? Run meta from the workspace's directory, or remove the set and create \
-             it again",
-            escape_path(set_dir),
-            escape_path(&owner.set)
-        );
+    for dir in sets.ancestors().skip(1) {
+        let Ok(Some(workspace)) = crate::config::Workspace::in_dir(dir) else {
+            continue;
+        };
+        let theirs = resolve_worktree_root(Some(&workspace), dir).ok();
+        if theirs.as_deref().map(real) == Some(real(sets)) {
+            return Ok(Some(dir.to_path_buf()));
+        }
     }
-    Ok(Some(owner.workspace))
+    Ok(None)
 }
 
 /// The config that names the members of the set at `set_dir`: the set's own
@@ -294,9 +299,10 @@ fn readable_tree(
             let (path, place) = (dir.join(&project.path), set.join(&project.path));
             // each meta repo once, as `walk_projects` does: links can loop
             let first = visited.insert(path.canonicalize().unwrap_or_else(|_| path.clone()));
-            let (own, theirs) = match first {
-                true => (listed(&place), listed(&path)),
-                false => (None, None),
+            let (own, theirs) = if first {
+                (listed(&place), listed(&path))
+            } else {
+                (None, None)
             };
             let is_meta = own.is_some() || theirs.is_some();
             let mut nested: Vec<config::ProjectInfo> = own.unwrap_or_default();

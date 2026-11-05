@@ -1285,6 +1285,27 @@ EOF
     [ "$(jq -c '[.results[].project]' <<<"$output")" = '["vendor","vendor/nested-lib"]' ]
 }
 
+@test "a set's root checkout is a member when the workspace repo doesn't commit its config" {
+    bats_require_minimum_version 1.5.0
+    # the workspace repo keeps .meta.yaml out of git: its checkout in a set
+    # has none
+    echo ".meta.yaml" >> .gitignore
+    git rm --cached --quiet .meta.yaml
+    git add .gitignore
+    git commit --quiet -m "config not committed"
+    "$META_BIN" git worktree create rooted --repo backend
+    [ -e .worktrees/rooted/.git ]
+    [ ! -e .worktrees/rooted/.meta.yaml ]
+    echo work > .worktrees/rooted/untracked.txt
+    cd .worktrees/rooted
+    run --separate-stderr "$META_BIN" --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '[".","backend"]' ]
+    run "$META_BIN" git status --short
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"untracked.txt"* ]]
+}
+
 @test "loop commands in a set reach its nested members" {
     bats_require_minimum_version 1.5.0
     setup_nested_meta

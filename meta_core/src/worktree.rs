@@ -179,16 +179,26 @@ pub fn set_members(
         .iter()
         .flat_map(|(_, info)| info.tags.clone())
         .collect();
-    let config_name = workspace.config_path.file_name();
-    let mut repos: Vec<Candidate> = config_name
-        .filter(|name| set_dir.join(name).is_file())
-        .map(|_| Candidate::root(set_dir.to_path_buf()))
-        .into_iter()
-        .collect();
     let held: Vec<PathBuf> = places
         .iter()
         .map(|(place, _)| set_dir.join(place))
         .filter(|dir| dir.is_dir())
+        .collect();
+    // the root is a member when the set holds a checkout of it: the
+    // workspace's config, or a file of its own at the top (not a hidden
+    // one: a tool's, such as `.git`), as a root checkout whose repository
+    // doesn't commit the config has. Folders alone are other members' way.
+    let config_name = workspace.config_path.file_name();
+    let holds_config = config_name.is_some_and(|name| set_dir.join(name).is_file());
+    let holds_more = std::fs::read_dir(set_dir).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            !entry.file_name().to_string_lossy().starts_with('.')
+                && entry.file_type().is_ok_and(|kind| !kind.is_dir())
+        })
+    });
+    let mut repos: Vec<Candidate> = (holds_config || holds_more)
+        .then(|| Candidate::root(set_dir.to_path_buf()))
+        .into_iter()
         .collect();
     repos.extend(
         places

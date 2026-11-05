@@ -176,14 +176,18 @@ meta git status
 meta --tag cli exec -- pwd
 ```
 
-Detection relies on the `.worktrees/<name>` path. Every repo of the set is in
-scope, those nested inside another repo of the set (e.g. `open-source/sdk/core`
-inside `open-source`) too, as `list` shows them; `-r` and `-A` add nothing inside a
-set. The root repo is part of a set
-by default, so the set has its own `.meta.yaml` config; otherwise meta walks up to
-the primary checkout's config. `meta --primary <command>` bypasses detection and acts on the
-workspace the set was made from (found through meta's records in the set's
-checkouts), from wherever you are in the set.
+A set is a folder meta knows by its place: one in the worktrees folder that has
+an owner file in `.meta-sets/` beside it (every set meta makes has one), or the
+`<name>` folder of a `.worktrees/<name>` path. Its members are the workspace's
+projects whose folders are in it, at their paths, those nested inside another
+project of the set (e.g. `open-source/sdk/core` inside `open-source`) too, as
+`list` shows them; what made a checkout (git, jj) doesn't matter. `-r` and `-A`
+add nothing inside a set. The root repo is part of a set by default, so the set
+has its own `.meta.yaml` config; otherwise meta reads the config of the workspace
+the set was made from. A set with no members is an error, never a reason to run
+in the workspace. `meta --primary <command>` bypasses detection and acts on the
+workspace the set was made from (its owner file says which), from wherever you
+are in the set.
 
 ## Cleanup
 

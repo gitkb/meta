@@ -502,17 +502,16 @@ It is `{"success", "command", "results", "skipped", "warnings", "message"?, "err
 
 ## Architecture
 
-Meta is a Rust workspace of 9 crates:
+Meta is a Rust workspace of 8 crates:
 
 | Crate | Purpose |
 |-------|---------|
 | `meta_cli` | Main CLI — plugin routing, `exec`, `context`, `project`, `init`, plugin registry |
 | `loop_lib` | Core execution engine — runs commands across directories |
 | `loop_cli` | Standalone loop CLI (usable without meta) |
-| `meta_core` | The workspace domain — config, repo filtering, worktree sets, dependency graph |
-| `meta_plugin` | The plugin SDK — the plugin protocol, exit codes, output and escaping, the one owner of the processes a program starts, a test kit |
-| `meta_git_cli` | Git plugin — clone, update, status, commit |
-| `meta_git_lib` | Shared git library utilities |
+| `meta_core` | The workspace domain — config, repo filtering, where worktree sets are and what they hold, dependency graph |
+| `meta_plugin` | The plugin SDK — the plugin protocol, exit codes, output and escaping, the one owner of the processes a program starts, worktree sets for any provider, calling meta back, a test kit |
+| `meta_git_cli` | Git plugin — clone, update, status, commit, worktree sets |
 | `meta_rust_cli` | Rust/Cargo plugin |
 | `meta_mcp` | MCP server for AI agent integration |
 

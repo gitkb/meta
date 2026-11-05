@@ -67,7 +67,6 @@ RUST_LOG=meta_git_cli::ssh=debug meta git push
 - `meta_git_cli` - Git plugin
 - `meta_project_cli` - Project plugin
 - `meta_rust_cli` - Rust plugin
-- `meta_git_lib` - Git library
 - `loop_lib` - Command execution library
 
 **Architecture:** Subprocess plugins initialize their own logger via `meta_plugin::run_plugin()` (the plugin SDK), inheriting `RUST_LOG` from the parent process.

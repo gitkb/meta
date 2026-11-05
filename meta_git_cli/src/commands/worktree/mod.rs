@@ -199,7 +199,7 @@ fn handle_worktree_command(
                     }
                     Ok(Response::printed(records))
                 }
-                Err(e) => crate::printed(ctx, records, Some(e)),
+                Err(e) => crate::printed_with_git(ctx, request, records, Some(e)),
             }
         }
         WorktreeCommands::Add(args) => {

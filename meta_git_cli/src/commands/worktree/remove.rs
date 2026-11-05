@@ -35,7 +35,7 @@ pub(crate) fn handle_remove(args: RemoveArgs, ctx: &Ctx, request: &Request) -> R
     };
     let mut records = Vec::new();
     let removed = remove_set(&args, &wt_dir, &here, ctx, how, &mut records);
-    crate::printed(ctx, records, removed.err())
+    crate::printed_with_git(ctx, request, records, removed.err())
 }
 
 /// How a remove runs: meta's options, or what an ephemeral run's cleanup

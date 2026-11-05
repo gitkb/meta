@@ -131,7 +131,7 @@ fn eligible(record: &SetRecord, now: i64) -> Result<Option<(String, Option<u64>)
 pub(crate) fn handle_prune(ctx: &Ctx, request: &Request) -> Result<Response> {
     let mut records = Vec::new();
     let pruned = prune(ctx, request, &mut records);
-    crate::printed(ctx, records, pruned.err())
+    crate::printed_with_git(ctx, request, records, pruned.err())
 }
 
 fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Result<()> {
@@ -306,6 +306,8 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
     let attempted = !dry_run && !candidates.is_empty();
     let mut removed = Vec::new();
     let mut failed = Vec::new();
+    // a row for each repo whose git command failed, with git's stderr
+    let mut git_rows = Vec::new();
     for (candidate, check) in candidates {
         if dry_run {
             removed.push(candidate.entry());
@@ -359,6 +361,10 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
         match removal {
             Ok(()) => removed.push(candidate.entry()),
             Err(e) => {
+                git_rows.extend(crate::worktree::git_ops::failure_rows(
+                    &e,
+                    &here.workspace.root,
+                ));
                 failed.push(candidate.name.clone());
                 kept.push(candidate.kept(format!("removing it failed: {e:#}")));
             }
@@ -386,7 +392,16 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
         if let Err(e) = hook {
             ctx.warn(format!("{e:#}"));
         }
-        anyhow::bail!("Failed to prune: {}", escape(&failed.join(", ")));
+        let failure = anyhow::anyhow!("Failed to prune: {}", escape(&failed.join(", ")));
+        // under --json: the command's error, then each git failure's row
+        if json && !git_rows.is_empty() {
+            records.push(ProjectResult {
+                error: Some(meta_plugin::envelope::info_of(&failure)),
+                ..ProjectResult::default()
+            });
+            records.append(&mut git_rows);
+        }
+        return Err(failure);
     }
     hook.or_else(|e| ctx.warn_or_bail(format!("{e:#}")))?;
     warn_kept(&kept, ctx)

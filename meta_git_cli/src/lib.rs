@@ -293,6 +293,35 @@ pub(crate) fn through_meta(
     }
 }
 
+/// [`printed`], for a worktree command: under `--json` its records, then
+/// the failure (the command's error), then a row for each repo whose git
+/// command failed, with git's stderr. In text the failure says it all,
+/// git's stderr under the repo it names.
+pub(crate) fn printed_with_git(
+    ctx: &Ctx,
+    request: &Request,
+    mut records: Vec<ProjectResult>,
+    failure: Option<anyhow::Error>,
+) -> meta_plugin::Result<Response> {
+    let Some(failure) = failure else {
+        return Ok(Response::printed(records));
+    };
+    let root = request
+        .workspace
+        .as_ref()
+        .map_or(request.cwd.as_path(), |w| w.root.as_path());
+    let rows = worktree::git_ops::failure_rows(&failure, root);
+    if !ctx.meta().json || rows.is_empty() {
+        return printed(ctx, records, Some(failure));
+    }
+    records.push(ProjectResult {
+        error: Some(meta_plugin::envelope::info_of(&failure)),
+        ..ProjectResult::default()
+    });
+    records.extend(rows);
+    Ok(Response::printed(records))
+}
+
 /// Check if a git command accesses remote repositories
 fn is_remote_command(argv: &[String]) -> bool {
     let remote_commands = ["push", "pull", "fetch", "clone", "ls-remote"];

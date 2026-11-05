@@ -8,6 +8,104 @@ use meta_plugin::errln;
 use std::ffi::OsStr;
 use std::path::Path;
 
+/// A git command that failed in a repo: its error says what failed where,
+/// with git's stderr, as any of meta's git errors does; a command's answer
+/// gives the repo a row of its own with that stderr (see [`failure_rows`]).
+#[derive(Debug)]
+pub struct GitFailed {
+    /// The repo, as its project is checked out
+    pub repo: std::path::PathBuf,
+    /// The command, as shown
+    pub command: String,
+    /// The folder git ran in
+    pub dir: std::path::PathBuf,
+    pub stderr: String,
+}
+
+impl std::fmt::Display for GitFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "git {} failed in {}:{}",
+            escape(&self.command),
+            escape_path(&self.dir),
+            meta_plugin::display::program_output(self.stderr.as_bytes())
+        )
+    }
+}
+
+impl std::error::Error for GitFailed {}
+
+/// `git <args>` in `dir`, a command that changes the repo of `repo`: when
+/// it fails, a [`GitFailed`] (its stderr kept, bounded as every captured
+/// output is).
+fn change<I, S>(repo: &Path, dir: &Path, args: I) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args: Vec<S> = args.into_iter().collect();
+    let command = args
+        .iter()
+        .map(|a| a.as_ref().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let output =
+        meta_plugin::process::output(meta_core::git::git(dir).args(&args)).map_err(|e| {
+            anyhow::anyhow!(
+                "Cannot run git {} in {}: {e}",
+                escape(&command),
+                escape_path(dir)
+            )
+        })?;
+    if !output.status.success() {
+        return Err(GitFailed {
+            repo: repo.to_path_buf(),
+            command,
+            dir: dir.to_path_buf(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+        .into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim_end_matches(['\n', '\r'])
+        .to_string())
+}
+
+/// A row for each git command that failed in `error`'s chain, named by its
+/// repo's path from `root`, with git's stderr: as `meta --json exec` gives a
+/// failed step's.
+pub fn failure_rows(error: &anyhow::Error, root: &Path) -> Vec<meta_plugin::ProjectResult> {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<GitFailed>())
+        .map(|failed| {
+            let project = match failed.repo.strip_prefix(root) {
+                Ok(inside) if inside.as_os_str().is_empty() => ".".to_string(),
+                Ok(inside) => inside.to_string_lossy().into_owned(),
+                Err(_) => failed.repo.to_string_lossy().into_owned(),
+            };
+            let last = failed
+                .stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("no stderr");
+            meta_plugin::ProjectResult {
+                stderr: Some(failed.stderr.clone()),
+                ..meta_plugin::ProjectResult::error(
+                    project,
+                    meta_plugin::ErrorInfo::new(
+                        meta_plugin::ErrorCode::ToolFailed,
+                        format!("git {} failed: {}", escape(&failed.command), escape(last)),
+                    ),
+                )
+                .at(&failed.repo)
+            }
+        })
+        .collect()
+}
+
 /// An error if the checkout at `repo_path` has `core.bare=true` in its
 /// config: git would make no worktree of it.
 pub fn ensure_checkout_config_is_not_bare(repo_path: &Path) -> Result<()> {
@@ -202,7 +300,7 @@ pub fn git_worktree_add(
         WorktreeStart::Default { name, .. } => args.push(name.as_ref()),
         WorktreeStart::Head { .. } => {}
     }
-    run(repo_path, args)?;
+    change(repo_path, repo_path, args)?;
     Ok(start)
 }
 
@@ -258,7 +356,12 @@ pub fn git_worktree_remove(repo_path: &Path, worktree_path: &Path, force: bool) 
         args.push("--force".as_ref());
     }
     args.push(worktree_path.as_os_str());
-    run(repo_path, args)?;
+    // the repo: its checkout, above its git directory
+    let repo = match repo_path.file_name() {
+        Some(name) if name == ".git" => repo_path.parent().unwrap_or(repo_path),
+        _ => repo_path,
+    };
+    change(repo, repo_path, args)?;
     Ok(())
 }
 
@@ -459,7 +562,8 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
 pub fn git_delete_branch_at(repo_path: &Path, branch: &str, expected: &str) -> Result<()> {
     git_branch_is_free(repo_path, branch)
         .map_err(|e| anyhow::anyhow!("Branch '{}' is in use; kept ({e})", escape(branch)))?;
-    run(
+    change(
+        repo_path,
         repo_path,
         [
             "update-ref",
@@ -495,7 +599,7 @@ pub fn git_delete_branch_at(repo_path: &Path, branch: &str, expected: &str) -> R
 
 /// Fetch a branch from origin if not locally available.
 pub fn git_fetch_branch(repo_path: &Path, branch: &str) -> Result<()> {
-    run(repo_path, ["fetch", "origin", branch])?;
+    change(repo_path, repo_path, ["fetch", "origin", branch])?;
     Ok(())
 }
 
@@ -606,6 +710,17 @@ mod tests {
             !message.contains('\u{1b}') && !message.lines().any(|l| l.starts_with("FORGED")),
             "{message}"
         );
+        // the repo gets a row of its own with git's stderr, under any context
+        let err = err.context("Cannot fetch the PR branch");
+        let rows = failure_rows(&err, &tmp);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].project.as_deref(), Some("."));
+        assert!(
+            rows[0].stderr.as_deref().unwrap().contains("fatal"),
+            "{rows:?}"
+        );
+        let said = &rows[0].error.as_ref().unwrap().message;
+        assert!(!said.contains('\u{1b}') && !said.contains('\n'), "{said}");
     }
 
     /// The command a leftover git entry's message gives is quoted for a shell

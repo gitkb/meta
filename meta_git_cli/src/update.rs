@@ -1,10 +1,10 @@
+use crate::clone_queue::{CloneQueue, CloneTask, MetaRepo, Work};
 use crate::clone_worker::clone_with_queue;
 use crate::ssh;
 use colored::Colorize;
 use indicatif::MultiProgress;
 use meta_core::config;
 use meta_core::gitdir::Checkout;
-use crate::clone_queue::{CloneQueue, CloneTask, MetaRepo, Work};
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::RepoUrl;
 use meta_plugin::{errln, outln};

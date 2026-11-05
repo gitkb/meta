@@ -8,15 +8,15 @@ use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
 
+use crate::worktree::git_ops::repo_status;
+use crate::worktree::ttl;
+use crate::worktree::types::ListRepoEntry;
 use meta_core::duration::format_duration;
 use meta_core::set_record::{self as record, SetRecord};
 use meta_core::worktree::{
     detect_worktree_location, discover_worktree_members, discover_worktree_members_strict,
     discover_worktree_repos, discover_worktree_repos_strict, WorktreeMemberInfo,
 };
-use crate::worktree::git_ops::repo_status;
-use crate::worktree::ttl;
-use crate::worktree::types::ListRepoEntry;
 
 use super::cli_types::ListArgs;
 

@@ -2,8 +2,8 @@
 //!
 //! These are clap-derived types that belong in the CLI crate, not the library.
 
-use clap::{Args, Subcommand};
 use crate::worktree::RepoSpec;
+use clap::{Args, Subcommand};
 
 /// Worktree subcommands parsed by clap.
 #[derive(Subcommand)]

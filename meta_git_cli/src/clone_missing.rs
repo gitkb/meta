@@ -3,9 +3,9 @@
 //! repos that are there that none lists, with the `.meta.yaml` files as they
 //! are on disk.
 
+use crate::clone_queue::{CloneQueue, MetaRepo, Work};
 use crate::update::{self, Leftover};
 use colored::Colorize;
-use crate::clone_queue::{CloneQueue, MetaRepo, Work};
 use meta_plugin::display::escape;
 use meta_plugin::outln;
 use meta_plugin::{Ctx, ErrorCode, ErrorInfo, ProjectResult, Request, Response};

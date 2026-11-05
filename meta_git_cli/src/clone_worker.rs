@@ -1,7 +1,7 @@
+use crate::clone_queue::{CloneQueue, CloneTask, Outcome, Work};
 use anyhow::Context;
 use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use crate::clone_queue::{CloneQueue, CloneTask, Outcome, Work};
 use meta_plugin::errln;
 use meta_plugin::RepoUrl;
 use std::ffi::OsString;

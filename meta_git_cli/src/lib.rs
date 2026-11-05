@@ -3,8 +3,8 @@
 //! Provides git operations optimized for meta repositories.
 
 mod clone;
-mod clone_queue;
 mod clone_missing;
+mod clone_queue;
 mod clone_worker;
 mod commit;
 mod git_env;

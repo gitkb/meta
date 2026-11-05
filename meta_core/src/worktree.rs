@@ -165,7 +165,10 @@ pub fn set_members(
             .map(|(place, (_, info))| (place, info))
             .collect();
     places.sort_by(|a, b| a.0.cmp(&b.0));
-    let tags = places.iter().flat_map(|(_, info)| info.tags.clone()).collect();
+    let tags = places
+        .iter()
+        .flat_map(|(_, info)| info.tags.clone())
+        .collect();
     let config_name = workspace.config_path.file_name();
     let mut repos: Vec<Candidate> = config_name
         .filter(|name| set_dir.join(name).is_file())

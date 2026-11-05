@@ -4,8 +4,8 @@ use meta_plugin::{errln, outln};
 use meta_plugin::{Ctx, Plan, Request, Response, Scope, Step};
 use std::path::{Path, PathBuf};
 
-use meta_core::worktree::{discover_worktree_repos, WorktreeRepoInfo};
 use crate::worktree::helpers::*;
+use meta_core::worktree::{discover_worktree_repos, WorktreeRepoInfo};
 
 use super::cli_types::{CreateArgs, ExecArgs, RemoveArgs};
 use crate::git_env;

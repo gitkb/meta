@@ -117,7 +117,10 @@ fn a_typo_of_a_command_suggests_the_command_it_is_near() {
         (&["exce", "--", "ls"], &["exec", "--", "ls"]),
         (&["project", "lsit"], &["project", "list"]),
         // asking a typo for its help gets the command it is near, not help
-        (&["project", "lsit", "--help"], &["project", "list", "--help"]),
+        (
+            &["project", "lsit", "--help"],
+            &["project", "list", "--help"],
+        ),
     ] {
         let out = workspace.meta(typo);
         assert_eq!(out.status.code(), Some(2), "{}", text(&out));

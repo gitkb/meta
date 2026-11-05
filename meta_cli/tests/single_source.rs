@@ -68,8 +68,14 @@ const GROUPS: [(u8, &str, Check); 25] = [
         6,
         "help and usage: rendered from the declarations",
         Check::Copies(&[
-            ("meta_git_cli/src/lib.rs", "usage: \"Usage: meta git <COMMAND> [OPTIONS]\""),
-            ("meta_rust_cli/src/main.rs", "usage: \"Usage: meta cargo <CARGO_ARGS>...\""),
+            (
+                "meta_git_cli/src/lib.rs",
+                "usage: \"Usage: meta git <COMMAND> [OPTIONS]\"",
+            ),
+            (
+                "meta_rust_cli/src/main.rs",
+                "usage: \"Usage: meta cargo <CARGO_ARGS>...\"",
+            ),
             ("meta_cli/src/main.rs", "fn as_typed_help"),
             ("meta_cli/src/main.rs", "fn help_with_plugins"),
             ("meta_plugin/src/lib.rs", "pub fn help_text"),

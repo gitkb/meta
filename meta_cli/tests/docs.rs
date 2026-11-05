@@ -618,11 +618,7 @@ fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let bin = Path::new(env!("CARGO_BIN_EXE_meta")).parent().unwrap();
     // the plugin guide's example plugin serves `meta hello`
-    for plugin in [
-        "meta-git",
-        "meta-cargo",
-        "examples/meta-hello",
-    ] {
+    for plugin in ["meta-git", "meta-cargo", "examples/meta-hello"] {
         assert!(
             bin.join(plugin).is_file(),
             "{plugin} is not in {}: build the workspace first (cargo build --workspace --bins --examples)",

@@ -12,11 +12,11 @@ use meta_core::worktree::discover_worktree_members;
 use meta_core::worktree::Configs;
 
 use crate::worktree::hooks::fire_post_prune;
-use meta_plugin::sets::lease;
 use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
 use crate::worktree::ttl;
 use crate::worktree::types::*;
 use crate::worktree::workspace::Workspace;
+use meta_plugin::sets::lease;
 
 /// Helper to create a PruneEntry with consistent structure.
 fn create_prune_entry(

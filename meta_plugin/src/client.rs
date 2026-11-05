@@ -127,7 +127,9 @@ impl Meta {
         if json {
             command.arg("--json");
         }
-        command.args(&self.args).env(DEPTH_VAR, self.depth.to_string());
+        command
+            .args(&self.args)
+            .env(DEPTH_VAR, self.depth.to_string());
         match &self.lease {
             Some(token) => command.env(crate::LEASE_VAR, token),
             None => command.env_remove(crate::LEASE_VAR),
@@ -213,9 +215,8 @@ impl Running {
                 MAX_ENVELOPE >> 20
             );
         }
-        serde_json::from_slice(&bytes).with_context(|| {
-            format!("meta ended ({status}) without an Envelope on its stdout")
-        })
+        serde_json::from_slice(&bytes)
+            .with_context(|| format!("meta ended ({status}) without an Envelope on its stdout"))
     }
 
     /// Whether meta has ended (its Envelope may still be being read), so a
@@ -292,7 +293,9 @@ mod tests {
     /// The tests that touch these variables hold one lock.
     fn temp_env<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _held = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _held = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let old: Vec<_> = vars
             .iter()
             .map(|(k, _)| (*k, std::env::var_os(k)))

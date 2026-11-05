@@ -7,10 +7,10 @@ use meta_plugin::outln;
 use meta_plugin::{Ctx, ProjectResult, Request, Response};
 
 use crate::worktree::hooks::fire_post_destroy;
-use meta_plugin::sets::lease;
 use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
 use crate::worktree::types::*;
 use crate::worktree::workspace::Workspace;
+use meta_plugin::sets::lease;
 
 use super::cli_types::RemoveArgs;
 

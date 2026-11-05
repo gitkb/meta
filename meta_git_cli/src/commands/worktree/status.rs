@@ -5,10 +5,10 @@ use meta_plugin::outln;
 use meta_plugin::{Ctx, ProjectResult, Request, Response};
 use rayon::prelude::*;
 
-use meta_core::worktree::WorktreeMemberInfo;
 use crate::worktree::git_ops::repo_status;
 use crate::worktree::helpers::resolve_existing_worktree;
 use crate::worktree::types::*;
+use meta_core::worktree::WorktreeMemberInfo;
 
 use super::cli_types::StatusArgs;
 

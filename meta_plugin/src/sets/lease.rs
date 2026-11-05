@@ -24,8 +24,8 @@
 //! [`crate::client`]) gets the token in [`super::LEASE_VAR`], which meta
 //! passes its plugin as `Request::lease`; [`Found::held_by`] tells.
 
-use anyhow::{Context, Result};
 use crate::display::escape_path;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::path::{Path, PathBuf};

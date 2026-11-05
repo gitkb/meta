@@ -121,10 +121,7 @@ pub fn provider(set: &Path) -> Result<String> {
 /// whose folder is still there keeps it.
 pub fn forget(set: &Path) -> Result<()> {
     if set.symlink_metadata().is_ok() {
-        anyhow::bail!(
-            "{} is still there; its owner file stays",
-            escape_path(set)
-        );
+        anyhow::bail!("{} is still there; its owner file stays", escape_path(set));
     }
     let path = beside(set, OWNER_SUFFIX)?;
     match std::fs::remove_file(&path) {
@@ -141,16 +138,9 @@ pub fn forget(set: &Path) -> Result<()> {
 /// before anything is deleted, naming it. For a provider whose tool leaves
 /// plain folders (a jj workspace forgotten); meta-git deletes its sets with
 /// its own checks.
-pub fn remove_checked(
-    set: &crate::Set,
-    claim: &lease::Claim,
-    provider: &str,
-) -> Result<()> {
+pub fn remove_checked(set: &crate::Set, claim: &lease::Claim, provider: &str) -> Result<()> {
     if !claim.is_for(&set.dir) {
-        anyhow::bail!(
-            "The lease held is not the one of {}",
-            escape_path(&set.dir)
-        );
+        anyhow::bail!("The lease held is not the one of {}", escape_path(&set.dir));
     }
     let owner = self::provider(&set.dir)?;
     if owner != provider {
@@ -170,7 +160,11 @@ pub fn remove_checked(
             "Worktree set {} holds what is no member's ({}{}); left in place",
             escape(&set.name),
             shown.join(", "),
-            if stray.len() > shown.len() { ", …" } else { "" }
+            if stray.len() > shown.len() {
+                ", …"
+            } else {
+                ""
+            }
         );
     }
     std::fs::remove_dir_all(&set.dir)
@@ -207,16 +201,16 @@ fn strays(dir: &Path, members: &[&Path], found: &mut Vec<PathBuf>) -> Result<()>
 /// followed is done either way. A hook that doesn't read its payload is no
 /// failure.
 #[cfg(feature = "process")]
-pub fn fire(
-    worktree: &crate::Worktree,
-    event: &str,
-    payload: &serde_json::Value,
-) -> Result<()> {
+pub fn fire(worktree: &crate::Worktree, event: &str, payload: &serde_json::Value) -> Result<()> {
     use std::process::Stdio;
     let Some(command) = worktree.hooks.get(event) else {
         return Ok(());
     };
     let hook = format!("The {} hook", escape(event));
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the hook's shell; process::clean_env clears the repo's git env next"
+    )]
     let mut sh = std::process::Command::new("sh");
     crate::process::clean_env(&mut sh);
     if let Some(home) = &worktree.home {

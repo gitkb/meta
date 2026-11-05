@@ -114,9 +114,7 @@ const FILTERS: [&str; 3] = ["--include", "--exclude", "--tag"];
 pub fn run(cli: &Cli, command: &ProjectCommands, report: &mut Report) -> Result<()> {
     let start = cli.start_dir()?;
     let found = match command {
-        ProjectCommands::Other(words) => {
-            return Err(unrecognized(words, &crate::meta_options()))
-        }
+        ProjectCommands::Other(words) => return Err(unrecognized(words, &crate::meta_options())),
         ProjectCommands::Check => return check(cli, &start, report),
         ProjectCommands::List => list(&workspace_target(cli, &start, "list")?, &start)?,
         ProjectCommands::Dependents { project } => {

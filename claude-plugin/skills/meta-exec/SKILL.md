@@ -123,7 +123,7 @@ A row that failed has an `error` (`{"code", "message"}`), and so does the whole 
 
 ## Silent Mode
 
-Suppress command output (only meta's final failure message remains):
+Suppress command output: nothing is printed for a repo where the command succeeds; for each one where it failed, its name, how it ended and its stderr are printed on stderr:
 
 ```bash
 meta --silent exec -- npm install

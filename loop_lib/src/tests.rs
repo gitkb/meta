@@ -859,3 +859,38 @@ fn one_argument_with_a_space_that_names_no_program_is_told_apart() {
     // nor a path with a space in it
     assert!(!not_started(&["/opt/My Tools/run".to_string()], &missing).contains("separate"));
 }
+
+#[cfg(unix)]
+#[test]
+fn captured_output_is_whole_under_the_limit_and_refused_past_it() {
+    use meta_plugin::process::CAPTURE_LIMIT;
+    let dir = TempDir::new().unwrap();
+    let config = LoopConfig::default();
+    let capture = |script: String| {
+        let result =
+            execute_command_in_directory_capturing(dir.path(), &sh(&script), &config, None);
+        CommandResult {
+            project: Some("a".to_string()),
+            ..result
+        }
+    };
+
+    let fits = capture(format!("head -c {CAPTURE_LIMIT} /dev/zero"));
+    assert!(fits.success);
+    assert_eq!(fits.stdout.len(), CAPTURE_LIMIT);
+
+    // the limit counts stdout and stderr together
+    let half = CAPTURE_LIMIT / 2 + 1;
+    let over = capture(format!(
+        "head -c {half} /dev/zero; head -c {half} /dev/zero >&2"
+    ));
+    assert!(!over.success);
+    assert!(over.stdout.is_empty() && over.stderr.is_empty());
+    let error = over.row().error.unwrap();
+    assert_eq!(error.code, meta_plugin::ErrorCode::TooMuchOutput);
+    assert!(
+        error.message.starts_with("a: ") && error.message.contains("16 MiB"),
+        "{}",
+        error.message
+    );
+}

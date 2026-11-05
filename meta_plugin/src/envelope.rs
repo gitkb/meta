@@ -192,6 +192,9 @@ pub enum ErrorCode {
     ToolFailed,
     /// Stopped by a signal (Ctrl-C)
     Cancelled,
+    /// A program wrote more output than meta keeps of one
+    /// ([`crate::process::CAPTURE_LIMIT`]): it was stopped
+    TooMuchOutput,
     /// A service refused the credentials, or none were given
     Auth,
     /// A service couldn't be reached
@@ -222,6 +225,7 @@ impl ErrorCode {
             ErrorCode::PluginFailed => "plugin-failed",
             ErrorCode::ToolFailed => "tool-failed",
             ErrorCode::Cancelled => "cancelled",
+            ErrorCode::TooMuchOutput => "too-much-output",
             ErrorCode::Auth => "auth",
             ErrorCode::Network => "network",
             ErrorCode::RateLimited => "rate-limited",
@@ -292,6 +296,13 @@ pub fn code_of(error: &anyhow::Error) -> ErrorCode {
         .find_map(|cause| {
             if let Some(info) = cause.downcast_ref::<ErrorInfo>() {
                 return Some(info.code);
+            }
+            if cause
+                .downcast_ref::<std::io::Error>()
+                .and_then(crate::process::TooMuchOutput::of)
+                .is_some()
+            {
+                return Some(ErrorCode::TooMuchOutput);
             }
             cause.is::<crate::exit::Usage>().then_some(ErrorCode::Usage)
         })

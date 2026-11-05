@@ -318,7 +318,9 @@ impl SubprocessPlugin {
     /// Call the plugin with `request`: the request in a file, its answer
     /// read from another (see `meta_plugin`'s protocol). Its stdin and
     /// stderr are meta's, and its stdout too, but under `--json` meta's
-    /// stderr, so meta's stdout holds the Envelope alone.
+    /// stderr, so meta's stdout holds the Envelope alone. Under `--json`
+    /// its stderr passes through meta, which keeps its end: a plugin that
+    /// fails without an answer has it in the Envelope's error.
     pub fn call(
         &self,
         request: &Request,
@@ -351,23 +353,31 @@ impl SubprocessPlugin {
             .arg("--meta-plugin-exec")
             .env(meta_plugin::REQUEST_VAR, &request_file)
             .env(meta_plugin::RESPONSE_VAR, &response_file)
-            .stdin(Stdio::inherit())
-            .stderr(Stdio::inherit());
+            .stdin(Stdio::inherit());
         match request.meta.json {
-            true => plugin.stdout(std::io::stderr()),
-            false => plugin.stdout(Stdio::inherit()),
+            true => plugin.stdout(std::io::stderr()).stderr(Stdio::piped()),
+            false => plugin.stdout(Stdio::inherit()).stderr(Stdio::inherit()),
         };
         let events = crate::events::Channel::open(dir.path(), show)
             .context("Cannot make the plugin's events channel")?;
         plugin.env(meta_plugin::event::EVENTS_VAR, events.path());
         meta_plugin::out::pass_color(&mut plugin);
         meta_plugin::out::flush()?;
-        let status = meta_plugin::process::status(&mut plugin);
+        let status = meta_plugin::process::spawn(&mut plugin).and_then(|mut child| {
+            let stderr = child.stderr().map(StderrTail::pass);
+            child.wait().map(|status| (status, stderr))
+        });
         let received = events.finish();
-        let status = status.with_context(|| format!("Failed to execute plugin {shown}"))?;
+        let (status, stderr) =
+            status.with_context(|| format!("Failed to execute plugin {shown}"))?;
+        let said = stderr.map(StderrTail::finish).unwrap_or_default();
         let ended = meta_plugin::exit::ExitWith::of(status);
         let failed = |why: String| {
-            let info = ErrorInfo::new(ErrorCode::PluginFailed, format!("plugin {shown} {why}"));
+            let message = match said.is_empty() {
+                true => format!("plugin {shown} {why}"),
+                false => format!("plugin {shown} {why} (its stderr ends:\n{said})"),
+            };
+            let info = ErrorInfo::new(ErrorCode::PluginFailed, message);
             match ended.0 {
                 // its own ending: meta ends with it, as the plugin may
                 // have said why on stderr
@@ -388,6 +398,62 @@ impl SubprocessPlugin {
         let response = serde_json::from_slice(&bytes)
             .map_err(|e| failed(format!("wrote an answer that is no response ({e})")))?;
         Ok((response, received))
+    }
+}
+
+/// A plugin's stderr, passed on to meta's as it comes, its last lines kept.
+struct StderrTail {
+    tail: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    ended: std::sync::mpsc::Receiver<()>,
+}
+
+impl StderrTail {
+    /// The most of a plugin's stderr kept for its error.
+    const KEPT: usize = 4096;
+
+    fn pass(mut pipe: std::process::ChildStderr) -> StderrTail {
+        let tail = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (done, ended) = std::sync::mpsc::channel();
+        let kept = std::sync::Arc::clone(&tail);
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 8192];
+            loop {
+                let n = match pipe.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                };
+                let bytes = chunk.get(..n).unwrap_or_default();
+                meta_plugin::out::stderr_bytes(bytes);
+                let mut tail = kept.lock().unwrap_or_else(|p| p.into_inner());
+                tail.extend_from_slice(bytes);
+                if let Some(last) = tail
+                    .len()
+                    .checked_sub(Self::KEPT)
+                    .and_then(|at| tail.get(at..))
+                {
+                    *tail = last.to_vec();
+                }
+            }
+            let _ = done.send(());
+        });
+        StderrTail { tail, ended }
+    }
+
+    /// What it kept, once its stderr ended: whole lines, escaped. What
+    /// it started may hold its stderr open after it ended: that is waited
+    /// for only briefly, and passed on as it comes.
+    fn finish(self) -> String {
+        let _ = self.ended.recv_timeout(Duration::from_millis(200));
+        let tail = std::mem::take(&mut *self.tail.lock().unwrap_or_else(|p| p.into_inner()));
+        let text = String::from_utf8_lossy(&tail);
+        // a line cut where the tail starts isn't shown
+        let whole = match tail.len() >= Self::KEPT {
+            true => text.split_once('\n').map_or("", |(_, rest)| rest),
+            false => &text,
+        };
+        meta_plugin::display::escape_lines(whole.trim()).into_owned()
     }
 }
 

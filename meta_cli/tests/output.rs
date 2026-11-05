@@ -2,6 +2,8 @@
 //! output mode, and captured output that stays bounded.
 
 #![expect(clippy::unwrap_used, reason = "test helpers: a panic is a failed test")]
+// Unix only: the plugin here is a shell script
+#![cfg(unix)]
 
 use meta_plugin::testing::Sandbox;
 use std::io::Read;

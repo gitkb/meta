@@ -20,21 +20,6 @@ fn wait_for(what: &str, done: impl Fn() -> bool) {
     }
 }
 
-/// The processes whose working directory is under `dir` (Linux: where
-/// /proc tells).
-fn running_in(dir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter(|entry| {
-            std::fs::read_link(entry.path().join("cwd")).is_ok_and(|cwd| cwd.starts_with(dir))
-        })
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect()
-}
-
 #[test]
 fn a_cancelled_ephemeral_run_leaves_no_set_and_no_process() {
     let sandbox = Sandbox::new();
@@ -52,7 +37,14 @@ fn a_cancelled_ephemeral_run_leaves_no_set_and_no_process() {
     let mut run = sandbox
         .command(&meta)
         .args(["git", "worktree", "exec", "--ephemeral", "t", "--repo", "a"])
-        .args(["--", "sleep", "30"])
+        // the command says it started, and which process it is
+        .args([
+            "--",
+            "sh",
+            "-c",
+            r#"echo $$ > "$0.$(basename "$PWD")"; exec sleep 30"#,
+        ])
+        .arg(sandbox.work().join("started"))
         .current_dir(&ws)
         .env("PATH", std::env::join_paths(paths).unwrap())
         .stdin(Stdio::null())
@@ -62,9 +54,16 @@ fn a_cancelled_ephemeral_run_leaves_no_set_and_no_process() {
         .spawn()
         .unwrap();
     let set = ws.join(".worktrees/t");
+    let started = sandbox.work().join("started.a");
     wait_for("the set's command", || {
-        !running_in(&set.join("a")).is_empty()
+        std::fs::read_to_string(&started).is_ok_and(|pid| pid.ends_with('\n'))
     });
+    let pid: i32 = std::fs::read_to_string(&started)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let pid = rustix::process::Pid::from_raw(pid).unwrap();
 
     // Ctrl-C: SIGINT to meta's process group, as a terminal sends it
     let group = rustix::process::Pid::from_child(&run);
@@ -73,7 +72,7 @@ fn a_cancelled_ephemeral_run_leaves_no_set_and_no_process() {
 
     wait_for("the set's removal", || !set.exists());
     wait_for("the end of what the run started", || {
-        running_in(&sandbox.work()).is_empty()
+        rustix::process::test_kill_process(pid).is_err()
     });
     assert!(
         ws.join("a/README").exists(),

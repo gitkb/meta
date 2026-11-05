@@ -694,6 +694,15 @@ assert backend['files_changed'] >= 1 and backend['files'] == ['README.md'], back
     run "$META_BIN" --parallel git worktree exec in-turn -- sh -c "$step"
     [ "$status" -eq 0 ]
     [ "$(head -2 "$log" | tr '\n' ' ')" = "start start " ]
+    # an ephemeral run the same: in turn, at once only with --parallel
+    rm "$log"
+    run "$META_BIN" git worktree exec --ephemeral eph-turn --repo backend --repo frontend -- sh -c "$step"
+    [ "$status" -eq 0 ]
+    [[ "$(tr '\n' ' ' < "$log")" != *"start start"* ]]
+    rm "$log"
+    run "$META_BIN" --parallel git worktree exec --ephemeral eph-once --repo backend --repo frontend -- sh -c "$step"
+    [ "$status" -eq 0 ]
+    [ "$(head -2 "$log" | tr '\n' ' ')" = "start start " ]
 }
 
 @test "worktree exec --include filters repos" {

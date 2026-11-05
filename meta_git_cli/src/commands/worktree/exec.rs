@@ -210,8 +210,11 @@ fn run_in(
     removal: &mut meta_plugin::client::Finishing,
 ) -> Result<Vec<ProjectResult>> {
     let mut args: Vec<std::ffi::OsString> = Vec::new();
-    if request.meta_options.typed_has("--parallel") {
-        args.push("--parallel".into());
+    // one checkout after another, as `worktree exec` runs (at once only with
+    // --parallel), whatever exec's own default
+    match request.meta_options.typed_has("--parallel") {
+        true => args.push("--parallel".into()),
+        false => args.push("--sequential".into()),
     }
     if request.meta.verbose {
         args.push("--verbose".into());

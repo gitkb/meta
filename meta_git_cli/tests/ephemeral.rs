@@ -81,15 +81,17 @@ fn ended_by(stop: impl Fn(rustix::process::Pid) -> rustix::io::Result<()>) {
         .spawn()
         .unwrap();
     let set = ws.join(".worktrees/t");
-    let started = sandbox.work().join("started.a");
-    wait_for("the set's command", || {
-        std::fs::read_to_string(&started).is_ok_and(|pid| pid.ends_with('\n'))
-    });
-    let pid: i32 = std::fs::read_to_string(&started)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+    // the repos run in turn: the first one's command, whichever it is
+    let started = || {
+        std::fs::read_dir(sandbox.work())
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("started."))
+            .find_map(|entry| std::fs::read_to_string(entry.path()).ok())
+            .filter(|pid| pid.ends_with('\n'))
+    };
+    wait_for("the set's command", || started().is_some());
+    let pid: i32 = started().unwrap().trim().parse().unwrap();
     let pid = rustix::process::Pid::from_raw(pid).unwrap();
 
     stop(rustix::process::Pid::from_child(&run)).unwrap();

@@ -123,6 +123,47 @@ fn a_typo_of_a_command_suggests_the_command_it_is_near() {
         // and that one runs
         assert!(workspace.meta(near).status.success(), "meta {near:?}");
     }
+    // meta's options typed after the typo go before the command, and the
+    // ones typed before it stay
+    for (typo, near) in [
+        (
+            &["project", "lsit", "--json"][..],
+            &["--json", "project", "list"][..],
+        ),
+        (
+            &["--json", "project", "lsit"],
+            &["--json", "project", "list"],
+        ),
+        (
+            &["-r", "project", "lsit", "--json"],
+            &["-r", "--json", "project", "list"],
+        ),
+    ] {
+        let out = workspace.meta(typo);
+        assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+        // under --json the message is the Envelope's error
+        let said = match serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+            Ok(envelope) => envelope["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            Err(_) => text(&out),
+        };
+        let line = said
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("meta "))
+            .unwrap_or_default();
+        assert_eq!(
+            shlex::split(line)
+                .unwrap_or_default()
+                .get(1..)
+                .unwrap_or_default(),
+            near,
+            "{said}"
+        );
+        assert!(workspace.meta(near).status.success(), "meta {near:?}");
+    }
     // meta's options before the command stay: a preview stays a preview
     let out = workspace.meta(&["--dry-run", "--include", "api", "exce", "--", "rm", "x"]);
     assert_eq!(
@@ -298,6 +339,19 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
         "{}",
         text(&out)
     );
+    // -r typed in a cluster before the command is not given again
+    let out = workspace.meta(&["-rv", "git", "clone", url, "d", "--meta-depth", "1"]);
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
+    let line = tip_line(&out);
+    assert_eq!(
+        line,
+        ["-rv", "--depth", "1", "git", "clone", url, "d"],
+        "{}",
+        text(&out)
+    );
+    let words: Vec<&str> = line.iter().map(String::as_str).collect();
+    let again = workspace.meta(&words);
+    assert_ne!(again.status.code(), Some(2), "{words:?}: {}", text(&again));
     let out = workspace.meta(&["git", "update", "--include", "api"]);
     assert!(
         text(&out)

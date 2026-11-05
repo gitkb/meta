@@ -193,11 +193,7 @@ fn meta_depth_line(args: &[String], meta: &meta_plugin::args::MetaOptions) -> Op
         Some((_, depth)) => (depth.to_string(), 1),
         None => (args.get(at + 1)?.clone(), 2),
     };
-    let typed_depth = meta
-        .typed
-        .iter()
-        .any(|w| w == "--depth" || w.starts_with("--depth="));
-    if depth.parse::<usize>().is_err() || typed_depth {
+    if depth.parse::<usize>().is_err() || meta.typed_has("--depth") {
         return None;
     }
     let recursive = |a: &String| a == "-r" || a == "--recursive";
@@ -208,7 +204,8 @@ fn meta_depth_line(args: &[String], meta: &meta_plugin::args::MetaOptions) -> Op
         .map(|(_, a)| a.clone())
         .collect();
     meta_plugin::parse_args::<clone::CloneArgs>("git clone", &rest, meta).ok()?;
-    let already = meta.typed.iter().any(recursive);
+    // -r may be in a cluster: `-rv`
+    let already = meta.typed_has("--recursive");
     let line: Vec<String> = std::iter::once("meta".to_string())
         .chain(meta.typed.iter().cloned())
         .chain((!already).then(|| "-r".to_string()))

@@ -128,9 +128,12 @@ impl Reach {
         scope
     }
 
-    /// The repos of it `filters` select. One that names a repo outside
-    /// where `-r` starts, but that `-A` (with the same `--depth`) reaches,
-    /// says so, as in `with_a` (the line to run).
+    /// The repos of it `filters` select. When one value of theirs (an
+    /// `--include`, an `--exclude` or a `--tag`) names nothing where `-r`
+    /// starts but something `-A` (with the same `--depth`) reaches, and `-A`
+    /// takes them all, the error says so, as in `with_a` (the line to run).
+    /// A selection that is merely empty here gets no such tip: `-A` would
+    /// run in repos nobody named.
     pub fn select(
         &self,
         filters: &Filters,
@@ -146,17 +149,37 @@ impl Reach {
         let whole = Workspace::in_dir(&self.root)?
             .map(|root| Reach::of(root, false, true, self.depth))
             .transpose()?;
-        // -A from the root reaches no deeper below here than -r: what it
-        // takes that -r doesn't is outside (an --exclude of a repo there too)
-        match whole.map(|whole| whole.scope().select_repos(filters)) {
-            Some(Ok(_)) => bail!(
-                "{e:#}\nThat names a repo outside {}, where -r starts; -A reaches the whole \
-                 workspace, as in {}",
-                escape(&repo_path(&self.workspace.dir, &self.root)),
-                escape(&with_a())
-            ),
-            _ => Err(e),
+        let Some(whole) = whole else {
+            return Err(e);
+        };
+        // -A from the root reaches no deeper below here than -r: a value it
+        // takes that -r doesn't names something outside
+        let outside = |one: Filters| {
+            self.scope().select_repos(&one).is_err() && whole.scope().select_repos(&one).is_ok()
+        };
+        let value = |v: &String| Filters {
+            include: vec![v.clone()],
+            ..Filters::default()
+        };
+        let tag = |t: &String| Filters {
+            tags: vec![t.clone()],
+            ..Filters::default()
+        };
+        let named = filters
+            .include
+            .iter()
+            .chain(&filters.exclude)
+            .any(|v| outside(value(v)))
+            || filters.tags.iter().any(|t| outside(tag(t)));
+        if !named || whole.scope().select_repos(filters).is_err() {
+            return Err(e);
         }
+        bail!(
+            "{e:#}\nThat names a repo or tag outside {}, where -r starts; -A reaches the \
+             whole workspace, as in {}",
+            escape(&repo_path(&self.workspace.dir, &self.root)),
+            escape(&with_a())
+        )
     }
 }
 

@@ -147,47 +147,11 @@ impl MetaOptions {
                 refused: false,
             })
             .collect();
-        let find = |spelling: &str| {
-            options
-                .iter()
-                .find(|o| o.spellings.iter().any(|s| s == spelling))
-        };
         let mut typed = Vec::new();
         let mut words = args.iter();
         while let Some(word) = words.next() {
-            // `--include=api`, `-i api`, and a cluster of short ones (`-rv`,
-            // `-iapi`: a value-taking one ends it, the rest its value)
-            let value_follows = match word.strip_prefix('-') {
-                Some(long) if long.starts_with('-') => {
-                    match find(word.split('=').next().unwrap_or(word)) {
-                        Some(option) => option.takes_value && !word.contains('='),
-                        None => break,
-                    }
-                }
-                Some(shorts) if !shorts.is_empty() => {
-                    // each a short option of meta's; one that takes a value
-                    // takes the rest of the word, or the next word
-                    let mut value_follows = false;
-                    let mut known = true;
-                    for (at, short) in shorts.char_indices() {
-                        match find(&format!("-{short}")) {
-                            Some(option) if option.takes_value => {
-                                value_follows = at + short.len_utf8() == shorts.len();
-                                break;
-                            }
-                            Some(_) => {}
-                            None => {
-                                known = false;
-                                break;
-                            }
-                        }
-                    }
-                    if !known {
-                        break;
-                    }
-                    value_follows
-                }
-                _ => break,
+            let Some(value_follows) = option_word(&options, word) else {
+                break;
             };
             typed.push(word.clone());
             if value_follows {
@@ -315,7 +279,95 @@ impl MetaOptions {
     }
 }
 
+/// Whether `word` is meta's options, from `options`: `--include=api`,
+/// `-i api`, or a cluster of short ones (`-rv`, `-iapi`: a value-taking one
+/// ends it, the rest its value). `None` when it is not; otherwise whether
+/// their value is the next word.
+fn option_word(options: &[MetaOption], word: &str) -> Option<bool> {
+    let find = |spelling: &str| {
+        options
+            .iter()
+            .find(|o| o.spellings.iter().any(|s| s == spelling))
+    };
+    match word.strip_prefix('-') {
+        Some(long) if long.starts_with('-') => {
+            let option = find(word.split('=').next().unwrap_or(word))?;
+            Some(option.takes_value && !word.contains('='))
+        }
+        Some(shorts) if !shorts.is_empty() => {
+            for (at, short) in shorts.char_indices() {
+                if find(&format!("-{short}"))?.takes_value {
+                    return Some(at + short.len_utf8() == shorts.len());
+                }
+            }
+            Some(false)
+        }
+        _ => None,
+    }
+}
+
 impl MetaOptions {
+    /// Whether meta's option spelled `long` (`--recursive`) was typed before
+    /// the command, in any spelling: `-r`, in a cluster (`-rv`), or with its
+    /// value (`--depth=2`).
+    pub fn typed_has(&self, long: &str) -> bool {
+        let Some(option) = self
+            .options
+            .iter()
+            .find(|o| o.spellings.iter().any(|s| s == long))
+        else {
+            return false;
+        };
+        let mut words = self.typed.iter();
+        while let Some(word) = words.next() {
+            if self.names(option, word) {
+                return true;
+            }
+            if option_word(&self.options, word) == Some(true) {
+                words.next();
+            }
+        }
+        false
+    }
+
+    /// `words` (typed after the command) split into meta's options among
+    /// them, with their values, and the rest: the ones to move before the
+    /// command. `None` when moving them makes a line that fails again: one
+    /// this command refuses, one without its value, or one already typed
+    /// before the command that can't be given twice.
+    pub fn lift(&self, words: &[String]) -> Option<(Vec<String>, Vec<String>)> {
+        let (mut moved, mut rest) = (Vec::new(), Vec::new());
+        let mut words = words.iter();
+        while let Some(word) = words.next() {
+            let Some(value_follows) = option_word(&self.options, word) else {
+                rest.push(word.clone());
+                continue;
+            };
+            let named: Vec<&MetaOption> = self
+                .options
+                .iter()
+                .filter(|o| self.names(o, word))
+                .collect();
+            let twice = named
+                .iter()
+                .any(|o| !o.repeats && self.typed.iter().chain(&moved).any(|w| self.names(o, w)));
+            if named.iter().any(|o| o.refused) || twice && value_follows {
+                return None;
+            }
+            let value = if value_follows {
+                Some(words.next()?.clone())
+            } else {
+                None
+            };
+            // a flag said twice is said once
+            if !twice {
+                moved.push(word.clone());
+                moved.extend(value);
+            }
+        }
+        Some((moved, rest))
+    }
+
     /// Whether `word`, typed among meta's options, gives `option`: one of
     /// its spellings (`--depth=2` too), or a cluster of short options
     /// holding it (`-rv`) before one that takes a value.

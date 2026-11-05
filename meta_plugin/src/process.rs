@@ -242,7 +242,8 @@ impl Owned {
     /// `keep` in memory. Its other pipes are not read.
     pub fn stderr_tail(mut self, keep: usize) -> io::Result<(ExitStatus, Vec<u8>)> {
         use std::io::Read;
-        let mut tail = std::collections::VecDeque::with_capacity(keep);
+        let mut tail: std::collections::VecDeque<u8> =
+            std::collections::VecDeque::with_capacity(keep);
         if let Some(mut pipe) = self.child.stderr.take() {
             let mut chunk = [0_u8; 8192];
             loop {
@@ -256,7 +257,7 @@ impl Owned {
                         return Err(e);
                     }
                 };
-                tail.extend(chunk.iter().take(n));
+                tail.extend(chunk.iter().take(n).copied());
                 while tail.len() > keep {
                     tail.pop_front();
                 }

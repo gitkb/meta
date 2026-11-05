@@ -302,10 +302,13 @@ pub(crate) fn finish(args: &[std::ffi::OsString]) -> Result<()> {
             _ => {}
         }
     }
+    // elsewhere (Windows) the job meta put its plugin in ends that run
     #[cfg(unix)]
     if let Some(pid) = running.and_then(|pid| i32::try_from(pid).ok()) {
         stop_and_wait(pid);
     }
+    #[cfg(not(unix))]
+    let _ = running;
     let Some((program, args)) = args.split_first() else {
         anyhow::bail!("{FINISH_FLAG} takes the command to run");
     };

@@ -342,9 +342,11 @@ fn stop_and_wait(pid: i32) {
     let gone = || test_kill_process(pid).is_err();
     let _ = kill_process(pid, Signal::TERM);
     let start = std::time::Instant::now();
+    let mut killed = false;
     while !gone() {
-        if start.elapsed() > std::time::Duration::from_secs(10) {
+        if !killed && start.elapsed() > std::time::Duration::from_secs(10) {
             let _ = kill_process(pid, Signal::KILL);
+            killed = true;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }

@@ -257,3 +257,36 @@ fn silenced_failures_say_why_or_that_there_was_no_stderr() {
         );
     }
 }
+
+/// A silenced command that leaves a program running in the background,
+/// holding its stderr, doesn't keep meta waiting for that program.
+#[test]
+fn a_silenced_command_that_leaves_a_background_program_ends_meta_promptly() {
+    let sandbox = Sandbox::new();
+    let root = workspace(&sandbox);
+    let pids = sandbox.work().join("background.pid");
+    let script = format!(
+        r#"sleep 60 & echo $! >> "{}"; echo why >&2; exit 1"#,
+        pids.display()
+    );
+    let started = std::time::Instant::now();
+    let out = meta(
+        &sandbox,
+        &root,
+        &["--silent", "-i", "a", "exec", "--", "sh", "-c", &script],
+    )
+    .output()
+    .unwrap();
+    let took = started.elapsed();
+    for pid in std::fs::read_to_string(&pids)
+        .unwrap_or_default()
+        .split_whitespace()
+    {
+        if let Some(pid) = pid.parse().ok().and_then(rustix::process::Pid::from_raw) {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+        }
+    }
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("why"));
+    assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
+}

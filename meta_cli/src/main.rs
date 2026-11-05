@@ -396,8 +396,9 @@ static COMMAND: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 /// The words of meta's own command typed after meta's options (`project
 /// dependents`, `plugin install`), each by its name (an alias by the command
-/// it stands for), as far as they name commands; empty when the first word
-/// is no command of meta's.
+/// it stands for), as far as they name commands, and the word typed where
+/// one of them expects a subcommand; empty when the first word is no command
+/// of meta's.
 fn typed_command() -> String {
     let typed: Vec<String> = std::env::args_os()
         .skip(1)
@@ -408,6 +409,11 @@ fn typed_command() -> String {
     let mut words = Vec::new();
     for word in typed.iter().skip(skip) {
         let Some(sub) = command.find_subcommand(word).cloned() else {
+            // a word where a command of its takes subcommands: the one typed
+            // (`project nonesuch`)
+            if command.has_subcommands() && !words.is_empty() && !word.starts_with('-') {
+                words.push(word.clone());
+            }
             break;
         };
         words.push(sub.get_name().to_string());

@@ -236,35 +236,44 @@ impl Owned {
         }
     }
 
-    /// Wait for the child, reading its piped stderr to its end and keeping
-    /// only the last `keep` bytes of it (for saying why it failed): a child
-    /// that writes much is never stopped for it, and never holds more than
-    /// `keep` in memory. Its other pipes are not read.
+    /// Wait for the child, reading its piped stderr and keeping only the
+    /// last `keep` bytes of it (for saying why it failed): a child that
+    /// writes much is never stopped for it, and never holds more than `keep`
+    /// in memory. Once the child has ended, what is left in the pipe is read
+    /// for a moment more (a program it started in the background may hold
+    /// the pipe for as long as it runs: it isn't waited for). Its other pipes
+    /// are not read.
     pub fn stderr_tail(mut self, keep: usize) -> io::Result<(ExitStatus, Vec<u8>)> {
+        use std::collections::VecDeque;
         use std::io::Read;
-        let mut tail: std::collections::VecDeque<u8> =
-            std::collections::VecDeque::with_capacity(keep);
+        use std::sync::{Arc, Mutex, PoisonError};
+        let tail = Arc::new(Mutex::new(VecDeque::<u8>::with_capacity(keep)));
+        let (done, ended) = std::sync::mpsc::channel::<()>();
         if let Some(mut pipe) = self.child.stderr.take() {
-            let mut chunk = [0_u8; 8192];
-            loop {
-                let n = match pipe.read(&mut chunk) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(e) => {
-                        let _ = self.child.kill();
-                        let _ = self.wait();
-                        return Err(e);
+            let kept = Arc::clone(&tail);
+            std::thread::Builder::new()
+                .name("stderr-tail".to_string())
+                .spawn(move || {
+                    let mut chunk = [0_u8; 8192];
+                    loop {
+                        let n = match pipe.read(&mut chunk) {
+                            Ok(0) => break,
+                            Ok(n) => n,
+                            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                            Err(_) => break,
+                        };
+                        let mut tail = kept.lock().unwrap_or_else(PoisonError::into_inner);
+                        tail.extend(chunk.iter().take(n).copied());
+                        let over = tail.len().saturating_sub(keep);
+                        tail.drain(..over);
                     }
-                };
-                tail.extend(chunk.iter().take(n).copied());
-                while tail.len() > keep {
-                    tail.pop_front();
-                }
-            }
+                    let _ = done.send(());
+                })?;
         }
         let status = self.wait()?;
-        Ok((status, tail.into_iter().collect()))
+        let _ = ended.recv_timeout(std::time::Duration::from_millis(200));
+        let tail = tail.lock().unwrap_or_else(PoisonError::into_inner);
+        Ok((status, tail.iter().copied().collect()))
     }
 
     /// Write `input` to the child's piped stdin and close it, while reading

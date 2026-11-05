@@ -681,6 +681,21 @@ assert backend['files_changed'] >= 1 and backend['files'] == ['README.md'], back
     [[ "$output" == *"exec-test/frontend"* ]]
 }
 
+@test "worktree exec runs the repos one after another, at once only with --parallel" {
+    "$META_BIN" git worktree create in-turn --repo backend --repo frontend
+    local log="$TEST_DIR/order.log"
+    local step="echo start >> $log; sleep 0.5; echo end >> $log"
+    run "$META_BIN" git worktree exec in-turn -- sh -c "$step"
+    [ "$status" -eq 0 ]
+    # in turn: each start is followed by its end
+    [[ "$(tr '\n' ' ' < "$log")" == "start end start end "* ]]
+    [[ "$(tr '\n' ' ' < "$log")" != *"start start"* ]]
+    rm "$log"
+    run "$META_BIN" --parallel git worktree exec in-turn -- sh -c "$step"
+    [ "$status" -eq 0 ]
+    [ "$(head -2 "$log" | tr '\n' ' ')" = "start start " ]
+}
+
 @test "worktree exec --include filters repos" {
     "$META_BIN" git worktree create exec-filter --repo backend --repo frontend
     run "$META_BIN" --include backend git worktree exec exec-filter -- echo found

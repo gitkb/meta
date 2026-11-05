@@ -105,8 +105,11 @@ pub(crate) fn handle_exec(args: ExecArgs, ctx: &Ctx, request: &Request) -> Resul
             .collect(),
         false => repos.iter().map(|r| step(&r.alias, &r.path)).collect(),
     };
+    // one checkout after another, at once only with meta's --parallel
+    // typed (a config's default is for `meta exec`)
     Ok(Response::plan(Plan {
         steps,
+        parallel: Some(request.meta_options.typed_has("--parallel")),
         ..Plan::default()
     }))
 }
@@ -121,7 +124,7 @@ fn loop_config(
         directories: repos.iter().map(|r| r.path.clone()).collect(),
         verbose: request.meta.verbose,
         silent: request.meta.silent,
-        parallel: request.meta.parallel(),
+        parallel: request.meta_options.typed_has("--parallel"),
         dry_run: request.meta.dry_run,
         json_output: request.meta.json,
         env: Some(git_env::git_env()),

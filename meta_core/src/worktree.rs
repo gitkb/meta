@@ -124,9 +124,10 @@ pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
 /// The members of the set at `set_dir` that `filters` select (see
 /// [`crate::repo_filter::Scope::select`]): the projects of `workspace` (the
 /// set's config, [`set_config`]), nested meta repos' included, whose folder
-/// is in the set at the project's place, and the set's root when it holds
-/// the workspace's config. What a folder holds (a git checkout, a jj
-/// workspace) is its provider's business: meta looks for the folder only.
+/// is in the set at the project's place, and the set's root when the set's
+/// folder is a checkout of its own (it has a `.git`). What a project's folder
+/// holds (a git checkout, a jj workspace) is its provider's business: meta
+/// looks for the folder only.
 /// A checkout is named and tagged by the project at its place, as the set's
 /// config and the nested configs tell (see [`set_tree`]).
 pub fn set_members(
@@ -184,19 +185,12 @@ pub fn set_members(
         .map(|(place, _)| set_dir.join(place))
         .filter(|dir| dir.is_dir())
         .collect();
-    // the root is a member when the set holds a checkout of it: the
-    // workspace's config, or a file of its own at the top (not a hidden
-    // one: a tool's, such as `.git`), as a root checkout whose repository
-    // doesn't commit the config has. Folders alone are other members' way.
-    let config_name = workspace.config_path.file_name();
-    let holds_config = config_name.is_some_and(|name| set_dir.join(name).is_file());
-    let holds_more = std::fs::read_dir(set_dir).is_ok_and(|entries| {
-        entries.flatten().any(|entry| {
-            !entry.file_name().to_string_lossy().starts_with('.')
-                && entry.file_type().is_ok_and(|kind| !kind.is_dir())
-        })
-    });
-    let mut repos: Vec<Candidate> = (holds_config || holds_more)
+    // the root is a member exactly when the set's folder is a checkout of
+    // its own, whatever it holds
+    let mut repos: Vec<Candidate> = set_dir
+        .join(".git")
+        .symlink_metadata()
+        .is_ok()
         .then(|| Candidate::root(set_dir.to_path_buf()))
         .into_iter()
         .collect();

@@ -1304,6 +1304,14 @@ EOF
     run "$META_BIN" git status --short
     [ "$status" -eq 0 ]
     [[ "$output" == *"untracked.txt"* ]]
+    # a set without a root checkout has no root member, whatever lies in it
+    cd "$TEST_DIR"
+    "$META_BIN" git worktree create rootless --repo backend --no-deps
+    echo notes > .worktrees/rootless/notes.txt
+    cd .worktrees/rootless
+    run --separate-stderr "$META_BIN" --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '["backend"]' ]
 }
 
 @test "loop commands in a set reach its nested members" {

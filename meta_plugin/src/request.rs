@@ -193,8 +193,8 @@ pub struct Set {
     #[serde(with = "wire_path")]
     pub dir: PathBuf,
     /// Its members: the workspace's projects whose folder is in it (at
-    /// their path, `abs` inside `dir`), the root when the set holds the
-    /// workspace's config. Which of them are checkouts of a provider's, the
+    /// their path, `abs` inside `dir`), the root when the set's folder is a
+    /// checkout of its own. Which of them are checkouts of a provider's, the
     /// provider tells; meta looks for folders only.
     #[serde(default)]
     pub members: Vec<Project>,

@@ -1876,13 +1876,14 @@ set_projects() {
     [[ "$output" != *"/s/experiment"* ]]
 }
 
-@test "a folder in .worktrees whose .git names a hostile path refuses, with no forged line" {
+@test "a folder in .worktrees whose .git names a hostile path runs in that folder alone, with no forged line" {
     mkdir -p "$TEST_DIR/.worktrees/broken"
     printf 'gitdir: /bad\nFORGED\n' > "$TEST_DIR/.worktrees/broken/.git"
     cd "$TEST_DIR/.worktrees/broken"
-    run "$META_BIN" exec -- true
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"No checkouts of worktree set 'broken'"* ]]
+    # it has a .git: its root is a member, and meta doesn't read that file
+    run "$META_BIN" exec -- touch ran
+    [ -e "$TEST_DIR/.worktrees/broken/ran" ]
+    [ ! -e "$TEST_DIR/ran" ]
     if printf '%s\n' "$output" | grep -q '^FORGED'; then false; fi
 }
 
@@ -2268,12 +2269,22 @@ J
 }
 
 @test "a moved workspace's sets keep working where it now is" {
-    "$META_BIN" git worktree create t --repo backend --no-deps
+    "$META_BIN" git worktree create t --repo backend
     MOVED="$(cd "$(mktemp -d)" && pwd -P)/moved"
     mv "$TEST_DIR" "$MOVED"
-    # git's own links point at the old place: repair them, as after any move
-    git -C "$MOVED" worktree repair "$MOVED/.worktrees/t" 2>/dev/null || true
-    git -C "$MOVED/backend" worktree repair "$MOVED/.worktrees/t/backend" 2>/dev/null || true
+    cd "$MOVED"
+    # git's links point at the old place: meta names the command that repairs
+    # each checkout, and running what it names does repair them
+    local fix tries=0
+    while :; do
+        run "$META_BIN" --dry-run git worktree remove t
+        fix="$(sed -n 's/.*`\(git -C .*worktree repair [^`]*\)`.*/\1/p' <<<"$output" | head -1)"
+        [ -n "$fix" ] || break
+        eval "$fix"
+        tries=$((tries + 1))
+        [ "$tries" -le 3 ]
+    done
+    [ "$tries" -ge 1 ]
     cd "$MOVED/.worktrees/t/backend"
     run "$META_BIN" exec -- pwd
     [ "$status" -eq 0 ]

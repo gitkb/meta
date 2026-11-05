@@ -14,7 +14,7 @@
 //! use meta_plugin::client::Meta;
 //! let envelope = Meta::from_env()?
 //!     .cwd("/w/app")
-//!     .args(["project", "list"])
+//!     .args(["exec", "--", "pwd"])
 //!     .json()?
 //!     .wait()?;
 //! for row in &envelope.results {
@@ -81,7 +81,7 @@ impl Meta {
         let depth = depth()? + 1;
         if depth > MAX_DEPTH {
             anyhow::bail!(
-                "meta calls meta more than {MAX_DEPTH} deep: a command calls itself through meta"
+                "Calls back to meta nest more than {MAX_DEPTH} deep: a command calls itself through meta"
             );
         }
         Ok(Meta {
@@ -120,7 +120,7 @@ impl Meta {
     fn command(&self, json: bool) -> Command {
         #[expect(
             clippy::disallowed_methods,
-            reason = "meta itself, started with no repository's git env"
+            reason = "the meta executable itself, with no repository's git env"
         )]
         let mut command = Command::new(&self.exe);
         crate::process::clean_env(&mut command);
@@ -211,12 +211,13 @@ impl Running {
         let bytes = read.context("Cannot read meta's output")?;
         if too_big {
             anyhow::bail!(
-                "meta printed more than {} MiB of JSON; refused, not cut",
+                "The call of meta printed more than {} MiB of JSON; refused, not cut",
                 MAX_ENVELOPE >> 20
             );
         }
-        serde_json::from_slice(&bytes)
-            .with_context(|| format!("meta ended ({status}) without an Envelope on its stdout"))
+        serde_json::from_slice(&bytes).with_context(|| {
+            format!("The call of meta ended ({status}) without an Envelope on its stdout")
+        })
     }
 
     /// Whether meta has ended (its Envelope may still be being read), so a
@@ -246,7 +247,7 @@ mod tests {
         assert_eq!(call(None).unwrap().depth, 1);
         assert_eq!(call(Some("7")).unwrap().depth, 8);
         let refused = call(Some("8")).unwrap_err().to_string();
-        assert!(refused.contains("more than 8 deep"), "{refused}");
+        assert!(refused.contains("nest more than 8 deep"), "{refused}");
         assert!(call(Some("x")).is_err());
         let refused = temp_env(&[(EXE_VAR, None)], Meta::from_env)
             .unwrap_err()

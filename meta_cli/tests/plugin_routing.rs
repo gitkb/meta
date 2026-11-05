@@ -672,10 +672,17 @@ fn a_set_whose_checkouts_are_no_git_repos_reaches_a_plugin_with_its_members() {
         .command(env!("CARGO_BIN_EXE_meta"))
         .args(["jj", "status"])
         .current_dir(set.join("a"))
-        .env("PATH", format!("{}:/usr/bin:/bin", root.join("bin").display()))
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", root.join("bin").display()),
+        )
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let sent: meta_plugin::Request =
         serde_json::from_slice(&fs::read(root.join("jj.request.json")).unwrap()).unwrap();
     let got = sent.set.unwrap();

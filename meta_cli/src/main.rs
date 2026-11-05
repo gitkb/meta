@@ -449,7 +449,7 @@ fn called_back() -> Result<()> {
     let depth = depth()?;
     if depth > MAX_DEPTH {
         anyhow::bail!(
-            "meta runs inside {depth} meta calls, deeper than {MAX_DEPTH}: a command calls itself through meta"
+            "This run of meta is {depth} calls deep, deeper than {MAX_DEPTH}: a command calls itself through meta"
         );
     }
     // set while meta has one thread, before it starts anything

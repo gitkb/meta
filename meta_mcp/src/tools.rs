@@ -693,7 +693,7 @@ impl McpServer {
                 .map(|skipped| skipped.reason)
                 .chain(envelope.message)
                 .next()
-                .unwrap_or_else(|| "meta gave no result".to_string())),
+                .unwrap_or_else(|| "The call of meta gave no result".to_string())),
         }
     }
 

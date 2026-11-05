@@ -764,7 +764,23 @@ fn capture_in_directory(
     // loop_lib is tool-agnostic.
     meta_plugin::out::pass_color(&mut cmd_builder);
 
-    let output = meta_plugin::process::output(&mut cmd_builder);
+    // Silenced (and no JSON wants its output): never stopped for what it
+    // writes, as it ran to its end before; only its stderr's end is kept
+    let output = match config.silent && !config.json_output {
+        true => meta_plugin::process::spawn(
+            cmd_builder
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped()),
+        )
+        .and_then(|child| child.stderr_tail(SILENT_TAIL))
+        .map(|(status, stderr)| std::process::Output {
+            status,
+            stdout: Vec::new(),
+            stderr,
+        }),
+        false => meta_plugin::process::output(&mut cmd_builder),
+    };
 
     match output {
         Ok(output) => {

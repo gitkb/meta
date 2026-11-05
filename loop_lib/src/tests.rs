@@ -227,9 +227,10 @@ fn test_run_parallel() {
 
 #[test]
 fn test_execute_command_in_directory_capturing() {
+    // captured to be shown later (a silenced command's stdout goes nowhere)
     let config = LoopConfig {
         verbose: false,
-        silent: true,
+        silent: false,
         ..Default::default()
     };
     let temp_dir = TempDir::new().unwrap();

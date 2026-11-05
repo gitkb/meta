@@ -200,34 +200,23 @@ fn a_silenced_command_runs_to_its_end_however_much_it_writes() {
     let sandbox = Sandbox::new();
     let root = workspace(&sandbox);
     let chatty = r#"head -c 17000000 /dev/zero | tr '\0' x >&2; echo; echo "last-$(basename "$PWD")" >&2; touch finished; exit 1"#;
-    let out = meta(
-        &sandbox,
-        &root,
-        &[
-            "--silent",
-            "--sequential",
-            "-i",
-            "a,b",
-            "exec",
-            "--",
-            "sh",
-            "-c",
-            chatty,
-        ],
-    )
-    .output()
-    .unwrap();
-    assert!(!out.status.success());
-    let text = String::from_utf8_lossy(&out.stderr);
-    for repo in ["a", "b"] {
-        assert!(
-            root.join(repo).join("finished").exists(),
-            "{repo} was stopped"
-        );
-        assert!(
-            text.contains(&format!("last-{repo}")),
-            "{repo}'s end is shown"
-        );
+    // in meta's default order, at once, and one at a time
+    for order in [None, Some("--parallel"), Some("--sequential")] {
+        let mut args = vec!["--silent"];
+        args.extend(order);
+        args.extend(["-i", "a,b", "exec", "--", "sh", "-c", chatty]);
+        let out = meta(&sandbox, &root, &args).output().unwrap();
+        assert!(!out.status.success());
+        let text = String::from_utf8_lossy(&out.stderr);
+        for repo in ["a", "b"] {
+            let finished = root.join(repo).join("finished");
+            assert!(finished.exists(), "{order:?}: {repo} was stopped");
+            std::fs::remove_file(finished).unwrap();
+            assert!(
+                text.contains(&format!("last-{repo}")),
+                "{order:?}: {repo}'s end is shown"
+            );
+        }
+        assert!(!text.contains("16 MiB"), "{order:?}: {}", text.len());
     }
-    assert!(!text.contains("16 MiB"), "{}", text.len());
 }

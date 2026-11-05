@@ -1,8 +1,11 @@
 //! The tool call being run, and the programs it starts: each one can be
 //! stopped when the client cancels the call.
 
+use meta_plugin::client::{self, Meta};
+use meta_plugin::Envelope;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -11,6 +14,35 @@ use std::time::{Duration, Instant};
 /// How long a cancelled program has to stop after SIGTERM (git removes its
 /// lock files then) before it is killed.
 const GRACE: Duration = Duration::from_secs(2);
+
+/// `program` in `dir`, without the variables a git hook around this server
+/// set to tie git to its repository.
+pub(crate) fn in_dir(program: impl AsRef<std::ffi::OsStr>, dir: &Path) -> Command {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the helper every program in a project starts through"
+    )]
+    let mut command = Command::new(program);
+    command.current_dir(dir);
+    meta_plugin::process::clean_env(&mut command);
+    command
+}
+
+/// git in `dir`, taking no lock a read can do without.
+pub(crate) fn git(dir: &Path) -> Command {
+    let mut command = in_dir("git", dir);
+    command.env("GIT_OPTIONAL_LOCKS", "0");
+    command
+}
+
+/// The meta this server calls: the one that started it, else (started by
+/// an agent, as its config says) `meta` from `PATH`.
+pub(crate) fn meta() -> anyhow::Result<Meta> {
+    match std::env::var_os(client::EXE_VAR) {
+        Some(_) => Meta::from_env(),
+        None => Meta::new("meta"),
+    }
+}
 
 /// The tool calls waiting or running, by request id (as JSON text).
 #[derive(Default)]
@@ -138,6 +170,26 @@ impl Calls {
     /// Whether the running call was cancelled.
     pub(crate) fn cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// The Envelope of `meta`, run with `--json`; stopped (with what it
+    /// started) if the call is cancelled. A cancelled call starts nothing
+    /// more.
+    pub(crate) fn meta(&self, meta: Meta) -> anyhow::Result<Envelope> {
+        if self.cancelled() {
+            anyhow::bail!("the tool call was cancelled");
+        }
+        let mut running = meta.json()?;
+        let mut nap = Duration::from_millis(1);
+        while !running.ended() {
+            if self.cancelled() {
+                running.stop();
+                break;
+            }
+            std::thread::sleep(nap);
+            nap = (nap * 2).min(Duration::from_millis(50));
+        }
+        running.wait()
     }
 
     /// Runs `command` to its end, as `Command::output`, but with no input,

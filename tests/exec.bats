@@ -414,16 +414,11 @@ SCRIPT
     [[ "$output" != *"Usage"* ]]
 }
 
-@test "unrecognized plugin subcommand shows plugin help" {
-    # Copy meta-project plugin to test dir
-    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/meta-project"
-    chmod +x "$TEST_DIR/.meta/plugins/meta-project"
-
+@test "an unrecognized project subcommand shows project's commands" {
     run "$META_BIN" project blablabla
     [ "$status" -eq 2 ]
     [[ "$output" == *"unrecognized command"* ]]
     [[ "$output" == *"project blablabla"* ]]
-    # Should show plugin help with available commands
     [[ "$output" == *"list"* ]] || [[ "$output" == *"check"* ]]
 }
 

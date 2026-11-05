@@ -803,14 +803,21 @@ mod recursive_tests {
         let projects = crate::config::Workspace::load(&workspace.join(".meta.yaml"))
             .unwrap()
             .projects;
-        let tree = crate::config::walk_projects(&workspace, &projects, None).unwrap();
+        let tree = |set: &Path| {
+            readable_tree(
+                &workspace,
+                set,
+                &projects,
+                &mut std::collections::HashSet::new(),
+            )
+        };
 
         // the set doesn't hold parent: the workspace's config tells about x
         std::fs::create_dir_all(&set).unwrap();
-        assert_eq!(not_held(tree.clone(), &set)[0].children.len(), 1);
+        assert_eq!(tree(&set)[0].children.len(), 1);
         // the set holds parent's config, which no longer lists x
         config(&set.join("parent"), "");
-        assert!(not_held(tree, &set)[0].children.is_empty());
+        assert!(tree(&set)[0].children.is_empty());
     }
 
     /// Create a real committed repository and linked worktree in the fixture.

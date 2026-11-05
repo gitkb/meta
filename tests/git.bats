@@ -125,7 +125,6 @@ EOF
     json_has '.success == true and (.message | contains("No staged changes"))'
 
     # a report, then a failure: the report stays the only document
-    cp "$META_BIN_DIR/meta-project" .meta/plugins/
     json_run "$META_BIN" --json project check
     [ "$status" -eq 1 ]
     json_has '.success == false and (.error | type) == "object" and ([.results[] | select(.error)] | length > 0)'

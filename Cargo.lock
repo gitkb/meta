@@ -965,19 +965,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "meta_project_cli"
-version = "0.2.22"
-dependencies = [
- "anyhow",
- "clap",
- "indexmap",
- "meta_core",
- "meta_plugin",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "meta_rust_cli"
 version = "0.2.22"
 dependencies = [

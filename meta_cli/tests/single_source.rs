@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The groups whose facts have one source now.
-const ENABLED: &[u8] = &[3, 8, 11, 12, 18, 19, 22, 24, 25];
+const ENABLED: &[u8] = &[3, 4, 8, 11, 12, 18, 19, 22, 24, 25];
 
 /// How a group is checked.
 enum Check {
@@ -57,7 +57,7 @@ const GROUPS: [(u8, &str, Check); 25] = [
     (
         4,
         "meta project's commands: declared once",
-        Check::Copies(&[("meta_project_cli/src/lib.rs", "const SUBCOMMANDS")]),
+        Check::Rule(project_once),
     ),
     (
         5,
@@ -67,7 +67,13 @@ const GROUPS: [(u8, &str, Check); 25] = [
     (
         6,
         "help and usage: rendered from the declarations",
-        Check::Copies(&[("meta_project_cli/src/lib.rs", "PROJECT_HELP")]),
+        Check::Copies(&[
+            ("meta_git_cli/src/lib.rs", "usage: \"Usage: meta git <COMMAND> [OPTIONS]\""),
+            ("meta_rust_cli/src/main.rs", "usage: \"Usage: meta cargo <CARGO_ARGS>...\""),
+            ("meta_cli/src/main.rs", "fn as_typed_help"),
+            ("meta_cli/src/main.rs", "fn help_with_plugins"),
+            ("meta_plugin/src/lib.rs", "pub fn help_text"),
+        ]),
     ),
     (
         7,
@@ -406,6 +412,32 @@ fn scope_once(repo: &Repo) -> Result<(), String> {
         found => Err(format!(
             "the filter refusal is in {found:?}, not the host alone"
         )),
+    }
+}
+
+/// meta project's commands are declared once, by the host's clap
+/// subcommands: no plugin serves them, and no code lists or routes them by
+/// hand or writes their help.
+fn project_once(repo: &Repo) -> Result<(), String> {
+    let copies = [r#""project", "list""#, "const SUBCOMMANDS", "PROJECT_HELP"];
+    let mut problems: Vec<String> = repo
+        .files
+        .iter()
+        .filter(|file| file.starts_with("meta_project_cli/"))
+        .map(|file| format!("{file}: a plugin serves meta project"))
+        .collect();
+    for (file, text) in repo.texts() {
+        if !file.ends_with(".rs") || file == THIS || file.contains("/tests/") {
+            continue;
+        }
+        let code = text.split("#[cfg(test)]").next().unwrap_or_default();
+        for copy in copies.iter().filter(|copy| code.contains(**copy)) {
+            problems.push(format!("{file} has `{copy}`"));
+        }
+    }
+    match problems.is_empty() {
+        true => Ok(()),
+        false => Err(problems.join("\n")),
     }
 }
 

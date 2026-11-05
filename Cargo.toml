@@ -8,7 +8,6 @@ members = [
     "meta_mcp",
     "meta_plugin",
     "meta_rust_cli",
-    "meta_project_cli",
 ]
 exclude = ["agent"]
 resolver = "2"

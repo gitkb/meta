@@ -15,7 +15,7 @@ setup() {
     }
 }
 EOF
-    make_workspace --init-only --plugins project frontend backend shared
+    make_workspace --init-only frontend backend shared
     cd "$TEST_DIR"
 }
 
@@ -143,8 +143,6 @@ assert 'api' in backend['tags']
 @test "meta project list with no .meta.yaml file shows error" {
     bats_require_minimum_version 1.5.0
     rm "$TEST_DIR/.meta.yaml"
-    # outside a workspace its .meta/plugins don't count: meta-project from PATH
-    export PATH="$META_BIN_DIR:$PATH"
     run "$META_BIN" project list
     [ "$status" -ne 0 ]
     [[ "$output" == *".meta.yaml"* ]]
@@ -418,6 +416,7 @@ YAML
 
 # root (frontend backend shared, platform) > platform (api, infra) > infra (tf)
 reach_tree() {
+    mkdir -p .meta/plugins
     cp "$META_BIN_DIR/meta-git" .meta/plugins/meta-git
     printf '{"projects": {"frontend": "git@github.com:org/frontend.git", "backend": "git@github.com:org/backend.git", "shared": "git@github.com:org/shared.git", "platform": {"repo": "git@github.com:org/platform.git", "meta": true}}}\n' > .meta.yaml
     mkdir -p platform/api platform/infra/tf

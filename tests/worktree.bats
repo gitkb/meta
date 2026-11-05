@@ -1155,7 +1155,6 @@ EOF
 
 @test "inside a set, -r reaches the meta repos checked out in it, as outside one" {
     bats_require_minimum_version 1.5.0
-    cp "$META_BIN_DIR/meta-project" .meta/plugins/meta-project
     setup_nested_meta
     git -C vendor init --quiet -b main
     printf '/nested-lib/\n' > vendor/.gitignore
@@ -1186,7 +1185,6 @@ EOF
 
 @test "a set of a workspace whose root is no repo names its own folder as the root" {
     bats_require_minimum_version 1.5.0
-    cp "$META_BIN_DIR/meta-project" .meta/plugins/meta-project
     rm -rf .git
     run "$META_BIN" git worktree create loose-root --repo backend
     [ "$status" -eq 0 ]

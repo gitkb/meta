@@ -620,7 +620,6 @@ fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
     // the plugin guide's example plugin serves `meta hello`
     for plugin in [
         "meta-git",
-        "meta-project",
         "meta-cargo",
         "examples/meta-hello",
     ] {

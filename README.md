@@ -140,7 +140,7 @@ git clone https://github.com/gitkb/meta && make -C meta install
 ```
 
 This builds meta from the main branch with the committed `Cargo.lock` and
-installs `meta`, the `meta-git`, `meta-project` and `meta-cargo` plugins,
+installs `meta`, the `meta-git` and `meta-cargo` plugins,
 `meta-mcp` and `loop` into `~/.cargo/bin` (the crates in the Makefile's
 `BIN_CRATES`), replacing any copies already there, with your default
 stable toolchain. `meta --version` names the commit it was built from
@@ -502,18 +502,17 @@ It is `{"success", "command", "results", "skipped", "warnings", "message"?, "err
 
 ## Architecture
 
-Meta is a Rust workspace of 10 crates:
+Meta is a Rust workspace of 9 crates:
 
 | Crate | Purpose |
 |-------|---------|
-| `meta_cli` | Main CLI — plugin routing, `exec`, `context`, `init`, plugin registry |
+| `meta_cli` | Main CLI — plugin routing, `exec`, `context`, `project`, `init`, plugin registry |
 | `loop_lib` | Core execution engine — runs commands across directories |
 | `loop_cli` | Standalone loop CLI (usable without meta) |
 | `meta_core` | The workspace domain — config, repo filtering, worktree sets, dependency graph |
 | `meta_plugin` | The plugin SDK — the plugin protocol, exit codes, output and escaping, the one owner of the processes a program starts, a test kit |
 | `meta_git_cli` | Git plugin — clone, update, status, commit |
 | `meta_git_lib` | Shared git library utilities |
-| `meta_project_cli` | Project management plugin |
 | `meta_rust_cli` | Rust/Cargo plugin |
 | `meta_mcp` | MCP server for AI agent integration |
 

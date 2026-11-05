@@ -258,7 +258,7 @@ pub(crate) fn again(ctx: &Ctx, request: &Request) -> anyhow::Result<Response> {
     through_meta(ctx, request, &request.cwd, &words)
 }
 
-/// Run `meta <meta's options as typed> <words>` from `cwd`, as [`again`]
+/// Run meta with its options as typed, then `words`, from `cwd`, as [`again`]
 /// does: in text as it shows, under `--json` its rows this call's.
 pub(crate) fn through_meta(
     ctx: &Ctx,

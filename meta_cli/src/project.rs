@@ -8,7 +8,6 @@ use anyhow::Result;
 use meta_core::config::{self, MetaTreeNode};
 use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
 use meta_core::repo_filter::{repo_path, Candidate};
-use meta_core::worktree;
 use meta_plugin::display::escape;
 use meta_plugin::{outln, ErrorCode, ErrorInfo, ProjectResult, RepoUrl};
 use serde::Serialize;
@@ -467,14 +466,10 @@ fn list(target: &Target, start: &Path) -> Result<Found> {
     }
 
     let worktree = target.set.as_ref().map(|set| {
-        let canonical_root = worktree::discover_worktree_repos(&set.dir)
+        // the workspace the set was made from, as its owner file says
+        let canonical_root = config::set_source(&set.dir)
             .ok()
-            .and_then(|repos| {
-                repos
-                    .into_iter()
-                    .find(|repo| repo.alias == ".")
-                    .map(|repo| repo.source_path)
-            })
+            .flatten()
             .unwrap_or_else(|| config.dir.clone());
         ListedWorktree {
             linked: true,

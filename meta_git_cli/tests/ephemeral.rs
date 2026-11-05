@@ -4,7 +4,11 @@
 
 // Unix only: a Ctrl-C to meta's process group
 #![cfg(unix)]
-#![expect(clippy::unwrap_used, reason = "test helpers: a panic is a failed test")]
+#![expect(
+    clippy::unwrap_used,
+    clippy::disallowed_methods,
+    reason = "test helpers: a panic is a failed test, and the test lists processes with pgrep"
+)]
 
 use meta_plugin::testing::Sandbox;
 use std::os::unix::process::CommandExt;
@@ -27,6 +31,19 @@ fn a_cancelled_ephemeral_run_leaves_no_set_and_no_process() {
     ended_by(|meta| rustix::process::kill_process_group(meta, rustix::process::Signal::INT));
     // meta killed outright, alone: what it started ends with it
     ended_by(|meta| rustix::process::kill_process(meta, rustix::process::Signal::KILL));
+    // meta-git itself killed outright: its run is stopped before the set
+    // is removed under it
+    ended_by(|meta| {
+        let children = std::process::Command::new("pgrep")
+            .args(["-P", &meta.as_raw_nonzero().to_string()])
+            .output()
+            .unwrap();
+        for pid in String::from_utf8_lossy(&children.stdout).split_whitespace() {
+            let pid = rustix::process::Pid::from_raw(pid.parse().unwrap()).unwrap();
+            rustix::process::kill_process(pid, rustix::process::Signal::KILL)?;
+        }
+        Ok(())
+    });
 }
 
 /// An ephemeral run of a command that would go on for ten minutes, ended

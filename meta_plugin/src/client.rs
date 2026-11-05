@@ -175,12 +175,22 @@ impl Meta {
     }
 
     /// Run it with this program's stdin, stdout and stderr, as typed (for a
-    /// command whose output the user watches), and its exit status.
+    /// command whose output the user watches), and its exit status. On a
+    /// terminal it shares this program's process group, the terminal's
+    /// foreground one, so it may read the terminal and gets the terminal's
+    /// Ctrl-C itself; off one it gets a group of its own, which this
+    /// program's stop reaches ([`crate::process::spawn`]).
     pub fn inherit(self) -> Result<ExitStatus> {
+        self.start_inherited()?.wait()
+    }
+
+    /// [`Meta::inherit`], started: its process id is known before it ends
+    /// (for [`Finishing::running`]).
+    pub fn start_inherited(self) -> Result<Inherited> {
         let mut command = self.command(false);
-        crate::process::spawn_group(&mut command)
-            .and_then(|mut child| child.wait())
-            .with_context(|| format!("Cannot run {}", escape_path(&self.exe)))
+        let child = crate::process::spawn(&mut command)
+            .with_context(|| format!("Cannot run {}", escape_path(&self.exe)))?;
+        Ok(Inherited { child })
     }
 }
 
@@ -222,6 +232,23 @@ impl Meta {
     }
 }
 
+/// A [`Meta::inherit`] call that is running.
+pub struct Inherited {
+    child: crate::process::Owned,
+}
+
+impl Inherited {
+    /// Its process id.
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Wait for it to end: its exit status.
+    pub fn wait(mut self) -> Result<ExitStatus> {
+        self.child.wait().context("Cannot wait for meta")
+    }
+}
+
 /// A command waiting to run once this program ends (see [`Meta::finishing`]).
 pub struct Finishing {
     child: crate::process::Owned,
@@ -230,6 +257,29 @@ pub struct Finishing {
 }
 
 impl Finishing {
+    /// Say that the run with process id `pid` (a meta this program started)
+    /// works on what the command cleans up. Should this program end before
+    /// it says [`Finishing::ended`] (killed outright), the waiter stops that
+    /// run (SIGTERM, then SIGKILL after 10 seconds) and waits for its end
+    /// before it runs the command, so the cleanup never pulls the ground
+    /// from under it.
+    pub fn running(&mut self, pid: u32) {
+        self.say(&format!("run {pid}"));
+    }
+
+    /// Say that the run named with [`Finishing::running`] has ended.
+    pub fn ended(&mut self) {
+        self.say("ended");
+    }
+
+    fn say(&mut self, line: &str) {
+        use std::io::Write;
+        if let Some(stdin) = &mut self.stdin {
+            let _ = writeln!(stdin, "{line}");
+            let _ = stdin.flush();
+        }
+    }
+
     /// Run it now and wait for it: its exit status. A stop that comes
     /// meanwhile ends this program, not the command.
     pub fn run(mut self) -> Result<ExitStatus> {
@@ -241,7 +291,21 @@ impl Finishing {
 /// The waiter of [`Meta::finishing`]: wait for stdin to close, then run the
 /// command `args` names (a program, then its arguments) and end as it ends.
 pub(crate) fn finish(args: &[std::ffi::OsString]) -> Result<()> {
-    let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+    use std::io::BufRead;
+    // the run its caller named and didn't see end, if any
+    let mut running: Option<u32> = None;
+    for line in std::io::stdin().lock().lines() {
+        let Ok(line) = line else { break };
+        match line.split_once(' ') {
+            Some(("run", pid)) => running = pid.trim().parse().ok(),
+            _ if line == "ended" => running = None,
+            _ => {}
+        }
+    }
+    #[cfg(unix)]
+    if let Some(pid) = running.and_then(|pid| i32::try_from(pid).ok()) {
+        stop_and_wait(pid);
+    }
     let Some((program, args)) = args.split_first() else {
         anyhow::bail!("{FINISH_FLAG} takes the command to run");
     };
@@ -264,6 +328,25 @@ pub(crate) fn finish(args: &[std::ffi::OsString]) -> Result<()> {
     }
 }
 
+/// Stop the process `pid` (SIGTERM; SIGKILL after 10 seconds) and wait
+/// for its end.
+#[cfg(unix)]
+fn stop_and_wait(pid: i32) {
+    use rustix::process::{kill_process, test_kill_process, Pid, Signal};
+    let Some(pid) = Pid::from_raw(pid) else {
+        return;
+    };
+    let gone = || test_kill_process(pid).is_err();
+    let _ = kill_process(pid, Signal::TERM);
+    let start = std::time::Instant::now();
+    while !gone() {
+        if start.elapsed() > std::time::Duration::from_secs(10) {
+            let _ = kill_process(pid, Signal::KILL);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// What a call printed: its stdout, up to [`MAX_ENVELOPE`] bytes.
 fn read_bounded(stdout: Option<std::process::ChildStdout>) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
@@ -281,6 +364,11 @@ pub struct Running {
 }
 
 impl Running {
+    /// Its process id.
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
     /// Wait for it to end, and read its Envelope. A call that prints none
     /// (meta was killed, say) is an error with its exit status; one that
     /// printed more than [`MAX_ENVELOPE`] is stopped and refused.

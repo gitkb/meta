@@ -168,6 +168,11 @@ pub fn output(command: &mut Command) -> io::Result<Output> {
 }
 
 impl Owned {
+    /// The child's process id.
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
     /// The child's stdout, if piped and not taken yet.
     pub fn stdout(&mut self) -> Option<std::process::ChildStdout> {
         self.child.stdout.take()

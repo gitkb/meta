@@ -150,7 +150,7 @@ fn handle_ephemeral_exec(args: ExecArgs, ctx: &Ctx, request: &Request) -> Result
                 escape(&name)
             )
         });
-    let removal = match removal {
+    let mut removal = match removal {
         Ok(removal) => removal,
         Err(e) => {
             created.lease.leave();
@@ -159,7 +159,7 @@ fn handle_ephemeral_exec(args: ExecArgs, ctx: &Ctx, request: &Request) -> Result
     };
 
     // Run the command in the set just made, as `meta exec` runs one
-    let run = run_in(&created.dir, cmd_parts, &token, request);
+    let run = run_in(&created.dir, cmd_parts, &token, request, &mut removal);
 
     if verbose {
         errln!("Removing ephemeral worktree '{name}'...");
@@ -207,6 +207,7 @@ fn run_in(
     command: &[String],
     token: &str,
     request: &Request,
+    removal: &mut meta_plugin::client::Finishing,
 ) -> Result<Vec<ProjectResult>> {
     let mut args: Vec<std::ffi::OsString> = Vec::new();
     if request.meta_options.typed_has("--parallel") {
@@ -218,8 +219,14 @@ fn run_in(
     args.extend(["exec".into(), "--".into()]);
     args.extend(command.iter().map(Into::into));
     let meta = Meta::from_env()?.cwd(dir).args(args).lease(token);
+    // the removal waits for this run's end, even when this program is
+    // killed outright
     if !request.meta.json {
-        let status = meta.inherit()?;
+        let started = meta.start_inherited()?;
+        removal.running(started.id());
+        let status = started.wait();
+        removal.ended();
+        let status = status?;
         if !status.success() {
             return Err(ErrorInfo::new(
                 ErrorCode::ToolFailed,
@@ -232,7 +239,11 @@ fn run_in(
         }
         return Ok(Vec::new());
     }
-    let envelope = meta.json()?.wait()?;
+    let running = meta.json()?;
+    removal.running(running.id());
+    let envelope = running.wait();
+    removal.ended();
+    let envelope = envelope?;
     let mut rows = envelope.results;
     if let Some(error) = envelope.error {
         if !rows.iter().any(ProjectResult::is_failure) {

@@ -4,7 +4,7 @@ use colored::Colorize;
 use indicatif::MultiProgress;
 use meta_core::config;
 use meta_core::gitdir::Checkout;
-use meta_git_lib::clone_queue::{CloneQueue, CloneTask, MetaRepo, Work};
+use crate::clone_queue::{CloneQueue, CloneTask, MetaRepo, Work};
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::RepoUrl;
 use meta_plugin::{errln, outln};
@@ -177,7 +177,7 @@ pub(crate) fn execute_git_update(
         Checkout::Repo { .. } => None,
         // git clones into an empty folder too
         Checkout::Missing => listed.cloned(),
-        Checkout::NotARepo(_) if meta_git_lib::clone_queue::is_empty_dir(dir) => listed.cloned(),
+        Checkout::NotARepo(_) if crate::clone_queue::is_empty_dir(dir) => listed.cloned(),
         Checkout::NotARepo(_) => None,
     };
     let projects = workspace.projects.iter();
@@ -251,8 +251,8 @@ impl Leftover {
             Ok(None) => {}
             Err(e) => return Self::Holds(format!("it can't be searched ({e})")),
         }
-        let held = meta_git_lib::worktree::safety::repo_holds(path)
-            .and_then(|held| Ok((held, meta_git_lib::worktree::safety::repo_ignored(path)?)));
+        let held = crate::worktree::safety::repo_holds(path)
+            .and_then(|held| Ok((held, crate::worktree::safety::repo_ignored(path)?)));
         match held {
             Ok((held, ignored)) if held.is_empty() => Self::Removable(ignored),
             Ok((held, ignored)) => Self::Holds(format!(

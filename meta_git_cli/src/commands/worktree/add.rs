@@ -6,10 +6,10 @@ use meta_plugin::{Ctx, ProjectResult, Request, Response};
 
 use meta_core::set_record as record;
 use meta_core::worktree::discover_worktree_repos;
-use meta_git_lib::worktree::git_ops::{git_worktree_add, worktree_start};
-use meta_git_lib::worktree::helpers::*;
-use meta_git_lib::worktree::plan::{Index, PlannedRepo};
-use meta_git_lib::worktree::types::*;
+use crate::worktree::git_ops::{git_worktree_add, worktree_start};
+use crate::worktree::helpers::*;
+use crate::worktree::plan::{Index, PlannedRepo};
+use crate::worktree::types::*;
 
 use super::cli_types::AddArgs;
 

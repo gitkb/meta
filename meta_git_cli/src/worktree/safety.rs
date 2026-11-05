@@ -52,6 +52,7 @@ pub struct RemovalCheck {
 }
 
 impl RemovalCheck {
+    #[cfg(test)]
     pub fn is_clear(&self) -> bool {
         self.blockers.is_empty() && self.unsaved.is_empty()
     }

@@ -3,7 +3,7 @@
 //! These are clap-derived types that belong in the CLI crate, not the library.
 
 use clap::{Args, Subcommand};
-use meta_git_lib::worktree::RepoSpec;
+use crate::worktree::RepoSpec;
 
 /// Worktree subcommands parsed by clap.
 #[derive(Subcommand)]

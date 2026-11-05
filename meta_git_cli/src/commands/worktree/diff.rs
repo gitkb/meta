@@ -5,9 +5,9 @@ use meta_plugin::outln;
 use meta_plugin::{Ctx, ErrorCode, ErrorInfo, ProjectResult, Request, Response};
 use rayon::prelude::*;
 
-use meta_git_lib::worktree::git_ops::{git_diff_patch, git_diff_stat};
-use meta_git_lib::worktree::helpers::discover_and_validate_worktree;
-use meta_git_lib::worktree::types::*;
+use crate::worktree::git_ops::{git_diff_patch, git_diff_stat};
+use crate::worktree::helpers::discover_and_validate_worktree;
+use crate::worktree::types::*;
 
 use super::cli_types::DiffArgs;
 

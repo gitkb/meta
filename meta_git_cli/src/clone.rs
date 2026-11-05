@@ -4,7 +4,7 @@ use anyhow::Context;
 use colored::Colorize;
 use indicatif::MultiProgress;
 use meta_core::config;
-use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
+use crate::clone_queue::{CloneQueue, MetaRepo, Work};
 use meta_plugin::RepoUrl;
 use meta_plugin::{errln, outln};
 use meta_plugin::{Ctx, Request, Response};

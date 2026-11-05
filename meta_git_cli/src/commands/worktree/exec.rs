@@ -5,7 +5,7 @@ use meta_plugin::{Ctx, Plan, Request, Response, Scope, Step};
 use std::path::{Path, PathBuf};
 
 use meta_core::worktree::{discover_worktree_repos, WorktreeRepoInfo};
-use meta_git_lib::worktree::helpers::*;
+use crate::worktree::helpers::*;
 
 use super::cli_types::{CreateArgs, ExecArgs, RemoveArgs};
 use crate::git_env;

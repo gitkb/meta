@@ -2,7 +2,7 @@
 //!
 //! Provides filesystem-based detection of worktree contexts and
 //! discovery of repos within a worktree set. Used by the meta binary for
-//! automatic worktree-scoped command dispatch, and by meta_git_lib
+//! automatic worktree-scoped command dispatch, and by meta_git_cli (worktree)
 //! for worktree management commands.
 
 use anyhow::{Context, Result};

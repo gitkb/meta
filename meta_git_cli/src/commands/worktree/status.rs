@@ -6,9 +6,9 @@ use meta_plugin::{Ctx, ProjectResult, Request, Response};
 use rayon::prelude::*;
 
 use meta_core::worktree::WorktreeMemberInfo;
-use meta_git_lib::worktree::git_ops::repo_status;
-use meta_git_lib::worktree::helpers::resolve_existing_worktree;
-use meta_git_lib::worktree::types::*;
+use crate::worktree::git_ops::repo_status;
+use crate::worktree::helpers::resolve_existing_worktree;
+use crate::worktree::types::*;
 
 use super::cli_types::StatusArgs;
 

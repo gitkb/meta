@@ -3,6 +3,7 @@
 //! Provides git operations optimized for meta repositories.
 
 mod clone;
+mod clone_queue;
 mod clone_missing;
 mod clone_worker;
 mod commit;
@@ -11,6 +12,7 @@ mod ssh;
 mod update;
 
 mod commands;
+mod worktree;
 
 use indexmap::IndexMap;
 use log::debug;

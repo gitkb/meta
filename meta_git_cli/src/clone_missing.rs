@@ -5,7 +5,7 @@
 
 use crate::update::{self, Leftover};
 use colored::Colorize;
-use meta_git_lib::clone_queue::{CloneQueue, MetaRepo, Work};
+use crate::clone_queue::{CloneQueue, MetaRepo, Work};
 use meta_plugin::display::escape;
 use meta_plugin::outln;
 use meta_plugin::{Ctx, ErrorCode, ErrorInfo, ProjectResult, Request, Response};

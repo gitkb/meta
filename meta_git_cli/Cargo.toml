@@ -19,7 +19,6 @@ path = "src/lib.rs"
 tempfile.workspace = true
 meta_plugin = { workspace = true, features = ["parse"] }
 meta_core.workspace = true
-meta_git_lib = { path = "../meta_git_lib" }
 loop_lib.workspace = true
 clap = { workspace = true, features = ["derive"] }
 anyhow.workspace = true
@@ -35,6 +34,9 @@ dirs.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process", "termios"] }
+
+[target.'cfg(not(unix))'.dependencies]
+same-file = "1"
 
 [dev-dependencies]
 meta_plugin = { workspace = true, features = ["testing-git"] }

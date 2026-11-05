@@ -11,12 +11,12 @@ use meta_core::set_record::{self as record, SetRecord};
 use meta_core::worktree::discover_worktree_members;
 use meta_core::worktree::Configs;
 
-use meta_git_lib::worktree::hooks::fire_post_prune;
-use meta_git_lib::worktree::lease;
-use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
-use meta_git_lib::worktree::ttl;
-use meta_git_lib::worktree::types::*;
-use meta_git_lib::worktree::workspace::Workspace;
+use crate::worktree::hooks::fire_post_prune;
+use crate::worktree::lease;
+use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
+use crate::worktree::ttl;
+use crate::worktree::types::*;
+use crate::worktree::workspace::Workspace;
 
 /// Helper to create a PruneEntry with consistent structure.
 fn create_prune_entry(

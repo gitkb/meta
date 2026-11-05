@@ -14,9 +14,9 @@ use meta_core::worktree::{
     detect_worktree_location, discover_worktree_members, discover_worktree_members_strict,
     discover_worktree_repos, discover_worktree_repos_strict, WorktreeMemberInfo,
 };
-use meta_git_lib::worktree::git_ops::repo_status;
-use meta_git_lib::worktree::ttl;
-use meta_git_lib::worktree::types::ListRepoEntry;
+use crate::worktree::git_ops::repo_status;
+use crate::worktree::ttl;
+use crate::worktree::types::ListRepoEntry;
 
 use super::cli_types::ListArgs;
 

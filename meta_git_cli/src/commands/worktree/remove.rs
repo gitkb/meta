@@ -6,11 +6,11 @@ use meta_plugin::display::{escape, escape_path};
 use meta_plugin::outln;
 use meta_plugin::{Ctx, ProjectResult, Request, Response};
 
-use meta_git_lib::worktree::hooks::fire_post_destroy;
-use meta_git_lib::worktree::lease;
-use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
-use meta_git_lib::worktree::types::*;
-use meta_git_lib::worktree::workspace::Workspace;
+use crate::worktree::hooks::fire_post_destroy;
+use crate::worktree::lease;
+use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
+use crate::worktree::types::*;
+use crate::worktree::workspace::Workspace;
 
 use super::cli_types::RemoveArgs;
 

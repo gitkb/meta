@@ -263,21 +263,25 @@ impl CommandResult {
         }
     }
 
-    /// Why it failed, in a line: the last line of its stderr that has
-    /// anything on it, or that it wrote none.
+    /// Why it failed, for the end of a line (`: why`): the last line of
+    /// its stderr that has anything on it, or that it wrote none. Nothing for
+    /// a command that ran live: its stderr was the user's, shown and not kept.
     fn why(&self) -> String {
-        if self.too_much_output.is_some() {
-            return "no more of one command's output is kept".to_string();
-        }
         if self.live {
-            return "its stderr is above".to_string();
+            return String::new();
+        }
+        if self.too_much_output.is_some() {
+            return ": no more of one command's output is kept".to_string();
         }
         String::from_utf8_lossy(&self.stderr)
             .lines()
             .rev()
             .map(str::trim)
             .find(|line| !line.is_empty())
-            .map_or_else(|| "no stderr".to_string(), |line| escape(line).into_owned())
+            .map_or_else(
+                || ": no stderr".to_string(),
+                |line| format!(": {}", escape(line)),
+            )
     }
 }
 
@@ -657,19 +661,13 @@ fn execute_in_directory(
         meta_plugin::out::flush()?;
     }
 
-    // Live, unless silenced: then only the end of its stderr is kept, to say
-    // why it failed
-    let stderr_on_terminal = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    // Live, its stderr the user's own, unless silenced: then only the end
+    // of its stderr is kept, to say why it failed
     let ran = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
         let started = match config.silent {
-            // never stopped for what it writes: only its stderr's end is
-            // kept, as it ran to its end on stdout's /dev/null before
-            true => meta_plugin::process::spawn(cmd.stdout(Stdio::null()).stderr(Stdio::piped()))
-                .and_then(|child| child.stderr_tail(SILENT_TAIL)),
-            // on a terminal, the terminal's own; elsewhere its stderr passes
-            // through meta, its end kept to say why it failed
-            false if !stderr_on_terminal => meta_plugin::process::spawn(cmd.stderr(Stdio::piped()))
-                .and_then(|child| child.stderr_shown_tail(SILENT_TAIL)),
+            true => {
+                meta_plugin::process::status_keeping_stderr(cmd.stdout(Stdio::null()), SILENT_TAIL)
+            }
             false => meta_plugin::process::status(&mut cmd).map(|status| (status, Vec::new())),
         };
         started.map_err(|e| match TooMuchOutput::of(&e) {
@@ -689,8 +687,7 @@ fn execute_in_directory(
                 command,
                 argv,
                 stderr,
-                // its stderr was shown and not kept: the summary says so
-                live: !config.silent && stderr_on_terminal,
+                live: !config.silent,
                 ..Default::default()
             }
         }
@@ -773,13 +770,10 @@ fn capture_in_directory(
     // Silenced (and no JSON wants its output): never stopped for what it
     // writes, as it ran to its end before; only its stderr's end is kept
     let output = match config.silent && !config.json_output {
-        true => meta_plugin::process::spawn(
-            cmd_builder
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped()),
+        true => meta_plugin::process::status_keeping_stderr(
+            cmd_builder.stdin(Stdio::null()).stdout(Stdio::null()),
+            SILENT_TAIL,
         )
-        .and_then(|child| child.stderr_tail(SILENT_TAIL))
         .map(|(status, stderr)| std::process::Output {
             status,
             stdout: Vec::new(),
@@ -927,7 +921,7 @@ impl Outcome {
             None => Ok(()),
             Some(_) if self.silent => match self.results.iter().find(|r| !r.success) {
                 Some(first) => anyhow::bail!(
-                    "At least one command failed: {}: {}",
+                    "At least one command failed: {}{}",
                     escape_path(&first.directory),
                     first.why()
                 ),
@@ -1242,7 +1236,7 @@ fn print_summary(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
             };
             let names: Vec<String> = failed.iter().map(name).collect();
             outln!(
-                "\n{} {}: {} ({}): {}",
+                "\n{} {}: {} ({}){}",
                 "✗".red(),
                 names.join(", "),
                 escape(&first.command),
@@ -1309,7 +1303,7 @@ fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> 
 fn print_silenced_failures(config: &LoopConfig, results: &[CommandResult]) {
     for result in results.iter().filter(|r| !r.success) {
         errln!(
-            "{} {}: {} ({}): {}",
+            "{} {}: {} ({}){}",
             meta_plugin::out::label("✗", |l| l.red()),
             result_name(&result.directory, config.root_dir.as_deref()),
             escape(&result.command),

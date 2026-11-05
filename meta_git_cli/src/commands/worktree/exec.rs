@@ -219,6 +219,9 @@ fn run_in(
     if request.meta.verbose {
         args.push("--verbose".into());
     }
+    if request.meta.silent {
+        args.push("--silent".into());
+    }
     args.extend(["exec".into(), "--".into()]);
     args.extend(command.iter().map(Into::into));
     let meta = Meta::from_env()?.cwd(dir).args(args).lease(token);
@@ -227,23 +230,14 @@ fn run_in(
     if !request.meta.json {
         let started = meta.start_inherited()?;
         removal.running(started.id());
-        let ended = started.wait_why();
+        let status = started.wait();
         removal.ended();
-        let (status, last) = ended?;
+        let status = status?;
         if !status.success() {
-            // why, as every summary says it: the run's last stderr line,
-            // or (on a terminal) where the user saw it
-            let why = match last {
-                Some(line) => escape(&line).into_owned(),
-                None if std::io::IsTerminal::is_terminal(&std::io::stderr()) => {
-                    "its stderr is above".to_string()
-                }
-                None => "no stderr".to_string(),
-            };
             return Err(ErrorInfo::new(
                 ErrorCode::ToolFailed,
                 format!(
-                    "`{}` failed in the ephemeral worktree ({status}): {why}",
+                    "`{}` failed in the ephemeral worktree ({status})",
                     escape(&meta_plugin::display::display_command(command))
                 ),
             )

@@ -1625,21 +1625,16 @@ YAML
     [ -z "$(find "$TEST_DIR" -name blank-tag)" ]
 }
 
-@test "a failed clone of the meta repo ends with git's last line, in text and --silent" {
+@test "a failed clone of the meta repo shows git's error, its stderr being the user's" {
     cd "$TEST_DIR"
-    # what git itself says last for this clone
-    last=$(git clone "file://$TEST_DIR/nowhere.git" probe 2>&1 | grep -v '^[[:space:]]*$' | tail -1)
-    [ -n "$last" ]
-    for mode in "" "--silent"; do
-        # shellcheck disable=SC2086
-        run "$META_BIN" $mode git clone "file://$TEST_DIR/nowhere.git" dest
-        [ "$status" -ne 0 ]
-        [ "$(tail -1 <<<"$output")" = "Error: Failed to clone meta repository: $last" ]
-        [ ! -e dest ]
-    done
+    run "$META_BIN" git clone "file://$TEST_DIR/nowhere.git" dest
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"fatal: "*"nowhere.git"* ]]
+    [ "$(tail -1 <<<"$output")" = "Error: Failed to clone meta repository" ]
+    [ ! -e dest ]
 }
 
-@test "a failed pull and a failed ephemeral run end with the last stderr line, in text and --silent" {
+@test "a failed pull ends with the last stderr line; an ephemeral run's stderr is the user's" {
     with_remotes
     # git that fails every pull, saying why on its last line
     mkdir -p "$TEST_DIR/shim"
@@ -1651,10 +1646,19 @@ YAML
         PATH="$TEST_DIR/shim:$PATH" run "$META_BIN" $mode git update
         [ "$status" -ne 0 ]
         [[ "$(grep -v '^[[:space:]]*$' <<<"$output" | tail -1)" == *": LAST diagnostic" ]]
-        # shellcheck disable=SC2086
-        run "$META_BIN" $mode git worktree exec --ephemeral "eph$RANDOM" --repo backend -- \
-            sh -c 'printf "FIRST diagnostic\nLAST diagnostic\n" >&2; exit 1'
-        [ "$status" -ne 0 ]
-        [[ "$(grep -v '^[[:space:]]*$' <<<"$output" | tail -1)" == *": LAST diagnostic" ]]
     done
+    run "$META_BIN" git worktree exec --ephemeral "eph$RANDOM" --repo backend -- \
+        sh -c 'printf "FIRST diagnostic\nLAST diagnostic\n" >&2; exit 1'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"LAST diagnostic"* ]]
+    [[ "$(tail -1 <<<"$output")" == *"failed in the ephemeral worktree (exit status: 1)" ]]
+    # silenced, it says why too, and nothing on success
+    run "$META_BIN" --silent git worktree exec --ephemeral "eph$RANDOM" --repo backend -- \
+        sh -c 'printf "LAST diagnostic\n" >&2; exit 1'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"LAST diagnostic"* ]]
+    run "$META_BIN" --silent git worktree exec --ephemeral "eph$RANDOM" --repo backend -- \
+        sh -c 'echo said; echo said-too >&2'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"said"* ]]
 }

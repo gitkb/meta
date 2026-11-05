@@ -155,6 +155,90 @@ pub fn status(command: &mut Command) -> io::Result<ExitStatus> {
     spawn(command)?.wait()
 }
 
+/// Run `command` to completion, its stderr going to a private temporary
+/// file, and the last `keep` bytes of it (for saying why it failed).
+///
+/// A file and not a pipe: a program the command leaves in the background
+/// keeps a stderr it can write to after this program ends (a pipe would kill
+/// it with SIGPIPE), this program waits for the command alone, and nothing
+/// the command writes can block it. It is never stopped for what it writes:
+/// past [`CAPTURE_LIMIT`] the file's end is kept and the file emptied, so the
+/// disk and the memory stay bounded. With no temporary file to be had its
+/// stderr goes nowhere.
+pub fn status_keeping_stderr(
+    command: &mut Command,
+    keep: usize,
+) -> io::Result<(ExitStatus, Vec<u8>)> {
+    use std::process::Stdio;
+    let Ok((file, path)) = stderr_file() else {
+        return status(command.stderr(Stdio::null())).map(|status| (status, Vec::new()));
+    };
+    command.stderr(Stdio::from(file.try_clone()?));
+    // Unix: gone from the folder at once, it lives while it is open
+    #[cfg(unix)]
+    let _ = std::fs::remove_file(&path);
+    let mut child = spawn(command)?;
+    let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    let trimmer = std::thread::Builder::new()
+        .name("stderr-file".to_string())
+        .spawn(move || {
+            let mut file = file;
+            let mut kept = Vec::new();
+            while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                stopped.recv_timeout(std::time::Duration::from_millis(100))
+            {
+                if file
+                    .metadata()
+                    .is_ok_and(|m| m.len() > CAPTURE_LIMIT as u64)
+                {
+                    keep_end(&mut file, keep, &mut kept);
+                    let _ = file.set_len(0);
+                }
+            }
+            keep_end(&mut file, keep, &mut kept);
+            kept
+        })?;
+    let status = child.wait();
+    let _ = stop.send(());
+    let kept = trimmer.join().unwrap_or_default();
+    #[cfg(not(unix))]
+    let _ = std::fs::remove_file(&path);
+    status.map(|status| (status, kept))
+}
+
+/// A new temporary file for a command's stderr, open to read and to append.
+fn stderr_file() -> io::Result<(std::fs::File, std::path::PathBuf)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let name = format!(
+        "meta-stderr-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    let path = std::env::temp_dir().join(name);
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create_new(true)
+        .open(&path)?;
+    Ok((file, path))
+}
+
+/// Add the last `keep` bytes of `file` to `kept`, which keeps its last `keep`.
+fn keep_end(file: &mut std::fs::File, keep: usize, kept: &mut Vec<u8>) {
+    use std::io::{Read, Seek, SeekFrom};
+    let len = file.metadata().map_or(0, |m| m.len());
+    if file
+        .seek(SeekFrom::Start(len.saturating_sub(keep as u64)))
+        .is_err()
+    {
+        return;
+    }
+    let _ = file.take(keep as u64).read_to_end(kept);
+    let over = kept.len().saturating_sub(keep);
+    *kept = kept.get(over..).unwrap_or_default().to_vec();
+}
+
 /// Run `command` to completion capturing its output, as [`Command::output`]
 /// does, with stdin from nothing; output past [`CAPTURE_LIMIT`] stops it
 /// (see [`Owned::exchange`]).
@@ -234,63 +318,6 @@ impl Owned {
                 let _ = self.child.kill();
             }
         }
-    }
-
-    /// Wait for the child, reading its piped stderr and keeping only the
-    /// last `keep` bytes of it (for saying why it failed): a child that
-    /// writes much is never stopped for it, and never holds more than `keep`
-    /// in memory. Once the child has ended, what is left in the pipe is read
-    /// for a moment more (a program it started in the background may hold
-    /// the pipe for as long as it runs: it isn't waited for). Its other pipes
-    /// are not read.
-    pub fn stderr_tail(self, keep: usize) -> io::Result<(ExitStatus, Vec<u8>)> {
-        self.read_stderr(keep, false)
-    }
-
-    /// [`Owned::stderr_tail`], passing all of its stderr on to this
-    /// program's stderr as it comes (for output a user watches that isn't
-    /// on a terminal, so nothing is lost by the pipe).
-    pub fn stderr_shown_tail(self, keep: usize) -> io::Result<(ExitStatus, Vec<u8>)> {
-        self.read_stderr(keep, true)
-    }
-
-    fn read_stderr(mut self, keep: usize, show: bool) -> io::Result<(ExitStatus, Vec<u8>)> {
-        use std::collections::VecDeque;
-        use std::io::Read;
-        use std::sync::{Arc, Mutex, PoisonError};
-        let tail = Arc::new(Mutex::new(VecDeque::<u8>::with_capacity(keep)));
-        let (done, ended) = std::sync::mpsc::channel::<()>();
-        if let Some(mut pipe) = self.child.stderr.take() {
-            let kept = Arc::clone(&tail);
-            std::thread::Builder::new()
-                .name("stderr-tail".to_string())
-                .spawn(move || {
-                    let mut chunk = [0_u8; 8192];
-                    loop {
-                        let n = match pipe.read(&mut chunk) {
-                            Ok(0) => break,
-                            Ok(n) => n,
-                            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                            Err(_) => break,
-                        };
-                        if show {
-                            use std::io::Write;
-                            let mut shown = std::io::stderr().lock();
-                            let _ = shown.write_all(chunk.get(..n).unwrap_or_default());
-                            let _ = shown.flush();
-                        }
-                        let mut tail = kept.lock().unwrap_or_else(PoisonError::into_inner);
-                        tail.extend(chunk.iter().take(n).copied());
-                        let over = tail.len().saturating_sub(keep);
-                        tail.drain(..over);
-                    }
-                    let _ = done.send(());
-                })?;
-        }
-        let status = self.wait()?;
-        let _ = ended.recv_timeout(std::time::Duration::from_millis(200));
-        let tail = tail.lock().unwrap_or_else(PoisonError::into_inner);
-        Ok((status, tail.iter().copied().collect()))
     }
 
     /// Write `input` to the child's piped stdin and close it, while reading

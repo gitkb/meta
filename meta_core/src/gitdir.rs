@@ -188,7 +188,7 @@ pub fn linked(checkout: &Path) -> anyhow::Result<Linked> {
     anyhow::ensure!(
         admin.join("HEAD").is_file(),
         "its git metadata {} is missing; was the repository moved or deleted? After a move, \
-         run `git worktree repair` in the workspace's root and in each repo with worktrees, then \
+         run `git -C <repo> worktree repair <checkout>` for each of the set's checkouts, then \
          run meta again",
         escape_path(&admin)
     );

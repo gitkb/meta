@@ -277,7 +277,10 @@ struct ListedProject {
     #[serde(skip_serializing_if = "Option::is_none")]
     repo: Option<RepoUrl>,
     tags: Vec<String>,
+    /// Whether a `.meta.yaml` is in its folder now
     is_meta: bool,
+    /// Whether its config says it is a meta repo (`meta: true`), cloned or not
+    meta: bool,
     /// Why its folder couldn't be looked into (its own projects may be
     /// missing from the list); absent when it could.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -492,6 +495,7 @@ fn list(target: &Target, start: &Path) -> Result<Found> {
             repo: root_repo,
             tags: Vec::new(),
             is_meta: true,
+            meta: true,
             error: None,
             cwd: Some(cwd.to_string_lossy().into_owned()),
             worktree,
@@ -527,6 +531,7 @@ fn list_records(nodes: &[MetaTreeNode], dir: &Path, root: &Path, out: &mut Vec<P
                     repo: node.info.repo.clone(),
                     tags: node.info.tags.clone(),
                     is_meta: node.is_meta,
+                    meta: node.info.meta,
                     error: node.error.clone(),
                     cwd: None,
                     worktree: None,

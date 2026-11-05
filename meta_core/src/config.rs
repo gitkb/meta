@@ -2531,36 +2531,6 @@ mod tests {
         .unwrap();
     }
 
-    /// A `.git` file naming `git_dir`, as git writes one: without the
-    /// `\\?\` that canonicalize gives on Windows, which git can't read.
-    fn gitfile(git_dir: &Path) -> String {
-        let path = git_dir.display().to_string();
-        format!("gitdir: {}\n", path.strip_prefix(r"\\?\").unwrap_or(&path))
-    }
-
-    /// A repository's git directory at `repo/.git`, as much of one as meta
-    /// reads: git calls a directory without these no repository.
-    fn git_dir(repo: &Path) {
-        let git = repo.join(".git");
-        for dir in ["objects", "refs"] {
-            std::fs::create_dir_all(git.join(dir)).unwrap();
-        }
-        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-    }
-
-    /// Git's admin directory `admin` for a linked worktree checked out at
-    /// `checkout`, with the files git keeps there, and the `.git` file
-    /// that names it.
-    fn link(admin: &Path, checkout: &Path) {
-        std::fs::create_dir_all(admin).unwrap();
-        std::fs::create_dir_all(checkout).unwrap();
-        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
-        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        let back = checkout.join(".git").display().to_string();
-        std::fs::write(admin.join("gitdir"), format!("{back}\n")).unwrap();
-        std::fs::write(checkout.join(".git"), gitfile(admin)).unwrap();
-    }
-
     #[test]
     fn the_root_climbs_only_through_parents_that_list_the_child() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2582,28 +2552,16 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_meta_made_belongs_to_its_sources_workspace() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
+    fn a_set_a_provider_made_belongs_to_its_sources_workspace() {
         let tmp = tempfile::tempdir().unwrap();
         let top = tmp.path().canonicalize().unwrap();
         meta_yaml(&top, r#""a": "x""#);
-        git_dir(&top);
-        // A worktree set's root checkout, as git lays it out
-        let admin = top.join(".git/worktrees/s1");
         let set = top.join(".worktrees/s1");
         meta_yaml(&set, r#""a": "x""#);
-        link(&admin, &set);
-        // Made by hand: a workspace of its own
+        // Nothing says who made it: a workspace of its own
         assert_eq!(workspace_meta_dirs(&set).unwrap(), vec![set.clone()]);
-        // Made by meta
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" });
-        std::fs::write(
-            admin.join(crate::set_record::RECORD_FILE),
-            record.to_string(),
-        )
-        .unwrap();
+        // Its owner file says it was made from top
+        meta_plugin::sets::create(&set, "git", &top).unwrap();
         assert_eq!(
             workspace_meta_dirs(&set).unwrap(),
             vec![set.clone(), top.clone()]
@@ -2612,27 +2570,16 @@ mod tests {
 
     #[test]
     fn a_nested_checkout_in_a_set_climbs_the_set_then_its_source() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
         let tmp = tempfile::tempdir().unwrap();
         let top = tmp.path().canonicalize().unwrap();
         let listing_child = r#""child": {"repo": "x", "meta": true}"#;
         meta_yaml(&top, listing_child);
         meta_yaml(&top.join("child"), "");
-        // The set's root and nested checkouts, each with meta's record
         let set = top.join(".worktrees/ctx");
         meta_yaml(&set, listing_child);
         meta_yaml(&set.join("child"), "");
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
-                .to_string();
-        for (checkout, repo) in [(&set, top.clone()), (&set.join("child"), top.join("child"))] {
-            git_dir(&repo);
-            let admin = repo.join(".git/worktrees/ctx");
-            link(&admin, checkout);
-            std::fs::write(admin.join(crate::set_record::RECORD_FILE), &record).unwrap();
-        }
-        // The set's own meta dirs, then the checkout it stands for and up
+        meta_plugin::sets::create(&set, "git", &top).unwrap();
+        // The set's own meta dirs, then the folder it stands for and up
         assert_eq!(
             workspace_meta_dirs(&set.join("child")).unwrap(),
             vec![
@@ -2645,123 +2592,17 @@ mod tests {
     }
 
     #[test]
-    fn a_set_checkout_stands_for_the_repo_at_its_place() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
-        // alpha lives at beta, and beta at gamma: a checkout at <set>/beta is
-        // alpha's, not beta's
+    fn a_folder_in_a_set_stands_for_the_folder_at_its_place() {
+        // alpha lives at beta: whatever is checked out at <set>/beta stands
+        // for <workspace>/beta
         let tmp = tempfile::tempdir().unwrap();
         let top = tmp.path().canonicalize().unwrap();
-        meta_yaml(
-            &top,
-            r#""alpha": {"repo": "x", "path": "beta"}, "beta": {"repo": "x", "path": "gamma"}"#,
-        );
+        meta_yaml(&top, r#""alpha": {"repo": "x", "path": "beta"}"#);
         let set = top.join(".worktrees/s");
         let member = set.join("beta");
         std::fs::create_dir_all(&member).unwrap();
-        git_dir(&top.join("beta"));
-        let admin = top.join("beta/.git/worktrees/s");
-        link(&admin, &member);
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
-                .to_string();
-        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
+        meta_plugin::sets::create(&set, "git", &top).unwrap();
         assert_eq!(set_source(&member).unwrap(), Some(top.join("beta")));
-    }
-
-    #[test]
-    fn a_set_checkout_a_branch_link_put_elsewhere_stands_for_its_own_repo() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
-        // app is at `link`; the root's branch in the set links it to
-        // `alternate`, which in the workspace is another repository
-        let tmp = tempfile::tempdir().unwrap();
-        let top = tmp.path().canonicalize().unwrap();
-        meta_yaml(
-            &top,
-            r#""app": {"repo": "x", "path": "real"}, "alt": {"repo": "x", "path": "alternate"}"#,
-        );
-        let set = top.join(".worktrees/s");
-        let member = set.join("alternate");
-        std::fs::create_dir_all(&member).unwrap();
-        git_dir(&top.join("alternate"));
-        git_dir(&top.join("real"));
-        let admin = top.join("real/.git/worktrees/s");
-        link(&admin, &member);
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
-                .to_string();
-        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
-        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
-
-        // so does a place that holds no repository, or nothing, in the workspace
-        std::fs::remove_dir_all(top.join("alternate/.git")).unwrap();
-        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
-        std::fs::remove_dir_all(top.join("alternate")).unwrap();
-        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
-
-        // a broken config of another nested repo doesn't hide it
-        meta_yaml(
-            &top,
-            r#""app": {"repo": "x", "path": "real"}, "alt": {"repo": "x", "path": "alternate"}, "other": {"repo": "x", "meta": true}"#,
-        );
-        std::fs::create_dir_all(top.join("other")).unwrap();
-        std::fs::write(top.join("other/.meta.yaml"), "{broken").unwrap();
-        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
-
-        // a repository that is no project of the workspace stands for nothing
-        meta_yaml(&top, r#""alt": {"repo": "x", "path": "alternate"}"#);
-        assert_eq!(set_source(&member).unwrap(), None);
-    }
-
-    #[test]
-    fn a_second_checkout_of_a_projects_repo_is_not_its_source() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
-        // app is at `real`; `alternate` is a hand-made `git worktree add` of
-        // the same repository, no project; a branch link put the set's
-        // checkout of app at `<set>/alternate`
-        let tmp = tempfile::tempdir().unwrap();
-        let top = tmp.path().canonicalize().unwrap();
-        meta_yaml(&top, r#""app": {"repo": "x", "path": "real"}"#);
-        git_dir(&top.join("real"));
-        let linked = |checkout: &Path, id: &str| {
-            let admin = top.join("real/.git/worktrees").join(id);
-            link(&admin, checkout);
-            admin
-        };
-        linked(&top.join("alternate"), "alternate");
-        let set = top.join(".worktrees/s");
-        let member = set.join("alternate");
-        let admin = linked(&member, "s");
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
-                .to_string();
-        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
-        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
-    }
-
-    #[test]
-    fn a_separate_git_dir_workspace_is_its_set_roots_source() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path().canonicalize().unwrap();
-        let (top, git) = (base.join("ws"), base.join("git"));
-        meta_yaml(&top, "");
-        std::fs::write(top.join(".git"), gitfile(&git)).unwrap();
-        for dir in ["objects", "refs"] {
-            std::fs::create_dir_all(git.join(dir)).unwrap();
-        }
-        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        let set = top.join(".worktrees/s");
-        let admin = git.join("worktrees/s");
-        link(&admin, &set);
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
-                .to_string();
-        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
-        assert_eq!(set_source(&set).unwrap(), Some(top));
     }
 
     #[test]

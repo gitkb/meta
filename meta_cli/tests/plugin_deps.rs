@@ -4,7 +4,6 @@
 //! named, shrinks to nothing.
 
 #![expect(
-    clippy::unwrap_used,
     clippy::string_slice,
     clippy::disallowed_methods,
     reason = "test helpers: a panic is a failed test, and the test runs cargo"

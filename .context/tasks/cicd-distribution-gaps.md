@@ -36,12 +36,12 @@ Make `meta` immediately usable by any user on any platform **without requiring R
 
 **macOS/Linux:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/harmony-labs/meta/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/gitkb/meta/main/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/harmony-labs/meta/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/gitkb/meta/main/install.ps1 | iex
 ```
 
 - Auto-detects platform and arch
@@ -51,7 +51,7 @@ irm https://raw.githubusercontent.com/harmony-labs/meta/main/install.ps1 | iex
 ### 2. Homebrew (macOS/Linux)
 
 ```bash
-brew install harmony-labs/tap/meta-cli
+brew install gitkb/tap/meta-cli
 ```
 
 ### 3. cargo-binstall (Best for Rust users)
@@ -72,7 +72,7 @@ cargo install meta
 
 ### 5. GitHub Releases (Manual)
 
-Direct download from: `https://github.com/harmony-labs/meta/releases/latest`
+Direct download from: `https://github.com/gitkb/meta/releases/latest`
 
 ---
 
@@ -94,7 +94,7 @@ Direct download from: `https://github.com/harmony-labs/meta/releases/latest`
 |------|--------|-------|
 | `CARGO_REGISTRY_TOKEN` | Create crates.io API token, add to GitHub secrets | Required for `cargo install` to work |
 | `HOMEBREW_TAP_TOKEN` | Create GitHub PAT with repo scope, add to secrets | Required for Homebrew auto-update |
-| `harmony-labs/homebrew-tap` | Create empty GitHub repository | One-time repo creation |
+| `gitkb/homebrew-tap` | Create empty GitHub repository | One-time repo creation |
 
 ---
 
@@ -103,7 +103,7 @@ Direct download from: `https://github.com/harmony-labs/meta/releases/latest`
 ### 1. Create Homebrew Tap Repository
 
 ```bash
-# Create empty repo at: https://github.com/harmony-labs/homebrew-tap
+# Create empty repo at: https://github.com/gitkb/homebrew-tap
 # No files needed - the release workflow will populate it
 ```
 
@@ -125,7 +125,7 @@ Direct download from: `https://github.com/harmony-labs/meta/releases/latest`
 
 - [x] `curl ... | bash` works on macOS/Linux (install.sh exists)
 - [x] `irm ... | iex` works on Windows (install.ps1 exists)
-- [ ] `brew install harmony-labs/tap/meta-cli` works (needs tap repo + secret)
+- [ ] `brew install gitkb/tap/meta-cli` works (needs tap repo + secret)
 - [ ] `cargo binstall meta` downloads pre-built binary (needs crates.io publish)
 - [ ] `cargo install meta` compiles from source (needs crates.io publish)
 - [x] All methods install the same version (workspace version sync)

@@ -1731,16 +1731,17 @@ set_projects() {
     [[ "$output" != *"not tracked by its parent"* ]]
 }
 
-@test "a set in a worktrees_dir under .worktrees runs nothing in the workspace" {
+@test "a set in a worktrees_dir under .worktrees runs in that set, nothing in the workspace" {
     commit_repo "$TEST_DIR/.deps/x"
     printf '{"projects": {"x": {"repo": "git@x:o/x.git", "path": ".deps/x"}}, "worktrees_dir": ".worktrees/w"}\n' > "$TEST_DIR/.meta.yaml"
     git -C "$TEST_DIR" add .meta.yaml
     git -C "$TEST_DIR" commit --quiet -m wdir
     "$META_BIN" git worktree create s1 --repo x --no-deps
     cd "$TEST_DIR/.worktrees/w/s1/.deps/x"
+    # the set is s1 (its owner file says so), not a set "w"
     run "$META_BIN" exec -- touch ran
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"--primary"* ]]
+    [ "$status" -eq 0 ]
+    [ -e ran ]
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/.deps/x/ran" ]
 }
@@ -1786,7 +1787,11 @@ set_projects() {
     [ ! -e ran ]
 }
 
-@test "a moved set whose records no longer match runs nothing in the workspace" {
+@test "a moved set runs in its own checkouts, never in the workspace" {
+    # Sets are folders meta knows by place (owner decision, PR 3): a set moved
+    # by hand is no longer the set its owner file names, and its members are
+    # the workspace's projects whose folders it holds; meta-git's records,
+    # which no longer match, still decide remove and prune
     commit_repo "$TEST_DIR/.deps/child"
     set_projects '{"child": {"repo": "git@x:o/c.git", "path": ".deps/child"}}'
     "$META_BIN" git worktree create s --repo child --no-deps
@@ -1794,22 +1799,18 @@ set_projects() {
     git -C "$TEST_DIR/.worktrees/s2/.deps/child" worktree repair
     cd "$TEST_DIR/.worktrees/s2/.deps/child"
     run "$META_BIN" exec -- touch ran
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"No checkouts of worktree set 's2'"* ]]
+    [ "$status" -eq 0 ]
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/.deps/child/ran" ]
-    [ ! -e ran ]
-    # nor with a record meta can no longer read
+    [ -e ran ]
+    rm ran
+    # a record meta-git can no longer read changes nothing here
     echo '{broken' > "$(git rev-parse --git-dir)/meta-worktree.json"
     run "$META_BIN" exec -- touch ran
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/.deps/child/ran" ]
-    # nor --primary, which can't tell where the set was made from: it names
-    # the record; from the workspace, meta runs there
-    run "$META_BIN" --primary exec -- pwd
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"meta-worktree.json"* ]]
+    # from the workspace, meta runs there
     cd "$TEST_DIR"
     run "$META_BIN" exec -- pwd
     [ "$status" -eq 0 ]
@@ -1874,13 +1875,13 @@ set_projects() {
     [[ "$output" != *"/s/experiment"* ]]
 }
 
-@test "a checkout in a set whose .git names a hostile path keeps the error on one line" {
+@test "a folder in .worktrees whose .git names a hostile path refuses, with no forged line" {
     mkdir -p "$TEST_DIR/.worktrees/broken"
     printf 'gitdir: /bad\nFORGED\n' > "$TEST_DIR/.worktrees/broken/.git"
     cd "$TEST_DIR/.worktrees/broken"
     run "$META_BIN" exec -- true
     [ "$status" -ne 0 ]
-    [[ "$output" == *'gitdir: /bad\nFORGED'* ]]
+    [[ "$output" == *"No checkouts of worktree set 'broken'"* ]]
     if printf '%s\n' "$output" | grep -q '^FORGED'; then false; fi
 }
 

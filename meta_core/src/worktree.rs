@@ -89,14 +89,17 @@ pub fn set_config(set_dir: &Path, config_name: Option<&PathBuf>) -> Result<Optio
 pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
     let mut place = dir.to_path_buf();
     let mut seen = Vec::new();
-    while let Some((_, set_dir)) = detect_worktree_location(&place)? {
-        let origin = set_origin(&set_dir).map_err(|e| {
-            anyhow::anyhow!(
-                "--primary can't tell which workspace worktree set {} was made from: {e:#}. \
-                 Run meta from that workspace's directory instead.",
-                escape_path(&set_dir)
-            )
-        })?;
+    let unknown = |place: &Path, e: anyhow::Error| {
+        anyhow::anyhow!(
+            "--primary can't tell which workspace worktree set {} was made from: {e:#}. \
+             Run meta from that workspace's directory instead.",
+            escape_path(place)
+        )
+    };
+    while let Some((_, set_dir)) =
+        detect_worktree_location(&place).map_err(|e| unknown(&place, e))?
+    {
+        let origin = set_origin(&set_dir).map_err(|e| unknown(&set_dir, e))?;
         let Some(origin) = origin else {
             break;
         };

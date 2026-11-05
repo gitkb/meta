@@ -7,10 +7,12 @@
 //!
 //! What a set has beside it, in the worktrees folder (so nothing is written
 //! into a checkout, where it would be an untracked file):
-//! - `.<set>.meta-set.json`, its [`Owner`]: which provider made it, and from
+//! - `.meta-sets/<set>.json`, its [`Owner`]: which provider made it, and from
 //!   which workspace. [`create`] writes it. meta refuses a command on a named
 //!   set from a provider that isn't its owner. A set without the file is
-//!   meta-git's (every set made before the file existed is a git set).
+//!   meta-git's (every set made before the file existed is a git set). The
+//!   folder's name starts with `.`, as no set's can: a provider listing the
+//!   sets in the worktrees folder passes over names that start with `.`.
 //! - `.<set>.meta-lease` and its lock: the [`lease`] its creator or its
 //!   ephemeral run holds.
 //!
@@ -29,10 +31,10 @@ pub use crate::LEASE_VAR;
 /// The provider that owns a set without an owner file.
 pub const DEFAULT_PROVIDER: &str = "git";
 
-/// The suffix of an owner file's name.
-const OWNER_SUFFIX: &str = ".meta-set.json";
+/// The folder beside the sets that holds their owner files.
+pub const OWNERS_DIR: &str = ".meta-sets";
 
-/// Who made a set, as `.<set>.meta-set.json` beside it says.
+/// Who made a set, as `.meta-sets/<set>.json` beside it says.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Owner {
@@ -77,10 +79,26 @@ pub(crate) fn beside(set: &Path, suffix: &str) -> Result<PathBuf> {
     }
 }
 
+/// The owner file of the set at `set`: `.meta-sets/<set>.json` beside it.
+fn owner_path(set: &Path) -> Result<PathBuf> {
+    match (set.parent(), set.file_name()) {
+        (Some(dir), Some(name)) => {
+            let mut file = name.to_owned();
+            file.push(".json");
+            Ok(dir.join(OWNERS_DIR).join(file))
+        }
+        _ => anyhow::bail!("{} has no folder to keep its files in", escape_path(set)),
+    }
+}
+
 /// Record that `provider` made the set at `set` from the workspace whose
 /// config is in `workspace`. Written whole, then put in place.
 pub fn create(set: &Path, provider: &str, workspace: &Path) -> Result<()> {
-    let path = beside(set, OWNER_SUFFIX)?;
+    let path = owner_path(set)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Cannot create {}", escape_path(dir)))?;
+    }
     let owner = Owner {
         provider: provider.to_string(),
         workspace: workspace.to_path_buf(),
@@ -102,7 +120,7 @@ pub fn create(set: &Path, provider: &str, workspace: &Path) -> Result<()> {
 /// owner files, or one that isn't a set). One that can't be read is an
 /// error: it says the set is someone's.
 pub fn owner(set: &Path) -> Result<Option<Owner>> {
-    let path = beside(set, OWNER_SUFFIX)?;
+    let path = owner_path(set)?;
     match std::fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
@@ -123,12 +141,18 @@ pub fn forget(set: &Path) -> Result<()> {
     if set.symlink_metadata().is_ok() {
         anyhow::bail!("{} is still there; its owner file stays", escape_path(set));
     }
-    let path = beside(set, OWNER_SUFFIX)?;
+    let path = owner_path(set)?;
     match std::fs::remove_file(&path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
             Err(e).with_context(|| format!("Cannot delete {}", escape_path(&path)))
         }
-        _ => Ok(()),
+        // the folder goes with the last owner file (one still in use stays)
+        _ => {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::remove_dir(dir);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -250,15 +274,23 @@ mod tests {
         create(&set, "jj", Path::new("/w")).unwrap();
         assert_eq!(provider(&set).unwrap(), "jj");
         assert_eq!(owner(&set).unwrap().unwrap().workspace, Path::new("/w"));
-        // nothing is written into the set itself
+        // nothing is written into the set itself, nor any file beside it:
+        // one folder whose name no set can have
         assert_eq!(std::fs::read_dir(&set).unwrap().count(), 0);
+        let beside: Vec<_> = std::fs::read_dir(set.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap())
+            .collect();
+        assert!(beside.iter().all(|e| e.path().is_dir()));
+        assert!(validate_name(OWNERS_DIR).is_err());
         // a file that can't be read is someone's: an error, not "git"
-        std::fs::write(beside(&set, OWNER_SUFFIX).unwrap(), "{").unwrap();
+        std::fs::write(owner_path(&set).unwrap(), "{").unwrap();
         assert!(provider(&set).is_err());
         assert!(forget(&set).is_err(), "kept while the set is there");
         std::fs::remove_dir(&set).unwrap();
         forget(&set).unwrap();
         assert_eq!(owner(&set).unwrap(), None);
+        assert!(!set.parent().unwrap().join(OWNERS_DIR).exists());
     }
 
     #[test]

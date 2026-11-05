@@ -1473,15 +1473,9 @@ EOF
     [[ "$output" == *"\"frontend\""* ]]
 }
 
-@test "--primary in a set whose records name two workspaces says so, without pointing back at --primary" {
+@test "--primary in a set whose owner file can't be read says so, without pointing back at --primary" {
     "$META_BIN" git worktree create mixed --repo backend --repo frontend --no-deps
-    record="$(git -C .worktrees/mixed/frontend rev-parse --absolute-git-dir)/meta-worktree.json"
-    python3 - "$record" "$(mktemp -d)" <<'PY'
-import json, sys
-path, other = sys.argv[1], sys.argv[2]
-record = json.load(open(path)); record["project"] = other
-json.dump(record, open(path, "w"))
-PY
+    echo '{broken' > .worktrees/.meta-sets/mixed.json
     cd .worktrees/mixed/backend
     run "$META_BIN" --primary exec -- pwd
     [ "$status" -ne 0 ]

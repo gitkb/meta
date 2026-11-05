@@ -988,7 +988,6 @@ dependencies = [
  "meta_plugin",
  "serde",
  "serde_json",
- "shlex",
 ]
 
 [[package]]

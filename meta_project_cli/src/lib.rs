@@ -191,15 +191,22 @@ pub fn execute(_ctx: &Ctx, request: Request) -> meta_plugin::Result<Response> {
             let near = args
                 .first()
                 .and_then(|word| meta_plugin::args::nearest(word, SUBCOMMANDS.iter().copied()));
-            let suggestion = match near {
-                Some(word) => format!(
-                    "\n\nA command with a similar name exists:\n    meta project {}",
-                    escape(
-                        &shlex::try_join(
-                            std::iter::once(word).chain(args.iter().skip(1).map(String::as_str))
-                        )
-                        .unwrap_or_else(|_| args.join(" "))
-                    )
+            // meta's options go before the command: the ones typed there,
+            // then the ones typed after it
+            let line = near.and_then(|word| {
+                let (moved, rest) = meta.lift(args.get(1..).unwrap_or_default())?;
+                let line: Vec<String> = std::iter::once("meta".to_string())
+                    .chain(meta.typed.iter().cloned())
+                    .chain(moved)
+                    .chain(["project".to_string(), word.to_string()])
+                    .chain(rest)
+                    .collect();
+                Some(meta_plugin::display::display_command(&line))
+            });
+            let suggestion = match line {
+                Some(line) => format!(
+                    "\n\nA command with a similar name exists:\n    {}",
+                    escape(&line)
                 ),
                 None => String::new(),
             };

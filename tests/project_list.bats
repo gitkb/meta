@@ -431,6 +431,24 @@ reach_tree() {
 
 paths() { jq -r '[.results[].project] | join(" ")'; }
 
+@test "the -A tip comes only for a value or tag that names something outside" {
+    reach_tree
+    printf '{"projects": {"frontend": {"repo": "git@github.com:org/frontend.git", "tags": ["backend", "ui"]}, "platform": {"repo": "git@github.com:org/platform.git", "meta": true}}}\n' > .meta.yaml
+    printf '{"projects": {"api": {"repo": "git@github.com:org/api.git", "tags": ["backend"]}, "infra": {"repo": "git@github.com:org/infra.git", "meta": true}}}\n' > platform/.meta.yaml
+    cd platform
+    # nothing outside was named: the backend repos here, less api, are none
+    run "$META_BIN" -r --tag backend --exclude platform/api exec -- true
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"-A reaches"* ]]
+    [[ "$output" != *"outside platform"* ]]
+    # a tag only a repo outside has: the tip, and its line runs there
+    run "$META_BIN" -r --tag ui exec -- true
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"names a repo or tag outside platform, where -r starts"*"as in meta -A --tag ui exec -- true"* ]]
+    run "$META_BIN" -A --tag ui exec -- true
+    [ "$status" -eq 0 ]
+}
+
 @test "plain reaches the nearest .meta.yaml, -r the meta repos under it, -A the whole workspace" {
     bats_require_minimum_version 1.5.0
     reach_tree

@@ -47,7 +47,7 @@ release() {
 #!/bin/sh
 case "\$1" in
     --meta-plugin-info) echo '{"name":"x","version":"$2","commands":["x run"]}' ;;
-    --meta-plugin-exec) cat > /dev/null; echo "$3" ;;
+    --meta-plugin-exec) echo '{"message":"$3"}' > "\$META_RESPONSE" ;;
 esac
 EOF
     chmod +x "$build/meta-x"

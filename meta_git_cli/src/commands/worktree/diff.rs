@@ -2,6 +2,7 @@ use anyhow::Result;
 use colored::*;
 use meta_plugin::display::{escape, escape_lines};
 use meta_plugin::outln;
+use meta_plugin::{Ctx, ErrorCode, ErrorInfo, ProjectResult, Request, Response};
 use rayon::prelude::*;
 
 use meta_git_lib::worktree::git_ops::{git_diff_patch, git_diff_stat};
@@ -10,11 +11,15 @@ use meta_git_lib::worktree::types::*;
 
 use super::cli_types::DiffArgs;
 
-pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
+/// One record per repo of the set: its diff against the base, or why there
+/// is none (a failure).
+pub(crate) fn handle_diff(args: DiffArgs, ctx: &Ctx, request: &Request) -> Result<Response> {
     let name = &args.name;
     let base_ref = &args.base;
 
-    let (_, repos) = discover_and_validate_worktree(name)?;
+    let configs = super::configs(request)?;
+    let owner = configs.as_ref().map(|c| &c.owner);
+    let (_, repos) = discover_and_validate_worktree(name, owner, &request.cwd)?;
 
     let diff_entries: Vec<DiffRepoEntry> = repos
         .par_iter()
@@ -60,20 +65,7 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
         }
     }
 
-    if json {
-        let output = DiffOutput {
-            name: name.to_string(),
-            base: base_ref.to_string(),
-            repos: diff_entries,
-            totals: DiffTotals {
-                repos_changed: total_repos_changed,
-                files_changed: total_files,
-                insertions: total_insertions,
-                deletions: total_deletions,
-            },
-        };
-        outln!("{}", serde_json::to_string_pretty(&output)?)?;
-    } else {
+    if !request.meta.json {
         outln!("{} vs {}:", name.bold(), escape(base_ref))?;
         for d in &diff_entries {
             if let Some(error) = &d.error {
@@ -119,10 +111,21 @@ pub(crate) fn handle_diff(args: DiffArgs, json: bool) -> Result<()> {
         }
     }
 
-    anyhow::ensure!(
-        failed == 0,
-        "Failed to diff {failed} repos against {}",
-        escape(base_ref)
-    );
-    Ok(())
+    let failure = (failed > 0)
+        .then(|| anyhow::anyhow!("Failed to diff {failed} repos against {}", escape(base_ref)));
+    let records = diff_entries
+        .into_iter()
+        .zip(&repos)
+        .map(|(entry, repo)| {
+            let record = ProjectResult::record(&entry.alias, &entry).at(&repo.path);
+            match &entry.error {
+                Some(error) => ProjectResult {
+                    error: Some(ErrorInfo::new(ErrorCode::Failed, error.clone())),
+                    ..record
+                },
+                None => record,
+            }
+        })
+        .collect();
+    crate::printed(ctx, records, failure)
 }

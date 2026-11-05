@@ -5,8 +5,8 @@
 //! `.meta/plugins/`: its file name makes it serve `meta hello`.
 
 use meta_plugin::{
-    has_help_token, run_plugin, CommandResult, PlannedCommand, PluginDefinition, PluginHelp,
-    PluginInfo, PluginRequest,
+    has_help_token, run_plugin, Ctx, Plan, PluginDefinition, PluginHelp, PluginInfo, Request,
+    Response, Step,
 };
 
 fn main() {
@@ -34,28 +34,24 @@ pub(crate) fn info() -> PluginInfo {
     }
 }
 
-/// `--meta-plugin-exec`: a plan of one command per selected repo, which meta
-/// runs. `request.projects` holds the repos' directories, selection applied.
-pub(crate) fn execute(request: PluginRequest) -> CommandResult {
+/// `--meta-plugin-exec`: a plan of one step per selected repo, which meta
+/// runs. `request.projects` holds the repos, selection applied.
+pub(crate) fn execute(_ctx: &Ctx, request: Request) -> anyhow::Result<Response> {
     // `meta hello world --help` reaches the plugin like any other arguments
     if has_help_token(&request.command, &request.args) {
-        return CommandResult::ShowHelp(None);
+        return Ok(Response::message(meta_plugin::help_text("hello", &info())));
     }
     // a bare `meta hello` (or `meta hello --help`) never gets here: meta
     // prints the plugin's help
     let [name] = request.args.as_slice() else {
-        return CommandResult::Usage("meta hello takes one name".to_string());
+        return Err(meta_plugin::usage("meta hello takes one name"));
     };
-    let commands = request
-        .projects
-        .iter()
-        .map(|dir| PlannedCommand {
-            dir: dir.clone(),
-            argv: echo(&format!("hello {name}")),
-            env: None,
-        })
-        .collect();
-    CommandResult::Plan(commands, None)
+    let steps = Step::each(&request, &echo(&format!("hello {name}")));
+    Ok(Plan {
+        steps,
+        ..Plan::default()
+    }
+    .into())
 }
 
 /// A command that prints `text`: meta runs plans with no shell, and on

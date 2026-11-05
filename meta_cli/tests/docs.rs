@@ -159,6 +159,7 @@ const VALUED: &[&str] = &[
     "-t",
     "--tag",
     "--depth",
+    "--fields",
 ];
 
 /// The `meta` commands of a shell line (`a && b` has two), each the words

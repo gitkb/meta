@@ -792,14 +792,16 @@ fn a_project_outside_the_workspace_is_selected_by_its_name() {
         ),
     )
     .unwrap();
-    // a `meta` that writes down what it was asked to select
+    // a `meta` that writes down what it was asked to select, then fails
+    // as `meta --json` does when it finds no project
     let bin = tmp.join("bin");
     std::fs::create_dir(&bin).unwrap();
     let log = tmp.join("args");
+    let envelope = r#"{"success":false,"command":"git status","error":{"code":"not-found","message":"no project sib"}}"#;
     std::fs::write(
         bin.join("meta"),
         format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho '{{}}'\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho '{envelope}'\nexit 1\n",
             log.display()
         ),
     )
@@ -807,7 +809,11 @@ fn a_project_outside_the_workspace_is_selected_by_its_name() {
     std::fs::set_permissions(bin.join("meta"), std::fs::Permissions::from_mode(0o755)).unwrap();
     let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "meta_git_status", "arguments": {"project": "sib"}}});
-    meta_mcp(&sandbox, &ws, &[], &request.to_string(), &[("PATH", &bin)]);
+    let out = meta_mcp(&sandbox, &ws, &[], &request.to_string(), &[("PATH", &bin)]);
+    let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(reply["result"]["isError"], true, "{reply}");
+    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("no project sib"), "{text}");
     let args = std::fs::read_to_string(&log).unwrap();
     let args: Vec<&str> = args.lines().collect();
     let include = args.iter().position(|a| *a == "--include").unwrap();

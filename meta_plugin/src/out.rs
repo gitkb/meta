@@ -49,19 +49,38 @@ macro_rules! errln {
 /// after a report goes to stderr, so stdout holds one JSON document.
 static WROTE: AtomicBool = AtomicBool::new(false);
 
-/// Write `args` to stdout (see [`out!`]).
+/// Write `args` to stdout (see [`out!`]). Under `--json` ([`set_json`])
+/// stdout holds the one JSON document ([`document`]), so text goes to
+/// stderr.
 pub fn stdout(args: fmt::Arguments<'_>) -> Result<(), StdoutError> {
     if args.as_str() == Some("") {
+        return Ok(());
+    }
+    if json() {
+        stderr(args);
         return Ok(());
     }
     WROTE.store(true, Ordering::Relaxed);
     io::stdout().lock().write_fmt(args).map_err(StdoutError)
 }
 
+/// Write `text`, the program's one JSON document, to stdout.
+pub fn document(text: &str) -> Result<(), StdoutError> {
+    WROTE.store(true, Ordering::Relaxed);
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "{text}")
+        .and_then(|()| stdout.flush())
+        .map_err(StdoutError)
+}
+
 /// Write `bytes` to stdout as they are: a command's output, which need not
 /// be UTF-8.
 pub fn stdout_bytes(bytes: &[u8]) -> Result<(), StdoutError> {
     if bytes.is_empty() {
+        return Ok(());
+    }
+    if json() {
+        stderr_bytes(bytes);
         return Ok(());
     }
     WROTE.store(true, Ordering::Relaxed);
@@ -208,7 +227,8 @@ pub fn pass_color(command: &mut std::process::Command) {
 static JSON: AtomicBool = AtomicBool::new(false);
 
 /// Output is JSON (`--json`), for programs that read it: no colour, and
-/// errors are JSON on stdout. Returns `json`.
+/// stdout holds the one JSON document alone (text goes to stderr).
+/// Returns `json`.
 pub fn set_json(json: bool) -> bool {
     JSON.store(json, Ordering::Relaxed);
     color();

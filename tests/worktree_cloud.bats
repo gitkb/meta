@@ -46,7 +46,7 @@ assert entry['custom']['run_id'] == 'abc123'
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
+d = json.load(sys.stdin)['results'][0]['data']
 assert d['custom']['env'] == 'ci', f'got custom: {d.get(\"custom\")}'
 "
 }
@@ -76,7 +76,7 @@ assert entry['ephemeral'] == True
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
+d = json.load(sys.stdin)['results'][0]['data']
 assert d['ephemeral'] == True
 "
 }
@@ -100,7 +100,7 @@ assert entry['ttl_seconds'] == 7200, f'got: {entry[\"ttl_seconds\"]}'
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
+d = json.load(sys.stdin)['results'][0]['data']
 assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
 "
 }
@@ -109,21 +109,21 @@ assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
     # Seconds
     run "$META_BIN" --json git worktree create ttl-s --repo backend --ttl 30s
     [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "import json,sys; assert json.load(sys.stdin)['ttl_seconds'] == 30"
+    echo "$output" | python3 -c "import json,sys; assert json.load(sys.stdin)['results'][0]['data']['ttl_seconds'] == 30"
 
     "$META_BIN" git worktree remove ttl-s --force
 
     # Minutes
     run "$META_BIN" --json git worktree create ttl-m --repo backend --ttl 5m
     [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "import json,sys; assert json.load(sys.stdin)['ttl_seconds'] == 300"
+    echo "$output" | python3 -c "import json,sys; assert json.load(sys.stdin)['results'][0]['data']['ttl_seconds'] == 300"
 
     "$META_BIN" git worktree remove ttl-m --force
 
     # Days
     run "$META_BIN" --json git worktree create ttl-d --repo backend --ttl 2d
     [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "import json,sys; assert json.load(sys.stdin)['ttl_seconds'] == 172800"
+    echo "$output" | python3 -c "import json,sys; assert json.load(sys.stdin)['results'][0]['data']['ttl_seconds'] == 172800"
 }
 
 @test "worktree create --ttl invalid format fails with one clear error" {
@@ -215,7 +215,7 @@ assert 'created_at' in entry
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
+d = json.load(sys.stdin)['results'][0]['data']
 assert d['name'] == 'destroy-json', f'name mismatch: {d}'
 assert 'path' in d, 'missing path field'
 assert d['repos_removed'] == 2, f'expected 2 repos, got: {d.get(\"repos_removed\")}'
@@ -250,7 +250,7 @@ assert d['repos_removed'] == 2, f'expected 2 repos, got: {d.get(\"repos_removed\
     echo "$output" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
-wt = next(w for w in data['worktrees'] if w['name'] == 'list-meta')
+wt = next(r['data'] for r in data['results'] if r['data']['name'] == 'list-meta')
 assert wt.get('ephemeral') == True, f'ephemeral: {wt.get(\"ephemeral\")}'
 assert wt.get('ttl_remaining_seconds') is not None
 assert wt.get('custom', {}).get('env') == 'staging'
@@ -469,10 +469,9 @@ assert payload['custom']['env'] == 'yaml'
     echo "$output" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-assert 'removed' in d
-assert d['dry_run'] == False
-assert any(e['name'] == 'prune-json' for e in d['removed'])
+assert any(r['data']['name'] == 'prune-json' and r['data']['action'] == 'removed' for r in d['results']), d
 "
+    [ ! -e .worktrees/prune-json ]
 }
 
 @test "worktree prune --dry-run --json outputs structured result" {
@@ -484,8 +483,7 @@ assert any(e['name'] == 'prune-json' for e in d['removed'])
     echo "$output" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-assert d['dry_run'] == True
-assert any(e['name'] == 'prune-dj' for e in d['removed'])
+assert any(r['data']['name'] == 'prune-dj' and r['data']['action'] == 'removed' for r in d['results']), d
 "
     # Worktree still exists
     [ -d ".worktrees/prune-dj" ]
@@ -609,7 +607,7 @@ assert 'removed' in payload
     [ "$status" -eq 0 ]
     echo "$output" | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
+d = json.load(sys.stdin)['results'][0]['data']
 assert d['name'] == 'full-cloud'
 assert d['ephemeral'] == True
 assert d['ttl_seconds'] == 1800
@@ -630,7 +628,7 @@ assert d['custom']['run_id'] == '123'
     echo "$output" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-wt = next(w for w in d['worktrees'] if w['name'] == 'lifecycle-meta')
+wt = next(r['data'] for r in d['results'] if r['data']['name'] == 'lifecycle-meta')
 assert wt['ephemeral'] == True
 "
 

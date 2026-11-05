@@ -12,10 +12,11 @@
 #![cfg(unix)]
 
 use meta_plugin::testing::{mkfifo, Sandbox};
-use serde_json::json;
+use meta_plugin::{Answer, Request, Response, Scope};
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -46,35 +47,50 @@ impl Race {
         Race { sandbox, root, ws }
     }
 
-    /// `meta git worktree <args>`, started.
-    fn start(&self, args: &[&str]) -> Child {
+    /// `meta git worktree <args>`, started, sent the request meta would send
+    /// from the workspace: in a file, its response read from another.
+    fn start(&self, args: &[&str]) -> Running {
         let (sub, rest) = args.split_first().unwrap();
-        let request = json!({"command": format!("git worktree {sub}"), "args": rest,
-            "cwd": self.ws, "options": {}});
+        let mut request = Request::new(format!("git worktree {sub}"), &self.ws);
+        request.args = rest.iter().map(|a| a.to_string()).collect();
+        request.scope = Scope::Workspace;
+        request.workspace = meta_core::config::Workspace::find(&self.ws, None)
+            .unwrap()
+            .map(|w| meta_plugin::Workspace {
+                root: w.dir.clone(),
+                config: w.config_path.clone(),
+                listed_root: meta_core::config::listed_root(&w.dir),
+                members: Vec::new(),
+                worktree: Default::default(),
+            });
+        let files = tempfile::tempdir().unwrap();
+        let (request_file, response) =
+            (files.path().join("request"), files.path().join("response"));
+        fs::write(&request_file, serde_json::to_vec(&request).unwrap()).unwrap();
         let path = std::env::var_os("PATH").unwrap_or_default();
         let paths = std::iter::once(self.root.join("bin")).chain(std::env::split_paths(&path));
-        let mut child = self
+        let child = self
             .sandbox
             .command(env!("CARGO_BIN_EXE_meta-git"))
             .arg("--meta-plugin-exec")
             .current_dir(&self.ws)
             .env("PATH", std::env::join_paths(paths).unwrap())
-            .stdin(Stdio::piped())
+            .env(meta_plugin::REQUEST_VAR, &request_file)
+            .env(meta_plugin::RESPONSE_VAR, &response)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(request.to_string().as_bytes())
-            .unwrap();
-        child
+        Running {
+            child,
+            response,
+            _files: files,
+        }
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        self.start(args).wait_with_output().unwrap()
+        self.start(args).wait_with_output()
     }
 
     /// A program `name` on the commands' PATH that says it started (touches
@@ -106,6 +122,43 @@ impl Race {
 
     fn release(&self, name: &str) {
         fs::write(self.root.join(format!("release-{name}")), "").unwrap();
+    }
+}
+
+/// A plugin call under way, and where its response will be.
+struct Running {
+    child: Child,
+    response: PathBuf,
+    _files: tempfile::TempDir,
+}
+
+impl Running {
+    /// Its output as meta would show it: the response's warnings and error
+    /// on stderr (`warning: …`, `Error: …`), and the code meta would end with
+    /// (a failed record fails the command).
+    fn wait_with_output(self) -> Output {
+        let mut out = self.child.wait_with_output().unwrap();
+        let response: Option<Response> = fs::read(&self.response)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let Some(response) = response else {
+            return out;
+        };
+        for warning in &response.warnings {
+            out.stderr
+                .extend(format!("warning: {}\n", warning.message).into_bytes());
+        }
+        let error = match response.answer {
+            Answer::Error(error) => Some(error),
+            Answer::Results(results) => results.records.into_iter().find_map(|r| r.error),
+            _ => None,
+        };
+        if let Some(error) = error {
+            out.stderr
+                .extend(format!("Error: {}\n", error.message).into_bytes());
+            out.status = std::process::ExitStatus::from_raw(error.code.exit_code() << 8);
+        }
+        out
     }
 }
 
@@ -158,15 +211,15 @@ fn a_late_create_leaves_a_half_set_removable() {
     let mut b = sb.start(&["create", "same", "--repo", "frontend", "--no-deps"]);
     sb.wait_for("post-checkout-started");
     rustix::process::kill_process(
-        rustix::process::Pid::from_child(&b),
+        rustix::process::Pid::from_child(&b.child),
         rustix::process::Signal::TERM,
     )
     .unwrap();
-    b.wait().unwrap();
+    b.child.wait().unwrap();
     assert!(sb.ws.join(".worktrees/same/frontend/.git").exists());
 
     sb.release("gh");
-    let a = a.wait_with_output().unwrap();
+    let a = a.wait_with_output();
     assert!(!a.status.success());
     assert!(text(&a).contains("left half-made"), "{}", text(&a));
 
@@ -256,7 +309,7 @@ fn prune_held_while_an_ephemeral_run_starts(meanwhile: impl FnOnce(&Race)) {
     let mut second = second.join().unwrap();
     second.write_all(&saved).unwrap();
     drop(second);
-    let pruned = prune.wait_with_output().unwrap();
+    let pruned = prune.wait_with_output();
     assert!(
         sb.ws.join(".worktrees/zzz/backend").exists(),
         "{}",
@@ -264,7 +317,7 @@ fn prune_held_while_an_ephemeral_run_starts(meanwhile: impl FnOnce(&Race)) {
     );
 
     sb.release("command");
-    let run = run.wait_with_output().unwrap();
+    let run = run.wait_with_output();
     assert!(run.status.success(), "{}", text(&run));
 }
 
@@ -305,7 +358,7 @@ fn prune_leaves_an_ephemeral_run_after_a_repository_is_added() {
     );
 
     sb.release("command");
-    let run = run.wait_with_output().unwrap();
+    let run = run.wait_with_output();
     assert!(run.status.success(), "{}", text(&run));
 }
 
@@ -341,11 +394,11 @@ fn a_lease_left_by_a_stopped_run_does_not_expire_a_set_made_again() {
     ]);
     sb.wait_for("command-started");
     rustix::process::kill_process(
-        rustix::process::Pid::from_child(&run),
+        rustix::process::Pid::from_child(&run.child),
         rustix::process::Signal::KILL,
     )
     .unwrap();
-    run.wait().unwrap();
+    run.child.wait().unwrap();
     sb.release("command");
     fs::remove_dir_all(sb.ws.join(".worktrees/same")).unwrap();
     add_a_first_repository(&sb);
@@ -394,6 +447,6 @@ fn prune_leaves_an_ephemeral_run_whose_lease_was_deleted() {
     assert!(worktrees.join("eph/backend").exists(), "{}", text(&pruned));
 
     sb.release("command");
-    let run = run.wait_with_output().unwrap();
+    let run = run.wait_with_output();
     assert!(run.status.success(), "{}", text(&run));
 }

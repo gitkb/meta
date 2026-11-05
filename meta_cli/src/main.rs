@@ -5,15 +5,19 @@ use meta_core::repo_filter::{Filters, Reach};
 use meta_plugin::display::{escape, escape_lines, escape_path};
 use meta_plugin::ExecutionMode;
 use meta_plugin::{errln, out, outln};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 mod context;
+mod events;
 mod init;
+mod invoke;
 mod registry;
+mod report;
 mod run_list;
 mod subprocess_plugins;
 use meta_core::worktree;
-use meta_plugin::PluginRequestOptions;
+use meta_plugin::Scope;
+use report::Report;
 use subprocess_plugins::{SubprocessPlugin, SubprocessPluginManager};
 
 // === CLI Structs ===
@@ -42,7 +46,7 @@ fn version() -> String {
     after_help = "meta's options go before the command (meta --dry-run git update); \
                   what follows the command belongs to it."
 )]
-struct Cli {
+pub struct Cli {
     #[arg(long, help = "Add shell aliases to the global .looprc file")]
     add_aliases_to_global_looprc: bool,
 
@@ -70,8 +74,26 @@ struct Cli {
     )]
     include: Option<Vec<String>>,
 
-    #[arg(long, help = "Output results in JSON format")]
+    #[arg(
+        long,
+        help = "Print one JSON document (the envelope every command prints) instead of text"
+    )]
     json: bool,
+
+    #[arg(
+        long,
+        conflicts_with = "json",
+        help = "Print each event as one JSON line as it happens ({\"event\": …}), then the envelope --json prints as the last line ({\"envelope\": …})"
+    )]
+    json_stream: bool,
+
+    #[arg(
+        long,
+        value_name = "FIELDS",
+        value_delimiter = ',',
+        help = "With --json, keep only these fields of each result (comma-separated; a.b reaches into a field, as data.name)"
+    )]
+    fields: Option<Vec<String>>,
 
     #[arg(short, long, help = "Enable silent mode")]
     silent: bool,
@@ -137,13 +159,22 @@ struct Cli {
 }
 
 impl Cli {
+    /// How events are shown as they arrive.
+    pub fn show(&self) -> events::Show {
+        match (self.json_stream, self.json) {
+            (true, _) => events::Show::Stream,
+            (false, true) => events::Show::Json,
+            (false, false) => events::Show::Text,
+        }
+    }
+
     /// `--dry-run`, resolved once for every command
     fn mode(&self) -> ExecutionMode {
         ExecutionMode::from_dry_run(self.dry_run)
     }
 
     /// `--include`, `--exclude` and `--tag`
-    fn filters(&self) -> Filters {
+    pub fn filters(&self) -> Filters {
         Filters::new(
             self.include.clone(),
             self.exclude.clone(),
@@ -151,32 +182,10 @@ impl Cli {
         )
     }
 
-    /// What a plugin is told of meta's options; `parallel` is resolved
-    /// against the config the command runs from
-    fn request_options(&self, parallel: bool) -> PluginRequestOptions {
-        let tags = self.filters().tags;
-        PluginRequestOptions {
-            json_output: self.json,
-            verbose: self.verbose,
-            parallel,
-            dry_run: self.dry_run,
-            silent: self.silent,
-            // an older plugin, which knows no `all`, reaches at least -r's
-            recursive: self.recursive || self.all,
-            all: self.all,
-            depth: self.depth,
-            include_filters: self.include.clone(),
-            exclude_filters: self.exclude.clone(),
-            tag_filters: (!tags.is_empty()).then_some(tags),
-            strict: self.strict,
-            meta_options: meta_options(),
-        }
-    }
-
     /// Where the command runs from: the current directory, or with
     /// `--primary` inside a worktree set, its place in the workspace the set
     /// was made from
-    fn start_dir(&self) -> Result<PathBuf> {
+    pub fn start_dir(&self) -> Result<PathBuf> {
         let cwd = std::env::current_dir()?;
         if !self.primary {
             return Ok(cwd);
@@ -316,6 +325,19 @@ enum PluginCommands {
     },
 }
 
+impl PluginCommands {
+    /// Its words, as the Envelope names the command.
+    fn name(&self) -> &'static str {
+        match self {
+            PluginCommands::Search { .. } => "plugin search",
+            PluginCommands::Install { .. } => "plugin install",
+            PluginCommands::List { .. } => "plugin list",
+            PluginCommands::Uninstall { .. } => "plugin uninstall",
+            PluginCommands::Update { .. } => "plugin update",
+        }
+    }
+}
+
 // === Help Utilities ===
 
 /// meta's help, with an entry for each plugin's command word (each plugin is
@@ -358,6 +380,20 @@ fn help_with_plugins(plugins: &SubprocessPluginManager) -> String {
 
 // === Main Entry Point ===
 
+/// The command being run, once known: what an Envelope of an error that
+/// ends meta names.
+static COMMAND: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// The command being run is `name` (the Envelope of an error names it).
+pub fn running(name: &str) {
+    if let Ok(mut command) = COMMAND.lock() {
+        name.clone_into(&mut command);
+    }
+}
+
+/// `--json-stream`: an error that ends meta is the stream's last line.
+static STREAM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn main() -> std::process::ExitCode {
     meta_plugin::exit::run(|| {
         if let Err(e) = meta_plugin::process::own() {
@@ -365,8 +401,34 @@ fn main() -> std::process::ExitCode {
                 "cannot pass signals on to the programs meta starts: {e}"
             ));
         }
-        run_cli()
+        let result = run_cli();
+        match result {
+            // under --json an error ends in the Envelope too, unless one
+            // was printed already (a failed command's)
+            Err(e) if meta_plugin::out::json() && !reported(&e) => {
+                let error = meta_plugin::envelope::info_of(&e);
+                let code = meta_plugin::exit::ending(&e).unwrap_or(error.code.exit_code());
+                let command = COMMAND.lock().map(|c| c.clone()).unwrap_or_default();
+                let envelope = meta_plugin::Envelope::failed(command, error);
+                match STREAM.load(std::sync::atomic::Ordering::Relaxed) {
+                    true => envelope.print_last(&[])?,
+                    false => envelope.print(&[])?,
+                }
+                Err(meta_plugin::exit::ExitWith(code).into())
+            }
+            result => result,
+        }
     })
+}
+
+/// Whether `error` is an ending already reported: an exit code alone (the
+/// Envelope or summary said why), or a closed stdout.
+fn reported(error: &anyhow::Error) -> bool {
+    meta_plugin::exit::ending(error).is_some()
+        && error.downcast_ref::<meta_plugin::ErrorInfo>().is_none()
+        && !error
+            .chain()
+            .any(|cause| cause.is::<meta_plugin::ErrorInfo>())
 }
 
 fn run_cli() -> Result<()> {
@@ -390,7 +452,7 @@ fn run_cli() -> Result<()> {
     // meta's own --help also lists the commands plugins add, so it is
     // answered here, before anything else runs; every other result of
     // parsing is reported as usual
-    let cli: Cli = match Cli::try_parse() {
+    let mut cli: Cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(e) if is_root_help(&e) => {
             check_and_warn_orphan();
@@ -399,7 +461,18 @@ fn run_cli() -> Result<()> {
         }
         Err(_) => meta_plugin::args::parse()?,
     };
+    // the stream is JSON too: every command reads `json` for it, and only
+    // the printing tells the two apart
+    cli.json |= cli.json_stream;
+    STREAM.store(cli.json_stream, std::sync::atomic::Ordering::Relaxed);
     meta_plugin::out::set_json(cli.json);
+    let fields = cli.fields.clone().unwrap_or_default();
+    anyhow::ensure!(
+        cli.json || fields.is_empty(),
+        meta_plugin::exit::Usage(
+            "--fields picks fields of the --json output: add --json".to_string()
+        )
+    );
 
     // Check for orphaned nested meta repo and warn the user
     check_and_warn_orphan();
@@ -422,12 +495,27 @@ fn run_cli() -> Result<()> {
         return loop_lib::import_aliases(cli.dry_run);
     }
 
+    let mut report = Report::new(match &cli.command {
+        None => "help",
+        Some(Commands::Help { .. }) => "help",
+        Some(Commands::Context(_)) => "context",
+        Some(Commands::Init(_)) => "init claude",
+        Some(Commands::Plugin(args)) => args.command.name(),
+        Some(Commands::Exec(_)) => "exec",
+        Some(Commands::External(_)) => "",
+    });
+    running(&report.command);
     match &cli.command {
-        None => Ok(out!("{}", help_with_plugins(&subprocess_plugins))?),
-        Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins),
+        None => help_message(&cli, &help_with_plugins(&subprocess_plugins), &mut report)?,
+        Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins, &mut report)?,
         Some(Commands::Context(args)) => {
-            let workspace = Workspace::find(&cli.start_dir()?, None)?
-                .ok_or_else(|| anyhow::anyhow!("Not a meta workspace (no .meta.yaml found)"))?;
+            let workspace =
+                Workspace::find(&cli.start_dir()?, cli.config.as_ref())?.ok_or_else(|| {
+                    meta_plugin::ErrorInfo::new(
+                        meta_plugin::ErrorCode::NotFound,
+                        "Not a meta workspace (no .meta.yaml found)",
+                    )
+                })?;
             context::handle_context(
                 cli.json,
                 args.no_status,
@@ -435,27 +523,72 @@ fn run_cli() -> Result<()> {
                 Reach::of(workspace, cli.recursive, cli.all, cli.depth)?,
                 &cli.filters(),
                 with_all,
-            )
+                &mut report,
+            )?
         }
         Some(Commands::Init(InitArgs {
             command: InitCommands::Claude { force, update },
-        })) => init::init_claude(*force, *update, cli.mode(), cli.verbose),
-        Some(Commands::Plugin(args)) => {
-            handle_plugin_command(&args.command, cli.mode(), cli.json, &subprocess_plugins)
-        }
-        Some(Commands::Exec(args)) => dispatch(&cli, &args.command, None),
+        })) => init::init_claude(*force, *update, cli.mode(), cli.verbose)?,
+        Some(Commands::Plugin(args)) => handle_plugin_command(
+            &args.command,
+            cli.mode(),
+            cli.json,
+            &subprocess_plugins,
+            &mut report,
+        )?,
+        Some(Commands::Exec(args)) => invoke::exec(&cli, &args.command, &mut report)?,
         Some(Commands::External(args)) => {
-            // Only the plugin serving this word is started
-            let plugin = match args.first() {
-                Some(word) => subprocess_plugins.find(word)?,
-                None => None,
-            };
-            let Some(plugin) = plugin else {
-                return Err(unrecognized_command_error(args, &subprocess_plugins, true));
-            };
-            plugin_command(&cli, args, &plugin)
+            external(&cli, args, &subprocess_plugins, &mut report, false)?
         }
     }
+    report.finish(cli.show(), cli.silent, &fields)
+}
+
+/// `meta <word> ...`, served by the plugin of `word`; `delegated` when a
+/// plugin asked for it (its own delegate is refused: it could loop).
+fn external(
+    cli: &Cli,
+    args: &[String],
+    plugins: &SubprocessPluginManager,
+    report: &mut Report,
+    delegated: bool,
+) -> Result<()> {
+    // Only the plugin serving this word is started
+    let plugin = match args.first() {
+        Some(word) => plugins.find(word)?,
+        None => None,
+    };
+    let Some(plugin) = plugin else {
+        return Err(unrecognized_command_error(args, plugins, true));
+    };
+    let delegate = plugin_command(cli, args, &plugin, report)?;
+    match delegate {
+        None => Ok(()),
+        Some(_) if delegated => Err(meta_plugin::ErrorInfo::new(
+            meta_plugin::ErrorCode::PluginFailed,
+            format!(
+                "plugin {} delegated a command that was itself a delegate",
+                escape(&plugin.word)
+            ),
+        )
+        .into()),
+        Some(line) if line.first().is_some_and(|w| w == "exec") => {
+            let argv = line.get(1..).unwrap_or_default();
+            let argv = argv.strip_prefix(&["--".to_string()]).unwrap_or(argv);
+            invoke::exec(cli, argv, report)
+        }
+        Some(line) => external(cli, &line, plugins, report, true),
+    }
+}
+
+/// `text`, the help asked for: printed, or under `--json` the Envelope's
+/// message.
+fn help_message(cli: &Cli, text: &str, report: &mut Report) -> Result<()> {
+    match cli.json {
+        true => report.message = Some(text.to_string()),
+        false => out!("{text}")?,
+    }
+    Ok(())
 }
 
 /// Whether `error` is clap showing meta's own help (`meta --help`, also
@@ -470,9 +603,14 @@ fn is_root_help(error: &clap::Error) -> bool {
 
 /// `meta help [COMMAND...]`: meta's help, a built-in command's, or the
 /// plugin command's, as `meta <command> --help` prints it.
-fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Result<()> {
+fn help(
+    cli: &Cli,
+    words: &[String],
+    plugins: &SubprocessPluginManager,
+    report: &mut Report,
+) -> Result<()> {
     let Some(first) = words.first() else {
-        return Ok(out!("{}", help_with_plugins(plugins))?);
+        return help_message(cli, &help_with_plugins(plugins), report);
     };
     let mut cmd = Cli::command();
     // built, so the subcommands carry their names and meta's help settings
@@ -492,7 +630,7 @@ fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Resul
                 }
             };
         }
-        return Ok(out!("{}", found.render_help())?);
+        return help_message(cli, &found.render_help().to_string(), report);
     }
     let Some(plugin) = plugins.find(first)? else {
         return Err(unrecognized_command_error(words, plugins, false));
@@ -505,12 +643,17 @@ fn help(cli: &Cli, words: &[String], plugins: &SubprocessPluginManager) -> Resul
         .cloned()
         .chain(["--help".to_string()])
         .collect();
-    plugin_command(cli, &args, &plugin)
+    plugin_command(cli, &args, &plugin, report).map(|_| ())
 }
 
 /// `meta <word> ...`, served by `plugin`: its help, or the command in the
-/// selected repos.
-fn plugin_command(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Result<()> {
+/// selected repos. What the plugin delegated to, if it did.
+fn plugin_command(
+    cli: &Cli,
+    args: &[String],
+    plugin: &SubprocessPlugin,
+    report: &mut Report,
+) -> Result<Option<Vec<String>>> {
     // A bare `meta <word>` and `meta <word> --help` print the plugin's
     // help; nested help requests reach the plugin's command, without its
     // repos. A --help after `--` is an argument for the command.
@@ -521,23 +664,35 @@ fn plugin_command(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Resu
     let namespace_help =
         args.len() == 2 && matches!(args.get(1).map(String::as_str), Some("--help" | "-h"));
     if args.len() == 1 || namespace_help {
+        report.command = plugin.word.clone();
         let help = meta_plugin::help_text(&plugin.word, &plugin.info);
-        return Ok(outln!("{}", help.trim_end())?);
+        help_message(cli, &format!("{}\n", help.trim_end()), report)?;
+        return Ok(None);
     }
     if wants_help {
-        return command_help(cli, args, plugin);
+        return command_help(cli, args, plugin, report);
     }
-    dispatch(cli, args, Some(plugin))
+    dispatch(cli, args, plugin, report)
 }
 
 /// `meta <word> <verb> ... --help`: a line saying who answers the command,
 /// as the plugin's info declares it, then the command's help: the plugin's
 /// for one of its own, meta's for one it runs as typed.
-fn command_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Result<()> {
+fn command_help(
+    cli: &Cli,
+    args: &[String],
+    plugin: &SubprocessPlugin,
+    report: &mut Report,
+) -> Result<Option<Vec<String>>> {
     use meta_plugin::Verb;
     let verb = args.get(1).map(String::as_str).unwrap_or_default();
     let named = loop_lib::display_command(&[plugin.word.clone(), verb.to_string()]);
     let named = escape(&named);
+    let start = cli.start_dir()?;
+    let ask_plugin = |report: &mut Report| {
+        let request = invoke::request(cli, plugin, args, &start, Scope::None, None)?;
+        invoke::call(cli, plugin, &request, None, report)
+    };
     match plugin.info.verb(verb) {
         Verb::Own => {
             let tool = plugin
@@ -545,7 +700,7 @@ fn command_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Result
                 .help
                 .as_ref()
                 .and_then(|h| h.runs_as_typed.as_deref());
-            // --json keeps stdout the plugin's JSON
+            // under --json, the help alone is the Envelope's message
             if !cli.json {
                 let owner = match tool {
                     Some(tool) => format!(
@@ -557,23 +712,14 @@ fn command_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> Result
                 };
                 outln!("{owner}\n")?;
             }
-            let options = cli.request_options(cli.parallel);
-            plugin.execute(args, &[], None, &cli.start_dir()?, options)
+            ask_plugin(report)
         }
         Verb::AsTyped(tool) => {
-            let help = as_typed_help(cli, args, plugin, tool);
-            match cli.json {
-                true => Ok(outln!(
-                    "{}",
-                    serde_json::json!({"success": true, "output": help})
-                )?),
-                false => Ok(out!("{help}")?),
-            }
+            report.command = format!("{} {verb}", plugin.word);
+            help_message(cli, &as_typed_help(cli, args, plugin, tool), report)?;
+            Ok(None)
         }
-        Verb::Unknown => {
-            let options = cli.request_options(cli.parallel);
-            plugin.execute(args, &[], None, &cli.start_dir()?, options)
-        }
+        Verb::Unknown => ask_plugin(report),
     }
 }
 
@@ -597,10 +743,13 @@ fn as_typed_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin, tool: &s
         escape(&plugin.word),
     );
     let tool = escape(tool);
-    let scope = match cli.start_dir().and_then(|start| target(cli, &start)) {
+    let scope = match cli
+        .start_dir()
+        .and_then(|start| invoke::target(cli, &start))
+    {
         Ok(target) => {
             let names: Vec<String> = target
-                .dirs
+                .dirs()
                 .iter()
                 .map(|dir| match dir.strip_prefix(&target.root) {
                     Ok(rel) if rel.as_os_str().is_empty() => ".".to_string(),
@@ -662,80 +811,79 @@ fn selection_options_help() -> String {
         .to_string()
 }
 
-// === Command Dispatch (shared by exec and external) ===
+// === Command Dispatch ===
 
-/// The repos a command runs in, chosen once
-struct Target {
-    /// The workspace or worktree set they belong to, shown as `.`
-    root: PathBuf,
-    dirs: Vec<PathBuf>,
-    /// `--parallel` or `--sequential`, else the config's default
-    parallel: bool,
-}
-
-/// Run a command across the selected repos.
-///
-/// `meta exec` (no plugin) runs the command as typed and never offers it to
-/// a plugin, so a plugin's word (e.g. meta-cargo's `cargo`) cannot shadow a
-/// raw command. Other commands (e.g. `meta git status`) go to the plugin
-/// serving their first word.
-fn dispatch(cli: &Cli, command_args: &[String], plugin: Option<&SubprocessPlugin>) -> Result<()> {
+/// `args` (starting with the plugin's word) through `plugin`, in the repos
+/// meta's options select. `git clone` makes the workspace, so it needs
+/// none; worktree commands find their repos in the set they name (in the
+/// workspace's members).
+fn dispatch(
+    cli: &Cli,
+    args: &[String],
+    plugin: &SubprocessPlugin,
+    report: &mut Report,
+) -> Result<Option<Vec<String>>> {
+    running(
+        &args
+            .get(..plugin.command_len(args))
+            .unwrap_or_default()
+            .join(" "),
+    );
     let start = cli.start_dir()?;
-    // `git clone` makes the workspace, so it needs none; worktree commands
-    // find their repos in the set they name (exec applies meta's selection
-    // there)
-    let finds_its_repos = command_args.first().is_some_and(|s| s == "git")
-        && command_args
-            .get(1)
-            .is_some_and(|s| s == "clone" || s == "worktree");
-    // (meta's --parallel as typed: no config's default applies to them)
-    if let Some(plugin) = plugin.filter(|_| finds_its_repos) {
-        let options = cli.request_options(cli.parallel);
-        return plugin.execute(command_args, &[], None, &start, options);
-    }
-
-    let target = target(cli, &start)?;
-    if cli.verbose {
-        errln!(
-            "Executing command: {}",
-            escape(&loop_lib::display_command(command_args))
-        );
-    }
-    match plugin {
-        None => {
-            let config = loop_lib::LoopConfig {
-                verbose: cli.verbose,
-                silent: cli.silent,
-                parallel: target.parallel,
-                dry_run: cli.dry_run,
-                json_output: cli.json,
-                aliases: loop_lib::aliases()?,
-                root_dir: Some(target.root.clone()),
-                outer: Some(outer(&["exec", "--"])),
-                ..Default::default()
-            };
-            // only in the selected projects that are repositories
-            let commands = target
-                .dirs
-                .iter()
-                .map(|dir| loop_lib::DirCommand {
-                    dir: dir.clone(),
-                    argv: command_args.to_vec(),
-                    env: None,
-                    refused: None,
-                })
-                .collect();
-            let commands = run_list::in_repos(commands, &target.dirs, Some(&target.root));
-            loop_lib::run_commands(&config, &commands)
+    let words: Vec<&str> = args.iter().map(String::as_str).collect();
+    // the set a worktree command names: the word after its verb
+    let named = words.get(3).copied().filter(|name| !name.starts_with('-'));
+    let scope = match words.as_slice() {
+        ["git", "clone", ..] => Scope::None,
+        ["git", "update", ..] => Scope::Workspace,
+        ["git", "worktree", "exec" | "remove" | "status" | "diff" | "add", ..]
+            if named.is_some() =>
+        {
+            Scope::NamedSet
         }
-        Some(plugin) => plugin.execute(
-            command_args,
-            &target.dirs,
-            Some(&target.root),
-            &start,
-            cli.request_options(target.parallel),
-        ),
+        ["git", "worktree", ..] => Scope::Workspace,
+        ["project", "list" | "ls" | "dependents", ..] => Scope::Workspace,
+        _ => Scope::Selection,
+    };
+    // the host applies meta's selection: a command that finds its repos
+    // itself takes none, nor one that acts on a whole named set
+    // (`exec --ephemeral` makes its set: there is nothing to select from yet)
+    let ephemeral = words
+        .iter()
+        .take_while(|w| **w != "--")
+        .any(|w| *w == "--ephemeral");
+    let whole_set = scope == Scope::NamedSet && (words.get(2) != Some(&"exec") || ephemeral);
+    let refuses_filters = matches!(scope, Scope::None | Scope::Workspace) || whole_set;
+    if refuses_filters && !cli.filters().is_empty() {
+        return Err(meta_plugin::exit::Usage(format!(
+            "meta {} finds its repos itself (in the .meta.yaml files or its worktree sets); it does not take --include/--exclude/--tag",
+            escape(&loop_lib::display_command(&args.iter().take(3).cloned().collect::<Vec<_>>()))
+        ))
+        .into());
     }
+    let target = match (scope, named) {
+        // a clone runs where it is, in a workspace or none
+        (Scope::None, _) => None,
+        (Scope::NamedSet, Some(name)) => invoke::named_set(cli, &start, name)?,
+        // outside a workspace, the command says what it needs itself; a
+        // config that is refused is an error here
+        (Scope::Workspace | Scope::NamedSet, _) => match invoke::target(cli, &start) {
+            Ok(target) => Some(target),
+            Err(e) if meta_plugin::envelope::code_of(&e) == meta_plugin::ErrorCode::NotFound => {
+                None
+            }
+            Err(e) => return Err(e),
+        },
+        (Scope::Selection, _) => Some(invoke::target(cli, &start)?),
+    };
+    let mut request = invoke::request(cli, plugin, args, &start, scope, target.as_ref())?;
+    // typed after the command, they get no tip to type them before it
+    if refuses_filters {
+        request.meta_options = request
+            .meta_options
+            .refusing(&["--include", "--exclude", "--tag"]);
+    }
+    invoke::call(cli, plugin, &request, target.as_ref(), report)
 }
 
 /// meta's options, and what of this process's arguments is them
@@ -755,95 +903,6 @@ fn outer(before: &[&str]) -> loop_lib::Outer {
         meta: meta_options(),
         before: before.iter().map(ToString::to_string).collect(),
     }
-}
-
-/// The repos `cli`'s filters select from `start`: the checkouts of the
-/// worktree set it is in (unless `--primary`), else the repos of the
-/// workspace whose config is nearest at or above it (with `--recursive`, of
-/// the nested meta repos too).
-fn target(cli: &Cli, start: &Path) -> Result<Target> {
-    let filters = cli.filters();
-    // --parallel wins, then --sequential, then the default of the config
-    // the command runs from (parallel without one)
-    let parallel = |workspace: Option<&Workspace>| {
-        cli.parallel || !cli.sequential && workspace.is_none_or(|w| w.defaults.parallel)
-    };
-
-    // Inside a set, the command runs in the set's checkouts
-    let location = match cli.primary {
-        true => None,
-        false => worktree::detect_worktree_location(start)?,
-    };
-    if let Some((name, set_dir)) = location {
-        let members: Vec<_> = worktree::discover_worktree_members(&set_dir)?
-            .into_iter()
-            .map(|member| member.path)
-            .collect();
-        // Inside a set, a command never falls back to the workspace's own
-        // checkouts: they aren't the ones the caller is in. A plain clone
-        // that is merely under a `.worktrees` directory is no set.
-        if members.is_empty() && worktree::holds_meta_checkout(&set_dir) {
-            anyhow::bail!(
-                "No checkouts of worktree set '{}' found in {}. Run from a set meta made, or pass --primary to run in the workspace.",
-                escape(&name),
-                escape_path(&set_dir)
-            );
-        }
-        if !members.is_empty() {
-            if cli.verbose {
-                errln!(
-                    "Detected worktree context: '{}' ({} repos)",
-                    escape(&name),
-                    members.len()
-                );
-            }
-            let workspace = worktree::set_config(&set_dir, &members, cli.config.as_ref())?
-                .map(|config| Workspace::load(&config))
-                .transpose()?;
-            if cli.verbose {
-                match &workspace {
-                    Some(w) => errln!("Using config {}", escape_path(&w.config_path)),
-                    None => meta_plugin::out::warn(format!(
-                        "No .meta.yaml found for worktree '{}'. Tags, plugins, and dependency features unavailable.",
-                        escape(&name)
-                    )),
-                }
-            }
-            let dirs = worktree::select_in_set(&set_dir, &members, workspace.as_ref(), &filters)?;
-            return Ok(Target {
-                parallel: parallel(workspace.as_ref()),
-                root: set_dir,
-                dirs,
-            });
-        }
-    }
-
-    let Some(workspace) = Workspace::find(start, cli.config.as_ref())? else {
-        let config_name = cli
-            .config
-            .as_ref()
-            .map(|p| escape_path(p))
-            .unwrap_or_else(|| config::META_CONFIG_NAME.to_string());
-        anyhow::bail!(
-            "Could not find meta config file '{config_name}'\nSearched from {} up to root",
-            escape_path(start)
-        );
-    };
-    if cli.verbose {
-        errln!(
-            "Resolved config file path: {}",
-            escape_path(&workspace.config_path)
-        );
-    }
-    // From the config already loaded (the default or --config's): -r into
-    // the meta repos nested under it, -A from the outermost one
-    let parallel = parallel(Some(&workspace));
-    let reach = Reach::of(workspace, cli.recursive, cli.all, cli.depth)?;
-    Ok(Target {
-        dirs: reach.select(&filters, with_all)?,
-        parallel,
-        root: reach.root,
-    })
 }
 
 /// The line as typed with meta's `-r` in it as `-A`, which reaches the
@@ -942,7 +1001,11 @@ fn handle_plugin_command(
     mode: ExecutionMode,
     json: bool,
     subprocess_plugins: &SubprocessPluginManager,
+    report: &mut Report,
 ) -> Result<()> {
+    use meta_plugin::ProjectResult;
+    let mut record =
+        |data: serde_json::Value| report.results.push(ProjectResult::about_workspace(data));
     use registry::{PluginInstaller, RegistryClient, PLUGIN_PREFIX};
 
     // These change installed plugins and have no preview
@@ -965,8 +1028,11 @@ fn handle_plugin_command(
             let client = RegistryClient::new()?;
             let results = client.search(query)?;
 
+            for plugin in &results {
+                record(serde_json::to_value(plugin)?);
+            }
             if json {
-                outln!("{}", serde_json::to_string_pretty(&results)?)?;
+                // the records above are the --json output
             } else if results.is_empty() {
                 outln!("No plugins found matching '{}'", escape(query))?;
             } else {
@@ -991,6 +1057,7 @@ fn handle_plugin_command(
             if name.starts_with("http://") || name.starts_with("https://") {
                 // Direct URL install
                 let plugin_name = installer.install_from_url(name)?;
+                record(serde_json::json!({"installed": plugin_name, "to": location}));
                 if !json {
                     outln!(
                         "Successfully installed {} to {location}",
@@ -1000,6 +1067,7 @@ fn handle_plugin_command(
             } else if let Some(shorthand) = GitHubShorthand::parse(name) {
                 // GitHub shorthand install (user/repo[@version])
                 let plugin_name = installer.install_from_github(&shorthand)?;
+                record(serde_json::json!({"installed": plugin_name, "to": location}));
                 if !json {
                     outln!(
                         "Successfully installed {} to {location}",
@@ -1016,6 +1084,7 @@ fn handle_plugin_command(
                         // Got GitHub shorthand from registry, use GitHub install flow
                         if let Some(shorthand) = GitHubShorthand::parse(&source) {
                             let plugin_name = installer.install_from_github(&shorthand)?;
+                            record(serde_json::json!({"installed": plugin_name, "to": location}));
                             if !json {
                                 outln!(
                                     "Successfully installed {} from {} to {location}",
@@ -1031,6 +1100,11 @@ fn handle_plugin_command(
                         // Fall back to complex registry format (plugins/{name}/plugin.json)
                         let metadata = client.fetch_plugin_metadata(name)?;
                         let installed = installer.install(&metadata)?;
+                        record(serde_json::json!({
+                            "installed": metadata.name,
+                            "version": metadata.version,
+                            "to": location,
+                        }));
 
                         if !json {
                             outln!(
@@ -1048,8 +1122,11 @@ fn handle_plugin_command(
             if *local {
                 let installer = PluginInstaller::new_local()?;
                 let plugins = installer.list_plugins_detailed()?;
+                for plugin in &plugins {
+                    record(serde_json::to_value(plugin)?);
+                }
                 if json {
-                    outln!("{}", serde_json::to_string_pretty(&plugins)?)?;
+                    // the records above are the --json output
                 } else if plugins.is_empty() {
                     outln!("No project-local plugins installed")?;
                 } else {
@@ -1076,20 +1153,16 @@ fn handle_plugin_command(
                 // Use discovered plugins from subprocess plugin manager
                 let plugins = subprocess_plugins.all();
 
+                for plugin in &plugins {
+                    record(serde_json::json!({
+                        "name": plugin.word,
+                        "version": plugin.info.version,
+                        "description": plugin.info.description,
+                        "path": plugin.path.to_string_lossy(),
+                    }));
+                }
                 if json {
-                    let json_plugins: Vec<_> = plugins
-                        .iter()
-                        .map(|plugin| {
-                            serde_json::json!({
-                                "name": plugin.word,
-                                "version": plugin.info.version,
-                                "description": plugin.info.description.as_deref()
-                                    .unwrap_or("No description available"),
-                                "path": plugin.path.display().to_string()
-                            })
-                        })
-                        .collect();
-                    outln!("{}", serde_json::to_string_pretty(&json_plugins)?)?;
+                    // the records above are the --json output
                 } else if plugins.is_empty() {
                     outln!("No plugins installed")?;
                 } else {
@@ -1113,6 +1186,7 @@ fn handle_plugin_command(
             let installer = create_installer(*local)?;
             let location = format_plugin_location(*local);
             installer.uninstall(name)?;
+            record(serde_json::json!({"uninstalled": name, "from": location}));
 
             if !json {
                 outln!("Successfully uninstalled {} from {location}", escape(name))?;
@@ -1127,6 +1201,9 @@ fn handle_plugin_command(
                 // Update specific plugin
                 match installer.check_update(plugin_name)? {
                     Some((current, latest)) => {
+                        record(serde_json::json!({
+                            "name": plugin_name, "version": current, "latest": latest, "updated": !check,
+                        }));
                         if check {
                             if !json {
                                 outln!(
@@ -1150,6 +1227,7 @@ fn handle_plugin_command(
                         }
                     }
                     None => {
+                        record(serde_json::json!({"name": plugin_name, "updated": false}));
                         if !json {
                             outln!("{} is already up to date", escape(plugin_name))?;
                         }
@@ -1172,6 +1250,9 @@ fn handle_plugin_command(
                         Ok(Some((current, latest))) => {
                             updates_available.push((name, current, latest))
                         }
+                        Ok(None) if json => {
+                            record(serde_json::json!({"name": name, "updated": false}))
+                        }
                         Ok(None) => {}
                         Err(e) => report(&name, e),
                     }
@@ -1182,6 +1263,11 @@ fn handle_plugin_command(
                         outln!("All plugins are up to date")?;
                     }
                 } else if check {
+                    for (name, current, latest) in &updates_available {
+                        record(serde_json::json!({
+                            "name": name, "version": current, "latest": latest, "updated": false,
+                        }));
+                    }
                     if !json {
                         outln!("Updates available:")?;
                         for (name, current, latest) in &updates_available {
@@ -1197,6 +1283,9 @@ fn handle_plugin_command(
                     for (name, current, latest) in &updates_available {
                         match installer.update_plugin(name) {
                             Ok(_) => {
+                                record(serde_json::json!({
+                                    "name": name, "version": current, "latest": latest, "updated": true,
+                                }));
                                 if !json {
                                     outln!(
                                         "Updated {} from {} to {}",

@@ -31,7 +31,7 @@ pub const CODES: &[(&str, &str)] = &[
     ("0", "Done"),
     (
         "1",
-        "Something failed: a command in at least one repo (the summary names them), or meta itself (`Error: …` on stderr; with `--json`, a JSON error on stdout)",
+        "Something failed: a command in at least one repo (the summary names them), or meta itself (`Error: …` on stderr; with `--json`, the Envelope's `error`)",
     ),
     (
         "2",
@@ -128,9 +128,9 @@ pub fn ending(error: &anyhow::Error) -> Option<i32> {
     })
 }
 
-/// The exit code for `result`, with its error reported: as JSON on stdout
-/// with `--json` while stdout is still empty (one JSON document), else
-/// escaped on stderr.
+/// The exit code for `result`, with its error reported, escaped, on
+/// stderr. (Under `--json` meta reports it in its Envelope first and ends
+/// with [`ExitWith`].)
 pub fn code(result: anyhow::Result<()>) -> i32 {
     let Err(error) = result else {
         return SUCCESS;
@@ -138,19 +138,9 @@ pub fn code(result: anyhow::Result<()>) -> i32 {
     if let Some(code) = ending(&error) {
         return code;
     }
-    let usage = error.chain().any(|cause| cause.is::<Usage>());
-    let code = if usage { USAGE } else { FAILURE };
-    if out::json() && !out::wrote_stdout() {
-        let report = serde_json::json!({ "success": false, "error": format!("{error:#}") });
-        match crate::outln!("{report}") {
-            Ok(()) => return code,
-            Err(StdoutError(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                return CLOSED_STDOUT
-            }
-            // said on stderr instead
-            Err(_) => {}
-        }
-    }
+    let kind = crate::envelope::code_of(&error);
+    let usage = kind == crate::ErrorCode::Usage;
+    let code = kind.exit_code();
     // escaped: an error can carry paths and names from git and the
     // filesystem
     if usage {

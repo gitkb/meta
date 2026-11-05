@@ -1,8 +1,7 @@
 use colored::Colorize;
-use meta_core::config;
-use meta_plugin::display::{escape, escape_lines, escape_path};
+use meta_plugin::display::{escape, escape_lines};
 use meta_plugin::outln;
-use meta_plugin::{CommandResult, PlannedCommand, PluginRequestOptions};
+use meta_plugin::{Plan, Request, Response, Step};
 use std::path::Path;
 use std::process::Command;
 
@@ -20,89 +19,52 @@ pub(crate) struct CommitArgs {
     message: Option<String>,
 }
 
-/// Execute git commit with optional --edit flag for per-repo messages
-pub(crate) fn execute_git_commit(
-    args: CommitArgs,
-    projects: &[String],
-    options: &PluginRequestOptions,
-    cwd: &std::path::Path,
-) -> anyhow::Result<CommandResult> {
+/// Execute git commit with optional --edit flag for per-repo messages, in
+/// the selected repos that have staged changes
+pub(crate) fn execute_git_commit(args: CommitArgs, request: &Request) -> anyhow::Result<Response> {
     let (use_editor, message) = (args.edit, args.message);
 
-    // Get list of directories to check for staged changes
-    let dirs_to_check: Vec<String> = if !projects.is_empty() {
-        // Use projects from meta_cli (supports --recursive)
-        projects.to_vec()
-    } else {
-        // Fall back to reading local meta config
-        let Some(workspace) = config::Workspace::in_dir(cwd)? else {
-            return Ok(CommandResult::Message(format!(
-                "No .meta.yaml found in {}",
-                escape_path(cwd)
-            )));
-        };
-        let projects = workspace.projects;
-
-        let mut dirs = vec![".".to_string()];
-        dirs.extend(projects.iter().map(|p| p.path.clone()));
-        dirs
-    };
-
-    // Find repos with staged changes
+    // Find repos with staged changes: (name, folder, staged files)
     let mut repos_with_changes: Vec<(String, String, Vec<String>)> = Vec::new();
 
-    for dir in &dirs_to_check {
-        let path = if dir == "." {
-            cwd.to_path_buf()
-        } else {
-            cwd.join(dir)
-        };
-
+    for project in &request.projects {
+        let (dir, path) = (&project.path, &project.abs);
         // a folder with nothing git's in it (not cloned, or a workspace
         // that is no repository) has nothing staged; a .git git can't use is
         // the user's to know about
-        match meta_core::gitdir::common_dir(&path) {
+        match meta_core::gitdir::common_dir(path) {
             Ok(Some(_)) => {}
             Ok(None) => continue,
             Err(e) => anyhow::bail!("{}: not a git repository ({e:#})", escape(dir)),
         }
-        let staged = staged_files(&path)?;
+        let staged = staged_files(path)?;
         if !staged.is_empty() {
             repos_with_changes.push((dir.clone(), path.to_string_lossy().to_string(), staged));
         }
     }
 
     if repos_with_changes.is_empty() {
-        return Ok(CommandResult::Message(
-            "No staged changes found in any repository.".to_string(),
+        return Ok(Response::message(
+            "No staged changes found in any repository.",
         ));
     }
 
     if use_editor {
         // Open editor for per-repo messages (interactive, cannot use ExecutionPlan)
-        execute_editor_commit(&repos_with_changes, options.mode())?;
+        execute_editor_commit(&repos_with_changes, request.meta.mode())?;
     } else if let Some(msg) = message {
-        // Apply same message to all repos - use ExecutionPlan for proper dry-run support
-        let commands: Vec<PlannedCommand> = repos_with_changes
+        // Apply same message to all repos: a plan, which meta previews
+        let steps = repos_with_changes
             .iter()
             .map(|(name, path, _files)| {
-                // For "." use "." as dir, otherwise use the path
-                let dir = if name == "." {
-                    ".".to_string()
-                } else {
-                    path.clone()
-                };
-                PlannedCommand {
-                    dir,
-                    argv: ["git", "commit", "-m", msg.as_str()]
-                        .map(str::to_string)
-                        .to_vec(),
-                    env: None,
-                }
+                let argv = ["git", "commit", "-m", msg.as_str()].map(str::to_string);
+                Step::new(Some(name), path, argv.to_vec())
             })
             .collect();
-
-        return Ok(CommandResult::Plan(commands, Some(options.parallel)));
+        return Ok(Response::plan(Plan {
+            steps,
+            ..Plan::default()
+        }));
     } else {
         // No message provided, show what would be committed
         outln!("Repositories with staged changes:")?;
@@ -124,7 +86,7 @@ pub(crate) fn execute_git_commit(
         )?;
     }
 
-    Ok(CommandResult::Message(String::new()))
+    Ok(Response::done())
 }
 
 /// The staged files of the repo at `path`.
@@ -395,6 +357,29 @@ pub(crate) fn parse_multi_commit_file(content: &str) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_plugin::{Answer, Project};
+    use std::path::PathBuf;
+
+    /// A commit request for the projects at `dirs` (each named by its
+    /// folder's name), from the first.
+    fn request(dirs: &[PathBuf]) -> Request {
+        let mut request = Request::new("git commit", dirs.first().cloned().unwrap_or_default());
+        request.projects = dirs
+            .iter()
+            .map(|dir| Project {
+                name: dir.file_name().unwrap().to_string_lossy().into_owned(),
+                path: dir.file_name().unwrap().to_string_lossy().into_owned(),
+                abs: dir.clone(),
+                present: dir.exists(),
+                ..Project::default()
+            })
+            .collect();
+        request
+    }
+
+    fn says_nothing_staged(result: anyhow::Result<Response>) -> bool {
+        matches!(result.unwrap().answer, Answer::Message(message) if message.contains("No staged changes"))
+    }
 
     #[test]
     fn commit_passes_over_folders_with_nothing_of_gits_but_reports_a_broken_one() {
@@ -405,22 +390,18 @@ mod tests {
             edit: false,
             message: Some("x".to_string()),
         };
-        let options = PluginRequestOptions::default();
-        let result = execute_git_commit(args(), &["missing".to_string()], &options, &dir);
-        assert!(
-            matches!(result.unwrap(), CommandResult::Message(message) if message.contains("No staged changes"))
-        );
+        let in_dir = |name: &str| request(&[dir.join(name)]);
+        let result = execute_git_commit(args(), &in_dir("missing"));
+        assert!(says_nothing_staged(result));
 
         // nothing git's in it: nothing staged there
         std::fs::create_dir(dir.join("plain")).unwrap();
-        let result = execute_git_commit(args(), &["plain".to_string()], &options, &dir);
-        assert!(
-            matches!(result.unwrap(), CommandResult::Message(message) if message.contains("No staged changes"))
-        );
+        let result = execute_git_commit(args(), &in_dir("plain"));
+        assert!(says_nothing_staged(result));
         // a .git git can't use is named, never taken for "nothing staged"
         std::fs::create_dir_all(dir.join("broken/.git")).unwrap();
-        let result = execute_git_commit(args(), &["broken".to_string()], &options, &dir);
-        let error = result.err().expect("a broken repository must fail");
+        let result = execute_git_commit(args(), &in_dir("broken"));
+        let error = result.expect_err("a broken repository must fail");
         let error = error.to_string();
         assert!(
             error.contains("broken") && error.contains("not a git repository"),
@@ -440,30 +421,22 @@ mod tests {
         sandbox.git(&project, &["init", "-q"]);
         std::fs::write(project.join("new"), "x").unwrap();
         sandbox.git(&project, &["add", "new"]);
-        let options = PluginRequestOptions {
-            dry_run: true,
-            ..Default::default()
-        };
-        // from the root, and from inside the project (the host sends the
-        // workspace by its path then)
-        let shown = |p: &Path| p.to_string_lossy().into_owned();
-        for (cwd, projects) in [
-            (root.clone(), [shown(&root), "p".to_string()]),
-            (project.clone(), [shown(&root), shown(&project)]),
-        ] {
+        // from the root, and from inside the project
+        for cwd in [&root, &project] {
+            let mut request = request(&[root.clone(), project.clone()]);
+            request.cwd = cwd.clone();
+            request.meta.dry_run = true;
             let args = CommitArgs {
                 edit: false,
                 message: Some("save".to_string()),
             };
-            let result = execute_git_commit(args, &projects, &options, &cwd);
-            assert!(
-                matches!(
-                    result,
-                    Ok(CommandResult::Message(_) | CommandResult::Plan(..))
-                ),
-                "{cwd:?}: {:?}",
-                result.err()
-            );
+            let result = execute_git_commit(args, &request);
+            let steps = match result.unwrap().answer {
+                Answer::Plan(plan) => plan.steps,
+                _ => Vec::new(),
+            };
+            assert_eq!(steps.len(), 1, "{cwd:?}");
+            assert_eq!(steps[0].dir, project, "{cwd:?}");
         }
     }
 
@@ -479,16 +452,8 @@ mod tests {
             edit: false,
             message: Some("x".to_string()),
         };
-        let result = execute_git_commit(
-            args,
-            &["broken".to_string()],
-            &PluginRequestOptions::default(),
-            &dir,
-        );
-        let error = format!(
-            "{:#}",
-            result.err().expect("git failing is no empty answer")
-        );
+        let result = execute_git_commit(args, &request(&[repo]));
+        let error = format!("{:#}", result.expect_err("git failing is no empty answer"));
         assert!(
             error.contains("diff --cached --name-only") && error.contains("broken"),
             "{error}"

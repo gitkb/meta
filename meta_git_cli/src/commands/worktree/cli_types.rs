@@ -106,21 +106,6 @@ pub struct CreateArgs {
     /// their depends_on unchecked (with --every-repo too).
     #[arg(long)]
     pub no_deps: bool,
-
-    /// meta's -r: resolve dependencies across the meta repos nested under
-    /// the nearest .meta.yaml; repo aliases are full paths from there
-    #[arg(skip)]
-    pub recursive: bool,
-
-    /// meta's -A: the same across the whole workspace, from its outermost
-    /// .meta.yaml; repo aliases are full paths from there
-    /// (open-source/gitkb/core)
-    #[arg(skip)]
-    pub from_root: bool,
-
-    /// meta's --depth: how many levels of nested meta repos -r or -A goes
-    #[arg(skip)]
-    pub depth: Option<usize>,
 }
 
 #[derive(Args)]

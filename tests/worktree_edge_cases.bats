@@ -291,8 +291,7 @@ EOF
     echo "$output" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-assert 'removed' in data
-assert any(r['name'] == 'json-prune' for r in data['removed'])
+assert any(r['data']['name'] == 'json-prune' and r['data']['action'] == 'removed' for r in data['results']), data
 "
 }
 
@@ -481,7 +480,9 @@ EOF
     META_DATA_DIR="$META_DATA_DIR/linked" run "$META_BIN" linked
     [ -e "$TEST_DIR/ran-linked" ]
     [ -f "$(record_file .worktrees/linked-store/backend)" ]
-    [ "$(ls -A "$REAL/data")" = "plugins" ]
+    # no file outside plugins: the folder meta makes for the plugin's own
+    # files stays empty
+    [ -z "$(find "$REAL/data" -path "$REAL/data/plugins" -prune -o ! -type d -print)" ]
 }
 
 @test "a meta-* program in a group-writable PATH dir still loads" {
@@ -812,11 +813,16 @@ add_backend_origin() {
 J
     mkdir -p backend/src
     echo keep > backend/src/file
-    run "$META_GIT_BIN" --meta-plugin-exec <<J
-{"command": "worktree", "args": ["remove", "src"], "projects": [], "cwd": "$TEST_DIR"}
+    # a request that names backend as the place for sets, as no host would
+    cat > "$TEST_DIR/request.json" <<J
+{"command": "git worktree remove", "args": ["src", "--force"], "cwd": "$TEST_DIR", "scope": "workspace",
+ "workspace": {"root": "$TEST_DIR", "config": "$TEST_DIR/.meta.yaml", "listed_root": "$TEST_DIR",
+               "worktree": {"dir": "$TEST_DIR/backend"}},
+ "plugin_dir": "$TEST_DIR", "data_dir": "$TEST_DIR", "meta": {}}
 J
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"Invalid project 'backend'"* ]]
+    META_REQUEST="$TEST_DIR/request.json" META_RESPONSE="$TEST_DIR/response.json" \
+        run "$META_GIT_BIN" --meta-plugin-exec
+    [[ "$(cat "$TEST_DIR/response.json")" == *"Invalid project 'backend'"* ]]
     [ -f backend/src/file ]
 }
 

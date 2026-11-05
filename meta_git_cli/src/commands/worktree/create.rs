@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::*;
+use meta_core::worktree::Configs;
 use meta_plugin::display::{escape, escape_path};
-use meta_plugin::out;
-use meta_plugin::ExecutionMode;
 use meta_plugin::{errln, outln};
+use meta_plugin::{Ctx, ProjectResult, Request};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
@@ -29,18 +29,21 @@ pub(crate) struct Created {
     pub lease: lease::Held,
 }
 
-/// Make the set `args` asks for; `None` for a preview, which makes none.
+/// Make the set `args` asks for in the workspace `request` runs in (with
+/// meta's `-r`, resolving dependencies across the meta repos nested under
+/// its config; with `-A`, from the outermost); `None` for a preview, which
+/// makes none. The set made is in `records`, for `--json`, even when what
+/// follows its making (a hook) fails.
 pub(crate) fn handle_create(
     args: CreateArgs,
-    mode: ExecutionMode,
-    verbose: bool,
-    json: bool,
-    global_strict: bool,
+    ctx: &Ctx,
+    request: &Request,
+    records: &mut Vec<ProjectResult>,
 ) -> Result<Option<Created>> {
-    let strict = global_strict;
+    let (mode, verbose) = (request.meta.mode(), request.meta.verbose);
 
     let name = &args.name;
-    validate_worktree_name(name)?;
+    meta_core::worktree::validate_name(name)?;
 
     let ephemeral = args.ephemeral;
     let ttl_seconds = args.ttl;
@@ -50,34 +53,28 @@ pub(crate) fn handle_create(
         if let Some((key, value)) = s.split_once('=') {
             custom_meta.insert(key.to_string(), value.to_string());
         } else {
-            out::warn_or_bail(
-                strict,
-                format!(
-                    "--meta value '{}' missing '=' separator (expected key=value), skipping",
-                    escape(s)
-                ),
-            )?;
+            ctx.warn_or_bail(format!(
+                "--meta value '{}' missing '=' separator (expected key=value), skipping",
+                escape(s)
+            ))?;
         }
     }
     let from_ref = args.commit_ish.as_deref();
     let from_pr_spec = args.from_pr.as_deref();
 
-    let recursive = args.recursive || args.from_root;
+    // meta's -r or -A: the host sends how deep, and the config they start
+    // from (-A: the root of the workspace tree; -r: the nearest .meta.yaml)
+    let depth = request.depth;
+    let recursive = request.recursive;
 
     if args.repos.is_empty() && !args.every_repo {
         anyhow::bail!("Specify repos with --repo <alias> or use --every-repo");
     }
-    let cwd = std::env::current_dir()?;
-    let configs = Configs::find(&cwd)?;
-    // meta's -A works from the root of the workspace tree, -r from the
-    // nearest .meta.yaml down
-    let configs = match args.from_root {
-        true => Configs::of(configs.here.root()?)?,
-        false => configs,
-    };
+    let cwd = request.cwd.as_path();
+    let configs: Configs = super::workspace_configs(request)?;
     // with -r or -A, meta names repos by their path from here
     let root = meta_core::config::listed_root(&configs.here.dir);
-    let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
+    let worktree_root = meta_core::worktree::resolve_worktree_root(Some(&configs.owner), cwd)?;
 
     // Check if worktree already exists
     let wt_dir = worktree_root.join(name);
@@ -98,7 +95,7 @@ pub(crate) fn handle_create(
     // projects (the whole tree, walked once, with --recursive)
     let index_of = || -> Result<Index> {
         Ok(match recursive {
-            true => Index::recursive(&configs.here, args.depth)?,
+            true => Index::recursive(&configs.here, depth)?,
             false => Index::new(&configs.here),
         })
     };
@@ -141,7 +138,7 @@ pub(crate) fn handle_create(
             index = index_of()?;
             continue;
         }
-        let planned = plan_repos(&index, &args, strict, verbose, !warned)?;
+        let planned = plan_repos(&index, &args, ctx, verbose, !warned)?;
         warned = true;
         if planned.missing.is_empty() {
             break planned.repos;
@@ -190,14 +187,11 @@ pub(crate) fn handle_create(
         let mut kept = Vec::new();
         for repo in repos_to_create {
             match missing_ref(&repo.source, from_ref)? {
-                Some(r) => out::warn_or_bail(
-                    strict,
-                    format!(
-                        "Skipping '{}': ref '{}' not found",
-                        escape(&repo.project),
-                        escape(r)
-                    ),
-                )?,
+                Some(r) => ctx.warn_or_bail(format!(
+                    "Skipping '{}': ref '{}' not found",
+                    escape(&repo.project),
+                    escape(r)
+                ))?,
                 None => kept.push(repo),
             }
         }
@@ -321,14 +315,11 @@ pub(crate) fn handle_create(
         for repo in &repos_to_create {
             if let Some(r) = missing_ref(&repo.source, from_ref)? {
                 // skip repos where the commit-ish doesn't exist
-                out::warn_or_bail(
-                    strict,
-                    format!(
-                        "Skipping '{}': ref '{}' not found",
-                        escape(&repo.project),
-                        escape(r)
-                    ),
-                )?;
+                ctx.warn_or_bail(format!(
+                    "Skipping '{}': ref '{}' not found",
+                    escape(&repo.project),
+                    escape(r)
+                ))?;
                 continue;
             }
             let dest = if repo.place == "." {
@@ -405,9 +396,7 @@ pub(crate) fn handle_create(
         ttl_seconds,
         custom: custom_meta,
     };
-    if json {
-        outln!("{}", serde_json::to_string_pretty(&output)?)?;
-    } else {
+    if !request.meta.json {
         outln!(
             "{} Created worktree '{}' at {}",
             "✓".green(),
@@ -448,7 +437,8 @@ pub(crate) fn handle_create(
         &output.custom,
         Some(&configs.owner),
     )
-    .or_else(|e| out::warn_or_bail(strict, format!("{e:#}")));
+    .or_else(|e| ctx.warn_or_bail(format!("{e:#}")));
+    records.push(ProjectResult::about_workspace(&output).at(&wt_dir));
     if let Err(e) = hook {
         // the set is made: an ephemeral one is the next prune's
         if ephemeral {
@@ -703,7 +693,7 @@ impl Plan<'_> {
 fn plan_repos(
     index: &Index,
     args: &CreateArgs,
-    strict: bool,
+    ctx: &Ctx,
     verbose: bool,
     warn: bool,
 ) -> Result<Planned> {
@@ -825,7 +815,7 @@ fn plan_repos(
                 // A plain directory on the way is no parent; a repo that
                 // isn't a project is worth saying so
                 if meta_core::gitdir::common_dir(&meta_dir.join(&parent))?.is_some() {
-                    out::warn(format!(
+                    ctx.warn(format!(
                         "Intermediate parent '{}' for nested repo '{}' is not a project of the \
                          workspace, skipping",
                         escape(&parent),
@@ -847,7 +837,7 @@ fn plan_repos(
     // on the way to a nested repo is in the set for its place, not its needs
     if !args.no_deps && warn {
         let set = followed.iter().map(String::as_str);
-        report_problems(&dep_graph(index)?, set, index.tree().is_none(), strict)?;
+        report_problems(&dep_graph(index)?, set, index.tree().is_none(), ctx)?;
     }
 
     // A project not cloned yet has no repository to make a worktree of: the
@@ -888,10 +878,10 @@ fn plan_repos(
             repos.push(repo);
             continue;
         };
-        if strict {
+        if ctx.meta().strict {
             anyhow::bail!("{why} (strict mode)");
         }
-        out::warn(format!("{why}, skipping"));
+        ctx.warn(format!("{why}, skipping"));
     }
     if !not_cloned.is_empty() {
         not_cloned.extend(missing);
@@ -1147,7 +1137,7 @@ fn report_problems<'a>(
     graph: &DependencyGraph,
     set: impl IntoIterator<Item = &'a str>,
     flat: bool,
-    strict: bool,
+    ctx: &Ctx,
 ) -> Result<()> {
     // a project reached twice is reported once
     let set: BTreeSet<&str> = set.into_iter().collect();
@@ -1157,7 +1147,7 @@ fn report_problems<'a>(
                 DependencyProblem::Unresolved(_) if flat => " (nested projects count with -r)",
                 _ => "",
             };
-            out::warn_or_bail(strict, format!("'{}' {problem}{hint}", escape(project)))?;
+            ctx.warn_or_bail(format!("'{}' {problem}{hint}", escape(project)))?;
         }
     }
     Ok(())

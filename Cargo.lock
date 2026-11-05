@@ -872,6 +872,7 @@ dependencies = [
  "loop_lib",
  "meta_core",
  "meta_plugin",
+ "nix",
  "proc-macro2",
  "rayon",
  "rustix",
@@ -892,7 +893,6 @@ version = "0.2.22"
 dependencies = [
  "anyhow",
  "clap",
- "loop_lib",
  "meta_core",
  "meta_plugin",
  "schemars",
@@ -961,6 +961,7 @@ name = "meta_plugin"
 version = "0.2.22"
 dependencies = [
  "anyhow",
+ "base64",
  "clap",
  "colored",
  "console",
@@ -988,7 +989,6 @@ dependencies = [
  "meta_plugin",
  "serde",
  "serde_json",
- "shlex",
 ]
 
 [[package]]

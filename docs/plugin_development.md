@@ -1,6 +1,6 @@
 # Plugin Development Guide
 
-A plugin adds a command to `meta`. It is a program named `meta-<word>` that serves `meta <word> ...`: meta starts it, sends it the request as JSON, and runs the plan it answers with (or prints what it prints). Any language works.
+A plugin adds a command to `meta`. It is a program named `meta-<word>` that serves `meta <word> ...`: meta starts it, sends it the resolved request, and does what it answers (runs its plan, shows its results). Any language works.
 
 The whole of a working plugin in Rust is [`meta_plugin/examples/meta-hello.rs`](../meta_plugin/examples/meta-hello.rs), about 60 lines: `meta hello NAME` runs `echo hello NAME` in each selected repo. It is built and tested with the workspace, so it matches the protocol below.
 
@@ -25,54 +25,15 @@ For `meta <word> ...` meta starts only `meta-<word>`; if it doesn't answer `--me
 
 ## The protocol
 
-The types are in [`meta_plugin`](../meta_plugin/src/lib.rs), the plugin SDK; a Rust plugin uses them and `run_plugin`, which handles the flags below. It isn't published: depend on it by git (`meta_plugin = { git = "https://github.com/gitkb/meta", features = ["parse"] }`). Besides the protocol it gives a plugin meta's exit codes, output and escaping, the process owner (`meta_plugin::process`, on by default: a plugin's children stop when it is told to), and, with the feature `testing`, a test kit (`meta_plugin::testing`: a sandbox, a workspace builder with `testing-git`, `PluginRequest::builder` and `call`, which sends a plugin a request as meta does).
+The protocol is the SDK's types, and its documentation is theirs: [`meta_plugin`](../meta_plugin/src/lib.rs) (`cargo doc -p meta_plugin --open`). In short: meta asks a plugin for its info (`PluginInfo`), then calls it with a `Request` (the invocation meta resolved: the workspace, the worktree set it runs in, the selected projects, meta's options a plugin may act on) in the file `META_REQUEST` names. The plugin writes one `Response` to the file `META_RESPONSE` names: a `Plan` of steps for meta to run in each project, `Results` (records meta shows, or that the plugin already showed in its own words), a message, a delegate (another meta command line to run instead) or an error, each with its warnings and skipped projects. The plugin keeps the terminal: its stdin, stdout and stderr are meta's (under `--json` its stdout is meta's stderr). meta prints the outcome; under `--json`, the one `Envelope` every command prints (see [the --json envelope](advanced_usage.md#json-output-mode)). A plugin never prints JSON itself.
 
-**`meta-<word> --meta-plugin-info`** prints a `PluginInfo`:
+A command that finds things one at a time can show them as it goes: it writes events (`meta_plugin::Event`: a record, progress or a warning, one JSON object per line) to the file `META_EVENTS` names, and meta shows them as they arrive (`Ctx::{record, progress, emit}` in Rust, `printf '%s\n' "$event" >> "$META_EVENTS"` in a script). The call still ends with its response.
 
-```json
-{
-  "name": "hello",
-  "version": "0.1.0",
-  "commands": ["hello"],
-  "description": "Say hello in each repo",
-  "help": {"usage": "meta hello NAME", "examples": ["meta hello world"]}
-}
-```
+A Rust plugin uses the types and `run_plugin`, which reads the request, hands the handler a `Ctx` (for warnings and `--strict`) and writes the response. The SDK isn't published: depend on it by git (`meta_plugin = { git = "https://github.com/gitkb/meta", features = ["parse"] }`). Besides the protocol it gives a plugin meta's exit codes, output and escaping, the process owner (`meta_plugin::process`, on by default: a plugin's children stop when it is told to), and, with the feature `testing`, a test kit (`meta_plugin::testing`: a sandbox, a workspace builder with `testing-git`, and `call`, which sends a plugin a request as meta does).
 
-`commands` start with the plugin's word. For `meta git worktree create x`, the longest listed command that matches the typed words whole (`git worktree create`) is the request's `command` and the rest (`["x"]`) its `args`; with none matching, `command` is the word alone. `meta <word>` and `meta <word> --help` print the plugin's help, from its info: `help.usage` (required), then `commands` (the plugin's own commands, each with one line), `runs_as_typed`, `examples` and `note` (all optional). `meta --help` lists the same `commands` under the plugin's word. `runs_as_typed` names the tool that every other command runs as typed, in each selected repo (`"git"` for meta-git: `meta git log` runs `git log`). For `meta <word> <command> --help`, meta first says who answers the command, from the same info. For one of `commands` it then passes the `--help` on to the plugin, which answers it itself (`has_help_token`, then `CommandResult::ShowHelp`). For any other command, with `runs_as_typed` set, meta prints that command's help itself (the repos it would run in, meta's options, where the tool's own help is) and the plugin is not asked; without it, the plugin is asked.
+meta's options go before the command and reach a plugin resolved: the selection as the request's projects, the rest as its `meta` options. Never define an option of meta's of your own (an option of the tool you adapt that only shares a spelling and means something else stays the tool's: `git clone --depth N` is history depth). Parse your arguments with `meta_plugin::parse_args`, which gives meta's options typed after your command the tip with the line that has them before it.
 
-**`meta-<word> --meta-plugin-exec`** reads a `PluginRequest` on stdin:
-
-```json
-{
-  "command": "hello",
-  "args": ["team"],
-  "projects": ["/home/me/ws", "/home/me/ws/api", "/home/me/ws/apps/web"],
-  "cwd": "/home/me/ws",
-  "options": {"json_output": false, "dry_run": false, "parallel": true, "recursive": false,
-              "verbose": false, "silent": false, "strict": false, "all": false, "depth": null,
-              "include_filters": null, "exclude_filters": null, "tag_filters": ["backend"],
-              "meta_options": {"options": [{"spellings": ["--recursive", "-r"], "takes_value": false, "repeats": false, "number": false}, …],
-                               "typed": ["--tag", "backend"]}}
-}
-```
-
-`recursive` is meta's `-r` (the meta repos nested under the nearest `.meta.yaml` too) and `all` its `-A` (the whole workspace, from its outermost `.meta.yaml`; meta sends `recursive` with it too, so a plugin that knows no `all` reaches at least `-r`'s repos); a plugin that finds its repos itself starts where they say. `projects` are the selected repos' directories, `--include`, `--exclude` and `--tag` already applied (the root included unless they left it out). The filters are passed too: a plugin that finds its repos itself must refuse filters it can't honour.
-
-meta's options go before the command, and `options` is where a plugin reads them: never define a `--json`, `-r`, `-A`/`--all`, `--dry-run`, `--strict`, `--depth`, `--include`, `--exclude`, `--tag` or `--parallel` of your own (an option of the tool you adapt that only shares a spelling and means something else stays the tool's: `git clone --depth N` is history depth, `--parallel N` a count). Parse your arguments with `meta_plugin::parse_args(command, args, &request.options.meta_options)` and refuse the rest with exit 2; meta's options typed after your command then get the tip with the line that has them before it (`options.meta_options`, which meta sends, lists meta's options and what was typed of them; `MetaOptions::refusing` marks the ones your command never takes, so no tip suggests a line that fails again).
-
-It answers on stdout with one of:
-
-- a plan, which meta runs in each directory (in parallel unless the plan or the user says otherwise), honouring `--dry-run` itself:
-  ```json
-  {"plan": {"commands": [{"dir": "/home/me/ws/api", "argv": ["echo", "hello team"]}]}}
-  ```
-  (A Rust plugin builds a full plan as `CommandResult::FullPlan(Box::new(plan))`.) Each `argv` runs as given, with no shell. A plan can also carry `pre_commands` and `post_commands`, which run one at a time before and after the main ones and **run under `--dry-run` too** (they are for setup such as an SSH connection, not for changes), `parallel`, `max_parallel`, `spawn_stagger_ms`, a per-command `env`, and `warnings`, which meta prints, or lists in its `--json` report (`ExecutionPlan`).
-- any other output, which meta prints as it is.
-
-and ends with one of meta's [exit codes](advanced_usage.md#exit-codes) (`CommandResult::Error` and `CommandResult::Usage` print the message on stderr and end it as a failure and as a wrong command line). meta ends with the plugin's code. A plugin that changes something itself (instead of planning) honours `options.dry_run`, or refuses it with exit 2.
-
-meta starts a plugin with `META_OWNER_DEPTH` set (1, one more for each program in between); when meta is told to stop, a plugin gets half of meta's time to stop what it started first. `meta_plugin::process` reads and passes the variable on; the crate docs of `meta_plugin` say how.
+`commands` in a plugin's info start with its word. For `meta git worktree create x`, the longest listed command that matches the typed words whole (`git worktree create`) is the request's command and the rest (`x`) its arguments; with none matching, the command is the word alone. `meta <word>` and `meta <word> --help` print the plugin's help, from its info. `runs_as_typed` names the tool that every other command runs as typed, in each selected repo (`git` for meta-git: `meta git log` runs `git log`); for its help meta answers itself.
 
 ## Other languages
 
@@ -80,30 +41,31 @@ The same plugin in Python, as `meta-hello` (executable) on PATH or in a plugins 
 
 ```python
 #!/usr/bin/env python3
-import json, sys
+import json, os, sys
 
 if sys.argv[1:] == ["--meta-plugin-info"]:
     print(json.dumps({"name": "hello", "version": "0.1.0", "commands": ["hello"],
                       "help": {"usage": "meta hello NAME"}}))
-elif sys.argv[1:] == ["--meta-plugin-exec"]:
-    request = json.load(sys.stdin)
-    if len(request["args"]) != 1:
-        print("meta hello takes one name", file=sys.stderr)
-        sys.exit(2)
-    commands = [{"dir": d, "argv": ["echo", "hello " + request["args"][0]]}
-                for d in request["projects"]]
-    print(json.dumps({"plan": {"commands": commands}}))
+    sys.exit(0)
+request = json.load(open(os.environ["META_REQUEST"]))
+if len(request["args"]) != 1:
+    response = {"error": {"code": "usage", "message": "meta hello takes one name"}}
 else:
-    sys.exit(2)
+    steps = [{"project": p["path"], "dir": p["abs"], "argv": ["echo", "hello " + request["args"][0]]}
+             for p in request["projects"]]
+    response = {"plan": {"steps": steps}}
+json.dump(response, open(os.environ["META_RESPONSE"], "w"))
 ```
 
 ## Testing a plugin
 
 ```bash
 ~/.meta/plugins/meta-hello --meta-plugin-info | jq .
-echo '{"command":"hello","args":["team"],"projects":["."]}' | ~/.meta/plugins/meta-hello --meta-plugin-exec
-meta --dry-run hello team    # what meta would run, run nowhere
+meta --dry-run hello team        # what meta would run, run nowhere
+meta --json hello team | jq .    # the envelope: one row per step
 ```
+
+A Rust plugin's tests send it requests with `meta_plugin::testing::call`, through the same files meta uses.
 
 If `meta hello` says the command is unrecognized, the file isn't where meta looks, isn't executable, or isn't named `meta-hello`; `meta --verbose plugin list` shows the folders meta looked in and what it found there.
 

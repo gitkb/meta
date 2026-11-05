@@ -8,8 +8,8 @@
 //! plugins). Git a fixture runs fails the test unless it succeeds.
 //!
 //! [`Sandbox::workspace`] builds a meta workspace of repos, nested meta
-//! repos and members not cloned yet; [`PluginRequest::builder`] and
-//! [`call`] send a plugin a request the way meta does.
+//! repos and members not cloned yet; [`call`] sends a plugin a
+//! [`Request`] (made with [`Request::new`]) the way meta does.
 //!
 //! On Windows the user's home is found without `HOME`, so there meta's own
 //! files stay out of it through `META_DATA_DIR` alone.
@@ -24,7 +24,7 @@
     reason = "test support: a panic is a failed test, and tests start the programs they test"
 )]
 
-use crate::{PluginRequest, PluginRequestOptions};
+use crate::Request;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -209,69 +209,31 @@ impl Sandbox {
     }
 }
 
+/// How a plugin answered a [`call`]: what it printed, how it ended, and the
+/// response it wrote (none when it wrote none, or one meta couldn't read).
+pub struct Called {
+    pub output: std::process::Output,
+    pub response: Option<crate::Response>,
+}
+
 /// `plugin --meta-plugin-exec` (a [`Sandbox::command`], with whatever else
-/// the test sets on it: its folder, its variables), sent `request` on stdin
-/// as meta sends it; what the plugin printed and how it ended.
-pub fn call(plugin: &mut Command, request: &PluginRequest) -> std::process::Output {
-    use std::io::Write;
-    use std::process::Stdio;
-    let mut child = plugin
+/// the test sets on it: its folder, its variables), sent `request` the way
+/// meta sends it: in a file, with the response read from another.
+pub fn call(plugin: &mut Command, request: &Request) -> Called {
+    let dir = tempfile::tempdir().unwrap();
+    let (request_file, response_file) = (dir.path().join("request"), dir.path().join("response"));
+    std::fs::write(&request_file, serde_json::to_vec(request).unwrap()).unwrap();
+    let output = plugin
         .arg("--meta-plugin-exec")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .env(crate::REQUEST_VAR, &request_file)
+        .env(crate::RESPONSE_VAR, &response_file)
+        .stdin(std::process::Stdio::null())
+        .output()
         .unwrap();
-    let json = serde_json::to_vec(request).unwrap();
-    child.stdin.take().unwrap().write_all(&json).unwrap();
-    child.wait_with_output().unwrap()
-}
-
-impl PluginRequest {
-    /// A request for `command` (`"git status"`), with no arguments, no
-    /// projects, no directory and meta's defaults.
-    pub fn builder(command: &str) -> RequestBuilder {
-        RequestBuilder(PluginRequest {
-            command: command.to_string(),
-            args: Vec::new(),
-            projects: Vec::new(),
-            cwd: PathBuf::new(),
-            options: PluginRequestOptions::default(),
-        })
-    }
-}
-
-/// A [`PluginRequest`] being built ([`PluginRequest::builder`]).
-pub struct RequestBuilder(PluginRequest);
-
-impl RequestBuilder {
-    /// The words the user typed after the command.
-    pub fn args<S: Into<String>>(mut self, args: impl IntoIterator<Item = S>) -> Self {
-        self.0.args = args.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// The selected projects.
-    pub fn projects<S: Into<String>>(mut self, projects: impl IntoIterator<Item = S>) -> Self {
-        self.0.projects = projects.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Where the command runs.
-    pub fn cwd(mut self, cwd: &Path) -> Self {
-        self.0.cwd = cwd.to_path_buf();
-        self
-    }
-
-    /// meta's options, as meta resolved them.
-    pub fn options(mut self, options: PluginRequestOptions) -> Self {
-        self.0.options = options;
-        self
-    }
-
-    pub fn build(self) -> PluginRequest {
-        self.0
-    }
+    let response = std::fs::read(&response_file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    Called { output, response }
 }
 
 #[cfg(feature = "testing-git")]

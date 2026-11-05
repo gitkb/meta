@@ -203,3 +203,5 @@ meta-git/SKILL.md 54ab7a8d28406ba2185ed971eb6ba5b3096f2f9d
 meta-safety/SKILL.md c8d3e940ed72f43cf3eb2d909eabf17348d03818
 meta-safety/SKILL.md 9accd799d9380baaace0acfc653b9c5efba980f3
 meta-plugins/SKILL.md baccbefa18bdfb010ba7b9129358552fa32bd48e
+meta-exec/SKILL.md 0f3d6752cedfe7f75d766c30377a7431df307c44
+meta-plugins/SKILL.md 163e543d744672b47056fd6d2dd1af41496cbe3a

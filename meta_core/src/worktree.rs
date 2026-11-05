@@ -193,11 +193,8 @@ pub fn select_in_set(
     members: &[PathBuf],
     workspace: Option<&crate::config::Workspace>,
     filters: &crate::repo_filter::Filters,
-) -> Result<Vec<PathBuf>> {
+) -> Result<Vec<crate::repo_filter::Candidate>> {
     use crate::repo_filter::{Candidate, Scope};
-    if filters.is_empty() {
-        return Ok(members.to_vec());
-    }
     if workspace.is_none() && !filters.tags.is_empty() {
         anyhow::bail!(
             "No meta config found for worktree set {}, so --tag cannot select its repos",
@@ -214,7 +211,15 @@ pub fn select_in_set(
             ..project.clone()
         })
         .collect();
-    let tree = set_tree(set_dir, members, &projects)?;
+    // without a filter, a nested config that can't be read only costs the
+    // names: the command runs in every checkout, as in the workspace
+    let tree = match set_tree(set_dir, members, &projects) {
+        Ok(tree) => tree,
+        Err(_) if filters.is_empty() => {
+            return Ok(members.iter().cloned().map(Candidate::root).collect())
+        }
+        Err(e) => return Err(e),
+    };
     // Compared as directories: a project at a link in the set is the
     // checkout where the link leads
     let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -238,7 +243,7 @@ pub fn select_in_set(
         tags: infos.into_values().flat_map(|info| info.tags).collect(),
         nested: true,
     }
-    .select(filters)
+    .select_repos(filters)
 }
 
 /// The meta tree that describes the checkouts of the set at `set_dir`, whose
@@ -696,6 +701,99 @@ fn source_repo(checkout: &Path) -> Result<PathBuf> {
                 escape_path(&admin)
             )
         })
+}
+
+/// Refuse a set name that isn't one folder name of ASCII letters, digits,
+/// `-` and `_` (not starting with `.`).
+pub fn validate_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("Worktree name cannot be empty");
+    }
+    let shown = escape(name);
+    if name.starts_with('.') {
+        anyhow::bail!("Invalid worktree name '{shown}': cannot start with '.'");
+    }
+    if name.contains('/') || name.contains('\\') {
+        anyhow::bail!("Invalid worktree name '{shown}': cannot contain path separators");
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        anyhow::bail!("Invalid worktree name '{shown}': only ASCII alphanumeric characters, hyphens, and underscores allowed");
+    }
+    Ok(())
+}
+
+/// The configs a worktree command reads, each loaded once: `here`, the
+/// nearest at or above where it runs, and `owner`, whose sets and settings
+/// (`worktrees_dir`, hooks) these are: inside a set, the checkout the set
+/// stands for, which outlives it; else `here`.
+#[derive(Debug, Clone)]
+pub struct Configs {
+    pub here: crate::config::Workspace,
+    pub owner: crate::config::Workspace,
+}
+
+impl Configs {
+    /// The configs of the workspace at or above `start`; an error outside one.
+    pub fn find(start: &Path) -> Result<Self> {
+        Self::find_optional(start)?
+            .ok_or_else(|| anyhow::anyhow!("Not inside a meta project (no .meta.yaml found)"))
+    }
+
+    /// Like [`Configs::find`], `None` outside a workspace.
+    pub fn find_optional(start: &Path) -> Result<Option<Self>> {
+        crate::config::Workspace::find(start, None)?
+            .map(Self::of)
+            .transpose()
+    }
+
+    /// The configs for `here`. A source checkout without a config is still
+    /// the owner, with no settings of its own.
+    pub fn of(here: crate::config::Workspace) -> Result<Self> {
+        let Some(source) = crate::config::set_source(&here.dir)?.filter(|s| s.is_dir()) else {
+            return Ok(Self {
+                owner: here.clone(),
+                here,
+            });
+        };
+        let owner = crate::config::Workspace::in_dir(&source)?.unwrap_or_else(|| {
+            crate::config::Workspace {
+                config_path: source.join(crate::config::META_CONFIG_NAME),
+                dir: source,
+                projects: Vec::new(),
+                defaults: Default::default(),
+                worktrees_dir: None,
+                worktree: Default::default(),
+            }
+        });
+        Ok(Self { here, owner })
+    }
+}
+
+/// Where worktree sets go: `META_WORKTREES`, else the `worktrees_dir` of
+/// `owner`'s config (anywhere; checked when it was loaded), else its
+/// `.worktrees`; outside a workspace, `.worktrees` in `cwd`.
+pub fn resolve_worktree_root(
+    owner: Option<&crate::config::Workspace>,
+    cwd: &Path,
+) -> Result<PathBuf> {
+    if let Ok(env_path) = std::env::var("META_WORKTREES") {
+        return Ok(PathBuf::from(env_path));
+    }
+    let Some(owner) = owner else {
+        return Ok(cwd.join(".worktrees"));
+    };
+    // A link there is followed, wherever it leads (removal checks what is in
+    // a set, not where it is), but not into git's data; a configured
+    // worktrees_dir was checked when it was loaded
+    let Some(configured) = &owner.worktrees_dir else {
+        crate::config::check_location(&owner.dir, ".worktrees", false)
+            .map_err(|why| anyhow::anyhow!("Refusing to keep worktrees in .worktrees: {why}"))?;
+        return Ok(owner.dir.join(".worktrees"));
+    };
+    Ok(owner.dir.join(configured))
 }
 
 #[cfg(test)]

@@ -125,7 +125,7 @@ Plugin (meta-git): "here's the plan" → [{dir: "./api", argv: ["git", "status"]
 Loop Engine: execute plan → aggregate output → report results
 ```
 
-Plugins communicate via JSON over stdin/stdout — language-agnostic, process-isolated, easy to debug. You could write a plugin in Python, Go, Rust, or anything else.
+A plugin gets the resolved request and writes one response, both JSON files; language-agnostic, process-isolated, easy to debug. You could write a plugin in Python, Go, Rust, or anything else.
 
 ---
 
@@ -271,7 +271,7 @@ The same rules apply to every meta config that a recursive command reads, includ
 
 YAML anchors and merge keys (`<<: *defaults`) work as YAML defines them.
 
-**A project is acted on only if its folder is its own repository.** `meta exec` and the per-repo `meta git` commands run in each selected project that is a git repository of its own, and name the others. `meta exec` then exits 1: `web: not cloned (run 'meta git clone-missing')`, or `r1: not a git repository (folder exists, no .git)`. The per-repo `meta git` commands (`meta git pull`, `meta git status`, …) name a project that isn't cloned yet as a warning ("web is not cloned; `meta git clone-missing` clones it"), which fails the command only with `--strict`, and exit 1 for a folder that is not a repository. git started for a project never looks above the project's folder, so it can't reach the workspace repository around it: meta sets `GIT_CEILING_DIRECTORIES` (added to any you set) for every command it runs in a project, the root included. `meta git update` clones a missing project, or into an empty folder, and names a folder that holds something else. `meta project check` names every project that is missing, not a repository, or cloned from another remote, and exits 1. `--json` prints `{"problems": [{"name", "path", "state", "reason", "repo"?, "actual"?}]}` on stdout, `state` being `missing`, `not_a_repo` or `wrong_remote` (`actual`: the checkout's origin, `null` without one).
+**A project is acted on only if its folder is its own repository.** `meta exec` and the per-repo `meta git` commands run in each selected project that is a git repository of its own, and name the others. `meta exec` then exits 1: `web: not cloned (run 'meta git clone-missing')`, or `r1: not a git repository (folder exists, no .git)`. The per-repo `meta git` commands (`meta git pull`, `meta git status`, …) name a project that isn't cloned yet as a warning ("web is not cloned; `meta git clone-missing` clones it"), which fails the command only with `--strict`, and exit 1 for a folder that is not a repository. git started for a project never looks above the project's folder, so it can't reach the workspace repository around it: meta sets `GIT_CEILING_DIRECTORIES` (added to any you set) for every command it runs in a project, the root included. `meta git update` clones a missing project, or into an empty folder, and names a folder that holds something else. `meta project check` names every project that is missing, not a repository, or cloned from another remote, and exits 1. Under `--json` each problem is a row whose `data` is `{"name", "path", "state", "reason", "repo"?, "actual"?}`, `state` being `missing`, `not_a_repo` or `wrong_remote` (`actual`: the checkout's origin, `null` without one).
 
 You can mix simple and extended formats in the same file.
 
@@ -341,7 +341,7 @@ Keeping the clones to what the `.meta.yaml` files list:
 | `meta git clone-prune` | Remove the repos no `.meta.yaml` lists that hold nothing unpushed; keep and name the others |
 | `meta git clone-sync` | `clone-missing`, then `clone-prune` |
 
-Each takes meta's `-r` for nested meta repos and `--dry-run`, before the command (`meta -r --dry-run git clone-sync`). `clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files as they are on disk and pull nothing; they take meta's `--include`, `--exclude` and `--tag` (the projects cloned, the meta repos searched for leftovers) and `--json` (`{"dry_run", "repos": [{"path", "action", "reason"?}]}`, `action` being `cloned`, `removed`, `kept` or `failed`; a removed repo's `reason` names the ignored files deleted with it). `clone-prune` removes a repo only when git shows nothing in it that isn't on a remote: no uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it (bare ones too). Files git ignores (`.env`, `target/`) are deleted with it and named first, as `git worktree remove` deletes them; commits only a reflog holds are not kept.
+Each takes meta's `-r` for nested meta repos and `--dry-run`, before the command (`meta -r --dry-run git clone-sync`). `clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files as they are on disk and pull nothing; they take meta's `--include`, `--exclude` and `--tag` (the projects cloned, the meta repos searched for leftovers) and `--json` (one row per repo, its `data` `{"path", "action", "reason"?}`, `action` being `cloned`, `removed`, `kept` or `failed`; a removed repo's `reason` names the ignored files deleted with it). `clone-prune` removes a repo only when git shows nothing in it that isn't on a remote: no uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it (bare ones too). Files git ignores (`.env`, `target/`) are deleted with it and named first, as `git worktree remove` deletes them; commits only a reflog holds are not kept.
 
 ```bash
 # List entire tree
@@ -401,7 +401,7 @@ meta -A --include platform/api git status                 # by path from the roo
 
 Meta runs every command as a program with its arguments, never through a shell. Each argument meta receives reaches the program unchanged, so quotes, spaces, `$()`, `;`, globs and `%` stay literal (`meta git log --format='%h %s'` works, and text pasted into a commit message can't run commands). Your own shell still parses the line before meta runs, so `"$(...)"` in double quotes runs there: pass untrusted text in single quotes. When you want a shell, ask for one: `meta exec -- sh -c 'npm ci && npm test'`. `meta git commit`, `clone`, `update` and `worktree` are meta's own commands with their own options; for git's native behavior, `meta exec -- git ...`. Every other `meta git` command, `status` included, passes its arguments to git.
 
-Meta's own options go before the command, for every command, the ones meta and its plugins own included: `meta --dry-run git update`, `meta --json git worktree list`, `meta -r --json project list`, `meta -A git status`, `meta --include api git worktree exec t -- make`. Everything after the command word belongs to the command, so `meta git pull --tag v1` gives `--tag v1` to git. A meta option typed after a command that rejects it gets one tip with the line to run: `--dry-run` after `meta exec` is refused with a tip to write `meta --dry-run exec -- rm x`. With `--json`, that usage error is a JSON document on stdout carrying the same line.
+Meta's own options go before the command, for every command, the ones meta and its plugins own included: `meta --dry-run git update`, `meta --json git worktree list`, `meta -r --json project list`, `meta -A git status`, `meta --include api git worktree exec t -- make`. Everything after the command word belongs to the command, so `meta git pull --tag v1` gives `--tag v1` to git. A meta option typed after a command that rejects it gets one tip with the line to run: `--dry-run` after `meta exec` is refused with a tip to write `meta --dry-run exec -- rm x`. With `--json`, that usage error is the envelope's `error`, its `hint` the same line.
 
 ### Recursive Processing
 
@@ -451,17 +451,7 @@ registries:
 
 ### Writing Plugins
 
-Plugins communicate via JSON over stdin/stdout. Any language works:
-
-```bash
-# Meta asks: "What can you do?"
-meta-myplugin --meta-plugin-info
-# → {"name": "myplugin", "version": "1.0", "commands": ["myplugin run"]}
-
-# Meta asks: "Execute this command"
-echo '{"command":"myplugin run","args":[],"projects":[...]}' | meta-myplugin --meta-plugin-exec
-# → {"plan": {"commands": [{"dir": "./repo1", "argv": ["make", "lint"]}]}}
-```
+A plugin is a program in any language. Meta asks it what it serves (`meta-myplugin --meta-plugin-info` → `{"name": "myplugin", "version": "1.0", "commands": ["myplugin run"]}`), then calls it with the resolved request (the workspace, the selected projects, meta's options) in a file; the plugin answers with one response in another: a plan of steps per repo for meta to run, its records, a message or an error. Meta prints the outcome, under `--json` as the one envelope every command prints.
 
 See [docs/plugin_development.md](docs/plugin_development.md) for the full guide.
 
@@ -498,7 +488,7 @@ Installs purpose-built skills that teach Claude Code how to work with multi-repo
 
 ### JSON Output
 
-`meta --json` before a command prints its result, or its error, as JSON on stdout (help and `meta init claude` stay text):
+`meta --json` before a command prints its result, or its error, as one JSON document on stdout, the same envelope for every command:
 
 ```bash
 meta --json git status
@@ -506,7 +496,7 @@ meta --json exec -- git rev-parse HEAD
 meta --json project list
 ```
 
-A command run in each repo reports `{"success", "results", "summary", "warnings", "hint"}`. Each result names its repo by `path`, as the human output shows it: its path from the nearest workspace, or with `-r` or `-A` from the workspace root (`.` for that root, `./api`), which `--include` takes as is (`./` makes it a path only; a bare value also matches project names); `stdout` and `stderr` are always there, `""` for no output. `warnings` lists what the human output warns of (a project that isn't cloned), and `hint` is the tip it ends with (an option of meta's typed after the command), or `null`. See [Advanced Usage](docs/advanced_usage.md#json-output-mode) for the format.
+It is `{"success", "command", "results", "skipped", "warnings", "message"?, "error"?}`: one row in `results` per repo a command ran in, or per record it returned (a project of `project list`, a worktree set), each naming its repo by `project`, its path from the workspace root as `--include` takes it (`.` for the root; without `-r` or `-A`, from the nearest `.meta.yaml`), with a program's `argv`, `exit_code`, `stdout` and `stderr`, or the command's `data`; a row that failed has its own `error`, and the command's own failure is `error` (`{"code", "message", "hint"?}`). `meta --fields project,data.name --json project list` keeps only those fields of each row. See [Advanced Usage](docs/advanced_usage.md#json-output-mode) for the format.
 
 ---
 

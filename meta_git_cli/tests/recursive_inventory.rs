@@ -4,26 +4,161 @@
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
-use meta_plugin::testing::Sandbox;
+use meta_plugin::testing::{call, Called, Sandbox};
+use meta_plugin::{Answer, Meta, Request, Scope};
 use serde_json::{json, Value};
-use std::{fs, io::Write, path::Path, process::Stdio};
+use std::{fs, path::Path};
 
-/// Invoke the public plugin protocol with isolated worktree and data roots.
-/// Whether `stdout` is the JSON error a failed `--json` command prints in
-/// place of its report.
+/// meta's options, as a test gives them: `json!({"json": true, "strict":
+/// true, "dry_run": true, "recursive": true, "all": true, "depth": 2})`.
+/// `recursive`/`all`/`depth` are how meta resolves the workspace and how
+/// deep (meta sends those as `request.depth` and the workspace it found);
+/// the rest are `request.meta`.
+fn request(cwd: &Path, command: &str, args: &[&str], options: &Value) -> Request {
+    let flag = |name: &str| options[name].as_bool().unwrap_or(false);
+    let (recursive, all) = (flag("recursive"), flag("all"));
+    let mut request = Request::new(command, cwd);
+    request.args = args.iter().map(|a| a.to_string()).collect();
+    request.scope = match command.split_whitespace().nth(1) {
+        Some("clone") => Scope::None,
+        Some("update" | "worktree") => Scope::Workspace,
+        _ => Scope::Selection,
+    };
+    // with -r or -A, how deep (none: no limit); without, none of the nested
+    request.recursive = recursive || all;
+    request.depth = match recursive || all {
+        true => options["depth"]
+            .as_u64()
+            .map(|d| usize::try_from(d).unwrap()),
+        false => Some(0),
+    };
+    // the workspace meta finds from cwd: -A from its outermost config, -r
+    // naming its projects from the outermost that lists it
+    let found = meta_core::config::Workspace::find(cwd, None).unwrap();
+    let found = match all {
+        true => found.map(|w| w.root().unwrap()),
+        false => found,
+    };
+    request.workspace = found.map(|w| {
+        let listed_root = meta_core::config::listed_root(&w.dir);
+        meta_plugin::Workspace {
+            root: match recursive && !all {
+                true => listed_root.clone(),
+                false => w.dir.clone(),
+            },
+            config: w.config_path.clone(),
+            listed_root,
+            members: Vec::new(),
+            worktree: Default::default(),
+        }
+    });
+    request.meta = Meta {
+        json: flag("json"),
+        dry_run: flag("dry_run"),
+        strict: flag("strict"),
+        verbose: flag("verbose"),
+        ..Meta::default()
+    };
+    request
+}
+
+/// How meta would end: its exit code.
+struct Status(Option<i32>);
+
+impl Status {
+    fn success(&self) -> bool {
+        self.0 == Some(0)
+    }
+}
+
+/// What meta would make of a plugin's answer: the plugin's own output, then
+/// its warnings and error on stderr as meta says them (`warning: …`,
+/// `Error: …`), a message on stdout; under `--json`, stdout is the
+/// Envelope's parts (`results`, `warnings`, `message`, `error`); the code
+/// meta would end with (a failed record fails the command).
+struct Ran {
+    status: Status,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn ran(called: Called, json: bool) -> Ran {
+    let Called { output, response } = called;
+    let (mut stdout, mut stderr) = (output.stdout, output.stderr);
+    let mut code = output.status.code();
+    let Some(response) = response else {
+        return Ran {
+            status: Status(code),
+            stdout,
+            stderr,
+        };
+    };
+    let mut say = |text: String| stderr.extend(text.into_bytes());
+    for warning in &response.warnings {
+        say(format!("warning: {}\n", warning.message));
+    }
+    let (records, message, error) = match response.answer {
+        Answer::Results(results) => {
+            let error = results.records.iter().find_map(|r| r.error.clone());
+            (results.records, None, error)
+        }
+        Answer::Error(error) => (Vec::new(), None, Some(error)),
+        Answer::Message(message) => (Vec::new(), Some(message), None),
+        Answer::Plan(_) | Answer::Delegate(_) => (Vec::new(), None, None),
+    };
+    if let Some(error) = &error {
+        say(format!("Error: {}\n", error.message));
+        code = Some(error.code.exit_code());
+    }
+    match json {
+        true => {
+            let envelope = json!({
+                "success": error.is_none(),
+                "results": records,
+                "warnings": response.warnings,
+                "message": message,
+                "error": error,
+            });
+            stdout = envelope.to_string().into_bytes();
+        }
+        false => {
+            if let Some(message) = message.filter(|m| !m.is_empty()) {
+                stdout.extend(format!("{}\n", message.trim_end()).into_bytes());
+            }
+        }
+    }
+    Ran {
+        status: Status(code),
+        stdout,
+        stderr,
+    }
+}
+
+/// `meta <command> <args>` in `cwd`, with meta's `options`, the plugin
+/// started from `cmd` (a `sandbox.command(env!("CARGO_BIN_EXE_meta-git"))`
+/// with whatever else the test sets on it).
+fn meta_git_with(
+    cmd: &mut std::process::Command,
+    cwd: &Path,
+    command: &str,
+    args: &[&str],
+    options: Value,
+) -> Ran {
+    let request = request(cwd, command, args, &options);
+    ran(call(cmd, &request), request.meta.json)
+}
+
+/// Whether `stdout` is the Envelope of a failed `--json` command: an error
+/// in place of its report.
 fn is_error(stdout: &[u8]) -> bool {
     serde_json::from_slice::<Value>(stdout).is_ok_and(|v| {
-        v["success"] == false && v["error"].is_string() && v.get("worktrees").is_none()
+        v["success"] == false
+            && v["error"]["message"].is_string()
+            && v["results"].as_array().is_some_and(|r| r.is_empty())
     })
 }
 
-fn request(
-    sandbox: &Sandbox,
-    root: &Path,
-    command: &str,
-    strict: bool,
-    explicit: bool,
-) -> std::process::Output {
+fn request_of(sandbox: &Sandbox, root: &Path, command: &str, strict: bool, explicit: bool) -> Ran {
     let args = if command == "status" {
         vec!["example"]
     } else {
@@ -32,6 +167,7 @@ fn request(
     request_args(sandbox, root, command, args, strict, explicit)
 }
 
+/// Invoke the public plugin protocol with isolated worktree and data roots.
 fn request_args(
     sandbox: &Sandbox,
     root: &Path,
@@ -39,31 +175,23 @@ fn request_args(
     args: Vec<&str>,
     strict: bool,
     explicit: bool,
-) -> std::process::Output {
+) -> Ran {
     // the strict scan is meta's --strict, whether the caller asked for it
     // through the option or typed it (before the command, as meta sends it)
-    let request = json!({"command": format!("git worktree {command}"), "args": args,
-        "cwd": root, "options": {"json_output": true, "strict": strict || explicit}});
     let mut executable = sandbox.command(env!("CARGO_BIN_EXE_meta-git"));
     if root.join("bin").is_dir() {
         executable.env("PATH", root.join("bin"));
     }
-    let mut child = executable
-        .arg("--meta-plugin-exec")
+    executable
         .current_dir(root)
-        .env("META_WORKTREES", root.join("sets"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(request.to_string().as_bytes())
-        .unwrap();
-    child.wait_with_output().unwrap()
+        .env("META_WORKTREES", root.join("sets"));
+    meta_git_with(
+        &mut executable,
+        root,
+        &format!("git worktree {command}"),
+        &args,
+        json!({"json": true, "strict": strict || explicit}),
+    )
 }
 
 #[test]
@@ -99,7 +227,7 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
     fs::write(set.join("open-source/.meta.yaml"), "projects:\n  atc: u\n").unwrap();
     for command in ["list", "status"] {
         for (recursive, explicit) in [(false, false), (true, false), (false, true), (true, true)] {
-            let out = request(&sandbox, root, command, recursive, explicit);
+            let out = request_of(&sandbox, root, command, recursive, explicit);
             assert!(
                 out.status.success(),
                 "{}",
@@ -115,11 +243,8 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
                     value
                 );
             }
-            let rows = if command == "list" {
-                &value["worktrees"][0]["repos"]
-            } else {
-                &value["repos"]
-            };
+            // list's one set, status's set
+            let rows = &value["results"][0]["data"]["repos"];
             let aliases: Vec<_> = rows
                 .as_array()
                 .unwrap()
@@ -157,10 +282,15 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
             healthy_set.to_str().unwrap(),
         ],
     );
-    let out = request(&sandbox, root, "list", true, false);
+    let out = request_of(&sandbox, root, "list", true, false);
     assert!(out.status.success());
     let value: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let worktrees = value["worktrees"].as_array().unwrap();
+    let worktrees: Vec<&Value> = value["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| &row["data"])
+        .collect();
     assert_eq!(worktrees.len(), 1);
     assert_eq!(worktrees[0]["name"], "healthy");
     assert_eq!(worktrees[0]["root"], healthy_set.to_str().unwrap());
@@ -168,15 +298,15 @@ fn public_list_status_recursive_protocol_and_explicit_flags() {
         worktrees[0]["repos"],
         json!([{"alias": ".", "branch": "healthy", "dirty": false}])
     );
+    // the set that can't be read is named, with why
     assert_eq!(value["warnings"].as_array().unwrap().len(), 1);
-    assert_eq!(value["warnings"][0]["name"], "example");
-    assert_eq!(value["warnings"][0]["root"], set.to_str().unwrap());
-    assert!(value["warnings"][0]["message"]
-        .as_str()
-        .unwrap()
-        .contains("Invalid .git file format"));
+    let warning = value["warnings"][0]["message"].as_str().unwrap();
+    assert!(
+        warning.starts_with("example: ") && warning.contains("Invalid .git file format"),
+        "{warning}"
+    );
 
-    let out = request(&sandbox, root, "status", true, false);
+    let out = request_of(&sandbox, root, "status", true, false);
     assert!(!out.status.success());
     assert!(
         is_error(&out.stdout),
@@ -193,11 +323,12 @@ fn missing_worktree_root_preserves_list_and_status_contracts() {
     let sandbox = Sandbox::new();
     let temp = sandbox.work();
     for recursive in [false, true] {
-        let out = request(&sandbox, &temp, "list", recursive, false);
+        let out = request_of(&sandbox, &temp, "list", recursive, false);
         assert!(out.status.success());
         let value: Value = serde_json::from_slice(&out.stdout).unwrap();
-        assert_eq!(value, json!({"worktrees": []}));
-        let out = request(&sandbox, &temp, "status", recursive, false);
+        assert_eq!(value["success"], true, "{value}");
+        assert_eq!(value["results"], json!([]), "{value}");
+        let out = request_of(&sandbox, &temp, "status", recursive, false);
         assert!(!out.status.success());
         assert!(is_error(&out.stdout));
     }
@@ -252,7 +383,7 @@ fn membership_only_protocol_runs_without_git_and_rejects_partial_membership() {
             String::from_utf8_lossy(&out.stderr)
         );
         let value: Value = serde_json::from_slice(&out.stdout).unwrap();
-        let value = &value["worktrees"][0];
+        let value = &value["results"][0]["data"];
         assert_eq!(value["name"], "example");
         assert_eq!(value["repos"].as_array().unwrap().len(), 2);
         assert_eq!(value["repos"][1]["alias"], "nested/child");
@@ -294,7 +425,7 @@ fn membership_only_protocol_runs_without_git_and_rejects_partial_membership() {
     );
     assert!(aggregate.status.success());
     let value: Value = serde_json::from_slice(&aggregate.stdout).unwrap();
-    assert!(value["worktrees"].as_array().unwrap().is_empty());
+    assert!(value["results"].as_array().unwrap().is_empty());
     assert_eq!(value["warnings"].as_array().unwrap().len(), 1);
     assert!(!bin.join("git.calls").exists());
 }
@@ -337,9 +468,8 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
     .unwrap();
     fs::set_permissions(&fake_git, fs::Permissions::from_mode(0o700)).unwrap();
     let invoke = |cwd: &Path, args: Vec<&str>, recursive: bool| {
-        let mut child = sandbox
-            .command(env!("CARGO_BIN_EXE_meta-git"))
-            .arg("--meta-plugin-exec")
+        let mut command = sandbox.command(env!("CARGO_BIN_EXE_meta-git"));
+        command
             .current_dir(&source)
             .env(
                 "PATH",
@@ -349,21 +479,23 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
                     std::env::var_os("PATH").unwrap()
                 },
             )
-            .env("META_WORKTREES", root.join("configured"))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let request = json!({"command": "git worktree list", "args": args,
-            "cwd": cwd, "options": {"json_output": true, "strict": recursive}});
-        child
-            .stdin
-            .take()
+            .env("META_WORKTREES", root.join("configured"));
+        meta_git_with(
+            &mut command,
+            cwd,
+            "git worktree list",
+            &args,
+            json!({"json": true, "strict": recursive}),
+        )
+    };
+    // the sets listed, one row each
+    let sets = |value: &Value| -> Vec<Value> {
+        value["results"]
+            .as_array()
             .unwrap()
-            .write_all(request.to_string().as_bytes())
-            .unwrap();
-        child.wait_with_output().unwrap()
+            .iter()
+            .map(|row| row["data"].clone())
+            .collect()
     };
     for cwd in [&set, &nested] {
         for (args, recursive) in [
@@ -377,26 +509,23 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
                 String::from_utf8_lossy(&out.stderr)
             );
             let value: Value = serde_json::from_slice(&out.stdout).unwrap();
-            assert_eq!(value["worktrees"].as_array().unwrap().len(), 1);
-            let value = &value["worktrees"][0];
-            assert_eq!(value["name"], "example");
-            assert_eq!(value["repos"][0]["path"], set.to_str().unwrap());
+            let sets = sets(&value);
+            assert_eq!(sets.len(), 1);
+            assert_eq!(sets[0]["name"], "example");
+            assert_eq!(sets[0]["repos"][0]["path"], set.to_str().unwrap());
         }
     }
     let explicit = invoke(&nested, vec!["other", "--metadata-only"], true);
     assert!(explicit.status.success());
     let value: Value = serde_json::from_slice(&explicit.stdout).unwrap();
-    assert_eq!(value["worktrees"][0]["name"], "other");
-    assert_eq!(
-        value["worktrees"][0]["repos"][0]["path"],
-        other.to_str().unwrap()
-    );
+    assert_eq!(sets(&value)[0]["name"], "other");
+    assert_eq!(sets(&value)[0]["repos"][0]["path"], other.to_str().unwrap());
 
     // Outside a worktree, omission still lists all configured sets.
     let outside = invoke(&source, vec!["--metadata-only"], true);
     assert!(outside.status.success());
     let value: Value = serde_json::from_slice(&outside.stdout).unwrap();
-    assert_eq!(value["worktrees"][0]["name"], "other");
+    assert_eq!(sets(&value)[0]["name"], "other");
     // Metadata-only is independent of recursion; legacy boundaries remain available.
     assert!(invoke(&set, vec!["--metadata-only"], false)
         .status
@@ -410,10 +539,11 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
             String::from_utf8_lossy(&out.stderr)
         );
         let value: Value = serde_json::from_slice(&out.stdout).unwrap();
-        assert_eq!(value["worktrees"].as_array().unwrap().len(), 1);
-        assert_eq!(value["worktrees"][0]["name"], "example");
-        assert_eq!(value["worktrees"][0]["repos"][0]["branch"], "topic");
-        assert_eq!(value["worktrees"][0]["repos"][0]["dirty"], true);
+        let sets = sets(&value);
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0]["name"], "example");
+        assert_eq!(sets[0]["repos"][0]["branch"], "topic");
+        assert_eq!(sets[0]["repos"][0]["dirty"], true);
     }
     let missing = invoke(&source, vec!["missing", "--metadata-only"], true);
     assert!(!missing.status.success());

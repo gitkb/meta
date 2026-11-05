@@ -87,7 +87,7 @@ EOF
     run "$META_BIN" --json git worktree status bare-member
     git -C backend config --local core.bare false
     [ "$status" -eq 0 ]
-    [ "$(printf '%s' "$output" | jq -r '.repos[] | select(.alias == "backend") | .branch')" = "bare-member" ]
+    [ "$(printf '%s' "$output" | jq -r '.results[0].data.repos[] | select(.alias == "backend") | .branch')" = "bare-member" ]
 }
 
 @test "worktree create --every-repo creates worktrees for all repos" {
@@ -439,7 +439,7 @@ EOF
 @test "worktree create --json emits structured output" {
     run "$META_BIN" --json git worktree create json-test --repo backend
     [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['name']=='json-test'"
+    echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin)['results'][0]['data']; assert d['name']=='json-test' and [r['alias'] for r in d['repos']]==['.','backend'], d"
 }
 
 @test "worktree create with existing name fails" {
@@ -542,7 +542,7 @@ EOF
     "$META_BIN" git worktree create add-json --repo backend
     run "$META_BIN" --json git worktree add add-json --repo frontend
     [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['name']=='add-json'"
+    echo "$output" | python3 -c "import json,sys; [r]=json.load(sys.stdin)['results']; assert r['project']=='frontend' and r['data']['alias']=='frontend' and r['data']['branch']=='add-json', r"
 }
 
 # ============ List ============
@@ -563,7 +563,7 @@ EOF
     echo "$output" | python3 -c "
 import json,sys
 data = json.load(sys.stdin)
-assert any(w['name'] == 'list-json' for w in data['worktrees'])
+assert any(r['data']['name'] == 'list-json' for r in data['results'])
 "
 }
 
@@ -609,7 +609,7 @@ assert any(w['name'] == 'list-json' for w in data['worktrees'])
     echo "$output" | python3 -c "
 import json,sys
 d = json.load(sys.stdin)
-repo = next(r for r in d['repos'] if r['alias'] == 'backend')
+repo = next(r for r in d['results'][0]['data']['repos'] if r['alias'] == 'backend')
 assert repo['dirty'] == True
 assert repo['modified_count'] >= 1
 "
@@ -644,7 +644,8 @@ assert repo['modified_count'] >= 1
     echo "$output" | python3 -c "
 import json,sys
 d = json.load(sys.stdin)
-assert d['totals']['files_changed'] >= 1
+backend = next(r['data'] for r in d['results'] if r['project'] == 'backend')
+assert backend['files_changed'] >= 1 and backend['files'] == ['README.md'], backend
 "
 }
 
@@ -678,6 +679,21 @@ assert d['totals']['files_changed'] >= 1
     [ "$status" -eq 0 ]
     [[ "$output" == *"exec-test/backend"* ]]
     [[ "$output" == *"exec-test/frontend"* ]]
+}
+
+@test "worktree exec runs the repos one after another, at once only with --parallel" {
+    "$META_BIN" git worktree create in-turn --repo backend --repo frontend
+    local log="$TEST_DIR/order.log"
+    local step="echo start >> $log; sleep 0.5; echo end >> $log"
+    run "$META_BIN" git worktree exec in-turn -- sh -c "$step"
+    [ "$status" -eq 0 ]
+    # in turn: each start is followed by its end
+    [[ "$(tr '\n' ' ' < "$log")" == "start end start end "* ]]
+    [[ "$(tr '\n' ' ' < "$log")" != *"start start"* ]]
+    rm "$log"
+    run "$META_BIN" --parallel git worktree exec in-turn -- sh -c "$step"
+    [ "$status" -eq 0 ]
+    [ "$(head -2 "$log" | tr '\n' ' ')" = "start start " ]
 }
 
 @test "worktree exec --include filters repos" {
@@ -1068,9 +1084,8 @@ assert d['totals']['files_changed'] >= 1
     echo "$output" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-assert d['totals']['files_changed'] == 0, f'expected 0 files changed, got: {d[\"totals\"][\"files_changed\"]}'
-assert d['totals']['insertions'] == 0
-assert d['totals']['deletions'] == 0
+for r in d['results']:
+    assert (r['data']['files_changed'], r['data']['insertions'], r['data']['deletions']) == (0, 0, 0), r
 "
 }
 
@@ -1087,7 +1102,7 @@ assert d['totals']['deletions'] == 0
     echo "$output" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-repos = {r['alias']: r for r in d['repos']}
+repos = {r['alias']: r for r in d['results'][0]['data']['repos']}
 assert repos['backend']['dirty'] == True, f'backend should be dirty: {repos[\"backend\"]}'
 assert repos['frontend']['dirty'] == False, f'frontend should be clean: {repos[\"frontend\"]}'
 "
@@ -1136,6 +1151,53 @@ EOF
     run "$META_BIN" --strict --dry-run --recursive git worktree create parent-check --repo vendor
     [ "$status" -ne 0 ]
     [[ "$output" == *"'vendor' depends on 'missing'"*"(strict mode)"* ]]
+}
+
+@test "inside a set, -r reaches the meta repos checked out in it, as outside one" {
+    bats_require_minimum_version 1.5.0
+    cp "$META_BIN_DIR/meta-project" .meta/plugins/meta-project
+    setup_nested_meta
+    git -C vendor init --quiet -b main
+    printf '/nested-lib/\n' > vendor/.gitignore
+    git -C vendor add -A
+    git -C vendor commit --quiet -m init
+    printf '/vendor/\n/backend/\n/frontend/\n.worktrees/\n' >> .gitignore
+    git add -A && git commit --quiet -m vendor
+    run "$META_BIN" -r git worktree create deep --every-repo
+    [ "$status" -eq 0 ]
+    [ -d .worktrees/deep/vendor/nested-lib/.git ] || [ -f .worktrees/deep/vendor/nested-lib/.git ]
+    cd .worktrees/deep/backend
+    local rows='[.results[] | "\(.project)=\(.path)=\(.data.repo)"] | join(" ")'
+    run --separate-stderr "$META_BIN" -r --json project list
+    [ "$status" -eq 0 ]
+    # the nested repo, at the set's checkout, with the URL a PR names it by
+    [[ " $(jq -r "$rows" <<<"$output") " == *" vendor/nested-lib=$TEST_DIR/.worktrees/deep/vendor/nested-lib=git@github.com:org/nested-lib.git "* ]]
+    run --separate-stderr "$META_BIN" -A --json project list
+    [[ " $(jq -r "$rows" <<<"$output") " == *" vendor/nested-lib="* ]]
+    # without -r, the first level only, as outside a set
+    run --separate-stderr "$META_BIN" --json project list
+    [ "$status" -eq 0 ]
+    [[ " $(jq -r "$rows" <<<"$output") " != *" vendor/nested-lib="* ]]
+    [[ " $(jq -r "$rows" <<<"$output") " == *" vendor=$TEST_DIR/.worktrees/deep/vendor="* ]]
+    # dependents reach as far
+    run "$META_BIN" -r project dependents nested-lib
+    [ "$status" -eq 0 ]
+}
+
+@test "a set of a workspace whose root is no repo names its own folder as the root" {
+    bats_require_minimum_version 1.5.0
+    cp "$META_BIN_DIR/meta-project" .meta/plugins/meta-project
+    rm -rf .git
+    run "$META_BIN" git worktree create loose-root --repo backend
+    [ "$status" -eq 0 ]
+    [ ! -e .worktrees/loose-root/.meta.yaml ]
+    cd .worktrees/loose-root/backend
+    run --separate-stderr "$META_BIN" --json project list
+    [ "$status" -eq 0 ]
+    local set="$TEST_DIR/.worktrees/loose-root"
+    [ "$(jq -r '.results[0].path' <<<"$output")" = "$set" ]
+    [ "$(jq -r '.results[0].data.worktree.physical_root' <<<"$output")" = "$set" ]
+    [ "$(jq -r '.results[] | select(.data.name == "backend") | "\(.project)=\(.path)"' <<<"$output")" = "backend=$set/backend" ]
 }
 
 @test "worktree create with nested repo alias succeeds" {
@@ -1213,8 +1275,8 @@ EOF
     # (the set's own .meta.yaml, from before vendor was added to the
     # workspace's, which -A would show from the workspace)
     run --separate-stderr "$META_BIN" -A --json context --no-status
-    [ "$(jq -r .name <<<"$output")" = nest ]
-    [[ "$(jq -r '[.repos[].path] | join(" ")' <<<"$output")" != *"vendor"* ]]
+    [ "$(jq -r '.results[0].data.name' <<<"$output")" = nest ]
+    [[ "$(jq -r '[.results[1:][].data.path] | join(" ")' <<<"$output")" != *"vendor"* ]]
     run "$META_BIN" -r --include nope git status
     [ "$status" -ne 0 ]
     [[ "$output" == *"--include 'nope' names none"* ]]

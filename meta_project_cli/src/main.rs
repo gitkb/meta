@@ -1,72 +1,10 @@
 //! meta-project subprocess plugin
 
-use indexmap::IndexMap;
-use meta_plugin::{
-    run_plugin, CommandResult, PluginDefinition, PluginHelp, PluginInfo, PluginRequest,
-};
+use meta_plugin::{run_plugin, PluginDefinition};
 
 fn main() {
-    let mut help_commands = IndexMap::new();
-    help_commands.insert(
-        "list".to_string(),
-        "List all projects defined in .meta.yaml (alias: ls)".to_string(),
-    );
-    help_commands.insert(
-        "check".to_string(),
-        "Verify all projects are cloned and consistent".to_string(),
-    );
-    help_commands.insert(
-        "dependents".to_string(),
-        "List projects that depend on a given project".to_string(),
-    );
-
     run_plugin(PluginDefinition {
-        info: PluginInfo {
-            name: "project".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            commands: vec![
-                "project list".to_string(),
-                "project ls".to_string(),
-                "project check".to_string(),
-                "project dependents".to_string(),
-            ],
-            description: Some("Project inspection for meta repositories".to_string()),
-            help: Some(PluginHelp {
-                usage: "meta project <command> [args...]".to_string(),
-                commands: help_commands,
-                runs_as_typed: None,
-                examples: vec![
-                    "meta project list".to_string(),
-                    "meta --json project list".to_string(),
-                    "meta -r project list".to_string(),
-                    "meta project check".to_string(),
-                ],
-                note: Some("To clone missing projects, use: meta git clone-missing".to_string()),
-            }),
-        },
-        execute,
+        info: meta_project_cli::info(),
+        execute: meta_project_cli::execute,
     });
-}
-
-fn execute(request: PluginRequest) -> CommandResult {
-    let options = meta_project_cli::ExecuteOptions {
-        json_output: request.options.json_output,
-        recursive: request.options.recursive,
-        all: request.options.all,
-        depth: request.options.depth,
-        // meta sent only the repos its filters chose
-        selected: request
-            .options
-            .filtered()
-            .then(|| meta_project_cli::ExecuteOptions::selection_from(&request.projects)),
-        meta: request.options.meta_options,
-    };
-
-    meta_project_cli::execute_command(
-        &request.command,
-        &request.args,
-        &options,
-        &request.projects,
-        &request.cwd,
-    )
 }

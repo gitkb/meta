@@ -2,106 +2,91 @@
 //!
 //! Provides project management commands for meta repositories.
 
+use indexmap::IndexMap;
 use meta_core::config::{self, MetaTreeNode};
 use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
+use meta_core::repo_filter::repo_path;
 use meta_core::worktree;
-use meta_plugin::display::{escape, escape_path};
-use meta_plugin::outln;
-use meta_plugin::RepoUrl;
+use meta_plugin::display::escape;
+use meta_plugin::{
+    has_help_token, outln, parse_args, usage, Ctx, ErrorCode, ErrorInfo, PluginHelp, PluginInfo,
+    Project, ProjectResult, RepoUrl, Request, Response,
+};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use meta_plugin::{has_help_token, parse_args, CommandResult};
-
-/// Options passed to execute_command
-#[derive(Debug, Default, Clone)]
-pub struct ExecuteOptions {
-    pub json_output: bool,
-    pub recursive: bool,
-    /// meta's -A: from the outermost workspace
-    pub all: bool,
-    pub depth: Option<usize>,
-    /// The project directories meta's `--include`, `--exclude` or `--tag`
-    /// chose, when one was given: the commands act on these only
-    pub selected: Option<Vec<PathBuf>>,
-    /// meta's options, for the tip when one is typed after the command
-    pub meta: meta_plugin::args::MetaOptions,
-}
-
-/// meta's options that choose repos, which list and dependents never take
-const FILTERS: [&str; 3] = ["--include", "--exclude", "--tag"];
-
-impl ExecuteOptions {
-    /// `selected` from the directories meta sent
-    pub fn selection_from(projects: &[String]) -> Vec<PathBuf> {
-        projects
-            .iter()
-            .map(|dir| comparable(Path::new(dir)))
-            .collect()
+/// What the plugin answers to `--meta-plugin-info`.
+pub fn info() -> PluginInfo {
+    let mut commands = IndexMap::new();
+    commands.insert(
+        "list".to_string(),
+        "List all projects defined in .meta.yaml (alias: ls)".to_string(),
+    );
+    commands.insert(
+        "check".to_string(),
+        "Verify all projects are cloned and consistent".to_string(),
+    );
+    commands.insert(
+        "dependents".to_string(),
+        "List projects that depend on a given project".to_string(),
+    );
+    PluginInfo {
+        name: "project".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        commands: vec![
+            "project list".to_string(),
+            "project ls".to_string(),
+            "project check".to_string(),
+            "project dependents".to_string(),
+        ],
+        description: Some("Project inspection for meta repositories".to_string()),
+        help: Some(PluginHelp {
+            usage: "meta project <command> [args...]".to_string(),
+            commands,
+            runs_as_typed: None,
+            examples: vec![
+                "meta project list".to_string(),
+                "meta --json project list".to_string(),
+                "meta -r project list".to_string(),
+                "meta project check".to_string(),
+            ],
+            note: Some("To clone missing projects, use: meta git clone-missing".to_string()),
+        }),
     }
-
-    /// Whether the command acts on the project at `dir`
-    fn acts_on(&self, dir: &Path) -> bool {
-        self.selected
-            .as_ref()
-            .is_none_or(|selected| selected.contains(&comparable(dir)))
-    }
-}
-
-/// `dir` resolved, so two spellings of one directory compare equal; for a
-/// project not cloned yet, its parent resolved.
-fn comparable(dir: &Path) -> PathBuf {
-    dir.canonicalize().unwrap_or_else(|_| {
-        match (
-            dir.parent().and_then(|p| p.canonicalize().ok()),
-            dir.file_name(),
-        ) {
-            (Some(parent), Some(name)) => parent.join(name),
-            _ => dir.to_path_buf(),
-        }
-    })
 }
 
 // ============================================================================
 // Project List Types
 // ============================================================================
 
-/// A project node in the hierarchical tree
+/// One row of `meta --json project list`: a project, or the workspace the
+/// list is of (the first row).
 #[derive(Debug, Clone, Serialize)]
-pub struct ProjectTreeNode {
+pub struct ListedProject {
     pub name: String,
+    /// From the workspace root, as the row's `project` (`.` for the root)
     pub path: String,
     /// Git remote URL. Should be present for all normal projects.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo: Option<RepoUrl>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     pub is_meta: bool,
     /// Why its folder couldn't be looked into (its own projects may be
-    /// missing from `projects`); absent when it could.
+    /// missing from the list); absent when it could.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub projects: Vec<ProjectTreeNode>,
-}
-
-/// Top-level output for `meta --json project list`
-#[derive(Debug, Clone, Serialize)]
-pub struct ProjectListOutput {
-    pub path: String,
-    /// The root's remote, `""` when it has none.
-    pub repo: RepoUrl,
-    pub root: String,
-    pub cwd: String,
+    /// The directory the command ran from (the first row only)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<ProjectListWorktree>,
-    pub projects: Vec<ProjectTreeNode>,
+    pub cwd: Option<String>,
+    /// The worktree set it ran in (the first row only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<ListedWorktree>,
 }
 
 /// Linked worktree context for project list output.
 #[derive(Debug, Clone, Serialize)]
-pub struct ProjectListWorktree {
+pub struct ListedWorktree {
     pub linked: bool,
     pub physical_root: String,
     pub canonical_root: String,
@@ -117,8 +102,8 @@ pub struct ProjectListWorktree {
 #[command(
     about = "Inspect the meta repo graph",
     after_help = "meta's options go before the command: -r includes the projects of nested meta \
-repos (--depth N limits how deep); --json emits a structured tree with root, cwd, project paths, \
-repo URLs, tags, and nested projects.
+repos (--depth N limits how deep); --json emits one record per project, the workspace's own \
+first: its path from the workspace root, repo URL, tags, and with -r the nested projects too.
 
 Agent hints:
   Use `meta -r --json project list` before broad changes to discover the full repo graph.
@@ -162,57 +147,42 @@ Examples:
   meta -A project dependents auth
 
 meta's -r also looks in the meta repos nested under the nearest .meta.yaml, -A in the whole \
-workspace from its root; --json emits the dependent project records."
+workspace from its root; --json emits one record per dependent project."
 )]
 struct DependentsArgs {
     /// Project name or provided capability to search for
     project: String,
 }
 
-/// Execute a project command and return the result
-///
-/// If `provided_projects` is not empty, it will be used instead of reading from .meta.yaml file.
-/// This allows meta_cli to pass in the full project list when --recursive is used.
-pub fn execute_command(
-    command: &str,
-    args: &[String],
-    options: &ExecuteOptions,
-    provided_projects: &[String],
-    cwd: &Path,
-) -> CommandResult {
-    let meta = &options.meta;
+/// What a command found: its text, and its records for `--json`.
+struct Found {
+    text: String,
+    records: Vec<ProjectResult>,
+}
+
+/// Answer a `meta project` call.
+pub fn execute(_ctx: &Ctx, request: Request) -> meta_plugin::Result<Response> {
+    let (command, args) = (request.command.as_str(), &request.args);
+    let meta = &request.meta_options;
     match command {
-        // These read the workspace tree themselves, with meta's -r, so
-        // meta's selection isn't theirs to apply
-        "project list" | "project ls" | "project dependents" if options.selected.is_some() => {
-            CommandResult::Error(format!(
-                "meta {command} does not take --include/--exclude/--tag; it reads the .meta.yaml \
-                 tree itself"
-            ))
-        }
-        "project list" | "project ls" => {
-            match parse_args::<ListArgs>(command, args, &meta.refusing(&FILTERS)) {
-                Ok(ListArgs {}) => handle_project_list(cwd, options),
-                Err(result) => result,
-            }
-        }
-        "project dependents" => {
-            match parse_args::<DependentsArgs>(command, args, &meta.refusing(&FILTERS)) {
-                Ok(dependents) => handle_project_dependents(&dependents.project, options, cwd),
-                Err(result) => result,
-            }
-        }
+        "project list" | "project ls" => match parse_args::<ListArgs>(command, args, meta) {
+            Ok(ListArgs {}) => shown(&request, list(&request)?),
+            Err(response) => Ok(*response),
+        },
+        "project dependents" => match parse_args::<DependentsArgs>(command, args, meta) {
+            Ok(DependentsArgs { project }) => shown(&request, dependents(&request, &project)?),
+            Err(response) => Ok(*response),
+        },
         "project check" => match parse_args::<CheckArgs>(command, args, meta) {
-            Ok(CheckArgs {}) => check(options.json_output, options, provided_projects, cwd)
-                .unwrap_or_else(Into::into),
-            Err(result) => result,
+            Ok(CheckArgs {}) => check(&request),
+            Err(response) => Ok(*response),
         },
         // meta_cli sends an unclaimed `project <word>` as `project` plus
         // args: help for `project`, but not for a word it doesn't have
         _ if args.first().is_none_or(|word| word.starts_with('-'))
             && has_help_token(command, args) =>
         {
-            CommandResult::Message(PROJECT_HELP.to_string())
+            Ok(Response::message(PROJECT_HELP))
         }
         _ => {
             let typed: Vec<&str> = std::iter::once(command)
@@ -221,24 +191,40 @@ pub fn execute_command(
             let near = args
                 .first()
                 .and_then(|word| meta_plugin::args::nearest(word, SUBCOMMANDS.iter().copied()));
-            let suggestion = match near {
-                Some(word) => format!(
-                    "\n\nA command with a similar name exists:\n    meta project {}",
-                    escape(
-                        &shlex::try_join(
-                            std::iter::once(word).chain(args.iter().skip(1).map(String::as_str))
-                        )
-                        .unwrap_or_else(|_| args.join(" "))
-                    )
+            // meta's options go before the command: the ones typed there,
+            // then the ones typed after it
+            let line = near.and_then(|word| {
+                let (moved, rest) = meta.lift(args.get(1..).unwrap_or_default())?;
+                let line: Vec<String> = std::iter::once("meta".to_string())
+                    .chain(meta.typed.iter().cloned())
+                    .chain(moved)
+                    .chain(["project".to_string(), word.to_string()])
+                    .chain(rest)
+                    .collect();
+                Some(meta_plugin::display::display_command(&line))
+            });
+            let suggestion = match line {
+                Some(line) => format!(
+                    "\n\nA command with a similar name exists:\n    {}",
+                    escape(&line)
                 ),
                 None => String::new(),
             };
-            CommandResult::ShowHelp(Some(format!(
-                "unrecognized command '{}'{suggestion}",
-                escape(&typed.join(" "))
+            Err(usage(format!(
+                "unrecognized command '{}'{suggestion}\n\n{}",
+                escape(&typed.join(" ")),
+                meta_plugin::help_text("project", &info()).trim_end()
             )))
         }
     }
+}
+
+/// `found`'s text shown (but not under `--json`), its records for `--json`.
+fn shown(request: &Request, found: Found) -> meta_plugin::Result<Response> {
+    if !request.meta.json {
+        outln!("{}", found.text)?;
+    }
+    Ok(Response::printed(found.records))
 }
 
 /// The words after `meta project` it answers.
@@ -278,34 +264,39 @@ struct CheckProblem {
     actual: Option<Option<RepoUrl>>,
 }
 
-/// `meta project check`: every project of the workspace is a clone of its
+/// `meta project check`: every selected project is a clone of its
 /// configured repository; each that isn't is named, and the command fails.
-fn check(
-    json: bool,
-    options: &ExecuteOptions,
-    provided_projects: &[String],
-    cwd: &Path,
-) -> anyhow::Result<CommandResult> {
-    let problems = check_projects(options, provided_projects, cwd)?;
-    if json {
-        let report = serde_json::to_string_pretty(&serde_json::json!({ "problems": problems }))
-            .map_err(|e| anyhow::anyhow!("Failed to serialize JSON: {e}"))?;
-        if problems.is_empty() {
-            return Ok(CommandResult::Message(report));
-        }
-        // the report on stdout, the failure in the exit code
-        outln!("{report}")?;
-    } else if problems.is_empty() {
-        return Ok(CommandResult::Message(
-            "All projects are cloned and present.".to_string(),
-        ));
-    } else {
-        for problem in &problems {
-            outln!("✗ {}: {}", escape(&problem.path), escape(&problem.reason))?;
-        }
+fn check(request: &Request) -> meta_plugin::Result<Response> {
+    let problems = check_projects(request)?;
+    if problems.is_empty() {
+        return Ok(Response::message("All projects are cloned and present."));
     }
-    let missing = problems.iter().any(|p| p.state == "missing");
-    Ok(CommandResult::Error(format!(
+    if request.meta.json {
+        let records = problems
+            .into_iter()
+            .map(|(project, problem)| {
+                let code = match problem.state {
+                    "missing" => ErrorCode::NotFound,
+                    "wrong_remote" => ErrorCode::Conflict,
+                    _ => ErrorCode::Failed,
+                };
+                let error = ErrorInfo::new(
+                    code,
+                    format!("{}: {}", escape(&project.path), escape(&problem.reason)),
+                );
+                ProjectResult {
+                    error: Some(error),
+                    ..ProjectResult::record(&project.path, problem).at(&project.abs)
+                }
+            })
+            .collect();
+        return Ok(Response::printed(records));
+    }
+    for (_, problem) in &problems {
+        outln!("✗ {}: {}", escape(&problem.path), escape(&problem.reason))?;
+    }
+    let missing = problems.iter().any(|(_, p)| p.state == "missing");
+    anyhow::bail!(
         "{} project(s) are not clones of their configured repository{}",
         problems.len(),
         if missing {
@@ -313,70 +304,39 @@ fn check(
         } else {
             ""
         }
-    )))
+    )
 }
 
-/// What is wrong with the projects of the nearest config at or above cwd;
-/// with meta's --recursive, of cwd's config and of each meta repo meta_cli
-/// sent; with meta's filters, of the projects they selected. A config that
-/// can't be read is an error, not "nothing wrong".
-fn check_projects(
-    options: &ExecuteOptions,
-    provided_projects: &[String],
-    cwd: &Path,
-) -> anyhow::Result<Vec<CheckProblem>> {
-    if options.selected.is_some() {
-        return check_selected(options, cwd);
-    }
-    let mut workspaces = Vec::new();
-    if !(options.recursive || options.all) || provided_projects.is_empty() {
-        workspaces.push(
-            config::Workspace::find(cwd, None)?
-                .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?,
-        );
-    } else {
-        let mut seen = HashSet::new();
-        for dir in
-            std::iter::once(cwd.to_path_buf()).chain(provided_projects.iter().map(|p| cwd.join(p)))
-        {
-            let key = dir.canonicalize().unwrap_or_else(|_| dir.clone());
-            if seen.insert(key) {
-                workspaces.extend(config::Workspace::in_dir(&dir)?);
-            }
-        }
-    }
-    Ok(workspaces
+/// What is wrong with the selected projects (meta's -r, -A and filters
+/// applied), in their order. The workspace's own repo is not one of them.
+fn check_projects(request: &Request) -> anyhow::Result<Vec<(&Project, CheckProblem)>> {
+    request.workspace()?;
+    Ok(request
+        .projects
         .iter()
-        .flat_map(|workspace| {
-            workspace
-                .projects
-                .iter()
-                .filter_map(|project| check_project(&workspace.dir, project, cwd))
-        })
+        .filter(|project| project.name != ".")
+        .filter_map(|project| Some((project, check_project(project, &request.cwd)?)))
         .collect())
 }
 
 /// What is wrong with `project`, if anything.
-fn check_project(
-    config_dir: &Path,
-    project: &config::ProjectInfo,
-    cwd: &Path,
-) -> Option<CheckProblem> {
+fn check_project(project: &Project, cwd: &Path) -> Option<CheckProblem> {
     use meta_core::gitdir::Checkout;
-    let dir = config_dir.join(&project.path);
+    let dir = &project.abs;
+    let repo = project.repo.clone().map(RepoUrl::from);
     let problem = |state, reason: String| CheckProblem {
         name: project.name.clone(),
         path: dir
             .strip_prefix(cwd)
-            .unwrap_or(&dir)
+            .unwrap_or(dir)
             .to_string_lossy()
             .into_owned(),
         state,
         reason,
-        repo: project.repo.clone(),
+        repo: repo.clone(),
         actual: None,
     };
-    let checkout = Checkout::of(&dir);
+    let checkout = Checkout::of(dir);
     if let Some(why) = checkout.problem() {
         let state = match checkout {
             Checkout::Missing => "missing",
@@ -384,8 +344,8 @@ fn check_project(
         };
         return Some(problem(state, why));
     }
-    let expected = project.repo.as_ref()?;
-    match meta_core::git::remote_url(&dir) {
+    let expected = repo.as_ref()?;
+    match meta_core::git::remote_url(dir) {
         Ok(Some(actual)) if actual.same_repository(expected) => None,
         Ok(actual) => Some(CheckProblem {
             actual: Some(actual.clone()),
@@ -404,173 +364,111 @@ fn check_project(
     }
 }
 
-/// What is wrong with the projects meta's filters selected: the nearest
-/// workspace's, with meta's --recursive its nested ones too, in project order.
-fn check_selected(options: &ExecuteOptions, cwd: &Path) -> anyhow::Result<Vec<CheckProblem>> {
-    fn walk(
-        nodes: &[MetaTreeNode],
-        dir: &Path,
-        options: &ExecuteOptions,
-        cwd: &Path,
-        out: &mut Vec<CheckProblem>,
-    ) {
-        for node in nodes {
-            let path = dir.join(&node.info.path);
-            if options.acts_on(&path) {
-                out.extend(check_project(dir, &node.info, cwd));
-            }
-            walk(&node.children, &path, options, cwd, out);
-        }
-    }
-    let workspace = config::Workspace::find(cwd, None)?
-        .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
-    let workspace = if options.all {
-        workspace.root()?
-    } else {
-        workspace
-    };
-    let depth = if options.recursive || options.all {
-        options.depth
-    } else {
-        Some(0)
-    };
-    let tree = config::walk_projects(&workspace.dir, &workspace.projects, depth)?;
-    let mut problems = Vec::new();
-    walk(&tree, &workspace.dir, options, cwd, &mut problems);
-    Ok(problems)
-}
-
 // ============================================================================
 // Project List Implementation
 // ============================================================================
 
-/// Handle `meta project list` / `meta project ls`
-fn handle_project_list(cwd: &Path, options: &ExecuteOptions) -> CommandResult {
-    let max_depth = if options.recursive || options.all {
-        options.depth
-    } else {
-        Some(0)
-    };
-
-    // -A: from the outermost workspace; -r: down from the nearest
-    let start_dir = if options.all {
-        match config::find_meta_config(cwd, None) {
-            Ok(Some(config_path)) => {
-                let nearest_meta_dir = config_path
-                    .parent()
-                    .unwrap_or(std::path::Path::new("."))
-                    .to_path_buf();
-                config::listed_root(&nearest_meta_dir)
-            }
-            Err(e) => return CommandResult::from(e),
-            Ok(None) => {
-                return CommandResult::Error(format!("No .meta.yaml found in {}", escape_path(cwd)))
-            }
-        }
-    } else {
-        cwd.to_path_buf()
-    };
-
-    let tree = match config::walk_meta_tree(&start_dir, max_depth) {
-        Ok(t) => t,
-        Err(e) => return CommandResult::from(e),
-    };
+/// `meta project list`: the projects of the config the command runs from
+/// (with -A, the outermost one's), and with -r those of the meta repos
+/// nested in it, as a tree; each a record, in the tree's order.
+fn list(request: &Request) -> anyhow::Result<Found> {
+    let workspace = request.workspace()?;
+    let config = config::Workspace::load(&workspace.config)?;
+    let dir = listed_in(request, &config);
+    let tree = config::walk_projects(&dir, &config.projects, request.depth)?;
 
     // The remote of the workspace whose projects these are, not of the
     // repository the command runs in (a project's, from inside it); none
     // when the workspace is no repository
-    let root_repo = match config::find_meta_config(&start_dir, None) {
-        Ok(found) => found
-            .and_then(|config| config.parent().map(Path::to_path_buf))
-            .filter(|dir| matches!(meta_core::gitdir::common_dir(dir), Ok(Some(_))))
-            .and_then(|dir| meta_core::git::remote_url(&dir).ok().flatten()),
-        Err(e) => return CommandResult::from(e),
-    };
-    let project_nodes: Vec<ProjectTreeNode> = tree.iter().map(to_project_tree_node).collect();
-    let abs_cwd = cwd
-        .canonicalize()
-        .unwrap_or_else(|_| cwd.to_path_buf())
-        .to_path_buf();
-    let abs_cwd_string = abs_cwd.to_string_lossy().to_string();
+    let root_repo = Some(&config.dir)
+        .filter(|dir| matches!(meta_core::gitdir::common_dir(dir), Ok(Some(_))))
+        .and_then(|dir| meta_core::git::remote_url(dir).ok().flatten());
 
-    if options.json_output {
-        // `root` = the .meta.yaml directory relevant to this invocation:
-        //   - -A: the outermost workspace root (same as start_dir)
-        //   - otherwise: the nearest ancestor .meta.yaml dir
-        // start_dir is wrong for those (it equals cwd).
-        let root_dir = if options.all {
-            start_dir.clone()
-        } else {
-            match config::find_meta_config(cwd, None) {
-                Ok(Some(config_path)) => config_path.parent().unwrap_or(cwd).to_path_buf(),
-                Ok(None) => start_dir.clone(),
-                Err(e) => return CommandResult::from(e),
-            }
-        };
-        let abs_root = root_dir
-            .canonicalize()
-            .unwrap_or(root_dir)
-            .to_string_lossy()
-            .to_string();
-        let context = match worktree::detect_worktree_context(&abs_cwd) {
-            Ok(context) => context,
-            Err(e) => return CommandResult::from(e),
-        };
-        let linked_worktree = context.map(|(name, task_dir, _repos)| {
-            let canonical_root = worktree::discover_worktree_repos(&task_dir)
-                .ok()
-                .and_then(|repos| {
-                    repos
-                        .into_iter()
-                        .find(|repo| repo.alias == ".")
-                        .map(|repo| repo.source_path)
-                })
-                .unwrap_or_else(|| Path::new(&abs_root).to_path_buf());
+    let mut text = format!(". ({})\n", remote_label(root_repo.as_ref()));
+    format_project_tree(&tree, &mut text, "");
+    if text.ends_with('\n') {
+        text.pop();
+    }
 
-            ProjectListWorktree {
-                linked: true,
-                physical_root: task_dir.to_string_lossy().to_string(),
-                canonical_root: canonical_root.to_string_lossy().to_string(),
-                name,
-            }
-        });
-        let abs_root = linked_worktree
-            .as_ref()
-            .map(|wt| wt.canonical_root.clone())
-            .unwrap_or(abs_root);
-        let output = ProjectListOutput {
-            path: ".".to_string(),
-            repo: root_repo.unwrap_or_default(),
-            root: abs_root,
-            cwd: abs_cwd_string,
-            worktree: linked_worktree,
-            projects: project_nodes,
-        };
-        let json = match serde_json::to_string_pretty(&output) {
-            Ok(j) => j,
-            Err(e) => return CommandResult::Error(format!("Failed to serialize JSON: {e}")),
-        };
-        CommandResult::Message(json)
-    } else {
-        let mut output = String::new();
-        output.push_str(&format!(". ({})\n", remote_label(root_repo.as_ref())));
-        format_project_tree(&project_nodes, &mut output, "");
-        if output.ends_with('\n') {
-            output.pop();
+    let worktree = request.set.as_ref().map(|set| {
+        let canonical_root = worktree::discover_worktree_repos(&set.dir)
+            .ok()
+            .and_then(|repos| {
+                repos
+                    .into_iter()
+                    .find(|repo| repo.alias == ".")
+                    .map(|repo| repo.source_path)
+            })
+            .unwrap_or_else(|| config.dir.clone());
+        ListedWorktree {
+            linked: true,
+            // the set's folder as the file system names it, as cwd is
+            physical_root: set
+                .dir
+                .canonicalize()
+                .unwrap_or_else(|_| set.dir.clone())
+                .to_string_lossy()
+                .into_owned(),
+            canonical_root: canonical_root.to_string_lossy().into_owned(),
+            name: set.name.clone(),
         }
-        CommandResult::Message(output)
+    });
+    let cwd = request
+        .cwd
+        .canonicalize()
+        .unwrap_or_else(|_| request.cwd.clone());
+    let root_path = repo_path(&dir, &workspace.root);
+    let mut records = vec![ProjectResult::record(
+        &root_path,
+        ListedProject {
+            name: ".".to_string(),
+            path: root_path.clone(),
+            repo: root_repo,
+            tags: Vec::new(),
+            is_meta: true,
+            error: None,
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            worktree,
+        },
+    )
+    .at(&dir)];
+    list_records(&tree, &dir, &workspace.root, &mut records);
+    Ok(Found { text, records })
+}
+
+/// Where the projects of `config` are checked out: in a worktree set, the
+/// set's folder (whose config may be the workspace's, when the set holds no
+/// checkout of the root); elsewhere the config's own.
+fn listed_in(request: &Request, config: &config::Workspace) -> PathBuf {
+    match &request.set {
+        Some(set) => set.dir.clone(),
+        None => config.dir.clone(),
     }
 }
 
-fn to_project_tree_node(node: &MetaTreeNode) -> ProjectTreeNode {
-    ProjectTreeNode {
-        name: node.info.name.clone(),
-        path: node.info.path.clone(),
-        repo: node.info.repo.clone(),
-        tags: node.info.tags.clone(),
-        is_meta: node.is_meta,
-        error: node.error.clone(),
-        projects: node.children.iter().map(to_project_tree_node).collect(),
+/// A record for each of `nodes` (listed in `dir`) and the nodes under it,
+/// in the order the tree shows them, named from `root`.
+fn list_records(nodes: &[MetaTreeNode], dir: &Path, root: &Path, out: &mut Vec<ProjectResult>) {
+    for node in nodes {
+        let abs = dir.join(&node.info.path);
+        let path = repo_path(&abs, root);
+        out.push(
+            ProjectResult::record(
+                &path,
+                ListedProject {
+                    name: node.info.name.clone(),
+                    path: path.clone(),
+                    repo: node.info.repo.clone(),
+                    tags: node.info.tags.clone(),
+                    is_meta: node.is_meta,
+                    error: node.error.clone(),
+                    cwd: None,
+                    worktree: None,
+                },
+            )
+            .at(&abs),
+        );
+        list_records(&node.children, &abs, root, out);
     }
 }
 
@@ -581,48 +479,49 @@ fn remote_label(repo: Option<&RepoUrl>) -> String {
 
 /// Format a project tree with box-drawing characters: each project's name, its
 /// path when that differs from the name, and its remote URL
-fn format_project_tree(nodes: &[ProjectTreeNode], output: &mut String, prefix: &str) {
+fn format_project_tree(nodes: &[MetaTreeNode], output: &mut String, prefix: &str) {
     for (i, node) in nodes.iter().enumerate() {
-        let is_last = i == nodes.len() - 1;
+        let info = &node.info;
+        let is_last = i + 1 == nodes.len();
         let connector = if is_last {
             "\u{2514}\u{2500}\u{2500} "
         } else {
             "\u{251c}\u{2500}\u{2500} "
         };
 
-        let tags_str = if node.tags.is_empty() {
+        let tags_str = if info.tags.is_empty() {
             String::new()
         } else {
-            let tags: Vec<_> = node.tags.iter().map(|t| escape(t)).collect();
+            let tags: Vec<_> = info.tags.iter().map(|t| escape(t)).collect();
             format!(" [{}]", tags.join(", "))
         };
 
-        let path_str = if node.path == node.name {
+        let path_str = if info.path == info.name {
             String::new()
         } else {
-            format!(" \u{2192} {}", escape(&node.path))
+            format!(" \u{2192} {}", escape(&info.path))
         };
 
         output.push_str(&format!(
             "{}{}{}{} ({}){}\n",
             prefix,
             connector,
-            escape(&node.name),
+            escape(&info.name),
             path_str,
-            remote_label(node.repo.as_ref()),
+            remote_label(info.repo.as_ref()),
             tags_str
         ));
         if let Some(error) = &node.error {
             output.push_str(&format!("{prefix}    ✗ {}\n", escape(error)));
         }
 
-        if !node.projects.is_empty() {
+        if !node.children.is_empty() {
             let child_prefix = if is_last {
                 format!("{prefix}    ")
             } else {
                 format!("{prefix}\u{2502}   ")
             };
-            format_project_tree(&node.projects, output, &child_prefix);
+            format_project_tree(&node.children, output, &child_prefix);
         }
     }
 }
@@ -631,97 +530,205 @@ fn format_project_tree(nodes: &[ProjectTreeNode], output: &mut String, prefix: &
 // Project Dependents
 // ============================================================================
 
-/// Handle `meta project dependents <name>`
-///
-/// Finds all projects that directly depend on the given project (via `depends_on`
-/// matching the project's name or any of its `provides` entries).
-fn handle_project_dependents(
-    project_name: &str,
-    options: &ExecuteOptions,
-    cwd: &Path,
-) -> CommandResult {
-    let json = options.json_output;
-    match dependents(project_name, options, cwd) {
-        Err(e) => CommandResult::from(e),
-        Ok(dependents) if json => match serde_json::to_string(&dependents) {
-            Ok(json) => CommandResult::Message(json),
-            Err(e) => CommandResult::Error(format!("Failed to serialize JSON: {e}")),
-        },
-        Ok(dependents) if dependents.is_empty() => {
-            CommandResult::Message(format!("No projects depend on '{}'.", escape(project_name)))
-        }
-        Ok(dependents) => {
-            let names: Vec<_> = dependents.iter().map(|d| escape(d)).collect();
-            CommandResult::Message(names.join("\n"))
-        }
-    }
+/// One project `meta project dependents` found.
+#[derive(Debug, Serialize)]
+struct Dependent<'a> {
+    /// As the text output names it: by name in the workspace the command
+    /// runs from, by its path from there in a nested one
+    name: &'a str,
 }
 
-/// The projects that depend directly on `project_name`, among those of the
-/// nearest workspace by name; with `recursive` (meta's -r), among every
-/// project in its tree (`depth` levels of it), its own by name and nested
-/// ones by their path from it (two nested repos may share a name); with
-/// `all` (-A), in the tree of the outermost workspace.
-fn dependents(
-    project_name: &str,
-    options: &ExecuteOptions,
-    cwd: &Path,
-) -> anyhow::Result<Vec<String>> {
-    let (recursive, all) = (options.recursive, options.all);
-    fn walk(nodes: Vec<MetaTreeNode>, prefix: &str, out: &mut Vec<ProjectDependencies>) {
+/// `meta project dependents <name>`: the projects that depend directly on
+/// `project_name` (via `depends_on` naming the project or one of its
+/// `provides` entries), among those of the config the command runs from by
+/// name; with meta's -r, among every project in its tree (`depth` levels of
+/// it), its own by name and nested ones by their path from it (two nested
+/// repos may share a name); with -A, in the tree of the outermost workspace.
+fn dependents(request: &Request, project_name: &str) -> anyhow::Result<Found> {
+    fn walk(
+        nodes: Vec<MetaTreeNode>,
+        prefix: &str,
+        dir: &Path,
+        out: &mut Vec<ProjectDependencies>,
+        dirs: &mut HashMap<String, PathBuf>,
+    ) {
         for node in nodes {
             let path = format!("{prefix}/{}", node.info.path);
+            let abs = dir.join(&node.info.path);
             let mut project = ProjectDependencies::from(node.info);
             // `depends_on` names it, so its name stands for it as well
             project
                 .provides
                 .push(std::mem::replace(&mut project.name, path.clone()));
             out.push(project);
-            walk(node.children, &path, out);
+            dirs.insert(path.clone(), abs.clone());
+            walk(node.children, &path, &abs, out, dirs);
         }
     }
-    let mut workspace = config::Workspace::find(cwd, None)?
-        .ok_or_else(|| anyhow::anyhow!("No .meta.yaml found in {}", escape_path(cwd)))?;
+    let root = &request.workspace()?.root;
+    let workspace = config::Workspace::load(&request.workspace()?.config)?;
+    let dir = listed_in(request, &workspace);
     let mut projects = Vec::new();
-    if all {
-        workspace = workspace.root()?;
-    }
-    if recursive || all {
-        for node in config::walk_projects(&workspace.dir, &workspace.projects, options.depth)? {
-            walk(node.children, &node.info.path, &mut projects);
-            projects.push(node.info.into());
-        }
-    } else {
-        projects.extend(workspace.projects.into_iter().map(Into::into));
+    let mut dirs = HashMap::new();
+    let top = match request.depth {
+        Some(0) => workspace
+            .projects
+            .iter()
+            .cloned()
+            .map(|info| (info, Vec::new()))
+            .collect::<Vec<_>>(),
+        depth => config::walk_projects(&dir, &workspace.projects, depth)?
+            .into_iter()
+            .map(|node| (node.info, node.children))
+            .collect(),
+    };
+    for (info, children) in top {
+        let abs = dir.join(&info.path);
+        walk(children, &info.path, &abs, &mut projects, &mut dirs);
+        dirs.insert(info.name.clone(), abs);
+        projects.push(info.into());
     }
     let graph = DependencyGraph::build(projects);
-    let dependents = graph
+    let found = graph
         .dependents_of(project_name)
         .ok_or_else(|| anyhow::anyhow!("Unknown project or alias: {}", escape(project_name)))?;
-    Ok(dependents.into_iter().map(str::to_string).collect())
+    let text = match found.is_empty() {
+        true => format!("No projects depend on '{}'.", escape(project_name)),
+        false => found
+            .iter()
+            .map(|name| escape(name))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    let records = found
+        .iter()
+        .map(|name| match dirs.get(*name) {
+            Some(dir) => ProjectResult::record(repo_path(dir, root), Dependent { name }).at(dir),
+            None => ProjectResult::record(*name, Dependent { name }),
+        })
+        .collect();
+    Ok(Found { text, records })
 }
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use meta_core::repo_filter::{Filters, Reach};
+    use meta_plugin::envelope::info_of;
+    use meta_plugin::Answer;
 
-    /// The text of a `Message` result, or `None` for any other result.
-    fn message(result: CommandResult) -> Option<String> {
-        match result {
-            CommandResult::Message(msg) => Some(msg),
+    /// meta's options that reach into the workspace, and --json
+    #[derive(Default, Clone, Copy)]
+    struct Options {
+        recursive: bool,
+        all: bool,
+        depth: Option<usize>,
+        json: bool,
+    }
+
+    const RECURSIVE: Options = Options {
+        recursive: true,
+        all: false,
+        depth: None,
+        json: false,
+    };
+    const ALL: Options = Options {
+        all: true,
+        ..RECURSIVE
+    };
+
+    /// The request meta sends for `command args` from `cwd`: the
+    /// workspace of the nearest config, and every repo `options` reach.
+    fn request(command: &str, args: &[&str], cwd: &Path, options: Options) -> Request {
+        let mut request = Request::new(command, cwd);
+        request.args = args.iter().map(|a| a.to_string()).collect();
+        request.meta.json = options.json;
+        let Some(config) = config::Workspace::find(cwd, None).unwrap() else {
+            return request;
+        };
+        let reach = Reach::of(config, options.recursive, options.all, options.depth).unwrap();
+        let repos = reach.select(&Filters::default(), String::new).unwrap();
+        request.projects = repos
+            .iter()
+            .map(|repo| Project {
+                name: repo.name().unwrap_or(".").to_string(),
+                path: repo_path(&repo.dir, &reach.root),
+                abs: repo.dir.clone(),
+                repo: repo
+                    .info
+                    .as_ref()
+                    .and_then(|i| i.repo.as_ref())
+                    .map(ToString::to_string),
+                tags: repo.tags().to_vec(),
+                present: repo.dir.exists(),
+                ..Project::default()
+            })
+            .collect();
+        request.workspace = Some(meta_plugin::Workspace {
+            root: reach.root.clone(),
+            config: reach.workspace.config_path.clone(),
+            listed_root: config::listed_root(&reach.workspace.dir),
+            members: request.projects.clone(),
+            worktree: Default::default(),
+        });
+        request.depth = match options.recursive || options.all {
+            true => options.depth,
+            false => Some(0),
+        };
+        request
+    }
+
+    fn run(request: Request) -> Response {
+        execute(&Ctx::new(request.meta.clone()), request)
+            .unwrap_or_else(|e| Response::error(info_of(&e)))
+    }
+
+    /// The words of a `Message` answer.
+    fn message(response: Response) -> Option<String> {
+        match response.answer {
+            Answer::Message(msg) => Some(msg),
             _ => None,
         }
     }
 
-    /// The text of an `Error` result, or `None` for any other result.
-    fn error(result: CommandResult) -> Option<String> {
-        match result {
-            CommandResult::Error(msg) | CommandResult::Usage(msg) => Some(msg),
+    /// The message of an `Error` answer.
+    fn error(response: Response) -> Option<String> {
+        match response.answer {
+            Answer::Error(error) => Some(error.message),
             _ => None,
+        }
+    }
+
+    /// The text `meta project list` shows.
+    fn listed(cwd: &Path, options: Options) -> String {
+        list(&request("project list", &[], cwd, options))
+            .unwrap()
+            .text
+    }
+
+    /// The rows of `meta --json project list`: each record's `project` and
+    /// `data`.
+    fn rows(cwd: &Path, options: Options) -> Vec<(String, serde_json::Value)> {
+        let response = run(request(
+            "project list",
+            &[],
+            cwd,
+            Options {
+                json: true,
+                ..options
+            },
+        ));
+        records(response)
+            .into_iter()
+            .map(|r| (r.project.unwrap(), r.data.unwrap()))
+            .collect()
+    }
+
+    /// The records of a `Results` answer (none for any other).
+    fn records(response: Response) -> Vec<ProjectResult> {
+        match response.answer {
+            Answer::Results(results) => results.records,
+            _ => Vec::new(),
         }
     }
 
@@ -737,61 +744,62 @@ mod tests {
     fn test_execute_command_no_meta_file() {
         let sandbox = meta_plugin::testing::Sandbox::new();
         let temp_dir = sandbox.work();
-
-        let options = ExecuteOptions::default();
-        let result = execute_command("project check", &[], &options, &[], &temp_dir);
-
-        let msg = error(result).unwrap();
-        assert!(msg.contains("No .meta.yaml"), "{msg}");
+        for command in ["project check", "project list"] {
+            let msg = error(run(Request::new(command, &temp_dir))).unwrap();
+            assert!(msg.contains("no .meta.yaml"), "{msg}");
+        }
     }
 
     #[test]
     fn test_unknown_command() {
         let sandbox = meta_plugin::testing::Sandbox::new();
         let temp_dir = sandbox.work();
-
-        // Create a .meta.yaml file
-        std::fs::write(temp_dir.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
-
-        let options = ExecuteOptions::default();
-        let args = ["unknown".to_string()];
-        let result = execute_command("project", &args, &options, &[], &temp_dir);
-
-        assert!(matches!(result, CommandResult::ShowHelp(Some(msg))
-            if msg.contains("unrecognized command 'project unknown'")));
+        let msg = error(run(request(
+            "project",
+            &["unknown"],
+            &temp_dir,
+            Options::default(),
+        )));
+        assert!(msg
+            .unwrap()
+            .contains("unrecognized command 'project unknown'"));
     }
 
     #[test]
     fn a_typo_of_a_project_command_names_the_command_and_gets_no_help() {
         let sandbox = meta_plugin::testing::Sandbox::new();
         let temp_dir = sandbox.work();
-        let options = ExecuteOptions::default();
-        let typo = ["lsit".to_string(), "--json".to_string()];
-        let result = execute_command("project", &typo, &options, &[], &temp_dir);
-        assert!(matches!(result, CommandResult::ShowHelp(Some(msg))
-            if msg.ends_with("meta project list --json")));
-        let asked = ["lsit".to_string(), "--help".to_string()];
-        let result = execute_command("project", &asked, &options, &[], &temp_dir);
-        assert!(matches!(result, CommandResult::ShowHelp(Some(_))));
+        let typo = request(
+            "project",
+            &["lsit", "--json"],
+            &temp_dir,
+            Options::default(),
+        );
+        let msg = error(run(typo)).unwrap();
+        assert!(msg.contains("meta project list --json\n\n"), "{msg}");
+        let asked = request(
+            "project",
+            &["lsit", "--help"],
+            &temp_dir,
+            Options::default(),
+        );
+        let msg = error(run(asked)).unwrap();
+        assert!(msg.contains("unrecognized command"), "{msg}");
     }
 
     #[test]
     fn test_project_check_all_present() {
         let sandbox = meta_plugin::testing::Sandbox::new();
         let temp_dir = sandbox.work();
-
-        // Create a .meta.yaml file with no projects
         std::fs::write(temp_dir.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
-
-        let options = ExecuteOptions::default();
-        let result = execute_command("project check", &[], &options, &[], &temp_dir);
-
-        let msg = message(result).unwrap();
-        assert!(msg.contains("All projects are cloned"));
+        let checked = run(request("project check", &[], &temp_dir, Options::default()));
+        assert!(message(checked)
+            .unwrap()
+            .contains("All projects are cloned"));
     }
 
     #[test]
-    fn meta_options_reach_list_and_dependents_and_each_config_counts_once() {
+    fn meta_options_reach_list_and_dependents() {
         let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         let root = temp_dir.canonicalize().unwrap();
@@ -804,68 +812,46 @@ mod tests {
         let nested = root.join("c");
         std::fs::create_dir_all(nested.join("g")).unwrap();
         std::fs::write(nested.join(".meta.yaml"), "projects:\n  g: git@x:o/g.git\n").unwrap();
-        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let run = |command: &str, a: &[&str], cwd: &Path| {
-            execute_command(command, &args(a), &ExecuteOptions::default(), &[], cwd)
-        };
 
-        // meta_cli sends the root among the repos: each config counts once,
-        // and what is missing comes in project order
-        let recursive = ExecuteOptions {
-            recursive: true,
-            ..Default::default()
-        };
-        let provided = [root.to_string_lossy().into_owned(), "c".to_string()];
-        let missing: Vec<_> = check_projects(&recursive, &provided, &root)
+        // every selected project is checked, the nested meta repo's too
+        let checking = request("project check", &[], &root, RECURSIVE);
+        let mut missing: Vec<_> = check_projects(&checking)
             .unwrap()
             .into_iter()
-            .map(|p| (p.name, p.state))
+            .map(|(_, p)| (p.name, p.state))
             .collect();
+        missing.sort();
         assert_eq!(
             missing,
             [
                 ("alpha", "missing"),
                 ("c", "not_a_repo"),
+                ("g", "not_a_repo"),
                 ("user", "missing"),
                 ("zed", "missing"),
-                ("g", "not_a_repo")
             ]
             .map(|(n, s)| (n.to_string(), s))
         );
-        assert!(error(run("project check", &["x"], &root))
-            .unwrap()
-            .contains("unexpected argument"));
+        let extra = request("project check", &["x"], &root, Options::default());
+        assert!(error(run(extra)).unwrap().contains("unexpected argument"));
 
         // meta's -r and --depth
-        let listed = |options: ExecuteOptions| {
-            message(execute_command("project list", &[], &options, &[], &root)).unwrap()
-        };
-        let depth = |depth| ExecuteOptions {
-            depth,
-            ..recursive.clone()
-        };
-        assert!(!listed(ExecuteOptions::default()).contains(" g "));
-        assert!(
-            listed(depth(None)).contains(" g "),
-            "{}",
-            listed(depth(None))
-        );
-        assert!(!listed(depth(Some(0))).contains(" g "));
+        let depth = |depth| Options { depth, ..RECURSIVE };
+        assert!(!listed(&root, Options::default()).contains(" g "));
+        assert!(listed(&root, depth(None)).contains(" g "));
+        assert!(!listed(&root, depth(Some(0))).contains(" g "));
         // they are meta's: after the command, a usage error
-        assert!(error(run("project list", &["-r"], &root)).is_some());
+        let after = request("project list", &["-r"], &root, Options::default());
+        assert!(error(run(after)).is_some());
 
         // meta's -A: the root workspace, from inside a nested one; -r
         // goes down from there only
-        let all = ExecuteOptions {
-            all: true,
-            ..Default::default()
-        };
-        let from_nested = |options: &ExecuteOptions| {
-            execute_command("project dependents", &args(&["c"]), options, &[], &nested)
-        };
-        assert!(error(run("project dependents", &["c"], &nested)).is_some());
-        assert!(error(from_nested(&recursive)).is_some());
-        assert_eq!(message(from_nested(&all)).unwrap(), "user");
+        let from_nested = |options| run(request("project dependents", &["c"], &nested, options));
+        assert!(error(from_nested(Options::default())).is_some());
+        assert!(error(from_nested(RECURSIVE)).is_some());
+        let all = dependents(&request("project dependents", &["c"], &nested, ALL), "c").unwrap();
+        assert_eq!(all.text, "user");
+        assert_eq!(all.records[0].project.as_deref(), Some("user"));
     }
 
     #[test]
@@ -893,25 +879,31 @@ mod tests {
             &root.join("tools"),
             "projects:\n  cli:\n    repo: git@x:o/cli.git\n    depends_on: [utils-api]\n",
         );
-        let dependents = |project: &str, cwd: &Path| {
-            let args = [project.to_string()];
-            let recursive = ExecuteOptions {
-                all: true,
-                ..Default::default()
-            };
-            message(execute_command(
-                "project dependents",
-                &args,
-                &recursive,
-                &[],
-                cwd,
-            ))
+        let found = |project: &str, cwd: &Path| {
+            dependents(
+                &request("project dependents", &[project], cwd, ALL),
+                project,
+            )
             .unwrap()
         };
         // nested projects depend on the root's, and on each other, by name
-        assert_eq!(dependents("utils-api", &root), "api\ntools/cli");
-        assert_eq!(dependents("terraform", &root), "infra/k8s");
-        assert_eq!(dependents("terraform", &root.join("infra")), "infra/k8s");
+        assert_eq!(found("utils-api", &root).text, "api\ntools/cli");
+        assert_eq!(found("terraform", &root).text, "infra/k8s");
+        let from_infra = found("terraform", &root.join("infra"));
+        assert_eq!(from_infra.text, "infra/k8s");
+        // each record names its project from the workspace root
+        let projects: Vec<_> = from_infra
+            .records
+            .iter()
+            .map(|r| (r.project.clone(), r.data.clone()))
+            .collect();
+        assert_eq!(
+            projects,
+            [(
+                Some("infra/k8s".to_string()),
+                Some(serde_json::json!({"name": "infra/k8s"}))
+            )]
+        );
     }
 
     #[test]
@@ -942,117 +934,116 @@ mod tests {
             ],
         );
 
-        let problems = check_projects(&ExecuteOptions::default(), &[], &root).unwrap();
+        let checking = request("project check", &[], &root, Options::default());
+        let problems = check_projects(&checking).unwrap();
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert_eq!(
-            (problems[0].name.as_str(), problems[0].state),
+            (problems[0].1.name.as_str(), problems[0].1.state),
             ("web", "wrong_remote")
         );
-        assert!(matches!(
-            check(true, &ExecuteOptions::default(), &[], &root).unwrap(),
-            CommandResult::Error(e) if e.contains("1 project(s)")
-        ));
+        let msg = error(run(request(
+            "project check",
+            &[],
+            &root,
+            Options::default(),
+        )));
+        assert!(msg.unwrap().contains("1 project(s)"));
+        // under --json, a failed record for the project
+        let json = Options {
+            json: true,
+            ..Options::default()
+        };
+        let failed = records(run(request("project check", &[], &root, json)));
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        let record = &failed[0];
+        assert_eq!(record.project.as_deref(), Some("apps/web"));
+        assert_eq!(
+            record.error.as_ref().map(|e| e.code),
+            Some(ErrorCode::Conflict)
+        );
+        assert_eq!(record.data.as_ref().unwrap()["state"], "wrong_remote");
 
         // listed from inside the child, the root is still the workspace's
-        let options = ExecuteOptions {
-            json_output: true,
-            ..Default::default()
-        };
-        let listed = message(execute_command("project list", &[], &options, &[], &web)).unwrap();
-        let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
-        assert_eq!(listed["repo"], "https://example.invalid/ws.git", "{listed}");
+        let rows = rows(&web, Options::default());
+        assert_eq!(rows[0].1["repo"], "https://example.invalid/ws.git");
     }
 
     #[test]
     fn test_project_sync_removed() {
         let sandbox = meta_plugin::testing::Sandbox::new();
-        let options = ExecuteOptions::default();
-        let args = ["sync".to_string()];
-        let result = execute_command("project", &args, &options, &[], &sandbox.work());
+        let sync = request("project", &["sync"], &sandbox.work(), Options::default());
         // gone, not pointed elsewhere: its help lists what there is
-        assert!(matches!(result, CommandResult::ShowHelp(Some(msg))
-            if msg == "unrecognized command 'project sync'"));
+        let msg = error(run(sync)).unwrap();
+        assert!(
+            msg.starts_with("unrecognized command 'project sync'\n\n"),
+            "{msg}"
+        );
+        assert!(!msg.contains("similar name"), "{msg}");
     }
 
     #[test]
     fn test_project_list_basic() {
         let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
-
-        // Create a .meta.yaml file with projects
         std::fs::write(
             temp_dir.join(".meta.yaml"),
             r#"{"projects": {"repo1": "git@github.com:org/repo1.git", "repo2": "git@github.com:org/repo2.git"}}"#,
         )
         .unwrap();
-
-        let options = ExecuteOptions::default();
-        let result = execute_command("project list", &[], &options, &[], &temp_dir);
-
-        let msg = message(result).unwrap();
+        let msg = listed(&temp_dir, Options::default());
         assert!(msg.contains("repo1"));
         assert!(msg.contains("repo2"));
-        assert!(msg.contains(".")); // root indicator
+        assert!(msg.starts_with(". (")); // root indicator
     }
 
     #[test]
     fn test_project_list_json() {
         let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
-
         std::fs::write(
             temp_dir.join(".meta.yaml"),
             r#"{"projects": {"repo1": "git@github.com:org/repo1.git"}}"#,
         )
         .unwrap();
-
-        let options = ExecuteOptions {
-            json_output: true,
-            ..Default::default()
-        };
-        let result = execute_command("project list", &[], &options, &[], &temp_dir);
-
-        let msg = message(result).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-        assert_eq!(parsed["path"], ".");
-        assert!(parsed["projects"].is_array());
-        let projects = parsed["projects"].as_array().unwrap();
-        assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0]["name"], "repo1");
-        assert_eq!(projects[0]["repo"], "git@github.com:org/repo1.git");
+        let rows = rows(&temp_dir, Options::default());
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, ".");
+        assert_eq!(rows[0].1["path"], ".");
+        assert_eq!(rows[1].0, "repo1");
+        assert_eq!(rows[1].1["name"], "repo1");
+        assert_eq!(rows[1].1["path"], "repo1");
+        assert_eq!(rows[1].1["repo"], "git@github.com:org/repo1.git");
     }
 
     #[test]
     fn test_project_ls_alias() {
         let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
-
         std::fs::write(
             temp_dir.join(".meta.yaml"),
             r#"{"projects": {"repo1": "git@github.com:org/repo1.git"}}"#,
         )
         .unwrap();
-
-        let options = ExecuteOptions::default();
-        let result = execute_command("project ls", &[], &options, &[], &temp_dir);
-
-        let msg = message(result).unwrap();
-        assert!(msg.contains("repo1"));
+        let json = Options {
+            json: true,
+            ..Options::default()
+        };
+        let ls = run(request("project ls", &[], &temp_dir, json));
+        assert!(
+            matches!(&ls.answer, Answer::Results(r) if r.records.len() == 2),
+            "{ls:?}"
+        );
     }
 
     #[test]
     fn test_project_list_recursive() {
         let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
-
-        // Create root .meta.yaml
         std::fs::write(
             temp_dir.join(".meta.yaml"),
             r#"{"projects": {"child": "git@github.com:org/child.git"}}"#,
         )
         .unwrap();
-
-        // Create child directory with its own .meta.yaml
         let child_dir = temp_dir.join("child");
         std::fs::create_dir(&child_dir).unwrap();
         std::fs::write(
@@ -1061,51 +1052,74 @@ mod tests {
         )
         .unwrap();
 
-        let options = ExecuteOptions {
-            recursive: true,
-            json_output: true,
-            ..Default::default()
-        };
-        let result = execute_command("project list", &[], &options, &[], &temp_dir);
+        // flat, every level, named from the root
+        let rows = rows(&temp_dir, RECURSIVE);
+        let paths: Vec<_> = rows.iter().map(|(p, d)| (p.as_str(), &d["path"])).collect();
+        assert_eq!(
+            paths,
+            [
+                (".", &".".into()),
+                ("child", &"child".into()),
+                ("child/grandchild", &"child/grandchild".into())
+            ]
+        );
+        assert_eq!(rows[1].1["is_meta"], true);
+        assert_eq!(rows[2].1["name"], "grandchild");
+    }
 
-        let msg = message(result).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-        let projects = parsed["projects"].as_array().unwrap();
-        assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0]["name"], "child");
-        assert_eq!(projects[0]["is_meta"], true);
-        let sub_projects = projects[0]["projects"].as_array().unwrap();
-        assert_eq!(sub_projects.len(), 1);
-        assert_eq!(sub_projects[0]["name"], "grandchild");
+    /// A node of a meta tree.
+    fn node(
+        name: &str,
+        path: &str,
+        repo: Option<&str>,
+        tags: &[&str],
+        error: Option<&str>,
+        children: Vec<MetaTreeNode>,
+    ) -> MetaTreeNode {
+        MetaTreeNode {
+            info: config::ProjectInfo {
+                name: name.to_string(),
+                path: path.to_string(),
+                repo: repo.map(Into::into),
+                tags: tags.iter().map(|t| t.to_string()).collect(),
+                provides: Vec::new(),
+                depends_on: Vec::new(),
+                meta: false,
+            },
+            is_meta: false,
+            error: error.map(str::to_string),
+            children,
+        }
     }
 
     /// Every node has one line of its own, including nested and error nodes.
-    fn assert_tree_properties(nodes: &[ProjectTreeNode], output: &str) {
+    fn assert_tree_properties(nodes: &[MetaTreeNode], output: &str) {
         assert!(
             output.chars().all(|c| c == '\n' || !c.is_control()),
             "{output:?}"
         );
         // each level one step further in; the path only where it isn't the name
         fn check<'a>(
-            nodes: &[ProjectTreeNode],
+            nodes: &[MetaTreeNode],
             depth: usize,
             lines: &mut impl Iterator<Item = &'a str>,
         ) {
             for (i, node) in nodes.iter().enumerate() {
+                let info = &node.info;
                 let line = lines.next().expect("a line for each node");
                 let connector = if i + 1 == nodes.len() { '└' } else { '├' };
                 let at = line.chars().position(|c| c == connector);
                 assert_eq!(at, Some(depth * 4), "{line}");
-                assert_eq!(line.contains('→'), node.path != node.name, "{line}");
+                assert_eq!(line.contains('→'), info.path != info.name, "{line}");
                 let mut fields = vec![
-                    escape(&node.name).into_owned(),
-                    escape(&node.path).into_owned(),
+                    escape(&info.name).into_owned(),
+                    escape(&info.path).into_owned(),
                 ];
-                fields.push(node.repo.as_ref().map_or_else(
+                fields.push(info.repo.as_ref().map_or_else(
                     || "no remote".into(),
                     |r| escape(&r.to_string()).into_owned(),
                 ));
-                fields.extend(node.tags.iter().map(|t| escape(t).into_owned()));
+                fields.extend(info.tags.iter().map(|t| escape(t).into_owned()));
                 for field in fields {
                     assert!(line.contains(&field), "{field:?} missing on {line:?}");
                 }
@@ -1113,7 +1127,7 @@ mod tests {
                     let line = lines.next().expect("the node's error line");
                     assert!(line.contains(escape(error).as_ref()), "{line}");
                 }
-                check(&node.projects, depth + 1, lines);
+                check(&node.children, depth + 1, lines);
             }
         }
         let mut lines = output.lines();
@@ -1124,45 +1138,40 @@ mod tests {
     #[test]
     fn test_format_project_tree() {
         let nodes = vec![
-            ProjectTreeNode {
-                error: None,
-                name: "api".to_string(),
-                path: "services/api".to_string(),
-                repo: Some("git@github.com:org/api.git".into()),
-                tags: vec!["backend".to_string()],
-                is_meta: false,
-                projects: vec![],
-            },
-            ProjectTreeNode {
-                error: None,
-                name: "frontend".to_string(),
-                path: "frontend".to_string(),
-                repo: Some("git@github.com:org/frontend.git".into()),
-                tags: vec![],
-                is_meta: false,
-                projects: vec![
-                    ProjectTreeNode {
-                        error: None,
-                        name: "widget".into(),
-                        path: "ui/widget".into(),
-                        repo: Some("git@github.com:org/widget.git".into()),
-                        tags: vec!["ui".into(), "client".into()],
-                        is_meta: false,
-                        projects: vec![],
-                    },
-                    ProjectTreeNode {
-                        error: Some("cannot read config".into()),
-                        name: "broken".into(),
-                        path: "ui/broken".into(),
-                        repo: None,
-                        tags: vec![],
-                        is_meta: false,
-                        projects: vec![],
-                    },
+            node(
+                "api",
+                "services/api",
+                Some("git@github.com:org/api.git"),
+                &["backend"],
+                None,
+                vec![],
+            ),
+            node(
+                "frontend",
+                "frontend",
+                Some("git@github.com:org/frontend.git"),
+                &[],
+                None,
+                vec![
+                    node(
+                        "widget",
+                        "ui/widget",
+                        Some("git@github.com:org/widget.git"),
+                        &["ui", "client"],
+                        None,
+                        vec![],
+                    ),
+                    node(
+                        "broken",
+                        "ui/broken",
+                        None,
+                        &[],
+                        Some("cannot read config"),
+                        vec![],
+                    ),
                 ],
-            },
+            ),
         ];
-
         let mut output = String::new();
         format_project_tree(&nodes, &mut output, "");
         assert_tree_properties(&nodes, &output);
@@ -1170,16 +1179,14 @@ mod tests {
 
     #[test]
     fn test_format_project_tree_escapes_control_characters() {
-        let nodes = vec![ProjectTreeNode {
-            error: None,
-            name: "x\u{1b}]0;PWNED\u{7}".to_string(),
-            path: "t\u{1b}[1A".to_string(),
-            repo: Some("u\u{9b}2J".into()),
-            tags: vec!["n\nfake".to_string()],
-            is_meta: false,
-            projects: vec![],
-        }];
-
+        let nodes = vec![node(
+            "x\u{1b}]0;PWNED\u{7}",
+            "t\u{1b}[1A",
+            Some("u\u{9b}2J"),
+            &["n\nfake"],
+            None,
+            vec![],
+        )];
         let mut output = String::new();
         format_project_tree(&nodes, &mut output, "");
         assert_tree_properties(&nodes, &output);
@@ -1187,16 +1194,7 @@ mod tests {
 
     #[test]
     fn test_format_project_tree_without_remote() {
-        let nodes = vec![ProjectTreeNode {
-            error: None,
-            name: "scratch".to_string(),
-            path: "scratch".to_string(),
-            repo: None,
-            tags: vec![],
-            is_meta: false,
-            projects: vec![],
-        }];
-
+        let nodes = vec![node("scratch", "scratch", None, &[], None, vec![])];
         let mut output = String::new();
         format_project_tree(&nodes, &mut output, "");
         assert_tree_properties(&nodes, &output);
@@ -1206,37 +1204,20 @@ mod tests {
     fn test_project_list_json_includes_cwd() {
         let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
-
         std::fs::write(
             temp_dir.join(".meta.yaml"),
             r#"{"projects": {"repo1": "git@github.com:org/repo1.git"}}"#,
         )
         .unwrap();
-
-        let options = ExecuteOptions {
-            json_output: true,
-            ..Default::default()
-        };
-        let result = execute_command("project list", &[], &options, &[], &temp_dir);
-
-        let msg = message(result).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-        // cwd field should be present and be an absolute path
-        let cwd = parsed["cwd"]
+        let rows = rows(&temp_dir, Options::default());
+        let cwd = rows[0].1["cwd"]
             .as_str()
             .expect("cwd field should be a string");
         assert!(
-            std::path::Path::new(cwd).is_absolute(),
+            Path::new(cwd).is_absolute(),
             "cwd should be absolute, got: {cwd}"
         );
-        // root field should be present and be an absolute path
-        let root = parsed["root"]
-            .as_str()
-            .expect("root field should be a string");
-        assert!(
-            std::path::Path::new(root).is_absolute(),
-            "root should be absolute, got: {root}"
-        );
+        assert!(rows[1].1.get("cwd").is_none());
     }
 
     #[test]
@@ -1272,17 +1253,26 @@ mod tests {
             ],
         );
 
-        let options = ExecuteOptions {
-            json_output: true,
-            ..Default::default()
-        };
-        let result = execute_command("project list", &[], &options, &[], &linked);
-
-        let msg = message(result).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+        // meta sends the set it runs in
+        let mut listing = request(
+            "project list",
+            &[],
+            &linked,
+            Options {
+                json: true,
+                ..Options::default()
+            },
+        );
+        listing.set = Some(meta_plugin::Set {
+            name: "feature".to_string(),
+            dir: linked.clone(),
+            members: Vec::new(),
+        });
+        let root = &records(run(listing))[0];
+        let data = root.data.as_ref().unwrap();
         let expected_root = comparable_path(&temp_dir.canonicalize().unwrap());
         let expected_linked = comparable_path(&linked.canonicalize().unwrap());
-        let worktree = parsed["worktree"]
+        let worktree = data["worktree"]
             .as_object()
             .expect("worktree field should be present");
         assert_eq!(worktree["linked"], true);
@@ -1292,150 +1282,70 @@ mod tests {
         );
         assert_eq!(
             worktree["canonical_root"].as_str().map(comparable_path_str),
-            Some(expected_root.clone())
+            Some(expected_root)
         );
         assert_eq!(worktree["name"].as_str(), Some("feature"));
         assert_eq!(
-            parsed["root"].as_str().map(comparable_path_str),
-            Some(expected_root)
-        );
-        assert_eq!(
-            parsed["cwd"].as_str().map(comparable_path_str),
+            data["cwd"].as_str().map(comparable_path_str),
             Some(expected_linked)
         );
     }
 
     #[test]
-    fn test_project_list_json_root_differs_from_cwd_in_nested_recursive() {
-        // Regression: when invoked from a child directory with -A,
-        // `root` must point to the outermost workspace root, NOT to cwd.
-        let sandbox = meta_plugin::testing::isolated!();
-        let temp_dir = sandbox.work();
-        let child = temp_dir.join("child");
-        std::fs::create_dir_all(&child).unwrap();
-
-        // Root .meta.yaml
-        std::fs::write(
-            temp_dir.join(".meta.yaml"),
-            r#"{"projects": {"child": {"repo": "git@github.com:org/child.git", "meta": true}}}"#,
-        )
-        .unwrap();
-
-        // Child .meta.yaml
-        std::fs::write(
-            child.join(".meta.yaml"),
-            r#"{"projects": {"repo1": "git@github.com:org/repo1.git"}}"#,
-        )
-        .unwrap();
-
-        let options = ExecuteOptions {
-            all: true,
-            json_output: true,
-            ..Default::default()
-        };
-        // Run from child (nested) directory
-        let result = execute_command("project list", &[], &options, &[], &child);
-
-        let msg = message(result).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-        let cwd = parsed["cwd"]
-            .as_str()
-            .expect("cwd field should be a string");
-        let root = parsed["root"]
-            .as_str()
-            .expect("root field should be a string");
-        assert!(
-            std::path::Path::new(root).is_absolute(),
-            "root should be absolute, got: {root}"
-        );
-        // root must be the outermost workspace root, which is the parent of child
-        assert_ne!(
-            root, cwd,
-            "root should differ from cwd when invoked from a nested meta workspace"
-        );
-    }
-
-    #[test]
     fn test_project_list_recursive_from_nested() {
-        // root has child, child has grandchild
-        // Running with -A from child should show root's tree
+        // root has child, child has grandchild: -A from child lists the
+        // root's tree, and the root row's folder is the root's, not cwd
         let sandbox = meta_plugin::testing::isolated!();
         let temp_dir = sandbox.work();
         let child = temp_dir.join("child");
         let grandchild = child.join("grandchild");
         std::fs::create_dir_all(&grandchild).unwrap();
-
-        // Root .meta.yaml
         std::fs::write(
             temp_dir.join(".meta.yaml"),
             r#"{"projects": {"child": {"repo": "git@github.com:org/child.git", "meta": true}}}"#,
         )
         .unwrap();
-
-        // Child .meta.yaml
         std::fs::write(
             child.join(".meta.yaml"),
             r#"{"projects": {"grandchild": "git@github.com:org/grandchild.git"}}"#,
         )
         .unwrap();
 
-        let options = ExecuteOptions {
-            all: true,
-            json_output: true,
-            ..Default::default()
-        };
-        // Run from child directory
-        let result = execute_command("project list", &[], &options, &[], &child);
+        let all = run(request(
+            "project list",
+            &[],
+            &child,
+            Options { json: true, ..ALL },
+        ));
+        let results = records(all);
+        let rows: Vec<_> = results
+            .iter()
+            .map(|r| r.project.as_deref().unwrap())
+            .collect();
+        assert_eq!(rows, [".", "child", "child/grandchild"]);
+        let root = &results[0];
+        assert_eq!(
+            root.path.as_deref().map(comparable_path_str),
+            Some(comparable_path(&temp_dir))
+        );
+        assert_ne!(
+            root.path,
+            root.data.as_ref().unwrap()["cwd"]
+                .as_str()
+                .map(String::from)
+        );
 
-        let msg = message(result).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-        // Should show root's projects (child), not child's projects (grandchild) at top level
-        let projects = parsed["projects"].as_array().unwrap();
-        assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0]["name"], "child");
-        // And child should have grandchild as nested
-        let sub_projects = projects[0]["projects"].as_array().unwrap();
-        assert_eq!(sub_projects.len(), 1);
-        assert_eq!(sub_projects[0]["name"], "grandchild");
+        // without -r or -A, from child: child's projects only, named from it
+        let local = rows_of(&child);
+        assert_eq!(local, [".", "grandchild"]);
     }
 
-    #[test]
-    fn test_project_list_non_recursive_stays_local() {
-        // Running non-recursive from child should only show child's projects
-        let sandbox = meta_plugin::testing::isolated!();
-        let temp_dir = sandbox.work();
-        let child = temp_dir.join("child");
-        let grandchild = child.join("grandchild");
-        std::fs::create_dir_all(&grandchild).unwrap();
-
-        // Root .meta.yaml
-        std::fs::write(
-            temp_dir.join(".meta.yaml"),
-            r#"{"projects": {"child": {"repo": "git@github.com:org/child.git", "meta": true}}}"#,
-        )
-        .unwrap();
-
-        // Child .meta.yaml
-        std::fs::write(
-            child.join(".meta.yaml"),
-            r#"{"projects": {"grandchild": "git@github.com:org/grandchild.git"}}"#,
-        )
-        .unwrap();
-
-        let options = ExecuteOptions {
-            recursive: false,
-            json_output: true,
-            ..Default::default()
-        };
-        // Run from child directory (non-recursive)
-        let result = execute_command("project list", &[], &options, &[], &child);
-
-        let msg = message(result).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
-        // Should show child's projects only (grandchild)
-        let projects = parsed["projects"].as_array().unwrap();
-        assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0]["name"], "grandchild");
+    /// The `project` of each row of `meta --json project list` from `cwd`.
+    fn rows_of(cwd: &Path) -> Vec<String> {
+        rows(cwd, Options::default())
+            .into_iter()
+            .map(|(project, _)| project)
+            .collect()
     }
 
     #[test]
@@ -1457,54 +1367,23 @@ projects:
 "#,
         )
         .unwrap();
-
-        let options = ExecuteOptions::default();
-        let result = execute_command(
-            "project dependents",
-            &["loop_lib".to_string()],
-            &options,
-            &[],
-            &temp_dir,
-        );
-
-        let msg = message(result).unwrap();
-        assert_eq!(msg.trim(), "meta_cli");
-    }
-
-    #[test]
-    fn test_project_dependents_from_subdirectory() {
-        // T8: running from a subdirectory should climb to the nearest .meta.yaml ancestor
-        let sandbox = meta_plugin::testing::isolated!();
-        let temp_dir = sandbox.work();
-        std::fs::write(
-            temp_dir.join(".meta.yaml"),
-            r#"
-projects:
-  lib_a:
-    repo: git@github.com:org/lib_a.git
-    provides: [lib-a]
-  app_b:
-    repo: git@github.com:org/app_b.git
-    depends_on: [lib-a]
-"#,
-        )
-        .unwrap();
-
-        // Create a subdirectory to invoke from
-        let sub_dir = temp_dir.join("lib_a");
+        // from the root, and from a subdirectory: the nearest .meta.yaml
+        let sub_dir = temp_dir.join("loop_lib");
         std::fs::create_dir(&sub_dir).unwrap();
-
-        let options = ExecuteOptions::default();
-        let result = execute_command(
+        for cwd in [&temp_dir, &sub_dir] {
+            let asked = request("project dependents", &["loop_lib"], cwd, Options::default());
+            assert_eq!(dependents(&asked, "loop_lib").unwrap().text, "meta_cli");
+        }
+        let asked = request(
             "project dependents",
-            &["lib_a".to_string()],
-            &options,
-            &[],
-            &sub_dir,
+            &["other"],
+            &temp_dir,
+            Options::default(),
         );
-
-        let msg = message(result).unwrap();
-        assert_eq!(msg.trim(), "app_b");
+        assert_eq!(
+            dependents(&asked, "other").unwrap().text,
+            "No projects depend on 'other'."
+        );
     }
 
     #[test]
@@ -1527,59 +1406,24 @@ projects:
 "#,
         )
         .unwrap();
-
-        let options = ExecuteOptions {
-            json_output: true,
-            ..Default::default()
+        let json = Options {
+            json: true,
+            ..Options::default()
         };
-        let result = execute_command(
-            "project dependents",
-            &["a".to_string()],
-            &options,
-            &[],
-            &temp_dir,
-        );
-
-        let msg = message(result).unwrap();
-        let parsed: Vec<String> = serde_json::from_str(&msg).unwrap();
-        assert_eq!(parsed, vec!["b", "c"]);
-    }
-
-    #[test]
-    fn test_project_dependents_json_is_metas() {
-        let sandbox = meta_plugin::testing::isolated!();
-        let temp_dir = sandbox.work();
-        std::fs::write(
-            temp_dir.join(".meta.yaml"),
-            r#"
-projects:
-  a:
-    repo: git@github.com:org/a.git
-  b:
-    repo: git@github.com:org/b.git
-    depends_on: [a]
-"#,
-        )
-        .unwrap();
-
-        let json = ExecuteOptions {
-            json_output: true,
-            ..Default::default()
-        };
-        let args = ["a".to_string()];
-        let result = execute_command("project dependents", &args, &json, &[], &temp_dir);
-        let parsed: Vec<String> = serde_json::from_str(&message(result).unwrap()).unwrap();
-        assert_eq!(parsed, vec!["b"]);
+        let results = records(run(request("project dependents", &["a"], &temp_dir, json)));
+        let projects: Vec<_> = results
+            .iter()
+            .map(|r| r.project.as_deref().unwrap())
+            .collect();
+        assert_eq!(projects, ["b", "c"]);
         // meta's --json after the command is a usage error
-        let args = ["a".to_string(), "--json".to_string()];
-        let result = execute_command(
+        let after = run(request(
             "project dependents",
-            &args,
-            &ExecuteOptions::default(),
-            &[],
+            &["a", "--json"],
             &temp_dir,
-        );
-        assert!(matches!(result, CommandResult::Usage(_)));
+            Options::default(),
+        ));
+        assert!(matches!(after.answer, Answer::Error(e) if e.code == ErrorCode::Usage));
     }
 
     #[test]
@@ -1596,15 +1440,8 @@ projects:
             &["--depth", "1", "a"],
             &["a", "--bogus\x1b[2J"],
         ] {
-            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-            let result = execute_command(
-                "project dependents",
-                &args,
-                &ExecuteOptions::default(),
-                &[],
-                &temp_dir,
-            );
-            let msg = error(result).unwrap();
+            let asked = request("project dependents", args, &temp_dir, Options::default());
+            let msg = error(run(asked)).unwrap();
             assert!(msg.contains("unexpected argument"), "{args:?}: {msg}");
             assert!(!msg.contains('\x1b'), "{msg}");
         }
@@ -1612,27 +1449,21 @@ projects:
 
     #[test]
     fn test_project_dependents_unknown_project_error() {
-        // T13: querying a nonexistent project name should error, not say "no dependents"
+        // querying a nonexistent project name should error, not say "no dependents"
         let sandbox = meta_plugin::testing::Sandbox::new();
         let temp_dir = sandbox.work();
         std::fs::write(
             temp_dir.join(".meta.yaml"),
-            r#"
-projects:
-  a:
-    repo: git@github.com:org/a.git
-"#,
+            "projects:\n  a:\n    repo: git@github.com:org/a.git\n",
         )
         .unwrap();
-
-        let result = execute_command(
+        let asked = request(
             "project dependents",
-            &["nonexistent".to_string()],
-            &ExecuteOptions::default(),
-            &[],
+            &["nonexistent"],
             &temp_dir,
+            Options::default(),
         );
-        let msg = error(result).unwrap();
+        let msg = error(run(asked)).unwrap();
         assert!(msg.contains("Unknown project or alias"), "{msg}");
     }
 }

@@ -141,10 +141,13 @@ meta git pull && meta exec -- npm install && meta exec -- npm test
 
 ```bash
 # Each repo's commit
-meta --json exec -- git rev-parse HEAD | jq -j '.results[] | .directory + " " + (.stdout // "\n")'
+meta --json exec -- git rev-parse HEAD | jq -j '.results[] | .project + " " + .stdout'
 
 # Project names, one per line
-meta --json project list | jq -r '.projects[].name'
+meta --json project list | jq -r '.results[].data.name'
+
+# Only the paths, as meta selects the fields
+meta --fields project --json project list
 ```
 
 ### Exit Codes
@@ -159,7 +162,7 @@ meta exec -- npm test || echo "Tests failed in at least one repo"
 | Code | Meaning |
 |------|---------|
 | 0 | Done |
-| 1 | Something failed: a command in at least one repo (the summary names them), or meta itself (`Error: …` on stderr; with `--json`, a JSON error on stdout) |
+| 1 | Something failed: a command in at least one repo (the summary names them), or meta itself (`Error: …` on stderr; with `--json`, the Envelope's `error`) |
 | 2 | The command line is wrong: an unknown command, or an option or value clap rejects |
 | 141 | Its output was cut off: stdout closed early, as in `meta exec -- git log \| head` |
 | 128 + n | Stopped by signal n (Ctrl-C: 130), or a plugin was |
@@ -175,7 +178,7 @@ Output is coloured only on a terminal: never into a pipe, a file or `--json`. `N
 
 ## JSON Output Mode
 
-Get structured output for parsing and automation:
+Every command prints one JSON document with `--json` before it: the same envelope, whatever the command.
 
 ```bash
 meta --json git status
@@ -184,44 +187,58 @@ meta --json exec -- git rev-parse HEAD
 
 ### Output Format
 
+`meta --json exec -- git rev-parse HEAD` in a workspace of one repo:
+
 ```json
 {
   "success": true,
+  "command": "exec",
   "results": [
     {
-      "directory": "/work/ws/api",
-      "path": "./api",
-      "command": "git rev-parse HEAD",
-      "success": true,
+      "project": ".",
+      "path": "/work/ws",
+      "argv": ["git", "rev-parse", "HEAD"],
       "exit_code": 0,
       "stdout": "abc123...\n",
       "stderr": ""
+    },
+    {
+      "project": "api",
+      "path": "/work/ws/api",
+      "argv": ["git", "rev-parse", "HEAD"],
+      "exit_code": 0,
+      "stdout": "def456...\n",
+      "stderr": ""
     }
   ],
-  "summary": {
-    "total": 5,
-    "succeeded": 5,
-    "failed": 0,
-    "dry_run": false
-  },
-  "warnings": [],
-  "hint": null
+  "skipped": [],
+  "warnings": []
 }
 ```
 
-`path` is the repo as the human output names it, from the nearest workspace (with `-r` or `-A`, from the workspace root; `.` for that root), and `--include` takes it as is. `stdout` and `stderr` are always there, `""` for no output. `warnings` lists what the human output warns of (a project that isn't cloned); `hint` is the tip it ends with (an option of meta's typed after the command), or `null`. A command a signal ended has `"exit_code": null` and the signal's number in
-`"signal"` (`9` for `SIGKILL`); `signal` is left out otherwise.
+- `success` is false exactly when `error` is there: `{"code", "message", "hint"?, "rejected"?, "retry_after"?}`, with `code` one of `usage` (exit 2), `not-found`, `conflict`, `dirty`, `plugin-failed`, `tool-failed` (a command failed in at least one repo), `cancelled`, `auth`, `network`, `rate-limited` and `failed` (anything else). `hint` is the line to run instead, or the tip for an option of meta's typed after the command.
+- `results` has one row per repo a command ran in, or per record a command returned (a worktree set, a project of `project list`, a repo of `context`); a repo can have several. `project` names the repo by its path from the workspace root as `--include` takes it (`.` for the root; without `-r` or `-A`, from the nearest `.meta.yaml`); a row about the workspace as a whole has none. `path` is its folder, and `path_bytes` its bytes in base64 when they aren't UTF-8. A row that ran a program has `argv`, `exit_code` (null when a signal ended it: see `signal`; absent in a dry run, which runs nothing), `stdout` and `stderr`; a record has the command's own `data`. A row that failed has its own `error`.
+- `skipped` lists repos a command left out on purpose (`{"project", "reason", "quiet"}`); all of them skipped is still success. `warnings` lists what the text output warns of (`{"message", "project"?}`).
+- `message` is what a command that answers in words said (a preview, help).
 
-With `--json`, a command with a JSON result prints only JSON on stdout: one document, or the documents a plugin writes (help and `meta init claude` have no JSON form). A command line that can't be parsed is one JSON document on stdout too (`{"success": false, "error": "…"}`, exit 2) when `--json` is among meta's options before the command, its error carrying the line to run; without, it is text on stderr. After that, an error before any output is `{"success": false, "error": "…"}` (an unknown command exits 2, other errors 1); one after a report was printed goes to stderr, so the report stays the only document. A plugin's output that isn't JSON comes as `{"success": …, "output": "…"}`, and a plugin that fails without printing anything leaves `{"success": false, "error": "plugin … failed"}`. A loop report lists warnings in `warnings`; without `--json` they go to stderr, as `--verbose` lines always do.
+With `--json`, stdout holds the envelope alone: what a command or plugin prints as text goes to stderr. A command line that can't be parsed is an envelope too (code `usage`, exit 2) when `--json` is among meta's options before the command; without, it is text on stderr. `--fields a,b.c` keeps only those fields of each row (`b.c` reaches into a field, as `data.name`).
+
+### Streaming
+
+`--json-stream` prints the same envelope as the last line of a stream (`{"envelope": …}`), after one line per event as it happens (`{"event": …}`): `step` when a step of a plan ends (its row, as in `results`), `record` when a command sends one of its records early (meta-grep's matches, say), `warning` as it is found, and `progress` (`{"done", "total"?, "project"?, "message"?}`). Under `--json` the same records and warnings are in the envelope, in the order they came, and progress is left out; in text they are shown as they come (progress only on a terminal).
+
+```bash
+meta --json-stream exec -- make test | jq -c 'select(.event) | .event | {project, exit_code}'
+```
 
 ### Parsing with jq
 
 ```bash
-# Get only successful repos
-meta --json git status | jq '.results[] | select(.success) | .directory'
+# The repos where the command failed
+meta --json exec -- npm test | jq -r '.results[] | select(.error) | .project'
 
-# Count failures
-meta --json exec -- npm test | jq '.summary.failed'
+# How many failed
+meta --json exec -- npm test | jq '[.results[] | select(.error)] | length'
 ```
 
 ---
@@ -303,20 +320,26 @@ meta --strict --json git worktree list example --metadata-only
 meta --strict --json git worktree list --metadata-only
 ```
 
-Both print the usual `worktrees` list, with the one set:
+Both print the usual envelope, with one row for the set:
 
 ```json
 {
-  "worktrees": [{
-    "name": "example",
-    "root": "/work/harmony/.worktrees/example",
-    "has_meta_root": true,
-    "repos": [{
-      "alias": ".",
-      "path": "/work/harmony/.worktrees/example",
-      "source_path": "/work/harmony"
-    }]
-  }]
+  "success": true,
+  "command": "git worktree list",
+  "results": [{
+    "data": {
+      "name": "example",
+      "root": "/work/harmony/.worktrees/example",
+      "has_meta_root": true,
+      "repos": [{
+        "alias": ".",
+        "path": "/work/harmony/.worktrees/example",
+        "source_path": "/work/harmony"
+      }]
+    }
+  }],
+  "skipped": [],
+  "warnings": []
 }
 ```
 

@@ -2,22 +2,21 @@ use anyhow::Result;
 use chrono::Utc;
 use colored::*;
 use meta_plugin::display::escape;
-use meta_plugin::out;
 use meta_plugin::outln;
+use meta_plugin::{Ctx, ProjectResult, Request, Response};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use meta_core::set_record::{self as record, SetRecord};
 use meta_core::worktree::discover_worktree_members;
-use meta_git_lib::worktree::helpers::{resolve_worktree_root, Configs};
+use meta_core::worktree::Configs;
+
 use meta_git_lib::worktree::hooks::fire_post_prune;
 use meta_git_lib::worktree::lease;
 use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
 use meta_git_lib::worktree::ttl;
 use meta_git_lib::worktree::types::*;
 use meta_git_lib::worktree::workspace::Workspace;
-
-use meta_plugin::ExecutionMode;
 
 /// Helper to create a PruneEntry with consistent structure.
 fn create_prune_entry(
@@ -129,15 +128,23 @@ fn eligible(record: &SetRecord, now: i64) -> Result<Option<(String, Option<u64>)
     Ok(Some(("ttl_expired".to_string(), Some(age))))
 }
 
-pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Result<()> {
-    let dry_run = mode.is_preview();
+/// One record per set prune removed (with `--dry-run`, would remove) or
+/// kept, each with what became of it.
+pub(crate) fn handle_prune(ctx: &Ctx, request: &Request) -> Result<Response> {
+    let mut records = Vec::new();
+    let pruned = prune(ctx, request, &mut records);
+    crate::printed(ctx, records, pruned.err())
+}
+
+fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Result<()> {
+    let (dry_run, json) = (ctx.dry_run(), request.meta.json);
 
     // Hooks come from the owner: inside a set being pruned, its own config
     // goes with it
-    let cwd = std::env::current_dir()?;
-    let configs = Configs::find(&cwd)?;
+    let cwd = request.cwd.as_path();
+    let configs: Configs = super::workspace_configs(request)?;
     let workspace = Workspace::of(&configs.here)?;
-    let worktree_root = resolve_worktree_root(Some(&configs.owner), &cwd)?;
+    let worktree_root = meta_core::worktree::resolve_worktree_root(Some(&configs.owner), cwd)?;
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
     // A set whose lease is held is being created, or is an ephemeral set
     // whose run goes on: prune leaves it. One whose creator is gone without
@@ -246,7 +253,7 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
                 to_remove.push((Candidate::new(set, name, reason, age), Some(record)));
             }
             Ok(None) => {}
-            Err(e) => out::warn_or_bail(strict, format!("{e:#}"))?,
+            Err(e) => ctx.warn_or_bail(format!("{e:#}"))?,
         }
     }
 
@@ -361,6 +368,15 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
 
     once_each(&mut kept);
     report(&removed, &kept, dry_run, json)?;
+    let record = |entry: &PruneEntry, action| {
+        let pruned = Pruned {
+            entry: entry.clone(),
+            action,
+        };
+        ProjectResult::about_workspace(pruned).at(Path::new(&entry.path))
+    };
+    records.extend(removed.iter().map(|entry| record(entry, "removed")));
+    records.extend(kept.iter().map(|entry| record(entry, "kept")));
     // What was done is reported first: a failing hook doesn't undo it
     let hook = match attempted {
         true => fire_post_prune(&removed, Some(&configs.owner)),
@@ -369,12 +385,21 @@ pub(crate) fn handle_prune(mode: ExecutionMode, json: bool, strict: bool) -> Res
     // a removal that failed is the error; a failing hook then only warns
     if !failed.is_empty() {
         if let Err(e) = hook {
-            out::warn(format!("{e:#}"));
+            ctx.warn(format!("{e:#}"));
         }
         anyhow::bail!("Failed to prune: {}", escape(&failed.join(", ")));
     }
-    hook.or_else(|e| out::warn_or_bail(strict, format!("{e:#}")))?;
-    warn_kept(&kept, strict)
+    hook.or_else(|e| ctx.warn_or_bail(format!("{e:#}")))?;
+    warn_kept(&kept, ctx)
+}
+
+/// What prune did with a set, for `--json`.
+#[derive(serde::Serialize)]
+struct Pruned {
+    #[serde(flatten)]
+    entry: PruneEntry,
+    /// removed or kept (with `--dry-run`: what would be)
+    action: &'static str,
 }
 
 /// A set prune may remove: where it is, and why.
@@ -414,13 +439,8 @@ impl Candidate {
 
 /// Print what prune removed (or, previewing, would remove) and what it kept.
 fn report(removed: &[PruneEntry], kept: &[PruneEntry], dry_run: bool, json: bool) -> Result<()> {
+    // with --json the records say it
     if json {
-        let output = PruneOutput {
-            removed: removed.to_vec(),
-            kept: kept.to_vec(),
-            dry_run,
-        };
-        outln!("{}", serde_json::to_string_pretty(&output)?)?;
         return Ok(());
     }
     match (removed.len(), dry_run) {
@@ -500,12 +520,12 @@ fn print_kept(kept: &[PruneEntry]) -> Result<()> {
 }
 
 /// Kept worktrees are a warning, and an error in strict mode.
-fn warn_kept(kept: &[PruneEntry], strict: bool) -> Result<()> {
+fn warn_kept(kept: &[PruneEntry], ctx: &Ctx) -> Result<()> {
     if kept.is_empty() {
         return Ok(());
     }
     let names: Vec<_> = kept.iter().map(|e| escape(&e.name)).collect();
-    out::warn_or_bail(strict, format!("Kept worktrees: {}", names.join(", ")))
+    ctx.warn_or_bail(format!("Kept worktrees: {}", names.join(", ")))
 }
 
 #[cfg(test)]
@@ -533,7 +553,11 @@ mod tests {
             "",
             None,
         )];
-        let message = warn_kept(&kept, true).unwrap_err().to_string();
+        let strict = Ctx::new(meta_plugin::Meta {
+            strict: true,
+            ..Default::default()
+        });
+        let message = warn_kept(&kept, &strict).unwrap_err().to_string();
         assert!(
             !message.contains('\n') && !message.contains('\u{1b}'),
             "{message}"

@@ -7,7 +7,6 @@ mod clone_missing;
 mod clone_worker;
 mod commit;
 mod git_env;
-mod helpers;
 mod ssh;
 mod update;
 
@@ -15,16 +14,11 @@ mod commands;
 
 use indexmap::IndexMap;
 use log::debug;
+use meta_plugin::display::escape;
 use meta_plugin::{
-    has_help_token, CommandResult, PlannedCommand, PluginHelp, PluginInfo, PluginRequestOptions,
+    has_help_token, Ctx, Plan, PluginHelp, PluginInfo, ProjectResult, Request, Response, Step,
+    Warning,
 };
-use std::path::Path;
-
-use helpers::get_project_directories_with_fallback;
-
-/// meta's options that choose repos, which commands that find their repos
-/// themselves never take
-pub(crate) const FILTERS: [&str; 3] = ["--include", "--exclude", "--tag"];
 
 /// What meta-git says about itself: the commands it routes, and its help.
 pub fn plugin_info() -> PluginInfo {
@@ -97,90 +91,69 @@ pub fn plugin_info() -> PluginInfo {
     }
 }
 
-/// Execute a command for meta repositories.
-///
-/// The `projects` parameter is the list of project directories passed from meta_cli.
-/// When meta_cli runs with `--recursive`, it discovers nested .meta.yaml files and passes
-/// all project directories here. If `projects` is empty, we fall back to reading
-/// the local .meta.yaml file via `get_project_directories()`.
-pub fn execute_command(
-    command: &str,
-    args: &[String],
-    projects: &[String],
-    options: &PluginRequestOptions,
-    cwd: &Path,
-) -> CommandResult {
+/// Answer `request`: a command meta-git adapts, or any other git command,
+/// as typed, in each selected repo.
+pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Response> {
+    let command = request.command.as_str();
+    let args = &request.args;
     debug!("[meta_git_cli] Plugin invoked with command: '{command}'");
     debug!(
-        "[meta_git_cli] Options: parallel={}, mode={:?}, verbose={}, recursive={}, depth={:?}",
-        options.parallel,
-        options.mode(),
-        options.verbose,
-        options.recursive,
-        options.depth
+        "[meta_git_cli] {} projects, depth {:?}",
+        request.projects.len(),
+        request.depth
     );
-    debug!("[meta_git_cli] Projects from meta_cli: {projects:?}");
 
     let help_requested = has_help_token(command, args);
 
-    // Worktree commands (meta worktree * and meta git worktree *)
-    // Checked before --help intercept so worktree subcommands can handle their own --help via clap
-    if command.starts_with("worktree") || command.starts_with("git worktree") {
-        return commands::worktree::execute_worktree_command(command, args, options, cwd);
-    }
-
-    // These act on repos they find themselves, not on the selected ones
-    if matches!(command, "git update" | "git clone") && options.filtered() {
-        return CommandResult::Error(format!(
-            "meta {command} finds its repos itself (in the .meta.yaml files); it does not take --include/--exclude/--tag"
-        ));
+    // Worktree commands parse their own arguments, help included
+    if command.starts_with("git worktree") {
+        return commands::worktree::execute_worktree_command(ctx, request);
     }
 
     // Commands meta adapts parse their own arguments, help included
-    let meta = &options.meta_options;
-    let all_but_filters = meta.refusing(&FILTERS);
+    let meta = &request.meta_options;
     match command {
         "git clone" => {
             if let Some(line) = meta_depth_line(args, meta) {
-                return CommandResult::Usage(format!(
+                return Err(meta_plugin::usage(format!(
                     "--meta-depth is gone: how deep into nested meta repos is meta's own --depth, \
                      before the command with -r (after `git clone`, --depth is git's history \
                      depth), as in {line}"
-                ));
+                )));
             }
-            return match meta_plugin::parse_args(command, args, &all_but_filters) {
-                Ok(args) => finish(clone::execute_git_clone(args, options, cwd)),
-                Err(result) => result,
+            return match meta_plugin::parse_args(command, args, meta) {
+                Ok(args) => clone::execute_git_clone(args, ctx, request),
+                Err(response) => Ok(*response),
             };
         }
         "git update" => {
-            return match meta_plugin::parse_args(command, args, &all_but_filters) {
-                Ok(args) => finish(update::execute_git_update(args, options, cwd)),
-                Err(result) => result,
+            return match meta_plugin::parse_args(command, args, meta) {
+                Ok(args) => update::execute_git_update(args, ctx, request),
+                Err(response) => Ok(*response),
             };
         }
         "git clone-missing" => {
             return match meta_plugin::parse_args::<clone_missing::CloneMissingArgs>(
                 command, args, meta,
             ) {
-                Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
-                Err(result) => result,
+                Ok(args) => clone_missing::execute(args.into(), ctx, request),
+                Err(response) => Ok(*response),
             };
         }
         "git clone-prune" => {
             return match meta_plugin::parse_args::<clone_missing::ClonePruneArgs>(
                 command, args, meta,
             ) {
-                Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
-                Err(result) => result,
+                Ok(args) => clone_missing::execute(args.into(), ctx, request),
+                Err(response) => Ok(*response),
             };
         }
         "git clone-sync" => {
             return match meta_plugin::parse_args::<clone_missing::CloneSyncArgs>(
                 command, args, meta,
             ) {
-                Ok(args) => finish(clone_missing::execute(args.into(), projects, options, cwd)),
-                Err(result) => result,
+                Ok(args) => clone_missing::execute(args.into(), ctx, request),
+                Err(response) => Ok(*response),
             };
         }
         "git commit" => {
@@ -189,8 +162,8 @@ pub fn execute_command(
             let help = ["--help".to_string()];
             let args = if help_requested { &help[..] } else { args };
             return match meta_plugin::parse_args(command, args, meta) {
-                Ok(args) => finish(commit::execute_git_commit(args, projects, options, cwd)),
-                Err(result) => result,
+                Ok(args) => commit::execute_git_commit(args, request),
+                Err(response) => Ok(*response),
             };
         }
         _ => {}
@@ -198,11 +171,14 @@ pub fn execute_command(
 
     // meta answers the help of a command it runs as typed itself
     if help_requested {
-        return CommandResult::ShowHelp(None);
+        return Ok(Response::message(meta_plugin::help_text(
+            "git",
+            &plugin_info(),
+        )));
     }
 
     // Every other git command runs as typed in each repo
-    execute_raw_git_command(command, args, projects, options, cwd)
+    execute_raw_git_command(ctx, request)
 }
 
 /// For a clone typed with the `--meta-depth N` it no longer takes, the line
@@ -217,11 +193,7 @@ fn meta_depth_line(args: &[String], meta: &meta_plugin::args::MetaOptions) -> Op
         Some((_, depth)) => (depth.to_string(), 1),
         None => (args.get(at + 1)?.clone(), 2),
     };
-    let typed_depth = meta
-        .typed
-        .iter()
-        .any(|w| w == "--depth" || w.starts_with("--depth="));
-    if depth.parse::<usize>().is_err() || typed_depth {
+    if depth.parse::<usize>().is_err() || meta.typed_has("--depth") {
         return None;
     }
     let recursive = |a: &String| a == "-r" || a == "--recursive";
@@ -232,7 +204,8 @@ fn meta_depth_line(args: &[String], meta: &meta_plugin::args::MetaOptions) -> Op
         .map(|(_, a)| a.clone())
         .collect();
     meta_plugin::parse_args::<clone::CloneArgs>("git clone", &rest, meta).ok()?;
-    let already = meta.typed.iter().any(recursive);
+    // -r may be in a cluster: `-rv`
+    let already = meta.typed_has("--recursive");
     let line: Vec<String> = std::iter::once("meta".to_string())
         .chain(meta.typed.iter().cloned())
         .chain((!already).then(|| "-r".to_string()))
@@ -243,8 +216,28 @@ fn meta_depth_line(args: &[String], meta: &meta_plugin::args::MetaOptions) -> Op
     Some(meta_plugin::display::escape(&meta_plugin::display::display_command(&line)).into_owned())
 }
 
-fn finish(result: anyhow::Result<CommandResult>) -> CommandResult {
-    result.unwrap_or_else(Into::into)
+/// Records a command printed itself, for one that failed with `failure`
+/// after printing them: under `--json` the records, the failure among them
+/// (as a record of its own unless one of them is a failure), so the
+/// Envelope has both; in text, the failure, said as before.
+pub(crate) fn printed(
+    ctx: &Ctx,
+    mut records: Vec<ProjectResult>,
+    failure: Option<anyhow::Error>,
+) -> meta_plugin::Result<Response> {
+    let Some(failure) = failure else {
+        return Ok(Response::printed(records));
+    };
+    if !ctx.meta().json || records.is_empty() {
+        return Err(failure);
+    }
+    if !records.iter().any(ProjectResult::is_failure) {
+        records.push(ProjectResult {
+            error: Some(meta_plugin::envelope::info_of(&failure)),
+            ..ProjectResult::default()
+        });
+    }
+    Ok(Response::printed(records))
 }
 
 /// Check if a git command accesses remote repositories
@@ -254,130 +247,86 @@ fn is_remote_command(argv: &[String]) -> bool {
         .is_some_and(|subcommand| remote_commands.contains(&subcommand.as_str()))
 }
 
-/// Execute a raw git command across all repos (fallback for unrecognized subcommands)
-fn execute_raw_git_command(
-    command: &str,
-    args: &[String],
-    projects: &[String],
-    options: &PluginRequestOptions,
-    cwd: &Path,
-) -> CommandResult {
-    use meta_plugin::ExecutionPlan;
+/// Plan a raw git command in each selected repo (any git command meta-git
+/// doesn't adapt)
+fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Response> {
+    // The git argv: the command words (e.g. "git" or "git add") and the
+    // user's args exactly as given
+    let argv: Vec<String> = request
+        .command
+        .split_whitespace()
+        .map(str::to_string)
+        .chain(request.args.iter().cloned())
+        .collect();
+    // Set git-specific environment variables (pager, colors, prompts)
+    let git_env: std::collections::BTreeMap<String, String> =
+        git_env::git_env().into_iter().collect();
 
-    // Get project directories
-    let dirs = match get_project_directories_with_fallback(projects, cwd) {
-        Ok(d) => d,
-        Err(e) => return CommandResult::Error(format!("Failed to get project directories: {e:#}")),
-    };
     // A listed project that isn't cloned yet is named, not counted as a
     // failure: cloning it is `meta git clone-missing`'s (with --strict, an
     // error)
-    let (missing, dirs): (Vec<String>, Vec<String>) = dirs.into_iter().partition(|dir| {
-        matches!(
-            meta_core::gitdir::Checkout::of(Path::new(dir)),
-            meta_core::gitdir::Checkout::Missing
-        )
-    });
-    let mut warnings = Vec::new();
-    for dir in &missing {
-        let shown = Path::new(dir);
-        let shown = meta_plugin::display::escape_path(shown.strip_prefix(cwd).unwrap_or(shown));
-        let warning = format!("{shown} is not cloned; `meta git clone-missing` clones it");
-        if options.strict {
-            return CommandResult::Error(format!("{warning} (strict mode)"));
+    let mut steps = Vec::new();
+    for project in &request.projects {
+        if !project.present {
+            ctx.warn_or_bail(Warning::about(
+                &project.path,
+                format!(
+                    "{} is not cloned; `meta git clone-missing` clones it",
+                    escape(&project.path)
+                ),
+            ))?;
+            continue;
         }
-        // meta shows them, or lists them in its --json report
-        warnings.push(warning);
+        let mut step = Step::new(Some(&project.path), &project.abs, argv.clone());
+        step.env = git_env.clone();
+        steps.push(step);
     }
-    let plan = |commands, parallel, max_parallel, spawn_stagger_ms| {
-        CommandResult::FullPlan(Box::new(ExecutionPlan {
-            pre_commands: vec![],
-            commands,
-            post_commands: vec![],
-            parallel: Some(parallel),
+    let plan = |steps, parallel: Option<bool>, max_parallel, stagger_ms| {
+        Ok(Response::plan(Plan {
+            steps,
+            parallel,
             max_parallel,
-            spawn_stagger_ms,
-            warnings: warnings.clone(),
+            stagger_ms,
         }))
     };
 
-    // The git argv: the command words (e.g. "git" or "git add") and the
-    // user's args exactly as given
-    let argv: Vec<String> = command
-        .split_whitespace()
-        .map(str::to_string)
-        .chain(args.iter().cloned())
-        .collect();
-
-    // Set git-specific environment variables (pager, colors, prompts)
-    let git_env = Some(git_env::git_env());
-
-    let commands: Vec<PlannedCommand> = dirs
-        .into_iter()
-        .map(|dir| PlannedCommand {
-            dir,
-            argv: argv.clone(),
-            env: git_env.clone(),
-        })
-        .collect();
-
     // For remote commands running in parallel, establish SSH ControlMaster
-    // connections and inject GIT_SSH_COMMAND into each planned command. A
-    // preview connects nowhere.
-    if options.parallel && !options.mode().is_preview() && is_remote_command(&argv) {
-        let urls = meta_core::config::Workspace::find(cwd, None)
-            .ok()
-            .flatten()
-            .map(|workspace| ssh::ssh_urls(&workspace.projects))
-            .unwrap_or_default();
-
-        // HTTPS-only workspaces don't need SSH multiplexing
-        if urls.is_empty() {
-            return plan(commands, true, None, None);
+    // connections and inject GIT_SSH_COMMAND into each step. A preview
+    // connects nowhere.
+    if !request.meta.parallel() || ctx.dry_run() || !is_remote_command(&argv) {
+        return plan(steps, None, None, None);
+    }
+    let urls = ssh::ssh_urls(&request.projects);
+    // HTTPS-only workspaces don't need SSH multiplexing
+    if urls.is_empty() {
+        return plan(steps, None, None, None);
+    }
+    let (ssh_env, parallel_ok) = match ssh::establish_ssh_masters(&urls) {
+        ssh::SshMasters::OurSockets(dir) => (Some(ssh::git_ssh_command(&dir)), true),
+        ssh::SshMasters::UserManaged => (None, true),
+        ssh::SshMasters::Failed => {
+            log::debug!("SSH multiplexing could not be set up: running one repository at a time");
+            (None, false)
         }
-
-        let (ssh_env, parallel_ok) = match ssh::establish_ssh_masters(&urls) {
-            ssh::SshMasters::OurSockets(dir) => (Some(ssh::git_ssh_command(&dir)), true),
-            ssh::SshMasters::UserManaged => (None, true),
-            ssh::SshMasters::Failed => {
-                log::debug!(
-                    "SSH multiplexing could not be set up: running one repository at a time"
-                );
-                (None, false)
-            }
-        };
-
-        // Inject GIT_SSH_COMMAND into every planned command's env
-        let commands: Vec<PlannedCommand> = commands
-            .into_iter()
-            .map(|mut cmd| {
-                if let Some(ref ssh) = ssh_env {
-                    let env = cmd.env.get_or_insert_with(Default::default);
-                    env.insert("GIT_SSH_COMMAND".to_string(), ssh.clone());
-                }
-                cmd
-            })
-            .collect();
-
-        // SSH ControlMaster has a default MaxSessions limit of 10 (server-side).
-        const SSH_MAX_SESSIONS: usize = 10;
-
-        // Stagger spawns by 25ms to prevent SSH socket saturation.
-        const SSH_SPAWN_STAGGER_MS: u64 = 25;
-
-        if parallel_ok {
-            plan(
-                commands,
-                true,
-                Some(SSH_MAX_SESSIONS),
-                Some(SSH_SPAWN_STAGGER_MS),
-            )
-        } else {
-            // SSH setup failed — fall back to sequential
-            plan(commands, false, None, None)
+    };
+    if let Some(ssh) = &ssh_env {
+        for step in &mut steps {
+            step.env.insert("GIT_SSH_COMMAND".to_string(), ssh.clone());
         }
-    } else {
-        plan(commands, options.parallel, None, None)
+    }
+    // SSH ControlMaster has a default MaxSessions limit of 10 (server-side).
+    const SSH_MAX_SESSIONS: usize = 10;
+    // Stagger spawns by 25ms to prevent SSH socket saturation.
+    const SSH_SPAWN_STAGGER_MS: u64 = 25;
+    match parallel_ok {
+        true => plan(
+            steps,
+            Some(true),
+            Some(SSH_MAX_SESSIONS),
+            Some(SSH_SPAWN_STAGGER_MS),
+        ),
+        // SSH setup failed — fall back to sequential
+        false => plan(steps, Some(false), None, None),
     }
 }
 
@@ -390,7 +339,20 @@ mod tests {
         line.split_whitespace().map(str::to_string).collect()
     }
     use commit::parse_multi_commit_file;
-    use helpers::get_project_directories;
+    use meta_plugin::{Answer, Meta, Project};
+
+    /// `meta git <command> <args>` answered in `cwd`, with `projects`
+    fn answer(
+        command: &str,
+        args: &str,
+        cwd: &std::path::Path,
+        projects: Vec<Project>,
+    ) -> Response {
+        let mut request = Request::new(command, cwd);
+        request.args = argv(args);
+        request.projects = projects;
+        execute_command(&Ctx::new(Meta::default()), &request).unwrap()
+    }
 
     #[test]
     fn the_commands_meta_git_adapts_are_the_ones_it_routes_and_each_names_its_git_options() {
@@ -411,16 +373,9 @@ mod tests {
         assert_eq!(adapted, routed);
         let sandbox = Sandbox::new();
         for verb in adapted {
-            let options = PluginRequestOptions::default();
-            let result = execute_command(
-                &format!("git {verb}"),
-                &argv("--help"),
-                &[],
-                &options,
-                &sandbox.work(),
-            );
-            let help = match result {
-                CommandResult::Message(help) => help,
+            let response = answer(&format!("git {verb}"), "--help", &sandbox.work(), vec![]);
+            let help = match response.answer {
+                Answer::Message(help) => help,
                 _ => String::new(),
             };
             assert!(help.contains("\nGit options: "), "git {verb}: {help}");
@@ -428,24 +383,52 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_git_status_no_meta_file() {
+    fn a_raw_command_runs_in_each_selected_repo_and_names_one_not_cloned() {
         let sandbox = Sandbox::new();
-        let temp_dir = sandbox.work();
-        let options = PluginRequestOptions::default();
-
-        let result = execute_command("git status", &[], &[], &options, &temp_dir);
-
-        // Should succeed (returns a Plan, not an Error)
-        assert!(!matches!(result, CommandResult::Error(_)));
-    }
-
-    #[test]
-    fn test_unknown_command_falls_through_to_raw_git() {
-        // Unknown git subcommands should fall through to raw git execution
-        let options = PluginRequestOptions::default();
-        let result = execute_command("git unknown", &[], &[], &options, Path::new("."));
-        // Should return a plan (to run `git unknown` in all repos), not ShowHelp
-        assert!(matches!(result, CommandResult::FullPlan(_)));
+        let root = sandbox.work();
+        let project = |path: &str, present: bool| Project {
+            name: path.to_string(),
+            path: path.to_string(),
+            abs: root.join(path),
+            present,
+            ..Project::default()
+        };
+        // Unknown git subcommands fall through to raw git, as typed
+        let response = answer(
+            "git unknown",
+            "-x",
+            &root,
+            vec![project(".", true), project("gone", false)],
+        );
+        let steps = match response.answer {
+            Answer::Plan(plan) => plan.steps,
+            _ => Vec::new(),
+        };
+        let steps: Vec<_> = steps
+            .iter()
+            .map(|s| (s.project.as_deref(), s.argv.join(" ")))
+            .collect();
+        assert_eq!(steps, [(Some("."), "git unknown -x".to_string())]);
+        let ctx = Ctx::new(Meta::default());
+        let mut request = Request::new("git status", &root);
+        request.projects = vec![project("gone", false)];
+        let warned = ctx
+            .finish(execute_command(&ctx, &request).unwrap())
+            .warnings;
+        assert_eq!(warned.len(), 1);
+        assert!(
+            warned[0].message.contains("gone is not cloned"),
+            "{warned:?}"
+        );
+        // with --strict, an error
+        let strict = Ctx::new(Meta {
+            strict: true,
+            ..Meta::default()
+        });
+        assert!(execute_command(&strict, &request).is_err());
+        // no selection is no repo, never "find them yourself"
+        let response = answer("git status", "", &root, vec![]);
+        assert!(matches!(response.answer, Answer::Plan(plan) if plan.steps.is_empty()));
     }
 
     #[test]
@@ -593,103 +576,6 @@ the only commit message
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].0, "only_repo");
         assert_eq!(commits[0].1, "the only commit message");
-    }
-
-    // ============ get_project_directories Tests ============
-
-    #[test]
-    fn test_get_project_directories_no_meta_file() {
-        let sandbox = Sandbox::new();
-        let temp_dir = sandbox.work();
-
-        let dirs = get_project_directories(&temp_dir).unwrap();
-
-        // Should return just "." when no .meta.yaml file
-        assert_eq!(dirs, vec!["."]);
-    }
-
-    #[test]
-    fn test_get_project_directories_refuses_a_bad_meta_file() {
-        // A refused config is an error, not "just the root"
-        let sandbox = Sandbox::new();
-        let temp_dir = sandbox.work();
-        std::fs::write(
-            temp_dir.join(".meta.yaml"),
-            r#"{"projects": {"evil": {"repo": "u", "path": ".git/x"}}}"#,
-        )
-        .unwrap();
-
-        let err = get_project_directories(&temp_dir).unwrap_err();
-        assert!(format!("{err:#}").contains("leads into .git"), "{err:#}");
-    }
-
-    #[test]
-    fn test_get_project_directories_with_meta_file() {
-        let sandbox = Sandbox::new();
-        let temp_dir = sandbox.work();
-
-        // Create .meta.yaml file
-        let meta_content = r#"{"projects": {"alpha": "url1", "beta": "url2", "gamma": "url3"}}"#;
-        std::fs::write(temp_dir.join(".meta.yaml"), meta_content).unwrap();
-
-        let dirs = get_project_directories(&temp_dir).unwrap();
-
-        // Should return "." plus sorted project names
-        assert_eq!(dirs.len(), 4);
-        assert_eq!(dirs[0], ".");
-        assert_eq!(dirs[1], "alpha");
-        assert_eq!(dirs[2], "beta");
-        assert_eq!(dirs[3], "gamma");
-    }
-
-    #[test]
-    fn test_get_project_directories_sorted() {
-        let sandbox = Sandbox::new();
-        let temp_dir = sandbox.work();
-
-        // Create .meta.yaml file with unsorted projects
-        let meta_content = r#"{"projects": {"zebra": "url1", "alpha": "url2", "middle": "url3"}}"#;
-        std::fs::write(temp_dir.join(".meta.yaml"), meta_content).unwrap();
-
-        let dirs = get_project_directories(&temp_dir).unwrap();
-
-        // Projects should be sorted alphabetically
-        assert_eq!(dirs[1], "alpha");
-        assert_eq!(dirs[2], "middle");
-        assert_eq!(dirs[3], "zebra");
-    }
-
-    #[test]
-    fn test_get_project_directories_from_inside_a_project() {
-        let sandbox = Sandbox::new();
-        let temp_dir = sandbox.work();
-        let root = &temp_dir;
-        std::fs::write(
-            root.join(".meta.yaml"),
-            r#"{"projects": {"a": "u", "b": "u"}}"#,
-        )
-        .unwrap();
-        std::fs::create_dir(root.join("a")).unwrap();
-
-        // every repo the command runs in, not just the one cwd is in
-        let dirs = get_project_directories(&root.join("a")).unwrap();
-        let full = |path: &std::path::Path| path.to_string_lossy().into_owned();
-        assert_eq!(dirs, [full(root), ".".to_string(), full(&root.join("b"))]);
-    }
-
-    #[test]
-    fn test_get_project_directories_empty_projects() {
-        let sandbox = Sandbox::new();
-        let temp_dir = sandbox.work();
-
-        // Create .meta.yaml file with no projects
-        let meta_content = r#"{"projects": {}}"#;
-        std::fs::write(temp_dir.join(".meta.yaml"), meta_content).unwrap();
-
-        let dirs = get_project_directories(&temp_dir).unwrap();
-
-        // Should return just "."
-        assert_eq!(dirs, vec!["."]);
     }
 
     // ============ Remote Command Detection Tests ============

@@ -6,7 +6,7 @@ use meta_plugin::display::{escape, escape_path, program_output};
 use meta_plugin::{errln, out, outln};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
@@ -57,6 +57,38 @@ pub struct LoopConfig {
     /// commands run, or with `json_output` listed in the report
     #[serde(skip)]
     pub warnings: Vec<String>,
+    /// Told of each command as it ends (in parallel, from its thread)
+    #[serde(skip)]
+    pub on_done: OnDone,
+}
+
+/// A function told of each command as it ends.
+type Tell = dyn Fn(&CommandResult) + Send + Sync;
+
+/// What a caller is told as each command ends.
+#[derive(Clone, Default)]
+pub struct OnDone(Option<std::sync::Arc<Tell>>);
+
+impl OnDone {
+    pub fn call(f: impl Fn(&CommandResult) + Send + Sync + 'static) -> Self {
+        OnDone(Some(std::sync::Arc::new(f)))
+    }
+
+    fn tell(&self, result: &CommandResult) {
+        if let Some(f) = &self.0 {
+            f(result);
+        }
+    }
+}
+
+impl std::fmt::Debug for OnDone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "OnDone(..)"
+        } else {
+            "OnDone(none)"
+        })
+    }
 }
 
 /// meta, running commands through loop: when every command fails because
@@ -133,6 +165,9 @@ impl Outer {
 /// A command to execute in a specific directory
 #[derive(Debug, Clone)]
 pub struct DirCommand {
+    /// The project it runs for, by its path from the workspace root (the
+    /// Envelope names its row so)
+    pub project: Option<String>,
     pub dir: PathBuf,
     /// The program and its arguments, run as given: no shell parses them.
     pub argv: Vec<String>,
@@ -141,6 +176,22 @@ pub struct DirCommand {
     /// Why the command must not run here (its folder is no project the
     /// caller acts in, say): reported as a failed result, never run.
     pub refused: Option<String>,
+    /// The exit codes that are success (`[0]` for most programs)
+    pub ok_codes: Vec<i32>,
+}
+
+impl DirCommand {
+    /// `argv` in `dir`, with exit code 0 its only success.
+    pub fn new(dir: PathBuf, argv: Vec<String>) -> Self {
+        DirCommand {
+            project: None,
+            dir,
+            argv,
+            env: None,
+            refused: None,
+            ok_codes: vec![0],
+        }
+    }
 }
 
 impl Default for LoopConfig {
@@ -160,19 +211,26 @@ impl Default for LoopConfig {
             root_dir: None,
             outer: None,
             warnings: vec![],
+            on_done: OnDone::default(),
         }
     }
 }
 
 #[derive(Default)]
 pub struct CommandResult {
+    /// The project it ran for (see [`DirCommand::project`])
+    pub project: Option<String>,
     pub success: bool,
+    /// Whether it ran: false in a dry run, and when it couldn't start
+    pub ran: bool,
     /// None when a signal ended the command; -1 when it never started
     pub exit_code: Option<i32>,
     /// The signal that ended the command (unix)
     pub signal: Option<i32>,
     pub directory: PathBuf,
     pub command: String,
+    /// The program and arguments, aliases expanded
+    pub argv: Vec<String>,
     /// What the command wrote, as it wrote it (not necessarily UTF-8)
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -188,6 +246,12 @@ impl CommandResult {
             (None, None) => "no exit code".to_string(),
         }
     }
+}
+
+/// Whether a command that ended so succeeded: no signal, and an exit code
+/// among `ok_codes`.
+fn accepted(exit_code: Option<i32>, signal: Option<i32>, ok_codes: &[i32]) -> bool {
+    signal.is_none() && exit_code.is_some_and(|code| ok_codes.contains(&code))
 }
 
 /// The exit code and, on unix, the signal of a finished command.
@@ -451,7 +515,10 @@ fn build_command(
 
 fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
     CommandResult {
+        project: None,
         success: false,
+        ran: false,
+        argv: Vec::new(),
         exit_code: Some(-1),
         signal: None,
         directory: dir.to_path_buf(),
@@ -465,6 +532,7 @@ fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
 /// `why` as its error output, exit code 1, nothing run.
 fn refused_result(job: &DirCommand, why: &str) -> CommandResult {
     CommandResult {
+        project: job.project.clone(),
         exit_code: Some(1),
         ..failed_result(&job.dir, display_command(&job.argv), format!("{why}\n"))
     }
@@ -482,11 +550,21 @@ fn dry_run_line(dir: &Path, command: &str) -> String {
     format!("Would execute in {dir_display}:\n  {}", escape(command))
 }
 
-fn execute_command_in_directory(
+fn execute_command_in_directory(job: &DirCommand, config: &LoopConfig) -> Result<CommandResult> {
+    let result =
+        execute_in_directory(&job.dir, &job.argv, config, job.env.as_ref(), &job.ok_codes)?;
+    Ok(CommandResult {
+        project: job.project.clone(),
+        ..result
+    })
+}
+
+fn execute_in_directory(
     dir: &Path,
     argv: &[String],
     config: &LoopConfig,
     extra_env: Option<&HashMap<String, String>>,
+    ok_codes: &[i32],
 ) -> Result<CommandResult> {
     if !dir.exists() {
         outln!("\nNo directory found for {}", escape_path(dir))?;
@@ -528,6 +606,7 @@ fn execute_command_in_directory(
             exit_code: Some(0),
             directory: dir.to_path_buf(),
             command,
+            argv,
             ..Default::default()
         });
     }
@@ -563,11 +642,13 @@ fn execute_command_in_directory(
         Ok(status) => {
             let (exit_code, signal) = exit_of(status);
             CommandResult {
-                success: status.success(),
+                success: accepted(exit_code, signal, ok_codes),
+                ran: true,
                 exit_code,
                 signal,
                 directory: dir.to_path_buf(),
                 command,
+                argv,
                 // Sequential mode uses Stdio::inherit(), so no capture
                 ..Default::default()
             }
@@ -590,11 +671,19 @@ fn execute_command_in_directory(
 }
 
 /// Capturing version for parallel execution - captures stdout/stderr for display after completion
-fn execute_command_in_directory_capturing(
+fn execute_command_in_directory_capturing(job: &DirCommand, config: &LoopConfig) -> CommandResult {
+    CommandResult {
+        project: job.project.clone(),
+        ..capture_in_directory(&job.dir, &job.argv, config, job.env.as_ref(), &job.ok_codes)
+    }
+}
+
+fn capture_in_directory(
     dir: &Path,
     argv: &[String],
     config: &LoopConfig,
     extra_env: Option<&HashMap<String, String>>,
+    ok_codes: &[i32],
 ) -> CommandResult {
     if !dir.exists() {
         return CommandResult {
@@ -621,6 +710,7 @@ fn execute_command_in_directory_capturing(
             exit_code: Some(0),
             directory: dir.to_path_buf(),
             command,
+            argv,
             stdout,
             ..Default::default()
         };
@@ -642,11 +732,14 @@ fn execute_command_in_directory_capturing(
         Ok(output) => {
             let (exit_code, signal) = exit_of(output.status);
             CommandResult {
-                success: output.status.success(),
+                project: None,
+                success: accepted(exit_code, signal, ok_codes),
+                ran: true,
                 exit_code,
                 signal,
                 directory: dir.to_path_buf(),
                 command,
+                argv,
                 stdout: output.stdout,
                 stderr: output.stderr,
             }
@@ -705,63 +798,96 @@ pub fn expand_directories(directories: &[PathBuf], ignore: &[String]) -> Result<
 }
 
 /// Run the same command across multiple directories.
-pub fn run(config: &LoopConfig, argv: &[String]) -> Result<()> {
+pub fn run(config: &LoopConfig, argv: &[String]) -> Result<Outcome> {
     let commands: Vec<DirCommand> = config
         .directories
         .iter()
         .map(|dir| DirCommand {
-            dir: dir.clone(),
-            argv: argv.to_vec(),
             env: config.env.clone(),
-            refused: None,
+            ..DirCommand::new(dir.clone(), argv.to_vec())
         })
         .collect();
 
     run_commands(config, &commands)
 }
 
-/// JSON output structure for command results
-#[derive(Debug, Serialize, Deserialize)]
-pub struct JsonOutput {
-    pub success: bool,
-    pub results: Vec<JsonCommandResult>,
-    pub summary: JsonSummary,
-    /// What the human output warns of before the results
-    #[serde(default)]
-    pub warnings: Vec<String>,
-    /// The tip the human output ends with (an option of meta's typed
-    /// after the command), if any
-    #[serde(default)]
-    pub hint: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct JsonCommandResult {
-    pub directory: String,
-    /// The repo as the human output names it: its path from the workspace
-    /// (from its root with -r or -A; `.` for the root, `./api`), which
-    /// `--include` takes as is (an older meta left it out)
-    #[serde(default)]
-    pub path: String,
-    pub command: String,
-    pub success: bool,
-    /// null when a signal ended the command: see `signal`
-    pub exit_code: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub signal: Option<i32>,
-    /// What it wrote, `""` for nothing (an older meta left the key out)
-    #[serde(default)]
-    pub stdout: String,
-    #[serde(default)]
-    pub stderr: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct JsonSummary {
-    pub total: usize,
-    pub succeeded: usize,
-    pub failed: usize,
+/// How a run of commands went.
+pub struct Outcome {
+    /// One per command, in the order shown
+    pub results: Vec<CommandResult>,
+    /// The tip the text output ended with (an option of meta's typed
+    /// after the command, when every command rejected it)
+    pub tip: Option<String>,
+    /// Whether the commands were only shown (`--dry-run`)
     pub dry_run: bool,
+    /// The summary is a line of its own when output is silenced
+    silent: bool,
+}
+
+impl Outcome {
+    /// How many commands failed.
+    pub fn failed(&self) -> usize {
+        self.results.iter().filter(|r| !r.success).count()
+    }
+
+    /// Why the run failed, when a command did: `tool-failed`, with the tip.
+    pub fn error(&self) -> Option<meta_plugin::ErrorInfo> {
+        let failed = self.failed();
+        if failed == 0 {
+            return None;
+        }
+        let mut error = meta_plugin::ErrorInfo::new(
+            meta_plugin::ErrorCode::ToolFailed,
+            format!("{failed} of {} commands failed", self.results.len()),
+        );
+        error.hint = self.tip.clone();
+        Some(error)
+    }
+
+    /// The run's end for a caller that shows text: done, or the failure the
+    /// summary already named (said once more when output is silenced).
+    pub fn finish(&self) -> Result<()> {
+        match self.error() {
+            None => Ok(()),
+            Some(_) if self.silent => anyhow::bail!("At least one command failed"),
+            Some(_) => Err(meta_plugin::exit::ExitWith(1).into()),
+        }
+    }
+
+    /// Each command as a row of the Envelope.
+    pub fn rows(&self) -> Vec<meta_plugin::ProjectResult> {
+        self.results.iter().map(CommandResult::row).collect()
+    }
+}
+
+impl CommandResult {
+    /// This result as a row of the Envelope: a dry run's has no exit code,
+    /// a failure's `error` says how it ended.
+    pub fn row(&self) -> meta_plugin::ProjectResult {
+        let text = |bytes: &[u8]| Some(String::from_utf8_lossy(bytes).into_owned());
+        let error = (!self.success).then(|| {
+            let stderr = String::from_utf8_lossy(&self.stderr);
+            let message = match self.ran {
+                true => self.ending(),
+                false => stderr.trim_end().to_string(),
+            };
+            meta_plugin::ErrorInfo::new(meta_plugin::ErrorCode::ToolFailed, message)
+        });
+        meta_plugin::ProjectResult {
+            project: self.project.clone(),
+            argv: Some(match self.argv.is_empty() {
+                true => vec![self.command.clone()],
+                false => self.argv.clone(),
+            }),
+            exit_code: self.exit_code.filter(|_| self.ran),
+            signal: self.signal,
+            stdout: text(&self.stdout),
+            stderr: text(&self.stderr),
+            error,
+            ..meta_plugin::ProjectResult::default()
+        }
+        .at(&self.directory)
+    }
 }
 
 /// Spaces command starts at least `interval` apart.
@@ -836,13 +962,9 @@ fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Comm
                 }
                 let result = match &job.refused {
                     Some(why) => refused_result(job, why),
-                    None => execute_command_in_directory_capturing(
-                        &job.dir,
-                        &job.argv,
-                        config,
-                        job.env.as_ref(),
-                    ),
+                    None => execute_command_in_directory_capturing(job, config),
                 };
+                config.on_done.tell(&result);
                 // results are shown once all are done
                 if let Some(pb) = spinner {
                     pb.finish_and_clear();
@@ -874,49 +996,60 @@ fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Comm
 fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<CommandResult>> {
     commands
         .iter()
-        .map(|job| match (&job.refused, config.json_output) {
-            (Some(why), json) => {
-                if !json && !config.silent {
-                    outln!(
-                        "\n{}",
-                        format!(
-                            "✗ {}: {} (Exit code: 1)",
-                            display_name(&job.dir, config.root_dir.as_deref()),
-                            escape(why)
-                        )
-                        .red()
-                    )?;
-                }
-                Ok(refused_result(job, why))
-            }
-            (None, true) => Ok(execute_command_in_directory_capturing(
-                &job.dir,
-                &job.argv,
-                config,
-                job.env.as_ref(),
-            )),
-            (None, false) => {
-                execute_command_in_directory(&job.dir, &job.argv, config, job.env.as_ref())
-            }
+        .map(|job| -> Result<CommandResult> {
+            let result = run_one(config, job)?;
+            config.on_done.tell(&result);
+            Ok(result)
         })
         .collect()
 }
 
-/// Execute a list of commands (each with its own directory) and report how
-/// they went. This is the execution engine for meta and its plugins.
-pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> {
-    // on stderr, unless the JSON report lists them
-    if !config.json_output {
+/// One command, in turn: its output live unless it goes into JSON.
+fn run_one(config: &LoopConfig, job: &DirCommand) -> Result<CommandResult> {
+    match (&job.refused, config.json_output) {
+        (Some(why), json) => {
+            if !json && !config.silent {
+                outln!(
+                    "\n{}",
+                    format!(
+                        "✗ {}: {} (Exit code: 1)",
+                        display_name(&job.dir, config.root_dir.as_deref()),
+                        escape(why)
+                    )
+                    .red()
+                )?;
+            }
+            Ok(refused_result(job, why))
+        }
+        (None, true) => Ok(execute_command_in_directory_capturing(job, config)),
+        (None, false) => execute_command_in_directory(job, config),
+    }
+}
+
+/// Execute a list of commands (each with its own directory) and say how
+/// they went: in text, unless `json_output` (then the caller reports the
+/// [`Outcome`]). A failed command is part of the outcome, not an error.
+/// This is the execution engine for meta and its plugins.
+pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<Outcome> {
+    let text = !config.json_output;
+    // on stderr, unless the caller's report lists them
+    if text {
         for warning in &config.warnings {
             meta_plugin::out::warn(warning);
         }
     }
-    if commands.is_empty() && !config.json_output {
-        return Ok(());
+    let outcome = |results, tip| Outcome {
+        results,
+        tip,
+        dry_run: config.dry_run,
+        silent: config.silent,
+    };
+    if commands.is_empty() {
+        return Ok(outcome(Vec::new(), None));
     }
     let results = if config.parallel {
         let results = run_parallel(config, commands)?;
-        if !config.silent && !config.json_output {
+        if !config.silent && text {
             print_captured(config, &results)?;
         }
         results
@@ -936,97 +1069,69 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<()> 
         .filter(|(_, first)| commands.iter().all(|c| c.argv == first.argv))
         .and_then(|(outer, first)| outer.tip(&first.argv, &results));
 
-    if config.json_output {
-        let output = JsonOutput {
-            success: failed_count == 0,
-            summary: JsonSummary {
-                total,
-                succeeded: total - failed_count,
-                failed: failed_count,
-                dry_run: config.dry_run,
-            },
-            warnings: config.warnings.clone(),
-            hint: tip.clone(),
-            results: results
-                .into_iter()
-                .map(|r| JsonCommandResult {
-                    path: plain_display_name(&r.directory, config.root_dir.as_deref()),
-                    directory: r.directory.display().to_string(),
-                    command: r.command,
-                    success: r.success,
-                    exit_code: r.exit_code,
-                    signal: r.signal,
-                    stdout: String::from_utf8_lossy(&r.stdout).into_owned(),
-                    stderr: String::from_utf8_lossy(&r.stderr).into_owned(),
-                })
-                .collect(),
-        };
-        outln!("{}", serde_json::to_string_pretty(&output)?)?;
-    } else if !config.silent {
-        if config.dry_run {
-            outln!(
-                "\n{} Would run {} command(s) across {} directories",
-                "[DRY RUN]".cyan(),
-                total.to_string().yellow(),
-                total.to_string().yellow()
-            )?;
-        } else if failed_count == 0 {
-            outln!("{} commands complete", total.to_string().green())?;
-        } else {
-            outln!(
-                "\nSummary: {} {} out of {} commands failed",
-                "✗".red(),
-                failed_count.to_string().red(),
-                total
-            )?;
-            // Without a root the basename is ambiguous, so keep the full path
-            let name = |result: &CommandResult| match config.root_dir.as_deref() {
-                Some(root) => result_name(&result.directory, Some(root)),
-                None => escape_path(&result.directory),
-            };
-            let failures: Vec<&[CommandResult]> = match same_failure(&results) {
-                true => vec![results.as_slice()],
-                false => results
-                    .iter()
-                    .filter(|r| !r.success)
-                    .map(std::slice::from_ref)
-                    .collect(),
-            };
-            for failed in failures {
-                let Some(first) = failed.first() else {
-                    continue;
-                };
-                let names: Vec<String> = failed.iter().map(name).collect();
-                outln!(
-                    "\n{} {}: {} ({}) ",
-                    "✗".red(),
-                    names.join(", "),
-                    escape(&first.command),
-                    first.ending()
-                )?;
-            }
-            outln!()?;
-        }
+    if text && !config.silent {
+        print_summary(config, &results)?;
     }
-
-    if let Some(tip) = tip {
+    if let Some(tip) = tip.as_ref().filter(|_| text) {
         meta_plugin::out::flush()?;
         errln!(
             "{} {tip}",
             meta_plugin::out::label("tip:", |l| l.cyan().bold())
         );
     }
+    Ok(outcome(results, tip))
+}
 
-    // In a dry run only commands that cannot run (a missing directory, a
-    // broken alias) fail. The summary or the JSON said which; silenced,
-    // the error says it.
-    if failed_count > 0 {
-        if config.silent && !config.json_output {
-            anyhow::bail!("At least one command failed");
+/// The line after the commands: how many ran, or which failed and how. In
+/// a dry run only commands that cannot run (a missing directory, a broken
+/// alias) fail.
+fn print_summary(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
+    let total = results.len();
+    let failed_count = results.iter().filter(|r| !r.success).count();
+    if config.dry_run {
+        outln!(
+            "\n{} Would run {} command(s) across {} directories",
+            "[DRY RUN]".cyan(),
+            total.to_string().yellow(),
+            total.to_string().yellow()
+        )?;
+    } else if failed_count == 0 {
+        outln!("{} commands complete", total.to_string().green())?;
+    } else {
+        outln!(
+            "\nSummary: {} {} out of {} commands failed",
+            "✗".red(),
+            failed_count.to_string().red(),
+            total
+        )?;
+        // Without a root the basename is ambiguous, so keep the full path
+        let name = |result: &CommandResult| match config.root_dir.as_deref() {
+            Some(root) => result_name(&result.directory, Some(root)),
+            None => escape_path(&result.directory),
+        };
+        let failures: Vec<&[CommandResult]> = match same_failure(results) {
+            true => vec![results],
+            false => results
+                .iter()
+                .filter(|r| !r.success)
+                .map(std::slice::from_ref)
+                .collect(),
+        };
+        for failed in failures {
+            let Some(first) = failed.first() else {
+                continue;
+            };
+            let names: Vec<String> = failed.iter().map(name).collect();
+            outln!(
+                "\n{} {}: {} ({}) ",
+                "✗".red(),
+                names.join(", "),
+                escape(&first.command),
+                first.ending()
+            )?;
         }
-        return Err(meta_plugin::exit::ExitWith(1).into());
+        outln!()?;
     }
-
     Ok(())
 }
 

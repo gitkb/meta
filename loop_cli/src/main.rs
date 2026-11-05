@@ -47,7 +47,19 @@ struct Cli {
 }
 
 fn main() -> std::process::ExitCode {
-    meta_plugin::exit::run(run_loop)
+    meta_plugin::exit::run(|| {
+        let result = run_loop();
+        // a .looprc's JSON output reports a failure in the one envelope too
+        match result {
+            Err(e) if meta_plugin::out::json() && meta_plugin::exit::ending(&e).is_none() => {
+                let error = meta_plugin::envelope::info_of(&e);
+                let code = error.code.exit_code();
+                meta_plugin::Envelope::failed("loop", error).print(&[])?;
+                Err(meta_plugin::exit::ExitWith(code).into())
+            }
+            result => result,
+        }
+    })
 }
 
 fn run_loop() -> Result<()> {
@@ -79,7 +91,7 @@ fn run_loop() -> Result<()> {
         }
     };
     // a .looprc's JSON output, before anything is printed: no colour in it,
-    // errors as JSON
+    // errors in the envelope
     meta_plugin::out::set_json(config.json_output);
 
     if cli.command.is_empty() {
@@ -127,7 +139,21 @@ fn run_loop() -> Result<()> {
         "No directories left after exclusions"
     );
 
-    run(&config, &cli.command)?;
-
-    Ok(())
+    let outcome = run(&config, &cli.command)?;
+    if !config.json_output {
+        return outcome.finish();
+    }
+    let error = outcome.error();
+    let envelope = meta_plugin::Envelope {
+        success: error.is_none(),
+        command: "loop".to_string(),
+        results: outcome.rows(),
+        error,
+        ..meta_plugin::Envelope::default()
+    };
+    envelope.print(&[])?;
+    match envelope.success {
+        true => Ok(()),
+        false => Err(meta_plugin::exit::ExitWith(meta_plugin::exit::FAILURE).into()),
+    }
 }

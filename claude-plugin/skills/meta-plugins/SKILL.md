@@ -121,16 +121,16 @@ meta git status
   │
   ├─ Is there a file named meta-git? Yes
   │
-  ├─ Plugin receives: command="git", args=["status"], projects=[list]
+  ├─ Plugin receives: command="git", args=["status"], the selected projects
   │
-  ├─ Plugin returns: ExecutionPlan with commands per repo
+  ├─ Plugin returns: a Plan with a step per repo
   │
   └─ Meta executes plan via loop engine
 ```
 
 For commands with special handling (like `clone`), the plugin does the work directly instead of returning an execution plan.
 
-meta's own options (`-r`, `-A`, `--json`, `--dry-run`, `--include`, …) go before the command and reach a plugin in the request's `options`, never in `args` (`meta -r --json project list`). A plugin defines no option of meta's; it parses its arguments with `meta_plugin::parse_args` (feature `parse`) and refuses the rest with exit 2, so a meta option typed after its command gets the tip with the line that has it before (see `docs/plugin_development.md`).
+meta's own options (`-r`, `-A`, `--json`, `--dry-run`, `--include`, …) go before the command and reach a plugin resolved, never in `args` (`meta -r --json project list`): the selection as the request's projects, the rest as its `meta` options. A plugin defines no option of meta's; it parses its arguments with `meta_plugin::parse_args` (feature `parse`), so a meta option typed after its command gets the tip with the line that has it before (see `docs/plugin_development.md`). A plugin never prints JSON: meta prints one envelope for every command under `--json`.
 
 ## Why This Matters
 

@@ -3,12 +3,12 @@
 
 use crate::McpServer;
 use anyhow::{Context, Result};
-use loop_lib::JsonOutput;
 use meta_core::config::{self, ProjectInfo};
 use meta_core::dependency_graph::{self, ProjectDependencies};
 use meta_core::git::{git, RepoStatus};
 use meta_core::query::{Query, RepoState, WorkspaceState};
 use meta_plugin::display::escape;
+use meta_plugin::Envelope;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -662,25 +662,34 @@ impl McpServer {
             .output(&mut meta)
             .with_context(|| format!("Cannot run {}", escape(&what)))?;
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        match serde_json::from_str::<JsonOutput>(&stdout) {
-            Ok(json) => Ok(Reply {
-                is_error: all_failed(json.results.iter().map(|result| result.success)),
+        match serde_json::from_str::<Envelope>(&stdout) {
+            // meta failed before any project gave a result: its error
+            Ok(Envelope {
+                error: Some(error),
+                results,
+                ..
+            }) if results.is_empty() => anyhow::bail!(
+                "{} failed ({}): {}{}",
+                escape(&what),
+                output.status,
+                error.message,
+                error
+                    .hint
+                    .map(|hint| format!(" ({hint})"))
+                    .unwrap_or_default()
+            ),
+            Ok(envelope) => Ok(Reply {
+                is_error: all_failed(envelope.results.iter().map(|row| !row.is_failure())),
                 text: stdout,
             }),
             Err(_) if output.status.success() => Ok(stdout.into()),
-            Err(_) => {
-                // with --json, meta's error is JSON on stdout
-                let error = serde_json::from_str::<serde_json::Value>(&stdout)
-                    .ok()
-                    .and_then(|v| v.get("error")?.as_str().map(str::to_string));
-                anyhow::bail!(
-                    "{} failed ({}): {}{}",
-                    escape(&what),
-                    output.status,
-                    String::from_utf8_lossy(&output.stderr).trim(),
-                    error.unwrap_or(stdout)
-                )
-            }
+            Err(_) => anyhow::bail!(
+                "{} failed ({}): {}{}",
+                escape(&what),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim(),
+                stdout
+            ),
         }
     }
 

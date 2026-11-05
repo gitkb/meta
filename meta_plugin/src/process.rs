@@ -413,6 +413,28 @@ pub fn own() -> io::Result<()> {
     imp::own()
 }
 
+/// End this program the way a SIGTERM would (its children stopped first,
+/// see [`own`]) once its parent is gone: a plugin's call ends with the meta
+/// that made it, even one killed outright, so nothing it started runs on
+/// for nobody. On Windows the job meta put the plugin in ends it already.
+#[cfg(unix)]
+pub fn end_with_parent() {
+    let Some(parent) = rustix::process::getppid() else {
+        return;
+    };
+    let watch = std::thread::Builder::new()
+        .name("parent-watch".to_string())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            if rustix::process::getppid() != Some(parent) {
+                let me = rustix::process::getpid();
+                let _ = rustix::process::kill_process(me, rustix::process::Signal::TERM);
+                return;
+            }
+        });
+    drop(watch);
+}
+
 #[cfg(unix)]
 mod imp {
     use rustix::process::{Pid, Signal};

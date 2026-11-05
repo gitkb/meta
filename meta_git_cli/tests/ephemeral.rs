@@ -4,6 +4,7 @@
 
 // Unix only: a Ctrl-C to meta's process group
 #![cfg(unix)]
+#![expect(clippy::unwrap_used, reason = "test helpers: a panic is a failed test")]
 
 use meta_plugin::testing::Sandbox;
 use std::os::unix::process::CommandExt;
@@ -22,6 +23,15 @@ fn wait_for(what: &str, done: impl Fn() -> bool) {
 
 #[test]
 fn a_cancelled_ephemeral_run_leaves_no_set_and_no_process() {
+    // Ctrl-C: SIGINT to meta's process group, as a terminal sends it
+    ended_by(|meta| rustix::process::kill_process_group(meta, rustix::process::Signal::INT));
+    // meta killed outright, alone: what it started ends with it
+    ended_by(|meta| rustix::process::kill_process(meta, rustix::process::Signal::KILL));
+}
+
+/// An ephemeral run of a command that would go on for ten minutes, ended
+/// by `stop` (given meta's pid, which leads its own process group).
+fn ended_by(stop: impl Fn(rustix::process::Pid) -> rustix::io::Result<()>) {
     let sandbox = Sandbox::new();
     let ws = sandbox
         .workspace(&sandbox.work().join("ws"))
@@ -42,7 +52,7 @@ fn a_cancelled_ephemeral_run_leaves_no_set_and_no_process() {
             "--",
             "sh",
             "-c",
-            r#"echo $$ > "$0.$(basename "$PWD")"; exec sleep 30"#,
+            r#"echo $$ > "$0.$(basename "$PWD")"; exec sleep 600"#,
         ])
         .arg(sandbox.work().join("started"))
         .current_dir(&ws)
@@ -65,9 +75,7 @@ fn a_cancelled_ephemeral_run_leaves_no_set_and_no_process() {
         .unwrap();
     let pid = rustix::process::Pid::from_raw(pid).unwrap();
 
-    // Ctrl-C: SIGINT to meta's process group, as a terminal sends it
-    let group = rustix::process::Pid::from_child(&run);
-    rustix::process::kill_process_group(group, rustix::process::Signal::INT).unwrap();
+    stop(rustix::process::Pid::from_child(&run)).unwrap();
     run.wait().unwrap();
 
     wait_for("the set's removal", || !set.exists());

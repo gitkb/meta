@@ -209,6 +209,9 @@ fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
             "cannot pass signals on to the programs this plugin starts: {e}"
         ));
     }
+    // a plugin's call ends with its meta
+    #[cfg(all(unix, feature = "process"))]
+    crate::process::end_with_parent();
     let var = |name: &str| {
         std::env::var_os(name)
             .with_context(|| format!("{name} is not set: meta starts plugins with it"))

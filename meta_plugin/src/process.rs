@@ -231,6 +231,36 @@ impl Owned {
         }
     }
 
+    /// Wait for the child, reading its piped stderr to its end and keeping
+    /// only the last `keep` bytes of it (for saying why it failed): a child
+    /// that writes much is never stopped for it, and never holds more than
+    /// `keep` in memory. Its other pipes are not read.
+    pub fn stderr_tail(mut self, keep: usize) -> io::Result<(ExitStatus, Vec<u8>)> {
+        use std::io::Read;
+        let mut tail = std::collections::VecDeque::with_capacity(keep);
+        if let Some(mut pipe) = self.child.stderr.take() {
+            let mut chunk = [0_u8; 8192];
+            loop {
+                let n = match pipe.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        let _ = self.child.kill();
+                        let _ = self.wait();
+                        return Err(e);
+                    }
+                };
+                tail.extend(chunk.iter().take(n));
+                while tail.len() > keep {
+                    tail.pop_front();
+                }
+            }
+        }
+        let status = self.wait()?;
+        Ok((status, tail.into_iter().collect()))
+    }
+
     /// Write `input` to the child's piped stdin and close it, while reading
     /// its piped stdout and stderr to their end, then wait for it, as
     /// [`Child::wait_with_output`] does: neither side can block the other on

@@ -18,6 +18,10 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+/// How much of a silenced command's stderr is kept to say why it failed:
+/// its end, the last 64 KiB.
+const SILENT_TAIL: usize = 64 << 10;
+
 /// A write to command-output stdout failed (meta's one stdout error).
 pub use meta_plugin::out::StdoutError;
 
@@ -653,13 +657,14 @@ fn execute_in_directory(
         meta_plugin::out::flush()?;
     }
 
-    // Live, unless silenced: then only its stderr is kept, to say why it
-    // failed
+    // Live, unless silenced: then only the end of its stderr is kept, to say
+    // why it failed
     let ran = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
         let started = match config.silent {
+            // never stopped for what it writes: only its stderr's end is
+            // kept, as it ran to its end on stdout's /dev/null before
             true => meta_plugin::process::spawn(cmd.stdout(Stdio::null()).stderr(Stdio::piped()))
-                .and_then(|child| child.exchange(&[]))
-                .map(|output| (output.status, output.stderr)),
+                .and_then(|child| child.stderr_tail(SILENT_TAIL)),
             false => meta_plugin::process::status(&mut cmd).map(|status| (status, Vec::new())),
         };
         started.map_err(|e| match TooMuchOutput::of(&e) {

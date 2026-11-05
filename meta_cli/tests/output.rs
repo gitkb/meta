@@ -191,3 +191,43 @@ fn a_closed_stdout_ends_meta_promptly_with_an_endless_command() {
         assert_eq!(status.code(), Some(141), "{mode:?}: {stderr}");
     }
 }
+
+/// A silenced command (`--silent`, one at a time) is never stopped for what
+/// it writes, as before meta kept its stderr: it runs to its end, and only
+/// the end of its stderr is kept to say why it failed.
+#[test]
+fn a_silenced_command_runs_to_its_end_however_much_it_writes() {
+    let sandbox = Sandbox::new();
+    let root = workspace(&sandbox);
+    let chatty = r#"head -c 17000000 /dev/zero | tr '\0' x >&2; echo; echo "last-$(basename "$PWD")" >&2; touch finished; exit 1"#;
+    let out = meta(
+        &sandbox,
+        &root,
+        &[
+            "--silent",
+            "--sequential",
+            "-i",
+            "a,b",
+            "exec",
+            "--",
+            "sh",
+            "-c",
+            chatty,
+        ],
+    )
+    .output()
+    .unwrap();
+    assert!(!out.status.success());
+    let text = String::from_utf8_lossy(&out.stderr);
+    for repo in ["a", "b"] {
+        assert!(
+            root.join(repo).join("finished").exists(),
+            "{repo} was stopped"
+        );
+        assert!(
+            text.contains(&format!("last-{repo}")),
+            "{repo}'s end is shown"
+        );
+    }
+    assert!(!text.contains("16 MiB"), "{}", text.len());
+}

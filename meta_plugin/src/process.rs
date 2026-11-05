@@ -86,7 +86,9 @@ pub struct Owned {
     /// Off the list: waited for (its pid may now be another child's), or
     /// never on it ([`spawn_finishing`])
     waited: bool,
-    /// Its process group or job, when started through [`spawn_group`]
+    /// Its process group or job: always when started through
+    /// [`spawn_group`]; on Unix also when it got a group of its own anyway
+    /// (no terminal to share)
     group: Option<imp::Group>,
 }
 
@@ -152,7 +154,8 @@ pub fn status(command: &mut Command) -> io::Result<ExitStatus> {
 }
 
 /// Run `command` to completion capturing its output, as [`Command::output`]
-/// does, with stdin from nothing.
+/// does, with stdin from nothing; output past [`CAPTURE_LIMIT`] stops it
+/// (see [`Owned::exchange`]).
 pub fn output(command: &mut Command) -> io::Result<Output> {
     use std::process::Stdio;
     command
@@ -200,7 +203,7 @@ impl Owned {
 
     /// Whether anything is left of the child's process group or job: the
     /// child itself, or anything it started that is still running. A child
-    /// not started through [`spawn_group`] has no group of its own: `false`.
+    /// with no group of its own (see [`spawn`]): `false`.
     pub fn group_alive(&mut self) -> bool {
         match &mut self.group {
             Some(group) => imp::group_alive(group, &mut self.child),
@@ -210,7 +213,8 @@ impl Owned {
 
     /// Ask the child and everything in its process group to stop (SIGTERM),
     /// or kill them (`kill`). On Windows the whole job is killed either way.
-    /// A child not started through [`spawn_group`] is killed alone.
+    /// A child with no group of its own (one sharing this program's, or not
+    /// started through [`spawn_group`] on Windows) is killed alone.
     pub fn stop(&mut self, kill: bool) {
         match &mut self.group {
             Some(group) => imp::stop_group(group, &mut self.child, kill),
@@ -226,12 +230,23 @@ impl Owned {
     /// a full pipe. A child that ends without reading all its input is no
     /// error; its exit status says how it went. Whatever goes wrong, the
     /// child is waited for (killed first if its output can't be read).
+    ///
+    /// What it writes is kept up to [`CAPTURE_LIMIT`] bytes, stdout and
+    /// stderr together. One that writes more is stopped (killed, with its
+    /// process group when it leads one) and the result is a
+    /// [`TooMuchOutput`] error: nothing of its output is kept, so no caller
+    /// shows part of it as if it were all.
     pub fn exchange(mut self, input: &[u8]) -> io::Result<Output> {
         use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::mpsc::{channel, Sender};
         use std::thread::{Builder, ScopedJoinHandle};
-        fn read_all(mut pipe: impl Read) -> io::Result<Vec<u8>> {
-            let mut bytes = Vec::new();
-            pipe.read_to_end(&mut bytes).map(|_| bytes)
+        /// Tells the waiting thread a reader ended, however it ended.
+        struct Ended(Sender<()>);
+        impl Drop for Ended {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
         }
         fn joined<T>(thread: ScopedJoinHandle<'_, io::Result<T>>) -> io::Result<T> {
             thread
@@ -239,16 +254,59 @@ impl Owned {
                 .unwrap_or_else(|_| Err(io::Error::other("a pipe's thread panicked")))
         }
         let stdin = self.child.stdin.take();
-        let stdout = self.child.stdout.take();
-        let stderr = self.child.stderr.take();
-        let child = &mut self.child;
+        let pipes = [
+            self.child
+                .stdout
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+            self.child
+                .stderr
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        ];
+        let kept = AtomicUsize::new(0);
+        let over = AtomicBool::new(false);
+        let (ended, readers_ended) = channel();
+        // Read `pipe` to its end, or until the child's output passed the
+        // limit (then the pipe is let go: a child still writing to it ends)
+        let read = |mut pipe: Box<dyn Read + Send>, _ended: Ended| -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            let mut chunk = vec![0u8; 64 * 1024];
+            while !over.load(Ordering::Acquire) {
+                let n = match pipe.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e),
+                };
+                if kept.fetch_add(n, Ordering::AcqRel) + n > CAPTURE_LIMIT {
+                    over.store(true, Ordering::Release);
+                    break;
+                }
+                bytes.extend_from_slice(chunk.get(..n).unwrap_or_default());
+            }
+            Ok(bytes)
+        };
         let served: io::Result<_> = std::thread::scope(|scope| {
-            // a pipe that can't be served is let go by killing the child, so
-            // nothing waits on it
-            let mut kill = |e: io::Error| {
-                let _ = child.kill();
-                e
-            };
+            let mut started = Vec::new();
+            for pipe in pipes {
+                let thread = pipe
+                    .map(|pipe| {
+                        let ended = Ended(ended.clone());
+                        Builder::new().spawn_scoped(scope, move || read(pipe, ended))
+                    })
+                    .transpose();
+                match thread {
+                    Ok(thread) => started.push(thread),
+                    // a pipe that can't be served is let go by killing the
+                    // child, so nothing waits on it
+                    Err(e) => {
+                        self.stop(true);
+                        return Err(e);
+                    }
+                }
+            }
+            drop(ended);
             // dropped once written: the child reads its end
             let sent = stdin
                 .map(|mut pipe| {
@@ -257,18 +315,40 @@ impl Owned {
                         sent => sent,
                     })
                 })
-                .transpose()
-                .map_err(&mut kill)?;
-            let stderr = stderr
-                .map(|pipe| Builder::new().spawn_scoped(scope, move || read_all(pipe)))
-                .transpose()
-                .map_err(&mut kill)?;
-            let stdout = stdout.map(read_all).transpose().map_err(&mut kill)?;
-            let stderr = stderr.map(joined).transpose().map_err(&mut kill)?;
+                .transpose();
+            let sent = match sent {
+                Ok(sent) => sent,
+                Err(e) => {
+                    self.stop(true);
+                    return Err(e);
+                }
+            };
+            // each reader says when it ends; one past the limit has the
+            // child stopped, so the other's pipe ends too
+            while readers_ended.recv().is_ok() {
+                if over.load(Ordering::Acquire) {
+                    self.stop(true);
+                }
+            }
+            let mut output = started.into_iter().map(|thread| thread.map(joined));
+            let stdout = output.next().flatten().transpose();
+            let stderr = output.next().flatten().transpose();
+            let (stdout, stderr) = match (stdout, stderr) {
+                (Ok(stdout), Ok(stderr)) => (stdout, stderr),
+                (Err(e), _) | (_, Err(e)) => {
+                    self.stop(true);
+                    return Err(e);
+                }
+            };
             sent.map(joined).transpose()?;
             Ok((stdout.unwrap_or_default(), stderr.unwrap_or_default()))
         });
         let status = self.wait()?;
+        if over.load(Ordering::Acquire) {
+            return Err(io::Error::other(TooMuchOutput {
+                limit: CAPTURE_LIMIT,
+            }));
+        }
         let (stdout, stderr) = served?;
         Ok(Output {
             status,
@@ -277,6 +357,48 @@ impl Owned {
         })
     }
 }
+
+/// The most output, stdout and stderr together, kept of one program whose
+/// output is captured ([`Owned::exchange`], [`output`]): 16 MiB.
+///
+/// Captured output is held in memory until the program ends, to be shown
+/// after it, put in a JSON document or parsed, so without a bound one
+/// program that never stops writing (`meta exec -- yes`) fills the
+/// machine's memory. Commands run at once each hold their own (one per CPU
+/// in parallel mode), so the bound is per program and modest: 16 MiB is
+/// some 200,000 lines of text, more than anyone reads in a summary or an
+/// agent in a JSON row, and a 32-way parallel run stays near half a GiB.
+/// Output meta shows live (`--sequential` in text) is never captured, so
+/// it has no limit.
+pub const CAPTURE_LIMIT: usize = 16 << 20;
+
+/// A program whose output is captured wrote more than its limit
+/// ([`CAPTURE_LIMIT`]): it was stopped, and its output dropped. An
+/// [`io::Error`] carries it ([`TooMuchOutput::of`] finds it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TooMuchOutput {
+    /// The limit it passed, in bytes
+    pub limit: usize,
+}
+
+impl TooMuchOutput {
+    /// The limit `error` says a program passed, if that is what it says.
+    pub fn of(error: &io::Error) -> Option<TooMuchOutput> {
+        error.get_ref()?.downcast_ref().copied()
+    }
+}
+
+impl std::fmt::Display for TooMuchOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "its output passed {} MiB, the most meta keeps of one program's, so meta stopped it",
+            self.limit >> 20
+        )
+    }
+}
+
+impl std::error::Error for TooMuchOutput {}
 
 /// Make this program the owner of its children's signals (see the module
 /// documentation). Call it once, first thing in `main`.
@@ -381,8 +503,7 @@ mod imp {
     }
 
     /// Start `command`, in a process group of its own when there is no
-    /// terminal to share or `grouped` asks for one; the group is returned
-    /// only when asked for.
+    /// terminal to share or `grouped` asks for one; that group is returned.
     pub(super) fn spawn(
         command: &mut Command,
         grouped: bool,
@@ -409,7 +530,7 @@ mod imp {
         // held from the check above to here: a signal that stops this
         // program either came first or sees the child
         drop(children);
-        Ok((child, grouped.then_some(pid)))
+        Ok((child, own_group.then_some(pid)))
     }
 
     /// Start `command` in a process group of its own, off the lists: no

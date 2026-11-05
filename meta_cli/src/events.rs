@@ -23,13 +23,14 @@ pub enum Show {
     Stream,
 }
 
-/// Show `event` as `show` says.
-pub fn show(show: Show, event: &Event) {
+/// Show `event` as `show` says. A closed stdout is an error only for the
+/// stream: text that can't be shown is no reason to stop.
+pub fn show(show: Show, event: &Event) -> Result<(), meta_plugin::out::StdoutError> {
     match show {
         Show::Json => {}
         Show::Stream => {
             let line = serde_json::json!({ "event": event });
-            let _ = meta_plugin::out::document(&line.to_string());
+            return meta_plugin::out::document(&line.to_string());
         }
         Show::Text => match event {
             Event::Record(record) => {
@@ -48,6 +49,7 @@ pub fn show(show: Show, event: &Event) {
             Event::Step(_) => {}
         },
     }
+    Ok(())
 }
 
 /// What a plugin's events added to its outcome.
@@ -177,7 +179,8 @@ fn lines(pending: &mut Vec<u8>, received: &mut Received, how: Show) {
                 received.problem = Some("it sent a step event, which is meta's own".to_string())
             }
             Ok(event) => {
-                show(how, &event);
+                // the plugin's events keep being read: it waits on them
+                let _ = show(how, &event);
                 match event {
                     Event::Record(record) => received.records.push(record),
                     Event::Warning(warning) => received.warnings.push(warning),

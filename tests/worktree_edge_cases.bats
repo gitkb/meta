@@ -2249,3 +2249,24 @@ J
     python3 "$BATS_TEST_DIRNAME/helpers/hangup_stubborn.py" "$META_BIN" "$TEST_DIR"
     [ "$(cat "$TEST_DIR/result")" = "$(printf 'ended\nstubborn ended')" ]
 }
+
+@test "a copy of a workspace never acts on the original through its set's owner file" {
+    "$META_BIN" git worktree create t --repo backend --no-deps
+    COPY="$(cd "$(mktemp -d)" && pwd -P)/wscopy"
+    cp -a "$TEST_DIR" "$COPY"
+    cd "$COPY/.worktrees/t/backend"
+    run "$META_BIN" --primary exec -- touch ran
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"owner file of worktree set"*"was made for"* ]]
+    [ ! -e "$TEST_DIR/backend/ran" ]
+    [ ! -e "$TEST_DIR/ran" ]
+    run "$META_BIN" exec -- touch ran
+    [ "$status" -ne 0 ]
+    [ ! -e "$TEST_DIR/backend/ran" ]
+    [ ! -e "$TEST_DIR/.worktrees/t/backend/ran" ]
+    # the original's own set is untouched and works
+    cd "$TEST_DIR/.worktrees/t/backend"
+    run "$META_BIN" --primary exec -- pwd
+    [ "$status" -eq 0 ]
+    rm -rf "$COPY"
+}

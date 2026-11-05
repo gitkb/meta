@@ -47,9 +47,27 @@ pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>>
     Ok(None)
 }
 
-/// The workspace the set at `set_dir` was made from, as its owner file says.
+/// The workspace the set at `set_dir` was made from, as its owner file
+/// says: only while the file is the one made for this very folder. One made
+/// for another (copied, with a copy of the workspace, or moved) is refused:
+/// meta never acts on another workspace through it.
 fn set_origin(set_dir: &Path) -> Result<Option<PathBuf>> {
-    Ok(meta_plugin::sets::owner(set_dir)?.map(|owner| owner.workspace))
+    let Some(owner) = meta_plugin::sets::owner(set_dir)? else {
+        return Ok(None);
+    };
+    let here = set_dir
+        .canonicalize()
+        .unwrap_or_else(|_| set_dir.to_path_buf());
+    if owner.set != here {
+        anyhow::bail!(
+            "the owner file of worktree set {} was made for {}: a copy of a workspace, or a \
+             moved one? Run meta from the workspace's directory, or remove the set and create \
+             it again",
+            escape_path(set_dir),
+            escape_path(&owner.set)
+        );
+    }
+    Ok(Some(owner.workspace))
 }
 
 /// The config that names the members of the set at `set_dir`: the set's own

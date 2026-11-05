@@ -43,6 +43,10 @@ pub struct Owner {
     /// The folder of the workspace config the set was made from
     #[serde(with = "crate::wire_path")]
     pub workspace: PathBuf,
+    /// The set's own folder, resolved, when it was made: a file beside
+    /// another folder (a copy of the workspace) is not that set's
+    #[serde(with = "crate::wire_path")]
+    pub set: PathBuf,
 }
 
 /// A set name is one folder name of letters, digits, `-` and `_`.
@@ -102,6 +106,9 @@ pub fn create(set: &Path, provider: &str, workspace: &Path) -> Result<()> {
     let owner = Owner {
         provider: provider.to_string(),
         workspace: workspace.to_path_buf(),
+        set: set
+            .canonicalize()
+            .with_context(|| format!("Cannot resolve {}", escape_path(set)))?,
     };
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(format!(".tmp.{}", std::process::id()));

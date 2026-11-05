@@ -1241,6 +1241,34 @@ EOF
     [[ "$output" == *'"alias": "vendor/nested-lib"'* ]]
 }
 
+@test "a checkout in a set is a member even when the set's checked-out config doesn't list it" {
+    bats_require_minimum_version 1.5.0
+    setup_nested_meta
+    # vendor's commit has no .meta.yaml: only the workspace's file on disk
+    # lists nested-lib, as when the workspace's configs aren't committed
+    echo "nested-lib/" > vendor/.gitignore
+    git -C vendor init --quiet --initial-branch=main
+    git -C vendor add .gitignore
+    git -C vendor commit --quiet -m "vendor"
+    "$META_BIN" -r git worktree create full --repo vendor --repo vendor/nested-lib
+    cd .worktrees/full
+    run --separate-stderr "$META_BIN" -r --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '[".","vendor","vendor/nested-lib"]' ]
+    # from inside the nested checkout, the command reaches the whole set
+    cd vendor/nested-lib
+    run --separate-stderr "$META_BIN" --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '[".","vendor","vendor/nested-lib"]' ]
+    # a set made for the nested repo (create checks vendor out to hold it)
+    cd "$TEST_DIR"
+    "$META_BIN" -r git worktree create leaf --repo vendor/nested-lib --no-deps
+    cd .worktrees/leaf
+    run --separate-stderr "$META_BIN" --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '["vendor","vendor/nested-lib"]' ]
+}
+
 @test "loop commands in a set reach its nested members" {
     bats_require_minimum_version 1.5.0
     setup_nested_meta

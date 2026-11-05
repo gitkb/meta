@@ -251,10 +251,11 @@ fn set_tree(
 }
 
 /// The meta tree of `projects` listed in `dir` (the workspace a set was made
-/// from), each nested meta repo's projects read from its checkout in the
-/// set at `set` when that holds its config, else from the workspace's,
-/// passing over each nested config that can't be read: one broken config
-/// loses only its own projects.
+/// from), each nested meta repo's projects those its config lists in the
+/// set at `set` and those the workspace's lists, the set's first (its entry
+/// wins in a map built in order), passing over each nested config that
+/// can't be read: one broken config loses only its own projects. A
+/// checkout in the set is a member whichever of the two lists it.
 fn readable_tree(
     dir: &Path,
     set: &Path,
@@ -262,26 +263,35 @@ fn readable_tree(
     visited: &mut std::collections::HashSet<PathBuf>,
 ) -> Vec<crate::config::MetaTreeNode> {
     use crate::config;
+    let listed = |folder: &Path| {
+        config::find_meta_config_in(folder)
+            .ok()
+            .flatten()
+            .and_then(|path| config::Workspace::load(&path).ok())
+            .map(|w| w.projects)
+    };
     projects
         .iter()
         .map(|project| {
             let (path, place) = (dir.join(&project.path), set.join(&project.path));
-            let nested = match config::find_meta_config_in(&place).ok().flatten() {
-                Some(own) => Some(own),
-                None => config::find_meta_config_in(&path).ok().flatten(),
-            };
             // each meta repo once, as `walk_projects` does: links can loop
-            let children = nested
-                .as_ref()
-                .filter(|_| visited.insert(path.canonicalize().unwrap_or_else(|_| path.clone())))
-                .and_then(|config| config::Workspace::load(config).ok())
-                .map(|nested| readable_tree(&path, &place, &nested.projects, visited))
-                .unwrap_or_default();
+            let first = visited.insert(path.canonicalize().unwrap_or_else(|_| path.clone()));
+            let (own, theirs) = match first {
+                true => (listed(&place), listed(&path)),
+                false => (None, None),
+            };
+            let is_meta = own.is_some() || theirs.is_some();
+            let mut nested: Vec<config::ProjectInfo> = own.unwrap_or_default();
+            for project in theirs.unwrap_or_default() {
+                if !nested.iter().any(|p| p.path == project.path) {
+                    nested.push(project);
+                }
+            }
             config::MetaTreeNode {
                 info: project.clone(),
-                is_meta: nested.is_some(),
+                is_meta,
                 error: None,
-                children,
+                children: readable_tree(&path, &place, &nested, visited),
             }
         })
         .collect()
@@ -364,7 +374,7 @@ mod tests {
     use meta_plugin::testing::Sandbox;
 
     #[test]
-    fn the_sets_own_nested_config_wins_over_the_workspaces() {
+    fn a_nested_repos_projects_are_those_the_set_or_the_workspace_lists() {
         let sandbox = Sandbox::new();
         let (workspace, set) = (sandbox.work().join("ws"), sandbox.work().join("set"));
         let config = |dir: &Path, projects: &str| {
@@ -392,8 +402,15 @@ mod tests {
         // the set doesn't hold parent: the workspace's config tells about x
         std::fs::create_dir_all(&set).unwrap();
         assert_eq!(tree(&set)[0].children.len(), 1);
-        // the set holds parent's config, which no longer lists x
-        config(&set.join("parent"), "");
-        assert!(tree(&set)[0].children.is_empty());
+        // the set holds parent's config, which lists y and not x: both are
+        // in the tree (a checkout of either in the set is a member), the
+        // set's first
+        config(&set.join("parent"), r#""y": "y""#);
+        let names: Vec<String> = tree(&set)[0]
+            .children
+            .iter()
+            .map(|c| c.info.name.clone())
+            .collect();
+        assert_eq!(names, ["y", "x"]);
     }
 }

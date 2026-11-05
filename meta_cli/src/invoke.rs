@@ -554,10 +554,13 @@ pub fn answer(
             }
             let failed: Vec<&ProjectResult> =
                 results.records.iter().filter(|r| r.is_failure()).collect();
-            if let Some(first) = failed.first().and_then(|r| r.error.clone()) {
-                let error = match failed.len() {
-                    1 => first,
-                    n => ErrorInfo::new(
+            // the command's own error (a record about no project) says why
+            // it failed; else one failure is its own, several are counted
+            let own = failed.iter().find(|r| r.project.is_none());
+            if let Some(first) = own.or(failed.first()).and_then(|r| r.error.clone()) {
+                let error = match (own, failed.len()) {
+                    (Some(_), _) | (None, 1) => first,
+                    (None, n) => ErrorInfo::new(
                         first.code,
                         format!("{n} of {} records are failures", results.records.len()),
                     ),

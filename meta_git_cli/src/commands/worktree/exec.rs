@@ -227,14 +227,23 @@ fn run_in(
     if !request.meta.json {
         let started = meta.start_inherited()?;
         removal.running(started.id());
-        let status = started.wait();
+        let ended = started.wait_why();
         removal.ended();
-        let status = status?;
+        let (status, last) = ended?;
         if !status.success() {
+            // why, as every summary says it: the run's last stderr line,
+            // or (on a terminal) where the user saw it
+            let why = match last {
+                Some(line) => escape(&line).into_owned(),
+                None if std::io::IsTerminal::is_terminal(&std::io::stderr()) => {
+                    "its stderr is above".to_string()
+                }
+                None => "no stderr".to_string(),
+            };
             return Err(ErrorInfo::new(
                 ErrorCode::ToolFailed,
                 format!(
-                    "`{}` failed in the ephemeral worktree ({status})",
+                    "`{}` failed in the ephemeral worktree ({status}): {why}",
                     escape(&meta_plugin::display::display_command(command))
                 ),
             )

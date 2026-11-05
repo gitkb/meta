@@ -243,7 +243,18 @@ impl Owned {
     /// for a moment more (a program it started in the background may hold
     /// the pipe for as long as it runs: it isn't waited for). Its other pipes
     /// are not read.
-    pub fn stderr_tail(mut self, keep: usize) -> io::Result<(ExitStatus, Vec<u8>)> {
+    pub fn stderr_tail(self, keep: usize) -> io::Result<(ExitStatus, Vec<u8>)> {
+        self.read_stderr(keep, false)
+    }
+
+    /// [`Owned::stderr_tail`], passing all of its stderr on to this
+    /// program's stderr as it comes (for output a user watches that isn't
+    /// on a terminal, so nothing is lost by the pipe).
+    pub fn stderr_shown_tail(self, keep: usize) -> io::Result<(ExitStatus, Vec<u8>)> {
+        self.read_stderr(keep, true)
+    }
+
+    fn read_stderr(mut self, keep: usize, show: bool) -> io::Result<(ExitStatus, Vec<u8>)> {
         use std::collections::VecDeque;
         use std::io::Read;
         use std::sync::{Arc, Mutex, PoisonError};
@@ -262,6 +273,12 @@ impl Owned {
                             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                             Err(_) => break,
                         };
+                        if show {
+                            use std::io::Write;
+                            let mut shown = std::io::stderr().lock();
+                            let _ = shown.write_all(chunk.get(..n).unwrap_or_default());
+                            let _ = shown.flush();
+                        }
                         let mut tail = kept.lock().unwrap_or_else(PoisonError::into_inner);
                         tail.extend(chunk.iter().take(n).copied());
                         let over = tail.len().saturating_sub(keep);

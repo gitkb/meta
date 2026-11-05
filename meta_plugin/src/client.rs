@@ -188,6 +188,11 @@ impl Meta {
     /// (for [`Finishing::running`]).
     pub fn start_inherited(self) -> Result<Inherited> {
         let mut command = self.command(false);
+        // off a terminal its stderr passes through this program, its last
+        // line kept (see [`Inherited::wait_why`])
+        if !std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+            command.stderr(Stdio::piped());
+        }
         let child = crate::process::spawn(&mut command)
             .with_context(|| format!("Cannot run {}", escape_path(&self.exe)))?;
         Ok(Inherited { child })
@@ -244,8 +249,25 @@ impl Inherited {
     }
 
     /// Wait for it to end: its exit status.
-    pub fn wait(mut self) -> Result<ExitStatus> {
-        self.child.wait().context("Cannot wait for meta")
+    pub fn wait(self) -> Result<ExitStatus> {
+        Ok(self.wait_why()?.0)
+    }
+
+    /// Wait for it to end: its exit status, and the last line of its
+    /// stderr that has anything on it, when that passed through this
+    /// program (off a terminal; on one, the user saw it there).
+    pub fn wait_why(self) -> Result<(ExitStatus, Option<String>)> {
+        let (status, tail) = self
+            .child
+            .stderr_shown_tail(64 << 10)
+            .context("Cannot wait for meta")?;
+        let last = String::from_utf8_lossy(&tail)
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(str::to_string);
+        Ok((status, last))
     }
 }
 

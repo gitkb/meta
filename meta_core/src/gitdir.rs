@@ -187,7 +187,9 @@ pub fn linked(checkout: &Path) -> anyhow::Result<Linked> {
         .with_context(|| format!("{} has no .git file", escape_path(checkout)))?;
     anyhow::ensure!(
         admin.join("HEAD").is_file(),
-        "its git metadata {} is missing; was the repository moved or deleted?",
+        "its git metadata {} is missing; was the repository moved or deleted? After a move, \
+         run `git worktree repair` in the workspace's root and in each repo with worktrees, then \
+         run meta again",
         escape_path(&admin)
     );
     let common = std::fs::read_to_string(admin.join("commondir")).with_context(|| {

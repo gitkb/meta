@@ -1638,3 +1638,23 @@ YAML
         [ ! -e dest ]
     done
 }
+
+@test "a failed pull and a failed ephemeral run end with the last stderr line, in text and --silent" {
+    with_remotes
+    # git that fails every pull, saying why on its last line
+    mkdir -p "$TEST_DIR/shim"
+    real_git="$(command -v git)"
+    printf '#!/bin/sh\ncase " $* " in *" pull "*) printf "FIRST diagnostic\\nLAST diagnostic\\n" >&2; exit 1;; esac\nexec "%s" "$@"\n' "$real_git" > "$TEST_DIR/shim/git"
+    chmod +x "$TEST_DIR/shim/git"
+    for mode in "" "--silent"; do
+        # shellcheck disable=SC2086
+        PATH="$TEST_DIR/shim:$PATH" run "$META_BIN" $mode git update
+        [ "$status" -ne 0 ]
+        [[ "$(grep -v '^[[:space:]]*$' <<<"$output" | tail -1)" == *": LAST diagnostic" ]]
+        # shellcheck disable=SC2086
+        run "$META_BIN" $mode git worktree exec --ephemeral "eph$RANDOM" --repo backend -- \
+            sh -c 'printf "FIRST diagnostic\nLAST diagnostic\n" >&2; exit 1'
+        [ "$status" -ne 0 ]
+        [[ "$(grep -v '^[[:space:]]*$' <<<"$output" | tail -1)" == *": LAST diagnostic" ]]
+    done
+}

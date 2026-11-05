@@ -230,11 +230,21 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
             meta_plugin::display::escape_lines(line)
         );
     }
-    let failed = |clone: bool| -> Vec<&str> {
+    // each named with why, git's last line, as every summary says it
+    let failed = |clone: bool| -> Vec<String> {
         failures
             .iter()
             .filter(|f| matches!(f.work, Work::Clone(_)) == clone)
-            .map(|f| f.name.as_str())
+            .map(|f| {
+                let last = f
+                    .error
+                    .lines()
+                    .rev()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .unwrap_or("no stderr");
+                format!("{}: {}", f.name, meta_plugin::display::escape(last))
+            })
             .collect()
     };
     let (clones, pulls) = (failed(true), failed(false));
@@ -245,14 +255,14 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
                     "{} of {} repositories failed to clone: {}",
                     clones.len(),
                     cloned.len() + clones.len(),
-                    clones.join(", ")
+                    clones.join("; ")
                 )
             }),
             (!pulls.is_empty()).then(|| {
                 format!(
                     "{} could not be pulled (fast-forward only): {}",
                     plural(pulls.len()),
-                    pulls.join(", ")
+                    pulls.join("; ")
                 )
             }),
             (!refused.is_empty()).then(|| {

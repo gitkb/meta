@@ -1624,3 +1624,17 @@ YAML
     done
     [ -z "$(find "$TEST_DIR" -name blank-tag)" ]
 }
+
+@test "a failed clone of the meta repo ends with git's last line, in text and --silent" {
+    cd "$TEST_DIR"
+    # what git itself says last for this clone
+    last=$(git clone "file://$TEST_DIR/nowhere.git" probe 2>&1 | grep -v '^[[:space:]]*$' | tail -1)
+    [ -n "$last" ]
+    for mode in "" "--silent"; do
+        # shellcheck disable=SC2086
+        run "$META_BIN" $mode git clone "file://$TEST_DIR/nowhere.git" dest
+        [ "$status" -ne 0 ]
+        [ "$(tail -1 <<<"$output")" = "Error: Failed to clone meta repository: $last" ]
+        [ ! -e dest ]
+    done
+}

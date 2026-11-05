@@ -4,10 +4,49 @@ use crate::ssh;
 use anyhow::Context;
 use colored::Colorize;
 use indicatif::MultiProgress;
+use meta_plugin::display::escape;
 use meta_plugin::RepoUrl;
 use meta_plugin::{errln, outln};
 use meta_plugin::{Ctx, Request, Response};
 use std::sync::Arc;
+
+/// Run `command` with its stderr passed on to this program's as it comes,
+/// and the last line of it that isn't blank (a progress update, ended by
+/// `\r`, is a line too; a line is kept to its last 4 KiB).
+fn shown_stderr(
+    command: &mut std::process::Command,
+) -> anyhow::Result<(std::process::ExitStatus, Option<String>)> {
+    use std::io::{Read, Write};
+    let mut child = meta_plugin::process::spawn(command.stderr(std::process::Stdio::piped()))?;
+    let mut last: Option<String> = None;
+    if let Some(mut pipe) = child.stderr() {
+        let mut shown = std::io::stderr();
+        let (mut chunk, mut line) = ([0_u8; 4096], Vec::new());
+        let mut keep = |line: &mut Vec<u8>| {
+            let text = String::from_utf8_lossy(line).trim().to_string();
+            if !text.is_empty() {
+                last = Some(text);
+            }
+            line.clear();
+        };
+        loop {
+            let n = pipe.read(&mut chunk)?;
+            let Some(read) = chunk.get(..n).filter(|read| !read.is_empty()) else {
+                break;
+            };
+            let _ = shown.write_all(read);
+            for &byte in read {
+                match byte {
+                    b'\n' | b'\r' => keep(&mut line),
+                    _ if line.len() < 4096 => line.push(byte),
+                    _ => {}
+                }
+            }
+        }
+        keep(&mut line);
+    }
+    Ok((child.wait()?, last))
+}
 
 /// Clone a meta repository, then the repos its .meta.yaml lists.
 #[derive(clap::Parser)]
@@ -140,10 +179,18 @@ pub(crate) fn execute_git_clone(
     // stdout only once it ends
     errln!("Cloning meta repository: {url}");
     let mut clone_cmd = meta_core::git::git(cwd);
+    // its progress on a terminal, though meta reads its stderr in text mode
+    // (git shows none into a pipe)
+    let terminal = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    if terminal && !ctx.meta().json {
+        clone_cmd.args(["clone", "--progress"]);
+    } else {
+        clone_cmd.arg("clone");
+    }
     clone_cmd.args(
         clone_argv(url.as_git_arg().to_string_lossy().into_owned())
             .iter()
-            .skip(1),
+            .skip(2),
     );
     if let Some(ref ssh) = ssh_cmd {
         clone_cmd.env("GIT_SSH_COMMAND", ssh);
@@ -172,8 +219,16 @@ pub(crate) fn execute_git_clone(
             );
         }
     } else {
-        let status = meta_plugin::process::status(&mut clone_cmd)?;
-        anyhow::ensure!(status.success(), "Failed to clone meta repository");
+        // shown as git writes it, its last line kept to say why it failed
+        let (status, last) = shown_stderr(&mut clone_cmd)?;
+        anyhow::ensure!(
+            status.success(),
+            "Failed to clone meta repository: {}",
+            last.map_or_else(
+                || "no stderr".to_string(),
+                |line| escape(&line).into_owned()
+            )
+        );
     }
 
     // The projects the clone's config lists, as meta reads them

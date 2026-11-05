@@ -37,16 +37,6 @@ Handles all `meta git *` commands with special cases:
 | `meta git worktree *` | Isolated multi-repo worktree sets (see the `meta-worktree` skill) |
 | `meta git <other>` | Pass through to every repo at this meta level |
 
-### Project Plugin (`meta-project`)
-
-Workspace management:
-
-```bash
-meta project list      # List projects from .meta.yaml
-meta project check     # Verify all repos exist
-meta project dependents <name>  # Projects that depend on one
-```
-
 ### Cargo Plugin (`meta-cargo`)
 
 Runs any cargo command in each selected repo that has a `Cargo.toml`, skipping the rest (listed on stderr). `meta exec -- cargo ...` runs cargo in every repo instead.
@@ -130,7 +120,7 @@ meta git status
 
 For commands with special handling (like `clone`), the plugin does the work directly instead of returning an execution plan.
 
-meta's own options (`-r`, `-A`, `--json`, `--dry-run`, `--include`, …) go before the command and reach a plugin resolved, never in `args` (`meta -r --json project list`): the selection as the request's projects, the rest as its `meta` options. A plugin defines no option of meta's; it parses its arguments with `meta_plugin::parse_args` (feature `parse`), so a meta option typed after its command gets the tip with the line that has it before (see `docs/plugin_development.md`). A plugin never prints JSON: meta prints one envelope for every command under `--json`.
+meta's own options (`-r`, `-A`, `--json`, `--dry-run`, `--include`, …) go before the command and reach a plugin resolved, never in `args` (`meta -r --json git status`): the selection as the request's projects, the rest as its `meta` options. A plugin defines no option of meta's; it parses its arguments with `meta_plugin::parse_args` (feature `parse`), so a meta option typed after its command gets the tip with the line that has it before (see `docs/plugin_development.md`). A plugin never prints JSON: meta prints one envelope for every command under `--json`.
 
 ## Why This Matters
 

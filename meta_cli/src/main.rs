@@ -11,6 +11,7 @@ mod context;
 mod events;
 mod init;
 mod invoke;
+mod project;
 mod registry;
 mod report;
 mod run_list;
@@ -217,6 +218,8 @@ enum Commands {
     Init(InitArgs),
     /// Manage plugins
     Plugin(PluginArgs),
+    /// Inspect and validate the workspace's projects
+    Project(project::ProjectArgs),
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -459,7 +462,10 @@ fn run_cli() -> Result<()> {
             let plugins = SubprocessPluginManager::new(false)?;
             return Ok(out!("{}", help_with_plugins(&plugins))?);
         }
-        Err(_) => meta_plugin::args::parse()?,
+        Err(e) => match project::usage_error(&e) {
+            Some(error) => return Err(error),
+            None => meta_plugin::args::parse()?,
+        },
     };
     // the stream is JSON too: every command reads `json` for it, and only
     // the printing tells the two apart
@@ -502,6 +508,7 @@ fn run_cli() -> Result<()> {
         Some(Commands::Init(_)) => "init claude",
         Some(Commands::Plugin(args)) => args.command.name(),
         Some(Commands::Exec(_)) => "exec",
+        Some(Commands::Project(args)) => args.command.name(),
         Some(Commands::External(_)) => "",
     });
     running(&report.command);
@@ -537,6 +544,7 @@ fn run_cli() -> Result<()> {
             &mut report,
         )?,
         Some(Commands::Exec(args)) => invoke::exec(&cli, &args.command, &mut report)?,
+        Some(Commands::Project(args)) => project::run(&cli, &args.command, &mut report)?,
         Some(Commands::External(args)) => {
             external(&cli, args, &subprocess_plugins, &mut report, false)?
         }
@@ -842,7 +850,6 @@ fn dispatch(
             Scope::NamedSet
         }
         ["git", "worktree", ..] => Scope::Workspace,
-        ["project", "list" | "ls" | "dependents", ..] => Scope::Workspace,
         _ => Scope::Selection,
     };
     // the host applies meta's selection: a command that finds its repos
@@ -854,13 +861,10 @@ fn dispatch(
         .any(|w| *w == "--ephemeral");
     let whole_set = scope == Scope::NamedSet && (words.get(2) != Some(&"exec") || ephemeral);
     let refuses_filters = matches!(scope, Scope::None | Scope::Workspace) || whole_set;
-    if refuses_filters && !cli.filters().is_empty() {
-        return Err(meta_plugin::exit::Usage(format!(
-            "meta {} finds its repos itself (in the .meta.yaml files or its worktree sets); it does not take --include/--exclude/--tag",
-            escape(&loop_lib::display_command(&args.iter().take(3).cloned().collect::<Vec<_>>()))
-        ))
-        .into());
-    }
+    refuse_filters(
+        refuses_filters && !cli.filters().is_empty(),
+        args.get(..3).unwrap_or(args),
+    )?;
     let target = match (scope, named) {
         // a clone runs where it is, in a workspace or none
         (Scope::None, _) => None,
@@ -884,6 +888,20 @@ fn dispatch(
             .refusing(&["--include", "--exclude", "--tag"]);
     }
     invoke::call(cli, plugin, &request, target.as_ref(), report)
+}
+
+/// A usage error when meta's filters were given (`filtered`) to `command`
+/// (its words), which finds its repos itself.
+fn refuse_filters(filtered: bool, command: &[impl AsRef<str>]) -> Result<()> {
+    if !filtered {
+        return Ok(());
+    }
+    let words: Vec<String> = command.iter().map(|w| w.as_ref().to_string()).collect();
+    Err(meta_plugin::exit::Usage(format!(
+        "meta {} finds its repos itself (in the .meta.yaml files or its worktree sets); it does not take --include/--exclude/--tag",
+        escape(&loop_lib::display_command(&words))
+    ))
+    .into())
 }
 
 /// meta's options, and what of this process's arguments is them

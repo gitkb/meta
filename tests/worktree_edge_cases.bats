@@ -696,8 +696,6 @@ EOF
 }
 
 @test "a plain project check does not read a child's own .meta.yaml" {
-    # The built project plugin, not one that happens to be on PATH
-    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/"
     ln -s missing.json "$TEST_DIR/frontend/.meta.yaml"
     # each a clone of what the config lists
     for repo in backend frontend common; do
@@ -714,7 +712,6 @@ EOF
 }
 
 @test "meta git status and project check fail on a refused .meta.yaml" {
-    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/meta-project"
     echo '{"projects": {"evil": {"repo": "u", "path": ".git/evil"}}}' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git status
     [ "$status" -ne 0 ]
@@ -1977,7 +1974,6 @@ set_projects() {
 }
 
 @test "meta -r project check with a filter reports a selected nested project that is missing" {
-    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/"
     mkdir -p "$TEST_DIR/tools"
     # cli is tagged and missing; other is missing too, but not selected
     printf 'projects:\n  cli:\n    repo: git@github.com:org/cli.git\n    tags: [rust]\n  other: git@github.com:org/other.git\n' > "$TEST_DIR/tools/.meta.yaml"

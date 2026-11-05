@@ -9,9 +9,7 @@ TOKEN=ghp_SECRETTOKEN123
 setup() {
     sandbox
     mkdir -p "$TEST_DIR/remotes" "$TEST_DIR/bin"
-    for plugin in meta-git meta-project; do
-        cp "$META_BIN_DIR/$plugin" "$TEST_DIR/bin/"
-    done
+    cp "$META_BIN_DIR/meta-git" "$TEST_DIR/bin/"
     export PATH="$TEST_DIR/bin:$PATH"
 
     # local bare repos: `lib`, and a meta repo whose config holds a token

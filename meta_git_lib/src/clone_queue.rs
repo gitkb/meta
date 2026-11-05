@@ -304,12 +304,32 @@ impl CloneQueue {
     }
 
     /// Record the repositories in `workspace`'s folder that it doesn't list
-    /// (outside a selection's meta repos, none).
+    /// (outside a selection's meta repos, none). A repo the folder's own
+    /// .meta.yaml lists counts as listed too, so `--config` with a smaller
+    /// list never makes a listed project unlisted; when that .meta.yaml
+    /// can't be read, none is recorded.
     fn note_unlisted(&self, workspace: &config::Workspace) {
         if !self.selected(&workspace.dir) {
             return;
         }
-        let listed: HashSet<&str> = workspace.projects.iter().map(|p| p.path.as_str()).collect();
+        let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let default = match config::find_meta_config_in(&workspace.dir) {
+            Ok(found) => found.filter(|path| real(path) != real(&workspace.config_path)),
+            Err(_) => return,
+        };
+        let default = match default
+            .map(|path| config::Workspace::load(&path))
+            .transpose()
+        {
+            Ok(default) => default,
+            Err(_) => return,
+        };
+        let listed: HashSet<&str> = workspace
+            .projects
+            .iter()
+            .chain(default.iter().flat_map(|d| &d.projects))
+            .map(|p| p.path.as_str())
+            .collect();
         let entries = std::fs::read_dir(&workspace.dir)
             .into_iter()
             .flatten()

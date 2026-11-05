@@ -596,6 +596,28 @@ within() {
     done
 }
 
+@test "meta git clone-prune with --config keeps the repos .meta.yaml lists" {
+    with_remotes
+    printf '.env\n' > frontend/.git/info/exclude
+    echo SECRET=1 > frontend/.env
+    printf 'projects:\n  shared: file://%s/remotes/shared.git\n' "$TEST_DIR" > other.yaml
+    git add other.yaml && git commit --quiet -m other
+    run "$META_BIN" --config other.yaml --dry-run git clone-prune
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"remove frontend"* ]]
+    run "$META_BIN" --config other.yaml git clone-prune
+    [ "$status" -eq 0 ]
+    run "$META_BIN" --config other.yaml git clone-sync
+    [ "$status" -eq 0 ]
+    [ -f frontend/.env ]
+    [ -d backend/.git ]
+    # a leftover neither lists is still one
+    git clone --quiet remotes/shared.git leftover
+    run "$META_BIN" --config other.yaml git clone-prune
+    [[ "$output" == *"Removed leftover"* ]]
+    [ ! -e leftover ]
+}
+
 @test "meta git clone-prune removes a leftover holding only ignored files, naming them" {
     with_remotes
     git clone --quiet remotes/shared.git local-data

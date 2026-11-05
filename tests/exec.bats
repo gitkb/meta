@@ -1001,7 +1001,8 @@ YAML
 # user's stderr, whether that is a terminal, a file or a pipe
 
 @test "a closed pipe ends a live run at once" {
-    run timeout 20 bash -c "\"$META_BIN\" --sequential -i api exec -- sh -c 'while :; do echo out; echo err >&2; done' 2>&1 | head -1"
+    # at most 20 seconds, on macOS too (it has no timeout)
+    run perl -e 'alarm 20; exec @ARGV' bash -c "\"$META_BIN\" --sequential -i api exec -- sh -c 'while :; do echo out; echo err >&2; done' 2>&1 | head -1"
     [ "$status" -eq 0 ]
 }
 

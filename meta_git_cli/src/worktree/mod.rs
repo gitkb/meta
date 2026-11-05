@@ -6,7 +6,6 @@
 pub mod git_ops;
 pub mod helpers;
 pub mod hooks;
-pub mod lease;
 pub mod plan;
 pub mod safety;
 pub mod ttl;

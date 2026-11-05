@@ -12,7 +12,7 @@ use meta_core::worktree::discover_worktree_members;
 use meta_core::worktree::Configs;
 
 use crate::worktree::hooks::fire_post_prune;
-use crate::worktree::lease;
+use meta_plugin::sets::lease;
 use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
 use crate::worktree::ttl;
 use crate::worktree::types::*;

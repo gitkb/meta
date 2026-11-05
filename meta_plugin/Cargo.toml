@@ -15,6 +15,10 @@ process = ["dep:rustix", "dep:signal-hook", "dep:win32job"]
 # temporary: clap parsing of a plugin's arguments and the tip for one of
 # meta's options typed after the command, until the host parses for plugins
 parse = ["dep:clap", "dep:strsim"]
+# calling meta back (`meta --json …`) from a program meta started
+client = ["process"]
+# worktree sets for any provider: owner files, leases, hooks
+sets = ["dep:same-file"]
 # a sandbox and workspace builder for plugin tests
 testing = ["process", "dep:tempfile"]
 # the same, with git repositories in the workspace
@@ -41,8 +45,11 @@ signal-hook = { workspace = true, features = ["extended-siginfo"], optional = tr
 [target.'cfg(windows)'.dependencies]
 win32job = { version = "2", optional = true }
 
+[target.'cfg(not(unix))'.dependencies]
+same-file = { version = "1", optional = true }
+
 [dev-dependencies]
-meta_plugin = { path = ".", features = ["parse", "testing-git"] }
+meta_plugin = { path = ".", features = ["parse", "sets", "client", "testing-git"] }
 
 [lints]
 workspace = true

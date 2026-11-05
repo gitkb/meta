@@ -150,6 +150,13 @@ pub struct Cli {
 
     #[arg(
         long,
+        conflicts_with_all = ["all", "primary"],
+        help = "Only the .meta.yaml in the directory meta runs from: no workspace above it, no worktree set around it"
+    )]
+    no_parent: bool,
+
+    #[arg(
+        long,
         help = "Convert warnings to errors for all-or-nothing behavior (CI/automation)"
     )]
     strict: bool,
@@ -431,6 +438,25 @@ fn reported(error: &anyhow::Error) -> bool {
             .any(|cause| cause.is::<meta_plugin::ErrorInfo>())
 }
 
+/// Tell the programs meta starts how to call it back (`META_EXE`, and
+/// `META_DEPTH`: how many meta calls are around this one), refusing a meta
+/// deeper than calls may go: a command that calls itself through meta ends.
+fn called_back() -> Result<()> {
+    use meta_plugin::client::{depth, DEPTH_VAR, EXE_VAR, MAX_DEPTH};
+    let depth = depth()?;
+    if depth > MAX_DEPTH {
+        anyhow::bail!(
+            "meta runs inside {depth} meta calls, deeper than {MAX_DEPTH}: a command calls itself through meta"
+        );
+    }
+    // set while meta has one thread, before it starts anything
+    std::env::set_var(DEPTH_VAR, depth.to_string());
+    if let Ok(exe) = std::env::current_exe() {
+        std::env::set_var(EXE_VAR, exe);
+    }
+    Ok(())
+}
+
 fn run_cli() -> Result<()> {
     // Log records carry names, versions, paths and URLs from config, the
     // filesystem and plugin registries: escape them like other output
@@ -448,6 +474,7 @@ fn run_cli() -> Result<()> {
             )
         })
         .init();
+    called_back()?;
 
     // meta's own --help also lists the commands plugins add, so it is
     // answered here, before anything else runs; every other result of
@@ -876,6 +903,23 @@ fn dispatch(
         },
         (Scope::Selection, _) => Some(invoke::target(cli, &start)?),
     };
+    // a set is acted on by name only by the provider that made it: one VCS
+    // never removes another's checkouts
+    if let Some(set) = target.as_ref().and_then(|t| t.set.as_ref()) {
+        if scope == Scope::NamedSet && set.provider != plugin.word {
+            return Err(meta_plugin::ErrorInfo::new(
+                meta_plugin::ErrorCode::Conflict,
+                format!(
+                    "Worktree set '{}' was made by meta-{}; meta {} acts only on the sets meta-{} made",
+                    escape(&set.name),
+                    escape(&set.provider),
+                    escape(&plugin.word),
+                    escape(&plugin.word)
+                ),
+            )
+            .into());
+        }
+    }
     let mut request = invoke::request(cli, plugin, args, &start, scope, target.as_ref())?;
     // typed after the command, they get no tip to type them before it
     if refuses_filters {
@@ -1408,7 +1452,7 @@ fn check_and_warn_orphan() {
     };
 
     // inside a set, or where that can't be told (the command reports why)
-    if !matches!(worktree::detect_worktree_context(&current_dir), Ok(None)) {
+    if !matches!(worktree::detect_worktree_location(&current_dir), Ok(None)) {
         return;
     }
 

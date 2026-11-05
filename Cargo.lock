@@ -931,28 +931,13 @@ dependencies = [
  "log",
  "loop_lib",
  "meta_core",
- "meta_git_lib",
  "meta_plugin",
  "rayon",
  "rustix",
- "serde",
- "serde_json",
- "shlex",
- "tempfile",
-]
-
-[[package]]
-name = "meta_git_lib"
-version = "0.2.22"
-dependencies = [
- "anyhow",
- "chrono",
- "log",
- "meta_core",
- "meta_plugin",
  "same-file",
  "serde",
  "serde_json",
+ "shlex",
  "tempfile",
 ]
 
@@ -969,6 +954,7 @@ dependencies = [
  "indexmap",
  "meta_plugin",
  "rustix",
+ "same-file",
  "serde",
  "serde_json",
  "shlex",

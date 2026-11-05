@@ -18,6 +18,8 @@ struct EphemeralGuard<'a> {
     dir: PathBuf,
     ctx: &'a Ctx,
     request: &'a Request,
+    /// The token of the set's lease, which this run holds
+    token: String,
     finished: bool,
 }
 
@@ -38,6 +40,7 @@ impl EphemeralGuard<'_> {
             verbose,
             json: self.request.meta.json,
             strict: false,
+            lease: Some(&self.token),
         };
         super::remove::remove_set(
             &remove_args,
@@ -187,6 +190,7 @@ fn handle_ephemeral_exec(args: ExecArgs, ctx: &Ctx, request: &Request) -> Result
         dir: created.dir.clone(),
         ctx,
         request,
+        token: created.lease.token().to_string(),
         finished: false,
     };
 

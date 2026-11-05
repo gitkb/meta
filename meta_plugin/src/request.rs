@@ -29,9 +29,15 @@ pub struct Request {
     pub workspace: Option<Workspace>,
     /// What the host resolved for this command.
     pub scope: Scope,
-    /// The worktree set the command runs in, when it runs inside one.
+    /// The worktree set the command runs in, when it runs inside one, or
+    /// the one it names (`scope = named-set`).
     #[serde(default)]
     pub set: Option<Set>,
+    /// The lease the caller holds (`META_LEASE`, set by a program that holds
+    /// a set's lease and called meta back): a command may treat that set as
+    /// its caller's (see [`crate::sets::lease::Found::held_by`]).
+    #[serde(default)]
+    pub lease: Option<String>,
     /// The selected projects, in order: meta's selection (`-r`, `-A`,
     /// `--depth`, `--include`, `--exclude`, `--tag`) applied. Empty is a
     /// selection of none, never "find them yourself".
@@ -145,8 +151,10 @@ pub struct Workspace {
     /// The folder of that config: where its projects are listed
     #[serde(with = "wire_path")]
     pub listed_root: PathBuf,
-    /// Every project of the workspace's tree, nested meta repos' too,
-    /// whether selected or cloned or not.
+    /// Every project of the workspace's tree, nested meta repos' too, from
+    /// its outermost config (as far as its configs can be read), whether
+    /// selected or cloned or not: never narrowed by meta's selection options.
+    /// Inside a set, every member of the set.
     #[serde(default)]
     pub members: Vec<Project>,
     pub worktree: Worktree,
@@ -165,6 +173,10 @@ pub struct Worktree {
     /// `post-destroy`, `post-prune`), from `worktree.hooks`
     #[serde(default)]
     pub hooks: std::collections::BTreeMap<String, String>,
+    /// The folder of the config these settings come from (inside a set, the
+    /// workspace the set was made from): hooks run there
+    #[serde(default, with = "wire_path::option")]
+    pub home: Option<PathBuf>,
 }
 
 /// A worktree set: a folder holding a checkout of some of the workspace's
@@ -175,9 +187,18 @@ pub struct Set {
     pub name: String,
     #[serde(with = "wire_path")]
     pub dir: PathBuf,
-    /// The checkouts in it, each `abs` inside `dir`
+    /// Its members: the workspace's projects whose folder is in it (at
+    /// their path, `abs` inside `dir`), the root when the set holds the
+    /// workspace's config. Which of them are checkouts of a provider's, the
+    /// provider tells; meta looks for folders only.
     #[serde(default)]
     pub members: Vec<Project>,
+    /// The provider that made it (see [`crate::sets::Owner`]): `git` for a
+    /// set with no owner file
+    pub provider: String,
+    /// Whether a creator or an ephemeral run holds its lease now
+    #[serde(default)]
+    pub leased: bool,
 }
 
 /// A project of the workspace.
@@ -200,6 +221,10 @@ pub struct Project {
     /// What its config says it depends on
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Whether its config says it is a meta repo (`meta: true`): one with a
+    /// `.meta.yaml` of its own listing projects
+    #[serde(default)]
+    pub meta: bool,
     /// Its dependency level, when the selection was ordered by dependency
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<usize>,
@@ -223,6 +248,7 @@ impl Request {
             workspace: None,
             scope: Scope::None,
             set: None,
+            lease: None,
             projects: Vec::new(),
             depth: Some(0),
             recursive: false,

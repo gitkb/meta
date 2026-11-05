@@ -14,7 +14,7 @@ use meta_core::set_record::{self as record, SetRecord};
 use crate::worktree::git_ops::*;
 use crate::worktree::helpers::*;
 use crate::worktree::hooks::fire_post_create;
-use crate::worktree::lease;
+use meta_plugin::sets::lease;
 use crate::worktree::plan::{Found, Index, PlannedRepo};
 use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
 use crate::worktree::types::{CreateOutput, CreateRepoEntry};
@@ -289,6 +289,8 @@ pub(crate) fn handle_create(
     // The checkout whose sets these are: inside a set, the one it stands for
     let owner = &configs.owner.dir;
     let built = (|| -> Result<()> {
+        // The set's owner, beside it: meta-git's, made from this workspace
+        meta_plugin::sets::create(&wt_dir, meta_plugin::sets::DEFAULT_PROVIDER, owner)?;
         // Each worktree gets this record as soon as it exists, so `remove`
         // and `prune` know meta made it; a worktree that can't be recorded
         // is a failed create.

@@ -7,7 +7,7 @@ repository.workspace = true
 description = "The workspace domain meta and its plugins share: config, repo selection, worktree sets and the dependency graph"
 
 [dependencies]
-meta_plugin.workspace = true
+meta_plugin = { workspace = true, features = ["sets"] }
 anyhow.workspace = true
 dirs.workspace = true
 log.workspace = true

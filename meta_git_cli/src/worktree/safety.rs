@@ -219,6 +219,8 @@ pub fn delete_checked_set(
             remove_entry(path).with_context(|| format!("Cannot delete {}", escape_path(path)))?;
         }
     }
+    // its owner file is beside the folder as named, a link or not
+    let named = wt_dir.to_path_buf();
     // a set folder that is a link: what it leads to, then the link
     let link = is_link(wt_dir).then(|| wt_dir.to_path_buf());
     let real = match &link {
@@ -244,7 +246,7 @@ pub fn delete_checked_set(
             sample(&left, |p| relative_label(wt_dir, p))
         );
     }
-    Ok(())
+    meta_plugin::sets::forget(&named)
 }
 
 /// Delete a file or link. On Windows a link to a directory needs `remove_dir`.

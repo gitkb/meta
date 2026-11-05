@@ -61,6 +61,8 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "parse")]
 pub mod args;
+#[cfg(feature = "client")]
+pub mod client;
 pub mod display;
 pub mod envelope;
 pub mod event;
@@ -73,6 +75,8 @@ mod repo_url;
 pub mod request;
 pub mod response;
 mod serve;
+#[cfg(feature = "sets")]
+pub mod sets;
 #[cfg(feature = "testing")]
 pub mod testing;
 
@@ -85,6 +89,14 @@ pub use repo_url::RepoUrl;
 pub use request::{Meta, Project, Request, Scope, Set, Workspace, Worktree};
 pub use response::{Answer, Plan, Response, Results, Step, Text};
 pub use serve::{run_plugin, usage, Ctx, PluginDefinition, REQUEST_VAR, RESPONSE_VAR};
+
+/// The variable that names the lease a program's caller holds (see
+/// `sets::lease`): meta reads it and passes it on as `Request::lease`.
+pub const LEASE_VAR: &str = "META_LEASE";
+
+/// The variable a caller would name an exact selection in. Nothing reads it
+/// yet; meta strips it, with [`LEASE_VAR`], from every program it starts.
+pub const SELECTION_VAR: &str = "META_SELECTION";
 
 /// What a plugin's handler returns: an error carries its [`ErrorCode`] in
 /// an [`ErrorInfo`] (any other error is `failed`).
@@ -334,6 +346,7 @@ mod tests {
             repo: Some("git@x:api.git".to_string()),
             tags: vec!["rust".to_string()],
             depends_on: vec!["core".to_string()],
+            meta: false,
             level: None,
             present: true,
             nested: vec![],
@@ -349,6 +362,7 @@ mod tests {
             worktree: Worktree {
                 dir: Some(PathBuf::from("/w/.worktrees")),
                 hooks: [("post-create".to_string(), "make".to_string())].into(),
+                home: None,
             },
         });
         sent.projects = vec![project.clone()];

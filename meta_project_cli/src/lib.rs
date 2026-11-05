@@ -1267,6 +1267,8 @@ mod tests {
             name: "feature".to_string(),
             dir: linked.clone(),
             members: Vec::new(),
+            provider: "git".to_string(),
+            leased: false,
         });
         let root = &records(run(listing))[0];
         let data = root.data.as_ref().unwrap();

@@ -3,7 +3,6 @@
 //! This module provides the core types and functions for finding and parsing
 //! meta's YAML configuration files.
 
-use crate::gitdir;
 use anyhow::Context;
 use meta_plugin::display::{escape, escape_path, is_unsafe_char};
 use meta_plugin::RepoUrl;
@@ -395,102 +394,13 @@ fn lists(config: &Path, dir: &Path) -> bool {
     })
 }
 
-/// The checkout that `dir`, a checkout in a worktree set meta made, stands
-/// for: the `project` the set was made from, joined with `dir`'s place in
-/// the set (meta lays a set out as the workspace). The project comes from
-/// meta's record in the checkout's git admin directory
-/// ([`crate::set_record`]). A set made from inside another set leads on to
-/// that set's source. A worktree made by hand has no record and stands for
-/// itself, as a second workspace can. Git's shared repository doesn't say
-/// which checkout made a set, so only the record is used: one that can't be
-/// read is an error naming it, never taken for no record.
+/// Where the folder `dir`, in a worktree set, stands in the workspace the
+/// set was made from, as the set's owner file says (see
+/// [`crate::worktree::primary_dir`]); from a set made inside another set, on
+/// to that one's workspace. A folder in no set, or in a set without an owner
+/// file (made by hand), stands for itself, as a second workspace can.
 pub fn set_source(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
-    let Some(mut source) = recorded_source(dir)? else {
-        return Ok(None);
-    };
-    let mut seen = vec![dir.to_path_buf()];
-    while let Some(next) = recorded_source(&source)? {
-        if seen.contains(&next) {
-            break;
-        }
-        seen.push(std::mem::replace(&mut source, next));
-    }
-    Ok(Some(source))
-}
-
-/// One step of [`set_source`].
-fn recorded_source(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
-    let Some((_, record)) = crate::set_record::member(dir).with_context(|| {
-        format!(
-            "Cannot read meta's record of the worktree {}",
-            escape_path(dir)
-        )
-    })?
-    else {
-        return Ok(None);
-    };
-    Ok(source_of(dir, record.project, &record.set))
-}
-
-/// Where the checkout at `dir`, in the set at `set` made from `project`,
-/// stands in that workspace (see [`recorded_source`]).
-fn source_of(dir: &Path, project: PathBuf, set: &Path) -> Option<PathBuf> {
-    let set = set.canonicalize().ok()?;
-    let place = dir.canonicalize().ok()?;
-    let place = place.strip_prefix(set).ok()?;
-    // meta puts each repo of a set where it is in the workspace
-    let source = project.join(place);
-    // The set's root stands for the workspace itself. Another checkout
-    // stands for a project of that workspace with the same repository: the
-    // one at its place, else (a link that differs between the root's
-    // branches put it elsewhere) the only one there is. Its place alone
-    // doesn't say: a second workspace's `git worktree add` shares the
-    // repository but is no project.
-    let Some(own) = common_git_dir(dir) else {
-        return Some(source);
-    };
-    if place.as_os_str().is_empty() {
-        return Some(source);
-    }
-    let mut matches = Vec::new();
-    projects_with_git_dir(&project, &own, 0, &mut matches);
-    let at_place = source.canonicalize().ok();
-    match matches.as_slice() {
-        [only] => Some(only.clone()),
-        // no project says (one no longer listed, say): its place, if that
-        // is its repository
-        [] => (common_git_dir(&source).as_ref() == Some(&own)).then_some(source),
-        _ => matches.into_iter().find(|path| {
-            path.canonicalize()
-                .ok()
-                .is_some_and(|real| Some(real) == at_place)
-        }),
-    }
-}
-
-/// The projects of the meta repo at `meta_dir`, and of the meta repos nested
-/// in it, whose repository's git directory is `git_dir`. A config that can't
-/// be read is passed over: one broken sibling doesn't hide a project.
-fn projects_with_git_dir(meta_dir: &Path, git_dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
-    if depth > MAX_LINK_HOPS {
-        return;
-    }
-    let Ok(Some(workspace)) = Workspace::in_dir(meta_dir) else {
-        return;
-    };
-    for project in &workspace.projects {
-        let path = meta_dir.join(&project.path);
-        if common_git_dir(&path).as_deref() == Some(git_dir) {
-            found.push(path.clone());
-        }
-        projects_with_git_dir(&path, git_dir, depth + 1, found);
-    }
-}
-
-/// The git directory the checkout at `dir` shares with its linked worktrees,
-/// resolved.
-fn common_git_dir(dir: &Path) -> Option<PathBuf> {
-    gitdir::common_dir(dir).ok()??.canonicalize().ok()
+    crate::worktree::primary_dir(dir)
 }
 
 /// Nearest directory holding a config file: where `--local` plugins go.

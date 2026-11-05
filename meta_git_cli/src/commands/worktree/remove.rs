@@ -7,7 +7,7 @@ use meta_plugin::outln;
 use meta_plugin::{Ctx, ProjectResult, Request, Response};
 
 use crate::worktree::hooks::fire_post_destroy;
-use crate::worktree::lease;
+use meta_plugin::sets::lease;
 use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
 use crate::worktree::types::*;
 use crate::worktree::workspace::Workspace;
@@ -34,6 +34,7 @@ pub(crate) fn handle_remove(args: RemoveArgs, ctx: &Ctx, request: &Request) -> R
         verbose: request.meta.verbose,
         json: request.meta.json,
         strict: ctx.meta().strict,
+        lease: request.lease.as_deref(),
     };
     let mut records = Vec::new();
     let removed = remove_set(&args, &wt_dir, &configs, ctx, how, &mut records);
@@ -43,7 +44,7 @@ pub(crate) fn handle_remove(args: RemoveArgs, ctx: &Ctx, request: &Request) -> R
 /// How a remove runs: meta's options, or what an ephemeral run's cleanup
 /// asks for.
 #[derive(Clone, Copy)]
-pub(crate) struct How {
+pub(crate) struct How<'a> {
     /// `--dry-run`: only say what would be removed
     pub preview: bool,
     pub verbose: bool,
@@ -51,6 +52,9 @@ pub(crate) struct How {
     pub json: bool,
     /// A failing hook is an error
     pub strict: bool,
+    /// The lease this run holds (its own, or its caller's): a set leased by
+    /// it is its own to remove
+    pub lease: Option<&'a str>,
 }
 
 /// Remove the set named `args.name` at `wt_dir`, after checking it; its
@@ -61,7 +65,7 @@ pub(crate) fn remove_set(
     wt_dir: &std::path::Path,
     configs: &Configs,
     ctx: &Ctx,
-    how: How,
+    how: How<'_>,
     records: &mut Vec<ProjectResult>,
 ) -> Result<()> {
     let How {
@@ -69,6 +73,7 @@ pub(crate) fn remove_set(
         verbose,
         json,
         strict,
+        lease: token,
     } = how;
     let name = &args.name;
     let force = args.force;
@@ -85,7 +90,7 @@ pub(crate) fn remove_set(
         .canonicalize()
         .with_context(|| format!("Cannot resolve {}", escape_path(&wt_dir)))?;
     let found = lease::find(&set);
-    let mine = found.as_ref().is_some_and(|found| found.is_mine());
+    let mine = found.as_ref().is_some_and(|found| found.held_by(token));
     let held = match () {
         _ if mine => None,
         _ if preview => match &found {

@@ -23,115 +23,74 @@ pub struct WorktreeRepoInfo {
     pub created_branch: Option<bool>,
 }
 
-/// Detect if cwd is inside a `.worktrees/<name>/` directory.
-/// Returns (task_name, task_dir, repo_paths) if inside a worktree, None otherwise.
-/// Filesystem-based detection — no store dependency.
+/// The worktree set `cwd` is in: its name and folder, or `None`.
 ///
-/// Walks the path components looking for a `.worktrees` segment followed by a task name.
-/// Works whether cwd is the task dir itself, a repo within it, or deeper inside a repo.
-pub fn detect_worktree_context(cwd: &Path) -> Result<Option<(String, PathBuf, Vec<PathBuf>)>> {
-    let Some((task_name, task_dir)) = detect_worktree_location(cwd)? else {
-        return Ok(None);
-    };
-    let Ok(repos) = discover_worktree_members(&task_dir) else {
-        return Ok(None);
-    };
-    if repos.is_empty() {
-        return Ok(None);
-    }
-    let paths = repos.into_iter().map(|r| r.path).collect();
-    Ok(Some((task_name, task_dir, paths)))
-}
-
-/// Locate the enclosing `.worktrees/<name>` set, or the set meta's record
-/// names for the checkout around `cwd`, without scanning its contents.
-/// This is a location hint, not validation. Callers must validate membership and
-/// report errors rather than silently falling back to a different set on failure.
-/// A record that can't be read is an error.
+/// A set is a folder meta knows by its place, whatever made it and whatever
+/// is in it: the nearest folder at or above `cwd` with an owner file beside
+/// it ([`meta_plugin::sets::owner`]), else the `<name>` folder after a
+/// `.worktrees` part of the path (a set made before owner files, or by
+/// hand). Membership is checked by the caller ([`set_members`]).
 pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>> {
     use std::path::Component;
-
+    // the path as typed, then as it really is (a set reached through a link)
+    let real = cwd.canonicalize().ok();
+    for path in std::iter::once(cwd).chain(real.as_deref()) {
+        for dir in path.ancestors() {
+            let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if meta_plugin::sets::owner(dir)?.is_some() {
+                return Ok(Some((name.to_string(), dir.to_path_buf())));
+            }
+        }
+    }
     let components: Vec<_> = cwd.components().collect();
-
-    // Find the `.worktrees` component and extract the task name (next component)
     for (i, comp) in components.iter().enumerate() {
         if let Component::Normal(name) = comp {
             if name.to_str() == Some(".worktrees") {
-                // Next component after .worktrees is the task name
                 let task_name = match components.get(i + 1) {
                     Some(Component::Normal(n)) => match n.to_str() {
                         Some(n) => n.to_string(),
                         None => return Ok(None),
                     },
-                    _ => return Ok(None), // .worktrees/ with nothing after it
+                    _ => return Ok(None),
                 };
-
-                // Reconstruct the task directory: everything up to and including .worktrees/<task>
                 let task_dir: PathBuf = components.iter().take(i + 2).collect();
                 return Ok(Some((task_name, task_dir)));
-            }
-        }
-    }
-
-    // A set elsewhere (`worktrees_dir` outside, or `.worktrees` a link, so
-    // the real path has no such part): the set meta recorded for the
-    // checkout around `cwd`
-    let Ok(real) = cwd.canonicalize() else {
-        return Ok(None);
-    };
-    for checkout in real.ancestors().filter(|dir| dir.join(".git").is_file()) {
-        let Some(set) = recorded_set(checkout)? else {
-            continue;
-        };
-        if let Some(name) = set.file_name().and_then(|n| n.to_str()) {
-            if real.starts_with(&set) {
-                return Ok(Some((name.to_string(), set)));
             }
         }
     }
     Ok(None)
 }
 
-/// The set, resolved, that meta's record says the checkout at `dir` was
-/// made for; `None` without a record, or when the set is gone.
-fn recorded_set(dir: &Path) -> Result<Option<PathBuf>> {
-    Ok(crate::set_record::member(dir)?.and_then(|(_, record)| record.set.canonicalize().ok()))
+/// The workspace the set at `set_dir` was made from, as its owner file says.
+fn set_origin(set_dir: &Path) -> Result<Option<PathBuf>> {
+    Ok(meta_plugin::sets::owner(set_dir)?.map(|owner| owner.workspace))
 }
 
 /// The config that names the members of the set at `set_dir`: the set's own
-/// (its root checkout's), else the config of the workspace meta recorded the
-/// set was made from. Only a set without meta's records looks above itself.
-pub fn set_config(
-    set_dir: &Path,
-    members: &[PathBuf],
-    config_name: Option<&PathBuf>,
-) -> Result<Option<PathBuf>> {
+/// (its root checkout's), else the config of the workspace its owner file
+/// says it was made from, else (a set without one) the nearest above it.
+pub fn set_config(set_dir: &Path, config_name: Option<&PathBuf>) -> Result<Option<PathBuf>> {
     use crate::config;
     if let Some(found) = config::meta_config_at(set_dir, config_name)? {
         return Ok(Some(found));
     }
-    let origin = set_origin(set_dir, members)
-        .map_err(|e| anyhow::anyhow!("{e:#}. Run meta from the workspace's directory instead."))?;
-    match origin {
+    match set_origin(set_dir)? {
         Some(source) => config::meta_config_at(&source, config_name),
         None => config::find_meta_config(set_dir, config_name),
     }
 }
 
-/// Where `dir`, inside a worktree set meta made, is in the workspace the set
-/// was made from (and from a set made inside another set, on to that one's
-/// workspace), by meta's records in the set's checkouts. None outside a set,
-/// and for a set without records (made by hand).
+/// Where `dir`, inside a worktree set, is in the workspace the set was made
+/// from (and from a set made inside another set, on to that one's
+/// workspace), by the sets' owner files. None outside a set, and for a set
+/// without an owner file.
 pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
     let mut place = dir.to_path_buf();
     let mut seen = Vec::new();
     while let Some((_, set_dir)) = detect_worktree_location(&place)? {
-        let members: Vec<PathBuf> = discover_worktree_members(&set_dir)?
-            .into_iter()
-            .map(|member| member.path)
-            .collect();
-        // set_origin's way out of its error is --primary itself
-        let origin = set_origin(&set_dir, &members).map_err(|e| {
+        let origin = set_origin(&set_dir).map_err(|e| {
             anyhow::anyhow!(
                 "--primary can't tell which workspace worktree set {} was made from: {e:#}. \
                  Run meta from that workspace's directory instead.",
@@ -143,7 +102,7 @@ pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
         };
         let inside = place.strip_prefix(&set_dir).unwrap_or(Path::new(""));
         place = origin.join(inside);
-        // records that lead in a circle lead nowhere
+        // owner files that lead in a circle lead nowhere
         if seen.contains(&place) {
             break;
         }
@@ -152,127 +111,163 @@ pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
     Ok((!seen.is_empty()).then_some(place))
 }
 
-/// The workspace meta recorded the set at `set_dir` was made from, by the
-/// members whose record names this set (another set's checkout moved in
-/// doesn't count). Members that name different workspaces are an error.
-fn set_origin(set_dir: &Path, members: &[PathBuf]) -> Result<Option<PathBuf>> {
-    let set = set_dir
-        .canonicalize()
-        .unwrap_or_else(|_| set_dir.to_path_buf());
-    let mut origin: Option<PathBuf> = None;
-    for member in members {
-        let Some((_, record)) = crate::set_record::member(member)? else {
-            continue;
-        };
-        if record.set.canonicalize().ok().as_ref() != Some(&set) {
-            continue;
-        }
-        let project = record.project;
-        match &origin {
-            Some(first) if *first != project => anyhow::bail!(
-                "The checkouts of worktree set {} name different workspaces ({} and {}); \
-                 meta can't tell which config describes them",
-                escape_path(set_dir),
-                escape_path(first),
-                escape_path(&project)
-            ),
-            _ => origin = Some(project),
-        }
-    }
-    Ok(origin)
-}
-
-/// The checkouts among `members` of the set at `set_dir` that `filters`
-/// select (see [`crate::repo_filter::Scope::select`]). A set lays its repos out as
-/// the workspace, so a checkout is named and tagged by the project at its
-/// place in the set, nested meta repos included, as the set's `workspace`
-/// and the nested configs tell (see [`set_tree`]); a checkout of no project,
-/// such as the set's root, has neither name nor tags.
-pub fn select_in_set(
+/// The members of the set at `set_dir` that `filters` select (see
+/// [`crate::repo_filter::Scope::select`]): the projects of `workspace` (the
+/// set's config, [`set_config`]), nested meta repos' included, whose folder
+/// is in the set at the project's place, and the set's root when it holds
+/// the workspace's config. What a folder holds (a git checkout, a jj
+/// workspace) is its provider's business: meta looks for the folder only.
+/// A checkout is named and tagged by the project at its place, as the set's
+/// config and the nested configs tell (see [`set_tree`]).
+pub fn set_members(
     set_dir: &Path,
-    members: &[PathBuf],
     workspace: Option<&crate::config::Workspace>,
     filters: &crate::repo_filter::Filters,
 ) -> Result<Vec<crate::repo_filter::Candidate>> {
     use crate::repo_filter::{Candidate, Scope};
-    if workspace.is_none() && !filters.tags.is_empty() {
-        anyhow::bail!(
-            "No meta config found for worktree set {}, so --tag cannot select its repos",
-            escape_path(set_dir)
-        );
-    }
+    let Some(workspace) = workspace else {
+        if !filters.tags.is_empty() {
+            anyhow::bail!(
+                "No meta config found for worktree set {}, so --tag cannot select its repos",
+                escape_path(set_dir)
+            );
+        }
+        return Ok(Vec::new());
+    };
     // where each project's checkout is in the set (an outside project's at
     // its name)
     let projects: Vec<_> = workspace
-        .map_or(&[][..], |w| &w.projects)
+        .projects
         .iter()
         .map(|project| crate::config::ProjectInfo {
             path: project.set_place().to_string(),
             ..project.clone()
         })
         .collect();
-    // without a filter, a nested config that can't be read only costs the
-    // names: the command runs in every checkout, as in the workspace
-    let tree = match set_tree(set_dir, members, &projects) {
+    // without a filter, a nested config that can't be read only costs its
+    // projects: the command runs in the others, as in the workspace
+    let tree = match set_tree(set_dir, &projects) {
         Ok(tree) => tree,
-        Err(_) if filters.is_empty() => {
-            return Ok(members.iter().cloned().map(Candidate::root).collect())
-        }
+        Err(_) if filters.is_empty() => projects
+            .iter()
+            .map(|info| crate::config::MetaTreeNode {
+                info: info.clone(),
+                is_meta: false,
+                error: None,
+                children: Vec::new(),
+            })
+            .collect(),
         Err(e) => return Err(e),
     };
-    // Compared as directories: a project at a link in the set is the
-    // checkout where the link leads
-    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let infos: std::collections::HashMap<PathBuf, crate::config::ProjectInfo> =
+    let mut places: Vec<(String, crate::config::ProjectInfo)> =
         crate::config::build_project_map(&tree, set_dir, "")
             .into_iter()
-            .map(|(place, (_, info))| (real(&set_dir.join(place)), info))
+            .map(|(place, (_, info))| (place, info))
             .collect();
-    let repos = members
-        .iter()
-        .map(|member| match infos.get(&real(member)) {
-            Some(info) => Candidate::project(member.clone(), info),
-            None => Candidate::root(member.clone()),
-        })
+    places.sort_by(|a, b| a.0.cmp(&b.0));
+    let tags = places.iter().flat_map(|(_, info)| info.tags.clone()).collect();
+    let config_name = workspace.config_path.file_name();
+    let mut repos: Vec<Candidate> = config_name
+        .filter(|name| set_dir.join(name).is_file())
+        .map(|_| Candidate::root(set_dir.to_path_buf()))
+        .into_iter()
         .collect();
+    let held: Vec<PathBuf> = places
+        .iter()
+        .map(|(place, _)| set_dir.join(place))
+        .filter(|dir| dir.is_dir())
+        .collect();
+    repos.extend(
+        places
+            .iter()
+            .filter(|(place, _)| {
+                let dir = set_dir.join(place);
+                held.contains(&dir) && !only_leads_on(&dir, &held)
+            })
+            .map(|(place, info)| Candidate::project(set_dir.join(place), info)),
+    );
     Scope {
         root: set_dir.to_path_buf(),
-        config: workspace.map(|w| w.config_path.clone()),
+        config: Some(workspace.config_path.clone()),
         repos,
         // a tag of a project the set doesn't hold is no typo
-        tags: infos.into_values().flat_map(|info| info.tags).collect(),
+        tags,
         nested: true,
     }
     .select_repos(filters)
 }
 
+/// Whether the folder `dir` holds nothing but the way to other members'
+/// folders (`held`): the folder a nested project's checkout sits in, not a
+/// checkout itself. A folder that can't be read counts as a member.
+fn only_leads_on(dir: &Path, held: &[PathBuf]) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let mut any = false;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let path = entry.path();
+        let real_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+        let leads = real_dir
+            && held
+                .iter()
+                .any(|member| member != dir && member.starts_with(&path));
+        if !leads {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
 /// The meta tree that describes the checkouts of the set at `set_dir`, whose
-/// config lists `projects`: the nested configs of the workspace the set was
-/// made from, for nested meta repos the set doesn't hold (one skipped, say),
-/// then the set's own, so a map built from it in order lets the set's win.
-/// The workspace's part is best effort: what neither tells about stays
-/// unselected.
+/// config lists `projects`: the tree of the workspace the set was made from
+/// (its owner file says which; what `create` planned from, the projects its
+/// config on disk lists, which the set's checked-out config may not), for
+/// what the set's own configs don't hold, then the set's own, so a map built
+/// from it in order lets the set's win. The workspace's part is best effort:
+/// what neither tells about stays unselected.
 fn set_tree(
     set_dir: &Path,
-    members: &[PathBuf],
     projects: &[crate::config::ProjectInfo],
 ) -> Result<Vec<crate::config::MetaTreeNode>> {
     use crate::config;
     let own = config::walk_projects(set_dir, projects, None)?;
-    let mut tree: Vec<_> = set_origin(set_dir, members)?
+    let mut tree: Vec<_> = set_origin(set_dir)?
         .map(|dir| {
+            // where each project of the workspace sits in the set
+            let origin: Vec<config::ProjectInfo> = config::Workspace::in_dir(&dir)
+                .ok()
+                .flatten()
+                .map(|w| {
+                    w.projects
+                        .iter()
+                        .map(|project| config::ProjectInfo {
+                            path: project.set_place().to_string(),
+                            ..project.clone()
+                        })
+                        .collect()
+                })
+                .unwrap_or_else(|| projects.to_vec());
             let mut visited = std::collections::HashSet::new();
-            not_held(readable_tree(&dir, projects, &mut visited), set_dir)
+            readable_tree(&dir, set_dir, &origin, &mut visited)
         })
         .unwrap_or_default();
     tree.extend(own);
     Ok(tree)
 }
 
-/// The meta tree of `projects` in `dir`, passing over each nested config
-/// that can't be read: one broken config loses only its own projects.
+/// The meta tree of `projects` listed in `dir` (the workspace a set was made
+/// from), each nested meta repo's projects read from its checkout in the
+/// set at `set` when that holds its config, else from the workspace's,
+/// passing over each nested config that can't be read: one broken config
+/// loses only its own projects.
 fn readable_tree(
     dir: &Path,
+    set: &Path,
     projects: &[crate::config::ProjectInfo],
     visited: &mut std::collections::HashSet<PathBuf>,
 ) -> Vec<crate::config::MetaTreeNode> {
@@ -280,14 +275,17 @@ fn readable_tree(
     projects
         .iter()
         .map(|project| {
-            let path = dir.join(&project.path);
-            let nested = config::find_meta_config_in(&path).ok().flatten();
+            let (path, place) = (dir.join(&project.path), set.join(&project.path));
+            let nested = match config::find_meta_config_in(&place).ok().flatten() {
+                Some(own) => Some(own),
+                None => config::find_meta_config_in(&path).ok().flatten(),
+            };
             // each meta repo once, as `walk_projects` does: links can loop
             let children = nested
                 .as_ref()
                 .filter(|_| visited.insert(path.canonicalize().unwrap_or_else(|_| path.clone())))
                 .and_then(|config| config::Workspace::load(config).ok())
-                .map(|nested| readable_tree(&path, &nested.projects, visited))
+                .map(|nested| readable_tree(&path, &place, &nested.projects, visited))
                 .unwrap_or_default();
             config::MetaTreeNode {
                 info: project.clone(),
@@ -295,25 +293,6 @@ fn readable_tree(
                 error: None,
                 children,
             }
-        })
-        .collect()
-}
-
-/// `nodes` without the projects of the nested meta repos whose config the
-/// set at `dir` holds: those the set's own tree describes.
-fn not_held(
-    nodes: Vec<crate::config::MetaTreeNode>,
-    dir: &Path,
-) -> Vec<crate::config::MetaTreeNode> {
-    nodes
-        .into_iter()
-        .map(|mut node| {
-            let place = dir.join(&node.info.path);
-            node.children = match crate::config::find_meta_config_in(&place) {
-                Ok(Some(_)) => Vec::new(),
-                _ => not_held(node.children, &place),
-            };
-            node
         })
         .collect()
 }
@@ -587,6 +566,12 @@ pub struct WorktreeMemberInfo {
     pub alias: String,
     pub path: PathBuf,
     pub source_path: PathBuf,
+}
+
+/// The set, resolved, that meta-git's record says the checkout at `dir` was
+/// made for; `None` without a record, or when the set is gone.
+fn recorded_set(dir: &Path) -> Result<Option<PathBuf>> {
+    Ok(crate::set_record::member(dir)?.and_then(|(_, record)| record.set.canonicalize().ok()))
 }
 
 /// Which checkouts in a set are its members. `.git` and a nested
@@ -899,11 +884,16 @@ mod recursive_tests {
         // though not by the one checked out in the set
         let source = source_repo(&root.join("parent")).unwrap();
         std::fs::write(source.join(".meta.yaml"), "projects:\n  nested: u\n").unwrap();
-        let (name, observed_root, paths) = detect_worktree_context(&root.join("parent/nested"))
+        let (name, observed_root) = detect_worktree_location(&root.join("parent/nested"))
             .unwrap()
             .unwrap();
         assert_eq!(name, "example");
         assert_eq!(observed_root, root);
+        let paths: Vec<PathBuf> = discover_worktree_members(&root)
+            .unwrap()
+            .into_iter()
+            .map(|member| member.path)
+            .collect();
         assert_eq!(
             paths,
             vec![

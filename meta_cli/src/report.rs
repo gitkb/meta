@@ -61,6 +61,18 @@ impl Report {
         use crate::events::Show;
         let told = self.told;
         let json = show != Show::Text;
+        // silenced, the first failure's name and why, as its summary line
+        let first_failure = self.results.iter().find(|r| r.error.is_some()).map(|r| {
+            format!(
+                "{}: {}",
+                // named as the summary names it: ./api, . for the root
+                match r.project.as_deref() {
+                    None | Some(".") => ".".to_string(),
+                    Some(path) => format!("./{}", meta_plugin::display::escape(path)),
+                },
+                last_line(r.stderr.as_deref())
+            )
+        });
         let envelope = self.envelope();
         match show {
             Show::Text => {}
@@ -72,7 +84,10 @@ impl Report {
         };
         let code = error.code.exit_code();
         match (json, told, silent) {
-            (false, true, true) => anyhow::bail!("At least one command failed"),
+            (false, true, true) => match first_failure {
+                Some(why) => anyhow::bail!("At least one command failed: {why}"),
+                None => anyhow::bail!("At least one command failed"),
+            },
             // the hint said under the error, as one
             (false, false, _) => Err(ErrorInfo {
                 message: match &error.hint {
@@ -88,4 +103,19 @@ impl Report {
             _ => Err(meta_plugin::exit::ExitWith(code).into()),
         }
     }
+}
+
+/// The last line of `stderr` that has anything on it, escaped, or that
+/// there was none.
+fn last_line(stderr: Option<&str>) -> String {
+    stderr
+        .unwrap_or_default()
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map_or_else(
+            || "no stderr".to_string(),
+            |line| meta_plugin::display::escape(line).into_owned(),
+        )
 }

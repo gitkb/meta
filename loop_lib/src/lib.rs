@@ -919,7 +919,14 @@ impl Outcome {
     pub fn finish(&self) -> Result<()> {
         match self.error() {
             None => Ok(()),
-            Some(_) if self.silent => anyhow::bail!("At least one command failed"),
+            Some(_) if self.silent => match self.results.iter().find(|r| !r.success) {
+                Some(first) => anyhow::bail!(
+                    "At least one command failed: {}: {}",
+                    escape_path(&first.directory),
+                    first.why()
+                ),
+                None => anyhow::bail!("At least one command failed"),
+            },
             Some(_) => Err(meta_plugin::exit::ExitWith(1).into()),
         }
     }
@@ -1296,11 +1303,12 @@ fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> 
 fn print_silenced_failures(config: &LoopConfig, results: &[CommandResult]) {
     for result in results.iter().filter(|r| !r.success) {
         errln!(
-            "{} {}: {} ({})",
+            "{} {}: {} ({}): {}",
             meta_plugin::out::label("✗", |l| l.red()),
             result_name(&result.directory, config.root_dir.as_deref()),
             escape(&result.command),
-            result.ending()
+            result.ending(),
+            result.why()
         );
         match result.too_much_output {
             Some(over) => errln!("{over}"),

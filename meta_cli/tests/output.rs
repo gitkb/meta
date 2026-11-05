@@ -220,3 +220,40 @@ fn a_silenced_command_runs_to_its_end_however_much_it_writes() {
         assert!(!text.contains("16 MiB"), "{order:?}: {}", text.len());
     }
 }
+
+/// Silenced, each failed repo's line and the closing error still say why:
+/// the last line of its stderr, or that it wrote none.
+#[test]
+fn silenced_failures_say_why_or_that_there_was_no_stderr() {
+    let sandbox = Sandbox::new();
+    let root = workspace(&sandbox);
+    for (failing, why) in [
+        (
+            r#"printf "LAST diagnostic\n" >&2; exit 1"#,
+            "LAST diagnostic",
+        ),
+        ("exit 1", "no stderr"),
+    ] {
+        let out = meta(
+            &sandbox,
+            &root,
+            &["--silent", "-i", "a", "exec", "--", "sh", "-c", failing],
+        )
+        .output()
+        .unwrap();
+        assert!(!out.status.success());
+        let text = String::from_utf8_lossy(&out.stderr);
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("./a") && l.ends_with(&format!(": {why}"))),
+            "{text}"
+        );
+        assert_eq!(
+            lines.last().copied(),
+            Some(format!("Error: At least one command failed: ./a: {why}").as_str()),
+            "{text}"
+        );
+    }
+}

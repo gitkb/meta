@@ -30,6 +30,20 @@ meta -r exec -- cargo test  # Runs across all nested repos
 
 **What `meta` does:** Clones the repos a workspace lists, runs commands across them in parallel (`meta exec`), manages git worktrees across the entire workspace (`meta git worktree`), and provides project-level coordination.
 
+## Contracts with other repos
+
+Other repos run and read meta, so these are contracts: CLI arguments and option order, `--json` fields, exit codes, text a caller parses (`meta --dry-run git worktree create` output, `--metadata-only` in `meta git worktree list --help`), `.meta.yaml`, the `META_WORKTREES` variable, and the plugin protocol.
+
+Before merging a change to one, find its callers and test the real pair:
+
+1. Search every repo in the harmony checkout, scripts, workflows and skills included. Child repos are gitignored, so plain `rg` skips them: use `rg --no-ignore`.
+2. Additive change that callers can ignore (a new field or flag): say so in the PR.
+3. Breaking change: put `!` in the PR title. List every caller repo in the PR body with its companion PR, or "none found" and the search you ran.
+4. Each companion PR moves the caller's pin of the producer to this PR's head, so its CI runs the real pair. A caller with no pin runs against a build of this PR's head instead, and its PR shows the result. A fake `meta` script alone proves nothing.
+5. Both PRs pass on that pair and merge together, meta first.
+
+How-to and the known callers: the `stack-development` skill.
+
 ## Logging & Debugging
 
 The meta CLI uses the `log` crate with `env_logger`. Use `RUST_LOG` to control debug output:

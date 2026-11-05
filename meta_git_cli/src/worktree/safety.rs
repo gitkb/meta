@@ -278,6 +278,30 @@ fn remove_empty_dirs(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// `record` as it reads after its workspace was moved: when the set and the
+/// workspace it names are both gone, and `set` has the same place under some
+/// folder as the set had under that workspace, that folder is the workspace
+/// now. Every check then applies to where things are: whether the folder
+/// is this workspace and the repository one of its own is still asked. A set
+/// moved inside a workspace that is still there is not this.
+fn followed_its_workspace(mut record: SetRecord, set: &Path) -> SetRecord {
+    let gone = |path: &Path| path.symlink_metadata().is_err();
+    if record.set == set || !gone(&record.set) || !gone(&record.project) {
+        return record;
+    }
+    let Ok(place) = record.set.strip_prefix(&record.project) else {
+        return record;
+    };
+    if !set.ends_with(place) {
+        return record;
+    }
+    if let Some(project) = set.ancestors().nth(place.components().count()) {
+        record.project = project.to_path_buf();
+        record.set = set.to_path_buf();
+    }
+    record
+}
+
 /// Add the linked worktree at `path`, with its admin directory and its
 /// repository's git directory, to the members of the set resolved to `set`.
 fn add_member(
@@ -299,6 +323,7 @@ fn add_member(
             None
         }
     };
+    let record = record.map(|record| followed_its_workspace(record, set));
     if let Some(other) = record.as_ref().filter(|r| r.set != set) {
         check
             .blockers

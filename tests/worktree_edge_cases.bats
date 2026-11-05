@@ -2287,11 +2287,17 @@ J
     run "$META_BIN" git worktree list
     [ "$status" -eq 0 ]
     [[ "$output" == *"t"* ]]
-    # meta-git's records name the workspace where it was; remove keeps its
-    # own refusal for a set another workspace made, as before
+    # remove keeps every check: work in a checkout is refused
+    echo work > "$MOVED/.worktrees/t/backend/untracked.txt"
     run "$META_BIN" git worktree remove t
     [ "$status" -ne 0 ]
-    [[ "$output" == *"made it, and it is gone or was moved"* ]]
+    [ -e "$MOVED/.worktrees/t/backend/untracked.txt" ]
+    rm "$MOVED/.worktrees/t/backend/untracked.txt"
+    run "$META_BIN" --dry-run git worktree remove t
+    [ "$status" -eq 0 ]
     [ -d "$MOVED/.worktrees/t/backend" ]
+    run "$META_BIN" git worktree remove t
+    [ "$status" -eq 0 ]
+    [ ! -e "$MOVED/.worktrees/t" ]
     mv "$MOVED" "$TEST_DIR"
 }

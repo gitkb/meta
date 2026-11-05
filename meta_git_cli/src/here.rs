@@ -209,6 +209,7 @@ impl<'a> Tree<'a> {
     /// What the tree's own config lists.
     pub fn listing(&self) -> Listing {
         Listing {
+            asked: false,
             dir: self.dir.clone(),
             projects: self
                 .top()
@@ -237,6 +238,10 @@ pub(crate) struct Listed {
 /// What a meta repo's config lists.
 #[derive(Debug, Clone)]
 pub(crate) struct Listing {
+    /// Read back from meta (`project list`), which hides the credentials
+    /// in a URL: such a URL is no URL to clone from. Else from the request,
+    /// where each URL is as configured.
+    pub asked: bool,
     pub dir: PathBuf,
     pub projects: Vec<Listed>,
 }
@@ -261,6 +266,7 @@ impl Listing {
             })
             .collect();
         Ok(Some(Listing {
+            asked: true,
             dir: dir.to_path_buf(),
             projects,
         }))

@@ -249,6 +249,23 @@ pub(crate) fn printed(
 /// anew. In text it shows as it runs; under `--json` its rows are this
 /// call's.
 pub(crate) fn again(ctx: &Ctx, request: &Request) -> anyhow::Result<Response> {
+    let words: Vec<String> = request
+        .command
+        .split_whitespace()
+        .map(str::to_string)
+        .chain(request.args.iter().cloned())
+        .collect();
+    through_meta(ctx, request, &request.cwd, &words)
+}
+
+/// Run `meta <meta's options as typed> <words>` from `cwd`, as [`again`]
+/// does: in text as it shows, under `--json` its rows this call's.
+pub(crate) fn through_meta(
+    ctx: &Ctx,
+    request: &Request,
+    cwd: &std::path::Path,
+    words: &[String],
+) -> anyhow::Result<Response> {
     let json = ctx.meta().json;
     let args: Vec<String> = request
         .meta_options
@@ -256,12 +273,9 @@ pub(crate) fn again(ctx: &Ctx, request: &Request) -> anyhow::Result<Response> {
         .iter()
         .filter(|word| !(json && *word == "--json"))
         .cloned()
-        .chain(request.command.split_whitespace().map(str::to_string))
-        .chain(request.args.iter().cloned())
+        .chain(words.iter().cloned())
         .collect();
-    let meta = meta_plugin::client::Meta::from_env()?
-        .cwd(&request.cwd)
-        .args(args);
+    let meta = meta_plugin::client::Meta::from_env()?.cwd(cwd).args(args);
     if !json {
         let status = meta.inherit()?;
         return match status.success() {

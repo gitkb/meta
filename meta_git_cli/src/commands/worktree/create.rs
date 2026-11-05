@@ -957,7 +957,12 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
         places.join(", ")
     );
     let dirs: Vec<_> = missing.iter().map(|r| r.source.clone()).collect();
-    let cloned = crate::clone_missing::clone_dirs(&index.listing(), &dirs, "git worktree create")?;
+    let cloned = crate::clone_missing::clone_dirs(
+        &index.listing(),
+        index.members,
+        &dirs,
+        "git worktree create",
+    )?;
     // the ones still not there, for the error: those cloned are fine now
     let still: Vec<PlannedRepo> = missing
         .iter()

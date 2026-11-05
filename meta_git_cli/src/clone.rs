@@ -197,6 +197,10 @@ pub(crate) fn execute_git_clone(
         if let Some(error) = crate::clone_worker::report_failures(&queue, "git clone-missing") {
             anyhow::bail!("{error}");
         }
+        // only ones whose URL holds credentials: through meta, as configured
+        if let Some(rest) = crate::update::deferred(ctx, request, &clone_dir_path, &queue, true)? {
+            return Ok(rest);
+        }
         return Ok(Response::message("No child repositories to clone"));
     }
 
@@ -236,6 +240,12 @@ pub(crate) fn execute_git_clone(
     if let Some(error) = crate::clone_worker::report_failures(&queue, "git clone-missing") {
         let rows = crate::clone_worker::failure_rows(&queue, &clone_dir_path);
         return crate::printed(ctx, rows, Some(anyhow::anyhow!("{error}")));
+    }
+
+    // the projects whose URL holds credentials: through meta, as configured
+    if let Some(rest) = crate::update::deferred(ctx, request, &clone_dir_path, &queue, true)? {
+        outln!("Meta-repo clone completed; cloning the rest")?;
+        return Ok(rest);
     }
 
     let (completed, total) = queue.get_counts();

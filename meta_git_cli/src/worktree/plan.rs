@@ -40,6 +40,8 @@ pub struct Index<'a> {
     /// root): what meta's names of nested projects start with
     pub prefix: String,
     tree: Tree<'a>,
+    /// meta's members of the workspace, each URL as configured
+    pub members: &'a [meta_plugin::Project],
     /// With `--recursive`: how deep (none: no limit)
     depth: Option<Option<usize>>,
 }
@@ -53,6 +55,7 @@ impl<'a> Index<'a> {
                 .map(|place| format!("{place}/"))
                 .unwrap_or_default(),
             tree: here.tree(),
+            members: &here.workspace.members,
             depth: None,
         }
     }

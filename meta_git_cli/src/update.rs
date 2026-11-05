@@ -58,6 +58,38 @@ pub(crate) fn workspace(request: &Request, command: &str, in_set: &str) -> anyho
     Ok(here.tree().listing())
 }
 
+/// Clone the projects `queue` left for another run (their URL holds
+/// credentials meta hides in what it reads back): `meta git clone-missing`
+/// from `cwd` with meta's options as typed, whose request has each URL as
+/// configured. `None` when there are none. One whose config didn't change
+/// in this run (`fresh`: or all of them, for a run whose configs are none
+/// of meta's request) another run can't do better on: an error naming it.
+pub(crate) fn deferred(
+    ctx: &Ctx,
+    request: &Request,
+    cwd: &Path,
+    queue: &CloneQueue,
+    fresh: bool,
+) -> anyhow::Result<Option<Response>> {
+    let deferred = queue.outcome().deferred;
+    if deferred.is_empty() {
+        return Ok(None);
+    }
+    if !fresh && !deferred.iter().any(|(_, _, new)| *new) {
+        let names: Vec<String> = deferred
+            .iter()
+            .map(|(name, _, _)| escape(name).into_owned())
+            .collect();
+        anyhow::bail!(
+            "Not cloned: {}; meta's view of the workspace doesn't give their URLs, which hold \
+             credentials. Run 'meta git clone-missing' in the meta repo that lists them.",
+            names.join(", ")
+        );
+    }
+    let words = ["git".to_string(), "clone-missing".to_string()];
+    crate::through_meta(ctx, request, cwd, &words).map(Some)
+}
+
 /// The folder projects are named from in records: the workspace root meta
 /// names them from, else `root`.
 pub(crate) fn named<'a>(request: &'a Request, root: &'a Path) -> &'a Path {
@@ -119,7 +151,9 @@ pub(crate) fn execute_git_update(
 
     // No git depth for update; the workspace's projects as --config lists them
     let config = request.workspace()?.config.clone();
-    let queue = CloneQueue::new(None, meta_depth, true).config(&workspace.dir, &config);
+    let queue = CloneQueue::new(None, meta_depth, true)
+        .config(&workspace.dir, &config)
+        .raw(&request.workspace()?.members);
     let root = workspace.dir.as_path();
     let name = root_name(root);
     let top = || Arc::from([MetaRepo::at(&name, root, None)]);
@@ -168,7 +202,9 @@ pub(crate) fn execute_git_update(
 
     // Progress counts to the repos the .meta.yaml files on disk list, the
     // workspace's own first; pulls that add projects add to it
-    let on_disk = CloneQueue::new(None, meta_depth, false).config(&workspace.dir, &config);
+    let on_disk = CloneQueue::new(None, meta_depth, false)
+        .config(&workspace.dir, &config)
+        .raw(&request.workspace()?.members);
     if on_disk.discover_in(&workspace, 0, &top()).is_ok() {
         let own = usize::from(matches!(Checkout::of(root), Checkout::Repo { .. }));
         queue.expect(on_disk.found() + own);
@@ -204,6 +240,10 @@ pub(crate) fn execute_git_update(
         return crate::printed(ctx, rows, Some(anyhow::anyhow!("{error}")));
     }
     let (pulled, cloned) = (outcome.pulled, outcome.cloned.len());
+    if let Some(response) = deferred(ctx, request, cwd, &queue, false)? {
+        outln!("Update completed ({pulled} pulled, {cloned} cloned); cloning the rest")?;
+        return Ok(response);
+    }
     let not_pulled = match outcome.not_pulled.len() {
         0 => String::new(),
         n => format!(", {n} with nothing to pull from"),

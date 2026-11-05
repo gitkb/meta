@@ -143,7 +143,9 @@ pub(crate) fn execute(steps: Steps, ctx: &Ctx, request: &Request) -> anyhow::Res
     // the workspace's own projects as --config lists them, and those its
     // default config lists counted as listed too
     let config = request.workspace()?.config.clone();
-    let mut queue = CloneQueue::new(None, meta_depth, false).config(root, &config);
+    let mut queue = CloneQueue::new(None, meta_depth, false)
+        .config(root, &config)
+        .raw(&request.workspace()?.members);
     // a selection that leaves out a project the workspace has: only those
     if filtered(request) {
         queue = queue.only(request.projects.iter().map(|p| p.abs.clone()));
@@ -294,6 +296,14 @@ pub(crate) fn execute(steps: Steps, ctx: &Ctx, request: &Request) -> anyhow::Res
         let error = anyhow::anyhow!("{failed_removals} repositories could not be removed");
         return crate::printed(ctx, records, Some(error));
     }
+    if !preview && steps.clones() {
+        if let Some(rest) = update::deferred(ctx, request, cwd, &queue, false)? {
+            records.extend(match rest.answer {
+                meta_plugin::Answer::Results(results) => results.records,
+                _ => Vec::new(),
+            });
+        }
+    }
     if !preview {
         let cloned = format!("{} cloned", outcome.cloned.len());
         let pruned = format!("{removed} removed, {kept} kept");
@@ -325,11 +335,14 @@ fn filtered(request: &Request) -> bool {
 /// it cloned, or the error naming each clone that failed.
 pub(crate) fn clone_dirs(
     workspace: &crate::here::Listing,
+    members: &[meta_plugin::Project],
     dirs: &[PathBuf],
     command: &str,
 ) -> anyhow::Result<Result<Vec<PathBuf>, String>> {
     let root = workspace.dir.as_path();
-    let queue = CloneQueue::new(None, None, false).only(dirs.iter().cloned());
+    let queue = CloneQueue::new(None, None, false)
+        .only(dirs.iter().cloned())
+        .raw(members);
     let top = Arc::from([MetaRepo::at(&update::root_name(root), root, None)]);
     let tasks = queue.discover_in(workspace, 0, &top)?;
     let urls: Vec<_> = tasks

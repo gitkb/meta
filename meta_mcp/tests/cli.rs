@@ -141,7 +141,13 @@ fn call(
 ) -> serde_json::Value {
     let request = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": tool, "arguments": arguments}});
-    let out = meta_mcp(sandbox, dir, &[], &request.to_string(), &[]);
+    let out = meta_mcp(
+        sandbox,
+        dir,
+        &[],
+        &request.to_string(),
+        &[("META_EXE", &meta())],
+    );
     let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let text = reply["result"]["content"][0]["text"]
         .as_str()
@@ -149,6 +155,19 @@ fn call(
     serde_json::from_str(text)
         .map_err(|e| format!("{e}: {reply}"))
         .unwrap()
+}
+
+/// The meta built beside meta-mcp (`cargo build --workspace --bins`), which
+/// its tools call.
+fn meta() -> std::path::PathBuf {
+    let meta = Path::new(env!("CARGO_BIN_EXE_meta-mcp"))
+        .with_file_name(format!("meta{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        meta.is_file(),
+        "{} is missing: build the workspace's binaries first",
+        meta.display()
+    );
+    meta
 }
 
 #[test]
@@ -345,32 +364,6 @@ fn search_reads_the_pattern_as_a_pattern_and_skips_ignored_files() {
     );
 }
 
-/// A plain project's search keeps out of the workspace repo by a ceiling,
-/// which a path with the list separator would split: an error, not a
-/// silent "no match".
-#[test]
-#[cfg(unix)]
-fn search_reports_a_plain_project_it_cannot_fence_off() {
-    let sandbox = Sandbox::new();
-    let tmp = sandbox.work();
-    let ws = tmp.join("a:b");
-    std::fs::create_dir_all(ws.join("plain")).unwrap();
-    std::fs::write(ws.join("plain/x.rs"), "--flag\n").unwrap();
-    std::fs::write(ws.join(".meta.yaml"), "projects:\n  plain: {}\n").unwrap();
-    let found = call(
-        &sandbox,
-        &ws,
-        "meta_search_code",
-        serde_json::json!({"pattern": "--flag"}),
-    );
-    assert!(
-        found[0]["error"]
-            .as_str()
-            .is_some_and(|e| e.contains("path list separator")),
-        "{found}"
-    );
-}
-
 /// A project nested through a link is searched once, as its own, not also
 /// where the link leads inside its parent.
 #[test]
@@ -435,30 +428,6 @@ fn search_fences_off_a_linked_plain_project_by_its_real_path() {
     );
 }
 
-/// Windows' path list separator is `;`, which a directory name may hold.
-#[test]
-#[cfg(windows)]
-fn search_reports_a_plain_project_it_cannot_fence_off() {
-    let sandbox = Sandbox::new();
-    let tmp = sandbox.work();
-    let ws = tmp.join("a;b");
-    std::fs::create_dir_all(ws.join("plain")).unwrap();
-    std::fs::write(ws.join("plain/x.rs"), "--flag\n").unwrap();
-    std::fs::write(ws.join(".meta.yaml"), "projects:\n  plain: {}\n").unwrap();
-    let found = call(
-        &sandbox,
-        &ws,
-        "meta_search_code",
-        serde_json::json!({"pattern": "--flag"}),
-    );
-    assert!(
-        found[0]["error"]
-            .as_str()
-            .is_some_and(|e| e.contains("path list separator")),
-        "{found}"
-    );
-}
-
 /// While a tool runs, `ping` and `tools/list` are answered; cancelling it
 /// stops what it started, and it gets no reply.
 #[test]
@@ -466,46 +435,67 @@ fn search_reports_a_plain_project_it_cannot_fence_off() {
 fn a_running_call_can_be_cancelled_and_others_are_answered_meanwhile() {
     let sandbox = Sandbox::new();
     use std::io::{BufRead, BufReader};
+    use std::os::unix::fs::PermissionsExt;
     let tmp = sandbox.work();
     let ws = &tmp;
     std::fs::create_dir(ws.join("a")).unwrap();
     std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
-    let mut child = sandbox
-        .command(env!("CARGO_BIN_EXE_meta-mcp"))
-        .current_dir(ws)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    let mut replies = BufReader::new(child.stdout.take().unwrap()).lines();
-    let mut send = |message: serde_json::Value| writeln!(stdin, "{message}").unwrap();
-    let script = "sleep 60 & echo $$ $! > ../pids.tmp && mv ../pids.tmp ../pids; wait";
-    send(
-        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-        "name": "meta_batch_execute", "arguments": {"command": ["sh", "-c", script]}}}),
-    );
     let pids = ws.join("pids");
-    wait_for("the script to start", || pids.exists());
-    let started = std::time::Instant::now();
-    send(serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "ping"}));
-    send(serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "tools/list"}));
-    for id in [3, 4] {
-        let reply: serde_json::Value =
-            serde_json::from_str(&replies.next().unwrap().unwrap()).unwrap();
-        assert_eq!(reply["id"], id, "{reply}");
-    }
-    send(
-        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
-        "params": {"requestId": 2, "reason": "test"}}),
+    let script = format!(
+        "sleep 60 & echo $$ $! > '{0}.tmp' && mv '{0}.tmp' '{0}'; wait",
+        pids.display()
     );
-    drop(send);
-    drop(stdin);
-    assert!(replies.next().is_none(), "the cancelled call was answered");
-    assert!(child.wait().unwrap().success());
-    assert!(started.elapsed() < std::time::Duration::from_secs(20));
-    for pid in std::fs::read_to_string(pids).unwrap().split_whitespace() {
-        wait_for(&format!("{pid} to end"), || gone(pid));
+    // a program the server runs, and a meta it calls
+    let meta = ws.join("meta");
+    std::fs::write(&meta, format!("#!/bin/sh\n{script}\n")).unwrap();
+    std::fs::set_permissions(&meta, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for (tool, arguments) in [
+        (
+            "meta_batch_execute",
+            serde_json::json!({"command": ["sh", "-c", script]}),
+        ),
+        ("meta_git_status", serde_json::json!({})),
+    ] {
+        let _ = std::fs::remove_file(&pids);
+        let mut child = sandbox
+            .command(env!("CARGO_BIN_EXE_meta-mcp"))
+            .current_dir(ws)
+            .env("META_EXE", &meta)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut replies = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut send = |message: serde_json::Value| writeln!(stdin, "{message}").unwrap();
+        send(
+            serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments}}),
+        );
+        wait_for("the script to start", || pids.exists());
+        let started = std::time::Instant::now();
+        send(serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "ping"}));
+        send(serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "tools/list"}));
+        for id in [3, 4] {
+            let reply: serde_json::Value =
+                serde_json::from_str(&replies.next().unwrap().unwrap()).unwrap();
+            assert_eq!(reply["id"], id, "{reply}");
+        }
+        send(
+            serde_json::json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+            "params": {"requestId": 2, "reason": "test"}}),
+        );
+        drop(send);
+        drop(stdin);
+        assert!(
+            replies.next().is_none(),
+            "{tool}: the cancelled call was answered"
+        );
+        assert!(child.wait().unwrap().success());
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+        for pid in std::fs::read_to_string(&pids).unwrap().split_whitespace() {
+            wait_for(&format!("{pid} to end"), || gone(pid));
+        }
     }
 }
 

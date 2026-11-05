@@ -67,9 +67,17 @@ impl Meta {
     /// The meta that started this program. An error when none did (no
     /// [`EXE_VAR`]), and when the call would be deeper than [`MAX_DEPTH`].
     pub fn from_env() -> Result<Self> {
-        let exe = std::env::var_os(EXE_VAR).map(PathBuf::from).with_context(|| {
+        let exe = std::env::var_os(EXE_VAR).with_context(|| {
             format!("{EXE_VAR} is not set: only a program meta started can call meta back")
         })?;
+        Self::new(exe)
+    }
+
+    /// The meta at `exe` (a path, or a name looked up in `PATH`), for a
+    /// program that may have been started by something other than meta (an
+    /// agent's MCP server). As with [`Meta::from_env`], the call is one
+    /// level deeper than this program, and an error past [`MAX_DEPTH`].
+    pub fn new(exe: impl Into<PathBuf>) -> Result<Self> {
         let depth = depth()? + 1;
         if depth > MAX_DEPTH {
             anyhow::bail!(
@@ -77,7 +85,7 @@ impl Meta {
             );
         }
         Ok(Meta {
-            exe,
+            exe: exe.into(),
             depth,
             cwd: None,
             args: Vec::new(),
@@ -210,6 +218,12 @@ impl Running {
         })
     }
 
+    /// Whether meta has ended (its Envelope may still be being read), so a
+    /// caller waiting for it can [`Running::stop`] it meanwhile.
+    pub fn ended(&mut self) -> bool {
+        !matches!(self.child.try_wait(), Ok(None))
+    }
+
     /// Stop it and everything it started (SIGTERM to its process group; on
     /// Windows its job is ended). [`Running::wait`] then says how it ended.
     pub fn stop(&mut self) {
@@ -237,6 +251,11 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(refused.contains("META_EXE is not set"), "{refused}");
+        // a meta named by its caller counts its depth the same way
+        let named = |depth| temp_env(&[(DEPTH_VAR, depth)], || Meta::new("meta"));
+        assert_eq!(named(None).unwrap().exe, PathBuf::from("meta"));
+        assert_eq!(named(Some("7")).unwrap().depth, 8);
+        assert!(named(Some("8")).is_err());
     }
 
     #[test]

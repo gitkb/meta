@@ -185,7 +185,8 @@ project of the set (e.g. `open-source/sdk/core` inside `open-source`) too, as
 add nothing inside a set. The root repo is part of a set by default, so the set
 has its own `.meta.yaml` config; otherwise meta reads the config of the workspace
 the set was made from. A set with no members is an error, never a reason to run
-in the workspace. `meta --primary <command>` bypasses detection and acts on the
+in the workspace. `meta --config <file> <command>` naming a config outside the
+set acts on that config's workspace instead. `meta --primary <command>` bypasses detection and acts on the
 workspace the set was made from (its owner file says which), from wherever you
 are in the set.
 

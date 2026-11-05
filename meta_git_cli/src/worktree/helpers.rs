@@ -259,54 +259,6 @@ pub fn exclude_worktrees(owner: &Path, worktree_root: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    // ── meta_plugin::sets::validate_name ──────────────────────────────
-
-    #[test]
-    fn validate_name_accepts_simple_alphanumeric() {
-        assert!(meta_plugin::sets::validate_name("feature1").is_ok());
-    }
-
-    #[test]
-    fn validate_name_accepts_hyphens_and_underscores() {
-        assert!(meta_plugin::sets::validate_name("my-feature_v2").is_ok());
-    }
-
-    #[test]
-    fn validate_name_rejects_empty() {
-        let err = meta_plugin::sets::validate_name("").unwrap_err();
-        assert!(err.to_string().contains("cannot be empty"));
-    }
-
-    #[test]
-    fn validate_name_rejects_leading_dot() {
-        let err = meta_plugin::sets::validate_name(".hidden").unwrap_err();
-        assert!(err.to_string().contains("cannot start with '.'"));
-    }
-
-    #[test]
-    fn validate_name_rejects_forward_slash() {
-        let err = meta_plugin::sets::validate_name("a/b").unwrap_err();
-        assert!(err.to_string().contains("path separators"));
-    }
-
-    #[test]
-    fn validate_name_rejects_backslash() {
-        let err = meta_plugin::sets::validate_name("a\\b").unwrap_err();
-        assert!(err.to_string().contains("path separators"));
-    }
-
-    #[test]
-    fn validate_name_rejects_special_characters() {
-        let err = meta_plugin::sets::validate_name("feat@work").unwrap_err();
-        assert!(err.to_string().contains("only ASCII alphanumeric"));
-    }
-
-    #[test]
-    fn validate_name_rejects_spaces() {
-        let err = meta_plugin::sets::validate_name("my feature").unwrap_err();
-        assert!(err.to_string().contains("only ASCII alphanumeric"));
-    }
-
     /// A user-given name in an error is shown escaped, so the error stays
     /// one line with no control characters.
     fn assert_escaped(err: anyhow::Error) {

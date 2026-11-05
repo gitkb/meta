@@ -99,10 +99,6 @@ fn owner_path(set: &Path) -> Result<PathBuf> {
 /// config is in `workspace`. Written whole, then put in place.
 pub fn create(set: &Path, provider: &str, workspace: &Path) -> Result<()> {
     let path = owner_path(set)?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .with_context(|| format!("Cannot create {}", escape_path(dir)))?;
-    }
     let owner = Owner {
         provider: provider.to_string(),
         workspace: workspace.to_path_buf(),
@@ -113,10 +109,19 @@ pub fn create(set: &Path, provider: &str, workspace: &Path) -> Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(format!(".tmp.{}", std::process::id()));
     let tmp = PathBuf::from(tmp);
-    let written = serde_json::to_vec_pretty(&owner)
-        .map_err(std::io::Error::other)
-        .and_then(|json| std::fs::write(&tmp, json))
-        .and_then(|()| std::fs::rename(&tmp, &path));
+    let json = serde_json::to_vec_pretty(&owner)?;
+    let write = || {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&tmp, &json).and_then(|()| std::fs::rename(&tmp, &path))
+    };
+    // the folder goes with the last owner file another command forgets:
+    // made again once if it went in between
+    let written = match write() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => write(),
+        written => written,
+    };
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }

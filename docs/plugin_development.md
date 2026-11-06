@@ -23,6 +23,30 @@ The first executable file with the name wins. The file name decides which comman
 
 For `meta <word> ...` meta starts only `meta-<word>`; if it doesn't answer `--meta-plugin-info` within 5 seconds, the command fails naming it. `meta`, `meta help`, `meta --help` and `meta plugin list` start every plugin, and skip with a warning one that doesn't answer in time or answers with anything but its info (a `meta-*` program on PATH that isn't a plugin is just left out).
 
+## Manifests and the command index
+
+A plugin's commands are declared in a manifest, `meta-plugin.toml`, in the plugin's own folder: `.meta/plugins/<name>/` under each meta directory from the nearest one up, `<name>/` under the plugins folder of `~/.meta` (moved by `META_DATA_DIR`), then beside meta's own files (`lib/meta/plugins/<name>/`, found from meta's real path). `META_PLUGIN_DIRS` adds folders for tests. The schema is [`meta_plugin::manifest`](../meta_plugin/src/manifest.rs); an unknown key is an error.
+
+```toml
+name = "tasks"
+
+[commands.test]
+summary = "Run each repo's tests"
+effects = "read"
+scope = "selection"
+plan = ["make", "test"]
+```
+
+Each command has `run` (a program, in any language) or `plan` (an argv meta runs itself), never both; a `run` at the top of the manifest is the default for commands with no `plan`. `[run]` may hold `unix` and `windows` lists of argvs, and the first one found wins.
+
+meta reads every manifest into one index, which answers `meta --json help [COMMAND]`, the `answered by:` line of a command's help, the list of commands, and completions. **The index doesn't run commands yet**: a command still needs a `meta-<word>` program as above, and `meta <word>` says so when only a manifest declares it.
+
+A command has one provider. A second one needs `overrides = ["<command>"]` and a nearer place (workspace, then `~/.meta`, then beside meta); the words after a raw command, such as `git`'s, belong to its provider the same way. `help`, `plugin` and destructive commands can't be overridden. A manifest or command that breaks these rules disables only itself: every other command works, and `meta help` and `meta plugin list` name the problem. `meta plugin uninstall <name>` removes a plugin's folder even when its manifest is broken.
+
+In a build script, `meta_plugin::build::generate("meta-plugin.toml")` writes a typed struct of options for each command and an enum `Command` over them, and `meta_plugin::include_commands!()` brings them in (feature `build`).
+
+An option's `complete = [argv]`, or a raw command's, lists completions, one per line (the first word of each line counts). It runs for at most 500 ms from the current directory, with the word being completed in `META_COMPLETE_WORD` and a request naming the command, with no projects, in the file `META_REQUEST` names.
+
 ## The protocol
 
 The protocol is the SDK's types, and its documentation is theirs: [`meta_plugin`](../meta_plugin/src/lib.rs) (`cargo doc -p meta_plugin --open`). In short: meta asks a plugin for its info (`PluginInfo`), then calls it with a `Request` (the invocation meta resolved: the workspace, the worktree set it runs in, the selected projects, meta's options a plugin may act on) in the file `META_REQUEST` names. The plugin writes one `Response` to the file `META_RESPONSE` names: a `Plan` of steps for meta to run in each project, `Results` (records meta shows, or that the plugin already showed in its own words), a message, a delegate (another meta command line to run instead) or an error, each with its warnings and skipped projects. The plugin keeps the terminal: its stdin, stdout and stderr are meta's (under `--json` its stdout is meta's stderr, and its stderr passes through meta, so the error of a plugin that ends without an answer carries its last lines). meta prints the outcome; under `--json`, the one `Envelope` every command prints (see [the --json envelope](advanced_usage.md#json-output-mode)). A plugin never prints JSON itself.

@@ -14,6 +14,9 @@
 //! - [`run_plugin`] and [`Ctx`]: a Rust plugin's side of a call.
 //! - [`args`] and [`parse_args`] (feature `parse`): a plugin's own clap
 //!   parsing, with the tip for one of meta's options typed after the command.
+//! - `manifest` (feature `manifest`), `parser` (feature `parser`) and
+//!   `build` (feature `build`): what a plugin declares in `meta-plugin.toml`,
+//!   those options as a command line, and Rust types generated from them.
 //! - `testing` (feature `testing`; git fixtures with `testing-git`): a
 //!   sandbox with its own home and config, a workspace builder, and requests
 //!   to send a plugin through the real transport.

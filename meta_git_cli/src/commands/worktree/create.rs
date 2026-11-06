@@ -1,24 +1,23 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::*;
-use meta_core::worktree::Configs;
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::{errln, outln};
 use meta_plugin::{Ctx, ProjectResult, Request};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
-use meta_core::dependency_graph::{DependencyGraph, DependencyProblem, ProjectDependencies};
-use meta_core::duration::format_duration;
+use crate::here::Here;
+use crate::worktree::git_ops::*;
+use crate::worktree::helpers::*;
+use crate::worktree::hooks::fire_post_create;
+use crate::worktree::plan::{Found, Index, PlannedRepo};
+use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
+use crate::worktree::types::{CreateOutput, CreateRepoEntry};
+use crate::worktree::RepoSpec;
 use meta_core::set_record::{self as record, SetRecord};
-use meta_git_lib::worktree::git_ops::*;
-use meta_git_lib::worktree::helpers::*;
-use meta_git_lib::worktree::hooks::fire_post_create;
-use meta_git_lib::worktree::lease;
-use meta_git_lib::worktree::plan::{Found, Index, PlannedRepo};
-use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
-use meta_git_lib::worktree::types::{CreateOutput, CreateRepoEntry};
-use meta_git_lib::worktree::RepoSpec;
+use meta_plugin::duration::format_duration;
+use meta_plugin::sets::lease;
 
 use super::cli_types::CreateArgs;
 use meta_plugin::display::shell_quote;
@@ -27,6 +26,16 @@ use meta_plugin::display::shell_quote;
 pub(crate) struct Created {
     pub dir: std::path::PathBuf,
     pub lease: lease::Held,
+}
+
+/// What a create did.
+pub(crate) enum Made {
+    /// Said what it would do (`--dry-run`)
+    Preview,
+    Created(Created),
+    /// Cloned what the set needs that wasn't cloned: the configs those
+    /// clones hold change the plan, so the command runs again from the top
+    Again,
 }
 
 /// Make the set `args` asks for in the workspace `request` runs in (with
@@ -39,11 +48,11 @@ pub(crate) fn handle_create(
     ctx: &Ctx,
     request: &Request,
     records: &mut Vec<ProjectResult>,
-) -> Result<Option<Created>> {
+) -> Result<Made> {
     let (mode, verbose) = (request.meta.mode(), request.meta.verbose);
 
     let name = &args.name;
-    meta_core::worktree::validate_name(name)?;
+    meta_plugin::sets::validate_name(name)?;
 
     let ephemeral = args.ephemeral;
     let ttl_seconds = args.ttl;
@@ -70,11 +79,8 @@ pub(crate) fn handle_create(
     if args.repos.is_empty() && !args.every_repo {
         anyhow::bail!("Specify repos with --repo <alias> or use --every-repo");
     }
-    let cwd = request.cwd.as_path();
-    let configs: Configs = super::workspace_configs(request)?;
-    // with -r or -A, meta names repos by their path from here
-    let root = meta_core::config::listed_root(&configs.here.dir);
-    let worktree_root = meta_core::worktree::resolve_worktree_root(Some(&configs.owner), cwd)?;
+    let here = Here::need(request)?;
+    let worktree_root = here.worktrees()?;
 
     // Check if worktree already exists
     let wt_dir = worktree_root.join(name);
@@ -92,57 +98,40 @@ pub(crate) fn handle_create(
     }
 
     // The repos of the set, each resolved once: through one index of the
-    // projects (the whole tree, walked once, with --recursive)
-    let index_of = || -> Result<Index> {
-        Ok(match recursive {
-            true => Index::recursive(&configs.here, depth)?,
-            false => Index::new(&configs.here),
-        })
+    // projects (the whole tree, as meta read it, with --recursive)
+    let index = match recursive {
+        true => Index::recursive(&here, depth),
+        false => Index::new(&here),
     };
-    let mut index = index_of()?;
-    // The repos it needs that aren't cloned are cloned first, as
-    // clone-missing would; a clone may list more (a nested meta repo's
-    // projects), so it plans again until none is missing
-    let mut rounds = 0;
-    // warnings (errors with --strict) come from the first plan, whatever was
-    // cloned before it
-    let mut warned = false;
-    let mut repos_to_create = loop {
-        // a repo asked for inside a meta repo that isn't cloned is unknown
-        // until that meta repo is: it is cloned first, then planned again
-        // and one on the way to a project they depend on (open-source for
-        // open-source/atc), which only that meta repo's .meta.yaml lists
-        let mut wanted: Vec<String> = args.repos.iter().map(|r| r.alias.clone()).collect();
-        if !args.no_deps {
-            wanted.extend(unresolved_dependencies(&index, &args.repos)?);
+    // A repo asked for inside a meta repo that isn't cloned is unknown
+    // until that meta repo is, and so is one on the way to a project they
+    // depend on (open-source for open-source/atc), which only that meta
+    // repo's .meta.yaml lists: it is cloned first. The repos the set needs
+    // that aren't cloned are cloned too, as clone-missing would. A clone may
+    // list more (a nested meta repo's projects): then the command runs
+    // again, planning from the configs as they are now.
+    let mut wanted: Vec<String> = args.repos.iter().map(|r| r.alias.clone()).collect();
+    if !args.no_deps {
+        wanted.extend(unresolved_dependencies(&index, &args.repos));
+    }
+    let parents = uncloned_meta_parents(&index, &wanted, name);
+    if !parents.is_empty() {
+        if mode.is_preview() {
+            let places: Vec<_> = parents.iter().map(|r| escape(&r.place)).collect();
+            outln!(
+                "[DRY RUN] Would clone the meta repos on the way to the repos asked for \
+                 ({}), then plan worktree set '{}' again; nothing was cloned or created.",
+                places.join(", "),
+                escape(name)
+            )?;
+            return Ok(Made::Preview);
         }
-        let parents = uncloned_meta_parents(&index, &wanted, name);
-        if !parents.is_empty() {
-            if mode.is_preview() {
-                let places: Vec<_> = parents.iter().map(|r| escape(&r.place)).collect();
-                outln!(
-                    "[DRY RUN] Would clone the meta repos on the way to the repos asked for \
-                     ({}), then plan worktree set '{}' again; nothing was cloned or created.",
-                    places.join(", "),
-                    escape(name)
-                )?;
-                return Ok(None);
-            }
-            anyhow::ensure!(
-                rounds < 16,
-                "{}",
-                not_cloned_error(&parents, recursive.then(|| root.clone()))
-            );
-            clone_missing(&index, &parents)?;
-            rounds += 1;
-            index = index_of()?;
-            continue;
-        }
-        let planned = plan_repos(&index, &args, ctx, verbose, !warned)?;
-        warned = true;
-        if planned.missing.is_empty() {
-            break planned.repos;
-        }
+        clone_missing(&index, &parents)?;
+        return Ok(Made::Again);
+    }
+    let planned = plan_repos(&index, &args, ctx, verbose)?;
+    let mut repos_to_create = planned.repos;
+    if !planned.missing.is_empty() {
         if mode.is_preview() {
             let places: Vec<_> = planned.missing.iter().map(|r| escape(&r.place)).collect();
             outln!(
@@ -151,22 +140,11 @@ pub(crate) fn handle_create(
                 places.join(", "),
                 escape(name)
             )?;
-            return Ok(None);
+            return Ok(Made::Preview);
         }
-        anyhow::ensure!(
-            rounds < 16,
-            "{}",
-            not_cloned_error(
-                &planned.missing,
-                index
-                    .tree()
-                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
-            )
-        );
         clone_missing(&index, &planned.missing)?;
-        rounds += 1;
-        index = index_of()?;
-    };
+        return Ok(Made::Again);
+    }
 
     // A preview makes the checks a run makes (all but asking GitHub for a
     // PR's branch), skips what it skips and fails where it fails
@@ -225,7 +203,7 @@ pub(crate) fn handle_create(
             custom_meta: &custom_meta,
         };
         print_create_dry_run(&plan)?;
-        return Ok(None);
+        return Ok(Made::Preview);
     }
 
     // Resolve/apply --from-pr: get PR head branch, override branch for the matching repo, and fetch
@@ -263,11 +241,7 @@ pub(crate) fn handle_create(
                 .join(name),
             _ => anyhow::bail!("Cannot resolve {}", escape_path(&wt_dir)),
         };
-        lease::take(&lease::Lease::new(
-            set,
-            configs.owner.dir.clone(),
-            ephemeral,
-        ))?
+        lease::take(&lease::Lease::new(set, here.home.clone(), ephemeral))?
     };
 
     // Claim the set directory atomically: if another create claimed it first,
@@ -287,8 +261,16 @@ pub(crate) fn handle_create(
     let mut created_repos = Vec::new();
     let mut new_branches = Vec::new();
     // The checkout whose sets these are: inside a set, the one it stands for
-    let owner = &configs.owner.dir;
+    let owner = &here.home;
     let built = (|| -> Result<()> {
+        // The set's owner, beside it: meta-git's, made from this workspace.
+        // A folder META_WORKTREES names is its caller's, who may move the
+        // set out and remove it: nothing else of meta's goes there, and the
+        // records below say what the file would. An ephemeral set is meta's
+        // own to the end, and its run must find it with no root checkout
+        if ephemeral || std::env::var_os("META_WORKTREES").is_none() {
+            meta_plugin::sets::create(&wt_dir, meta_plugin::sets::DEFAULT_PROVIDER, owner)?;
+        }
         // Each worktree gets this record as soon as it exists, so `remove`
         // and `prune` know meta made it; a worktree that can't be recorded
         // is a failed create.
@@ -435,7 +417,7 @@ pub(crate) fn handle_create(
         ephemeral,
         ttl_seconds,
         &output.custom,
-        Some(&configs.owner),
+        Some(&here.workspace.worktree),
     )
     .or_else(|e| ctx.warn_or_bail(format!("{e:#}")));
     records.push(ProjectResult::about_workspace(&output).at(&wt_dir));
@@ -446,7 +428,7 @@ pub(crate) fn handle_create(
         }
         return Err(e);
     }
-    Ok(Some(Created { dir: wt_dir, lease }))
+    Ok(Made::Created(Created { dir: wt_dir, lease }))
 }
 
 /// How a repo's line ends: ` (new from origin/main)` for a branch this call
@@ -690,15 +672,8 @@ impl Plan<'_> {
 /// The repos `args` ask for, each resolved once through `index`: placed as
 /// in the workspace, on its branch, with the parents a nested one needs;
 /// one per place, the root first, then each repo before those inside it.
-fn plan_repos(
-    index: &Index,
-    args: &CreateArgs,
-    ctx: &Ctx,
-    verbose: bool,
-    warn: bool,
-) -> Result<Planned> {
-    let workspace = index.workspace;
-    let meta_dir = workspace.dir.as_path();
+fn plan_repos(index: &Index, args: &CreateArgs, ctx: &Ctx, verbose: bool) -> Result<Planned> {
+    let meta_dir = index.dir.as_path();
     let branch = |asked: Option<&str>| resolve_branch(&args.name, args.branch.as_deref(), asked);
     let mut plan = Plan {
         meta_dir,
@@ -730,19 +705,13 @@ fn plan_repos(
         if !matches!(meta_core::gitdir::common_dir(meta_dir), Ok(None)) {
             all(index.find(".")?)?;
         }
-        match index.tree() {
-            Some(tree) => {
-                let mut places: Vec<&String> = tree.keys().collect();
-                places.sort();
-                for place in places {
-                    all(index.place(place)?)?;
-                }
-            }
-            None => {
-                for project in &workspace.projects {
-                    all(index.find(&project.name)?)?;
-                }
-            }
+        let keys: Vec<String> = index.nodes().into_iter().map(|n| index.key(n)).collect();
+        for key in keys {
+            let found = match index.is_recursive() {
+                true => index.place(&key)?,
+                false => index.find(&key)?,
+            };
+            all(found)?;
         }
     }
     // The projects whose depends_on this create follows: with --every-repo every
@@ -763,24 +732,23 @@ fn plan_repos(
             if meta_core::gitdir::common_dir(meta_dir)?.is_some() {
                 plan.add(index.find(".")?, branch(None), Why::Wanted, false)?;
             }
-            let graph = dep_graph(index)?;
             for key in asked_keys.iter().filter(|key| *key != ".") {
                 followed.push(key.clone());
-                let deps = graph.get_all_dependencies(key);
-                followed.extend(deps.iter().map(|dep| dep.to_string()));
+                let deps = index.dependencies(key);
+                followed.extend(deps.iter().cloned());
                 log::debug!("Resolved transitive dependencies for '{key}': {deps:?}");
                 for dep in deps {
                     if verbose {
                         errln!(
                             "  Including '{}' (dependency of '{}')",
-                            escape(dep),
+                            escape(&dep),
                             escape(key)
                         );
                     }
-                    // the graph names projects as the index keys them
-                    let found = match index.tree() {
-                        Some(_) => index.place(dep)?,
-                        None => index.find(dep)?,
+                    // as the index keys them
+                    let found = match index.is_recursive() {
+                        true => index.place(&dep)?,
+                        false => index.find(&dep)?,
                     };
                     plan.add(found, branch(None), Why::Wanted, false)?;
                 }
@@ -811,7 +779,7 @@ fn plan_repos(
             if plan.repos.iter().any(|(r, _)| r.place == parent) {
                 continue;
             }
-            let Some(source) = index.at_place(&parent)? else {
+            let Some(source) = index.at_place(&parent) else {
                 // A plain directory on the way is no parent; a repo that
                 // isn't a project is worth saying so
                 if meta_core::gitdir::common_dir(&meta_dir.join(&parent))?.is_some() {
@@ -835,10 +803,6 @@ fn plan_repos(
 
     // What resolving the depends_on this create follows ran into; a parent
     // on the way to a nested repo is in the set for its place, not its needs
-    if !args.no_deps && warn {
-        let set = followed.iter().map(String::as_str);
-        report_problems(&dep_graph(index)?, set, index.tree().is_none(), ctx)?;
-    }
 
     // A project not cloned yet has no repository to make a worktree of: the
     // ones the set needs are returned, for the caller to clone; any other
@@ -883,17 +847,15 @@ fn plan_repos(
         }
         ctx.warn(format!("{why}, skipping"));
     }
+    // (once: a run that clones what the set needs plans again, from the
+    // top, and says them then; with --strict, before it clones anything)
+    let again = !missing.is_empty() && !ctx.meta().strict && !ctx.dry_run();
+    if !args.no_deps && !again {
+        report_problems(index, followed.iter().map(String::as_str), ctx)?;
+    }
     if !not_cloned.is_empty() {
         not_cloned.extend(missing);
-        anyhow::bail!(
-            "{}",
-            not_cloned_error(
-                &not_cloned,
-                index
-                    .tree()
-                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
-            )
-        );
+        anyhow::bail!("{}", not_cloned_error(&not_cloned, root_of(index)));
     }
     repos.sort_by(|a, b| {
         let order = |r: &PlannedRepo| (r.place != ".", r.place.split('/').count());
@@ -911,21 +873,12 @@ pub(super) fn uncloned_meta_parents(
     wanted: &[String],
     name: &str,
 ) -> Vec<PlannedRepo> {
-    let dir = index.workspace.dir.as_path();
-    let metas: Vec<(String, std::path::PathBuf)> = match index.tree() {
-        Some(tree) => tree
-            .iter()
-            .filter(|(_, (_, info))| info.meta)
-            .map(|(place, (source, _))| (place.clone(), source.clone()))
-            .collect(),
-        None => index
-            .workspace
-            .projects
-            .iter()
-            .filter(|p| p.meta)
-            .map(|p| (p.path.clone(), dir.join(&p.path)))
-            .collect(),
-    };
+    let metas: Vec<(String, std::path::PathBuf)> = index
+        .nodes()
+        .into_iter()
+        .filter(|n| n.project.meta)
+        .map(|n| (n.place.clone(), n.project.abs.clone()))
+        .collect();
     let mut parents: Vec<PlannedRepo> = Vec::new();
     for alias in wanted {
         if index.find(alias).is_ok() {
@@ -949,43 +902,41 @@ pub(super) fn uncloned_meta_parents(
     parents
 }
 
-/// The `depends_on` targets the planner's dependency graph ([`dep_graph`],
-/// which resolves names and what projects provide) can't resolve, of the
-/// repos `specs` ask for and of every project they depend on: each as the
-/// graph names it (qualified with the place of the meta repo that lists it,
-/// `clients/open-source/atc`) and as written there (`open-source/atc`), the
-/// places where an uncloned meta repo may hold it. With --recursive only:
-/// without it, nested projects aren't dependencies.
-fn unresolved_dependencies(index: &Index, specs: &[RepoSpec]) -> Result<Vec<String>> {
-    let Some(tree) = index.tree() else {
-        return Ok(Vec::new());
-    };
-    let graph = dep_graph(index)?;
+/// The `depends_on` entries meta found no project for, of the repos
+/// `specs` ask for and of every project they depend on: each as meta named
+/// it (qualified with the place of the meta repo that lists it,
+/// `clients/open-source/atc`, from the config's folder) and as written there
+/// (`open-source/atc`), the places where an uncloned meta repo may hold it.
+/// With --recursive only: without it, nested projects aren't dependencies.
+fn unresolved_dependencies(index: &Index, specs: &[RepoSpec]) -> Vec<String> {
+    if !index.is_recursive() {
+        return Vec::new();
+    }
     let mut unresolved: Vec<String> = Vec::new();
     for spec in specs {
         let Ok(found) = index.find(&spec.alias) else {
             continue;
         };
         let key = found.key;
-        let deps = graph.get_all_dependencies(&key);
-        for project in std::iter::once(key.as_str()).chain(deps) {
-            // the place of the meta repo that lists it, as qualify adds it
-            let prefix = tree
-                .get(project)
-                .and_then(|(_, info)| project.strip_suffix(info.path.as_str()))
+        for project in std::iter::once(key.clone()).chain(index.dependencies(&key)) {
+            // the place of the meta repo that lists it
+            let prefix = index
+                .node(&project)
+                .and_then(|n| n.place.strip_suffix(n.own.as_str()))
                 .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
-                .unwrap_or("");
-            for problem in graph.problems_of(project) {
-                if let DependencyProblem::Unresolved(dep) = problem {
-                    unresolved.push(dep.clone());
-                    if let Some(written) = dep.strip_prefix(prefix).filter(|_| !prefix.is_empty()) {
-                        unresolved.push(written.to_string());
-                    }
+                .unwrap_or("")
+                .to_string();
+            for dep in index.unresolved(&project) {
+                // named from the workspace root: from the config's folder
+                let dep = dep.strip_prefix(&index.prefix).unwrap_or(&dep).to_string();
+                if let Some(written) = dep.strip_prefix(&prefix).filter(|_| !prefix.is_empty()) {
+                    unresolved.push(written.to_string());
                 }
+                unresolved.push(dep);
             }
         }
     }
-    Ok(unresolved)
+    unresolved
 }
 
 /// The repos of a set being made: those to make worktrees of, and those it
@@ -1012,7 +963,12 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
         places.join(", ")
     );
     let dirs: Vec<_> = missing.iter().map(|r| r.source.clone()).collect();
-    let cloned = crate::clone_missing::clone_dirs(index.workspace, &dirs, "git worktree create")?;
+    let cloned = crate::clone_missing::clone_dirs(
+        &index.listing(),
+        index.members,
+        &dirs,
+        "git worktree create",
+    )?;
     // the ones still not there, for the error: those cloned are fine now
     let still: Vec<PlannedRepo> = missing
         .iter()
@@ -1030,21 +986,11 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
         }
         Ok(_) => anyhow::bail!(
             "{}\n(cloning cloned none of them)",
-            not_cloned_error(
-                &still,
-                index
-                    .tree()
-                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
-            )
+            not_cloned_error(&still, root_of(index))
         ),
         Err(why) => anyhow::bail!(
             "{}\nCloning failed: {}",
-            not_cloned_error(
-                &still,
-                index
-                    .tree()
-                    .map(|_| meta_core::config::listed_root(&index.workspace.dir))
-            ),
+            not_cloned_error(&still, root_of(index)),
             why
         ),
     }
@@ -1114,79 +1060,30 @@ fn not_cloned_error(repos: &[PlannedRepo], root: Option<std::path::PathBuf>) -> 
     message
 }
 
-/// The workspace's dependency graph: of every place with --recursive, else
-/// of its own projects.
-fn dep_graph(index: &Index) -> Result<DependencyGraph> {
-    Ok(match index.tree() {
-        Some(tree) => nested_dep_graph(tree)?,
-        None => DependencyGraph::build(
-            index
-                .workspace
-                .projects
-                .iter()
-                .map(|p| p.clone().into())
-                .collect(),
-        ),
-    })
+/// Where a recursive index names its places from, for the clone-missing
+/// line (`-A`): none for a shallow one.
+fn root_of(index: &Index) -> Option<std::path::PathBuf> {
+    index.is_recursive().then(|| index.listed_root.clone())
 }
 
-/// Report what resolving the `depends_on` of each project in `set` ran
-/// into: a warning, or with `strict` an error. `flat`: the graph has no
-/// nested projects.
+/// Report what meta ran into resolving the `depends_on` of each project in
+/// `set`: a warning, or with `--strict` an error.
 fn report_problems<'a>(
-    graph: &DependencyGraph,
+    index: &Index,
     set: impl IntoIterator<Item = &'a str>,
-    flat: bool,
     ctx: &Ctx,
 ) -> Result<()> {
     // a project reached twice is reported once
     let set: BTreeSet<&str> = set.into_iter().collect();
     for project in set {
-        for problem in graph.problems_of(project) {
-            let hint = match problem {
-                DependencyProblem::Unresolved(_) if flat => " (nested projects count with -r)",
-                _ => "",
-            };
-            ctx.warn_or_bail(format!("'{}' {problem}{hint}", escape(project)))?;
+        let Some(node) = index.node(project) else {
+            continue;
+        };
+        for problem in &node.project.dependency_problems {
+            ctx.warn_or_bail(format!("'{}' {problem}", escape(project)))?;
         }
     }
     Ok(())
-}
-
-/// The dependency graph of the whole tree (`tree`, every project by its
-/// place), named by place. A project's `depends_on` and `provides` are
-/// qualified with the place of the meta repo that lists it, so they name
-/// places too: `depends_on: [vendor/x]` of `open-source/gitkb/core` is
-/// `open-source/gitkb/vendor/x`.
-fn nested_dep_graph(
-    tree: &HashMap<String, (std::path::PathBuf, meta_core::config::ProjectInfo)>,
-) -> Result<DependencyGraph> {
-    let mut project_deps = Vec::new();
-    for (full_path, (_, info)) in tree {
-        // full_path="open-source/gitkb/core", info.path="core" → "open-source/gitkb/"
-        let parent_prefix = full_path
-            .strip_suffix(info.path.as_str())
-            .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
-            .unwrap_or("");
-        let qualify = |name: &str| {
-            if tree.contains_key(name) || name == "." {
-                name.to_string()
-            } else {
-                format!("{parent_prefix}{name}")
-            }
-        };
-        project_deps.push(ProjectDependencies {
-            name: full_path.clone(),
-            path: full_path.clone(),
-            repo: info.repo.clone(),
-            tags: info.tags.clone(),
-            provides: info.provides.iter().map(|p| qualify(p)).collect(),
-            depends_on: info.depends_on.iter().map(|d| qualify(d)).collect(),
-        });
-    }
-    // in the order of the places, so a run picks the provider the last did
-    project_deps.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(DependencyGraph::build(project_deps))
 }
 
 #[cfg(test)]

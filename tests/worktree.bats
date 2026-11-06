@@ -694,6 +694,15 @@ assert backend['files_changed'] >= 1 and backend['files'] == ['README.md'], back
     run "$META_BIN" --parallel git worktree exec in-turn -- sh -c "$step"
     [ "$status" -eq 0 ]
     [ "$(head -2 "$log" | tr '\n' ' ')" = "start start " ]
+    # an ephemeral run the same: in turn, at once only with --parallel
+    rm "$log"
+    run "$META_BIN" git worktree exec --ephemeral eph-turn --repo backend --repo frontend -- sh -c "$step"
+    [ "$status" -eq 0 ]
+    [[ "$(tr '\n' ' ' < "$log")" != *"start start"* ]]
+    rm "$log"
+    run "$META_BIN" --parallel git worktree exec --ephemeral eph-once --repo backend --repo frontend -- sh -c "$step"
+    [ "$status" -eq 0 ]
+    [ "$(head -2 "$log" | tr '\n' ' ')" = "start start " ]
 }
 
 @test "worktree exec --include filters repos" {
@@ -1155,7 +1164,6 @@ EOF
 
 @test "inside a set, -r reaches the meta repos checked out in it, as outside one" {
     bats_require_minimum_version 1.5.0
-    cp "$META_BIN_DIR/meta-project" .meta/plugins/meta-project
     setup_nested_meta
     git -C vendor init --quiet -b main
     printf '/nested-lib/\n' > vendor/.gitignore
@@ -1186,7 +1194,6 @@ EOF
 
 @test "a set of a workspace whose root is no repo names its own folder as the root" {
     bats_require_minimum_version 1.5.0
-    cp "$META_BIN_DIR/meta-project" .meta/plugins/meta-project
     rm -rf .git
     run "$META_BIN" git worktree create loose-root --repo backend
     [ "$status" -eq 0 ]
@@ -1241,6 +1248,70 @@ EOF
     run "$META_BIN" --json git worktree status nest
     [ "$status" -eq 0 ]
     [[ "$output" == *'"alias": "vendor/nested-lib"'* ]]
+}
+
+@test "a checkout in a set is a member even when the set's checked-out config doesn't list it" {
+    bats_require_minimum_version 1.5.0
+    setup_nested_meta
+    # vendor's commit has no .meta.yaml: only the workspace's file on disk
+    # lists nested-lib, as when the workspace's configs aren't committed
+    echo "nested-lib/" > vendor/.gitignore
+    git -C vendor init --quiet --initial-branch=main
+    git -C vendor add .gitignore
+    git -C vendor commit --quiet -m "vendor"
+    "$META_BIN" -r git worktree create full --repo vendor --repo vendor/nested-lib
+    cd .worktrees/full
+    run --separate-stderr "$META_BIN" -r --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '[".","vendor","vendor/nested-lib"]' ]
+    # from inside the nested checkout, the command reaches the whole set
+    cd vendor/nested-lib
+    run --separate-stderr "$META_BIN" --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '[".","vendor","vendor/nested-lib"]' ]
+    # moved by hand, the set keeps its checkouts as members
+    cd "$TEST_DIR"
+    mv .worktrees/full .worktrees/moved
+    cd .worktrees/moved
+    run --separate-stderr "$META_BIN" -r --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '[".","vendor","vendor/nested-lib"]' ]
+    # a set made for the nested repo (create checks vendor out to hold it)
+    cd "$TEST_DIR"
+    "$META_BIN" -r git worktree create leaf --repo vendor/nested-lib --no-deps
+    cd .worktrees/leaf
+    run --separate-stderr "$META_BIN" --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '["vendor","vendor/nested-lib"]' ]
+}
+
+@test "a set's root checkout is a member when the workspace repo doesn't commit its config" {
+    bats_require_minimum_version 1.5.0
+    # the workspace repo keeps .meta.yaml out of git: its checkout in a set
+    # has none
+    echo ".meta.yaml" >> .gitignore
+    git rm --cached --quiet .meta.yaml
+    git add .gitignore
+    git commit --quiet -m "config not committed"
+    "$META_BIN" git worktree create rooted --repo backend
+    [ -e .worktrees/rooted/.git ]
+    [ ! -e .worktrees/rooted/.meta.yaml ]
+    echo work > .worktrees/rooted/untracked.txt
+    cd .worktrees/rooted
+    run --separate-stderr "$META_BIN" --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '[".","backend"]' ]
+    run "$META_BIN" git status --short
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"untracked.txt"* ]]
+    # a set without a root checkout has no root member, whatever lies in it
+    cd "$TEST_DIR"
+    "$META_BIN" git worktree create rootless --repo backend --no-deps
+    echo notes > .worktrees/rootless/notes.txt
+    cd .worktrees/rootless
+    run --separate-stderr "$META_BIN" --json exec -- pwd
+    [ "$status" -eq 0 ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '["backend"]' ]
 }
 
 @test "loop commands in a set reach its nested members" {
@@ -1475,15 +1546,9 @@ EOF
     [[ "$output" == *"\"frontend\""* ]]
 }
 
-@test "--primary in a set whose records name two workspaces says so, without pointing back at --primary" {
+@test "--primary in a set whose owner file can't be read says so, without pointing back at --primary" {
     "$META_BIN" git worktree create mixed --repo backend --repo frontend --no-deps
-    record="$(git -C .worktrees/mixed/frontend rev-parse --absolute-git-dir)/meta-worktree.json"
-    python3 - "$record" "$(mktemp -d)" <<'PY'
-import json, sys
-path, other = sys.argv[1], sys.argv[2]
-record = json.load(open(path)); record["project"] = other
-json.dump(record, open(path, "w"))
-PY
+    echo '{broken' > .worktrees/.meta-sets/mixed.json
     cd .worktrees/mixed/backend
     run "$META_BIN" --primary exec -- pwd
     [ "$status" -ne 0 ]

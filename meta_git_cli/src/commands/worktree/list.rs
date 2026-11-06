@@ -8,15 +8,15 @@ use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
 
-use meta_core::duration::format_duration;
-use meta_core::set_record::{self as record, SetRecord};
-use meta_core::worktree::{
-    detect_worktree_location, discover_worktree_members, discover_worktree_members_strict,
-    discover_worktree_repos, discover_worktree_repos_strict, WorktreeMemberInfo,
+use crate::worktree::git_ops::repo_status;
+use crate::worktree::scan::{
+    discover_worktree_members, discover_worktree_members_strict, discover_worktree_repos,
+    discover_worktree_repos_strict, WorktreeMemberInfo,
 };
-use meta_git_lib::worktree::git_ops::repo_status;
-use meta_git_lib::worktree::ttl;
-use meta_git_lib::worktree::types::ListRepoEntry;
+use crate::worktree::ttl;
+use crate::worktree::types::ListRepoEntry;
+use meta_core::set_record::{self as record, SetRecord};
+use meta_plugin::duration::format_duration;
 
 use super::cli_types::ListArgs;
 
@@ -49,12 +49,13 @@ fn repo_entries(
     path: &std::path::Path,
     args: &ListArgs,
     selected: bool,
+    places: &[String],
 ) -> Result<(Vec<RepoEntry>, Option<SetRecord>)> {
     if args.metadata_only {
         let members = if args.strict {
             discover_worktree_members_strict(path)?
         } else {
-            discover_worktree_members(path)?
+            discover_worktree_members(path, places)?
         };
         let record = record::find(path, members.iter().map(|m| &m.path));
         return Ok((
@@ -65,7 +66,7 @@ fn repo_entries(
     let repos = if args.strict {
         discover_worktree_repos_strict(path)?
     } else {
-        discover_worktree_repos(path)?
+        discover_worktree_repos(path, places)?
     };
     let record = record::find(path, repos.iter().map(|r| &r.path));
     let entries = repos
@@ -91,18 +92,19 @@ fn repo_entries(
 pub(crate) fn handle_list(args: ListArgs, ctx: &Ctx, request: &Request) -> Result<Response> {
     let json = request.meta.json;
     let cwd = request.cwd.canonicalize()?;
-    let location = detect_worktree_location(&cwd)?;
+    let places = crate::worktree::helpers::places(request);
+    // the set it runs in, as meta found it
+    let location = request
+        .set
+        .as_ref()
+        .map(|set| (set.name.clone(), set.dir.clone()));
     let worktree_root = match (&location, std::env::var_os("META_WORKTREES")) {
         (Some((_, root)), None) => root
             .parent()
             .context("The worktree set has no parent folder")?
             .to_path_buf(),
         _ => {
-            let configs = super::configs(request)?;
-            let root = meta_core::worktree::resolve_worktree_root(
-                configs.as_ref().map(|c| &c.owner),
-                &cwd,
-            )?;
+            let root = crate::here::worktree_root(request)?;
             if root.is_absolute() {
                 root
             } else {
@@ -112,7 +114,7 @@ pub(crate) fn handle_list(args: ListArgs, ctx: &Ctx, request: &Request) -> Resul
     };
     let selected = match args.name.as_ref() {
         Some(name) => {
-            meta_core::worktree::validate_name(name)?;
+            meta_plugin::sets::validate_name(name)?;
             let path = worktree_root.join(name);
             anyhow::ensure!(
                 path.is_dir(),
@@ -124,7 +126,7 @@ pub(crate) fn handle_list(args: ListArgs, ctx: &Ctx, request: &Request) -> Resul
         None => location,
     };
     if let Some((name, _)) = &selected {
-        meta_core::worktree::validate_name(name)?;
+        meta_plugin::sets::validate_name(name)?;
     }
     let is_selected = selected.is_some();
     let sets = if let Some(selected) = selected {
@@ -139,6 +141,11 @@ pub(crate) fn handle_list(args: ListArgs, ctx: &Ctx, request: &Request) -> Resul
                     Err(error) if args.strict || args.metadata_only => return Err(error.into()),
                     Err(_) => continue,
                 };
+                // no set's name starts with `.`: what is there is meta's own
+                // (`.meta-sets/`, a lease)
+                if entry.file_name().to_string_lossy().starts_with('.') {
+                    continue;
+                }
                 match entry.file_type() {
                     // a set folder that is a link counts as the folder it leads to
                     Ok(kind) if kind.is_dir() || kind.is_symlink() && entry.path().is_dir() => sets
@@ -159,7 +166,7 @@ pub(crate) fn handle_list(args: ListArgs, ctx: &Ctx, request: &Request) -> Resul
     let results: Vec<Result<Listed>> = sets
         .par_iter()
         .map(|(name, path)| {
-            let (repos, record) = repo_entries(path, &args, is_selected)?;
+            let (repos, record) = repo_entries(path, &args, is_selected, &places)?;
             if repos.is_empty() {
                 anyhow::ensure!(!is_selected, "No repos found in worktree '{name}'");
                 return Ok(None);

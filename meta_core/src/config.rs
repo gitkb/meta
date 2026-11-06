@@ -3,7 +3,6 @@
 //! This module provides the core types and functions for finding and parsing
 //! meta's YAML configuration files.
 
-use crate::gitdir;
 use anyhow::Context;
 use meta_plugin::display::{escape, escape_path, is_unsafe_char};
 use meta_plugin::RepoUrl;
@@ -395,102 +394,13 @@ fn lists(config: &Path, dir: &Path) -> bool {
     })
 }
 
-/// The checkout that `dir`, a checkout in a worktree set meta made, stands
-/// for: the `project` the set was made from, joined with `dir`'s place in
-/// the set (meta lays a set out as the workspace). The project comes from
-/// meta's record in the checkout's git admin directory
-/// ([`crate::set_record`]). A set made from inside another set leads on to
-/// that set's source. A worktree made by hand has no record and stands for
-/// itself, as a second workspace can. Git's shared repository doesn't say
-/// which checkout made a set, so only the record is used: one that can't be
-/// read is an error naming it, never taken for no record.
+/// Where the folder `dir`, in a worktree set, stands in the workspace the
+/// set was made from, as the set's owner file says (see
+/// [`crate::worktree::primary_dir`]); from a set made inside another set, on
+/// to that one's workspace. A folder in no set, or in a set without an owner
+/// file (made by hand), stands for itself, as a second workspace can.
 pub fn set_source(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
-    let Some(mut source) = recorded_source(dir)? else {
-        return Ok(None);
-    };
-    let mut seen = vec![dir.to_path_buf()];
-    while let Some(next) = recorded_source(&source)? {
-        if seen.contains(&next) {
-            break;
-        }
-        seen.push(std::mem::replace(&mut source, next));
-    }
-    Ok(Some(source))
-}
-
-/// One step of [`set_source`].
-fn recorded_source(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
-    let Some((_, record)) = crate::set_record::member(dir).with_context(|| {
-        format!(
-            "Cannot read meta's record of the worktree {}",
-            escape_path(dir)
-        )
-    })?
-    else {
-        return Ok(None);
-    };
-    Ok(source_of(dir, record.project, &record.set))
-}
-
-/// Where the checkout at `dir`, in the set at `set` made from `project`,
-/// stands in that workspace (see [`recorded_source`]).
-fn source_of(dir: &Path, project: PathBuf, set: &Path) -> Option<PathBuf> {
-    let set = set.canonicalize().ok()?;
-    let place = dir.canonicalize().ok()?;
-    let place = place.strip_prefix(set).ok()?;
-    // meta puts each repo of a set where it is in the workspace
-    let source = project.join(place);
-    // The set's root stands for the workspace itself. Another checkout
-    // stands for a project of that workspace with the same repository: the
-    // one at its place, else (a link that differs between the root's
-    // branches put it elsewhere) the only one there is. Its place alone
-    // doesn't say: a second workspace's `git worktree add` shares the
-    // repository but is no project.
-    let Some(own) = common_git_dir(dir) else {
-        return Some(source);
-    };
-    if place.as_os_str().is_empty() {
-        return Some(source);
-    }
-    let mut matches = Vec::new();
-    projects_with_git_dir(&project, &own, 0, &mut matches);
-    let at_place = source.canonicalize().ok();
-    match matches.as_slice() {
-        [only] => Some(only.clone()),
-        // no project says (one no longer listed, say): its place, if that
-        // is its repository
-        [] => (common_git_dir(&source).as_ref() == Some(&own)).then_some(source),
-        _ => matches.into_iter().find(|path| {
-            path.canonicalize()
-                .ok()
-                .is_some_and(|real| Some(real) == at_place)
-        }),
-    }
-}
-
-/// The projects of the meta repo at `meta_dir`, and of the meta repos nested
-/// in it, whose repository's git directory is `git_dir`. A config that can't
-/// be read is passed over: one broken sibling doesn't hide a project.
-fn projects_with_git_dir(meta_dir: &Path, git_dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
-    if depth > MAX_LINK_HOPS {
-        return;
-    }
-    let Ok(Some(workspace)) = Workspace::in_dir(meta_dir) else {
-        return;
-    };
-    for project in &workspace.projects {
-        let path = meta_dir.join(&project.path);
-        if common_git_dir(&path).as_deref() == Some(git_dir) {
-            found.push(path.clone());
-        }
-        projects_with_git_dir(&path, git_dir, depth + 1, found);
-    }
-}
-
-/// The git directory the checkout at `dir` shares with its linked worktrees,
-/// resolved.
-fn common_git_dir(dir: &Path) -> Option<PathBuf> {
-    gitdir::common_dir(dir).ok()??.canonicalize().ok()
+    crate::worktree::primary_dir(dir)
 }
 
 /// Nearest directory holding a config file: where `--local` plugins go.
@@ -969,158 +879,6 @@ fn normalize_project_path(raw: &str) -> Result<String, String> {
         ));
     }
     Ok(parts.join("/"))
-}
-
-/// Resolve `rel` below `base_dir` through the symlinks that exist now, and
-/// refuse it if one leads outside `base_dir` or if it ends at `base_dir`.
-/// Returns the project's location: the real path of the part that exists,
-/// followed by the part not created yet.
-pub fn resolve_inside(base_dir: &Path, rel: &str) -> Result<PathBuf, String> {
-    resolve_inside_after(base_dir, rel, 0)
-}
-
-/// Links followed for a missing target before giving up, as the OS does.
-const MAX_LINK_HOPS: usize = 40;
-
-/// [`resolve_inside`], `hops` links into following missing targets.
-fn resolve_inside_after(base_dir: &Path, rel: &str, hops: usize) -> Result<PathBuf, String> {
-    let base = base_dir
-        .canonicalize()
-        .map_err(|e| format!("cannot resolve {}: {e}", escape_path(base_dir)))?;
-    if rel.starts_with('/') || rel.split('/').any(|part| matches!(part, "" | "." | "..")) {
-        return Err(format!(
-            "path '{}' must be a plain relative path",
-            escape(rel)
-        ));
-    }
-    let mut current = base.clone();
-    let mut exists = true;
-    for part in rel.split('/') {
-        current.push(part);
-        if !exists {
-            continue;
-        }
-        match current.symlink_metadata() {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => exists = false,
-            // What can't be examined (no permission, say) may hold a
-            // symlink out, so it is refused rather than taken as missing
-            Err(e) => {
-                return Err(format!(
-                    "path '{}' cannot be checked at '{}': {e}",
-                    escape(rel),
-                    escape_path(&current)
-                ))
-            }
-            Ok(meta) if meta.file_type().is_symlink() => match current.canonicalize() {
-                Ok(target) if target.starts_with(&base) => current = target,
-                // A link to what isn't there yet (a repo a checkout links
-                // to, before its own checkout): checked as the path it names
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    current = dangling_target(&base, &current, rel, hops + 1)?;
-                    // the rest is checked too: part of it may exist
-                    exists = current.symlink_metadata().is_ok();
-                }
-                Ok(_) => {
-                    return Err(format!(
-                        "path '{}' leads outside {} through the symlink '{}'",
-                        escape(rel),
-                        escape_path(&base),
-                        escape_path(&current)
-                    ))
-                }
-                // Its target may not exist yet, but where it would lead
-                // cannot be checked, so it is refused
-                Err(e) => {
-                    return Err(format!(
-                        "path '{}' goes through the symlink '{}', which cannot be resolved: {e}",
-                        escape(rel),
-                        escape_path(&current)
-                    ))
-                }
-            },
-            Ok(_) => {}
-        }
-    }
-    if current == base {
-        return Err(format!(
-            "path '{}' leads to the directory of the .meta.yaml file itself",
-            escape(rel)
-        ));
-    }
-    Ok(current)
-}
-
-/// Where the symlink `link` inside `base` leads when its target is missing:
-/// the target's path, with each link on the way followed before a `..`
-/// after it, then checked with [`resolve_inside`].
-fn dangling_target(base: &Path, link: &Path, rel: &str, hops: usize) -> Result<PathBuf, String> {
-    let unresolved = |at: &Path, e: std::io::Error| {
-        format!(
-            "path '{}' goes through the symlink '{}', which cannot be resolved: {e}",
-            escape(rel),
-            escape_path(at)
-        )
-    };
-    if hops > MAX_LINK_HOPS {
-        return Err(unresolved(
-            link,
-            std::io::Error::other("too many levels of symbolic links"),
-        ));
-    }
-    let target = std::fs::read_link(link).map_err(|e| unresolved(link, e))?;
-    let mut path = link.parent().unwrap_or(base).to_path_buf();
-    for part in target.components() {
-        match part {
-            // `..` leaves a directory only if it is there, as the OS has it
-            std::path::Component::ParentDir => {
-                if !path.is_dir() {
-                    return Err(unresolved(
-                        link,
-                        std::io::Error::from(std::io::ErrorKind::NotFound),
-                    ));
-                }
-                path.pop();
-            }
-            std::path::Component::CurDir => {}
-            // What exists is taken as the OS resolves it (links followed,
-            // and in the base's form: `\\?\` on Windows, which an absolute
-            // target doesn't carry); a link to what is missing is followed here
-            std::path::Component::Normal(_) => {
-                path.push(part);
-                match path.canonicalize() {
-                    Ok(real) => path = real,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        if path
-                            .symlink_metadata()
-                            .is_ok_and(|meta| meta.file_type().is_symlink())
-                        {
-                            path = dangling_target(base, &path, rel, hops + 1)?;
-                        }
-                    }
-                    Err(e) => return Err(unresolved(&path, e)),
-                }
-            }
-            // The root of an absolute target
-            std::path::Component::Prefix(_) | std::path::Component::RootDir => path.push(part),
-        }
-    }
-    let outside = || {
-        format!(
-            "path '{}' leads outside {} through the symlink '{}'",
-            escape(rel),
-            escape_path(base),
-            escape_path(link)
-        )
-    };
-    let place = path.strip_prefix(base).map_err(|_| outside())?;
-    let place: Vec<_> = place
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect();
-    if place.is_empty() {
-        return Err(outside());
-    }
-    resolve_inside_after(base, &place.join("/"), hops)
 }
 
 // ============================================================================
@@ -2049,72 +1807,6 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn an_absolute_link_to_what_is_not_there_yet_stays_inside() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().canonicalize().unwrap();
-        // the target as a user writes it, without `\\?\`
-        let plain = dir.path().join("real");
-        // creating links needs a privilege or developer mode
-        if std::os::windows::fs::symlink_dir(&plain, base.join("link")).is_err() {
-            eprintln!("skipped: this runner can't create symbolic links");
-            return;
-        }
-        assert_eq!(resolve_inside(&base, "link"), Ok(base.join("real")));
-        let outside = tempfile::tempdir().unwrap();
-        std::os::windows::fs::symlink_dir(outside.path().join("x"), base.join("out")).unwrap();
-        let err = resolve_inside(&base, "out").unwrap_err();
-        assert!(err.contains("leads outside"), "{err}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_link_to_what_is_not_there_yet_leads_where_it_names() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().canonicalize().unwrap();
-        std::os::unix::fs::symlink("real", base.join("link")).unwrap();
-        assert_eq!(resolve_inside(&base, "link"), Ok(base.join("real")));
-        assert_eq!(resolve_inside(&base, "link/x"), Ok(base.join("real/x")));
-
-        std::os::unix::fs::symlink("../elsewhere", base.join("out")).unwrap();
-        let err = resolve_inside(&base, "out").unwrap_err();
-        assert!(err.contains("leads outside"), "{err}");
-        // through a link that does exist, out of the base
-        std::os::unix::fs::symlink("/", base.join("root")).unwrap();
-        std::os::unix::fs::symlink("root/nowhere-meta-test", base.join("via")).unwrap();
-        let err = resolve_inside(&base, "via").unwrap_err();
-        assert!(err.contains("leads outside"), "{err}");
-
-        // `..` climbs from where the link before it leads
-        std::fs::create_dir_all(base.join("real/base")).unwrap();
-        std::os::unix::fs::symlink("real/base", base.join("hop")).unwrap();
-        std::os::unix::fs::symlink("hop/../app", base.join("back")).unwrap();
-        assert_eq!(resolve_inside(&base, "back"), Ok(base.join("real/app")));
-
-        // `..` out of a directory that isn't there is no way through, and a
-        // link after a followed one is still checked
-        let outside = tempfile::tempdir().unwrap();
-        std::fs::create_dir(base.join("b")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), base.join("b/x")).unwrap();
-        std::os::unix::fs::symlink("missing/../b", base.join("skip")).unwrap();
-        assert!(resolve_inside(&base, "skip/x").is_err());
-        std::os::unix::fs::symlink("b", base.join("tob")).unwrap();
-        std::os::unix::fs::symlink("nothing/../tob/x/y", base.join("deep")).unwrap();
-        assert!(resolve_inside(&base, "deep").is_err());
-        std::os::unix::fs::symlink("missing/../self", base.join("self")).unwrap();
-        assert!(resolve_inside(&base, "self").is_err());
-        // names from the filesystem are escaped in the error
-        std::os::unix::fs::symlink(outside.path(), base.join("bad\nFORGED")).unwrap();
-        std::os::unix::fs::symlink("bad\nFORGED/missing", base.join("forge")).unwrap();
-        let err = resolve_inside(&base, "forge").unwrap_err();
-        assert!(!err.contains('\n'), "{err}");
-        // a chain of links to missing targets ends
-        std::os::unix::fs::symlink("ping/z", base.join("pong")).unwrap();
-        std::os::unix::fs::symlink("pong/z", base.join("ping")).unwrap();
-        assert!(resolve_inside(&base, "ping").is_err());
-    }
-
     /// Whether a directory with mode 000 still can't be entered here (as
     /// root it can, and permission tests have nothing to check).
     #[cfg(unix)]
@@ -2621,36 +2313,6 @@ mod tests {
         .unwrap();
     }
 
-    /// A `.git` file naming `git_dir`, as git writes one: without the
-    /// `\\?\` that canonicalize gives on Windows, which git can't read.
-    fn gitfile(git_dir: &Path) -> String {
-        let path = git_dir.display().to_string();
-        format!("gitdir: {}\n", path.strip_prefix(r"\\?\").unwrap_or(&path))
-    }
-
-    /// A repository's git directory at `repo/.git`, as much of one as meta
-    /// reads: git calls a directory without these no repository.
-    fn git_dir(repo: &Path) {
-        let git = repo.join(".git");
-        for dir in ["objects", "refs"] {
-            std::fs::create_dir_all(git.join(dir)).unwrap();
-        }
-        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-    }
-
-    /// Git's admin directory `admin` for a linked worktree checked out at
-    /// `checkout`, with the files git keeps there, and the `.git` file
-    /// that names it.
-    fn link(admin: &Path, checkout: &Path) {
-        std::fs::create_dir_all(admin).unwrap();
-        std::fs::create_dir_all(checkout).unwrap();
-        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
-        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        let back = checkout.join(".git").display().to_string();
-        std::fs::write(admin.join("gitdir"), format!("{back}\n")).unwrap();
-        std::fs::write(checkout.join(".git"), gitfile(admin)).unwrap();
-    }
-
     #[test]
     fn the_root_climbs_only_through_parents_that_list_the_child() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2672,28 +2334,19 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_meta_made_belongs_to_its_sources_workspace() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
+    fn a_set_belongs_to_the_workspace_whose_worktrees_folder_holds_it() {
         let tmp = tempfile::tempdir().unwrap();
         let top = tmp.path().canonicalize().unwrap();
         meta_yaml(&top, r#""a": "x""#);
-        git_dir(&top);
-        // A worktree set's root checkout, as git lays it out
-        let admin = top.join(".git/worktrees/s1");
         let set = top.join(".worktrees/s1");
         meta_yaml(&set, r#""a": "x""#);
-        link(&admin, &set);
-        // Made by hand: a workspace of its own
-        assert_eq!(workspace_meta_dirs(&set).unwrap(), vec![set.clone()]);
-        // Made by meta
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" });
-        std::fs::write(
-            admin.join(crate::set_record::RECORD_FILE),
-            record.to_string(),
-        )
-        .unwrap();
+        // In top's worktrees folder: top's set, owner file or not
+        assert_eq!(
+            workspace_meta_dirs(&set).unwrap(),
+            vec![set.clone(), top.clone()]
+        );
+        // Its owner file says the same
+        meta_plugin::sets::create(&set, "git", &top).unwrap();
         assert_eq!(
             workspace_meta_dirs(&set).unwrap(),
             vec![set.clone(), top.clone()]
@@ -2702,27 +2355,16 @@ mod tests {
 
     #[test]
     fn a_nested_checkout_in_a_set_climbs_the_set_then_its_source() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
         let tmp = tempfile::tempdir().unwrap();
         let top = tmp.path().canonicalize().unwrap();
         let listing_child = r#""child": {"repo": "x", "meta": true}"#;
         meta_yaml(&top, listing_child);
         meta_yaml(&top.join("child"), "");
-        // The set's root and nested checkouts, each with meta's record
         let set = top.join(".worktrees/ctx");
         meta_yaml(&set, listing_child);
         meta_yaml(&set.join("child"), "");
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
-                .to_string();
-        for (checkout, repo) in [(&set, top.clone()), (&set.join("child"), top.join("child"))] {
-            git_dir(&repo);
-            let admin = repo.join(".git/worktrees/ctx");
-            link(&admin, checkout);
-            std::fs::write(admin.join(crate::set_record::RECORD_FILE), &record).unwrap();
-        }
-        // The set's own meta dirs, then the checkout it stands for and up
+        meta_plugin::sets::create(&set, "git", &top).unwrap();
+        // The set's own meta dirs, then the folder it stands for and up
         assert_eq!(
             workspace_meta_dirs(&set.join("child")).unwrap(),
             vec![
@@ -2735,123 +2377,17 @@ mod tests {
     }
 
     #[test]
-    fn a_set_checkout_stands_for_the_repo_at_its_place() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
-        // alpha lives at beta, and beta at gamma: a checkout at <set>/beta is
-        // alpha's, not beta's
+    fn a_folder_in_a_set_stands_for_the_folder_at_its_place() {
+        // alpha lives at beta: whatever is checked out at <set>/beta stands
+        // for <workspace>/beta
         let tmp = tempfile::tempdir().unwrap();
         let top = tmp.path().canonicalize().unwrap();
-        meta_yaml(
-            &top,
-            r#""alpha": {"repo": "x", "path": "beta"}, "beta": {"repo": "x", "path": "gamma"}"#,
-        );
+        meta_yaml(&top, r#""alpha": {"repo": "x", "path": "beta"}"#);
         let set = top.join(".worktrees/s");
         let member = set.join("beta");
         std::fs::create_dir_all(&member).unwrap();
-        git_dir(&top.join("beta"));
-        let admin = top.join("beta/.git/worktrees/s");
-        link(&admin, &member);
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
-                .to_string();
-        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
+        meta_plugin::sets::create(&set, "git", &top).unwrap();
         assert_eq!(set_source(&member).unwrap(), Some(top.join("beta")));
-    }
-
-    #[test]
-    fn a_set_checkout_a_branch_link_put_elsewhere_stands_for_its_own_repo() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
-        // app is at `link`; the root's branch in the set links it to
-        // `alternate`, which in the workspace is another repository
-        let tmp = tempfile::tempdir().unwrap();
-        let top = tmp.path().canonicalize().unwrap();
-        meta_yaml(
-            &top,
-            r#""app": {"repo": "x", "path": "real"}, "alt": {"repo": "x", "path": "alternate"}"#,
-        );
-        let set = top.join(".worktrees/s");
-        let member = set.join("alternate");
-        std::fs::create_dir_all(&member).unwrap();
-        git_dir(&top.join("alternate"));
-        git_dir(&top.join("real"));
-        let admin = top.join("real/.git/worktrees/s");
-        link(&admin, &member);
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
-                .to_string();
-        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
-        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
-
-        // so does a place that holds no repository, or nothing, in the workspace
-        std::fs::remove_dir_all(top.join("alternate/.git")).unwrap();
-        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
-        std::fs::remove_dir_all(top.join("alternate")).unwrap();
-        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
-
-        // a broken config of another nested repo doesn't hide it
-        meta_yaml(
-            &top,
-            r#""app": {"repo": "x", "path": "real"}, "alt": {"repo": "x", "path": "alternate"}, "other": {"repo": "x", "meta": true}"#,
-        );
-        std::fs::create_dir_all(top.join("other")).unwrap();
-        std::fs::write(top.join("other/.meta.yaml"), "{broken").unwrap();
-        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
-
-        // a repository that is no project of the workspace stands for nothing
-        meta_yaml(&top, r#""alt": {"repo": "x", "path": "alternate"}"#);
-        assert_eq!(set_source(&member).unwrap(), None);
-    }
-
-    #[test]
-    fn a_second_checkout_of_a_projects_repo_is_not_its_source() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
-        // app is at `real`; `alternate` is a hand-made `git worktree add` of
-        // the same repository, no project; a branch link put the set's
-        // checkout of app at `<set>/alternate`
-        let tmp = tempfile::tempdir().unwrap();
-        let top = tmp.path().canonicalize().unwrap();
-        meta_yaml(&top, r#""app": {"repo": "x", "path": "real"}"#);
-        git_dir(&top.join("real"));
-        let linked = |checkout: &Path, id: &str| {
-            let admin = top.join("real/.git/worktrees").join(id);
-            link(&admin, checkout);
-            admin
-        };
-        linked(&top.join("alternate"), "alternate");
-        let set = top.join(".worktrees/s");
-        let member = set.join("alternate");
-        let admin = linked(&member, "s");
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
-                .to_string();
-        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
-        assert_eq!(set_source(&member).unwrap(), Some(top.join("real")));
-    }
-
-    #[test]
-    fn a_separate_git_dir_workspace_is_its_set_roots_source() {
-        // runs git through the code it tests
-        let _sandbox = meta_plugin::testing::isolated!();
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path().canonicalize().unwrap();
-        let (top, git) = (base.join("ws"), base.join("git"));
-        meta_yaml(&top, "");
-        std::fs::write(top.join(".git"), gitfile(&git)).unwrap();
-        for dir in ["objects", "refs"] {
-            std::fs::create_dir_all(git.join(dir)).unwrap();
-        }
-        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        let set = top.join(".worktrees/s");
-        let admin = git.join("worktrees/s");
-        link(&admin, &set);
-        let record =
-            serde_json::json!({ "project": top, "set": set, "created_at": "2025-01-01T00:00:00Z" })
-                .to_string();
-        std::fs::write(admin.join(crate::set_record::RECORD_FILE), record).unwrap();
-        assert_eq!(set_source(&set).unwrap(), Some(top));
     }
 
     #[test]

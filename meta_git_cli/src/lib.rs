@@ -4,13 +4,16 @@
 
 mod clone;
 mod clone_missing;
+mod clone_queue;
 mod clone_worker;
 mod commit;
 mod git_env;
+mod here;
 mod ssh;
 mod update;
 
 mod commands;
+mod worktree;
 
 use indexmap::IndexMap;
 use log::debug;
@@ -237,6 +240,85 @@ pub(crate) fn printed(
             ..ProjectResult::default()
         });
     }
+    Ok(Response::printed(records))
+}
+
+/// Run the command `request` is again, from the top, through meta (as typed,
+/// meta's options first), for a command whose plan changed under it (it
+/// cloned a meta repo whose config lists more): meta reads the configs
+/// anew. In text it shows as it runs; under `--json` its rows are this
+/// call's.
+pub(crate) fn again(ctx: &Ctx, request: &Request) -> anyhow::Result<Response> {
+    let words: Vec<String> = request
+        .command
+        .split_whitespace()
+        .map(str::to_string)
+        .chain(request.args.iter().cloned())
+        .collect();
+    through_meta(ctx, request, &request.cwd, &words)
+}
+
+/// Run meta with its options as typed, then `words`, from `cwd`, as [`again`]
+/// does: in text as it shows, under `--json` its rows this call's.
+pub(crate) fn through_meta(
+    ctx: &Ctx,
+    request: &Request,
+    cwd: &std::path::Path,
+    words: &[String],
+) -> anyhow::Result<Response> {
+    let json = ctx.meta().json;
+    let args: Vec<String> = request
+        .meta_options
+        .typed
+        .iter()
+        .filter(|word| !(json && *word == "--json"))
+        .cloned()
+        .chain(words.iter().cloned())
+        .collect();
+    let meta = meta_plugin::client::Meta::from_env()?.cwd(cwd).args(args);
+    if !json {
+        let status = meta.inherit()?;
+        return match status.success() {
+            true => Ok(Response::done()),
+            false => Err(meta_plugin::exit::ExitWith::of(status).into()),
+        };
+    }
+    let envelope = meta.json()?.wait()?;
+    for warning in envelope.warnings {
+        ctx.warn(warning);
+    }
+    match envelope.error {
+        Some(error) => printed(ctx, envelope.results, Some(error.into())),
+        None => Ok(Response::printed(envelope.results)),
+    }
+}
+
+/// [`printed`], for a worktree command: under `--json` its records, then
+/// the failure (the command's error), then a row for each repo whose git
+/// command failed, with git's stderr. In text the failure says it all,
+/// git's stderr under the repo it names.
+pub(crate) fn printed_with_git(
+    ctx: &Ctx,
+    request: &Request,
+    mut records: Vec<ProjectResult>,
+    failure: Option<anyhow::Error>,
+) -> meta_plugin::Result<Response> {
+    let Some(failure) = failure else {
+        return Ok(Response::printed(records));
+    };
+    let root = request
+        .workspace
+        .as_ref()
+        .map_or(request.cwd.as_path(), |w| w.root.as_path());
+    let rows = worktree::git_ops::failure_rows(&failure, root);
+    if !ctx.meta().json || rows.is_empty() {
+        return printed(ctx, records, Some(failure));
+    }
+    records.push(ProjectResult {
+        error: Some(meta_plugin::envelope::info_of(&failure)),
+        ..ProjectResult::default()
+    });
+    records.extend(rows);
     Ok(Response::printed(records))
 }
 

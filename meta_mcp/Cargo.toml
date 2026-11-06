@@ -12,7 +12,7 @@ name = "meta-mcp"
 path = "src/main.rs"
 
 [dependencies]
-meta_plugin = { workspace = true, features = ["parse"] }
+meta_plugin = { workspace = true, features = ["parse", "client"] }
 meta_core.workspace = true
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }

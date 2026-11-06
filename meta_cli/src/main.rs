@@ -11,6 +11,7 @@ mod context;
 mod events;
 mod init;
 mod invoke;
+mod project;
 mod registry;
 mod report;
 mod run_list;
@@ -150,6 +151,13 @@ pub struct Cli {
 
     #[arg(
         long,
+        conflicts_with_all = ["all", "primary"],
+        help = "Only the .meta.yaml in the directory meta runs from: no workspace above it, no worktree set around it"
+    )]
+    no_parent: bool,
+
+    #[arg(
+        long,
         help = "Convert warnings to errors for all-or-nothing behavior (CI/automation)"
     )]
     strict: bool,
@@ -217,6 +225,8 @@ enum Commands {
     Init(InitArgs),
     /// Manage plugins
     Plugin(PluginArgs),
+    /// Inspect and validate the workspace's projects
+    Project(project::ProjectArgs),
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -384,6 +394,34 @@ fn help_with_plugins(plugins: &SubprocessPluginManager) -> String {
 /// ends meta names.
 static COMMAND: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
+/// The words of meta's own command typed after meta's options (`project
+/// dependents`, `plugin install`), each by its name (an alias by the command
+/// it stands for), as far as they name commands, and the word typed where
+/// one of them expects a subcommand; empty when the first word is no command
+/// of meta's.
+fn typed_command() -> String {
+    let typed: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let skip = meta_options().typed.len();
+    let mut command = Cli::command();
+    let mut words = Vec::new();
+    for word in typed.iter().skip(skip) {
+        let Some(sub) = command.find_subcommand(word).cloned() else {
+            // a word where a command of its takes subcommands: the one typed
+            // (`project nonesuch`)
+            if command.has_subcommands() && !words.is_empty() && !word.starts_with('-') {
+                words.push(word.clone());
+            }
+            break;
+        };
+        words.push(sub.get_name().to_string());
+        command = sub;
+    }
+    words.join(" ")
+}
+
 /// The command being run is `name` (the Envelope of an error names it).
 pub fn running(name: &str) {
     if let Ok(mut command) = COMMAND.lock() {
@@ -431,6 +469,25 @@ fn reported(error: &anyhow::Error) -> bool {
             .any(|cause| cause.is::<meta_plugin::ErrorInfo>())
 }
 
+/// Tell the programs meta starts how to call it back (`META_EXE`, and
+/// `META_DEPTH`: how many meta calls are around this one), refusing a meta
+/// deeper than calls may go: a command that calls itself through meta ends.
+fn called_back() -> Result<()> {
+    use meta_plugin::client::{depth, DEPTH_VAR, EXE_VAR, MAX_DEPTH};
+    let depth = depth()?;
+    if depth > MAX_DEPTH {
+        anyhow::bail!(
+            "This run of meta is {depth} calls deep, deeper than {MAX_DEPTH}: a command calls itself through meta"
+        );
+    }
+    // set while meta has one thread, before it starts anything
+    std::env::set_var(DEPTH_VAR, depth.to_string());
+    if let Ok(exe) = std::env::current_exe() {
+        std::env::set_var(EXE_VAR, exe);
+    }
+    Ok(())
+}
+
 fn run_cli() -> Result<()> {
     // Log records carry names, versions, paths and URLs from config, the
     // filesystem and plugin registries: escape them like other output
@@ -448,6 +505,7 @@ fn run_cli() -> Result<()> {
             )
         })
         .init();
+    called_back()?;
 
     // meta's own --help also lists the commands plugins add, so it is
     // answered here, before anything else runs; every other result of
@@ -459,7 +517,14 @@ fn run_cli() -> Result<()> {
             let plugins = SubprocessPluginManager::new(false)?;
             return Ok(out!("{}", help_with_plugins(&plugins))?);
         }
-        Err(_) => meta_plugin::args::parse()?,
+        Err(e) => {
+            // the Envelope of a usage error names the command it is about
+            running(&typed_command());
+            match project::usage_error(&e) {
+                Some(error) => return Err(error),
+                None => meta_plugin::args::parse()?,
+            }
+        }
     };
     // the stream is JSON too: every command reads `json` for it, and only
     // the printing tells the two apart
@@ -502,6 +567,7 @@ fn run_cli() -> Result<()> {
         Some(Commands::Init(_)) => "init claude",
         Some(Commands::Plugin(args)) => args.command.name(),
         Some(Commands::Exec(_)) => "exec",
+        Some(Commands::Project(args)) => args.command.name(),
         Some(Commands::External(_)) => "",
     });
     running(&report.command);
@@ -537,6 +603,7 @@ fn run_cli() -> Result<()> {
             &mut report,
         )?,
         Some(Commands::Exec(args)) => invoke::exec(&cli, &args.command, &mut report)?,
+        Some(Commands::Project(args)) => project::run(&cli, &args.command, &mut report)?,
         Some(Commands::External(args)) => {
             external(&cli, args, &subprocess_plugins, &mut report, false)?
         }
@@ -842,7 +909,6 @@ fn dispatch(
             Scope::NamedSet
         }
         ["git", "worktree", ..] => Scope::Workspace,
-        ["project", "list" | "ls" | "dependents", ..] => Scope::Workspace,
         _ => Scope::Selection,
     };
     // the host applies meta's selection: a command that finds its repos
@@ -854,13 +920,10 @@ fn dispatch(
         .any(|w| *w == "--ephemeral");
     let whole_set = scope == Scope::NamedSet && (words.get(2) != Some(&"exec") || ephemeral);
     let refuses_filters = matches!(scope, Scope::None | Scope::Workspace) || whole_set;
-    if refuses_filters && !cli.filters().is_empty() {
-        return Err(meta_plugin::exit::Usage(format!(
-            "meta {} finds its repos itself (in the .meta.yaml files or its worktree sets); it does not take --include/--exclude/--tag",
-            escape(&loop_lib::display_command(&args.iter().take(3).cloned().collect::<Vec<_>>()))
-        ))
-        .into());
-    }
+    refuse_filters(
+        refuses_filters && !cli.filters().is_empty(),
+        args.get(..3).unwrap_or(args),
+    )?;
     let target = match (scope, named) {
         // a clone runs where it is, in a workspace or none
         (Scope::None, _) => None,
@@ -876,6 +939,23 @@ fn dispatch(
         },
         (Scope::Selection, _) => Some(invoke::target(cli, &start)?),
     };
+    // a set is acted on by name only by the provider that made it: one VCS
+    // never removes another's checkouts
+    if let Some(set) = target.as_ref().and_then(|t| t.set.as_ref()) {
+        if scope == Scope::NamedSet && set.provider != plugin.word {
+            return Err(meta_plugin::ErrorInfo::new(
+                meta_plugin::ErrorCode::Conflict,
+                format!(
+                    "Worktree set '{}' was made by meta-{}; meta {} acts only on the sets meta-{} made",
+                    escape(&set.name),
+                    escape(&set.provider),
+                    escape(&plugin.word),
+                    escape(&plugin.word)
+                ),
+            )
+            .into());
+        }
+    }
     let mut request = invoke::request(cli, plugin, args, &start, scope, target.as_ref())?;
     // typed after the command, they get no tip to type them before it
     if refuses_filters {
@@ -884,6 +964,20 @@ fn dispatch(
             .refusing(&["--include", "--exclude", "--tag"]);
     }
     invoke::call(cli, plugin, &request, target.as_ref(), report)
+}
+
+/// A usage error when meta's filters were given (`filtered`) to `command`
+/// (its words), which finds its repos itself.
+fn refuse_filters(filtered: bool, command: &[impl AsRef<str>]) -> Result<()> {
+    if !filtered {
+        return Ok(());
+    }
+    let words: Vec<String> = command.iter().map(|w| w.as_ref().to_string()).collect();
+    Err(meta_plugin::exit::Usage(format!(
+        "meta {} finds its repos itself (in the .meta.yaml files or its worktree sets); it does not take --include/--exclude/--tag",
+        escape(&loop_lib::display_command(&words))
+    ))
+    .into())
 }
 
 /// meta's options, and what of this process's arguments is them
@@ -1408,7 +1502,7 @@ fn check_and_warn_orphan() {
     };
 
     // inside a set, or where that can't be told (the command reports why)
-    if !matches!(worktree::detect_worktree_context(&current_dir), Ok(None)) {
+    if !matches!(worktree::detect_worktree_location(&current_dir), Ok(None)) {
         return;
     }
 

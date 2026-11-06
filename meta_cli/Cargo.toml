@@ -9,7 +9,7 @@ description = "Multi-repo management CLI with AI integration"
 
 [dependencies]
 meta_core.workspace = true
-meta_plugin = { workspace = true, features = ["parse"] }
+meta_plugin = { workspace = true, features = ["parse", "client", "sets"] }
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive", "string"] }
 colored.workspace = true

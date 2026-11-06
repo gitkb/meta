@@ -7,14 +7,13 @@ repository.workspace = true
 description = "The workspace domain meta and its plugins share: config, repo selection, worktree sets and the dependency graph"
 
 [dependencies]
-meta_plugin.workspace = true
+meta_plugin = { workspace = true, features = ["sets"] }
 anyhow.workspace = true
 dirs.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true
-walkdir = "2.3"
 
 [dev-dependencies]
 meta_plugin = { workspace = true, features = ["testing-git"] }

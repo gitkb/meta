@@ -156,27 +156,11 @@ fn nested_meta_dir_reads_its_workspace_plugins_but_not_an_unlisting_parent() {
 #[test]
 fn a_worktree_set_checkout_reads_its_own_and_its_origins_plugins() {
     let f = Fixture::new(true);
-    // A set's root checkout, laid out as git and meta leave it
+    // A set's root checkout, made from this workspace (its owner file says so)
     let set = f.cwd.join(".worktrees/s1");
-    for dir in ["objects", "refs"] {
-        fs::create_dir_all(f.cwd.join(".git").join(dir)).unwrap();
-    }
-    fs::write(f.cwd.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
-    let admin = f.cwd.join(".git/worktrees/s1");
-    fs::create_dir_all(&admin).unwrap();
-    fs::write(admin.join("commondir"), "../..\n").unwrap();
-    fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-    let back = set.join(".git").display().to_string();
-    fs::write(admin.join("gitdir"), format!("{back}\n")).unwrap();
-    let record = format!(
-        "{{\"project\": {:?}, \"set\": {:?}, \"created_at\": \"2025-01-01T00:00:00Z\"}}",
-        f.cwd.display().to_string(),
-        set.display().to_string()
-    );
-    fs::write(admin.join("meta-worktree.json"), record).unwrap();
     fs::create_dir_all(&set).unwrap();
     fs::write(set.join(".meta.yaml"), "projects: {}\n").unwrap();
-    fs::write(set.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+    meta_plugin::sets::create(&set, "git", &f.cwd).unwrap();
     plugin(&f.cwd.join(".meta/plugins/meta-main"), "main", "1");
     plugin(&set.join(".meta/plugins/meta-setlocal"), "setlocal", "1");
     let output = f

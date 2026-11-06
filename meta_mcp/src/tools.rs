@@ -5,15 +5,13 @@ use crate::McpServer;
 use anyhow::{Context, Result};
 use meta_core::config::{self, ProjectInfo};
 use meta_core::dependency_graph::{self, ProjectDependencies};
-use meta_core::git::{git, RepoStatus};
 use meta_core::query::{Query, RepoState, WorkspaceState};
 use meta_plugin::display::escape;
-use meta_plugin::Envelope;
+use meta_plugin::{Envelope, ProjectResult};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::LazyLock;
 
 /// What a tool answers: its text, and whether it failed.
@@ -592,64 +590,29 @@ impl McpServer {
         Ok(Workspace { dir, projects })
     }
 
-    /// git in `target`'s folder, when that is a repository's top level. A
-    /// folder that isn't is an error: git would act on the repository
-    /// around it, which may be the workspace's or one outside it.
-    fn own_repo_git(&self, target: &Target) -> Result<Command> {
-        let out = self
-            .calls
-            .output(git(&target.dir).args(["rev-parse", "--is-inside-work-tree", "--show-cdup"]))
-            .context("Cannot run git rev-parse")?;
-        let at = || {
-            format!(
-                "Project '{}' at {}",
-                escape(&target.name),
-                meta_plugin::display::escape_path(&target.dir)
-            )
-        };
-        if !out.status.success() {
-            // git's reason: no repository, or one it won't open
-            anyhow::bail!("{}: {}", at(), String::from_utf8_lossy(&out.stderr).trim());
-        }
-        // in a work tree, with no way up to its top level: "true" and an
-        // empty line (in a bare repository "false"; below the top "../")
-        if out.stdout.trim_ascii() != b"true" {
-            anyhow::bail!("{} is not a git repository of its own", at());
-        }
-        Ok(git(&target.dir))
-    }
-
-    /// `meta` in the workspace root.
-    fn meta(&self, workspace: &Workspace) -> Command {
-        meta_core::git::in_repo("meta", &workspace.dir)
-    }
-
-    /// `meta --json` with `args`, in the projects `scope` selects (a project
-    /// by its path, so meta can't take it for another's name). The reply is
-    /// meta's result for each repo; it is an error only when meta gave none,
-    /// or every repo failed.
-    fn run_meta(&self, workspace: &Workspace, scope: &Scope, args: &[&str]) -> Result<Reply> {
-        let mut meta = self.meta(workspace);
-        meta.arg("--json");
+    /// meta in `dir`, with `--json` and `args`, in the projects `scope`
+    /// selects (a project by its path, so meta can't take it for another's
+    /// name). Its Envelope; an error only when meta gave no result and said
+    /// why.
+    fn call_meta(&self, workspace: &Workspace, scope: &Scope, args: &[&str]) -> Result<Envelope> {
+        let mut meta = crate::run::meta()?.cwd(&workspace.dir);
         match scope {
             Scope::All => {}
-            Scope::Tags(tags) => {
-                meta.arg("--tag").arg(tags);
-            }
+            Scope::Tags(tags) => meta = meta.args(["--tag", tags.as_str()]),
             Scope::Project(name) => {
                 let path = workspace.project(name)?.path;
                 let outside = std::path::Path::new(&path).is_absolute()
                     || path.split('/').any(|part| part == "..");
-                meta.arg("--include").arg(match path.as_str() {
+                let include = match path.as_str() {
                     "." => path,
                     // a project outside the workspace has no path from its
                     // root; meta refuses its name if another's path is it
                     _ if outside => name.clone(),
                     path => format!("./{path}"),
-                });
+                };
+                meta = meta.args(["--include".to_string(), include]);
             }
         }
-        meta.args(args);
         // the command, not its arguments, which may be long
         let words: Vec<&str> = args
             .iter()
@@ -657,39 +620,80 @@ impl McpServer {
             .take_while(|arg| !arg.starts_with('-'))
             .collect();
         let what = format!("meta {}", words.join(" "));
-        let output = self
+        let envelope = self
             .calls
-            .output(&mut meta)
+            .meta(meta.args(args))
             .with_context(|| format!("Cannot run {}", escape(&what)))?;
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        match serde_json::from_str::<Envelope>(&stdout) {
+        match envelope {
             // meta failed before any project gave a result: its error
-            Ok(Envelope {
+            Envelope {
                 error: Some(error),
                 results,
                 ..
-            }) if results.is_empty() => anyhow::bail!(
-                "{} failed ({}): {}{}",
+            } if results.is_empty() => anyhow::bail!(
+                "{} failed: {}{}",
                 escape(&what),
-                output.status,
                 error.message,
                 error
                     .hint
                     .map(|hint| format!(" ({hint})"))
                     .unwrap_or_default()
             ),
-            Ok(envelope) => Ok(Reply {
-                is_error: all_failed(envelope.results.iter().map(|row| !row.is_failure())),
-                text: stdout,
-            }),
-            Err(_) if output.status.success() => Ok(stdout.into()),
-            Err(_) => anyhow::bail!(
-                "{} failed ({}): {}{}",
-                escape(&what),
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim(),
-                stdout
-            ),
+            envelope => Ok(envelope),
+        }
+    }
+
+    /// [`McpServer::call_meta`], answered with its Envelope: an error when
+    /// every repo failed.
+    fn run_meta(&self, workspace: &Workspace, scope: &Scope, args: &[&str]) -> Result<Reply> {
+        let envelope = self.call_meta(workspace, scope, args)?;
+        Ok(Reply {
+            is_error: all_failed(envelope.results.iter().map(|row| !row.is_failure())),
+            text: serde_json::to_string(&envelope)?,
+        })
+    }
+
+    /// `meta git <args>` in the project `target` alone: its result, or why
+    /// there is none (git's words, else meta's).
+    fn git_in(
+        &self,
+        workspace: &Workspace,
+        target: &Target,
+        args: &[&str],
+    ) -> Result<String, String> {
+        let mut git_args = vec!["git"];
+        git_args.extend(args);
+        let envelope = self
+            .call_meta(workspace, &Scope::Project(target.name.clone()), &git_args)
+            .map_err(|e| format!("{e:#}"))?;
+        match envelope.results.into_iter().next() {
+            Some(ProjectResult {
+                error: None,
+                stdout,
+                ..
+            }) => Ok(stdout.unwrap_or_default()),
+            Some(ProjectResult {
+                error,
+                stdout,
+                stderr,
+                ..
+            }) => {
+                let said = [stderr, stdout]
+                    .into_iter()
+                    .flatten()
+                    .map(|text| text.trim().to_string())
+                    .find(|text| !text.is_empty());
+                Err(said
+                    .or(error.map(|error| error.message))
+                    .unwrap_or_default())
+            }
+            None => Err(envelope
+                .skipped
+                .into_iter()
+                .map(|skipped| skipped.reason)
+                .chain(envelope.message)
+                .next()
+                .unwrap_or_else(|| "The call of meta gave no result".to_string())),
         }
     }
 
@@ -770,37 +774,26 @@ impl McpServer {
 
     fn git_diff(&self, args: DiffArgs) -> Result<Reply> {
         let workspace = self.workspace()?;
+        let diff_args: &[&str] = match args.staged {
+            Some(true) => &["diff", "--staged"],
+            _ => &["diff"],
+        };
         let mut results = Vec::new();
         let mut successes = Vec::new();
         for project in workspace.select(&Scope::of(args.project, args.tag)?)? {
             if !project.dir.exists() {
                 continue;
             }
-            let diff = self.own_repo_git(&project).and_then(|mut cmd| {
-                cmd.arg("diff");
-                if args.staged == Some(true) {
-                    cmd.arg("--staged");
-                }
-                Ok(self.calls.output(&mut cmd)?)
-            });
+            let diff = self.git_in(&workspace, &project, diff_args);
+            successes.push(diff.is_ok());
             match diff {
-                Ok(out) if out.status.success() => {
-                    successes.push(true);
-                    let diff = String::from_utf8_lossy(&out.stdout);
-                    if !diff.is_empty() {
-                        results.push(serde_json::json!({
-                            "project": project.name,
-                            "diff": diff
-                        }));
-                    }
-                }
-                failed => {
-                    successes.push(false);
-                    let error = match failed {
-                        Ok(out) => String::from_utf8_lossy(&out.stderr).trim().to_string(),
-                        Err(e) => format!("{e:#}"),
-                    };
-                    results.push(serde_json::json!({ "project": project.name, "error": error }));
+                Ok(diff) if diff.is_empty() => {}
+                Ok(diff) => results.push(serde_json::json!({
+                    "project": project.name,
+                    "diff": diff
+                })),
+                Err(error) => {
+                    results.push(serde_json::json!({ "project": project.name, "error": error }))
                 }
             }
         }
@@ -811,34 +804,51 @@ impl McpServer {
     }
 
     fn git_branch(&self, args: TagArgs) -> Result<String> {
+        /// What `meta context` says of a repo's branch.
+        #[derive(Deserialize)]
+        struct Repo {
+            name: String,
+            branch: Option<String>,
+            detached: Option<bool>,
+            upstream: Option<String>,
+            ahead: Option<usize>,
+            behind: Option<usize>,
+        }
         let workspace = self.workspace()?;
+        let scope = Scope::of(None, args.tag)?;
+        let context = self.call_meta(&workspace, &scope, &["context"])?;
+        let repos: Vec<Repo> = context
+            .results
+            .into_iter()
+            .filter(|row| row.project.is_some())
+            .filter_map(|row| serde_json::from_value(row.data?).ok())
+            .collect();
         let mut results = Vec::new();
-        for project in workspace.select(&Scope::of(None, args.tag)?)? {
+        for project in workspace.select(&scope)? {
             if !project.dir.exists() {
                 continue;
             }
-            // a work tree git refuses (`core.bare=true`) still has its refs;
-            // what git can't read at all is unknown, never level with main
-            let status = RepoStatus::read(&project.dir)
-                .or_else(|e| RepoStatus::refs(&project.dir).and_then(|refs| refs.ok_or(e)));
-            results.push(match status {
-                Ok(status) => {
-                    let (ahead, behind) = status.ahead_behind.unwrap_or_default();
+            let repo = repos.iter().find(|repo| repo.name == project.name);
+            // a work tree git refuses (`core.bare=true`) still has its
+            // branch; what git can't read at all is unknown, never level
+            // with main
+            results.push(match repo {
+                Some(repo) if repo.branch.is_some() || repo.detached == Some(true) => {
                     serde_json::json!({
                         "project": project.name,
-                        "branch": status.branch.unwrap_or_else(|| "HEAD".to_string()),
-                        "tracking": status.upstream.filter(|upstream| !upstream.is_empty()),
-                        "ahead": ahead,
-                        "behind": behind
+                        "branch": repo.branch.clone().unwrap_or_else(|| "HEAD".to_string()),
+                        "tracking": repo.upstream.clone().filter(|upstream| !upstream.is_empty()),
+                        "ahead": repo.ahead.unwrap_or_default(),
+                        "behind": repo.behind.unwrap_or_default()
                     })
                 }
-                Err(e) => serde_json::json!({
+                _ => serde_json::json!({
                     "project": project.name,
                     "branch": null,
                     "tracking": null,
                     "ahead": null,
                     "behind": null,
-                    "error": format!("{e:#}")
+                    "error": "git can't read its branch (see `meta git status`)"
                 }),
             });
         }
@@ -879,7 +889,11 @@ impl McpServer {
         // has that name
         let check = self
             .calls
-            .output(git(&workspace.dir).args(["check-ref-format", "--branch", &args.branch]))
+            .output(crate::run::git(&workspace.dir).args([
+                "check-ref-format",
+                "--branch",
+                &args.branch,
+            ]))
             .context("Cannot run git check-ref-format")?;
         if !check.status.success() {
             // git's reason: a name it refuses, or a config it can't read
@@ -921,20 +935,8 @@ impl McpServer {
                     meta_plugin::display::escape_path(&target.dir)
                 ))
             } else {
-                let commit = self.own_repo_git(&target).and_then(|mut cmd| {
-                    Ok(self
-                        .calls
-                        .output(cmd.args(["commit", "-m", &commit.message]))?)
-                });
-                match commit {
-                    Ok(out) if out.status.success() => None,
-                    // git says why on stderr, or ("nothing to commit") on stdout
-                    Ok(out) => Some(match String::from_utf8_lossy(&out.stderr).trim() {
-                        "" => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-                        stderr => stderr.to_string(),
-                    }),
-                    Err(e) => Some(format!("{e:#}")),
-                }
+                self.git_in(&workspace, &target, &["commit", "-m", &commit.message])
+                    .err()
             };
             results.push(CommitResult {
                 project: commit.project,
@@ -1057,7 +1059,7 @@ impl McpServer {
             let Some((program, program_args)) = command(&target.dir) else {
                 continue;
             };
-            let mut cmd = meta_core::git::in_repo(program, &target.dir);
+            let mut cmd = crate::run::in_dir(program, &target.dir);
             cmd.args(&program_args);
             let line = format!("{program} {}", program_args.join(" "))
                 .trim_end()
@@ -1091,6 +1093,38 @@ impl McpServer {
     // Discovery tools
     // ========================================================================
 
+    /// The projects of the workspace in `dir` (their paths under `prefix`)
+    /// that are no repository of their own, and why, as `meta project
+    /// check` says; its error when it gave no answer.
+    fn not_repos(
+        &self,
+        dir: &Path,
+        prefix: &str,
+    ) -> Result<std::collections::HashMap<String, String>, String> {
+        let check = crate::run::meta().and_then(|meta| {
+            let meta = meta.cwd(dir).args(["project", "check"]);
+            self.calls.meta(meta)
+        });
+        let envelope = check.map_err(|e| format!("Cannot run meta project check: {e:#}"))?;
+        match envelope.error {
+            Some(error) if envelope.results.is_empty() => return Err(error.message),
+            _ => {}
+        }
+        Ok(envelope
+            .results
+            .into_iter()
+            .filter_map(|row| {
+                let data = row.data?;
+                if data.get("state")?.as_str()? != "not_a_repo" {
+                    return None;
+                }
+                let path = normal(&config::nested_path(prefix, &row.project?));
+                let reason = data.get("reason")?.as_str()?.to_string();
+                Some((path, reason))
+            })
+            .collect())
+    }
+
     fn search_code(&self, args: SearchArgs) -> Result<Reply> {
         /// The most matches given for one project.
         const MAX_MATCHES: usize = 50;
@@ -1108,9 +1142,12 @@ impl McpServer {
         let mut results = Vec::new();
         // whether a project gave an answer, matches or none
         let mut answered = false;
+        // what `meta project check` says of each workspace's projects
+        let mut checks = std::collections::HashMap::new();
 
         for SearchTarget {
             path: name,
+            level,
             tags,
             nested,
         } in targets
@@ -1128,12 +1165,40 @@ impl McpServer {
                 continue;
             }
 
+            // A project that is no repository of its own is a plain
+            // directory; one whose `.git` git won't open is an error.
+            let not_repos = checks
+                .entry(level.clone())
+                .or_insert_with(|| self.not_repos(&workspace.dir.join(&level), &level));
+            let own_repo = match not_repos {
+                Err(error) => Err(error.clone()),
+                Ok(not_repos) => match not_repos.get(&normal(&name)) {
+                    None => Ok(true),
+                    Some(_) if project_path.join(".git").symlink_metadata().is_err() => Ok(false),
+                    Some(why) => Err(why.clone()),
+                },
+            };
+            let own_repo = match own_repo {
+                Ok(own_repo) => own_repo,
+                Err(error) => {
+                    results.push(serde_json::json!({ "project": name, "error": error }));
+                    continue;
+                }
+            };
+
             // git's search never looks in .git or at what .gitignore leaves
-            // out, and takes the pattern after -e, never as an option. A
-            // project that is no repository of its own is a plain directory.
-            // The user's git config doesn't change the results: no colour or
+            // out, and takes the pattern after -e, never as an option. The
+            // user's git config doesn't change the results: no colour or
             // column, extended regular expressions, file names as they are.
-            let mut cmd = git(&project_path);
+            let mut cmd = crate::run::git(&project_path);
+            if !own_repo {
+                // a git directory that isn't one: git reads only the
+                // directory's own .gitignore files, never the workspace
+                // repo's around it, which may ignore the whole project
+                let mut git_dir = std::ffi::OsString::from("--git-dir=");
+                git_dir.push(project_path.join(".git"));
+                cmd.arg(git_dir);
+            }
             cmd.args([
                 "-c",
                 "core.quotePath=false",
@@ -1145,29 +1210,9 @@ impl McpServer {
                 "-n",
                 "-I",
             ]);
-            match meta_core::gitdir::common_dir(&project_path) {
-                Ok(Some(_)) => cmd.arg("--untracked"),
-                // only the directory's own .gitignore files: `git` keeps it
-                // from the workspace repo around it, which may ignore the
-                // whole project, unless the path can't be a ceiling
-                Ok(None) if meta_core::git::ceiling(&project_path).is_none() => {
-                    results.push(serde_json::json!({
-                        "project": name,
-                        "error": format!(
-                            "Cannot search {}: its path contains the path list separator",
-                            meta_plugin::display::escape_path(&project_path)
-                        )
-                    }));
-                    continue;
-                }
-                Ok(None) => cmd.args(["--no-index", "--exclude-standard"]),
-                Err(e) => {
-                    results.push(serde_json::json!({
-                        "project": name,
-                        "error": format!("{e:#}")
-                    }));
-                    continue;
-                }
+            match own_repo {
+                true => cmd.arg("--untracked"),
+                false => cmd.args(["--no-index", "--exclude-standard"]),
             };
             cmd.arg("-e").arg(&args.pattern).arg("--");
             // a file name pattern, in any directory
@@ -1253,18 +1298,14 @@ impl McpServer {
     }
 
     fn list_plugins(&self, _args: NoArgs) -> Result<String> {
-        let mut meta = self.meta(&self.workspace()?);
-        meta.args(["--json", "plugin", "list"]);
-        let output = self
-            .calls
-            .output(&mut meta)
-            .context("Failed to list plugins")?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Failed to list plugins:\n{stdout}\n{stderr}");
+        let meta = crate::run::meta()?
+            .cwd(&self.workspace()?.dir)
+            .args(["plugin", "list"]);
+        let envelope = self.calls.meta(meta).context("Failed to list plugins")?;
+        if let Some(error) = &envelope.error {
+            anyhow::bail!("Failed to list plugins: {}", error.message);
         }
-        Ok(stdout.into_owned())
+        Ok(serde_json::to_string(&envelope)?)
     }
 
     // ========================================================================
@@ -1351,6 +1392,8 @@ impl McpServer {
 /// and the paths, from it, of the projects nested in it.
 struct SearchTarget {
     path: String,
+    /// The path of the workspace whose config lists it (empty for the root)
+    level: String,
     tags: Vec<String>,
     nested: Result<Vec<String>, String>,
 }
@@ -1374,6 +1417,7 @@ fn search_targets(dir: &Path, prefix: &str, projects: &[ProjectInfo], out: &mut 
             .map_err(|e| format!("{e:#}"));
         out.push(SearchTarget {
             path: path.clone(),
+            level: prefix.to_string(),
             tags: project.tags.clone(),
             nested: nested
                 .as_ref()
@@ -1384,6 +1428,16 @@ fn search_targets(dir: &Path, prefix: &str, projects: &[ProjectInfo], out: &mut 
             search_targets(&dir.join(&project.path), &path, &nested, out);
         }
     }
+}
+
+/// `path` with no `.` in it, its parts joined by `/`.
+fn normal(path: &str) -> String {
+    let parts: Vec<_> = Path::new(path)
+        .components()
+        .filter(|part| *part != std::path::Component::CurDir)
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    parts.join("/")
 }
 
 fn build_file_tree(
@@ -1688,14 +1742,6 @@ mod tests {
         };
         assert_eq!(path("a"), Some(tmp.join("dir/a")));
         assert_eq!(path("."), Some(tmp.clone()));
-        // by its name, at its own path
-        std::fs::write(tmp.join("dir/a/README"), "changed").unwrap();
-        let diff = json(call(&server, "meta_git_diff", json!({"project": "a"})));
-        assert_eq!(diff.as_array().unwrap().len(), 1, "{diff}");
-        assert!(
-            diff[0]["diff"].as_str().unwrap().contains("+changed"),
-            "{diff}"
-        );
         let impact = json(call(
             &server,
             "meta_analyze_impact",
@@ -1739,7 +1785,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_commit_commits_only_in_projects_of_the_workspace() {
+    fn multi_commit_refuses_a_project_outside_the_workspace_before_committing() {
         let sandbox = meta_plugin::testing::isolated!();
         let (server, tmp) = server(&sandbox, "projects:\n  a: {path: dir/a}\n");
         let a = tmp.join("dir/a");
@@ -1766,171 +1812,6 @@ mod tests {
         }
         assert_eq!(sandbox.git(&outside, &["log", "--format=%s"]), "init\n");
         assert_eq!(sandbox.git(&a, &["log", "--format=%s"]), "init\n");
-
-        // by name, at the project's own path; the root has nothing staged,
-        // and git's reason (on stdout) is its error
-        let commits = json!({"commits": [
-            {"project": "a", "message": "in a"},
-            {"project": ".", "message": "in the root"}
-        ]});
-        sandbox.repo(&tmp);
-        let reply = call(&server, "meta_git_multi_commit", commits).unwrap();
-        assert!(!reply.is_error, "{}", reply.text);
-        let result: serde_json::Value = serde_json::from_str(&reply.text).unwrap();
-        assert_eq!(sandbox.git(&a, &["log", "-1", "--format=%s"]), "in a\n");
-        assert_eq!(result["results"][0]["success"], true, "{result}");
-        assert!(
-            result["results"][1]["error"]
-                .as_str()
-                .is_some_and(|e| e.contains("nothing")),
-            "{result}"
-        );
-        // every commit failed: the call failed
-        let commits = json!({"commits": [{"project": "a", "message": "again"}]});
-        assert!(
-            call(&server, "meta_git_multi_commit", commits)
-                .unwrap()
-                .is_error
-        );
-    }
-
-    #[test]
-    fn git_branch_reports_unknown_when_a_projects_git_file_points_nowhere() {
-        let sandbox = meta_plugin::testing::isolated!();
-        let (server, tmp) = server(&sandbox, "projects:\n  broken: {}\n");
-        sandbox.repo(&tmp);
-        std::fs::create_dir(tmp.join("broken")).unwrap();
-        std::fs::write(
-            tmp.join("broken/.git"),
-            format!("gitdir: {}\n", tmp.join("gone").display()),
-        )
-        .unwrap();
-
-        let result = json(call(&server, "meta_git_branch", json!({})));
-        let project = result
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["project"] == "broken")
-            .unwrap();
-        assert_eq!(
-            project.get("branch"),
-            Some(&serde_json::Value::Null),
-            "{result}"
-        );
-        assert_eq!(
-            project.get("ahead"),
-            Some(&serde_json::Value::Null),
-            "{result}"
-        );
-        assert!(
-            project["error"].as_str().is_some_and(|e| e.contains("git")),
-            "{result}"
-        );
-    }
-
-    #[test]
-    fn git_acts_only_in_a_project_that_is_its_own_repository() {
-        let sandbox = meta_plugin::testing::isolated!();
-        // a plain folder, in a workspace root that is a repository with
-        // work staged
-        let (server, tmp) = server(&sandbox, "projects:\n  plain: {}\n");
-        sandbox.repo(&tmp);
-        std::fs::create_dir(tmp.join("plain")).unwrap();
-        std::fs::write(tmp.join("staged"), "root work").unwrap();
-        sandbox.git(&tmp, &["add", "staged"]);
-        let commits = json!({"commits": [{"project": "plain", "message": "m"}]});
-        let reply = call(&server, "meta_git_multi_commit", commits).unwrap();
-        assert!(
-            reply.is_error && reply.text.contains("not a git repository"),
-            "{}",
-            reply.text
-        );
-        let diff = call(
-            &server,
-            "meta_git_diff",
-            json!({"project": "plain", "staged": true}),
-        )
-        .unwrap();
-        assert!(
-            diff.is_error && !diff.text.contains("root work"),
-            "{}",
-            diff.text
-        );
-        assert_eq!(sandbox.git(&tmp, &["log", "--format=%s"]), "init\n");
-
-        // a repository git won't open: its reason, not a guess
-        std::fs::write(tmp.join("plain/.git"), "gitdir: /nonexistent\n").unwrap();
-        let commits = json!({"commits": [{"project": "plain", "message": "m"}]});
-        let reply = call(&server, "meta_git_multi_commit", commits).unwrap();
-        // git's own words, which change between versions
-        assert!(reply.is_error, "{}", reply.text);
-        let result: serde_json::Value = serde_json::from_str(&reply.text).unwrap();
-        let error = result["results"][0]["error"].as_str().unwrap_or_default();
-        let reason = error
-            .strip_prefix("Project 'plain' at ")
-            .unwrap_or_default();
-        assert!(
-            reason.contains(": fatal:") && !reason.contains("of its own"),
-            "{error}"
-        );
-
-        // a plain folder in a workspace inside a bare repository
-        let bare = sandbox.work().join("bare");
-        std::fs::create_dir_all(&bare).unwrap();
-        sandbox.git(bare.as_path(), &["init", "-q", "--bare"]);
-        let ws = bare.join("ws");
-        std::fs::create_dir_all(ws.join("plain")).unwrap();
-        std::fs::write(ws.join(".meta.yaml"), "projects:\n  plain: {}\n").unwrap();
-        let server = McpServer::in_dir(Some(ws));
-        let diff = call(&server, "meta_git_diff", json!({"project": "plain"})).unwrap();
-        // or, under safe.bareRepository=explicit, git's own refusal
-        let refused = diff.text.contains("not a git repository of its own")
-            || diff.text.contains("Project 'plain' at ") && diff.text.contains(": fatal:");
-        assert!(diff.is_error && refused, "{}", diff.text);
-
-        // a workspace root that isn't a repository, inside one that is
-        let outer = sandbox.work().join("outer");
-        std::fs::create_dir_all(&outer).unwrap();
-        sandbox.repo(&outer);
-        std::fs::write(outer.join("wip"), "outer work").unwrap();
-        sandbox.git(&outer, &["add", "wip"]);
-        let ws = outer.join("ws");
-        std::fs::create_dir(&ws).unwrap();
-        std::fs::write(ws.join(".meta.yaml"), "projects: {}\n").unwrap();
-        let server = McpServer::in_dir(Some(ws));
-        let commits = json!({"commits": [{"project": ".", "message": "m"}]});
-        assert!(
-            call(&server, "meta_git_multi_commit", commits)
-                .unwrap()
-                .is_error
-        );
-        assert_eq!(sandbox.git(&outer, &["log", "--format=%s"]), "init\n");
-    }
-
-    /// The check reads no path from git, so any folder name works.
-    #[test]
-    fn a_repository_with_any_name_is_its_own() {
-        let sandbox = meta_plugin::testing::isolated!();
-        let tmp = sandbox.work();
-        let mut names = vec![std::ffi::OsString::from("name")];
-        // Windows drops a trailing space from a folder's name
-        #[cfg(unix)]
-        names.push(std::ffi::OsString::from("ends in a space "));
-        #[cfg(target_os = "linux")]
-        {
-            use std::os::unix::ffi::OsStrExt;
-            names.push(std::ffi::OsStr::from_bytes(b"byte \xff").to_os_string());
-        }
-        for name in names {
-            let ws = tmp.join(name);
-            sandbox.repo(&ws);
-            std::fs::write(ws.join(".meta.yaml"), "projects: {}\n").unwrap();
-            std::fs::write(ws.join("README"), "changed").unwrap();
-            let server = McpServer::in_dir(Some(ws.clone()));
-            let diff = json(call(&server, "meta_git_diff", json!({"project": "."})));
-            assert_eq!(diff.as_array().unwrap().len(), 1, "{ws:?}: {diff}");
-        }
     }
 
     /// A server keeps to its own workspace: when that one's config is gone,
@@ -1970,30 +1851,6 @@ mod tests {
             err.contains("fatal:") && !err.contains("not a valid branch name"),
             "{err}"
         );
-    }
-
-    #[test]
-    fn search_gives_at_most_fifty_matches_per_project_and_says_so() {
-        let sandbox = meta_plugin::testing::isolated!();
-        let (server, tmp) = server(&sandbox, "projects:\n  a: {}\n  b: {}\n");
-        for (project, lines) in [("a", 60), ("b", 50)] {
-            let dir = tmp.join(project);
-            sandbox.repo(&dir);
-            std::fs::write(dir.join("f"), "hit\n".repeat(lines)).unwrap();
-        }
-        let found = json(call(&server, "meta_search_code", json!({"pattern": "hit"})));
-        assert_eq!(found[0]["project"], "a", "{found}");
-        assert_eq!(found[0]["matches"].as_array().unwrap().len(), 50);
-        assert_eq!(found[0]["truncated"], true);
-        assert!(found[0].get("error").is_none(), "{found}");
-        assert_eq!(found[1]["matches"].as_array().unwrap().len(), 50);
-        assert!(found[1].get("truncated").is_none(), "{found}");
-
-        // no match is an answer; a search git refuses everywhere is a failure
-        let none = call(&server, "meta_search_code", json!({"pattern": "absent"})).unwrap();
-        assert!(!none.is_error, "{}", none.text);
-        let refused = call(&server, "meta_search_code", json!({"pattern": "["})).unwrap();
-        assert!(refused.is_error, "{}", refused.text);
     }
 
     #[test]

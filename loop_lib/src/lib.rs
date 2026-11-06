@@ -3,6 +3,7 @@ use colored::*;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 pub use meta_plugin::display::display_command;
 use meta_plugin::display::{escape, escape_path, program_output};
+use meta_plugin::process::TooMuchOutput;
 use meta_plugin::{errln, out, outln};
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
@@ -62,21 +63,25 @@ pub struct LoopConfig {
     pub on_done: OnDone,
 }
 
-/// A function told of each command as it ends.
-type Tell = dyn Fn(&CommandResult) + Send + Sync;
+/// A function told of each command as it ends; a closed stdout it found
+/// stops the run.
+type Tell = dyn Fn(&CommandResult) -> Result<(), StdoutError> + Send + Sync;
 
 /// What a caller is told as each command ends.
 #[derive(Clone, Default)]
 pub struct OnDone(Option<std::sync::Arc<Tell>>);
 
 impl OnDone {
-    pub fn call(f: impl Fn(&CommandResult) + Send + Sync + 'static) -> Self {
+    pub fn call(
+        f: impl Fn(&CommandResult) -> Result<(), StdoutError> + Send + Sync + 'static,
+    ) -> Self {
         OnDone(Some(std::sync::Arc::new(f)))
     }
 
-    fn tell(&self, result: &CommandResult) {
-        if let Some(f) = &self.0 {
-            f(result);
+    fn tell(&self, result: &CommandResult) -> Result<(), StdoutError> {
+        match &self.0 {
+            Some(f) => f(result),
+            None => Ok(()),
         }
     }
 }
@@ -234,17 +239,45 @@ pub struct CommandResult {
     /// What the command wrote, as it wrote it (not necessarily UTF-8)
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+    /// Its output went straight to meta's (`--sequential` text), so none
+    /// of it is here
+    pub live: bool,
+    /// It wrote more than meta keeps of one command, so it was stopped and
+    /// its output dropped
+    pub too_much_output: Option<TooMuchOutput>,
 }
 
 impl CommandResult {
     /// How the command ended, for a failure line: `exit code 1`,
     /// `killed by signal 9`.
     fn ending(&self) -> String {
-        match (self.signal, self.exit_code) {
-            (Some(signal), _) => format!("killed by signal {signal}"),
-            (None, Some(code)) => format!("exit code {code}"),
-            (None, None) => "no exit code".to_string(),
+        match (self.too_much_output, self.signal, self.exit_code) {
+            (Some(over), _, _) => format!("stopped at {} MiB of output", over.limit >> 20),
+            (None, Some(signal), _) => format!("killed by signal {signal}"),
+            (None, None, Some(code)) => format!("exit code {code}"),
+            (None, None, None) => "no exit code".to_string(),
         }
+    }
+
+    /// Why it failed, for the end of a line (`: why`): the last line of
+    /// its stderr that has anything on it, or that it wrote none. Nothing for
+    /// a command that ran live: its stderr was the user's, shown and not kept.
+    fn why(&self) -> String {
+        if self.live {
+            return String::new();
+        }
+        if self.too_much_output.is_some() {
+            return ": no more of one command's output is kept".to_string();
+        }
+        String::from_utf8_lossy(&self.stderr)
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map_or_else(
+                || ": no stderr".to_string(),
+                |line| format!(": {}", escape(line)),
+            )
     }
 }
 
@@ -525,6 +558,7 @@ fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
         command,
         stdout: Vec::new(),
         stderr: stderr.into_bytes(),
+        ..CommandResult::default()
     }
 }
 
@@ -623,22 +657,14 @@ fn execute_in_directory(
         meta_plugin::out::flush()?;
     }
 
-    let status = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
-        meta_plugin::process::status(
-            cmd.stdout(if config.silent {
-                Stdio::null()
-            } else {
-                Stdio::inherit()
-            })
-            .stderr(if config.silent {
-                Stdio::null()
-            } else {
-                Stdio::inherit()
-            }),
-        )
-        .map_err(|e| anyhow::anyhow!(not_started(&argv, &e)))
+    // Live, its output the user's own, unless silenced: then it goes nowhere
+    let ran = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
+        if config.silent {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+        meta_plugin::process::status(&mut cmd).map_err(|e| anyhow::anyhow!(not_started(&argv, &e)))
     });
-    let result = match status {
+    let result = match ran {
         Ok(status) => {
             let (exit_code, signal) = exit_of(status);
             CommandResult {
@@ -649,7 +675,7 @@ fn execute_in_directory(
                 directory: dir.to_path_buf(),
                 command,
                 argv,
-                // Sequential mode uses Stdio::inherit(), so no capture
+                live: true,
                 ..Default::default()
             }
         }
@@ -657,7 +683,7 @@ fn execute_in_directory(
             if !config.silent {
                 errln!("{e:#}");
             }
-            failed_result(dir, command, String::new())
+            failed_result(dir, command, format!("{e:#}\n"))
         }
     };
 
@@ -726,7 +752,21 @@ fn capture_in_directory(
     // loop_lib is tool-agnostic.
     meta_plugin::out::pass_color(&mut cmd_builder);
 
-    let output = meta_plugin::process::output(&mut cmd_builder);
+    // Silenced, under --json too: it goes nowhere, nothing held
+    let output = match config.silent {
+        true => meta_plugin::process::status(
+            cmd_builder
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        )
+        .map(|status| std::process::Output {
+            status,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        }),
+        false => meta_plugin::process::output(&mut cmd_builder),
+    };
 
     match output {
         Ok(output) => {
@@ -742,9 +782,25 @@ fn capture_in_directory(
                 argv,
                 stdout: output.stdout,
                 stderr: output.stderr,
+                ..CommandResult::default()
             }
         }
-        Err(e) => failed_result(dir, command, format!("{}\n", not_started(&argv, &e))),
+        Err(e) => match TooMuchOutput::of(&e) {
+            Some(over) => too_much(dir, command, argv, over),
+            None => failed_result(dir, command, format!("{}\n", not_started(&argv, &e))),
+        },
+    }
+}
+
+/// The result of a command that wrote more than meta keeps of one: it ran,
+/// was stopped, and nothing of its output is kept.
+fn too_much(dir: &Path, command: String, argv: Vec<String>, over: TooMuchOutput) -> CommandResult {
+    CommandResult {
+        ran: true,
+        exit_code: None,
+        argv,
+        too_much_output: Some(over),
+        ..failed_result(dir, command, String::new())
     }
 }
 
@@ -845,11 +901,15 @@ impl Outcome {
     }
 
     /// The run's end for a caller that shows text: done, or the failure the
-    /// summary already named (said once more when output is silenced).
+    /// summary already named (with output silenced, the repos that failed).
     pub fn finish(&self) -> Result<()> {
         match self.error() {
             None => Ok(()),
-            Some(_) if self.silent => anyhow::bail!("At least one command failed"),
+            Some(_) if self.silent => {
+                let failed = self.results.iter().filter(|r| !r.success);
+                let names: Vec<String> = failed.map(|r| escape_path(&r.directory)).collect();
+                anyhow::bail!("{}", failed_line(&names))
+            }
             Some(_) => Err(meta_plugin::exit::ExitWith(1).into()),
         }
     }
@@ -867,11 +927,25 @@ impl CommandResult {
         let text = |bytes: &[u8]| Some(String::from_utf8_lossy(bytes).into_owned());
         let error = (!self.success).then(|| {
             let stderr = String::from_utf8_lossy(&self.stderr);
-            let message = match self.ran {
-                true => self.ending(),
-                false => stderr.trim_end().to_string(),
-            };
-            meta_plugin::ErrorInfo::new(meta_plugin::ErrorCode::ToolFailed, message)
+            match (self.too_much_output, self.ran) {
+                (Some(over), _) => {
+                    let name = match &self.project {
+                        Some(project) => project.clone(),
+                        None => self.directory.display().to_string(),
+                    };
+                    meta_plugin::ErrorInfo::new(
+                        meta_plugin::ErrorCode::TooMuchOutput,
+                        format!("{name}: {over}"),
+                    )
+                }
+                (None, true) => {
+                    meta_plugin::ErrorInfo::new(meta_plugin::ErrorCode::ToolFailed, self.ending())
+                }
+                (None, false) => meta_plugin::ErrorInfo::new(
+                    meta_plugin::ErrorCode::ToolFailed,
+                    stderr.trim_end(),
+                ),
+            }
         });
         meta_plugin::ProjectResult {
             project: self.project.clone(),
@@ -953,9 +1027,20 @@ fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Comm
         .collect();
 
     let stagger = Stagger::new(Duration::from_millis(config.spawn_stagger_ms));
+    // a closed stdout, found telling of a command: no other one starts
+    let closed: Mutex<Option<StdoutError>> = Mutex::new(None);
+    let is_closed = || {
+        closed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    };
     let execute = || -> Vec<CommandResult> {
         jobs.par_iter()
             .map(|(job, spinner)| {
+                if is_closed() {
+                    return failed_result(&job.dir, display_command(&job.argv), String::new());
+                }
                 stagger.wait();
                 if let Some(pb) = spinner {
                     pb.set_message(format!("{}: running...", display_name(&job.dir, root)));
@@ -964,7 +1049,12 @@ fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Comm
                     Some(why) => refused_result(job, why),
                     None => execute_command_in_directory_capturing(job, config),
                 };
-                config.on_done.tell(&result);
+                if let Err(e) = config.on_done.tell(&result) {
+                    closed
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .get_or_insert(e);
+                }
                 // results are shown once all are done
                 if let Some(pb) = spinner {
                     pb.finish_and_clear();
@@ -984,6 +1074,9 @@ fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Comm
     if let Some(mp) = &progress {
         let _ = mp.clear();
     }
+    if let Some(e) = closed.into_inner().unwrap_or_else(PoisonError::into_inner) {
+        return Err(e.into());
+    }
 
     results.sort_by_cached_key(|r| {
         let name = display_name(&r.directory, root);
@@ -998,7 +1091,7 @@ fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Co
         .iter()
         .map(|job| -> Result<CommandResult> {
             let result = run_one(config, job)?;
-            config.on_done.tell(&result);
+            config.on_done.tell(&result)?;
             Ok(result)
         })
         .collect()
@@ -1123,11 +1216,12 @@ fn print_summary(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
             };
             let names: Vec<String> = failed.iter().map(name).collect();
             outln!(
-                "\n{} {}: {} ({}) ",
+                "\n{} {}: {} ({}){}",
                 "✗".red(),
                 names.join(", "),
                 escape(&first.command),
-                first.ending()
+                first.ending(),
+                first.why()
             )?;
         }
         outln!()?;
@@ -1140,8 +1234,11 @@ fn print_summary(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
 /// wrote it. When every command failed the same way, its output is shown
 /// once, under all their names.
 fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
-    let has_output =
-        |r: &CommandResult| !r.stdout.trim_ascii().is_empty() || !r.stderr.trim_ascii().is_empty();
+    let has_output = |r: &CommandResult| {
+        !r.stdout.trim_ascii().is_empty()
+            || !r.stderr.trim_ascii().is_empty()
+            || r.too_much_output.is_some()
+    };
     if results.iter().any(has_output) {
         outln!()?;
     }
@@ -1172,9 +1269,23 @@ fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> 
             meta_plugin::out::flush()?;
             meta_plugin::out::stderr_bytes(&result.stderr);
         }
+        if let Some(over) = result.too_much_output {
+            meta_plugin::out::flush()?;
+            errln!("{over}");
+        }
         outln!()?; // Blank line after each repo's output
     }
     Ok(())
+}
+
+/// The closing error of a silenced run: how many commands failed and where,
+/// `2 commands failed: app, platform`.
+pub fn failed_line(names: &[String]) -> String {
+    match names {
+        [] => "At least one command failed".to_string(),
+        [one] => format!("1 command failed: {one}"),
+        many => format!("{} commands failed: {}", many.len(), many.join(", ")),
+    }
 }
 
 /// Whether two or more commands all failed the same way: the same command,

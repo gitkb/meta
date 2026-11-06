@@ -12,7 +12,6 @@ use std::path::PathBuf;
 pub mod config;
 pub mod data_dir;
 pub mod dependency_graph;
-pub mod duration;
 pub mod git;
 pub mod gitdir;
 pub mod query;

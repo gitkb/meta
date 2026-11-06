@@ -8,15 +8,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use meta_core::set_record::{self as record, SetRecord};
-use meta_core::worktree::discover_worktree_members;
-use meta_core::worktree::Configs;
 
-use meta_git_lib::worktree::hooks::fire_post_prune;
-use meta_git_lib::worktree::lease;
-use meta_git_lib::worktree::safety::{check_worktree_removal, delete_checked_set};
-use meta_git_lib::worktree::ttl;
-use meta_git_lib::worktree::types::*;
-use meta_git_lib::worktree::workspace::Workspace;
+use crate::worktree::hooks::fire_post_prune;
+use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
+use crate::worktree::ttl;
+use crate::worktree::types::*;
+use crate::worktree::workspace::Workspace;
+use meta_plugin::sets::lease;
 
 /// Helper to create a PruneEntry with consistent structure.
 fn create_prune_entry(
@@ -133,7 +131,7 @@ fn eligible(record: &SetRecord, now: i64) -> Result<Option<(String, Option<u64>)
 pub(crate) fn handle_prune(ctx: &Ctx, request: &Request) -> Result<Response> {
     let mut records = Vec::new();
     let pruned = prune(ctx, request, &mut records);
-    crate::printed(ctx, records, pruned.err())
+    crate::printed_with_git(ctx, request, records, pruned.err())
 }
 
 fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Result<()> {
@@ -141,10 +139,10 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
 
     // Hooks come from the owner: inside a set being pruned, its own config
     // goes with it
-    let cwd = request.cwd.as_path();
-    let configs: Configs = super::workspace_configs(request)?;
-    let workspace = Workspace::of(&configs.here)?;
-    let worktree_root = meta_core::worktree::resolve_worktree_root(Some(&configs.owner), cwd)?;
+    let here = crate::here::Here::need(request)?;
+    let workspace = Workspace::of(&here.home)?;
+    let worktree_root = here.worktrees()?;
+    let places = here.places();
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
     // A set whose lease is held is being created, or is an ephemeral set
     // whose run goes on: prune leaves it. One whose creator is gone without
@@ -231,7 +229,8 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
 
         // The record the set's own worktrees hold decides, not an older one
         // left in a repository; the removal check must see this one again
-        let members = discover_worktree_members(set).unwrap_or_default();
+        let members =
+            crate::worktree::scan::discover_worktree_members(set, &places).unwrap_or_default();
         let record = match record::find(set, members.iter().map(|m| &m.path)) {
             Some(record) => record,
             // None of its worktrees holds a record (or prune can't read
@@ -307,6 +306,8 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
     let attempted = !dry_run && !candidates.is_empty();
     let mut removed = Vec::new();
     let mut failed = Vec::new();
+    // a row for each repo whose git command failed, with git's stderr
+    let mut git_rows = Vec::new();
     for (candidate, check) in candidates {
         if dry_run {
             removed.push(candidate.entry());
@@ -360,6 +361,10 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
         match removal {
             Ok(()) => removed.push(candidate.entry()),
             Err(e) => {
+                git_rows.extend(crate::worktree::git_ops::failure_rows(
+                    &e,
+                    &here.workspace.root,
+                ));
                 failed.push(candidate.name.clone());
                 kept.push(candidate.kept(format!("removing it failed: {e:#}")));
             }
@@ -379,7 +384,7 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
     records.extend(kept.iter().map(|entry| record(entry, "kept")));
     // What was done is reported first: a failing hook doesn't undo it
     let hook = match attempted {
-        true => fire_post_prune(&removed, Some(&configs.owner)),
+        true => fire_post_prune(&removed, Some(&here.workspace.worktree)),
         false => Ok(()),
     };
     // a removal that failed is the error; a failing hook then only warns
@@ -387,7 +392,16 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
         if let Err(e) = hook {
             ctx.warn(format!("{e:#}"));
         }
-        anyhow::bail!("Failed to prune: {}", escape(&failed.join(", ")));
+        let failure = anyhow::anyhow!("Failed to prune: {}", escape(&failed.join(", ")));
+        // under --json: the command's error, then each git failure's row
+        if json && !git_rows.is_empty() {
+            records.push(ProjectResult {
+                error: Some(meta_plugin::envelope::info_of(&failure)),
+                ..ProjectResult::default()
+            });
+            records.append(&mut git_rows);
+        }
+        return Err(failure);
     }
     hook.or_else(|e| ctx.warn_or_bail(format!("{e:#}")))?;
     warn_kept(&kept, ctx)

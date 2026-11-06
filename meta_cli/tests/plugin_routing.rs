@@ -644,3 +644,88 @@ fn json_stream_is_a_line_per_event_then_the_envelope_json_prints() {
     let last: meta_plugin::Envelope = serde_json::from_value(last["envelope"].clone()).unwrap();
     assert_eq!(last, json);
 }
+
+/// A set made by another provider than git (a jj set: folders with no
+/// `.git`), with its owner file beside it.
+fn jj_set(root: &Path) -> std::path::PathBuf {
+    let set = root.join(".worktrees/s");
+    for project in ["a", "b"] {
+        fs::create_dir_all(set.join(project).join(".jj")).unwrap();
+    }
+    meta_plugin::sets::create(&set, "jj", root).unwrap();
+    set
+}
+
+#[test]
+fn a_set_whose_checkouts_are_no_git_repos_reaches_a_plugin_with_its_members() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    let set = jj_set(&root);
+    answering(
+        &root,
+        "jj",
+        &serde_json::json!({"results": {"records": []}}),
+    );
+    // from inside the set, with the workspace's plugins on PATH
+    let output = sandbox
+        .command(env!("CARGO_BIN_EXE_meta"))
+        .args(["jj", "status"])
+        .current_dir(set.join("a"))
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", root.join("bin").display()),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sent: meta_plugin::Request =
+        serde_json::from_slice(&fs::read(root.join("jj.request.json")).unwrap()).unwrap();
+    let got = sent.set.unwrap();
+    assert_eq!((got.name.as_str(), got.provider.as_str()), ("s", "jj"));
+    let paths = |projects: &[meta_plugin::Project]| -> Vec<String> {
+        projects.iter().map(|p| p.path.clone()).collect()
+    };
+    // the projects whose folders are in the set, at their places in it
+    assert_eq!(paths(&got.members), ["a", "b"]);
+    assert_eq!(paths(&sent.projects), ["a", "b"]);
+    assert!(sent.projects.iter().all(|p| p.abs.starts_with(&set)));
+}
+
+#[test]
+fn a_named_set_command_from_a_provider_that_does_not_own_the_set_is_refused() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    jj_set(&root);
+    script(
+        &root.join("bin/meta-git"),
+        &format!(
+            r#"echo "$1" >> "{}"
+[ "$1" = --meta-plugin-info ] && echo '{{"name":"git","version":"1","commands":["git worktree remove"]}}'
+exit 0"#,
+            root.join("git.log").display()
+        ),
+    );
+    let output = run_meta(
+        &sandbox,
+        &root,
+        &["--json", "git", "worktree", "remove", "s"],
+    );
+    assert!(!output.status.success());
+    let error = envelope(&output).error.unwrap();
+    assert_eq!(error.code, meta_plugin::ErrorCode::Conflict);
+    assert!(
+        error.message.contains("made by meta-jj"),
+        "{}",
+        error.message
+    );
+    // meta-git never got the call, and the set is untouched
+    let log = fs::read_to_string(root.join("git.log")).unwrap_or_default();
+    assert!(!log.contains("--meta-plugin-exec"), "{log}");
+    assert!(root.join(".worktrees/s/a/.jj").is_dir());
+}

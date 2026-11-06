@@ -7,7 +7,7 @@ setup() {
     # api and web are plain folders: help never runs in a repo
     mkdir -p "$TEST_DIR/api" "$TEST_DIR/web"
     printf 'projects:\n  api: git@github.com:org/api.git\n  web: git@github.com:org/web.git\n' > "$TEST_DIR/.meta.yaml"
-    make_workspace --plugins "git project cargo"
+    make_workspace --plugins "git cargo"
     NO_CONFIG_DIR="$BATS_TEST_TMPDIR/no-config"
     mkdir -p "$NO_CONFIG_DIR/.meta/plugins"
     cp "$META_BIN_DIR/meta-git" "$META_BIN_DIR/meta-cargo" "$NO_CONFIG_DIR/.meta/plugins/"
@@ -271,9 +271,6 @@ EOF
         [[ "${lines[0]}" == '`meta git pull` runs as typed (`git pull`) in each selected repo.' ]]
         [[ "$output" == *"For git's own options: git pull --help"* ]]
     done
-    run "$META_BIN" project list --help
-    [ "$status" -eq 0 ]
-    [[ "${lines[0]}" == '`meta project list` is a command of meta-project.' ]]
 }
 
 @test "a git extension on PATH shows in plugin list and runs as meta git <name>" {

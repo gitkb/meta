@@ -5,9 +5,9 @@ use meta_plugin::outln;
 use meta_plugin::{Ctx, ErrorCode, ErrorInfo, ProjectResult, Request, Response};
 use rayon::prelude::*;
 
-use meta_git_lib::worktree::git_ops::{git_diff_patch, git_diff_stat};
-use meta_git_lib::worktree::helpers::discover_and_validate_worktree;
-use meta_git_lib::worktree::types::*;
+use crate::worktree::git_ops::{git_diff_patch, git_diff_stat};
+use crate::worktree::helpers::discover_and_validate_worktree;
+use crate::worktree::types::*;
 
 use super::cli_types::DiffArgs;
 
@@ -17,9 +17,7 @@ pub(crate) fn handle_diff(args: DiffArgs, ctx: &Ctx, request: &Request) -> Resul
     let name = &args.name;
     let base_ref = &args.base;
 
-    let configs = super::configs(request)?;
-    let owner = configs.as_ref().map(|c| &c.owner);
-    let (_, repos) = discover_and_validate_worktree(name, owner, &request.cwd)?;
+    let (_, repos) = discover_and_validate_worktree(name, request)?;
 
     let diff_entries: Vec<DiffRepoEntry> = repos
         .par_iter()

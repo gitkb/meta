@@ -1,5 +1,5 @@
-//! A lease names a worktree set while meta creates it, and an ephemeral set
-//! for as long as the run it was made for lasts.
+//! A lease names a worktree set while a provider creates it, and an
+//! ephemeral set for as long as the run it was made for lasts.
 //!
 //! A set's lease lives beside the set's folder, in the worktrees folder:
 //! `.<set>.meta-lease`, written once an OS lock is held on
@@ -15,13 +15,17 @@
 //!
 //! A lease left behind marks a set that was never finished: its worktrees
 //! are meta's even where meta hadn't recorded them yet, and it may be
-//! removed, after the same checks as any set. Unlike a record (see
-//! [`super::record`]), a lease isn't in a git directory: forging one takes
-//! write access to the worktrees folder, which already lets anyone delete
-//! the set (owner decision, 2026-10-31).
+//! removed, after the same checks as any set. A lease isn't in a
+//! repository: forging one takes write access to the worktrees folder,
+//! which already lets anyone delete the set (owner decision, 2026-10-31).
+//!
+//! Whose a lease is, its token says: [`Held::token`] for the holder, and a
+//! program the holder starts (a `meta` it calls back through
+//! [`crate::client`]) gets the token in [`super::LEASE_VAR`], which meta
+//! passes its plugin as `Request::lease`; [`Found::held_by`] tells.
 
+use crate::display::escape_path;
 use anyhow::{Context, Result};
-use meta_plugin::display::escape_path;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -66,12 +70,19 @@ impl Lease {
 #[derive(Debug)]
 pub struct Held {
     path: PathBuf,
+    token: String,
     _lock: File,
     /// Let go of the lock but leave the lease, as a creator that is gone does.
     leave: bool,
 }
 
 impl Held {
+    /// What names this lease, for the programs its holder starts (see
+    /// [`Found::held_by`]).
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
     /// Let go of the lock and leave the lease where it is: the set is the
     /// next `prune`'s to remove (`create --ephemeral`).
     pub fn leave(mut self) {
@@ -85,15 +96,7 @@ impl Drop for Held {
             let _ = std::fs::remove_file(&self.path);
         }
         let _ = std::fs::remove_file(lock_path(&self.path));
-        held().retain(|path| *path != self.path);
     }
-}
-
-/// The leases this process holds. A process id doesn't say: another machine,
-/// or another pid namespace, can have the same one.
-fn held() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
-    static HELD: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
-    HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// A lease found on disk.
@@ -108,9 +111,16 @@ pub struct Found {
 }
 
 impl Found {
-    /// Whether this process holds it.
-    pub fn is_mine(&self) -> bool {
-        held().contains(&self.path)
+    /// Whether it is the lease `token` names (a [`Held::token`]; a process id
+    /// doesn't say: another machine, or another pid namespace, can have the
+    /// same one). A live lease only: one its holder let go of is no one's.
+    pub fn held_by(&self, token: Option<&str>) -> bool {
+        self.live
+            && token.is_some_and(|token| {
+                self.lease
+                    .as_ref()
+                    .is_some_and(|lease| !lease.token.is_empty() && lease.token == token)
+            })
     }
 
     /// Who holds it, for messages.
@@ -157,6 +167,11 @@ pub struct Claim {
 }
 
 impl Claim {
+    /// Whether this is the lease of the set at `set`.
+    pub fn is_for(&self, set: &Path) -> bool {
+        path_for(set).is_ok_and(|path| path == self.path)
+    }
+
     /// Delete the lease, if one was left.
     pub fn delete(self) -> Result<()> {
         remove(&self.path)
@@ -281,15 +296,7 @@ const SUFFIX: &str = ".meta-lease";
 
 /// The lease file of the set at `set`: `.<set>.meta-lease` beside it.
 fn path_for(set: &Path) -> Result<PathBuf> {
-    match (set.parent(), set.file_name()) {
-        (Some(dir), Some(name)) => {
-            let mut file = std::ffi::OsString::from(".");
-            file.push(name);
-            file.push(SUFFIX);
-            Ok(dir.join(file))
-        }
-        _ => anyhow::bail!("{} has no folder to keep its lease in", escape_path(set)),
-    }
+    super::beside(set, SUFFIX)
 }
 
 /// Take the lease for creating `lease.set`. Fails if another creator holds
@@ -328,9 +335,9 @@ pub fn take(lease: &Lease) -> Result<Held> {
         let _ = std::fs::remove_file(&tmp);
     }
     written.with_context(|| format!("Cannot write {}", escape_path(&path)))?;
-    held().push(path.clone());
     Ok(Held {
         path,
+        token: lease.token.clone(),
         _lock: lock,
         leave: false,
     })
@@ -411,7 +418,8 @@ mod tests {
         let mine = lease(&set);
         let held = take(&mine).unwrap();
         let found = find(&set).unwrap();
-        assert!(found.live && found.is_mine());
+        assert!(found.live && found.held_by(Some(held.token())));
+        assert!(!found.held_by(None) && !found.held_by(Some("another")));
         assert_eq!(found.lease, Some(mine));
         // another creator, or a command deleting the set, is refused
         let refused = take(&lease(&set)).unwrap_err().to_string();
@@ -432,7 +440,7 @@ mod tests {
         left_behind(&lease(&set));
         let found = find(&set).unwrap();
         // it names this process, which doesn't hold it: a pid says nothing
-        assert!(!found.live && !found.is_mine());
+        assert!(!found.live && !found.held_by(Some(&lease(&set).token)));
         assert_eq!(all(set.parent().unwrap()).len(), 1);
         let refused = take(&lease(&set)).unwrap_err().to_string();
         assert!(refused.contains("left half-made"), "{refused}");
@@ -484,9 +492,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let set = temp.path().join("wt/a");
         std::fs::create_dir_all(set.parent().unwrap()).unwrap();
-        take(&lease(&set)).unwrap().leave();
+        let held = take(&lease(&set)).unwrap();
+        let token = held.token().to_string();
+        held.leave();
         let found = find(&set).unwrap();
-        assert!(!found.live && !found.is_mine());
+        assert!(!found.live && !found.held_by(Some(&token)));
         assert!(found.lease.is_some());
     }
 

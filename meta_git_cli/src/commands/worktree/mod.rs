@@ -12,9 +12,8 @@ mod status;
 
 use anyhow::Result;
 use clap::Parser;
-use meta_core::worktree::Configs;
 use meta_plugin::display::{escape, escape_path};
-use meta_plugin::{Answer, Ctx, ErrorCode, ErrorInfo, Request, Response};
+use meta_plugin::{Answer, Ctx, ErrorCode, ErrorInfo, Request, Response, Scope};
 use std::path::Path;
 
 use cli_types::WorktreeCommands;
@@ -30,22 +29,6 @@ use cli_types::WorktreeCommands;
 struct WorktreeParser {
     #[command(subcommand)]
     command: WorktreeCommands,
-}
-
-/// The configs of the workspace `request` runs in (`--config`'s, or the
-/// nearest; with `-A`, the outermost), each loaded once; none outside one.
-pub(crate) fn configs(request: &Request) -> Result<Option<Configs>> {
-    request
-        .workspace
-        .as_ref()
-        .map(|w| Configs::of(meta_core::config::Workspace::load(&w.config)?))
-        .transpose()
-}
-
-/// [`configs`], or the error outside a workspace.
-pub(crate) fn workspace_configs(request: &Request) -> Result<Configs> {
-    configs(request)?
-        .ok_or_else(|| anyhow::anyhow!("Not inside a meta project (no .meta.yaml found)"))
 }
 
 /// Refuse meta's selection for `command` on the whole set `name`: a
@@ -169,25 +152,54 @@ pub fn execute_worktree_command(ctx: &Ctx, request: &Request) -> Result<Response
     }
 }
 
+/// Refuse to make or act on sets from inside a set whose checkouts hold a
+/// record of meta-git's that can't be read: which workspace the set stands
+/// for, and so where its sets are, is then unknown. Naming the record.
+fn readable_records(request: &Request) -> Result<()> {
+    let Some(set) = request
+        .set
+        .as_ref()
+        .filter(|_| request.scope != Scope::NamedSet)
+    else {
+        return Ok(());
+    };
+    let checkouts =
+        std::iter::once(set.dir.as_path()).chain(set.members.iter().map(|m| m.abs.as_path()));
+    for checkout in checkouts {
+        meta_core::set_record::member(checkout)?;
+    }
+    Ok(())
+}
+
 /// Dispatch parsed worktree commands while retaining command-specific policies.
 fn handle_worktree_command(
     command: WorktreeCommands,
     ctx: &Ctx,
     request: &Request,
 ) -> Result<Response> {
+    if !matches!(
+        command,
+        WorktreeCommands::List(_) | WorktreeCommands::Status(_) | WorktreeCommands::Diff(_)
+    ) {
+        readable_records(request)?;
+    }
     match command {
         WorktreeCommands::Create(args) => {
             // An ephemeral set is the next prune's: its lease stays beside it
             let ephemeral = args.ephemeral;
             let mut records = Vec::new();
             match create::handle_create(args, ctx, request, &mut records) {
-                Ok(created) => {
-                    if let Some(created) = created.filter(|_| ephemeral) {
-                        created.lease.leave();
+                Ok(create::Made::Again) => crate::again(ctx, request),
+                Ok(made) => {
+                    if let create::Made::Created(created) = made {
+                        match ephemeral {
+                            true => created.lease.leave(),
+                            false => drop(created.lease),
+                        }
                     }
                     Ok(Response::printed(records))
                 }
-                Err(e) => crate::printed(ctx, records, Some(e)),
+                Err(e) => crate::printed_with_git(ctx, request, records, Some(e)),
             }
         }
         WorktreeCommands::Add(args) => {

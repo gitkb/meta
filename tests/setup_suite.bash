@@ -13,7 +13,7 @@ setup_suite() {
         META_BIN_DIR="$target/debug"
     fi
     local bin missing=""
-    for bin in meta meta-git meta-project meta-cargo meta-mcp loop; do
+    for bin in meta meta-git meta-cargo meta-mcp loop; do
         [ -x "$META_BIN_DIR/$bin" ] || missing="$missing $bin"
     done
     if [ -n "$missing" ]; then

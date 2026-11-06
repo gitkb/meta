@@ -6,8 +6,8 @@
 //! dependency on `~/.ssh/config`), let them share one connection through the
 //! `GIT_SSH_COMMAND` this module returns.
 
+use crate::here::{Listed, Listing};
 use log::debug;
-use meta_core::config::{ProjectInfo, Workspace};
 use meta_plugin::display::escape;
 use meta_plugin::display::shell_quote;
 use meta_plugin::RepoUrl;
@@ -265,8 +265,8 @@ fn ensure_ssh_sockets_dir(home: &Path) -> std::io::Result<PathBuf> {
 
 /// The warning about checkouts whose `origin` differs from the URL
 /// `workspace` lists for them, with how to fix each, if there are any.
-pub(crate) fn remote_mismatches(workspace: &Workspace) -> Option<String> {
-    let mismatches: Vec<(&ProjectInfo, &RepoUrl, RepoUrl)> = workspace
+pub(crate) fn remote_mismatches(workspace: &Listing) -> Option<String> {
+    let mismatches: Vec<(&Listed, &RepoUrl, RepoUrl)> = workspace
         .projects
         .iter()
         .filter_map(|project| {

@@ -119,3 +119,62 @@ call() {
     [[ "$output" == "isError=null"* ]]
     sed 1d <<<"$output" | jq -e '.success and ([.results[].data.name] | index("git") != null)'
 }
+
+@test "meta-mcp meta_git_diff, meta_git_multi_commit and meta_git_branch read each project's own repository" {
+    echo x >> second/README
+    run call meta_git_diff '{"project":"r2"}'
+    [[ "$output" == "isError=null"* ]]
+    sed 1d <<<"$output" | jq -e 'length == 1 and .[0].project == "r2" and (.[0].diff | contains("+x"))'
+
+    git -C second add README
+    run call meta_git_multi_commit '{"commits":[{"project":"r2","message":"in r2"},{"project":"r1","message":"m"}]}'
+    [[ "$output" == "isError=null"* ]]
+    [ "$(git -C second log -1 --format=%s)" = "in r2" ]
+    # nothing staged in r1: its commit failed, and says why
+    sed 1d <<<"$output" | jq -e '.results[1].success == false and (.results[1].error | length > 0)'
+    [ "$(git -C r1 log -1 --format=%s)" = init ]
+
+    echo y >> r1/README
+    git -C r1 commit --quiet -am ahead
+    git -C second checkout --quiet --detach
+    run call meta_git_branch '{}'
+    sed 1d <<<"$output" | jq -e '
+        (.[] | select(.project == "r1")) == {"project":"r1","branch":"main","tracking":"origin/main","ahead":1,"behind":0}
+        and (.[] | select(.project == "r2")) == {"project":"r2","branch":"HEAD","tracking":null,"ahead":0,"behind":0}'
+
+    # a plain folder: never the workspace repository around it
+    mkdir plain
+    echo '  plain: {repo: x}' >> .meta.yaml
+    echo "root work" > staged
+    git add staged
+    run call meta_git_diff '{"project":"plain","staged":true}'
+    [[ "$output" == "isError=true"*"not a git repository"* ]]
+    [[ "$output" != *"root work"* ]]
+    run call meta_git_multi_commit '{"commits":[{"project":"plain","message":"m"}]}'
+    [[ "$output" == "isError=true"* ]]
+    [ "$(git log -1 --format=%s)" = ws ]
+    run call meta_git_branch '{}'
+    sed 1d <<<"$output" | jq -e '.[] | select(.project == "plain") | .branch == null and .ahead == null and (.error | length > 0)'
+}
+
+@test "meta-mcp meta_search_code searches a repository and a plain folder each on its own, at most 50 matches" {
+    # the workspace repository ignores the plain folder; its own .gitignore counts
+    mkdir plain
+    echo hit > plain/f
+    echo hit > plain/ignored
+    echo ignored > plain/.gitignore
+    echo plain >> .gitignore
+    echo '  plain: {repo: x}' >> .meta.yaml
+    for i in $(seq 60); do echo hit; done > r1/many
+    run call meta_search_code '{"pattern":"hit"}'
+    [[ "$output" == "isError=null"* ]]
+    sed 1d <<<"$output" | jq -e '
+        (.[] | select(.project == "r1") | (.matches | length) == 50 and .truncated)
+        and (.[] | select(.project == "plain") | .matches == ["f:1:hit"])'
+
+    # no match is an answer; a search git refuses everywhere is a failure
+    run call meta_search_code '{"pattern":"absent"}'
+    [[ "$output" == "isError=null"* ]]
+    run call meta_search_code '{"pattern":"["}'
+    [[ "$output" == "isError=true"* ]]
+}

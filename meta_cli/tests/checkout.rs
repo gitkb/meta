@@ -149,33 +149,30 @@ fn a_silent_run_prints_nothing_for_a_refused_project() {
     );
 }
 
-/// A malformed selected worktree must fail before ordinary config fallback or exec.
+/// A command run inside a set acts in the set's members, never in the
+/// workspace: a set folder whose `.git` git can't read is still the set
+/// (meta reads no `.git` to find a set; owner decision, PR 3).
 #[cfg(unix)]
 #[test]
-fn malformed_worktree_membership_is_reported_before_dispatch() {
+fn a_set_whose_git_file_is_malformed_never_falls_back_to_the_workspace() {
     let sandbox = Sandbox::new();
     let root = sandbox.work();
     let worktree = root.join(".worktrees/broken");
     fs::create_dir_all(&worktree).unwrap();
     fs::write(root.join(".meta.yaml"), r#"{"projects":{}}"#).unwrap();
+    sandbox.git(&root, &["init", "-q"]);
     fs::write(worktree.join(".meta.yaml"), r#"{"projects":{}}"#).unwrap();
     fs::write(worktree.join(".git"), "malformed metadata").unwrap();
-    let marker = root.join("unexpected-dispatch");
     let output = sandbox
         .command(env!("CARGO_BIN_EXE_meta"))
-        .args(["exec", "--", "/usr/bin/touch", marker.to_str().unwrap()])
+        .args(["exec", "--", "/usr/bin/touch", "ran"])
         .current_dir(&worktree)
         .env("PATH", "/usr/bin:/bin")
         .output()
         .unwrap();
-    assert!(!output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("Invalid .git file format"),
-        "{}",
+        !root.join("ran").exists(),
+        "ran in the workspace: {}",
         String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        !marker.exists(),
-        "invalid worktree dispatched through ordinary config fallback"
     );
 }

@@ -1,7 +1,7 @@
 //! Human-friendly durations: `30s`, `5m`, `2h`, `1d`, `1w`.
 
+use crate::display::escape;
 use anyhow::Context;
-use meta_plugin::display::escape;
 
 /// Parse a human-friendly duration string to seconds.
 /// Supported formats: "30s", "5m", "1h", "2d", "1w" (any case), or bare seconds "300".

@@ -1,7 +1,7 @@
+use crate::clone_queue::{CloneQueue, CloneTask, Outcome, Work};
 use anyhow::Context;
 use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use meta_git_lib::clone_queue::{CloneQueue, CloneTask, Outcome, Work};
 use meta_plugin::errln;
 use meta_plugin::RepoUrl;
 use std::ffi::OsString;
@@ -129,6 +129,48 @@ impl<'a> Worker<'a> {
     }
 }
 
+/// A row for each clone or pull that failed, with git's stderr, as `meta
+/// --json exec` gives a failed step's: named by its path from `root`.
+pub(crate) fn failure_rows(queue: &CloneQueue, root: &Path) -> Vec<meta_plugin::ProjectResult> {
+    queue
+        .outcome()
+        .failures
+        .iter()
+        .map(|failure| {
+            let failed = match failure.work {
+                Work::Clone(_) => "could not be cloned",
+                Work::Pull => "could not be pulled (fast-forward only)",
+            };
+            let last = failure
+                .error
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("no stderr");
+            let project = match failure.path.strip_prefix(root) {
+                Ok(inside) if inside.as_os_str().is_empty() => ".".to_string(),
+                Ok(inside) => inside.to_string_lossy().into_owned(),
+                Err(_) => failure.path.to_string_lossy().into_owned(),
+            };
+            meta_plugin::ProjectResult {
+                stderr: Some(failure.error.clone()),
+                ..meta_plugin::ProjectResult::error(
+                    project,
+                    meta_plugin::ErrorInfo::new(
+                        meta_plugin::ErrorCode::ToolFailed,
+                        format!(
+                            "{} {failed}: {}",
+                            meta_plugin::display::escape(&failure.name),
+                            meta_plugin::display::escape(last)
+                        ),
+                    ),
+                )
+                .at(&failure.path)
+            }
+        })
+        .collect()
+}
+
 /// Print each failed clone or pull with git's error, each project left
 /// uncloned because its folder holds something else, each meta repo that
 /// lists one above it, and each nested `.meta.yaml` that can't be read, to
@@ -188,11 +230,21 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
             meta_plugin::display::escape_lines(line)
         );
     }
-    let failed = |clone: bool| -> Vec<&str> {
+    // each named with why, git's last line, as every summary says it
+    let failed = |clone: bool| -> Vec<String> {
         failures
             .iter()
             .filter(|f| matches!(f.work, Work::Clone(_)) == clone)
-            .map(|f| f.name.as_str())
+            .map(|f| {
+                let last = f
+                    .error
+                    .lines()
+                    .rev()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .unwrap_or("no stderr");
+                format!("{}: {}", f.name, meta_plugin::display::escape(last))
+            })
             .collect()
     };
     let (clones, pulls) = (failed(true), failed(false));
@@ -203,14 +255,14 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
                     "{} of {} repositories failed to clone: {}",
                     clones.len(),
                     cloned.len() + clones.len(),
-                    clones.join(", ")
+                    clones.join("; ")
                 )
             }),
             (!pulls.is_empty()).then(|| {
                 format!(
                     "{} could not be pulled (fast-forward only): {}",
                     plural(pulls.len()),
-                    pulls.join(", ")
+                    pulls.join("; ")
                 )
             }),
             (!refused.is_empty()).then(|| {

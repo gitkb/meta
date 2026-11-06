@@ -56,25 +56,27 @@ impl Race {
         request.scope = Scope::Workspace;
         request.workspace = meta_core::config::Workspace::find(&self.ws, None)
             .unwrap()
-            .map(|w| meta_plugin::Workspace {
-                root: w.dir.clone(),
-                config: w.config_path.clone(),
-                listed_root: meta_core::config::listed_root(&w.dir),
-                members: Vec::new(),
-                worktree: Default::default(),
-            });
+            .map(|w| as_meta_sends(w, None));
+        // it can call meta back: the `meta` built beside it (`cargo build
+        // --workspace --bins` first)
+        let bin = Path::new(env!("CARGO_BIN_EXE_meta-git")).parent().unwrap();
+        let meta = bin.join(format!("meta{}", std::env::consts::EXE_SUFFIX));
+        assert!(meta.is_file(), "{} is not built", meta.display());
         let files = tempfile::tempdir().unwrap();
         let (request_file, response) =
             (files.path().join("request"), files.path().join("response"));
         fs::write(&request_file, serde_json::to_vec(&request).unwrap()).unwrap();
         let path = std::env::var_os("PATH").unwrap_or_default();
-        let paths = std::iter::once(self.root.join("bin")).chain(std::env::split_paths(&path));
+        let paths = [self.root.join("bin"), bin.to_path_buf()]
+            .into_iter()
+            .chain(std::env::split_paths(&path));
         let child = self
             .sandbox
             .command(env!("CARGO_BIN_EXE_meta-git"))
             .arg("--meta-plugin-exec")
             .current_dir(&self.ws)
             .env("PATH", std::env::join_paths(paths).unwrap())
+            .env(meta_plugin::client::EXE_VAR, &meta)
             .env(meta_plugin::REQUEST_VAR, &request_file)
             .env(meta_plugin::RESPONSE_VAR, &response)
             .stdin(Stdio::null())
@@ -122,6 +124,63 @@ impl Race {
 
     fn release(&self, name: &str) {
         fs::write(self.root.join(format!("release-{name}")), "").unwrap();
+    }
+}
+
+/// The workspace `found` as meta sends it: its whole tree (from the
+/// outermost config) as members, and where its sets go (`worktrees`, as
+/// `META_WORKTREES` gives it, else its config's), their hooks and home.
+fn as_meta_sends(
+    found: meta_core::config::Workspace,
+    worktrees: Option<&Path>,
+) -> meta_plugin::Workspace {
+    use meta_core::{config, repo_filter, worktree};
+    let (root, repos) = match repo_filter::Reach::of(found.clone(), true, true, None) {
+        Ok(reach) => (reach.root.clone(), reach.scope().repos),
+        Err(_) => (found.dir.clone(), Vec::new()),
+    };
+    let owner = worktree::Configs::of(found.clone()).map_or_else(|_| found.clone(), |c| c.owner);
+    let members = repos
+        .iter()
+        .map(|repo| {
+            let info = repo.info.as_ref();
+            meta_plugin::Project {
+                name: repo.name().unwrap_or(".").to_string(),
+                path: repo_filter::repo_path(&repo.dir, &root),
+                abs: repo.dir.clone(),
+                repo: info
+                    .and_then(|i| i.repo.as_ref())
+                    .map(|r| r.raw().to_string()),
+                tags: repo.tags().to_vec(),
+                depends_on: info.map(|i| i.depends_on.clone()).unwrap_or_default(),
+                meta: info.is_some_and(|i| i.meta),
+                present: repo.dir.exists(),
+                ..meta_plugin::Project::default()
+            }
+        })
+        .collect();
+    let placed = worktree::resolve_worktree_root(Some(&owner), &found.dir);
+    meta_plugin::Workspace {
+        root,
+        config: found.config_path.clone(),
+        listed_root: config::listed_root(&found.dir),
+        members,
+        worktree: meta_plugin::Worktree {
+            dir: worktrees
+                .map(Path::to_path_buf)
+                .or(placed.as_ref().ok().cloned()),
+            refused: match (worktrees, &placed) {
+                (None, Err(why)) => Some(format!("{why:#}")),
+                _ => None,
+            },
+            hooks: owner
+                .worktree
+                .hooks
+                .iter()
+                .map(|(event, command)| (event.name().to_string(), command.clone()))
+                .collect(),
+            home: Some(owner.dir.clone()),
+        },
     }
 }
 

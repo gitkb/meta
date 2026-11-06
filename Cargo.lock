@@ -914,7 +914,6 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "tempfile",
- "walkdir",
 ]
 
 [[package]]
@@ -929,31 +928,16 @@ dependencies = [
  "indexmap",
  "indicatif",
  "log",
- "loop_lib",
  "meta_core",
- "meta_git_lib",
  "meta_plugin",
  "rayon",
  "rustix",
+ "same-file",
  "serde",
  "serde_json",
  "shlex",
  "tempfile",
-]
-
-[[package]]
-name = "meta_git_lib"
-version = "0.2.22"
-dependencies = [
- "anyhow",
- "chrono",
- "log",
- "meta_core",
- "meta_plugin",
- "same-file",
- "serde",
- "serde_json",
- "tempfile",
+ "walkdir",
 ]
 
 [[package]]
@@ -969,6 +953,7 @@ dependencies = [
  "indexmap",
  "meta_plugin",
  "rustix",
+ "same-file",
  "serde",
  "serde_json",
  "shlex",
@@ -976,19 +961,6 @@ dependencies = [
  "strsim",
  "tempfile",
  "win32job",
-]
-
-[[package]]
-name = "meta_project_cli"
-version = "0.2.22"
-dependencies = [
- "anyhow",
- "clap",
- "indexmap",
- "meta_core",
- "meta_plugin",
- "serde",
- "serde_json",
 ]
 
 [[package]]

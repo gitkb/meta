@@ -14,16 +14,14 @@ build:
 # Build plugins and install to project-local .meta/plugins/ (for development)
 build-plugins:
 	cargo build --release -p meta_git_cli
-	cargo build --release -p meta_project_cli
 	cargo build --release -p meta_rust_cli
 	mkdir -p .meta/plugins
 	cp target/release/meta-git .meta/plugins/meta-git
-	cp target/release/meta-project .meta/plugins/meta-project
 	cp target/release/meta-cargo .meta/plugins/meta-cargo
 
 # Crates whose binaries `make install` and `make uninstall` handle: the
 # binaries release.yml ships
-BIN_CRATES := meta_cli meta_git_cli meta_project_cli meta_rust_cli meta_mcp loop_cli
+BIN_CRATES := meta_cli meta_git_cli meta_rust_cli meta_mcp loop_cli
 
 # Install meta, its plugins, meta-mcp and loop globally via cargo install.
 # --force replaces any binary of the same name, e.g. one from a release download
@@ -36,7 +34,6 @@ $(BIN_CRATES:%=install-%): install-%:
 install-plugins: build-plugins
 	mkdir -p ~/.meta/plugins
 	cp target/release/meta-git ~/.meta/plugins/meta-git
-	cp target/release/meta-project ~/.meta/plugins/meta-project
 	cp target/release/meta-cargo ~/.meta/plugins/meta-cargo
 
 # Install everything globally (meta binary + plugins to both cargo bin and ~/.meta/plugins/)
@@ -117,7 +114,7 @@ integration-test:
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) META_CLI_PATH=target/debug/meta CARGO_BIN_EXE_meta=target/debug/meta cargo nextest run --workspace
 
 uninstall: $(BIN_CRATES:%=uninstall-%)
-	rm -f ~/.meta/plugins/meta-git ~/.meta/plugins/meta-project ~/.meta/plugins/meta-cargo
+	rm -f ~/.meta/plugins/meta-git ~/.meta/plugins/meta-cargo
 
 # By package name (from the crate's [package] section), so it still matches
 # after a version bump since the install

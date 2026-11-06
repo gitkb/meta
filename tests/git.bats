@@ -125,7 +125,6 @@ EOF
     json_has '.success == true and (.message | contains("No staged changes"))'
 
     # a report, then a failure: the report stays the only document
-    cp "$META_BIN_DIR/meta-project" .meta/plugins/
     json_run "$META_BIN" --json project check
     [ "$status" -eq 1 ]
     json_has '.success == false and (.error | type) == "object" and ([.results[] | select(.error)] | length > 0)'
@@ -1412,7 +1411,8 @@ EOF
     second="$(sed -n 2p "$LOG" | cut -d' ' -f1)"
     [ "$first" != "$second" ]
     for path in "$first" "$second"; do
-        [[ "$path" == "$META_DATA_DIR/tmp/META_COMMIT_EDITMSG-"* ]]
+        # in meta-git's own data dir, which meta makes private
+        [[ "$path" == "$META_DATA_DIR/data/git/META_COMMIT_EDITMSG-"* ]]
         [ ! -e "$path" ]
     done
     [ "$(grep -c -- ' -rw-------$' "$LOG")" -eq 2 ]
@@ -1623,4 +1623,43 @@ YAML
         [[ "$output" == *"names no tag"* ]]
     done
     [ -z "$(find "$TEST_DIR" -name blank-tag)" ]
+}
+
+@test "a failed clone of the meta repo shows git's error, its stderr being the user's" {
+    cd "$TEST_DIR"
+    run "$META_BIN" git clone "file://$TEST_DIR/nowhere.git" dest
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"fatal: "*"nowhere.git"* ]]
+    [ "$(tail -1 <<<"$output")" = "Error: Failed to clone meta repository" ]
+    [ ! -e dest ]
+}
+
+@test "a failed pull ends with the last stderr line; an ephemeral run's stderr is the user's unless silenced" {
+    with_remotes
+    # git that fails every pull, saying why on its last line
+    mkdir -p "$TEST_DIR/shim"
+    real_git="$(command -v git)"
+    printf '#!/bin/sh\ncase " $* " in *" pull "*) printf "FIRST diagnostic\\nLAST diagnostic\\n" >&2; exit 1;; esac\nexec "%s" "$@"\n' "$real_git" > "$TEST_DIR/shim/git"
+    chmod +x "$TEST_DIR/shim/git"
+    for mode in "" "--silent"; do
+        # shellcheck disable=SC2086
+        PATH="$TEST_DIR/shim:$PATH" run "$META_BIN" $mode git update
+        [ "$status" -ne 0 ]
+        [[ "$(grep -v '^[[:space:]]*$' <<<"$output" | tail -1)" == *": LAST diagnostic" ]]
+    done
+    run "$META_BIN" git worktree exec --ephemeral "eph$RANDOM" --repo backend -- \
+        sh -c 'printf "FIRST diagnostic\nLAST diagnostic\n" >&2; exit 1'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"LAST diagnostic"* ]]
+    [[ "$(tail -1 <<<"$output")" == *"failed in the ephemeral worktree (exit status: 1)" ]]
+    # silenced, it names the repo and not what it wrote, and nothing on success
+    run "$META_BIN" --silent git worktree exec --ephemeral "eph$RANDOM" --repo backend -- \
+        sh -c 'printf "LAST %s\n" diagnostic >&2; exit 1'
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"commands failed: ., backend"* ]]
+    [[ "$output" != *"LAST diagnostic"* ]]
+    run "$META_BIN" --silent git worktree exec --ephemeral "eph$RANDOM" --repo backend -- \
+        sh -c 'echo said; echo said-too >&2'
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"said"* ]]
 }

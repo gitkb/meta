@@ -696,8 +696,6 @@ EOF
 }
 
 @test "a plain project check does not read a child's own .meta.yaml" {
-    # The built project plugin, not one that happens to be on PATH
-    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/"
     ln -s missing.json "$TEST_DIR/frontend/.meta.yaml"
     # each a clone of what the config lists
     for repo in backend frontend common; do
@@ -714,7 +712,6 @@ EOF
 }
 
 @test "meta git status and project check fail on a refused .meta.yaml" {
-    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/meta-project"
     echo '{"projects": {"evil": {"repo": "u", "path": ".git/evil"}}}' > "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git status
     [ "$status" -ne 0 ]
@@ -807,7 +804,7 @@ add_backend_origin() {
     git -C backend fetch --quiet origin
 }
 
-@test "the git plugin run directly holds worktrees_dir to the config rules" {
+@test "the git plugin run directly with a project as the worktrees dir deletes nothing" {
     cat > "$TEST_DIR/.meta.yaml" <<'J'
 {"projects": {"backend": "git@github.com:org/backend.git"}, "worktrees_dir": "backend"}
 J
@@ -822,7 +819,8 @@ J
 J
     META_REQUEST="$TEST_DIR/request.json" META_RESPONSE="$TEST_DIR/response.json" \
         run "$META_GIT_BIN" --meta-plugin-exec
-    [[ "$(cat "$TEST_DIR/response.json")" == *"Invalid project 'backend'"* ]]
+    # meta-git reads no config: remove's own checks refuse what meta didn't make
+    [[ "$(cat "$TEST_DIR/response.json")" == *"meta has no record of creating a worktree set there"* ]]
     [ -f backend/src/file ]
 }
 
@@ -1734,16 +1732,17 @@ set_projects() {
     [[ "$output" != *"not tracked by its parent"* ]]
 }
 
-@test "a set in a worktrees_dir under .worktrees runs nothing in the workspace" {
+@test "a set in a worktrees_dir under .worktrees runs in that set, nothing in the workspace" {
     commit_repo "$TEST_DIR/.deps/x"
     printf '{"projects": {"x": {"repo": "git@x:o/x.git", "path": ".deps/x"}}, "worktrees_dir": ".worktrees/w"}\n' > "$TEST_DIR/.meta.yaml"
     git -C "$TEST_DIR" add .meta.yaml
     git -C "$TEST_DIR" commit --quiet -m wdir
     "$META_BIN" git worktree create s1 --repo x --no-deps
     cd "$TEST_DIR/.worktrees/w/s1/.deps/x"
+    # the set is s1 (its owner file says so), not a set "w"
     run "$META_BIN" exec -- touch ran
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"--primary"* ]]
+    [ "$status" -eq 0 ]
+    [ -e ran ]
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/.deps/x/ran" ]
 }
@@ -1789,7 +1788,11 @@ set_projects() {
     [ ! -e ran ]
 }
 
-@test "a moved set whose records no longer match runs nothing in the workspace" {
+@test "a moved set runs in its own checkouts, never in the workspace" {
+    # Sets are folders meta knows by place (owner decision, PR 3): a set moved
+    # by hand is no longer the set its owner file names, and its members are
+    # the workspace's projects whose folders it holds; meta-git's records,
+    # which no longer match, still decide remove and prune
     commit_repo "$TEST_DIR/.deps/child"
     set_projects '{"child": {"repo": "git@x:o/c.git", "path": ".deps/child"}}'
     "$META_BIN" git worktree create s --repo child --no-deps
@@ -1797,22 +1800,18 @@ set_projects() {
     git -C "$TEST_DIR/.worktrees/s2/.deps/child" worktree repair
     cd "$TEST_DIR/.worktrees/s2/.deps/child"
     run "$META_BIN" exec -- touch ran
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"No checkouts of worktree set 's2'"* ]]
+    [ "$status" -eq 0 ]
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/.deps/child/ran" ]
-    [ ! -e ran ]
-    # nor with a record meta can no longer read
+    [ -e ran ]
+    rm ran
+    # a record meta-git can no longer read changes nothing here
     echo '{broken' > "$(git rev-parse --git-dir)/meta-worktree.json"
     run "$META_BIN" exec -- touch ran
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
     [ ! -e "$TEST_DIR/ran" ]
     [ ! -e "$TEST_DIR/.deps/child/ran" ]
-    # nor --primary, which can't tell where the set was made from: it names
-    # the record; from the workspace, meta runs there
-    run "$META_BIN" --primary exec -- pwd
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"meta-worktree.json"* ]]
+    # from the workspace, meta runs there
     cd "$TEST_DIR"
     run "$META_BIN" exec -- pwd
     [ "$status" -eq 0 ]
@@ -1877,13 +1876,14 @@ set_projects() {
     [[ "$output" != *"/s/experiment"* ]]
 }
 
-@test "a checkout in a set whose .git names a hostile path keeps the error on one line" {
+@test "a folder in .worktrees whose .git names a hostile path runs in that folder alone, with no forged line" {
     mkdir -p "$TEST_DIR/.worktrees/broken"
     printf 'gitdir: /bad\nFORGED\n' > "$TEST_DIR/.worktrees/broken/.git"
     cd "$TEST_DIR/.worktrees/broken"
-    run "$META_BIN" exec -- true
-    [ "$status" -ne 0 ]
-    [[ "$output" == *'gitdir: /bad\nFORGED'* ]]
+    # it has a .git: its root is a member, and meta doesn't read that file
+    run "$META_BIN" exec -- touch ran
+    [ -e "$TEST_DIR/.worktrees/broken/ran" ]
+    [ ! -e "$TEST_DIR/ran" ]
     if printf '%s\n' "$output" | grep -q '^FORGED'; then false; fi
 }
 
@@ -1977,7 +1977,6 @@ set_projects() {
 }
 
 @test "meta -r project check with a filter reports a selected nested project that is missing" {
-    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/"
     mkdir -p "$TEST_DIR/tools"
     # cli is tagged and missing; other is missing too, but not selected
     printf 'projects:\n  cli:\n    repo: git@github.com:org/cli.git\n    tags: [rust]\n  other: git@github.com:org/other.git\n' > "$TEST_DIR/tools/.meta.yaml"
@@ -2054,19 +2053,21 @@ wait_for() {
     [ -d .worktrees/busy/backend ]
 }
 
-@test "prune removes an ephemeral set whose run was stopped" {
+@test "an ephemeral set whose run was stopped is removed all the same" {
     "$META_BIN" git worktree exec --ephemeral eph-stopped --repo backend -- \
         sh -c 'touch "$0/started"; sleep 30' "$TEST_DIR" &
     local pid=$!
     wait_for "$TEST_DIR/started"
     kill -TERM "$pid"
     wait "$pid" || true
-    [ -d .worktrees/eph-stopped/backend ]
+    # its removal was armed before the run: it finishes after the stop
+    local i=0
+    while [ -e .worktrees/eph-stopped ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+    [ ! -e .worktrees/eph-stopped ]
 
     run "$META_BIN" git worktree prune
     [ "$status" -eq 0 ]
-    [[ "$output" == *"eph-stopped (ephemeral, the run that made it"* ]]
-    [ ! -e .worktrees/eph-stopped ]
+    [[ "$output" != *"eph-stopped"* ]]
 }
 
 @test "prune and remove leave a running ephemeral set alone" {
@@ -2248,4 +2249,139 @@ J
     "$META_BIN" git worktree create stubborn --repo backend --no-deps
     python3 "$BATS_TEST_DIRNAME/helpers/hangup_stubborn.py" "$META_BIN" "$TEST_DIR"
     [ "$(cat "$TEST_DIR/result")" = "$(printf 'ended\nstubborn ended')" ]
+}
+
+@test "a copy of a workspace acts on the copy, never on the original" {
+    "$META_BIN" git worktree create t --repo backend --no-deps
+    COPY="$(cd "$(mktemp -d)" && pwd -P)/wscopy"
+    cp -a "$TEST_DIR" "$COPY"
+    cd "$COPY/.worktrees/t/backend"
+    # --primary: the workspace whose sets these are, the copy
+    run "$META_BIN" --primary exec -- touch ran
+    [ "$status" -eq 0 ]
+    [ -e "$COPY/backend/ran" ]
+    [ ! -e "$TEST_DIR/backend/ran" ]
+    run "$META_BIN" exec -- touch ran-here
+    [ "$status" -eq 0 ]
+    [ -e "$COPY/.worktrees/t/backend/ran-here" ]
+    [ ! -e "$TEST_DIR/.worktrees/t/backend/ran-here" ]
+    rm -rf "$COPY"
+}
+
+@test "a moved workspace's sets keep working where it now is" {
+    "$META_BIN" git worktree create t --repo backend
+    MOVED="$(cd "$(mktemp -d)" && pwd -P)/moved"
+    mv "$TEST_DIR" "$MOVED"
+    cd "$MOVED"
+    # git's links point at the old place: meta names the command that repairs
+    # each checkout, and running what it names does repair them
+    local fix tries=0
+    while :; do
+        run "$META_BIN" --dry-run git worktree remove t
+        fix="$(sed -n 's/.*`\(git -C .*worktree repair [^`]*\)`.*/\1/p' <<<"$output" | head -1)"
+        [ -n "$fix" ] || break
+        eval "$fix"
+        tries=$((tries + 1))
+        [ "$tries" -le 3 ]
+    done
+    [ "$tries" -ge 1 ]
+    cd "$MOVED/.worktrees/t/backend"
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$MOVED/.worktrees/t/backend"* ]]
+    run "$META_BIN" git status
+    [ "$status" -eq 0 ]
+    run "$META_BIN" --primary exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$MOVED/backend"* ]]
+    cd "$MOVED"
+    run "$META_BIN" git worktree list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"t"* ]]
+    # remove keeps every check: work in a checkout is refused
+    echo work > "$MOVED/.worktrees/t/backend/untracked.txt"
+    run "$META_BIN" git worktree remove t
+    [ "$status" -ne 0 ]
+    [ -e "$MOVED/.worktrees/t/backend/untracked.txt" ]
+    rm "$MOVED/.worktrees/t/backend/untracked.txt"
+    run "$META_BIN" --dry-run git worktree remove t
+    [ "$status" -eq 0 ]
+    [ -d "$MOVED/.worktrees/t/backend" ]
+    run "$META_BIN" git worktree remove t
+    [ "$status" -eq 0 ]
+    [ ! -e "$MOVED/.worktrees/t" ]
+    mv "$MOVED" "$TEST_DIR"
+}
+
+@test "a caller's META_WORKTREES folder holds nothing of meta's once the set is moved out" {
+    # what atc does: make the set in a private folder, move it into place,
+    # remove the folder
+    STAGE="$TEST_DIR/.stage"
+    mkdir "$STAGE"
+    META_WORKTREES="$STAGE" "$META_BIN" git worktree create s --repo backend
+    [ -z "$(ls -A "$STAGE" | grep -v '^s$')" ]
+    mkdir -p "$TEST_DIR/.worktrees"
+    mv "$STAGE/s" "$TEST_DIR/.worktrees/s"
+    rmdir "$STAGE"
+    [ -z "$(ls -A "$TEST_DIR/.worktrees/s" | grep meta-set)" ]
+}
+
+@test "an ephemeral run under META_WORKTREES with no root checkout leaves the workspace's files" {
+    rm -rf .git
+    echo precious > backend/untracked.txt
+    META_WORKTREES="$TEST_DIR/sets" run "$META_BIN" git worktree exec --ephemeral clean --repo backend -- git clean -fdx
+    [ "$status" -eq 0 ]
+    [ -f backend/untracked.txt ]
+    [ -z "$(ls -A sets 2>/dev/null)" ]
+}
+
+# `meta exec` from $2 (a folder of the set $1) ran nowhere but in the set,
+# or was refused
+stays_in_set() {
+    local log="$TEST_DIR/ran" set
+    set="$(cd "$1" && pwd -P)"
+    rm -f "$log"
+    (cd "$2" && "$META_BIN" exec -- sh -c "pwd -P >> '$log'") > /dev/null 2>&1 || true
+    [ ! -e "$log" ] || ! grep -qv "^$set\(/\|\$\)" "$log"
+}
+
+@test "a command started in a set never runs outside it, wherever the set is and however it got there" {
+    cp .meta.yaml plain.yaml
+    python3 -c 'import json; c=json.load(open(".meta.yaml")); c["worktrees_dir"]="wt"; json.dump(c,open("custom.yaml","w"))'
+    for root in with without; do
+        [ "$root" = with ] || rm -rf .git
+        # the default folder, a worktrees_dir, and META_WORKTREES, all in the workspace
+        for place in .worktrees wt sets; do
+            tag="s$RANDOM"
+            cp plain.yaml .meta.yaml
+            [ "$place" != wt ] || cp custom.yaml .meta.yaml
+            [ "$place" != sets ] || export META_WORKTREES="$TEST_DIR/sets"
+            "$META_BIN" git worktree create "$tag" --repo backend
+            stays_in_set "$place/$tag" "$place/$tag"
+            stays_in_set "$place/$tag" "$place/$tag/backend"
+            mv "$place/$tag" "$place/$tag-moved"
+            stays_in_set "$place/$tag-moved" "$place/$tag-moved"
+            stays_in_set "$place/$tag-moved" "$place/$tag-moved/backend"
+            unset META_WORKTREES
+        done
+        cp plain.yaml .meta.yaml
+        # ephemeral, in the default folder and a caller's: in the set it made
+        for folder in "" "$TEST_DIR/sets"; do
+            log="$TEST_DIR/ran-ephemeral"
+            rm -f "$log"
+            env ${folder:+META_WORKTREES="$folder"} "$META_BIN" git worktree exec --ephemeral "e$RANDOM" --repo backend -- \
+                sh -c "pwd -P >> '$log'"
+            [ -s "$log" ]
+            ! grep -qv "/\(\.worktrees\|sets\)/e[0-9]*\(/\|\$\)" "$log"
+        done
+    done
+    # no root checkout, no owner file: refused, and the workspace is one word away
+    cp custom.yaml .meta.yaml
+    mkdir -p wt/unknown
+    cd wt/unknown
+    run "$META_BIN" exec -- true
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"in no set meta can name"* ]]
+    run "$META_BIN" --primary --include backend exec -- pwd
+    [ "$status" -eq 0 ]
 }

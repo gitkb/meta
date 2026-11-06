@@ -2,8 +2,8 @@
 //!
 //! These are clap-derived types that belong in the CLI crate, not the library.
 
+use crate::worktree::RepoSpec;
 use clap::{Args, Subcommand};
-use meta_git_lib::worktree::RepoSpec;
 
 /// Worktree subcommands parsed by clap.
 #[derive(Subcommand)]
@@ -210,5 +210,5 @@ pub struct ExecArgs {
 
 /// Parse a human-friendly duration string for clap value_parser.
 fn parse_duration_clap(s: &str) -> std::result::Result<u64, String> {
-    meta_core::duration::parse_duration(s).map_err(|e| e.to_string())
+    meta_plugin::duration::parse_duration(s).map_err(|e| e.to_string())
 }

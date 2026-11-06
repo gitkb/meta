@@ -1,10 +1,10 @@
+use crate::clone_queue::{CloneQueue, CloneTask, MetaRepo, Work};
 use crate::clone_worker::clone_with_queue;
+use crate::here::{Here, Listing};
 use crate::ssh;
 use colored::Colorize;
 use indicatif::MultiProgress;
-use meta_core::config;
 use meta_core::gitdir::Checkout;
-use meta_git_lib::clone_queue::{CloneQueue, CloneTask, MetaRepo, Work};
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::RepoUrl;
 use meta_plugin::{errln, outln};
@@ -32,34 +32,71 @@ use std::sync::Arc;
 pub(crate) struct UpdateArgs {}
 
 /// The workspace `request` runs in that `meta <command>` acts on (with
-/// `-A`, the outermost). Refused inside a worktree set meta made: the
-/// workspace around the set is not the command's to change from in it
-/// (`in_set`: what to run there instead). A plain git worktree of a meta
-/// repo under .worktrees is a workspace of its own: one that meta didn't
-/// make, whose .meta.yaml is its own.
-pub(crate) fn workspace(
-    request: &Request,
-    command: &str,
-    in_set: &str,
-) -> anyhow::Result<config::Workspace> {
+/// `-A`, the outermost): its config's folder and the projects it lists.
+/// Refused inside a worktree set meta made: the workspace around the set is
+/// not the command's to change from in it (`in_set`: what to run there
+/// instead). A plain git worktree of a meta repo under .worktrees is a
+/// workspace of its own: one that meta didn't make, whose .meta.yaml is its
+/// own.
+pub(crate) fn workspace(request: &Request, command: &str, in_set: &str) -> anyhow::Result<Listing> {
     let cwd = request.cwd.as_path();
-    let Some(found) = &request.workspace else {
+    let Some(here) = Here::of(request) else {
         anyhow::bail!("No .meta.yaml found in {} or above it", escape_path(cwd));
     };
-    let workspace = config::Workspace::load(&found.config)?;
-    if let Some((set, set_dir)) = meta_core::worktree::detect_worktree_location(cwd)? {
+    if let Some(set) = &request.set {
         let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-        if !real(&workspace.dir).starts_with(real(&set_dir))
-            || meta_core::worktree::holds_meta_checkout(&set_dir)
+        if !real(&here.dir).starts_with(real(&set.dir))
+            || crate::worktree::scan::holds_meta_checkout(&set.dir)
         {
             anyhow::bail!(
                 "`meta {command}` acts on the workspace, not worktree set '{}'; run it in the \
                  workspace{in_set}",
-                escape(&set)
+                escape(&set.name)
             );
         }
     }
-    Ok(workspace)
+    Ok(here.tree().listing())
+}
+
+/// Clone the projects `queue` left for another run (their URL holds
+/// credentials meta hides in what it reads back): `meta git clone-missing`
+/// from `cwd` with meta's options as typed, whose request has each URL as
+/// configured. `None` when there are none. One whose config didn't change
+/// in this run (`fresh`: or all of them, for a run whose configs are none
+/// of meta's request) another run can't do better on: an error naming it.
+pub(crate) fn deferred(
+    ctx: &Ctx,
+    request: &Request,
+    cwd: &Path,
+    queue: &CloneQueue,
+    fresh: bool,
+) -> anyhow::Result<Option<Response>> {
+    let deferred = queue.outcome().deferred;
+    if deferred.is_empty() {
+        return Ok(None);
+    }
+    if !fresh && !deferred.iter().any(|(_, _, new)| *new) {
+        let names: Vec<String> = deferred
+            .iter()
+            .map(|(name, _, _)| escape(name).into_owned())
+            .collect();
+        anyhow::bail!(
+            "Not cloned: {}; meta's view of the workspace doesn't give their URLs, which hold \
+             credentials. Run 'meta git clone-missing' in the meta repo that lists them.",
+            names.join(", ")
+        );
+    }
+    let words = ["git".to_string(), "clone-missing".to_string()];
+    crate::through_meta(ctx, request, cwd, &words).map(Some)
+}
+
+/// The folder projects are named from in records: the workspace root meta
+/// names them from, else `root`.
+pub(crate) fn named<'a>(request: &'a Request, root: &'a Path) -> &'a Path {
+    request
+        .workspace
+        .as_ref()
+        .map_or(root, |w| w.root.as_path())
 }
 
 /// The name the workspace at `root` goes by in progress and errors.
@@ -112,7 +149,11 @@ pub(crate) fn execute_git_update(
         ctx.warn(mismatches);
     }
 
-    let queue = CloneQueue::new(None, meta_depth, true); // No git depth for update
+    // No git depth for update; the workspace's projects as --config lists them
+    let config = request.workspace()?.config.clone();
+    let queue = CloneQueue::new(None, meta_depth, true)
+        .config(&workspace.dir, &config)
+        .raw(&request.workspace()?.members);
     let root = workspace.dir.as_path();
     let name = root_name(root);
     let top = || Arc::from([MetaRepo::at(&name, root, None)]);
@@ -136,7 +177,7 @@ pub(crate) fn execute_git_update(
         while let Some(task) = tasks.pop_front() {
             let argv = crate::clone_worker::git_argv(&task, None, |url| url.to_string().into());
             let argv: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into()).collect();
-            let shown = escape(&loop_lib::display_command(&argv)).into_owned();
+            let shown = escape(&meta_plugin::display::display_command(&argv)).into_owned();
             match task.work {
                 Work::Clone(_) => outln!("  {shown}")?,
                 Work::Pull => match crate::clone_worker::nothing_to_pull(&task.target_path) {
@@ -153,14 +194,17 @@ pub(crate) fn execute_git_update(
         }
         report_unlisted(ctx, &queue, root, cwd, recursive);
         if let Some(error) = crate::clone_worker::report_failures(&queue, "git update") {
-            anyhow::bail!("{error}");
+            let rows = crate::clone_worker::failure_rows(&queue, named(request, root));
+            return crate::printed(ctx, rows, Some(anyhow::anyhow!("{error}")));
         }
         return Ok(Response::done());
     }
 
     // Progress counts to the repos the .meta.yaml files on disk list, the
     // workspace's own first; pulls that add projects add to it
-    let on_disk = CloneQueue::new(None, meta_depth, false);
+    let on_disk = CloneQueue::new(None, meta_depth, false)
+        .config(&workspace.dir, &config)
+        .raw(&request.workspace()?.members);
     if on_disk.discover_in(&workspace, 0, &top()).is_ok() {
         let own = usize::from(matches!(Checkout::of(root), Checkout::Repo { .. }));
         queue.expect(on_disk.found() + own);
@@ -177,7 +221,7 @@ pub(crate) fn execute_git_update(
         Checkout::Repo { .. } => None,
         // git clones into an empty folder too
         Checkout::Missing => listed.cloned(),
-        Checkout::NotARepo(_) if meta_git_lib::clone_queue::is_empty_dir(dir) => listed.cloned(),
+        Checkout::NotARepo(_) if crate::clone_queue::is_empty_dir(dir) => listed.cloned(),
         Checkout::NotARepo(_) => None,
     };
     let projects = workspace.projects.iter();
@@ -192,9 +236,14 @@ pub(crate) fn execute_git_update(
         errln!("{} {}: {why}", "Not pulled".yellow(), escape(name));
     }
     if let Some(error) = crate::clone_worker::report_failures(&queue, "git update") {
-        anyhow::bail!("{error}");
+        let rows = crate::clone_worker::failure_rows(&queue, named(request, root));
+        return crate::printed(ctx, rows, Some(anyhow::anyhow!("{error}")));
     }
     let (pulled, cloned) = (outcome.pulled, outcome.cloned.len());
+    if let Some(response) = deferred(ctx, request, cwd, &queue, false)? {
+        outln!("Update completed ({pulled} pulled, {cloned} cloned); cloning the rest")?;
+        return Ok(response);
+    }
     let not_pulled = match outcome.not_pulled.len() {
         0 => String::new(),
         n => format!(", {n} with nothing to pull from"),
@@ -251,8 +300,8 @@ impl Leftover {
             Ok(None) => {}
             Err(e) => return Self::Holds(format!("it can't be searched ({e})")),
         }
-        let held = meta_git_lib::worktree::safety::repo_holds(path)
-            .and_then(|held| Ok((held, meta_git_lib::worktree::safety::repo_ignored(path)?)));
+        let held = crate::worktree::safety::repo_holds(path)
+            .and_then(|held| Ok((held, crate::worktree::safety::repo_ignored(path)?)));
         match held {
             Ok((held, ignored)) if held.is_empty() => Self::Removable(ignored),
             Ok((held, ignored)) => Self::Holds(format!(

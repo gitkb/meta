@@ -123,7 +123,7 @@ A row that failed has an `error` (`{"code", "message"}`), and so does the whole 
 
 ## Silent Mode
 
-Suppress command output (only meta's final failure message remains):
+Suppress command output: stdout and stderr of every command go nowhere. If any failed, the closing error names the repos (`Error: 2 commands failed: app, platform`); to see why, run it again without `--silent`:
 
 ```bash
 meta --silent exec -- npm install
@@ -177,7 +177,7 @@ meta exec -- rm -rf node_modules dist
 
 ## Worktree Context Detection
 
-When your cwd is inside a `.worktrees/<name>/` directory, `meta exec` automatically scopes to the worktree's repos instead of the primary checkout:
+When your cwd is inside a worktree set (a `.worktrees/<name>/` folder, or any set meta made), `meta exec` automatically scopes to the set's repos instead of the primary checkout:
 
 ```bash
 cd .worktrees/auth-fix/backend
@@ -187,7 +187,7 @@ meta exec -- cargo test    # runs in auth-fix's repos
 meta --primary exec -- cargo test
 ```
 
-This is filesystem-based detection—no store dependency. It skips repos nested inside another repo of the set. See the `meta-worktree` skill for full worktree management.
+This is filesystem-based detection—no store dependency: the set's members are the projects whose folders are in it, nested ones included. See the `meta-worktree` skill for full worktree management.
 
 ## Efficiency Tips
 

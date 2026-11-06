@@ -61,6 +61,8 @@ fn projects(repos: &[Candidate], root: &Path) -> Vec<Project> {
                     .map(|r| r.raw().to_string()),
                 tags: repo.tags().to_vec(),
                 depends_on: info.map(|i| i.depends_on.clone()).unwrap_or_default(),
+                dependency_problems: Vec::new(),
+                meta: info.is_some_and(|i| i.meta),
                 level: None,
                 present: repo.dir.exists(),
                 nested: Vec::new(),
@@ -85,25 +87,122 @@ fn projects(repos: &[Candidate], root: &Path) -> Vec<Project> {
 
 /// The workspace of `config` as a plugin is told it: its repos are
 /// `members`, named from `root`.
-fn workspace(config: &Config, root: &Path, members: &[Candidate]) -> meta_plugin::Workspace {
+fn workspace(
+    config: &Config,
+    root: &Path,
+    members: &[Candidate],
+    reach: Option<&Reach>,
+) -> meta_plugin::Workspace {
+    let mut members = projects(members, root);
+    if let Some(reach) = reach {
+        resolve_dependencies(reach, root, &mut members);
+    }
     let owner = worktree::Configs::of(config.clone())
         .map(|configs| configs.owner)
         .unwrap_or_else(|_| config.clone());
+    let sets_dir = worktree::resolve_worktree_root(Some(&owner), &config.dir);
     meta_plugin::Workspace {
         root: root.to_path_buf(),
         config: config.config_path.clone(),
         listed_root: config::listed_root(&config.dir),
-        members: projects(members, root),
+        members,
         worktree: meta_plugin::Worktree {
+            dir: sets_dir.as_ref().ok().cloned(),
             // refused here, the worktree commands say why
-            dir: worktree::resolve_worktree_root(Some(&owner), &config.dir).ok(),
+            refused: sets_dir.as_ref().err().map(|e| format!("{e:#}")),
             hooks: owner
                 .worktree
                 .hooks
                 .iter()
                 .map(|(event, command)| (event.name().to_string(), command.clone()))
                 .collect(),
+            home: Some(owner.dir.clone()),
         },
+    }
+}
+
+/// Resolve the `depends_on` of `members` (named from `root`) within
+/// `reach`, as `meta git worktree create` follows them: by name among the
+/// config's own projects, or with `-r`/`-A` by place through the whole tree
+/// it walks (an entry qualified with the place of the meta repo that lists
+/// it), through what a project provides too. A member outside the reach
+/// keeps its entries as written.
+fn resolve_dependencies(reach: &Reach, root: &Path, members: &mut [Project]) {
+    use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
+    let repos = reach.scope().repos;
+    let flat = reach.tree.is_empty();
+    // each project of the reach: its folder, its key in the graph, its info
+    let keyed: Vec<(PathBuf, String, &config::ProjectInfo)> = repos
+        .iter()
+        .filter_map(|repo| {
+            let info = repo.info.as_ref()?;
+            let key = match flat {
+                true => info.name.clone(),
+                false => repo_path(&repo.dir, root),
+            };
+            Some((repo.dir.clone(), key, info))
+        })
+        .collect();
+    let keys: std::collections::HashSet<&str> = keyed.iter().map(|(_, k, _)| k.as_str()).collect();
+    let mut nodes: Vec<ProjectDependencies> = keyed
+        .iter()
+        .map(|(_, key, info)| {
+            // "open-source/gitkb/core" listed as "core": "open-source/gitkb/"
+            let prefix = match flat {
+                true => "",
+                false => key
+                    .strip_suffix(info.path.as_str())
+                    .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
+                    .unwrap_or(""),
+            };
+            let qualify = |name: &String| match keys.contains(name.as_str()) || name == "." {
+                true => name.clone(),
+                false => format!("{prefix}{name}"),
+            };
+            ProjectDependencies {
+                name: key.clone(),
+                path: key.clone(),
+                repo: info.repo.clone(),
+                tags: info.tags.clone(),
+                provides: info.provides.iter().map(qualify).collect(),
+                depends_on: info.depends_on.iter().map(qualify).collect(),
+            }
+        })
+        .collect();
+    // in the order of the keys, so a run picks the provider the last did
+    nodes.sort_by(|a, b| a.name.cmp(&b.name));
+    let graph = DependencyGraph::build(nodes);
+    let path_of = |key: &str| {
+        keyed
+            .iter()
+            .find(|(_, k, _)| k == key)
+            .map(|(dir, _, _)| repo_path(dir, root))
+    };
+    for member in members.iter_mut() {
+        let Some((_, key, _)) = keyed.iter().find(|(dir, _, _)| *dir == member.abs) else {
+            continue;
+        };
+        let resolved = graph.get_dependencies(key);
+        let problems = graph.problems_of(key);
+        // the resolved ones, then those that name nothing, as qualified
+        let unresolved = problems.iter().filter_map(|p| match p {
+            meta_core::dependency_graph::DependencyProblem::Unresolved(dep) => Some(dep.clone()),
+            _ => None,
+        });
+        member.depends_on = resolved
+            .iter()
+            .filter_map(|dep| path_of(dep))
+            .chain(unresolved)
+            .collect();
+        member.dependency_problems = problems
+            .iter()
+            .map(|problem| match problem {
+                meta_core::dependency_graph::DependencyProblem::Unresolved(_) if flat => {
+                    format!("{problem} (nested projects count with -r)")
+                }
+                _ => problem.to_string(),
+            })
+            .collect();
     }
 }
 
@@ -127,75 +226,19 @@ fn target_with(
         cli.parallel || !cli.sequential && workspace.is_none_or(|w| w.defaults.parallel)
     };
 
-    // Inside a set, the command runs in the set's checkouts
-    let location = match cli.primary {
+    // Inside a set, the command runs in the set's members
+    let location = match cli.primary || cli.no_parent {
         true => None,
         false => worktree::detect_worktree_location(start)?,
     };
+    let no_set = location.is_none() && !cli.primary && !cli.no_parent && cli.config.is_none();
     if let Some((name, set_dir)) = location {
-        let members: Vec<_> = worktree::discover_worktree_members(&set_dir)?
-            .into_iter()
-            .map(|member| member.path)
-            .collect();
-        // Inside a set, a command never falls back to the workspace's own
-        // checkouts: they aren't the ones the caller is in. A plain clone
-        // that is merely under a `.worktrees` directory is no set.
-        if members.is_empty() && worktree::holds_meta_checkout(&set_dir) {
-            anyhow::bail!(
-                "No checkouts of worktree set '{}' found in {}. Run from a set meta made, or pass --primary to run in the workspace.",
-                escape(&name),
-                escape_path(&set_dir)
-            );
-        }
-        if !members.is_empty() {
-            if cli.verbose {
-                errln!(
-                    "Detected worktree context: '{}' ({} repos)",
-                    escape(&name),
-                    members.len()
-                );
-            }
-            let config = worktree::set_config(&set_dir, &members, cli.config.as_ref())?
-                .map(|config| Config::load(&config))
-                .transpose()?;
-            if cli.verbose {
-                match &config {
-                    Some(w) => errln!("Using config {}", escape_path(&w.config_path)),
-                    None => meta_plugin::out::warn(format!(
-                        "No .meta.yaml found for worktree '{}'. Tags, plugins, and dependency features unavailable.",
-                        escape(&name)
-                    )),
-                }
-            }
-            let all = worktree::select_in_set(
-                &set_dir,
-                &members,
-                config.as_ref(),
-                &meta_core::repo_filter::Filters::default(),
-            )?;
-            let repos = worktree::select_in_set(&set_dir, &members, config.as_ref(), filters)?;
-            let set = meta_plugin::Set {
-                name,
-                dir: set_dir.clone(),
-                members: projects(&all, &set_dir),
-            };
-            return Ok(Target {
-                parallel: parallel(config.as_ref()),
-                workspace: config.as_ref().map(|c| workspace(c, &set_dir, &all)),
-                set: Some(set),
-                root: set_dir,
-                repos,
-                // the set is the scope; -r, -A and --depth say how deep
-                // into the meta repos checked out in it, as outside a set
-                depth: match cli.recursive || cli.all {
-                    true => cli.depth,
-                    false => Some(0),
-                },
-            });
+        if let Some(target) = in_set(cli, start, &name, &set_dir, filters, parallel)? {
+            return Ok(target);
         }
     }
 
-    let Some(config) = Config::find(start, cli.config.as_ref())? else {
+    let Some(config) = find_config(cli, start)? else {
         let config_name = cli
             .config
             .as_ref()
@@ -210,6 +253,9 @@ fn target_with(
         )
         .into());
     };
+    if no_set {
+        refuse_in_worktrees_folder(&config, start)?;
+    }
     if cli.verbose {
         errln!(
             "Resolved config file path: {}",
@@ -219,15 +265,15 @@ fn target_with(
     // From the config already loaded (the default or --config's): -r into
     // the meta repos nested under it, -A from the outermost one
     let parallel = parallel(Some(&config));
+    let (root, members) = whole_tree(&config);
     let reach = Reach::of(config, cli.recursive, cli.all, cli.depth)?;
-    let members = reach.scope().repos;
     let repos = reach.select(filters, crate::with_all)?;
     let depth = match cli.recursive || cli.all {
         true => cli.depth,
         false => Some(0),
     };
     Ok(Target {
-        workspace: Some(workspace(&reach.workspace, &reach.root, &members)),
+        workspace: Some(workspace(&reach.workspace, &root, &members, Some(&reach))),
         repos,
         parallel,
         root: reach.root,
@@ -236,55 +282,193 @@ fn target_with(
     })
 }
 
+/// A folder below `config`'s worktrees folder that is no set meta can name
+/// is not the workspace either: a command started there is refused, never
+/// run in the workspace above it.
+fn refuse_in_worktrees_folder(config: &Config, start: &Path) -> Result<()> {
+    let owner = worktree::Configs::of(config.clone())
+        .map(|configs| configs.owner)
+        .unwrap_or_else(|_| config.clone());
+    let Some(sets) = worktree::resolve_worktree_root(Some(&owner), &config.dir)
+        .ok()
+        .and_then(|dir| dir.canonicalize().ok())
+    else {
+        return Ok(());
+    };
+    let (Ok(here), Ok(home)) = (start.canonicalize(), config.dir.canonicalize()) else {
+        return Ok(());
+    };
+    if here == sets || !here.starts_with(&sets) || home.starts_with(&sets) {
+        return Ok(());
+    }
+    Err(ErrorInfo::new(
+        ErrorCode::Conflict,
+        format!(
+            "{} is in the worktrees folder {} but in no set meta can name; --primary runs in the workspace",
+            escape_path(start),
+            escape_path(&sets)
+        ),
+    )
+    .into())
+}
+
+/// The members of the set `name` at `set_dir` that `filters` select, as
+/// the target of a command run inside it (from `start`). `None` when a
+/// config named with `--config` outside the set makes that workspace the
+/// target, or a workspace of its own in the set's folder (one that is no
+/// member's) does. A set with no members is an error: a command run in one
+/// never falls back to the workspace.
+fn in_set(
+    cli: &Cli,
+    start: &Path,
+    name: &str,
+    set_dir: &Path,
+    filters: &meta_core::repo_filter::Filters,
+    parallel: impl Fn(Option<&Config>) -> bool,
+) -> Result<Option<Target>> {
+    let config_path = worktree::set_config(set_dir, cli.config.as_ref())?;
+    let named_outside = cli.config.is_some()
+        && config_path
+            .as_ref()
+            .is_none_or(|path| !path.starts_with(set_dir));
+    if named_outside {
+        return Ok(None);
+    }
+    let provider = meta_plugin::sets::owner(set_dir)?.map(|owner| owner.provider);
+    let config = config_path.map(|path| Config::load(&path)).transpose()?;
+    let repos = worktree::set_members(set_dir, config.as_ref(), filters)?;
+    let all = worktree::set_members(
+        set_dir,
+        config.as_ref(),
+        &meta_core::repo_filter::Filters::default(),
+    )?;
+    // a workspace of its own inside the set's folder (a clone, or a set
+    // inside it) is the target, unless it is a member's
+    if let Some(found) = config::find_meta_config(start, cli.config.as_ref())? {
+        let dir = found.parent().unwrap_or(set_dir);
+        let member = |c: &Candidate| c.dir == dir;
+        if dir != set_dir && dir.starts_with(set_dir) && !all.iter().any(member) {
+            return Ok(None);
+        }
+    }
+    // Inside a set, a command never falls back to the workspace's own
+    // checkouts: they aren't the ones the caller is in
+    if all.is_empty() {
+        anyhow::bail!(
+            "No checkouts of worktree set '{}' found in {}. Run from a set meta made, or pass --primary to run in the workspace.",
+            escape(name),
+            escape_path(set_dir)
+        );
+    }
+    if cli.verbose {
+        errln!(
+            "Detected worktree context: '{}' ({} repos)",
+            escape(name),
+            all.len()
+        );
+        if let Some(w) = &config {
+            errln!("Using config {}", escape_path(&w.config_path));
+        }
+    }
+    let set = meta_plugin::Set {
+        name: name.to_string(),
+        dir: set_dir.to_path_buf(),
+        members: projects(&all, set_dir),
+        provider: provider.unwrap_or_else(|| meta_plugin::sets::DEFAULT_PROVIDER.to_string()),
+        leased: leased(set_dir),
+    };
+    Ok(Some(Target {
+        parallel: parallel(config.as_ref()),
+        workspace: config.as_ref().map(|c| {
+            let reach = Reach::of(c.clone(), cli.recursive, cli.all, cli.depth).ok();
+            workspace(c, set_dir, &all, reach.as_ref())
+        }),
+        set: Some(set),
+        root: set_dir.to_path_buf(),
+        repos,
+        // the set is the scope; -r, -A and --depth say how deep into the
+        // meta repos checked out in it, as outside a set
+        depth: match cli.recursive || cli.all {
+            true => cli.depth,
+            false => Some(0),
+        },
+    }))
+}
+
+/// The config a command runs from: `--config`'s, or the nearest at or above
+/// `start` (with `--no-parent`, in `start` itself only).
+fn find_config(cli: &Cli, start: &Path) -> Result<Option<Config>> {
+    match cli.no_parent {
+        true => config::meta_config_at(start, cli.config.as_ref())?
+            .map(|path| Config::load(&path))
+            .transpose(),
+        false => Config::find(start, cli.config.as_ref()),
+    }
+}
+
+/// Whether a creator or an ephemeral run holds the lease of the set at `dir`.
+fn leased(dir: &Path) -> bool {
+    dir.canonicalize()
+        .ok()
+        .and_then(|set| meta_plugin::sets::lease::find(&set))
+        .is_some_and(|found| found.live)
+}
+
+/// Every project of the workspace `config` is in, nested meta repos' too,
+/// named from its outermost config's folder, and that folder: as far as its
+/// configs can be read (else from `config`'s folder down, else its own
+/// projects). What a plugin is told the workspace holds (`members`): never
+/// narrowed by a selection.
+fn whole_tree(config: &Config) -> (PathBuf, Vec<Candidate>) {
+    let reaches = [(true, true), (true, false), (false, false)];
+    reaches
+        .into_iter()
+        .find_map(|(recursive, all)| {
+            let reach = Reach::of(config.clone(), recursive, all, None).ok()?;
+            Some((reach.root.clone(), reach.scope().repos))
+        })
+        .unwrap_or_else(|| (config.dir.clone(), Vec::new()))
+}
+
 /// The worktree set `name` of the workspace at or above `start`, and the
 /// checkouts in it `cli`'s filters select. None outside a workspace; no
 /// set when there is none of that name (the command says so).
 pub fn named_set(cli: &Cli, start: &Path, name: &str) -> Result<Option<Target>> {
-    let Some(config) = Config::find(start, cli.config.as_ref())? else {
+    if find_config(cli, start)?.is_none() {
         return Ok(None);
-    };
+    }
     // the workspace alone: the filters select in the set
     let mut target = target_with(cli, start, &meta_core::repo_filter::Filters::default())?;
+    target.repos = Vec::new();
     let dir = target
         .workspace
         .as_ref()
         .and_then(|w| w.worktree.dir.clone());
     let set_dir = match dir {
-        Some(dir) if meta_core::worktree::validate_name(name).is_ok() => dir.join(name),
-        _ => {
-            return Ok(Some(Target {
-                repos: Vec::new(),
-                ..target
-            }))
-        }
+        Some(dir) if meta_plugin::sets::validate_name(name).is_ok() => dir.join(name),
+        _ => return Ok(Some(target)),
     };
-    let members: Vec<PathBuf> = match set_dir.is_dir() {
-        true => worktree::discover_worktree_members(&set_dir)?
-            .into_iter()
-            .map(|member| member.path)
-            .collect(),
-        false => Vec::new(),
-    };
-    if members.is_empty() {
-        target.repos = Vec::new();
+    if !set_dir.is_dir() {
         return Ok(Some(target));
     }
-    let set_config = worktree::set_config(&set_dir, &members, cli.config.as_ref())?
-        .map(|config| Config::load(&config))
-        .transpose()?
-        .unwrap_or(config);
-    let all = worktree::select_in_set(
-        &set_dir,
-        &members,
-        Some(&set_config),
-        &meta_core::repo_filter::Filters::default(),
-    )?;
-    let repos = worktree::select_in_set(&set_dir, &members, Some(&set_config), &cli.filters())?;
+    let provider = meta_plugin::sets::provider(&set_dir)?;
+    let set_config = match worktree::set_config(&set_dir, cli.config.as_ref())? {
+        Some(path) => Some(Config::load(&path)?),
+        None => None,
+    };
+    let filters = meta_core::repo_filter::Filters::default();
+    let all = worktree::set_members(&set_dir, set_config.as_ref(), &filters)?;
+    let repos = match all.is_empty() {
+        true => Vec::new(),
+        false => worktree::set_members(&set_dir, set_config.as_ref(), &cli.filters())?,
+    };
     Ok(Some(Target {
         set: Some(meta_plugin::Set {
             name: name.to_string(),
+            leased: leased(&set_dir),
             dir: set_dir.clone(),
             members: projects(&all, &set_dir),
+            provider,
         }),
         root: set_dir,
         repos,
@@ -321,6 +505,8 @@ pub fn request(
         request.depth = cli.depth;
         request.recursive = true;
     }
+    // the lease of the program that called meta back, for its plugin alone
+    request.lease = std::env::var(meta_plugin::LEASE_VAR).ok();
     request.plugin_dir = plugin
         .path
         .parent()
@@ -402,10 +588,13 @@ pub fn answer(
             }
             let failed: Vec<&ProjectResult> =
                 results.records.iter().filter(|r| r.is_failure()).collect();
-            if let Some(first) = failed.first().and_then(|r| r.error.clone()) {
-                let error = match failed.len() {
-                    1 => first,
-                    n => ErrorInfo::new(
+            // the command's own error (a record about no project) says why
+            // it failed; else one failure is its own, several are counted
+            let own = failed.iter().find(|r| r.project.is_none());
+            if let Some(first) = own.or(failed.first()).and_then(|r| r.error.clone()) {
+                let error = match (own, failed.len()) {
+                    (Some(_), _) | (None, 1) => first,
+                    (None, n) => ErrorInfo::new(
                         first.code,
                         format!("{n} of {} records are failures", results.records.len()),
                     ),

@@ -269,7 +269,7 @@ EOF
     # silenced, there is no summary: the error says it
     run "$META_BIN" --silent --include api exec -- sh -c 'exit 3'
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Error: At least one command failed"* ]]
+    [ "$output" = "Error: 1 command failed: api" ]
 }
 
 @test "a failure every repo shares prints once; different failures print per repo" {
@@ -414,16 +414,11 @@ SCRIPT
     [[ "$output" != *"Usage"* ]]
 }
 
-@test "unrecognized plugin subcommand shows plugin help" {
-    # Copy meta-project plugin to test dir
-    cp "$META_BIN_DIR/meta-project" "$TEST_DIR/.meta/plugins/meta-project"
-    chmod +x "$TEST_DIR/.meta/plugins/meta-project"
-
+@test "an unrecognized project subcommand shows project's commands" {
     run "$META_BIN" project blablabla
     [ "$status" -eq 2 ]
     [[ "$output" == *"unrecognized command"* ]]
     [[ "$output" == *"project blablabla"* ]]
-    # Should show plugin help with available commands
     [[ "$output" == *"list"* ]] || [[ "$output" == *"check"* ]]
 }
 
@@ -1000,4 +995,46 @@ YAML
     [ "$status" -eq 0 ]
     [[ "$output" == *"Usage: meta"* ]]
     [ ! -e "$HOME/.looprc" ]
+}
+
+# Live output is the command's own: meta puts no pipe between it and the
+# user's stderr, whether that is a terminal, a file or a pipe
+
+@test "a closed pipe ends a live run at once" {
+    # at most 20 seconds, on macOS too (it has no timeout)
+    run perl -e 'alarm 20; exec @ARGV' bash -c "\"$META_BIN\" --sequential -i api exec -- sh -c 'while :; do echo out; echo err >&2; done' 2>&1 | head -1"
+    [ "$status" -eq 0 ]
+}
+
+@test "live stdout and stderr keep their order in one file or pipe" {
+    local say='echo one; echo two >&2; echo three; echo four >&2'
+    "$META_BIN" --sequential -i api exec -- sh -c "$say" > "$TEST_DIR/to-file" 2>&1
+    "$META_BIN" --sequential -i api exec -- sh -c "$say" 2>&1 | cat > "$TEST_DIR/to-pipe"
+    for out in to-file to-pipe; do
+        [ "$(grep -E '^(one|two|three|four)$' "$TEST_DIR/$out" | tr '\n' ' ')" = "one two three four " ]
+    done
+}
+
+@test "a slow reader gets all of a live run's stderr" {
+    local say='head -c 300000 /dev/zero | tr "\0" x >&2; echo; echo END-MARK >&2'
+    "$META_BIN" --sequential -i api exec -- sh -c "$say" 2>&1 | (sleep 1; cat > "$TEST_DIR/slow")
+    grep -q 'END-MARK' "$TEST_DIR/slow"
+    [ "$(wc -c < "$TEST_DIR/slow")" -ge 300000 ]
+}
+
+@test "a background program outlives meta and may still write to stderr" {
+    # started by the command; writes once meta has ended
+    local late="(sleep 1; echo progress >&2; touch \"\$0\") &"
+    wait_for() { for _ in $(seq 100); do [ -e "$1" ] && return 0; sleep 0.1; done; return 1; }
+    "$META_BIN" --sequential -i api exec -- sh -c "$late" "$TEST_DIR/live-file" > "$TEST_DIR/live-out" 2>&1
+    wait_for "$TEST_DIR/live-file"
+    grep -q progress "$TEST_DIR/live-out"
+    "$META_BIN" --sequential -i api exec -- sh -c "$late" "$TEST_DIR/live-pipe" 2>&1 | cat > /dev/null
+    wait_for "$TEST_DIR/live-pipe"
+    for order in --sequential --parallel; do
+        "$META_BIN" --silent $order -i api exec -- sh -c "$late" "$TEST_DIR/silent$order-file" > "$TEST_DIR/silent-out" 2>&1
+        wait_for "$TEST_DIR/silent$order-file"
+        "$META_BIN" --silent $order -i api exec -- sh -c "$late" "$TEST_DIR/silent$order-pipe" 2>&1 | cat > /dev/null
+        wait_for "$TEST_DIR/silent$order-pipe"
+    done
 }

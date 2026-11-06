@@ -5,7 +5,7 @@
 //! names the `.git` file back.
 
 use anyhow::Context;
-use meta_plugin::display::escape_path;
+use meta_plugin::display::{escape, escape_path, shell_quote};
 use std::path::{Path, PathBuf};
 
 /// What the `.git` file in `checkout` names, as written (relative to
@@ -177,6 +177,33 @@ pub struct Linked {
     pub common: PathBuf,
 }
 
+/// The command that repairs `checkout` after its workspace moved, for the
+/// end of a sentence: in `<ws>/.worktrees/<set>/<place>` it is a checkout of
+/// the repository at `<ws>/<place>`. Nothing when that isn't where it is, or
+/// that repository isn't there.
+fn repair_advice(checkout: &Path) -> String {
+    let parts: Vec<_> = checkout.components().collect();
+    let Some(at) = parts
+        .iter()
+        .rposition(|part| part.as_os_str() == ".worktrees")
+    else {
+        return String::new();
+    };
+    let workspace: PathBuf = parts.iter().take(at).collect();
+    let place: PathBuf = parts.iter().skip(at + 2).collect();
+    let repo = workspace.join(place);
+    if !repo.join(".git").is_dir() {
+        return String::new();
+    }
+    let quoted = |path: &Path| escape(&shell_quote(&path.to_string_lossy())).into_owned();
+    format!(
+        " After a move, run `git -C {} worktree repair {}`, and the same for the set's other \
+         checkouts",
+        quoted(&repo),
+        quoted(checkout)
+    )
+}
+
 /// Follow the `.git` file of `checkout` to its admin directory and its
 /// repository's git directory, requiring the linked-worktree layout git
 /// keeps: an admin directory with a `HEAD`, a `commondir` naming a git
@@ -187,8 +214,9 @@ pub fn linked(checkout: &Path) -> anyhow::Result<Linked> {
         .with_context(|| format!("{} has no .git file", escape_path(checkout)))?;
     anyhow::ensure!(
         admin.join("HEAD").is_file(),
-        "its git metadata {} is missing; was the repository moved or deleted?",
-        escape_path(&admin)
+        "its git metadata {} is missing; was the repository moved or deleted?{}",
+        escape_path(&admin),
+        repair_advice(checkout)
     );
     let common = std::fs::read_to_string(admin.join("commondir")).with_context(|| {
         if admin.components().any(|c| c.as_os_str() == "modules") {

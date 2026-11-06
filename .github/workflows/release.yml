@@ -63,7 +63,6 @@ jobs:
         run: |
           cargo build --release --target ${{ matrix.target }} -p meta --locked
           cargo build --release --target ${{ matrix.target }} -p meta_git_cli --locked
-          cargo build --release --target ${{ matrix.target }} -p meta_project_cli --locked
           cargo build --release --target ${{ matrix.target }} -p meta_rust_cli --locked
           cargo build --release --target ${{ matrix.target }} -p meta-mcp --locked
           cargo build --release --target ${{ matrix.target }} -p loop_cli --locked
@@ -74,7 +73,6 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dist/
           cp target/${{ matrix.target }}/release/meta-git dist/
-          cp target/${{ matrix.target }}/release/meta-project dist/
           cp target/${{ matrix.target }}/release/meta-cargo dist/
           cp target/${{ matrix.target }}/release/meta-mcp dist/
           cp target/${{ matrix.target }}/release/loop dist/
@@ -108,7 +106,6 @@ jobs:
           mkdir dist
           copy target\${{ matrix.target }}\release\${{ matrix.binary_name }} dist\
           copy target\${{ matrix.target }}\release\meta-git.exe dist\
-          copy target\${{ matrix.target }}\release\meta-project.exe dist\
           copy target\${{ matrix.target }}\release\meta-cargo.exe dist\
           copy target\${{ matrix.target }}\release\meta-mcp.exe dist\
           copy target\${{ matrix.target }}\release\loop.exe dist\
@@ -350,7 +347,6 @@ jobs:
             def install
               bin.install "meta"
               bin.install "meta-git"
-              bin.install "meta-project"
               bin.install "meta-cargo"
               bin.install "meta-mcp"
               bin.install "loop"

@@ -1,9 +1,8 @@
+use crate::here::Listing;
 use log::debug;
-use meta_core::config;
 use meta_core::gitdir::Checkout;
-use meta_plugin::display::escape_path;
 use meta_plugin::RepoUrl;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -88,6 +87,11 @@ pub struct Outcome {
     /// Repositories in a meta repo's folder that no `.meta.yaml` read lists,
     /// and that hold no project one lists
     pub unlisted: Vec<PathBuf>,
+    /// Projects not cloned because their URL holds credentials and was read
+    /// back from meta, which hides them: the name, the folder, and whether
+    /// the config listing it changed in this run (another run gets the URL
+    /// as configured, in its request)
+    pub deferred: Vec<(String, PathBuf, bool)>,
 }
 
 /// The repositories a clone or update finds, and what became of them.
@@ -115,6 +119,13 @@ pub struct CloneQueue {
     /// The folders a selection chose: only their projects are cloned, and
     /// only their meta repos are searched for unlisted repositories
     only: Option<HashSet<PathBuf>>,
+    /// The config meta's `--config` named, and the folder it lists for
+    config: Option<(PathBuf, PathBuf)>,
+    /// Each project's URL as configured, by its folder (resolved): from
+    /// the request, for a URL whose credentials meta hides when it lists it
+    raw: HashMap<PathBuf, RepoUrl>,
+    /// The folders cloned or pulled in this run: their configs may have changed
+    changed: Mutex<HashSet<PathBuf>>,
 }
 
 impl CloneQueue {
@@ -133,7 +144,38 @@ impl CloneQueue {
             meta_depth,
             pull,
             only: None,
+            config: None,
+            raw: HashMap::new(),
+            changed: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// The queue, cloning each of `projects` (meta's members of the
+    /// workspace) from its URL as configured.
+    pub fn raw(mut self, projects: &[meta_plugin::Project]) -> Self {
+        self.raw = projects
+            .iter()
+            .filter_map(|p| Some((resolved(&p.abs), RepoUrl::from(p.repo.clone()?))))
+            .collect();
+        self
+    }
+
+    /// The queue, reading the projects of the folder `dir` from `config`
+    /// (meta's `--config`) instead of its default config.
+    pub fn config(mut self, dir: &Path, config: &Path) -> Self {
+        self.config = Some((resolved(dir), config.to_path_buf()));
+        self
+    }
+
+    /// What the config in `dir` lists (`--config`'s for its folder), as
+    /// meta reads it; `None` without one.
+    fn listing(&self, dir: &Path) -> anyhow::Result<Option<Listing>> {
+        let config = self
+            .config
+            .as_ref()
+            .filter(|(at, _)| *at == resolved(dir))
+            .map(|(_, config)| config.as_path());
+        Listing::of(dir, config)
     }
 
     /// The queue, keeping to the folders `dirs` (a selection's).
@@ -209,20 +251,24 @@ impl CloneQueue {
 
     /// The tasks for the projects of the `.meta.yaml` in `dir`, at `level`,
     /// below the meta repos `above` (the one at `dir` last).
+    #[cfg(test)]
     pub fn discover(
         &self,
         dir: &Path,
         level: usize,
         above: &Arc<[MetaRepo]>,
     ) -> anyhow::Result<Vec<CloneTask>> {
-        if self.meta_depth.is_some_and(|max| level > max) {
+        if !self.reads(level) {
             debug!("Skipping nested discovery at depth {level}");
             return Ok(Vec::new());
         }
-        match config::Workspace::in_dir(dir)? {
-            Some(workspace) => self.discover_in(&workspace, level, above),
+        match self.listing(dir)? {
+            Some(listing) => self.discover_in(&listing, level, above),
             None => {
-                debug!("No .meta.yaml found in {}", escape_path(dir));
+                debug!(
+                    "No .meta.yaml found in {}",
+                    meta_plugin::display::escape_path(dir)
+                );
                 Ok(Vec::new())
             }
         }
@@ -231,7 +277,7 @@ impl CloneQueue {
     /// [`Self::discover`], for a workspace already loaded.
     pub fn discover_in(
         &self,
-        workspace: &config::Workspace,
+        workspace: &Listing,
         level: usize,
         above: &Arc<[MetaRepo]>,
     ) -> anyhow::Result<Vec<CloneTask>> {
@@ -244,6 +290,33 @@ impl CloneQueue {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push(resolved(&target_path));
+            // a URL meta read back hides its credentials: the one configured
+            // is in the request, or in the request of another run
+            let mut project = project.clone();
+            if workspace.asked && project.repo.as_ref().is_some_and(RepoUrl::has_credentials) {
+                match self.raw.get(&resolved(&target_path)) {
+                    Some(url) => project.repo = Some(url.clone()),
+                    None => {
+                        let absent = matches!(Checkout::of(&target_path), Checkout::Missing)
+                            || is_empty_dir(&target_path);
+                        if absent && self.selected(&target_path) {
+                            let new = self
+                                .changed
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .contains(&resolved(base_dir));
+                            self.record(|o| {
+                                o.deferred
+                                    .push((project.name.clone(), target_path.clone(), new))
+                            });
+                            continue;
+                        }
+                        // cloned already: only its folder counts
+                        project.repo = None;
+                    }
+                }
+            }
+            let project = &project;
 
             let work = match Checkout::of(&target_path) {
                 Checkout::Repo { .. } if self.pull => Work::Pull,
@@ -251,7 +324,7 @@ impl CloneQueue {
                 Checkout::Repo { .. } => {
                     if self.claim(&target_path) {
                         let this = MetaRepo::at(&project.name, &target_path, project.repo.clone());
-                        tasks.extend(self.enter(this, &target_path, level + 1, above)?);
+                        tasks.extend(self.enter(this, &target_path, level + 1, above)?.0);
                     }
                     continue;
                 }
@@ -308,21 +381,20 @@ impl CloneQueue {
     /// .meta.yaml lists counts as listed too, so `--config` with a smaller
     /// list never makes a listed project unlisted; when that .meta.yaml
     /// can't be read, none is recorded.
-    fn note_unlisted(&self, workspace: &config::Workspace) {
+    fn note_unlisted(&self, workspace: &Listing) {
         if !self.selected(&workspace.dir) {
             return;
         }
-        let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let default = match config::find_meta_config_in(&workspace.dir) {
-            Ok(found) => found.filter(|path| real(path) != real(&workspace.config_path)),
-            Err(_) => return,
-        };
-        let default = match default
-            .map(|path| config::Workspace::load(&path))
-            .transpose()
-        {
-            Ok(default) => default,
-            Err(_) => return,
+        let named = self
+            .config
+            .as_ref()
+            .is_some_and(|(at, _)| *at == resolved(&workspace.dir));
+        let default = match named {
+            true => match Listing::of(&workspace.dir, None) {
+                Ok(default) => default,
+                Err(_) => return,
+            },
+            false => None,
         };
         let listed: HashSet<&str> = workspace
             .projects
@@ -370,16 +442,18 @@ impl CloneQueue {
             Work::Pull => o.pulled += 1,
             Work::Clone(_) => o.cloned.push(task.target_path.clone()),
         });
-        let found = self.nested(task);
+        self.changed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(resolved(&task.target_path));
+        let (found, listed) = self.read_nested(task);
 
         // Warn if the config declared meta: true but no nested .meta.yaml was found
-        if task.is_meta && found.is_empty() && task.level > 0 && self.reads(task.level) {
-            if let Ok(None) = config::find_meta_config_in(&task.target_path) {
-                meta_plugin::out::warn(format!(
-                    "'{}' is declared with `meta: true` but no .meta.yaml was found inside it",
-                    meta_plugin::display::escape(&task.name)
-                ));
-            }
+        if task.is_meta && task.level > 0 && self.reads(task.level) && !listed {
+            meta_plugin::out::warn(format!(
+                "'{}' is declared with `meta: true` but no .meta.yaml was found inside it",
+                meta_plugin::display::escape(&task.name)
+            ));
         }
         found
     }
@@ -387,34 +461,47 @@ impl CloneQueue {
     /// The tasks for the projects of the `.meta.yaml` in `task`'s folder; a
     /// config that can't be read is recorded.
     fn nested(&self, task: &CloneTask) -> Vec<CloneTask> {
+        self.read_nested(task).0
+    }
+
+    /// [`Self::nested`], and whether the folder has a config (one that
+    /// can't be read has one).
+    fn read_nested(&self, task: &CloneTask) -> (Vec<CloneTask>, bool) {
         let this = MetaRepo::at(&task.name, &task.target_path, task.url.clone());
         let found = self
             .enter(this, &task.target_path, task.level, &task.above)
             .unwrap_or_else(|e| {
                 self.record(|o| o.unreadable.push(format!("{}: {e:#}", task.name)));
-                Vec::new()
+                (Vec::new(), true)
             });
-        debug!("{}: {} nested tasks discovered", task.name, found.len());
+        debug!("{}: {} nested tasks discovered", task.name, found.0.len());
         found
     }
 
     /// The tasks for the projects of the `.meta.yaml` of `this`, the meta
     /// repo at `dir`, at `level` below `above`; none if `this` has one and
-    /// is one of `above`, which is recorded as a cycle.
+    /// is one of `above`, which is recorded as a cycle. And whether it has
+    /// one (as far as it was read: not past the depth).
     fn enter(
         &self,
         this: MetaRepo,
         dir: &Path,
         level: usize,
         above: &[MetaRepo],
-    ) -> anyhow::Result<Vec<CloneTask>> {
-        if self.reads(level)
-            && config::find_meta_config_in(dir)?.is_some()
-            && self.repeats(&this, above)
-        {
-            return Ok(Vec::new());
+    ) -> anyhow::Result<(Vec<CloneTask>, bool)> {
+        if !self.reads(level) {
+            return Ok((Vec::new(), true));
         }
-        self.discover(dir, level, &below(above, this))
+        let Some(listing) = self.listing(dir)? else {
+            return Ok((Vec::new(), false));
+        };
+        if self.repeats(&this, above) {
+            return Ok((Vec::new(), true));
+        }
+        Ok((
+            self.discover_in(&listing, level, &below(above, this))?,
+            true,
+        ))
     }
 
     /// Whether `this` is one of the meta repos `above`, by folder or URL;
@@ -522,7 +609,10 @@ pub fn is_empty_dir(dir: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// The top of a test's tree. The configs are read by meta: the one
+    /// built beside this test (`cargo build --workspace --bins` first).
     fn top(dir: &Path, url: Option<&str>) -> Arc<[MetaRepo]> {
+        crate::here::tests::use_built_meta();
         Arc::from([MetaRepo::at("ws", dir, url.map(RepoUrl::from))])
     }
 
@@ -809,6 +899,26 @@ mod tests {
         let queue = CloneQueue::new(None, None, false);
         queue.discover(&dir, 0, &top(&dir, None)).unwrap();
         assert_eq!(queue.outcome().unlisted, [dir.join("stray")]);
+    }
+
+    #[test]
+    fn a_repository_that_holds_a_project_put_off_for_its_credentials_is_no_leftover() {
+        // the project libs/x isn't cloned: its URL's credentials are hidden
+        let sandbox = meta_plugin::testing::isolated!();
+        let dir = sandbox.work();
+        for name in ["libs", "stray"] {
+            std::fs::create_dir(dir.join(name)).unwrap();
+            sandbox.git(&dir.join(name), &["init", "-q"]);
+        }
+        write_meta(
+            &dir,
+            r#"{"projects": {"x": {"repo": "https://me:secret@example.invalid/x.git", "path": "libs/x"}}}"#,
+        );
+        let queue = CloneQueue::new(None, None, false);
+        queue.discover(&dir, 0, &top(&dir, None)).unwrap();
+        let outcome = queue.outcome();
+        assert_eq!(outcome.deferred.len(), 1);
+        assert_eq!(outcome.unlisted, [dir.join("stray")]);
     }
 
     #[test]

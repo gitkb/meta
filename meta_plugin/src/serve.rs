@@ -184,6 +184,11 @@ fn serve(plugin: &PluginDefinition) -> anyhow::Result<()> {
             Ok(())
         }
         Some("--meta-plugin-exec") => execute(plugin),
+        #[cfg(feature = "client")]
+        Some(crate::client::FINISH_FLAG) => {
+            let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
+            crate::client::finish(&args)
+        }
         Some("--help" | "-h") => Ok(crate::out!(
             "{}",
             crate::help_text(&plugin.info.name, &plugin.info)
@@ -204,6 +209,9 @@ fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
             "cannot pass signals on to the programs this plugin starts: {e}"
         ));
     }
+    // a plugin's call ends with its meta
+    #[cfg(all(unix, feature = "process"))]
+    crate::process::end_with_parent();
     let var = |name: &str| {
         std::env::var_os(name)
             .with_context(|| format!("{name} is not set: meta starts plugins with it"))

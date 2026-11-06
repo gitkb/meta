@@ -269,7 +269,7 @@ EOF
     # silenced, there is no summary: the error says it
     run "$META_BIN" --silent --include api exec -- sh -c 'exit 3'
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Error: At least one command failed"* ]]
+    [ "$output" = "Error: 1 command failed: api" ]
 }
 
 @test "a failure every repo shares prints once; different failures print per repo" {

@@ -251,7 +251,7 @@ fn test_execute_command_in_directory_capturing() {
 fn test_execute_command_in_directory_capturing_stderr() {
     let config = LoopConfig {
         verbose: false,
-        silent: true,
+        silent: false,
         ..Default::default()
     };
     let temp_dir = TempDir::new().unwrap();

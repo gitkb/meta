@@ -50,7 +50,7 @@ impl Report {
     /// End the command: under `--json` print the Envelope (only the row
     /// fields `fields` names, when it names any); then the error that ends
     /// meta, if it failed. In text mode a failure not yet told is reported
-    /// as meta's error (`Error: …`); `silent` says a told one once more,
+    /// as meta's error (`Error: …`); `silent` names the repos of a told one,
     /// as the summary was not shown.
     pub fn finish(
         self,
@@ -61,18 +61,12 @@ impl Report {
         use crate::events::Show;
         let told = self.told;
         let json = show != Show::Text;
-        // silenced, the first failure's name and why, as its summary line
-        let first_failure = self.results.iter().find(|r| r.error.is_some()).map(|r| {
-            format!(
-                "{}: {}",
-                // named as the summary names it: ./api, . for the root
-                match r.project.as_deref() {
-                    None | Some(".") => ".".to_string(),
-                    Some(path) => format!("./{}", meta_plugin::display::escape(path)),
-                },
-                last_line(r.stderr.as_deref())
-            )
-        });
+        let failed: Vec<String> = self
+            .results
+            .iter()
+            .filter(|r| r.error.is_some())
+            .map(|r| meta_plugin::display::escape(r.project.as_deref().unwrap_or(".")).into_owned())
+            .collect();
         let envelope = self.envelope();
         match show {
             Show::Text => {}
@@ -84,10 +78,7 @@ impl Report {
         };
         let code = error.code.exit_code();
         match (json, told, silent) {
-            (false, true, true) => match first_failure {
-                Some(why) => anyhow::bail!("At least one command failed: {why}"),
-                None => anyhow::bail!("At least one command failed"),
-            },
+            (false, true, true) => anyhow::bail!("{}", loop_lib::failed_line(&failed)),
             // the hint said under the error, as one
             (false, false, _) => Err(ErrorInfo {
                 message: match &error.hint {
@@ -103,19 +94,4 @@ impl Report {
             _ => Err(meta_plugin::exit::ExitWith(code).into()),
         }
     }
-}
-
-/// The last line of `stderr` that has anything on it, escaped, or that
-/// there was none.
-fn last_line(stderr: Option<&str>) -> String {
-    stderr
-        .unwrap_or_default()
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map_or_else(
-            || "no stderr".to_string(),
-            |line| meta_plugin::display::escape(line).into_owned(),
-        )
 }

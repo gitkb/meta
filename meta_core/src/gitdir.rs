@@ -185,7 +185,7 @@ fn repair_advice(checkout: &Path) -> String {
     let parts: Vec<_> = checkout.components().collect();
     let Some(at) = parts
         .iter()
-        .position(|part| part.as_os_str() == ".worktrees")
+        .rposition(|part| part.as_os_str() == ".worktrees")
     else {
         return String::new();
     };

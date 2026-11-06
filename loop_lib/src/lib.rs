@@ -18,10 +18,6 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// How much of a command's stderr that isn't captured whole is kept to say why it failed:
-/// its end, the last 64 KiB.
-const SILENT_TAIL: usize = 64 << 10;
-
 /// A write to command-output stdout failed (meta's one stdout error).
 pub use meta_plugin::out::StdoutError;
 
@@ -661,22 +657,15 @@ fn execute_in_directory(
         meta_plugin::out::flush()?;
     }
 
-    // Live, its stderr the user's own, unless silenced: then only the end
-    // of its stderr is kept, to say why it failed
+    // Live, its output the user's own, unless silenced: then it goes nowhere
     let ran = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
-        let started = match config.silent {
-            true => {
-                meta_plugin::process::status_keeping_stderr(cmd.stdout(Stdio::null()), SILENT_TAIL)
-            }
-            false => meta_plugin::process::status(&mut cmd).map(|status| (status, Vec::new())),
-        };
-        started.map_err(|e| match TooMuchOutput::of(&e) {
-            Some(over) => anyhow::Error::new(over),
-            None => anyhow::anyhow!(not_started(&argv, &e)),
-        })
+        if config.silent {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+        meta_plugin::process::status(&mut cmd).map_err(|e| anyhow::anyhow!(not_started(&argv, &e)))
     });
     let result = match ran {
-        Ok((status, stderr)) => {
+        Ok(status) => {
             let (exit_code, signal) = exit_of(status);
             CommandResult {
                 success: accepted(exit_code, signal, ok_codes),
@@ -686,20 +675,16 @@ fn execute_in_directory(
                 directory: dir.to_path_buf(),
                 command,
                 argv,
-                stderr,
-                live: !config.silent,
+                live: true,
                 ..Default::default()
             }
         }
-        Err(e) => match e.downcast::<TooMuchOutput>() {
-            Ok(over) => too_much(dir, command, argv, over),
-            Err(e) => {
-                if !config.silent {
-                    errln!("{e:#}");
-                }
-                failed_result(dir, command, format!("{e:#}\n"))
+        Err(e) => {
+            if !config.silent {
+                errln!("{e:#}");
             }
-        },
+            failed_result(dir, command, format!("{e:#}\n"))
+        }
     };
 
     // A failure is said under what the command printed; the summary
@@ -767,17 +752,18 @@ fn capture_in_directory(
     // loop_lib is tool-agnostic.
     meta_plugin::out::pass_color(&mut cmd_builder);
 
-    // Silenced (and no JSON wants its output): never stopped for what it
-    // writes, as it ran to its end before; only its stderr's end is kept
+    // Silenced (and no JSON wants its output): it goes nowhere, nothing held
     let output = match config.silent && !config.json_output {
-        true => meta_plugin::process::status_keeping_stderr(
-            cmd_builder.stdin(Stdio::null()).stdout(Stdio::null()),
-            SILENT_TAIL,
+        true => meta_plugin::process::status(
+            cmd_builder
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
         )
-        .map(|(status, stderr)| std::process::Output {
+        .map(|status| std::process::Output {
             status,
             stdout: Vec::new(),
-            stderr,
+            stderr: Vec::new(),
         }),
         false => meta_plugin::process::output(&mut cmd_builder),
     };
@@ -915,18 +901,15 @@ impl Outcome {
     }
 
     /// The run's end for a caller that shows text: done, or the failure the
-    /// summary already named (said once more when output is silenced).
+    /// summary already named (with output silenced, the repos that failed).
     pub fn finish(&self) -> Result<()> {
         match self.error() {
             None => Ok(()),
-            Some(_) if self.silent => match self.results.iter().find(|r| !r.success) {
-                Some(first) => anyhow::bail!(
-                    "At least one command failed: {}{}",
-                    escape_path(&first.directory),
-                    first.why()
-                ),
-                None => anyhow::bail!("At least one command failed"),
-            },
+            Some(_) if self.silent => {
+                let failed = self.results.iter().filter(|r| !r.success);
+                let names: Vec<String> = failed.map(|r| escape_path(&r.directory)).collect();
+                anyhow::bail!("{}", failed_line(&names))
+            }
             Some(_) => Err(meta_plugin::exit::ExitWith(1).into()),
         }
     }
@@ -1182,9 +1165,6 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<Outc
     if text && !config.silent {
         print_summary(config, &results)?;
     }
-    if text && config.silent {
-        print_silenced_failures(config, &results);
-    }
     if let Some(tip) = tip.as_ref().filter(|_| text) {
         meta_plugin::out::flush()?;
         errln!(
@@ -1298,25 +1278,13 @@ fn print_captured(config: &LoopConfig, results: &[CommandResult]) -> Result<()> 
     Ok(())
 }
 
-/// With output silenced, each failed command still says why, on stderr:
-/// its name, how it ended, and its stderr.
-fn print_silenced_failures(config: &LoopConfig, results: &[CommandResult]) {
-    for result in results.iter().filter(|r| !r.success) {
-        errln!(
-            "{} {}: {} ({}){}",
-            meta_plugin::out::label("✗", |l| l.red()),
-            result_name(&result.directory, config.root_dir.as_deref()),
-            escape(&result.command),
-            result.ending(),
-            result.why()
-        );
-        match result.too_much_output {
-            Some(over) => errln!("{over}"),
-            None => meta_plugin::out::stderr_bytes(&result.stderr),
-        }
-        if !result.stderr.ends_with(b"\n") && !result.stderr.is_empty() {
-            errln!();
-        }
+/// The closing error of a silenced run: how many commands failed and where,
+/// `2 commands failed: app, platform`.
+pub fn failed_line(names: &[String]) -> String {
+    match names {
+        [] => "At least one command failed".to_string(),
+        [one] => format!("1 command failed: {one}"),
+        many => format!("{} commands failed: {}", many.len(), many.join(", ")),
     }
 }
 

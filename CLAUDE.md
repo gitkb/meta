@@ -65,7 +65,6 @@ RUST_LOG=meta_git_cli::ssh=debug meta git push
 **Crate names for RUST_LOG:**
 - `meta` - Host CLI (meta_cli)
 - `meta_git_cli` - Git plugin
-- `meta_project_cli` - Project plugin
 - `meta_rust_cli` - Rust plugin
 - `loop_lib` - Command execution library
 

@@ -78,7 +78,7 @@ fn tied(text: &str, why: &str, repo: &str) -> bool {
 }
 
 #[test]
-fn a_failed_commands_stderr_is_shown_with_its_repo_in_every_output_mode() {
+fn a_failed_commands_stderr_is_shown_with_its_repo_unless_silenced() {
     let sandbox = Sandbox::new();
     let root = workspace(&sandbox);
     let failing = r#"echo "why-$(basename "$PWD")" >&2; exit 1"#;
@@ -125,7 +125,10 @@ fn a_failed_commands_stderr_is_shown_with_its_repo_in_every_output_mode() {
                 let text = combined(&sandbox, &root, &exec);
                 for repo in ["a", "b"] {
                     let why = format!("why-{repo}");
-                    assert!(tied(&text, &why, &format!("./{repo}")), "{say}:\n{text}");
+                    match mode {
+                        "--silent" => assert!(!text.contains(&why), "{say}:\n{text}"),
+                        _ => assert!(tied(&text, &why, &format!("./{repo}")), "{say}:\n{text}"),
+                    }
                 }
                 assert!(
                     combined(&sandbox, &root, &args).contains("plugin-boom"),
@@ -192,14 +195,13 @@ fn a_closed_stdout_ends_meta_promptly_with_an_endless_command() {
     }
 }
 
-/// A silenced command (`--silent`, one at a time) is never stopped for what
-/// it writes, as before meta kept its stderr: it runs to its end, and only
-/// the end of its stderr is kept to say why it failed.
+/// A silenced command is never stopped for what it writes: it goes nowhere,
+/// nothing of it is held, and the command runs to its end.
 #[test]
 fn a_silenced_command_runs_to_its_end_however_much_it_writes() {
     let sandbox = Sandbox::new();
     let root = workspace(&sandbox);
-    let chatty = r#"head -c 17000000 /dev/zero | tr '\0' x >&2; echo; echo "last-$(basename "$PWD")" >&2; touch finished; exit 1"#;
+    let chatty = r#"head -c 17000000 /dev/zero | tr '\0' x >&2; touch finished; exit 1"#;
     // in meta's default order, at once, and one at a time
     for order in [None, Some("--parallel"), Some("--sequential")] {
         let mut args = vec!["--silent"];
@@ -212,49 +214,32 @@ fn a_silenced_command_runs_to_its_end_however_much_it_writes() {
             let finished = root.join(repo).join("finished");
             assert!(finished.exists(), "{order:?}: {repo} was stopped");
             std::fs::remove_file(finished).unwrap();
-            assert!(
-                text.contains(&format!("last-{repo}")),
-                "{order:?}: {repo}'s end is shown"
-            );
         }
         assert!(!text.contains("16 MiB"), "{order:?}: {}", text.len());
     }
 }
 
-/// Silenced, each failed repo's line and the closing error still say why:
-/// the last line of its stderr, or that it wrote none.
+/// Silenced, in every order, nothing of a command is shown: the one line is
+/// the closing error, naming the repos that failed and nothing they wrote.
 #[test]
-fn silenced_failures_say_why_or_that_there_was_no_stderr() {
+fn a_silenced_run_ends_with_the_repos_that_failed_and_nothing_they_wrote() {
     let sandbox = Sandbox::new();
     let root = workspace(&sandbox);
-    for (failing, why) in [
-        (
-            r#"printf "LAST diagnostic\n" >&2; exit 1"#,
-            "LAST diagnostic",
-        ),
-        ("exit 1", "no stderr"),
-    ] {
-        let out = meta(
-            &sandbox,
-            &root,
-            &["--silent", "-i", "a", "exec", "--", "sh", "-c", failing],
-        )
-        .output()
-        .unwrap();
-        assert!(!out.status.success());
-        let text = String::from_utf8_lossy(&out.stderr);
-        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.contains("./a") && l.ends_with(&format!(": {why}"))),
-            "{text}"
-        );
-        assert_eq!(
-            lines.last().copied(),
-            Some(format!("Error: At least one command failed: ./a: {why}").as_str()),
-            "{text}"
-        );
+    let failing = "echo out-text; echo err-text >&2; exit 1";
+    for order in ["--parallel", "--sequential"] {
+        for (repos, closing) in [
+            ("a", "Error: 1 command failed: a"),
+            ("a,b", "Error: 2 commands failed: a, b"),
+        ] {
+            let args = [
+                "--silent", order, "-i", repos, "exec", "--", "sh", "-c", failing,
+            ];
+            let out = meta(&sandbox, &root, &args).output().unwrap();
+            assert!(!out.status.success());
+            assert_eq!(String::from_utf8_lossy(&out.stdout), "", "{order}");
+            let text = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(text.trim_end(), closing, "{order}");
+        }
     }
 }
 
@@ -265,10 +250,7 @@ fn a_silenced_command_that_leaves_a_background_program_ends_meta_promptly() {
     let sandbox = Sandbox::new();
     let root = workspace(&sandbox);
     let pids = sandbox.work().join("background.pid");
-    let script = format!(
-        r#"sleep 60 & echo $! >> "{}"; echo why >&2; exit 1"#,
-        pids.display()
-    );
+    let script = format!(r#"sleep 60 & echo $! >> "{}"; exit 1"#, pids.display());
     let started = std::time::Instant::now();
     let out = meta(
         &sandbox,
@@ -287,6 +269,5 @@ fn a_silenced_command_that_leaves_a_background_program_ends_meta_promptly() {
         }
     }
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("why"));
     assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
 }

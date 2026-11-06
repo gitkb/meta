@@ -253,8 +253,9 @@ fn target_with(
         )
         .into());
     };
+    let (root, members) = whole_tree(&config);
     if no_set {
-        refuse_in_worktrees_folder(&config, start)?;
+        refuse_outside_workspace(&config, start, &root, &members)?;
     }
     if cli.verbose {
         errln!(
@@ -265,7 +266,6 @@ fn target_with(
     // From the config already loaded (the default or --config's): -r into
     // the meta repos nested under it, -A from the outermost one
     let parallel = parallel(Some(&config));
-    let (root, members) = whole_tree(&config);
     let reach = Reach::of(config, cli.recursive, cli.all, cli.depth)?;
     let repos = reach.select(filters, crate::with_all)?;
     let depth = match cli.recursive || cli.all {
@@ -282,34 +282,75 @@ fn target_with(
     })
 }
 
-/// A folder below `config`'s worktrees folder that is no set meta can name
-/// is not the workspace either: a command started there is refused, never
-/// run in the workspace above it.
-fn refuse_in_worktrees_folder(config: &Config, start: &Path) -> Result<()> {
-    let owner = worktree::Configs::of(config.clone())
-        .map(|configs| configs.owner)
-        .unwrap_or_else(|_| config.clone());
-    let Some(sets) = worktree::resolve_worktree_root(Some(&owner), &config.dir)
-        .ok()
-        .and_then(|dir| dir.canonicalize().ok())
+/// A command runs in a workspace only from the workspace's own folders. A
+/// folder below `config`'s that holds a checkout of one of its projects, or
+/// that is in its worktrees folder, is not one: unless it is a set meta can
+/// name (looked for first), a command started there is refused, never run in
+/// the workspace above it.
+fn refuse_outside_workspace(
+    config: &Config,
+    start: &Path,
+    root: &Path,
+    members: &[Candidate],
+) -> Result<()> {
+    let Some(folder) = holder_of_checkouts(config, start, root, members)
+        .or_else(|| in_worktrees_folder(config, start))
     else {
         return Ok(());
     };
-    let (Ok(here), Ok(home)) = (start.canonicalize(), config.dir.canonicalize()) else {
-        return Ok(());
-    };
-    if here == sets || !here.starts_with(&sets) || home.starts_with(&sets) {
-        return Ok(());
-    }
     Err(ErrorInfo::new(
         ErrorCode::Conflict,
         format!(
-            "{} is in the worktrees folder {} but in no set meta can name; --primary runs in the workspace",
-            escape_path(start),
-            escape_path(&sets)
+            "{} is in no set meta can name and is not the workspace {}: add --primary to run in the workspace, or run from there",
+            escape_path(&folder),
+            escape_path(&config.dir)
         ),
     )
     .into())
+}
+
+/// The nearest folder at or above `start`, below `config`'s, with a linked
+/// checkout (`.git` is a file) at the place of one of `members`: named from
+/// the outermost workspace `root`, or from `config`'s own folder.
+fn holder_of_checkouts(
+    config: &Config,
+    start: &Path,
+    root: &Path,
+    members: &[Candidate],
+) -> Option<PathBuf> {
+    let places: Vec<&Path> = members
+        .iter()
+        .flat_map(|member| [root, &config.dir].map(|from| member.dir.strip_prefix(from)))
+        .flatten()
+        .filter(|place| !place.as_os_str().is_empty())
+        .collect();
+    start
+        .ancestors()
+        .take_while(|dir| dir.starts_with(&config.dir) && *dir != config.dir)
+        .find(|dir| {
+            places
+                .iter()
+                .any(|place| dir.join(place).join(".git").is_file())
+        })
+        .map(Path::to_path_buf)
+}
+
+/// The folder of `config`'s worktrees folder that `start` is in, if any.
+fn in_worktrees_folder(config: &Config, start: &Path) -> Option<PathBuf> {
+    let owner = worktree::Configs::of(config.clone())
+        .map(|configs| configs.owner)
+        .unwrap_or_else(|_| config.clone());
+    let sets = worktree::resolve_worktree_root(Some(&owner), &config.dir)
+        .ok()?
+        .canonicalize()
+        .ok()?;
+    let here = start.canonicalize().ok()?;
+    let home = config.dir.canonicalize().ok()?;
+    if home.starts_with(&sets) {
+        return None;
+    }
+    let folder = here.strip_prefix(&sets).ok()?.components().next()?;
+    Some(sets.join(folder))
 }
 
 /// The members of the set `name` at `set_dir` that `filters` select, as

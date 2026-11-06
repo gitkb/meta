@@ -1603,7 +1603,10 @@ mod tests {
         let manifest = host_manifest();
         let mut differences = Vec::new();
         for (name, command) in &manifest.commands {
-            let clap = clap_of(name).unwrap_or_else(|| panic!("{name}: no clap type"));
+            let Some(clap) = clap_of(name) else {
+                differences.push(format!("{name}: no clap type"));
+                continue;
+            };
             let found = meta_plugin::parser::differences(&command.summary, &command.options, &clap);
             differences.extend(found.into_iter().map(|d| format!("{name}: {d}")));
         }

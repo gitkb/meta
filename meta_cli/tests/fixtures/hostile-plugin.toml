@@ -22,7 +22,7 @@ options = [
 [commands."self"]
 summary = "A variant Rust keeps for itself"
 
-[commands."hyphen-ated sub-command"]
+[commands."hyphen-ated sub-cmd"]
 summary = "Every type"
 options = [
   { long = "a-string", value = "S", default = "x" },

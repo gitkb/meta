@@ -112,7 +112,8 @@ fn command_structure(name: &str, command: &Command) -> Result<String, String> {
 fn structure(name: &str, doc: &str, options: &[Opt], strict: bool) -> Result<String, String> {
     let mut code = String::new();
     let mut fields = Names::default();
-    let _ = writeln!(code, "\n#[doc = {doc:?}]");
+    code.push('\n');
+    code.push_str(&doc_line("", doc));
     let _ = writeln!(
         code,
         "#[derive(Debug, Clone, PartialEq, ::serde::Deserialize)]"
@@ -126,12 +127,20 @@ fn structure(name: &str, doc: &str, options: &[Opt], strict: bool) -> Result<Str
         fields.take(&field)?;
         let (kind, attributes) = field_type(option);
         let id = option.id();
-        let _ = writeln!(code, "    #[doc = {:?}]", option.help);
+        code.push_str(&doc_line("    ", &option.help));
         let _ = writeln!(code, "    #[serde(rename = {id:?}{attributes})]");
         let _ = writeln!(code, "    pub {field}: {kind},");
     }
     code.push_str("}\n");
     Ok(code)
+}
+
+/// `text` as a doc attribute, when there is any.
+fn doc_line(indent: &str, text: &str) -> String {
+    match text.is_empty() {
+        true => String::new(),
+        false => format!("{indent}#[doc = {text:?}]\n"),
+    }
 }
 
 /// The Rust type of `option`, and what its field needs from serde.
@@ -204,7 +213,7 @@ fn variant(name: &str) -> String {
     }
     let starts_badly = pascal.chars().next().is_none_or(|c| !c.is_alphabetic());
     match starts_badly || pascal == "Self" {
-        true => format!("Command{pascal}"),
+        true => format!("Cmd{pascal}"),
         false => pascal,
     }
 }
@@ -250,8 +259,8 @@ mod tests {
     #[test]
     fn names_are_rust_whatever_the_manifest_says() {
         assert_eq!(variant("git worktree-list"), "GitWorktreeList");
-        assert_eq!(variant("2fa"), "Command2fa");
-        assert_eq!(variant("self"), "CommandSelf");
+        assert_eq!(variant("2fa"), "Cmd2fa");
+        assert_eq!(variant("self"), "CmdSelf");
         assert_eq!(field("every-repo"), "every_repo");
         assert_eq!(field("type"), "r#type");
         assert_eq!(field("self"), "self_");

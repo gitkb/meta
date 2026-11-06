@@ -3,12 +3,11 @@
 //! request's options by the manifest's names.
 
 #![expect(
-    clippy::unwrap_used,
+    clippy::panic,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 
 mod hostile {
-    #![expect(dead_code, reason = "only some of the fields are read")]
     include!(concat!(env!("OUT_DIR"), "/hostile.rs"));
 }
 
@@ -38,8 +37,8 @@ fn each_option_type_is_its_rust_type() {
                          "a-required-path": "/p", "some-paths": ["/a"], "a-duration": 60,
                          "durations": [1, 2], "first": "f",
                          "the-rest": [{"text": "w"}]});
-    let decoded = Command::decode("hyphen-ated sub-command", options);
-    let Some(Command::HyphenAtedSubCommand(all)) = decoded.unwrap() else {
+    let decoded = Command::decode("hyphen-ated sub-cmd", options);
+    let Some(Command::HyphenAtedSubCmd(all)) = decoded.unwrap() else {
         panic!("not the command");
     };
     assert_eq!(all.an_int, Some(-1));

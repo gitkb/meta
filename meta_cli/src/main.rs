@@ -70,7 +70,24 @@ pub fn command_line() -> clap::Command {
              what follows the command belongs to it.",
         )
         .args(meta_plugin::parser::args(&manifest.meta_options));
-    Commands::augment_subcommands(meta)
+    answered_by_meta(Commands::augment_subcommands(meta), true)
+}
+
+/// `command`, with the help of each command under it saying that meta
+/// answers it, as a plugin's does (`root`: meta's own help says nothing).
+fn answered_by_meta(command: clap::Command, root: bool) -> clap::Command {
+    let names: Vec<String> = command
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_string())
+        .collect();
+    let line = format!("answered by: meta {}", VERSION.trim());
+    let command = match root {
+        true => command,
+        false => command.before_help(line),
+    };
+    names.into_iter().fold(command, |command, name| {
+        command.mut_subcommand(name, |sub| answered_by_meta(sub, false))
+    })
 }
 
 /// What `matches` (of [`command_line`]) says: meta's options, and the command.
@@ -642,9 +659,20 @@ fn help(
         return Ok(());
     }
     if cli.json {
-        let index = index::load(plugins);
+        let mut index = index::load(plugins);
         let answer = match words.is_empty() {
-            true => Some(index.clone()),
+            true => {
+                // as `meta help`, which starts each file for its info, says
+                let unanswered = plugins.probed().1.into_iter();
+                index
+                    .problems
+                    .extend(unanswered.map(|(path, e)| meta_plugin::manifest::Problem {
+                        place: path.to_string_lossy().into_owned(),
+                        command: None,
+                        message: format!("{e:#}"),
+                    }));
+                Some(index)
+            }
             false => index::about(&index, words),
         };
         if let Some(answer) = answer {
@@ -701,10 +729,8 @@ fn option_after_help(words: &[String]) -> Option<meta_plugin::ErrorInfo> {
         let spelled = |o: &meta_plugin::args::MetaOption| o.spellings.iter().any(|s| s == spelling);
         meta.options.iter().any(spelled)
     };
-    let rejected = words
-        .iter()
-        .take_while(|word| *word != "--")
-        .find(|word| is_meta(word))?;
+    // later words are the command's: `git clone` has a --depth of its own
+    let rejected = words.first().filter(|word| is_meta(word))?;
     let line: Vec<String> = std::iter::once("help".to_string())
         .chain(words.iter().cloned())
         .collect();
@@ -754,8 +780,8 @@ fn plugin_command(
 }
 
 /// The `answered by:` line that opens the help of `args` (empty under
-/// `--json`, where the help alone is the Envelope's message): from the
-/// index, or for a file with no manifest, from what it says of itself.
+/// `--json`, where the help alone is the Envelope's message): `plugin`, what
+/// the router found for them and so what really runs.
 fn answered_by(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> String {
     if cli.json {
         return String::new();
@@ -765,22 +791,21 @@ fn answered_by(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> String 
         .take_while(|arg| !matches!(arg.as_str(), "--" | "--help" | "-h"))
         .cloned()
         .collect();
-    let line = SubprocessPluginManager::new(false)
+    // what the plugin's own manifest says of the command
+    let notes = SubprocessPluginManager::new(false)
         .ok()
         .and_then(|plugins| {
             let index = index::load(&plugins);
             let (held, _) = index::resolve(&index, &typed)?;
-            Some(index::answered_by(held, &typed))
+            (held.provider.name == plugin.word).then(|| index::noted(held))
         });
-    let line = line.unwrap_or_else(|| {
-        format!(
-            "answered by: {} {} ({})",
-            escape(&plugin.word),
-            escape(&plugin.info.version),
-            escape_path(&plugin.path)
-        )
-    });
-    format!("{line}\n\n")
+    format!(
+        "answered by: {} {} ({}){}\n\n",
+        escape(&plugin.word),
+        escape(&plugin.info.version),
+        escape_path(&plugin.path),
+        escape(&notes.unwrap_or_default())
+    )
 }
 
 /// `meta <word> <verb> ... --help`: a line saying who answers the command,
@@ -814,7 +839,10 @@ fn command_help(
             )?;
             Ok(None)
         }
-        Verb::Unknown => ask_plugin(report),
+        Verb::Unknown => {
+            out!("{}", answered_by(cli, args, plugin))?;
+            ask_plugin(report)
+        }
     }
 }
 
@@ -1529,7 +1557,7 @@ fn unrecognized_command_error(
         .map(|(held, _)| {
             format!(
                 "\n\n{}, but meta runs only `meta-<word>` programs so far: there is no meta-{}.",
-                index::answered_by(held, command_args),
+                index::answered_by(held),
                 escape(first_cmd)
             )
         })

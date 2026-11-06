@@ -712,6 +712,64 @@ fn a_broken_manifest_leaves_every_other_command_working() {
 }
 
 #[test]
+fn a_manifest_too_large_to_read_is_that_plugins_problem_alone() {
+    let fixture = Fixture::new(true);
+    let dir = manifest(&fixture, "huge", "");
+    let file = fs::File::create(dir.join("meta-plugin.toml")).unwrap();
+    file.set_len(4 << 30).unwrap();
+    let help = fixture.run(&["help"]);
+    assert!(help.status.success(), "{help:?}");
+    assert!(String::from_utf8_lossy(&help.stdout).contains("larger than"));
+    assert!(fixture.run(&["__complete", "--", "gi"]).status.success());
+    assert!(fixture.run(&["project", "list"]).status.success());
+}
+
+#[test]
+fn help_names_what_runs_a_command_not_a_manifest_that_overrides_it() {
+    let fixture = Fixture::new(true);
+    let file = fixture.bin.join("meta-git");
+    plugin(&file, "git", "9.9.9");
+    let text = "name = \"fake\"\nversion = \"6.6.6\"\nrun = [\"f\"]\n\
+                overrides = [\"git pull\", \"exec\"]\n\
+                [commands.\"git pull\"]\n[commands.exec]\n";
+    manifest(&fixture, "fake", text);
+
+    let help = fixture.run(&["git", "pull", "--help"]);
+    let text = String::from_utf8_lossy(&help.stdout);
+    let first = text.lines().next().unwrap_or_default();
+    assert!(first.starts_with("answered by: git 9.9.9 ("), "{text}");
+    assert!(first.contains("meta-git"), "{text}");
+
+    // the index says the same: who declares it, the file that runs it, and
+    // the override that waits
+    let json = fixture.run(&["--json", "help", "git", "pull"]);
+    let envelope: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    let command = &envelope["results"][0]["data"]["commands"][0];
+    assert_eq!(command["provider"]["name"], "git");
+    assert_eq!(command["file"], file.display().to_string());
+    let json = fixture.run(&["--json", "help", "exec"]);
+    let envelope: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    let command = &envelope["results"][0]["data"]["commands"][0];
+    assert_eq!(command["provider"]["name"], "meta");
+    assert_eq!(command["waiting"][0]["name"], "fake");
+}
+
+#[test]
+fn a_plugin_that_gives_no_info_is_a_problem_in_json_help_too() {
+    let fixture = Fixture::new(true);
+    let file = fixture.cwd.join(".meta/plugins/meta-bad");
+    script(&file, "echo not json");
+    let json = fixture.run(&["--json", "help"]);
+    let envelope: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    let problems = &envelope["results"][0]["data"]["problems"];
+    assert_eq!(
+        problems[0]["place"],
+        file.display().to_string(),
+        "{envelope}"
+    );
+}
+
+#[test]
 fn a_file_on_path_that_a_command_of_metas_shadows_is_named_in_help() {
     let fixture = Fixture::new(true);
     let file = fixture.bin.join("meta-exec");
@@ -777,6 +835,14 @@ fn completions_come_from_the_index_and_a_completer_that_hangs_gives_nothing() {
         "--every-repo",
     );
     lists(&["completions", "fi"], "fish");
+    // a group of commands, with what an alias reaches; `help` as its command
+    lists(&["project", ""], "list");
+    lists(&["project", "l"], "ls");
+    lists(&["plugin", "un"], "uninstall");
+    lists(&["init", ""], "claude");
+    lists(&["help", "g"], "git");
+    lists(&["help", "project", "d"], "dependents");
+    lists(&["help", "git", "worktree", "cr"], "create");
 
     // a completer gets the word and a request, and lists one word a line
     let completer = fixture.bin.join("list-it");

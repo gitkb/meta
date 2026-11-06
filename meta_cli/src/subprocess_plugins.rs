@@ -222,17 +222,25 @@ impl SubprocessPluginManager {
     /// one that doesn't give it is warned about and left out, except a
     /// program on PATH that isn't a plugin.
     pub fn all(&self) -> Vec<SubprocessPlugin> {
-        self.files()
-            .into_iter()
-            .filter_map(|(word, (path, on_path))| match probe_plugin_info(&path) {
-                Ok(info) => Some(self.loaded(word, path, info)),
-                Err(NoInfo::NotAPlugin(_)) if on_path => None,
-                Err(e) => {
-                    meta_plugin::out::warn(format!("{}; skipping", e.into_error()));
-                    None
-                }
-            })
-            .collect()
+        let (plugins, problems) = self.probed();
+        for (_, e) in problems {
+            meta_plugin::out::warn(format!("{e}; skipping"));
+        }
+        plugins
+    }
+
+    /// The plugins that gave their info, and each file that should have and
+    /// didn't, with why.
+    pub fn probed(&self) -> (Vec<SubprocessPlugin>, Vec<(PathBuf, anyhow::Error)>) {
+        let (mut plugins, mut problems) = (Vec::new(), Vec::new());
+        for (word, (path, on_path)) in self.files() {
+            match probe_plugin_info(&path) {
+                Ok(info) => plugins.push(self.loaded(word, path, info)),
+                Err(NoInfo::NotAPlugin(_)) if on_path => {}
+                Err(e) => problems.push((path, e.into_error())),
+            }
+        }
+        (plugins, problems)
     }
 
     /// The file serving each word (the first executable one in search

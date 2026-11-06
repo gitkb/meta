@@ -51,15 +51,43 @@ pub fn load(plugins: &SubprocessPluginManager) -> Index {
         .collect();
     found.extend(embedded);
     found.sort_by_key(|f| f.source);
-    let mut index = build(found);
+    let mut index = build(without_copies(found));
     index.problems.extend(problems);
     index.files = files(&index, plugins);
+    for held in index.commands.iter_mut() {
+        let word = held.name.split(' ').next();
+        let file = index
+            .files
+            .iter()
+            .find(|file| Some(file.word.as_str()) == word);
+        if held.provider.source != Source::Host {
+            held.file = file.map(|file| file.path.clone());
+        }
+    }
     index
+}
+
+/// `found` without a manifest the same as one nearer in the same scope: a
+/// worktree set holds a copy of what its workspace commits, and neither is a
+/// second provider.
+fn without_copies(found: Vec<Found>) -> Vec<Found> {
+    let mut kept: Vec<Found> = Vec::new();
+    for manifest in found {
+        let copy = kept.iter().any(|near| {
+            near.source == manifest.source
+                && near.manifest.is_ok()
+                && near.manifest == manifest.manifest
+        });
+        if !copy {
+            kept.push(manifest);
+        }
+    }
+    kept
 }
 
 /// The folders that hold plugin folders, with the scope of each.
 fn folders(problems: &mut Vec<Problem>) -> Vec<(Source, PathBuf)> {
-    let mut folders = Vec::new();
+    let mut folders: Vec<(Source, PathBuf)> = Vec::new();
     let mut problem = |place: String, e: anyhow::Error| {
         problems.push(Problem {
             place,
@@ -90,6 +118,9 @@ fn folders(problems: &mut Vec<Problem>) -> Vec<(Source, PathBuf)> {
     if let Some(dirs) = std::env::var_os("META_PLUGIN_DIRS") {
         folders.extend(std::env::split_paths(&dirs).map(|dir| (Source::Release, dir)));
     }
+    // one folder by two names (a workspace in the home folder) is read once
+    let mut seen = std::collections::HashSet::new();
+    folders.retain(|(_, dir)| seen.insert(dir.canonicalize().unwrap_or_else(|_| dir.clone())));
     folders
 }
 
@@ -124,9 +155,7 @@ fn manifests_in(source: Source, dir: &Path, problems: &mut Vec<Problem>) -> Vec<
         .into_iter()
         .map(|path| Found {
             source,
-            manifest: std::fs::read_to_string(&path)
-                .map_err(|e| e.to_string())
-                .and_then(|text| Manifest::parse(&text)),
+            manifest: Manifest::load(&path),
             path: Some(path),
         })
         .collect()
@@ -194,79 +223,71 @@ fn add(index: &mut Index, source: Source, path: Option<PathBuf>, manifest: Manif
     };
     let place = place_of(&provider.path);
     for (name, command) in &manifest.commands {
-        let mut entry = Indexed {
-            name: name.clone(),
-            provider: provider.clone(),
-            disabled: None,
-            shadows: Vec::new(),
-            command: command.clone(),
-        };
         let wrong = manifest.command_problems(name, command);
-        let holder = holder(index, name, &provider);
-        let conflict = holder.and_then(|at| {
-            let held = index.commands.get(at)?;
-            refusal(held, name, &provider, manifest.overrides.contains(name))
-        });
-        let mut problem = |message: String| {
+        let problem = |index: &mut Index, message: String| {
             index.problems.push(Problem {
                 place: place.clone(),
                 command: Some(name.clone()),
                 message,
             })
         };
-        // a mistake disables the one who made it, never the command it
-        // tried to take
-        if let Some(message) = conflict {
-            problem(message);
-            continue;
-        }
-        if !wrong.is_empty() {
-            let message = wrong.join("; ");
-            problem(message.clone());
-            entry.disabled = Some(message);
-            if holder.is_some() {
-                continue;
-            }
-        }
-        match holder.and_then(|at| Some((at, index.commands.get(at)?.name == *name))) {
-            Some((at, true)) => {
-                if let Some(held) = index.commands.get_mut(at) {
-                    entry.shadows = std::mem::take(&mut held.shadows);
-                    entry.shadows.push(held.provider.clone());
-                    *held = entry;
+        let held = holder(index, name, &provider);
+        if let Some(at) = held {
+            // a mistake disables the one who made it, never the command it
+            // tried to take; an override that keeps the rules waits, as what
+            // runs a command doesn't read the index yet
+            let refused = index
+                .commands
+                .get(at)
+                .and_then(|held| refusal(held, name, &provider, manifest.overrides.contains(name)));
+            match refused.or_else(|| (!wrong.is_empty()).then(|| wrong.join("; "))) {
+                Some(message) => problem(index, message),
+                None => {
+                    if let Some(held) = index.commands.get_mut(at) {
+                        held.waiting.push(provider.clone());
+                    }
                 }
             }
-            Some((at, false)) => {
-                entry.shadows = index
-                    .commands
-                    .get(at)
-                    .map(|held| held.provider.clone())
-                    .into_iter()
-                    .collect();
-                index.commands.push(entry);
-            }
-            None => index.commands.push(entry),
+            continue;
         }
+        let disabled = (!wrong.is_empty()).then(|| wrong.join("; "));
+        if let Some(message) = &disabled {
+            problem(index, message.clone());
+        }
+        index.commands.push(Indexed {
+            name: name.clone(),
+            provider: provider.clone(),
+            disabled,
+            file: None,
+            waiting: Vec::new(),
+            command: command.clone(),
+        });
     }
 }
 
 /// Where in the index another provider holds `name`: the command itself,
-/// or a raw command whose words reach it (raw words belong to their
-/// provider).
+/// or the longest raw command whose words reach it (raw words belong to
+/// their provider).
 fn holder(index: &Index, name: &str, provider: &Provider) -> Option<usize> {
     let exact = index.commands.iter().position(|held| held.name == name);
-    exact
-        .or_else(|| {
-            index.commands.iter().position(|held| {
-                held.command.raw && is_under(name, &held.name) && held.provider != *provider
-            })
-        })
-        .filter(|at| {
-            index
-                .commands
-                .get(*at)
-                .is_some_and(|held| held.provider != *provider)
-        })
+    let nearest_raw = || {
+        let under = |held: &&Indexed| held.command.raw && is_under(name, &held.name);
+        let longest = index
+            .commands
+            .iter()
+            .filter(under)
+            .max_by_key(|h| h.name.len())?;
+        index
+            .commands
+            .iter()
+            .position(|held| held.name == longest.name)
+    };
+    exact.or_else(nearest_raw).filter(|at| {
+        index
+            .commands
+            .get(*at)
+            .is_some_and(|held| held.provider != *provider)
+    })
 }
 
 /// Whether the words of `name` start with all those of `command`, and more.
@@ -379,36 +400,36 @@ pub fn about(index: &Index, words: &[String]) -> Option<Index> {
     })
 }
 
-/// The `answered by:` line of a command, from its entry: who, and what help
-/// should say of it.
-pub fn answered_by(held: &Indexed, typed: &[String]) -> String {
+/// The `answered by:` line of a command only a manifest declares: who
+/// declares it, and what help should say of it.
+pub fn answered_by(held: &Indexed) -> String {
     let provider = &held.provider;
     let version = provider
         .version
         .as_deref()
         .map(|version| format!(" {version}"))
         .unwrap_or_default();
-    let place = match &provider.path {
-        Some(path) => path.to_string_lossy().into_owned(),
-        None => "built into meta".to_string(),
-    };
-    let mut line = format!("answered by: {}{version} ({place})", provider.name);
-    let as_typed = held.command.raw || held.name.split(' ').count() < typed.len();
-    for note in notes(held, as_typed) {
-        line.push_str(" · ");
-        line.push_str(&note);
-    }
-    meta_plugin::display::escape(&line).into_owned()
+    let place = place_of(&provider.path);
+    let line = format!("answered by: {}{version} ({place})", provider.name);
+    meta_plugin::display::escape(&format!("{line}{}", noted(held))).into_owned()
 }
 
-fn notes(held: &Indexed, as_typed: bool) -> Vec<String> {
+/// What help should say of the command, after who answers it.
+pub fn noted(held: &Indexed) -> String {
+    notes(held)
+        .iter()
+        .map(|note| format!(" · {note}"))
+        .collect()
+}
+
+fn notes(held: &Indexed) -> Vec<String> {
     let command = &held.command;
     let mut notes: Vec<String> = held
         .disabled
         .iter()
         .map(|why| format!("disabled: {why}"))
         .collect();
-    if as_typed {
+    if command.raw {
         notes.push("runs as typed".to_string());
     }
     if !command.only_if.is_empty() {
@@ -536,20 +557,23 @@ effects = "destructive"
             first_party(),
             found(Source::Workspace, "w", &declared),
         ]);
-        assert_eq!(provider_of(&index, "git foo"), "other");
+        // allowed, and waiting: what runs `git foo` is still git's
+        assert_eq!(provider_of(&index, "git foo"), "nobody");
         assert!(index.problems.is_empty(), "{:?}", index.problems);
+        let held = index.commands.iter().find(|h| h.name == "git");
+        assert_eq!(held.unwrap().waiting[0].name, "other");
     }
 
     #[test]
-    fn an_override_is_nearer_or_refused_and_the_replaced_provider_is_named() {
+    fn an_override_is_nearer_or_refused_and_waits_without_taking_the_command() {
         let text = format!(
             "overrides = [\"git pull\"]\n{}",
             other("[commands.\"git pull\"]")
         );
         let index = build(vec![first_party(), found(Source::User, "u", &text)]);
-        assert_eq!(provider_of(&index, "git pull"), "other");
+        assert_eq!(provider_of(&index, "git pull"), "git");
         let held = index.commands.iter().find(|h| h.name == "git pull");
-        assert_eq!(held.unwrap().shadows[0].name, "git");
+        assert_eq!(held.unwrap().waiting[0].name, "other");
 
         let index = build(vec![first_party(), found(Source::Embedded, "same", &text)]);
         assert_eq!(provider_of(&index, "git pull"), "git");
@@ -558,11 +582,12 @@ effects = "destructive"
 
     #[test]
     fn destructive_commands_help_and_plugin_are_never_overridden() {
-        for name in ["git clean", "help", "plugin list"] {
+        for name in ["git clean", "git clean foo", "help", "plugin list"] {
             let command = format!("overrides = [\"{name}\"]\n");
             let text = format!("{command}{}", other(&format!("[commands.\"{name}\"]")));
             let index = build(vec![first_party(), found(Source::Workspace, "w", &text)]);
             assert_ne!(provider_of(&index, name), "other", "{name}");
+            assert!(index.commands.iter().all(|held| held.waiting.is_empty()));
             assert!(index.problems[0].message.contains("can't be overridden"));
         }
     }
@@ -590,6 +615,19 @@ effects = "destructive"
             .contains("both run and plan"));
         let places: Vec<&str> = index.problems.iter().map(|p| p.place.as_str()).collect();
         assert_eq!(places, ["broken", "half", "theirs"]);
+    }
+
+    #[test]
+    fn the_same_manifest_twice_in_a_scope_is_one_provider() {
+        let text = other("[commands.mine]");
+        let (near, far) = (
+            found(Source::Workspace, "near", &text),
+            found(Source::Workspace, "far", &text),
+        );
+        let index = build(without_copies(vec![near, far]));
+        assert!(index.problems.is_empty(), "{:?}", index.problems);
+        let held = index.commands.iter().find(|h| h.name == "mine").unwrap();
+        assert_eq!(held.provider.path.as_deref(), Some(Path::new("near")));
     }
 
     #[test]

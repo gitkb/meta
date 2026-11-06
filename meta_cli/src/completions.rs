@@ -122,10 +122,25 @@ fn takes_value(index: &Index, word: &str) -> bool {
 }
 
 /// The completions after `command` (the words typed, from the command word
-/// on).
+/// on). `meta help` takes a command's words, so it completes as they do.
 fn after_command(index: &Index, command: &[String], partial: &str) -> Vec<String> {
+    let words = match command.split_first() {
+        Some((help, words)) if help == "help" => words,
+        _ => return for_command(index, command, partial),
+    };
+    let found = match words.is_empty() {
+        true => top(index),
+        false => for_command(index, words, partial),
+    };
+    let word = |found: &String| !found.starts_with('-');
+    found.into_iter().filter(word).collect()
+}
+
+/// The completions after a command's words; words that name no command may
+/// be a group of them (`project`).
+fn for_command(index: &Index, command: &[String], partial: &str) -> Vec<String> {
     let Some((held, len)) = index::resolve(index, command) else {
-        return Vec::new();
+        return next_words(index, command);
     };
     let args = command.get(len..).unwrap_or_default();
     let words = command.get(..len).unwrap_or_default();
@@ -170,7 +185,12 @@ fn next_words(index: &Index, words: &[String]) -> Vec<String> {
     index::under(index, words)
         .into_iter()
         .filter(|held| !held.command.hidden)
-        .filter_map(|held| held.name.split(' ').nth(words.len()).map(str::to_string))
+        .flat_map(|held| {
+            let last = held.name.split(' ').count() == words.len() + 1;
+            let alias = held.command.alias.iter().filter(move |_| last).cloned();
+            let word = held.name.split(' ').nth(words.len()).map(str::to_string);
+            word.into_iter().chain(alias)
+        })
         .collect()
 }
 

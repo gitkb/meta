@@ -63,9 +63,14 @@ fn embed_skills() -> std::io::Result<()> {
         std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
     let skills = manifest.join("../claude-plugin/skills");
     println!("cargo:rerun-if-changed={}", skills.display());
-    let mut names = std::fs::read_dir(&skills)?
-        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
-        .collect::<std::io::Result<Vec<String>>>()?;
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(&skills)? {
+        let entry = entry?;
+        // a stray file (.DS_Store) is no skill
+        if entry.file_type()?.is_dir() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
     names.sort();
     let entries: String = names
         .iter()

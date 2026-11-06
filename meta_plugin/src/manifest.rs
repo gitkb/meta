@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 /// The manifest's file name, in the plugin's own folder.
 pub const FILE: &str = "meta-plugin.toml";
 
+/// The most of a manifest that is read: more than this is no manifest, and
+/// is refused rather than held in memory.
+pub const MOST: u64 = 1 << 20;
+
 /// A plugin's declaration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -442,6 +446,19 @@ impl Manifest {
         })
     }
 
+    /// The manifest in the file `path`. One larger than [`MOST`] is an error.
+    pub fn load(path: &Path) -> Result<Self, String> {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|file| file.take(MOST + 1).read_to_end(&mut bytes))
+            .map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > MOST {
+            return Err(format!("larger than {} MiB", MOST >> 20));
+        }
+        Self::parse(&String::from_utf8(bytes).map_err(|e| e.to_string())?)
+    }
+
     /// What is wrong with the manifest as a whole: no command of it can be
     /// trusted to mean what it says.
     pub fn problems(&self) -> Vec<String> {
@@ -571,9 +588,17 @@ pub struct Indexed {
     /// Why it can't run; every other command still can
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled: Option<String>,
-    /// The providers it replaced (`overrides`)
+    /// The file that runs it today, when one does: the router runs the
+    /// `meta-<word>` file of a word, whoever declares the command
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::wire_path::option::serialize"
+    )]
+    pub file: Option<PathBuf>,
+    /// Providers that declare `overrides` for it, which the rules allow. They
+    /// run nothing yet: `provider` keeps the command until the index routes
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub shadows: Vec<Provider>,
+    pub waiting: Vec<Provider>,
     #[serde(flatten)]
     pub command: Command,
 }
@@ -662,6 +687,17 @@ mod tests {
     fn a_typo_in_a_key_is_an_error_not_a_quiet_nothing() {
         let error = Manifest::parse("name = \"a\"\n[commands.x]\nsumary = \"s\"").unwrap_err();
         assert!(error.contains("sumary"), "{error}");
+    }
+
+    #[test]
+    fn a_file_too_large_to_be_a_manifest_is_refused_unread() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE);
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MOST + 1).unwrap();
+        assert!(Manifest::load(&path).unwrap_err().contains("larger than"));
+        std::fs::write(&path, "name = \"a\"").unwrap();
+        assert_eq!(Manifest::load(&path).unwrap().name, "a");
     }
 
     #[test]

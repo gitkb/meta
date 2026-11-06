@@ -43,6 +43,22 @@ setup() {
     [[ "$output" != *"Installed plugins"* ]]
 }
 
+@test "built-in command help says meta answers it, and an adapted command doesn't run as typed" {
+    for words in "exec --help" "help project list" "plugin --help"; do
+        run "$META_BIN" $words
+        [ "$status" -eq 0 ]
+        [[ "${lines[0]}" == "answered by: meta "* ]]
+    done
+    run "$META_BIN" git clone https://example.invalid/x --help
+    [[ "${lines[0]}" == "answered by: git "* ]]
+    [[ "${lines[0]}" != *"runs as typed"* ]]
+    # after `help`'s first word, the words are the command's
+    for words in "help git clone --depth 3" "help git status -v"; do
+        run "$META_BIN" $words
+        [ "$status" -eq 0 ]
+    done
+}
+
 @test "git worktree help reaches worktree command implementation" {
     run "$META_BIN" git worktree --help
     [ "$status" -eq 0 ]

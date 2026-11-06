@@ -2325,3 +2325,63 @@ J
     rmdir "$STAGE"
     [ -z "$(ls -A "$TEST_DIR/.worktrees/s" | grep meta-set)" ]
 }
+
+@test "an ephemeral run under META_WORKTREES with no root checkout leaves the workspace's files" {
+    rm -rf .git
+    echo precious > backend/untracked.txt
+    META_WORKTREES="$TEST_DIR/sets" run "$META_BIN" git worktree exec --ephemeral clean --repo backend -- git clean -fdx
+    [ "$status" -eq 0 ]
+    [ -f backend/untracked.txt ]
+    [ -z "$(ls -A sets 2>/dev/null)" ]
+}
+
+# `meta exec` from $2 (a folder of the set $1) ran nowhere but in the set,
+# or was refused
+stays_in_set() {
+    local log="$TEST_DIR/ran" set
+    set="$(cd "$1" && pwd -P)"
+    rm -f "$log"
+    (cd "$2" && "$META_BIN" exec -- sh -c "pwd -P >> '$log'") > /dev/null 2>&1 || true
+    [ ! -e "$log" ] || ! grep -qv "^$set\(/\|\$\)" "$log"
+}
+
+@test "a command started in a set never runs outside it, wherever the set is and however it got there" {
+    cp .meta.yaml plain.yaml
+    python3 -c 'import json; c=json.load(open(".meta.yaml")); c["worktrees_dir"]="wt"; json.dump(c,open("custom.yaml","w"))'
+    for root in with without; do
+        [ "$root" = with ] || rm -rf .git
+        # the default folder, a worktrees_dir, and META_WORKTREES, all in the workspace
+        for place in .worktrees wt sets; do
+            tag="s$RANDOM"
+            cp plain.yaml .meta.yaml
+            [ "$place" != wt ] || cp custom.yaml .meta.yaml
+            [ "$place" != sets ] || export META_WORKTREES="$TEST_DIR/sets"
+            "$META_BIN" git worktree create "$tag" --repo backend
+            stays_in_set "$place/$tag" "$place/$tag"
+            stays_in_set "$place/$tag" "$place/$tag/backend"
+            mv "$place/$tag" "$place/$tag-moved"
+            stays_in_set "$place/$tag-moved" "$place/$tag-moved"
+            stays_in_set "$place/$tag-moved" "$place/$tag-moved/backend"
+            unset META_WORKTREES
+        done
+        cp plain.yaml .meta.yaml
+        # ephemeral, in the default folder and a caller's: in the set it made
+        for folder in "" "$TEST_DIR/sets"; do
+            log="$TEST_DIR/ran-ephemeral"
+            rm -f "$log"
+            env ${folder:+META_WORKTREES="$folder"} "$META_BIN" git worktree exec --ephemeral "e$RANDOM" --repo backend -- \
+                sh -c "pwd -P >> '$log'"
+            [ -s "$log" ]
+            ! grep -qv "/\(\.worktrees\|sets\)/e[0-9]*\(/\|\$\)" "$log"
+        done
+    done
+    # no root checkout, no owner file: refused, and the workspace is one word away
+    cp custom.yaml .meta.yaml
+    mkdir -p wt/unknown
+    cd wt/unknown
+    run "$META_BIN" exec -- true
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"in no set meta can name"* ]]
+    run "$META_BIN" --primary --include backend exec -- pwd
+    [ "$status" -eq 0 ]
+}

@@ -266,8 +266,9 @@ pub(crate) fn handle_create(
         // The set's owner, beside it: meta-git's, made from this workspace.
         // A folder META_WORKTREES names is its caller's, who may move the
         // set out and remove it: nothing else of meta's goes there, and the
-        // records below say what the file would
-        if std::env::var_os("META_WORKTREES").is_none() {
+        // records below say what the file would. An ephemeral set is meta's
+        // own to the end, and its run must find it with no root checkout
+        if ephemeral || std::env::var_os("META_WORKTREES").is_none() {
             meta_plugin::sets::create(&wt_dir, meta_plugin::sets::DEFAULT_PROVIDER, owner)?;
         }
         // Each worktree gets this record as soon as it exists, so `remove`

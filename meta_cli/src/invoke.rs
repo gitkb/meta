@@ -231,6 +231,7 @@ fn target_with(
         true => None,
         false => worktree::detect_worktree_location(start)?,
     };
+    let no_set = location.is_none() && !cli.primary && !cli.no_parent && cli.config.is_none();
     if let Some((name, set_dir)) = location {
         if let Some(target) = in_set(cli, start, &name, &set_dir, filters, parallel)? {
             return Ok(target);
@@ -252,6 +253,9 @@ fn target_with(
         )
         .into());
     };
+    if no_set {
+        refuse_in_worktrees_folder(&config, start)?;
+    }
     if cli.verbose {
         errln!(
             "Resolved config file path: {}",
@@ -276,6 +280,36 @@ fn target_with(
         set: None,
         depth,
     })
+}
+
+/// A folder below `config`'s worktrees folder that is no set meta can name
+/// is not the workspace either: a command started there is refused, never
+/// run in the workspace above it.
+fn refuse_in_worktrees_folder(config: &Config, start: &Path) -> Result<()> {
+    let owner = worktree::Configs::of(config.clone())
+        .map(|configs| configs.owner)
+        .unwrap_or_else(|_| config.clone());
+    let Some(sets) = worktree::resolve_worktree_root(Some(&owner), &config.dir)
+        .ok()
+        .and_then(|dir| dir.canonicalize().ok())
+    else {
+        return Ok(());
+    };
+    let (Ok(here), Ok(home)) = (start.canonicalize(), config.dir.canonicalize()) else {
+        return Ok(());
+    };
+    if here == sets || !here.starts_with(&sets) || home.starts_with(&sets) {
+        return Ok(());
+    }
+    Err(ErrorInfo::new(
+        ErrorCode::Conflict,
+        format!(
+            "{} is in the worktrees folder {} but in no set meta can name; --primary runs in the workspace",
+            escape_path(start),
+            escape_path(&sets)
+        ),
+    )
+    .into())
 }
 
 /// The members of the set `name` at `set_dir` that `filters` select, as

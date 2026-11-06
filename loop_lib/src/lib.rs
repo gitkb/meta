@@ -752,8 +752,8 @@ fn capture_in_directory(
     // loop_lib is tool-agnostic.
     meta_plugin::out::pass_color(&mut cmd_builder);
 
-    // Silenced (and no JSON wants its output): it goes nowhere, nothing held
-    let output = match config.silent && !config.json_output {
+    // Silenced, under --json too: it goes nowhere, nothing held
+    let output = match config.silent {
         true => meta_plugin::process::status(
             cmd_builder
                 .stdin(Stdio::null())

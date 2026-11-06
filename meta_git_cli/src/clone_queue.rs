@@ -286,6 +286,10 @@ impl CloneQueue {
         let mut tasks = Vec::new();
         for project in &workspace.projects {
             let target_path = base_dir.join(&project.path);
+            self.listed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(resolved(&target_path));
             // a URL meta read back hides its credentials: the one configured
             // is in the request, or in the request of another run
             let mut project = project.clone();
@@ -313,10 +317,6 @@ impl CloneQueue {
                 }
             }
             let project = &project;
-            self.listed
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(resolved(&target_path));
 
             let work = match Checkout::of(&target_path) {
                 Checkout::Repo { .. } if self.pull => Work::Pull,
@@ -899,6 +899,26 @@ mod tests {
         let queue = CloneQueue::new(None, None, false);
         queue.discover(&dir, 0, &top(&dir, None)).unwrap();
         assert_eq!(queue.outcome().unlisted, [dir.join("stray")]);
+    }
+
+    #[test]
+    fn a_repository_that_holds_a_project_put_off_for_its_credentials_is_no_leftover() {
+        // the project libs/x isn't cloned: its URL's credentials are hidden
+        let sandbox = meta_plugin::testing::isolated!();
+        let dir = sandbox.work();
+        for name in ["libs", "stray"] {
+            std::fs::create_dir(dir.join(name)).unwrap();
+            sandbox.git(&dir.join(name), &["init", "-q"]);
+        }
+        write_meta(
+            &dir,
+            r#"{"projects": {"x": {"repo": "https://me:secret@example.invalid/x.git", "path": "libs/x"}}}"#,
+        );
+        let queue = CloneQueue::new(None, None, false);
+        queue.discover(&dir, 0, &top(&dir, None)).unwrap();
+        let outcome = queue.outcome();
+        assert_eq!(outcome.deferred.len(), 1);
+        assert_eq!(outcome.unlisted, [dir.join("stray")]);
     }
 
     #[test]

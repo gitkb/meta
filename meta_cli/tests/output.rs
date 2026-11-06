@@ -203,7 +203,12 @@ fn a_silenced_command_runs_to_its_end_however_much_it_writes() {
     let root = workspace(&sandbox);
     let chatty = r#"head -c 17000000 /dev/zero | tr '\0' x >&2; touch finished; exit 1"#;
     // in meta's default order, at once, and one at a time
-    for order in [None, Some("--parallel"), Some("--sequential")] {
+    for order in [
+        None,
+        Some("--parallel"),
+        Some("--sequential"),
+        Some("--json"),
+    ] {
         let mut args = vec!["--silent"];
         args.extend(order);
         args.extend(["-i", "a,b", "exec", "--", "sh", "-c", chatty]);
@@ -216,6 +221,13 @@ fn a_silenced_command_runs_to_its_end_however_much_it_writes() {
             std::fs::remove_file(finished).unwrap();
         }
         assert!(!text.contains("16 MiB"), "{order:?}: {}", text.len());
+        if order == Some("--json") {
+            let rows = documents(&out).pop().unwrap()["results"].clone();
+            for row in rows.as_array().unwrap() {
+                assert_eq!(row["exit_code"], 1, "{row}");
+                assert_eq!(row["stderr"], "", "{row}");
+            }
+        }
     }
 }
 

@@ -41,6 +41,7 @@ Before merging a change to one, find its callers and test the real pair:
 3. Breaking change: put `!` in the PR title. List every caller repo in the PR body with its companion PR, or "none found" and the search you ran.
 4. Each companion PR moves the caller's pin of the producer to this PR's head, so its CI runs the real pair. A caller with no pin runs against a build of this PR's head instead, and its PR shows the result. A fake `meta` script alone proves nothing.
 5. Both PRs pass on that pair and merge together, meta first.
+6. A failed bump of meta in a caller belongs to the author of the change it moved to, who fixes it or reverts it; for a bot bump, that means the author of the upstream change.
 
 How-to and the known callers: the `stack-development` skill.
 

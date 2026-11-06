@@ -178,7 +178,7 @@ Output is coloured only on a terminal: never into a pipe, a file or `--json`. `N
 
 ## JSON Output Mode
 
-Every command prints one JSON document with `--json` before it: the same envelope, whatever the command.
+Every command prints one JSON document with `--json` before it: the same envelope, whatever the command. `meta --version --json` isn't a command and prints no envelope, just the build, as `{"version", "source", "commit", "branch", "dirty", "built"}`.
 
 ```bash
 meta --json git status

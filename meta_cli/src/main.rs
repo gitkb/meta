@@ -31,6 +31,20 @@ fn version() -> String {
     format!("{}{}", VERSION.trim(), env!("META_BUILD_COMMIT"))
 }
 
+/// `meta --version --json`: these six fields and no others, as atc and
+/// git-kb print them, not the Envelope; `null` for what a build outside a git
+/// checkout can't know.
+fn version_json() -> serde_json::Value {
+    serde_json::json!({
+        "version": VERSION.trim(),
+        "source": option_env!("META_BUILD_SOURCE"),
+        "commit": option_env!("META_BUILD_SHA"),
+        "branch": option_env!("META_BUILD_BRANCH"),
+        "dirty": option_env!("META_BUILD_DIRTY").map(|dirty| dirty == "true"),
+        "built": env!("META_BUILT"),
+    })
+}
+
 /// meta's options go before the command; every word after the command
 /// belongs to it, so `meta git pull --tag v1` gives `--tag v1` to git.
 #[derive(Parser)]
@@ -516,6 +530,13 @@ fn run_cli() -> Result<()> {
             check_and_warn_orphan();
             let plugins = SubprocessPluginManager::new(false)?;
             return Ok(out!("{}", help_with_plugins(&plugins))?);
+        }
+        // clap stops at --version, so it may not have read a --json after it
+        Err(e)
+            if e.kind() == clap::error::ErrorKind::DisplayVersion
+                && std::env::args_os().any(|arg| arg == "--json") =>
+        {
+            return Ok(outln!("{}", version_json())?);
         }
         Err(e) => {
             // the Envelope of a usage error names the command it is about

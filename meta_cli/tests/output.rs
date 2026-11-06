@@ -283,3 +283,43 @@ fn a_silenced_command_that_leaves_a_background_program_ends_meta_promptly() {
     assert!(!out.status.success());
     assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
 }
+
+/// `--version --json` is the document atc and git-kb print, which their
+/// callers read field by field, and `--version` stays one line of text.
+#[test]
+fn version_json_has_exactly_the_six_build_fields() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    for args in [
+        ["--version", "--json"],
+        ["--json", "--version"],
+        ["-V", "--json"],
+    ] {
+        let out = meta(&sandbox, &root, &args).output().unwrap();
+        assert!(out.status.success(), "{args:?}");
+        let documents = documents(&out);
+        assert_eq!(documents.len(), 1, "{args:?}");
+        let build = documents.first().unwrap();
+        let mut fields: Vec<&str> = build
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        fields.sort_unstable();
+        assert_eq!(
+            fields,
+            ["branch", "built", "commit", "dirty", "source", "version"]
+        );
+        assert_eq!(build["version"], include_str!("../../VERSION").trim());
+        // null in a build from outside a git checkout
+        assert!(build["commit"].is_null() || build["commit"].as_str().unwrap().len() == 40);
+        assert!(build["dirty"].is_null() || build["dirty"].is_boolean());
+        chrono::DateTime::parse_from_rfc3339(build["built"].as_str().unwrap()).unwrap();
+    }
+
+    let out = meta(&sandbox, &root, &["--version"]).output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.starts_with("meta "), "{text}");
+    assert_eq!(text.lines().count(), 1, "{text}");
+}

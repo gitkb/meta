@@ -107,7 +107,7 @@ fn as_meta_sends(
                 .worktree
                 .hooks
                 .iter()
-                .map(|(event, command)| (event.name().to_string(), command.clone()))
+                .map(|(event, command)| (event.to_string(), command.clone()))
                 .collect(),
             home: Some(owner.dir.clone()),
         },

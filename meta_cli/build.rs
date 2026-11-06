@@ -50,4 +50,37 @@ fn main() {
         .map(|commit| format!(" (git {commit}{dirty})"))
         .unwrap_or_default();
     println!("cargo:rustc-env=META_BUILD_COMMIT={commit}");
+
+    if let Err(e) = embed_skills() {
+        println!("cargo:warning=claude-plugin/skills: {e}");
+        std::process::exit(1);
+    }
+}
+
+/// Write `SKILLS` for `init.rs`, in name order: the name and the `SKILL.md`
+/// of each folder of `claude-plugin/skills/`.
+fn embed_skills() -> std::io::Result<()> {
+    let manifest =
+        std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
+    let skills = manifest.join("../claude-plugin/skills");
+    println!("cargo:rerun-if-changed={}", skills.display());
+    let mut names = std::fs::read_dir(&skills)?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<Vec<String>>>()?;
+    names.sort();
+    let entries: String = names
+        .iter()
+        .map(|name| {
+            let file = skills.join(name).join("SKILL.md");
+            format!(
+                "({name:?}, include_str!({:?})),\n",
+                file.display().to_string()
+            )
+        })
+        .collect();
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap_or_default());
+    std::fs::write(
+        out.join("skills.rs"),
+        format!("const SKILLS: &[(&str, &str)] = &[\n{entries}];\n"),
+    )
 }

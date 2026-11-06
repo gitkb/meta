@@ -197,6 +197,7 @@ meta-git/SKILL.md 921d51437d62d553d35e424fe7aa0aeea39a2f79
 meta-plugins/SKILL.md d5e929511221c7bf7ea97973f0c0129e166d1c1a
 meta-safety/SKILL.md f623e0f8dd6726658a64d6af4407f834f0112e9f
 meta-workspace/SKILL.md f8641664a853129144f895e91e21d96d38de4769
+meta-workspace/SKILL.md cebbbfa7fd608d7027b4824e19a2f6c386eb4bd8
 meta-worktree/SKILL.md c679ba34983f3e1d448cd9a40f5ff749683efa48
 meta-worktree/SKILL.md 3e48d61a6f78f5023ff29055e355b14f780d70cb
 meta-git/SKILL.md 54ab7a8d28406ba2185ed971eb6ba5b3096f2f9d
@@ -211,5 +212,6 @@ meta-worktree/SKILL.md b428b539457ec5c98f7cb4a96811f1b0bb8e1da5
 meta-exec/SKILL.md c103f34997155e5c7d8d732d931a9919beead4dd
 meta-worktree/SKILL.md d35cffc6fa7281c24e9366373a07cf11cdc34a7a
 meta-worktree/SKILL.md 1722c48ffdd1ead07b6217591d62f8e89573691d
+meta-worktree/SKILL.md b3f92ad6a6d1a9dd12070ffacbc7bb366b9093fe
 meta-exec/SKILL.md 932d6ba56e6f99f16848515f348e026e3340202b
 meta-exec/SKILL.md 4619da9a57de74603b4ded8c4c71215fdc3ebbf4

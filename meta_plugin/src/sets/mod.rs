@@ -231,9 +231,9 @@ fn strays(dir: &Path, members: &[&Path], found: &mut Vec<PathBuf>) -> Result<()>
     Ok(())
 }
 
-/// Run the hook the workspace's `worktree.hooks` configures for `event`
-/// (`post-create`, `post-destroy`, `post-prune`), if any, with `payload` as
-/// JSON on its stdin, from the folder of the config the hooks come from.
+/// Run the hook the workspace's `worktree.hooks` configures for `event`, if
+/// any, with `payload` as JSON on its stdin, from the folder of the config
+/// the hooks come from.
 /// The hook's stderr is meta's (as git's hooks'); its stdout is dropped. A
 /// hook that fails, or can't start or be sent its payload, is an error
 /// naming its event (not its command, which may hold a secret); what it

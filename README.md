@@ -241,16 +241,24 @@ projects:
     tags: [shared]
 ```
 
-**Extended format fields:**
+**The fields of `.meta.yaml`** (every one optional):
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `repo` | No | Git repository URL (without one the project is local-only: `meta git update` doesn't clone it) |
-| `path` | No | Custom clone path (defaults to project name) |
-| `tags` | No | Array of tags for filtering |
-| `meta` | No | Set `true` if this project contains a nested `.meta.yaml` |
-| `provides` | No | Array of capabilities this project provides |
-| `depends_on` | No | Array of project names or provided capabilities this depends on |
+<!-- generated:config-fields -->
+| Field | Meaning |
+|-------|---------|
+| `projects` | The projects, by name: each a repo URL, or a mapping of the `projects.<name>` fields |
+| `defaults` | Settings for every command |
+| `worktrees_dir` | Where worktree sets go, instead of `.worktrees` |
+| `worktree` | Settings for worktree sets |
+| `projects.<name>.path` | Where the project lives (defaults to its name) |
+| `projects.<name>.repo` | Git repository URL (without one the project is local-only: `meta git update` doesn't clone it) |
+| `projects.<name>.tags` | Array of tags for filtering |
+| `projects.<name>.provides` | Array of capabilities this project provides |
+| `projects.<name>.depends_on` | Array of project names or provided capabilities this depends on |
+| `projects.<name>.meta` | Set `true` if this project contains a nested `.meta.yaml` |
+| `defaults.parallel` | Run commands in parallel (`true` unless set) |
+| `worktree.hooks` | The shell command to run at each worktree event, by event: `post-create`, `post-destroy`, `post-prune` |
+<!-- /generated -->
 
 A token in a `repo` URL (`https://user:token@host/org/repo.git`) works, and meta's own messages show it as `***`, but it is stored in plain text in `.meta.yaml` and in the clone's `.git/config`; prefer a git credential helper, such as `gh auth setup-git`.
 
@@ -265,7 +273,7 @@ A token in a `repo` URL (`https://user:token@host/org/repo.git`) works, and meta
 - Tags contain no whitespace and no `,`.
 - `worktrees_dir`, if set, may be anywhere (relative, `..`, absolute, or `.worktrees` a symlink to another disk), but not the config's directory itself, not inside a project and not in `.git`. `META_WORKTREES` overrides it.
 - A key meta doesn't know at the top level, under `defaults` or under `worktree` is an error, so a misspelling isn't ignored. Project entries may carry keys of their own for other tools.
-- `worktree.hooks` names only `post-create`, `post-destroy` and `post-prune`, and each value is a command string (`false` or `123` is refused, not run).
+- `worktree.hooks` names only the events the table lists, and each value is a command string (`false` or `123` is refused, not run).
 
 The same rules apply to every meta config that a recursive command reads, including one inside a cloned project: a refused nested config stops the command rather than silently leaving out that part of the tree.
 

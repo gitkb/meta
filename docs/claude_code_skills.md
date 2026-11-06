@@ -1,6 +1,6 @@
 # Claude Code Skills for Meta
 
-Meta includes six purpose-built Claude Code skills (`meta-workspace`, `meta-git`, `meta-exec`, `meta-plugins`, `meta-worktree`, `meta-safety`) that teach AI agents how to work effectively with multi-repository codebases. These skills are pedagogical—they explain HOW to work in a meta repo, not just WHAT commands exist.
+Meta includes purpose-built Claude Code skills (see [Available Skills](#available-skills)) that teach AI agents how to work effectively with multi-repository codebases. These skills are pedagogical—they explain HOW to work in a meta repo, not just WHAT commands exist.
 
 ## Installation
 
@@ -39,14 +39,16 @@ Commit `.meta/skills/` and the links so everyone working in the repo gets the sk
 
 ## Available Skills
 
+<!-- generated:skills -->
 | Skill | What it teaches |
 |-------|-----------------|
-| `meta-workspace` | The `.meta.yaml` format, tags, nested meta repos, and why `meta git` beats `git` in a workspace; for a first look at a meta repo |
-| `meta-git` | `meta git clone` and `update`, committing or stashing before batch changes, recovering with `git reflog` |
-| `meta-exec` | `meta exec -- <cmd>` (as typed, no shell), parallel and sequential runs, `--include`/`--exclude`/`--tag`, `--dry-run`, JSON output |
-| `meta-plugins` | Plugin discovery, how commands are routed to plugins, the built-in git, project and cargo plugins, installing plugins |
-| `meta-worktree` | Creating, using and removing multi-repo worktree sets with `meta git worktree`; for any change, a PR, or testing a tag or SHA |
-| `meta-safety` | Session start, precise filtering, dependency order (the MCP tool `meta_execution_order`), `--strict` |
+| `meta-exec` | Execute commands across all repos — parallel, filtered, dry-run modes. |
+| `meta-git` | Git operations across multiple repositories — status, commit, push, pull, multi-commit. |
+| `meta-plugins` | How the meta plugin system intercepts and enhances commands. |
+| `meta-safety` | Multi-repo safety discipline — precision operations, dependency checking, and efficiency tips. |
+| `meta-workspace` | Understanding and operating in meta repository workspaces with .meta.yaml configuration. |
+| `meta-worktree` | Create, use and remove isolated multi-repo git worktree sets with `meta git worktree`. Use before changing code in a meta workspace, to continue a PR, or to test a tag or SHA in isolation. |
+<!-- /generated -->
 
 ## Creating Custom Skills
 

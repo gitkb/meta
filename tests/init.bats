@@ -60,7 +60,9 @@ teardown() {
 @test "init claude creates all skills in .meta/skills and links them for Claude and Codex" {
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    for name in meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-safety; do
+    for src in "$BATS_TEST_DIRNAME"/../claude-plugin/skills/*/; do
+        local name
+        name="$(basename "$src")"
         [ "$(head -2 ".meta/skills/$name/SKILL.md")" = "$(printf -- '---\nname: %s' "$name")" ]
         for agent in .claude .agents; do
             [ "$(readlink "$agent/skills/$name")" = "../../.meta/skills/$name" ]
@@ -108,8 +110,8 @@ teardown() {
         [ "$(readlink "$root/.agents/skills/$name")" = "../../claude-plugin/skills/$name" ]
         count=$((count + 1))
     done
-    [ "$count" -eq 6 ]
-    [ "$(ls -d .meta/skills/meta-*/ | wc -l)" -eq 6 ]
+    [ "$count" -gt 0 ]
+    [ "$(ls -d .meta/skills/*/ | wc -l)" -eq "$count" ]
 }
 
 @test "init claude creates all rule files" {
@@ -398,13 +400,17 @@ EOF
 @test "init claude shows correct file counts" {
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    [[ "$output" == *"9 file(s)"* ]]  # 6 skills + 2 rules + 1 settings
+    local skills
+    skills="$(ls -d "$BATS_TEST_DIRNAME"/../claude-plugin/skills/*/ | wc -l)"
+    [[ "$output" == *"$((skills + 3)) file(s)"* ]]  # the skills + 2 rules + 1 settings
 }
 
 @test "init claude shows skills count" {
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
-    [[ "$output" == *"6 skills"* ]]
+    local skills
+    skills="$(ls -d "$BATS_TEST_DIRNAME"/../claude-plugin/skills/*/ | wc -l)"
+    [[ "$output" == *"$skills skills"* ]]
 }
 
 @test "init claude shows rules count" {

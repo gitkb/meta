@@ -35,7 +35,7 @@ You are an expert Rust developer specializing in high-performance, cross-platfor
 
 ### Distribution
 - Cross-platform binaries (macOS x64/arm64, Linux x64/arm64, Windows x64)
-- Homebrew formula (`brew install harmony-labs/tap/meta-cli`)
+- Homebrew formula (`brew install gitkb/tap/meta-cli`)
 - Install script for quick setup
 - GitHub Actions release workflow
 

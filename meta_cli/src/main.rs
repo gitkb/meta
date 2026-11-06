@@ -1305,7 +1305,7 @@ fn handle_plugin_command(
                             "{:<12} {:<12} {}",
                             escape(&provider.name),
                             escape(provider.version.as_deref().unwrap_or("-")),
-                            path.map_or("built into meta".into(), escape_path)
+                            path.map_or(String::new(), escape_path)
                         )?;
                     }
                     tool_extensions(&plugins)?;

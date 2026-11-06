@@ -424,8 +424,9 @@ fn notes(held: &Indexed, as_typed: bool) -> Vec<String> {
 }
 
 /// The providers with a manifest of their own and no `meta-<word>` file
-/// among `plugins`, one line each in `meta plugin list`: meta itself isn't
-/// one.
+/// among `plugins`, one line each in `meta plugin list`. meta itself isn't
+/// one, nor is a manifest built into meta: that says what a plugin would
+/// answer, not that it is installed.
 pub fn manifest_only(
     index: &Index,
     plugins: &[crate::subprocess_plugins::SubprocessPlugin],
@@ -434,7 +435,7 @@ pub fn manifest_only(
     for held in &index.commands {
         let provider = &held.provider;
         let file = plugins.iter().any(|plugin| plugin.word == provider.name);
-        if provider.source != Source::Host && !file && !providers.contains(provider) {
+        if provider.source > Source::Embedded && !file && !providers.contains(provider) {
             providers.push(provider.clone());
         }
     }

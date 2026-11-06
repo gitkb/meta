@@ -544,6 +544,89 @@ fn plan_problems(command: &Command) -> Vec<String> {
         .collect()
 }
 
+/// What `meta --json help` prints: every command there is, by whom it is
+/// answered, and what is wrong.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Index {
+    /// meta's own options, which go before the command
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub meta_options: Vec<Opt>,
+    pub commands: Vec<Indexed>,
+    /// `meta-<word>` files with no manifest
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<PluginFile>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<Problem>,
+}
+
+/// A command in the index.
+#[derive(Debug, Clone, Serialize)]
+pub struct Indexed {
+    pub name: String,
+    pub provider: Provider,
+    /// Why it can't run; every other command still can
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<String>,
+    /// The providers it replaced (`overrides`)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shadows: Vec<Provider>,
+    #[serde(flatten)]
+    pub command: Command,
+}
+
+/// Who declares a command.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Provider {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub source: Source,
+    /// Its manifest, when it has a file
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::wire_path::option::serialize"
+    )]
+    pub path: Option<PathBuf>,
+}
+
+/// Where a manifest was found, farthest first: a nearer one may override a
+/// farther one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Source {
+    /// meta itself
+    Host,
+    /// Built into meta, for an install that has no manifest files yet
+    Embedded,
+    /// Beside meta's own files
+    Release,
+    /// The user's meta folder
+    User,
+    /// A `.meta/plugins` folder of the workspace
+    Workspace,
+}
+
+/// A plugin file with no manifest, as the router finds it.
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginFile {
+    pub word: String,
+    #[serde(serialize_with = "crate::wire_path::serialize")]
+    pub path: PathBuf,
+    /// The command that keeps this file from ever running
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadowed_by: Option<String>,
+}
+
+/// Something wrong in the index: only what it names is disabled.
+#[derive(Debug, Clone, Serialize)]
+pub struct Problem {
+    /// The manifest, or the folder, it was found in
+    pub place: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    pub message: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

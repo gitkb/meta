@@ -7,8 +7,10 @@ use meta_plugin::ExecutionMode;
 use meta_plugin::{errln, out, outln};
 use std::path::PathBuf;
 
+mod completions;
 mod context;
 mod events;
+mod index;
 mod init;
 mod invoke;
 mod project;
@@ -23,7 +25,7 @@ use subprocess_plugins::{SubprocessPlugin, SubprocessPluginManager};
 
 // === CLI Structs ===
 
-const VERSION: &str = include_str!("../../VERSION");
+pub const VERSION: &str = include_str!("../../VERSION");
 
 /// The version, and for a build from a git checkout its commit and date:
 /// `<version> (git 1c96c7e 2026-11-03)`
@@ -145,6 +147,19 @@ enum Commands {
         /// The command, as you would type it after `meta`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
+    },
+    /// Print the script that completes meta's commands in a shell
+    Completions {
+        /// The shell to complete in
+        #[arg(value_name = "SHELL", value_parser = ["bash", "zsh", "fish", "powershell"])]
+        shell: String,
+    },
+    /// List the completions of a command line (what the scripts of `meta completions` call)
+    #[command(name = "__complete", hide = true)]
+    Complete {
+        /// The words after `meta`, the last one being completed
+        #[arg(value_name = "WORD", trailing_var_arg = true, allow_hyphen_values = true)]
+        words: Vec<String>,
     },
     /// Initialize meta integrations
     Init(InitArgs),
@@ -280,6 +295,7 @@ impl PluginCommands {
 /// description and version, its own commands, and what becomes of the
 /// rest. Plugins name and describe themselves, so their values are escaped.
 fn help_with_plugins(plugins: &SubprocessPluginManager) -> String {
+    let index = index::load(plugins);
     let mut cmd = command_line();
     for plugin in plugins.all() {
         // shown escaped; a word whose escaped form is taken (by a built-in
@@ -310,7 +326,20 @@ fn help_with_plugins(plugins: &SubprocessPluginManager) -> String {
         }
         cmd = cmd.subcommand(clap::Command::new(shown).about(about));
     }
-    cmd.render_help().to_string()
+    // a word only a manifest declares
+    for word in index::top_words(&index) {
+        let shown = escape(word).into_owned();
+        if cmd.find_subcommand(&shown).is_some() {
+            continue;
+        }
+        let summary = index
+            .commands
+            .iter()
+            .find(|held| held.name.split(' ').next() == Some(word))
+            .map(|held| escape(&held.command.summary).into_owned());
+        cmd = cmd.subcommand(clap::Command::new(shown).about(summary.unwrap_or_default()));
+    }
+    format!("{}{}", cmd.render_help(), index::notices(&index))
 }
 
 // === Main Entry Point ===
@@ -465,8 +494,10 @@ fn run_cli() -> Result<()> {
         )
     );
 
-    // Check for orphaned nested meta repo and warn the user
-    check_and_warn_orphan();
+    // Check for orphaned nested meta repo and warn the user; a TAB says nothing
+    if !matches!(command, Some(Commands::Complete { .. })) {
+        check_and_warn_orphan();
+    }
 
     // Where plugins are; nothing is started until a command needs one
     let subprocess_plugins = SubprocessPluginManager::new(cli.verbose)?;
@@ -481,6 +512,8 @@ fn run_cli() -> Result<()> {
     let mut report = Report::new(match &command {
         None => "help",
         Some(Commands::Help { .. }) => "help",
+        Some(Commands::Completions { .. }) => "completions",
+        Some(Commands::Complete { .. }) => "__complete",
         Some(Commands::Context(_)) => "context",
         Some(Commands::Init(_)) => "init claude",
         Some(Commands::Plugin(args)) => args.command.name(),
@@ -490,8 +523,14 @@ fn run_cli() -> Result<()> {
     });
     running(&report.command);
     match &command {
-        None => help_message(&cli, &help_with_plugins(&subprocess_plugins), &mut report)?,
+        None => help(&cli, &[], &subprocess_plugins, &mut report)?,
         Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins, &mut report)?,
+        Some(Commands::Completions { shell }) => out!("{}", completions::script(shell))?,
+        Some(Commands::Complete { words }) => {
+            for word in completions::complete(&index::load(&subprocess_plugins), words) {
+                outln!("{word}")?;
+            }
+        }
         Some(Commands::Context(args)) => {
             let workspace =
                 Workspace::find(&cli.start_dir()?, cli.config.as_ref())?.ok_or_else(|| {
@@ -594,6 +633,19 @@ fn help(
     plugins: &SubprocessPluginManager,
     report: &mut Report,
 ) -> Result<()> {
+    refuse_meta_option(words)?;
+    if cli.json {
+        let index = index::load(plugins);
+        let answer = match words.is_empty() {
+            true => Some(index.clone()),
+            false => index::about(&index, words),
+        };
+        if let Some(answer) = answer {
+            let data = serde_json::to_value(answer)?;
+            report.results.push(meta_plugin::ProjectResult::about_workspace(data));
+            return Ok(());
+        }
+    }
     let Some(first) = words.first() else {
         return help_message(cli, &help_with_plugins(plugins), report);
     };
@@ -631,6 +683,37 @@ fn help(
     plugin_command(cli, &args, &plugin, report).map(|_| ())
 }
 
+/// The tip for one of meta's options typed after `help`, as for any command.
+fn refuse_meta_option(words: &[String]) -> Result<()> {
+    let meta = meta_options();
+    let Some(rejected) = words.iter().take_while(|word| *word != "--").find(|word| {
+        word.starts_with('-')
+            && meta
+                .options
+                .iter()
+                .any(|o| o.spellings.iter().any(|s| s == word.split('=').next().unwrap_or(word)))
+    }) else {
+        return Ok(());
+    };
+    let line: Vec<String> = std::iter::once("help".to_string())
+        .chain(words.iter().cloned())
+        .collect();
+    let check = |moved: &[String], rest: &[String]| {
+        let line = std::iter::once("meta".to_string())
+            .chain(meta.typed.iter().cloned())
+            .chain(moved.iter().cloned())
+            .chain(rest.iter().cloned());
+        meta_plugin::args::verdict(command_line().try_get_matches_from(line))
+    };
+    let tip = meta.tip(&line, rejected, &check);
+    let mut error = meta_plugin::ErrorInfo::new(
+        meta_plugin::ErrorCode::Usage,
+        format!("meta help takes no option {}", escape(rejected)),
+    );
+    error.hint = tip;
+    Err(error.into())
+}
+
 /// `meta <word> ...`, served by `plugin`: its help, or the command in the
 /// selected repos. What the plugin delegated to, if it did.
 fn plugin_command(
@@ -651,7 +734,8 @@ fn plugin_command(
     if args.len() == 1 || namespace_help {
         report.command = plugin.word.clone();
         let help = meta_plugin::help_text(&plugin.word, &plugin.info);
-        help_message(cli, &format!("{}\n", help.trim_end()), report)?;
+        let help = format!("{}{}\n", answered_by(cli, args, plugin), help.trim_end());
+        help_message(cli, &help, report)?;
         return Ok(None);
     }
     if wants_help {
@@ -660,9 +744,37 @@ fn plugin_command(
     dispatch(cli, args, plugin, report)
 }
 
+/// The `answered by:` line that opens the help of `args` (empty under
+/// `--json`, where the help alone is the Envelope's message): from the
+/// index, or for a file with no manifest, from what it says of itself.
+fn answered_by(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> String {
+    if cli.json {
+        return String::new();
+    }
+    let typed: Vec<String> = args
+        .iter()
+        .take_while(|arg| !matches!(arg.as_str(), "--" | "--help" | "-h"))
+        .cloned()
+        .collect();
+    let line = SubprocessPluginManager::new(false).ok().and_then(|plugins| {
+        let index = index::load(&plugins);
+        let (held, _) = index::resolve(&index, &typed)?;
+        Some(index::answered_by(held, &typed))
+    });
+    let line = line.unwrap_or_else(|| {
+        format!(
+            "answered by: {} {} ({})",
+            escape(&plugin.word),
+            escape(&plugin.info.version),
+            escape_path(&plugin.path)
+        )
+    });
+    format!("{line}\n\n")
+}
+
 /// `meta <word> <verb> ... --help`: a line saying who answers the command,
-/// as the plugin's info declares it, then the command's help: the plugin's
-/// for one of its own, meta's for one it runs as typed.
+/// then the command's help: the plugin's for one of its own, meta's for one
+/// it runs as typed.
 fn command_help(
     cli: &Cli,
     args: &[String],
@@ -671,8 +783,6 @@ fn command_help(
 ) -> Result<Option<Vec<String>>> {
     use meta_plugin::Verb;
     let verb = args.get(1).map(String::as_str).unwrap_or_default();
-    let named = loop_lib::display_command(&[plugin.word.clone(), verb.to_string()]);
-    let named = escape(&named);
     let start = cli.start_dir()?;
     let ask_plugin = |report: &mut Report| {
         let request = invoke::request(cli, plugin, args, &start, Scope::None, None)?;
@@ -680,28 +790,13 @@ fn command_help(
     };
     match plugin.info.verb(verb) {
         Verb::Own => {
-            let tool = plugin
-                .info
-                .help
-                .as_ref()
-                .and_then(|h| h.runs_as_typed.as_deref());
-            // under --json, the help alone is the Envelope's message
-            if !cli.json {
-                let owner = match tool {
-                    Some(tool) => format!(
-                        "`meta {named}` is adapted by meta-{}: meta's own command, not {} run as typed.",
-                        escape(&plugin.word),
-                        escape(tool)
-                    ),
-                    None => format!("`meta {named}` is a command of meta-{}.", escape(&plugin.word)),
-                };
-                outln!("{owner}\n")?;
-            }
+            out!("{}", answered_by(cli, args, plugin))?;
             ask_plugin(report)
         }
         Verb::AsTyped(tool) => {
             report.command = format!("{} {verb}", plugin.word);
-            help_message(cli, &as_typed_help(cli, args, plugin, tool), report)?;
+            let help = as_typed_help(cli, args, plugin, tool);
+            help_message(cli, &format!("{}{help}", answered_by(cli, args, plugin)), report)?;
             Ok(None)
         }
         Verb::Unknown => ask_plugin(report),
@@ -999,8 +1094,9 @@ fn handle_plugin_command(
     report: &mut Report,
 ) -> Result<()> {
     use meta_plugin::ProjectResult;
-    let mut record =
-        |data: serde_json::Value| report.results.push(ProjectResult::about_workspace(data));
+    let mut warnings = Vec::new();
+    let results = &mut report.results;
+    let mut record = |data: serde_json::Value| results.push(ProjectResult::about_workspace(data));
     use registry::{PluginInstaller, RegistryClient, PLUGIN_PREFIX};
 
     // These change installed plugins and have no preview
@@ -1147,6 +1243,8 @@ fn handle_plugin_command(
             } else {
                 // Use discovered plugins from subprocess plugin manager
                 let plugins = subprocess_plugins.all();
+                let index = index::load(subprocess_plugins);
+                let declared = index::manifest_only(&index, &plugins);
 
                 for plugin in &plugins {
                     record(serde_json::json!({
@@ -1156,12 +1254,22 @@ fn handle_plugin_command(
                         "path": plugin.path.to_string_lossy(),
                     }));
                 }
+                for provider in &declared {
+                    record(serde_json::json!({
+                        "name": provider.name,
+                        "version": provider.version,
+                        "path": provider.path.as_deref().map(std::path::Path::to_string_lossy),
+                    }));
+                }
+                warnings.extend(index.problems.iter().map(|problem| {
+                    meta_plugin::Warning::new(index::problem_line(problem))
+                }));
                 if json {
                     // the records above are the --json output
-                } else if plugins.is_empty() {
+                } else if plugins.is_empty() && declared.is_empty() {
                     outln!("No plugins installed")?;
                 } else {
-                    outln!("Installed plugins ({}):", plugins.len())?;
+                    outln!("Installed plugins ({}):", plugins.len() + declared.len())?;
                     outln!()?;
                     outln!("{:<12} {:<12} PATH", "NAME", "VERSION")?;
                     outln!("{}", "-".repeat(70))?;
@@ -1173,7 +1281,19 @@ fn handle_plugin_command(
                             escape_path(&plugin.path)
                         )?;
                     }
+                    for provider in &declared {
+                        let path = provider.path.as_deref();
+                        outln!(
+                            "{:<12} {:<12} {}",
+                            escape(&provider.name),
+                            escape(provider.version.as_deref().unwrap_or("-")),
+                            path.map_or("built into meta".into(), escape_path)
+                        )?;
+                    }
                     tool_extensions(&plugins)?;
+                }
+                if !json {
+                    out!("{}", index::notices(&index))?;
                 }
             }
         }
@@ -1313,6 +1433,7 @@ fn handle_plugin_command(
         }
     }
 
+    report.warnings.extend(warnings);
     Ok(())
 }
 
@@ -1330,8 +1451,8 @@ fn unrecognized_command_error(
     run_it: bool,
 ) -> anyhow::Error {
     let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
-    let cli = command_line();
-    let builtins: Vec<&str> = cli.get_subcommands().map(|sub| sub.get_name()).collect();
+    let index = index::load(plugins);
+    let builtins = index::top_words(&index);
     // Plugins by their file names: none is started to list them
     let words = plugins.words();
     let near = (!subprocess_plugins::on_path(first_cmd))
@@ -1384,8 +1505,19 @@ fn unrecognized_command_error(
         true => "\n\nNo .meta.yaml here or above, so no workspace's own plugins were looked for.",
         false => "",
     };
+    // declared by a manifest, with no `meta-<word>` file to run it yet
+    let declared = index::resolve(&index, command_args)
+        .filter(|(held, _)| held.provider.source > meta_plugin::manifest::Source::Host)
+        .map(|(held, _)| {
+            format!(
+                "\n\n{}, but meta runs only `meta-<word>` programs so far: there is no meta-{}.",
+                index::answered_by(held, command_args),
+                escape(first_cmd)
+            )
+        })
+        .unwrap_or_default();
     meta_plugin::exit::Usage(format!(
-        "unrecognized command '{}'{suggestion}{outside}\n\n\
+        "unrecognized command '{}'{declared}{suggestion}{outside}\n\n\
          The commands there are, the ones plugins add too: meta --help",
         escape(first_cmd),
     ))

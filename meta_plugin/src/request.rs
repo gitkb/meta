@@ -175,8 +175,7 @@ pub struct Worktree {
     /// error
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
-    /// The shell command for each worktree event (`post-create`,
-    /// `post-destroy`, `post-prune`), from `worktree.hooks`
+    /// The shell command for each worktree event, from `worktree.hooks`
     #[serde(default)]
     pub hooks: std::collections::BTreeMap<String, String>,
     /// The folder of the config these settings come from (inside a set, the

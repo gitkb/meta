@@ -1,0 +1,472 @@
+//! The command index: every command there is, read from manifests. It
+//! answers help, `meta --json help`, completions and the unknown-command
+//! list; what runs a command is still the router in `main.rs`.
+//!
+//! A bad manifest or a collision disables only the commands it touches, and
+//! reading the index never fails: what went wrong is in its `problems`.
+
+use crate::subprocess_plugins::SubprocessPluginManager;
+use meta_plugin::manifest::{
+    Command, Index, Indexed, Manifest, PluginFile, Problem, Provider, Source, FILE,
+};
+use std::path::{Path, PathBuf};
+
+/// The first-party manifests, as the last place to look: an install has no
+/// manifest files yet, and `meta --json help git …` must have an answer.
+const EMBEDDED: [&str; 2] = [
+    include_str!("../../meta_git_cli/meta-plugin.toml"),
+    include_str!("../../plugins/cargo/meta-plugin.toml"),
+];
+
+/// Commands no provider may replace, whatever their effect.
+const FIXED: [&str; 2] = ["help", "plugin"];
+
+/// A manifest as found: where, and what it holds.
+struct Found {
+    source: Source,
+    path: Option<PathBuf>,
+    manifest: Result<Manifest, String>,
+}
+
+/// Read every manifest there is, and `plugins`' files.
+pub fn load(plugins: &SubprocessPluginManager) -> Index {
+    let mut problems = Vec::new();
+    let mut found = Vec::new();
+    for (source, dir) in folders(&mut problems) {
+        found.extend(manifests_in(source, &dir, &mut problems));
+    }
+    let on_disk = |name: &str| {
+        found.iter().any(|f: &Found| {
+            f.source == Source::Release && f.manifest.as_ref().is_ok_and(|m| m.name == name)
+        })
+    };
+    let embedded: Vec<Found> = EMBEDDED
+        .iter()
+        .map(|text| Found {
+            source: Source::Embedded,
+            path: None,
+            manifest: Manifest::parse(text),
+        })
+        .filter(|f| !f.manifest.as_ref().is_ok_and(|m| on_disk(&m.name)))
+        .collect();
+    found.extend(embedded);
+    found.sort_by_key(|f| f.source);
+    let mut index = build(found);
+    index.problems.extend(problems);
+    index.files = files(&index, plugins);
+    index
+}
+
+/// The folders that hold plugin folders, with the scope of each.
+fn folders(problems: &mut Vec<Problem>) -> Vec<(Source, PathBuf)> {
+    let mut folders = Vec::new();
+    let mut problem = |place: String, e: anyhow::Error| {
+        problems.push(Problem {
+            place,
+            command: None,
+            message: format!("{e:#}"),
+        })
+    };
+    let workspace = std::env::current_dir()
+        .map_err(anyhow::Error::from)
+        .and_then(|cwd| meta_core::config::nearest_meta_dir(&cwd))
+        .and_then(|nearest| {
+            nearest.map_or(Ok(Vec::new()), |dir| {
+                meta_core::config::workspace_meta_dirs(&dir)
+            })
+        });
+    match workspace {
+        Ok(dirs) => folders.extend(
+            dirs.into_iter()
+                .map(|dir| (Source::Workspace, dir.join(".meta/plugins"))),
+        ),
+        Err(e) => problem("the workspace".to_string(), e),
+    }
+    match meta_core::meta_dir() {
+        Ok(dir) => folders.push((Source::User, dir.join("plugins"))),
+        Err(e) => problem("your meta folder".to_string(), e),
+    }
+    folders.extend(release_dir().map(|dir| (Source::Release, dir)));
+    if let Some(dirs) = std::env::var_os("META_PLUGIN_DIRS") {
+        folders.extend(std::env::split_paths(&dirs).map(|dir| (Source::Release, dir)));
+    }
+    folders
+}
+
+/// `<prefix>/lib/meta/plugins`, for meta at `<prefix>/bin/meta`, through any
+/// links to it (Homebrew's).
+fn release_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    Some(exe.parent()?.parent()?.join("lib/meta/plugins"))
+}
+
+/// The manifests of the plugin folders in `dir`, by folder name.
+fn manifests_in(source: Source, dir: &Path, problems: &mut Vec<Problem>) -> Vec<Found> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            problems.push(Problem {
+                place: dir.to_string_lossy().into_owned(),
+                command: None,
+                message: e.to_string(),
+            });
+            return Vec::new();
+        }
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path().join(FILE))
+        .filter(|path| path.is_file())
+        .collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| Found {
+            source,
+            manifest: std::fs::read_to_string(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|text| Manifest::parse(&text)),
+            path: Some(path),
+        })
+        .collect()
+}
+
+/// The index of meta's own commands and `found` (farthest first).
+fn build(found: Vec<Found>) -> Index {
+    let host = Manifest::parse(crate::HOST_MANIFEST).unwrap_or_default();
+    let mut index = Index {
+        meta_options: host.meta_options.clone(),
+        ..Index::default()
+    };
+    add(&mut index, Source::Host, None, host);
+    for Found {
+        source,
+        path,
+        manifest,
+    } in found
+    {
+        let place = place_of(&path);
+        match manifest {
+            Ok(manifest) => {
+                let mut wrong = manifest.problems();
+                if !manifest.meta_options.is_empty() {
+                    wrong.push("meta_options belong to meta alone".to_string());
+                }
+                match wrong.is_empty() {
+                    true => add(&mut index, source, path, manifest),
+                    false => index
+                        .problems
+                        .extend(wrong.into_iter().map(|message| Problem {
+                            place: place.clone(),
+                            command: None,
+                            message,
+                        })),
+                }
+            }
+            Err(message) => index.problems.push(Problem {
+                place,
+                command: None,
+                message,
+            }),
+        }
+    }
+    index
+}
+
+fn place_of(path: &Option<PathBuf>) -> String {
+    match path {
+        Some(path) => path.to_string_lossy().into_owned(),
+        None => "built into meta".to_string(),
+    }
+}
+
+/// The commands of `manifest`, as the precedence rule lets them in.
+fn add(index: &mut Index, source: Source, path: Option<PathBuf>, manifest: Manifest) {
+    let provider = Provider {
+        name: manifest.name.clone(),
+        version: manifest.version.clone().or_else(|| {
+            (source <= Source::Embedded).then(|| crate::VERSION.trim().to_string())
+        }),
+        source,
+        path,
+    };
+    let place = place_of(&provider.path);
+    for (name, command) in &manifest.commands {
+        let mut entry = Indexed {
+            name: name.clone(),
+            provider: provider.clone(),
+            disabled: None,
+            shadows: Vec::new(),
+            command: command.clone(),
+        };
+        let wrong = manifest.command_problems(name, command);
+        let holder = holder(index, name, &provider);
+        let conflict = holder.and_then(|at| {
+            let held = index.commands.get(at)?;
+            refusal(held, name, &provider, manifest.overrides.contains(name))
+        });
+        let mut problem = |message: String| {
+            index.problems.push(Problem {
+                place: place.clone(),
+                command: Some(name.clone()),
+                message,
+            })
+        };
+        // a mistake disables the one who made it, never the command it
+        // tried to take
+        if let Some(message) = conflict {
+            problem(message);
+            continue;
+        }
+        if !wrong.is_empty() {
+            let message = wrong.join("; ");
+            problem(message.clone());
+            entry.disabled = Some(message);
+            if holder.is_some() {
+                continue;
+            }
+        }
+        match holder.and_then(|at| Some((at, index.commands.get(at)?.name == *name))) {
+            Some((at, true)) => {
+                if let Some(held) = index.commands.get_mut(at) {
+                    entry.shadows = std::mem::take(&mut held.shadows);
+                    entry.shadows.push(held.provider.clone());
+                    *held = entry;
+                }
+            }
+            Some((at, false)) => {
+                entry.shadows = index
+                    .commands
+                    .get(at)
+                    .map(|held| held.provider.clone())
+                    .into_iter()
+                    .collect();
+                index.commands.push(entry);
+            }
+            None => index.commands.push(entry),
+        }
+    }
+}
+
+/// Where in the index another provider holds `name`: the command itself,
+/// or a raw command whose words reach it (raw words belong to their
+/// provider).
+fn holder(index: &Index, name: &str, provider: &Provider) -> Option<usize> {
+    let exact = index.commands.iter().position(|held| held.name == name);
+    exact
+        .or_else(|| {
+            index.commands.iter().position(|held| {
+                held.command.raw && is_under(name, &held.name) && held.provider != *provider
+            })
+        })
+        .filter(|at| {
+            index
+                .commands
+                .get(*at)
+                .is_some_and(|held| held.provider != *provider)
+        })
+}
+
+/// Whether the words of `name` start with all those of `command`, and more.
+fn is_under(name: &str, command: &str) -> bool {
+    name.strip_prefix(command)
+        .is_some_and(|rest| rest.starts_with(' '))
+}
+
+/// Why `provider` can't take `name` from `held`, if it can't.
+fn refusal(held: &Indexed, name: &str, provider: &Provider, overrides: bool) -> Option<String> {
+    let owner = format!("{} ({})", held.provider.name, place_of(&held.provider.path));
+    let first = name.split(' ').next().unwrap_or_default();
+    if FIXED.contains(&first) || held.command.effects == meta_plugin::manifest::Effect::Destructive
+    {
+        return Some(format!(
+            "`{name}` can't be overridden; it stays with {owner}"
+        ));
+    }
+    if !overrides {
+        return Some(format!(
+            "`{name}` belongs to {owner}: to replace it, declare overrides = [\"{name}\"]"
+        ));
+    }
+    (provider.source <= held.provider.source).then(|| {
+        format!("`{name}` belongs to {owner}, in a scope as near: an override must be nearer")
+    })
+}
+
+/// `plugins`' files: each with no manifest behind it, and the command that
+/// keeps it from running. Only meta's own commands do that today: the
+/// router runs the file of any other word.
+fn files(index: &Index, plugins: &SubprocessPluginManager) -> Vec<PluginFile> {
+    plugins
+        .files_by_word()
+        .into_iter()
+        .map(|(word, path)| {
+            let shadowed_by = index
+                .commands
+                .iter()
+                .find(|held| {
+                    held.provider.source == Source::Host
+                        && held.name.split(' ').next() == Some(word.as_str())
+                })
+                .map(|held| held.name.split(' ').next().unwrap_or_default().to_string());
+            PluginFile {
+                word,
+                path,
+                shadowed_by,
+            }
+        })
+        .collect()
+}
+
+/// The command `words` reach, and how many of them name it: the longest
+/// declared command they start with, by name or by the alias of its last
+/// word.
+pub fn resolve<'a>(index: &'a Index, words: &[String]) -> Option<(&'a Indexed, usize)> {
+    (1..=words.len()).rev().find_map(|len| {
+        let typed = words.get(..len)?;
+        let held = index.commands.iter().find(|held| names(held, typed))?;
+        Some((held, len))
+    })
+}
+
+fn names(held: &Indexed, typed: &[String]) -> bool {
+    let declared: Vec<&str> = held.name.split(' ').collect();
+    let Some(((last, words), (last_typed, typed))) =
+        declared.split_last().zip(typed.split_last())
+    else {
+        return false;
+    };
+    words.len() == typed.len()
+        && words.iter().zip(typed).all(|(a, b)| a == b)
+        && (last == last_typed || held.command.alias.contains(last_typed))
+}
+
+/// The commands under `words`, by name.
+pub fn under<'a>(index: &'a Index, words: &[String]) -> Vec<&'a Indexed> {
+    let prefix = words.join(" ");
+    index
+        .commands
+        .iter()
+        .filter(|held| is_under(&held.name, &prefix))
+        .collect()
+}
+
+/// The first word of every command that shows, sorted, each once.
+pub fn top_words(index: &Index) -> Vec<&str> {
+    let mut words: Vec<&str> = index
+        .commands
+        .iter()
+        .filter(|held| !held.command.hidden)
+        .filter_map(|held| held.name.split(' ').next())
+        .collect();
+    words.sort_unstable();
+    words.dedup();
+    words
+}
+
+/// The index cut down to what `words` ask about: the command, or the
+/// commands under them.
+pub fn about(index: &Index, words: &[String]) -> Option<Index> {
+    let found = resolve(index, words).filter(|(held, len)| *len == words.len() || held.command.raw);
+    let mut commands: Vec<Indexed> = found.iter().map(|(held, _)| (*held).clone()).collect();
+    if found.is_none_or(|(_, len)| len == words.len()) {
+        commands.extend(under(index, words).into_iter().cloned());
+    }
+    (!commands.is_empty()).then(|| Index {
+        commands,
+        ..Index::default()
+    })
+}
+
+/// The `answered by:` line of a command, from its entry: who, and what help
+/// should say of it.
+pub fn answered_by(held: &Indexed, typed: &[String]) -> String {
+    let provider = &held.provider;
+    let version = provider
+        .version
+        .as_deref()
+        .map(|version| format!(" {version}"))
+        .unwrap_or_default();
+    let place = match &provider.path {
+        Some(path) => path.to_string_lossy().into_owned(),
+        None => "built into meta".to_string(),
+    };
+    let mut line = format!("answered by: {}{version} ({place})", provider.name);
+    let as_typed = held.command.raw || held.name.split(' ').count() < typed.len();
+    for note in notes(&held.command, as_typed) {
+        line.push_str(" · ");
+        line.push_str(&note);
+    }
+    meta_plugin::display::escape(&line).into_owned()
+}
+
+fn notes(command: &Command, as_typed: bool) -> Vec<String> {
+    let mut notes = Vec::new();
+    if as_typed {
+        notes.push("runs as typed".to_string());
+    }
+    if !command.only_if.is_empty() {
+        notes.push(format!(
+            "only where there is {}",
+            command.only_if.join(" or ")
+        ));
+    }
+    if command.network {
+        notes.push("uses the network".to_string());
+    }
+    notes
+}
+
+/// The providers with a manifest of their own and no `meta-<word>` file
+/// among `plugins`, one line each in `meta plugin list`: meta itself isn't
+/// one.
+pub fn manifest_only(
+    index: &Index,
+    plugins: &[crate::subprocess_plugins::SubprocessPlugin],
+) -> Vec<Provider> {
+    let mut providers: Vec<Provider> = Vec::new();
+    for held in &index.commands {
+        let provider = &held.provider;
+        let file = plugins.iter().any(|plugin| plugin.word == provider.name);
+        if provider.source != Source::Host && !file && !providers.contains(provider) {
+            providers.push(provider.clone());
+        }
+    }
+    providers
+}
+
+/// `problem`, as one line.
+pub fn problem_line(problem: &Problem) -> String {
+    use meta_plugin::display::escape;
+    let command = problem
+        .command
+        .as_deref()
+        .map(|command| format!(" `{}`", escape(command)))
+        .unwrap_or_default();
+    format!(
+        "Problem in {}{command}: {}",
+        escape(&problem.place),
+        escape(&problem.message)
+    )
+}
+
+/// What help says after the commands: each file that never runs, and each
+/// problem. Empty when there is nothing to say.
+pub fn notices(index: &Index) -> String {
+    use meta_plugin::display::{escape, escape_path};
+    let mut text = String::new();
+    for file in &index.files {
+        if let Some(command) = &file.shadowed_by {
+            text.push_str(&format!(
+                "\n{} never runs: `meta {}` is meta's own command. Delete the file.\n",
+                escape_path(&file.path),
+                escape(command)
+            ));
+        }
+    }
+    for problem in &index.problems {
+        text.push_str(&format!("\n{}\n", problem_line(problem)));
+    }
+    text
+}

@@ -1169,9 +1169,23 @@ impl PluginInstaller {
 
             info!("Uninstalled {}", plugin_name);
             Ok(())
+        } else if let Some(folder) = self.manifest_folder(name) {
+            // what a manifest says doesn't matter: a broken one goes too
+            std::fs::remove_dir_all(&folder)
+                .with_context(|| format!("Failed to remove {}", escape_path(&folder)))?;
+            info!("Uninstalled {}", name);
+            Ok(())
         } else {
             anyhow::bail!("Plugin {} is not installed", escape(&plugin_name))
         }
+    }
+
+    /// The plugin folder `name` has here: one plain folder name, holding a
+    /// manifest.
+    fn manifest_folder(&self, name: &str) -> Option<PathBuf> {
+        let plain = Path::new(name).file_name() == Some(name.as_ref());
+        let folder = self.plugins_dir.join(name);
+        (plain && folder.join(meta_plugin::manifest::FILE).is_file()).then_some(folder)
     }
 
     /// The plugins `meta plugin install` installed here that are still

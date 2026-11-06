@@ -10,37 +10,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-/// Represents a project entry in the .meta.yaml.
-/// Can be either a simple git URL string or an extended object with additional fields.
-#[derive(Debug, Clone)]
-pub enum ProjectEntry {
-    /// Simple format: just a git URL string
-    Simple(RepoUrl),
-    /// Extended format: object with repo, path, tags, and dependency info
-    Extended(ExtendedEntry),
-}
-
-/// An extended project entry's fields; others are left to other tools. Each
-/// string is one YAML wrote as a string: YAML would read `false` or `123` as
-/// "false" or "123".
-#[derive(Debug, Clone, Deserialize)]
-pub struct ExtendedEntry {
-    /// Git remote URL (optional for local-only projects).
-    #[serde(default, deserialize_with = "some_string")]
-    pub repo: Option<RepoUrl>,
-    #[serde(default, deserialize_with = "some_string")]
-    pub path: Option<String>,
-    #[serde(default, deserialize_with = "strings")]
-    pub tags: Vec<String>,
-    #[serde(default, deserialize_with = "strings")]
-    pub provides: Vec<String>,
-    #[serde(default, deserialize_with = "strings")]
-    pub depends_on: Vec<String>,
-    /// If true, this directory contains a nested .meta.yaml
-    #[serde(default)]
-    pub meta: bool,
-}
-
 /// A YAML string, as `T`.
 fn some_string<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -80,6 +49,10 @@ impl<'de> Deserialize<'de> for YamlString {
     }
 }
 
+/// A project's entry in the .meta.yaml: its repo URL, or a mapping of its
+/// fields.
+struct ProjectEntry(ProjectInfo);
+
 /// A URL or a mapping, and an error that says so (and what was wrong in the
 /// mapping) for anything else: an untagged enum's would only say no form
 /// matched.
@@ -90,46 +63,67 @@ impl<'de> Deserialize<'de> for ProjectEntry {
             type Value = ProjectEntry;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str(
-                    "a repo URL, or a mapping of repo, path, tags (a list), provides (a list), \
-                     depends_on (a list) and meta (true or false)",
-                )
+                let fields = serde_names::<ProjectInfo>().join(", ");
+                write!(formatter, "a repo URL, or a mapping of {fields}")
             }
 
             fn visit_str<E: serde::de::Error>(self, url: &str) -> Result<Self::Value, E> {
-                Ok(ProjectEntry::Simple(RepoUrl::from(url.to_string())))
+                Ok(ProjectEntry(ProjectInfo {
+                    repo: Some(RepoUrl::from(url.to_string())),
+                    ..ProjectInfo::default()
+                }))
             }
 
             fn visit_map<M: serde::de::MapAccess<'de>>(
                 self,
                 map: M,
             ) -> Result<Self::Value, M::Error> {
-                ExtendedEntry::deserialize(serde::de::value::MapAccessDeserializer::new(map))
-                    .map(ProjectEntry::Extended)
+                ProjectInfo::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(ProjectEntry)
             }
         }
         deserializer.deserialize_any(EntryVisitor)
     }
 }
 
-/// Parsed project info after normalization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A project: its entry in the .meta.yaml, then, once [`Workspace::load`]
+/// has named and checked it, what every command reads. Keys it doesn't know
+/// are left to other tools. Each string is one YAML wrote as a string: YAML
+/// would read `false` or `123` as "false" or "123".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProjectInfo {
+    /// Its key in `projects`, not a field of its entry.
+    #[serde(skip_deserializing)]
     pub name: String,
+    /// Empty while an entry that leaves it out is unread.
+    #[serde(default, deserialize_with = "project_path")]
     pub path: String,
     /// Git remote URL (optional for local-only projects).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "some_string"
+    )]
     pub repo: Option<RepoUrl>,
+    #[serde(default, deserialize_with = "strings")]
     pub tags: Vec<String>,
     /// What this project provides (e.g., APIs, libraries)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "strings")]
     pub provides: Vec<String>,
     /// What this project depends on (other project names or provided items)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "strings")]
     pub depends_on: Vec<String>,
     /// If true, this directory contains a nested .meta.yaml
     #[serde(default)]
     pub meta: bool,
+}
+
+/// A project's `path`, empty only when YAML wrote none.
+fn project_path<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    match some_string::<D, String>(deserializer)? {
+        Some(path) if path.is_empty() => Err(serde::de::Error::custom("path is empty")),
+        path => Ok(path.unwrap_or_default()),
+    }
 }
 
 impl ProjectInfo {
@@ -175,8 +169,9 @@ pub struct WorktreeConfig {
     pub hooks: BTreeMap<HookEvent, String>,
 }
 
-/// The worktree events a hook can run at; any other name is an error.
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// The worktree events a hook can run at; any other name is an error. Its
+/// name is its serde name, which `Display` shows.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
 pub enum HookEvent {
     PostCreate,
@@ -184,14 +179,16 @@ pub enum HookEvent {
     PostPrune,
 }
 
+impl std::fmt::Display for HookEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.serialize(f)
+    }
+}
+
 impl HookEvent {
     /// Its name in the config.
-    pub fn name(self) -> &'static str {
-        match self {
-            HookEvent::PostCreate => "post-create",
-            HookEvent::PostDestroy => "post-destroy",
-            HookEvent::PostPrune => "post-prune",
-        }
+    pub fn name(self) -> String {
+        self.to_string()
     }
 }
 
@@ -205,8 +202,7 @@ fn commands<'de, D: serde::Deserializer<'de>>(
         .map(|(event, value)| match value {
             serde_yaml_ng::Value::String(command) => Ok((event, command)),
             _ => Err(serde::de::Error::custom(format!(
-                "hook '{}' must be a command string",
-                event.name()
+                "hook '{event}' must be a command string"
             ))),
         })
         .collect()
@@ -222,7 +218,7 @@ pub struct MetaConfig {
     /// - A git URL string: `project: git@github.com:org/repo.git`
     /// - An extended object: `project: { repo: ..., path: ..., meta: true }`
     #[serde(default, deserialize_with = "unique_projects")]
-    pub projects: HashMap<String, ProjectEntry>,
+    pub projects: HashMap<String, ProjectInfo>,
     #[serde(default)]
     pub defaults: MetaDefaults,
     /// Custom directory for worktrees (overrides default .worktrees/)
@@ -235,10 +231,10 @@ pub struct MetaConfig {
 /// A project map in which no key appears twice: serde would keep the last.
 fn unique_projects<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<HashMap<String, ProjectEntry>, D::Error> {
+) -> Result<HashMap<String, ProjectInfo>, D::Error> {
     struct ProjectsVisitor;
     impl<'de> serde::de::Visitor<'de> for ProjectsVisitor {
-        type Value = HashMap<String, ProjectEntry>;
+        type Value = HashMap<String, ProjectInfo>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             formatter.write_str("a map of unique project keys")
@@ -256,12 +252,141 @@ fn unique_projects<'de, D: serde::Deserializer<'de>>(
                         escape(&key)
                     )));
                 }
-                projects.insert(key, map.next_value()?);
+                projects.insert(key, map.next_value::<ProjectEntry>()?.0);
             }
             Ok(projects)
         }
     }
     deserializer.deserialize_map(ProjectsVisitor)
+}
+
+/// What each key of a `.meta.yaml` means; [`fields_table`] takes the keys
+/// from serde, and a test holds this list to them.
+const FIELD_MEANINGS: &[(&str, &str)] = &[
+    (
+        "projects",
+        "The projects, by name: each a repo URL, or a mapping of the `projects.<name>` fields",
+    ),
+    (
+        "projects.<name>.path",
+        "Where the project lives (defaults to its name)",
+    ),
+    (
+        "projects.<name>.repo",
+        "Git repository URL (without one the project is local-only: `meta git update` doesn't \
+         clone it)",
+    ),
+    ("projects.<name>.tags", "Array of tags for filtering"),
+    (
+        "projects.<name>.provides",
+        "Array of capabilities this project provides",
+    ),
+    (
+        "projects.<name>.depends_on",
+        "Array of project names or provided capabilities this depends on",
+    ),
+    (
+        "projects.<name>.meta",
+        "Set `true` if this project contains a nested `.meta.yaml`",
+    ),
+    ("defaults", "Settings for every command"),
+    (
+        "defaults.parallel",
+        "Run commands in parallel (`true` unless set)",
+    ),
+    (
+        "worktrees_dir",
+        "Where worktree sets go, instead of `.worktrees`",
+    ),
+    ("worktree", "Settings for worktree sets"),
+    (
+        "worktree.hooks",
+        "The shell command to run at each worktree event, by event: {events}",
+    ),
+];
+
+/// Every key a `.meta.yaml` can hold, as serde names them.
+fn config_fields() -> Vec<String> {
+    [
+        ("", serde_names::<MetaConfig>()),
+        ("projects.<name>.", serde_names::<ProjectInfo>()),
+        ("defaults.", serde_names::<MetaDefaults>()),
+        ("worktree.", serde_names::<WorktreeConfig>()),
+    ]
+    .into_iter()
+    .flat_map(|(prefix, fields)| fields.iter().map(move |field| format!("{prefix}{field}")))
+    .collect()
+}
+
+/// The keys of a `.meta.yaml` as the Markdown table the docs show.
+pub fn fields_table() -> String {
+    let rows: String = config_fields()
+        .iter()
+        .map(|field| {
+            let meaning = FIELD_MEANINGS
+                .iter()
+                .find(|(key, _)| key == field)
+                .map_or("", |(_, meaning)| meaning)
+                .replace("{events}", &hook_events());
+            format!("| `{field}` | {meaning} |\n")
+        })
+        .collect();
+    format!("| Field | Meaning |\n|-------|---------|\n{rows}")
+}
+
+/// The names of the hook events, as the docs show them.
+pub fn hook_events() -> String {
+    let names: Vec<String> = serde_names::<HookEvent>()
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect();
+    names.join(", ")
+}
+
+/// The field names of a struct, or the variant names of an enum, that
+/// derives `Deserialize`, spelled as a config spells them.
+fn serde_names<'de, T: Deserialize<'de>>() -> &'static [&'static str] {
+    let mut names: &[&str] = &[];
+    // never a `T`: the names are all it was after
+    let _: Result<T, _> = T::deserialize(SerdeNames(&mut names));
+    names
+}
+
+/// A deserializer with nothing to read, which keeps the names a type's
+/// derived `Deserialize` asks it for.
+struct SerdeNames<'a>(&'a mut &'static [&'static str]);
+
+impl<'de> serde::Deserializer<'de> for SerdeNames<'_> {
+    type Error = serde::de::value::Error;
+
+    fn deserialize_any<V: serde::de::Visitor<'de>>(self, _: V) -> Result<V::Value, Self::Error> {
+        Err(serde::de::Error::custom("nothing to read"))
+    }
+
+    fn deserialize_struct<V: serde::de::Visitor<'de>>(
+        self,
+        _: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        *self.0 = fields;
+        self.deserialize_any(visitor)
+    }
+
+    fn deserialize_enum<V: serde::de::Visitor<'de>>(
+        self,
+        _: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Self::Error> {
+        *self.0 = variants;
+        self.deserialize_any(visitor)
+    }
+
+    serde::forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf
+        option unit unit_struct newtype_struct seq tuple tuple_struct map identifier ignored_any
+    }
 }
 
 /// The config filename meta looks for.
@@ -489,7 +614,7 @@ impl Workspace {
         }
         .with_context(parse_error)?;
 
-        // Convert project entries to normalized, validated ProjectInfo
+        // Name, normalize and validate the projects
         // in name order, so the first bad entry reported is always the same one
         let base_dir = meta_path
             .parent()
@@ -525,35 +650,11 @@ impl Workspace {
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         let checked: Vec<(ProjectInfo, PathBuf)> = entries
             .into_iter()
-            .map(|(name, entry)| {
-                let (repo, path, tags, provides, depends_on, meta) = match entry {
-                    // Simple string -> git URL
-                    ProjectEntry::Simple(url) => {
-                        (Some(url), name.clone(), vec![], vec![], vec![], false)
-                    }
-                    // Extended object -> repo with additional fields
-                    // meta: true indicates this project is also a meta-repo (has its own .meta.yaml)
-                    ProjectEntry::Extended(ExtendedEntry {
-                        repo,
-                        path,
-                        tags,
-                        provides,
-                        depends_on,
-                        meta,
-                    }) => {
-                        let resolved_path = path.unwrap_or_else(|| name.clone());
-                        (repo, resolved_path, tags, provides, depends_on, meta)
-                    }
-                };
-                let mut info = ProjectInfo {
-                    name,
-                    path,
-                    repo,
-                    tags,
-                    provides,
-                    depends_on,
-                    meta,
-                };
+            .map(|(name, mut info)| {
+                if info.path.is_empty() {
+                    info.path = name.clone();
+                }
+                info.name = name;
                 let location =
                     validate_project(base_dir, &worktrees, worktrees_at.as_deref(), &mut info)
                         .map_err(|reason| {
@@ -1370,6 +1471,48 @@ mod tests {
         assert_eq!(tree[0].info.name, "myproject");
         assert_eq!(tree[0].info.path, "custom/path");
         assert_eq!(tree[0].info.tags, vec!["frontend", "react"]);
+    }
+
+    #[test]
+    fn every_config_field_has_one_meaning() {
+        let mut fields = config_fields();
+        let mut meanings: Vec<String> = FIELD_MEANINGS.iter().map(|(f, _)| f.to_string()).collect();
+        fields.sort();
+        meanings.sort();
+        assert_eq!(fields, meanings);
+    }
+
+    #[test]
+    fn a_project_entry_reads_as_its_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".meta.yaml");
+        let load = |entry: &str| {
+            std::fs::write(&config, format!("projects:\n  a: {entry}\n")).unwrap();
+            Workspace::load(&config).map(|w| w.projects)
+        };
+        // no path, or a null one, is the name; a `name` key is another tool's
+        for entry in [
+            "git@x:o/a.git",
+            "{}",
+            "{path: ~}",
+            "{name: b, branch: main}",
+        ] {
+            let projects = load(entry).unwrap();
+            assert_eq!(
+                (projects[0].name.as_str(), projects[0].path.as_str()),
+                ("a", "a")
+            );
+        }
+        let error = format!("{:#}", load("{path: ''}").unwrap_err());
+        assert!(error.contains("path is empty"), "{error}");
+    }
+
+    #[test]
+    fn a_hook_event_shows_its_serde_name() {
+        for name in serde_names::<HookEvent>() {
+            let event: HookEvent = serde_yaml_ng::from_str(name).unwrap();
+            assert_eq!(event.to_string(), *name);
+        }
     }
 
     #[test]

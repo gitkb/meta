@@ -44,7 +44,24 @@ projects:
 ```
 
 **Simple format**: `name: git-url` - clones to `./name`
-**Extended format**: a mapping; every key is optional (`repo`, `path`, `tags`, `provides`, `depends_on`, `meta: true` for a nested meta repo)
+**Extended format**: a mapping; every key is optional. The fields of the config:
+
+<!-- generated:config-fields -->
+| Field | Meaning |
+|-------|---------|
+| `projects` | The projects, by name: each a repo URL, or a mapping of the `projects.<name>` fields |
+| `defaults` | Settings for every command |
+| `worktrees_dir` | Where worktree sets go, instead of `.worktrees` |
+| `worktree` | Settings for worktree sets |
+| `projects.<name>.path` | Where the project lives (defaults to its name) |
+| `projects.<name>.repo` | Git repository URL (without one the project is local-only: `meta git update` doesn't clone it) |
+| `projects.<name>.tags` | Array of tags for filtering |
+| `projects.<name>.provides` | Array of capabilities this project provides |
+| `projects.<name>.depends_on` | Array of project names or provided capabilities this depends on |
+| `projects.<name>.meta` | Set `true` if this project contains a nested `.meta.yaml` |
+| `defaults.parallel` | Run commands in parallel (`true` unless set) |
+| `worktree.hooks` | The shell command to run at each worktree event, by event: `post-create`, `post-destroy`, `post-prune` |
+<!-- /generated -->
 
 ## Discovering What's Here
 

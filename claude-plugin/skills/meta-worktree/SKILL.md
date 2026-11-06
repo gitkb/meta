@@ -231,9 +231,15 @@ Configure hooks in the meta config (`.meta.yaml`):
 worktree:
   hooks:
     post-create: my-tool worktree on-create
-    post-destroy: my-tool worktree on-destroy   # runs on `remove` and ephemeral cleanup
-    post-prune: my-tool worktree on-prune
 ```
+
+The events:
+
+<!-- generated:hook-events -->
+`post-create`, `post-destroy`, `post-prune`
+<!-- /generated -->
+
+`post-destroy` runs on `remove` and ephemeral cleanup.
 
 Each hook runs in the directory of the config that names it (the workspace's,
 also when run from inside a set) and gets a JSON description of the action on

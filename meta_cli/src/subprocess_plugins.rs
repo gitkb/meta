@@ -210,6 +210,14 @@ impl SubprocessPluginManager {
         self.files().into_keys().collect()
     }
 
+    /// The file serving each word, none started, sorted by word.
+    pub fn files_by_word(&self) -> Vec<(String, PathBuf)> {
+        self.files()
+            .into_iter()
+            .map(|(word, (path, _))| (word, path))
+            .collect()
+    }
+
     /// Every plugin, sorted by word. Each one is started to ask for its info;
     /// one that doesn't give it is warned about and left out, except a
     /// program on PATH that isn't a plugin.

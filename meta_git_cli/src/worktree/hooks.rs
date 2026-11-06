@@ -2,6 +2,7 @@
 //! [`meta_plugin::sets::fire`] with each event's payload.
 
 use anyhow::Result;
+use meta_core::config::HookEvent;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -11,9 +12,9 @@ use super::types::{CreateRepoEntry, PruneEntry};
 /// sent them (none outside a workspace).
 pub type Hooks<'a> = Option<&'a meta_plugin::Worktree>;
 
-fn fire(hooks: Hooks<'_>, event: &str, payload: &serde_json::Value) -> Result<()> {
+fn fire(hooks: Hooks<'_>, event: HookEvent, payload: &serde_json::Value) -> Result<()> {
     match hooks {
-        Some(worktree) => meta_plugin::sets::fire(worktree, event, payload),
+        Some(worktree) => meta_plugin::sets::fire(worktree, &event.to_string(), payload),
         None => Ok(()),
     }
 }
@@ -37,7 +38,7 @@ pub fn fire_post_create(
         "ttl_seconds": ttl_seconds,
         "custom": custom,
     });
-    fire(hooks, "post-create", &payload)
+    fire(hooks, HookEvent::PostCreate, &payload)
 }
 
 /// Fire post-destroy hook with structured payload.
@@ -48,7 +49,7 @@ pub fn fire_post_destroy(name: &str, path: &Path, force: bool, hooks: Hooks<'_>)
         "path": path.display().to_string(),
         "force": force,
     });
-    fire(hooks, "post-destroy", &payload)
+    fire(hooks, HookEvent::PostDestroy, &payload)
 }
 
 /// Fire post-prune hook with structured payload.
@@ -57,5 +58,5 @@ pub fn fire_post_prune(removed: &[PruneEntry], hooks: Hooks<'_>) -> Result<()> {
         "action": "prune",
         "removed": removed,
     });
-    fire(hooks, "post-prune", &payload)
+    fire(hooks, HookEvent::PostPrune, &payload)
 }

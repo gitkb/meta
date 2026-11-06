@@ -19,25 +19,9 @@ use std::os::unix::fs::symlink as symlink_dir;
 #[cfg(windows)]
 use std::os::windows::fs::symlink_dir;
 
-/// Embeds `claude-plugin/skills/<name>/SKILL.md`, the skills' one source
-macro_rules! skill {
-    ($name:literal) => {
-        (
-            $name,
-            include_str!(concat!("../../claude-plugin/skills/", $name, "/SKILL.md")),
-        )
-    };
-}
-
-/// All available skills with their names
-const SKILLS: &[(&str, &str)] = &[
-    skill!("meta-workspace"),
-    skill!("meta-git"),
-    skill!("meta-exec"),
-    skill!("meta-plugins"),
-    skill!("meta-worktree"),
-    skill!("meta-safety"),
-];
+// `SKILLS`, each skill's name and text: the folders of
+// `claude-plugin/skills/`, the skills' one source, as `build.rs` found them
+include!(concat!(env!("OUT_DIR"), "/skills.rs"));
 
 /// An agent skills folder each skill is linked into, named as in atc's agent registry.
 struct AgentDir {

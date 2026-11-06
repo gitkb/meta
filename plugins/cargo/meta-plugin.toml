@@ -1,0 +1,16 @@
+# cargo in every selected Rust project: no program of its own, only a plan
+# meta runs. The `meta-cargo` program still answers until the host runs plans
+# from manifests.
+
+name = "cargo"
+description = "Run cargo across the Rust repos of a meta workspace"
+
+[commands.cargo]
+summary = "Run cargo in every selected Rust project"
+effects = "unknown"
+scope = "selection"
+preview = "plan"
+raw = true
+only_if = ["Cargo.toml"]
+plan = ["cargo", "{raw}"]
+complete = ["cargo", "--list"]

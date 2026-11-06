@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The groups whose facts have one source now.
-const ENABLED: &[u8] = &[3, 4, 8, 11, 12, 18, 19, 22, 24, 25];
+const ENABLED: &[u8] = &[3, 4, 8, 11, 12, 18, 19, 20, 21, 22, 23, 24, 25];
 
 /// How a group is checked.
 enum Check {
@@ -137,15 +137,12 @@ const GROUPS: [(u8, &str, Check); 25] = [
     (
         20,
         ".meta.yaml's schema: one type",
-        Check::Copies(&[("meta_core/src/config.rs", "pub struct ProjectInfo {")]),
+        Check::Rule(config_schema),
     ),
     (
         21,
         "worktree hook event names: their serde names",
-        Check::Copies(&[(
-            "meta_core/src/config.rs",
-            "pub fn name(self) -> &'static str",
-        )]),
+        Check::Rule(hook_events),
     ),
     (
         22,
@@ -155,7 +152,7 @@ const GROUPS: [(u8, &str, Check); 25] = [
     (
         23,
         "the shipped skills: the skills folder",
-        Check::Copies(&[("meta_cli/src/shipped-skills.txt", "meta")]),
+        Check::Rule(skills_folder),
     ),
     (
         24,
@@ -534,6 +531,192 @@ fn markdown_without(repo: &Repo, words: &[&str]) -> Result<(), String> {
         true => Ok(()),
         false => Err(found.join("\n")),
     }
+}
+
+/// The lines of a Markdown text outside its generated sections, numbered.
+fn hand_written(text: &str) -> Vec<(usize, &str)> {
+    let mut generated = false;
+    text.lines()
+        .enumerate()
+        .filter(|(_, line)| {
+            generated = match line {
+                l if l.starts_with("<!-- generated:") => true,
+                l if l.starts_with("<!-- /generated") => false,
+                _ => generated,
+            };
+            !generated
+        })
+        .map(|(at, line)| (at + 1, line))
+        .collect()
+}
+
+fn all_ok(problems: Vec<String>) -> Result<(), String> {
+    match problems.is_empty() {
+        true => Ok(()),
+        false => Err(problems.join("\n")),
+    }
+}
+
+/// `.meta.yaml` is read by one serde type, `MetaConfig` and the sections it
+/// holds. The field tables are generated from it (the keys are serde's, and
+/// a meta_core test holds their meanings to them), and no other table lists
+/// a project's fields. A key meta doesn't know is an error, but in a project
+/// entry, where it is another tool's.
+fn config_schema(repo: &Repo) -> Result<(), String> {
+    use meta_core::config;
+    let table = config::fields_table();
+    let mut problems = Vec::new();
+    for file in ["README.md", "claude-plugin/skills/meta-workspace/SKILL.md"] {
+        problems.extend(repo.generated(file, "config-fields", &table).err());
+    }
+    if table.contains("|  |") {
+        problems.push(format!("a field has no meaning:\n{table}"));
+    }
+    let rows: Vec<String> = table
+        .lines()
+        .filter_map(|row| row.split("`projects.<name>.").nth(1)?.split('`').next())
+        .map(|field| format!("| `{field}` |"))
+        .collect();
+    assert!(rows.len() > 1, "project fields: {table}");
+    for (file, text) in repo.texts().filter(|(file, _)| file.ends_with(".md")) {
+        for (at, line) in hand_written(&text) {
+            if rows.iter().any(|row| line.starts_with(row.as_str())) {
+                problems.push(format!("{file}:{at}: a config field's table row"));
+            }
+        }
+    }
+    for (file, text) in repo.texts() {
+        if file.ends_with(".rs") && file != THIS && text.contains("struct ExtendedEntry") {
+            problems.push(format!("{file} has a second type for project entries"));
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join(".meta.yaml");
+    let load = |yaml: &str| {
+        std::fs::write(&config, yaml).unwrap();
+        config::Workspace::load(&config)
+    };
+    if let Err(e) = load("projects:\n  a:\n    repo: git@x:o/a.git\n    branch: main\n") {
+        problems.push(format!("another tool's key in a project entry: {e:#}"));
+    }
+    if load("project: {}\n").is_ok() {
+        problems.push("a misspelled top-level key was accepted".to_string());
+    }
+    all_ok(problems)
+}
+
+/// A hook event's name is its serde name: no code spells one as a string
+/// (`.to_string()` gives it), and the docs name one only as an example or
+/// in a section generated from the enum.
+fn hook_events(repo: &Repo) -> Result<(), String> {
+    let events = meta_core::config::hook_events();
+    let names: Vec<&str> = events.split('`').skip(1).step_by(2).collect();
+    assert!(names.len() > 1, "hook events: {events}");
+    let mut problems = Vec::new();
+    let skill = "claude-plugin/skills/meta-worktree/SKILL.md";
+    let render = format!("{events}\n");
+    problems.extend(repo.generated(skill, "hook-events", &render).err());
+    for (file, text) in repo.texts() {
+        if file.ends_with(".rs") && !file.contains("/tests/") {
+            let code = text.split("#[cfg(test)]").next().unwrap_or_default();
+            for name in names.iter().filter(|n| code.contains(&format!("\"{n}\""))) {
+                problems.push(format!("{file} spells the event {name}"));
+            }
+        }
+        if file.ends_with(".md") {
+            for (at, line) in hand_written(&text) {
+                if names.iter().filter(|n| line.contains(**n)).count() > 1 {
+                    problems.push(format!("{file}:{at}: a list of hook events"));
+                }
+            }
+        }
+    }
+    all_ok(problems)
+}
+
+/// The skills are the folders of `claude-plugin/skills/`: `meta init claude`
+/// installs exactly those, the docs' table is generated from their
+/// frontmatter, and nothing else lists them: no line names three (a test's
+/// fixture may use two), no code in `init.rs` names one, no table has a row
+/// for one. (`shipped-skills.txt`
+/// is the versions meta ever wrote, not this list: `--update` needs it to
+/// tell them from a user's file, and a unit test holds it to these folders.)
+fn skills_folder(repo: &Repo) -> Result<(), String> {
+    let mut skills: Vec<&str> = repo
+        .files
+        .iter()
+        .filter_map(|f| {
+            f.strip_prefix("claude-plugin/skills/")?
+                .strip_suffix("/SKILL.md")
+        })
+        .collect();
+    skills.sort_unstable();
+    assert!(skills.len() > 1, "skills: {skills:?}");
+    let mut problems = Vec::new();
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".meta.yaml"), "projects: {}\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_meta"))
+        .args(["init", "claude"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "meta init claude: {out:?}");
+    let mut installed: Vec<String> = std::fs::read_dir(dir.path().join(".meta/skills"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    installed.sort_unstable();
+    if installed != skills {
+        problems.push(format!(
+            "meta installs {installed:?}, the folder has {skills:?}"
+        ));
+    }
+
+    let mut rows = String::from("| Skill | What it teaches |\n|-------|-----------------|\n");
+    for name in &skills {
+        let file = format!("claude-plugin/skills/{name}/SKILL.md");
+        let text = std::fs::read_to_string(repo.root.join(&file)).unwrap();
+        let description = text.lines().find_map(|l| l.strip_prefix("description: "));
+        match description {
+            Some(description) => rows.push_str(&format!("| `{name}` | {description} |\n")),
+            None => problems.push(format!("{file} has no description")),
+        }
+    }
+    problems.extend(
+        repo.generated("docs/claude_code_skills.md", "skills", &rows)
+            .err(),
+    );
+
+    let init = "meta_cli/src/init.rs";
+    for (file, text) in repo.texts().filter(|(file, _)| *file != THIS) {
+        let lines = match file.ends_with(".md") {
+            true => hand_written(&text),
+            false => text
+                .lines()
+                .enumerate()
+                .map(|(at, l)| (at + 1, l))
+                .collect(),
+        };
+        for (at, line) in lines {
+            if skills.iter().filter(|name| line.contains(**name)).count() > 2 {
+                problems.push(format!("{file}:{at}: a list of skills"));
+            }
+            if skills
+                .iter()
+                .any(|name| line.starts_with(&format!("| `{name}`")))
+            {
+                problems.push(format!("{file}:{at}: a skill's table row"));
+            }
+        }
+        if file == init {
+            let code = text.split("#[cfg(test)]").next().unwrap_or_default();
+            for name in skills.iter().filter(|n| code.contains(&format!("\"{n}\""))) {
+                problems.push(format!("{init} names the skill {name}"));
+            }
+        }
+    }
+    all_ok(problems)
 }
 
 /// No plugin holds a list of meta's option spellings: selection reaches a

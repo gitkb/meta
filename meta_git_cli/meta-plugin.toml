@@ -1,0 +1,186 @@
+# meta-git's commands: `git` runs any git command as typed in each selected
+# repo, and the commands below adapt the ones that need the whole workspace.
+# The program's clap types still parse them until the host parses for
+# plugins; a test checks that the two agree.
+
+name = "git"
+description = "Git operations for meta repositories"
+run = ["meta-git"]
+
+[commands.git]
+summary = "Run any git command as typed in each selected repo"
+effects = "unknown"
+scope = "selection"
+preview = "plan"
+raw = true
+complete = ["git", "--list-cmds=main,others,alias,nohelpers"]
+
+# Destructive git commands that run as typed: declared so no other provider
+# can take them
+[commands."git clean"]
+summary = "git clean, as typed, in each selected repo"
+effects = "destructive"
+scope = "selection"
+preview = "plan"
+raw = true
+
+[commands."git reset"]
+summary = "git reset, as typed, in each selected repo"
+effects = "destructive"
+scope = "selection"
+preview = "plan"
+raw = true
+
+[commands."git branch"]
+summary = "git branch, as typed, in each selected repo"
+effects = "destructive"
+scope = "selection"
+preview = "plan"
+raw = true
+
+[commands."git clone"]
+summary = "Clone a meta repo and the repos its .meta.yaml lists (meta -r: nested ones too)"
+effects = "write"
+scope = "none"
+preview = "plan"
+network = true
+options = [
+  { positional = "url", value = "URL", required = true, help = "The meta repository to clone" },
+  { positional = "dir", value = "DIR", help = "Where to clone it (default: the repository's name)" },
+  { long = "parallel", value = "N", type = "uint", default = "4", help = "How many repos to clone at once" },
+  { long = "depth", value = "N", type = "uint", help = "Clone only this many commits of each repo (git clone --depth)" },
+]
+
+[commands."git clone-missing"]
+summary = "Clone each project in .meta.yaml that isn't cloned; change no repo that is"
+effects = "write"
+scope = "selection"
+preview = "plan"
+network = true
+
+[commands."git clone-prune"]
+summary = "Remove each repo in the workspace that no .meta.yaml lists and that holds nothing unpushed"
+effects = "destructive"
+scope = "selection"
+preview = "plan"
+
+[commands."git clone-sync"]
+summary = "clone-missing, then clone-prune: the clones become what the .meta.yaml files list"
+effects = "destructive"
+scope = "selection"
+preview = "plan"
+network = true
+
+[commands."git update"]
+summary = "Bring the workspace up to date: fast-forward each repo that is cloned (git pull --ff-only) and clone each project in .meta.yaml that isn't"
+effects = "write"
+scope = "workspace"
+preview = "plan"
+network = true
+
+[commands."git commit"]
+summary = "Commit what is staged, in every repo that has staged changes"
+effects = "write"
+scope = "selection"
+preview = "plan"
+options = [
+  { long = "edit", short = "e", help = "Write each repo's message in your editor (needs a terminal)" },
+  { long = "message", short = "m", value = "MESSAGE", allow_hyphen = true, help = "Use this message in every repo" },
+]
+
+[commands."git worktree"]
+summary = "Create isolated worktree sets for multi-repo branches"
+effects = "read"
+scope = "workspace"
+
+[commands."git worktree create"]
+summary = "Create a new worktree set"
+effects = "write"
+scope = "workspace"
+preview = "plan"
+options = [
+  { positional = "name", value = "NAME", required = true, help = "Worktree name" },
+  { positional = "commit-ish", value = "COMMIT_ISH", help = "Start new branches from this commit-ish (tag, SHA, branch); without it, each from its remote's default branch (origin/HEAD)" },
+  { long = "branch", value = "BRANCH", help = "Override default branch name" },
+  { long = "repo", value = "ALIAS[:BRANCH]", repeat = true, help = "Add specific repo(s) (alias or alias:branch)" },
+  { long = "every-repo", conflicts = ["repo"], help = "Add every repo meta reaches: those of the nearest .meta.yaml, with meta -r the nested meta repos' too, with meta -A the whole workspace's (one that isn't cloned is skipped with a warning; an error with meta --strict)" },
+  { long = "from-pr", value = "OWNER/REPO#N", conflicts = ["commit-ish"], help = "Start from a PR's head branch (owner/repo#N)" },
+  { long = "ephemeral", help = "Let the next `prune` remove it" },
+  { long = "ttl", value = "DURATION", type = "duration", help = "Time-to-live (30s, 5m, 1h, 2d, 1w)" },
+  { long = "meta", value = "KEY=VALUE", repeat = true, help = "Record custom metadata (key=value)" },
+  { long = "no-deps", help = "Skip automatic dependency resolution", long_help = "Skip automatic dependency resolution\n\nBy default, worktree create includes the root repo and resolves dependencies via provides/depends_on from .meta.yaml. Use --no-deps to include only the named repos (and, for a repo nested inside another project's path, that parent project), and to leave their depends_on unchecked (with --every-repo too)." },
+]
+
+[commands."git worktree add"]
+summary = "Add a repo to an existing worktree set"
+effects = "write"
+scope = "named-set"
+preview = "plan"
+options = [
+  { positional = "name", value = "NAME", required = true, help = "Worktree name" },
+  { positional = "commit-ish", value = "COMMIT_ISH", help = "Start a new branch from this commit-ish (tag, SHA, branch); without it, from the remote's default branch (origin/HEAD)" },
+  { long = "repo", value = "ALIAS[:BRANCH]", repeat = true, required = true, help = "Repo(s) to add (alias or alias:branch)" },
+]
+
+[commands."git worktree remove"]
+summary = "Remove a worktree set"
+effects = "destructive"
+scope = "named-set"
+preview = "plan"
+options = [
+  { positional = "name", value = "NAME", required = true, help = "Worktree name" },
+  { long = "force", help = "Remove even with uncommitted changes" },
+]
+
+[commands."git worktree list"]
+summary = "List worktree sets (defaults to the current set when inside one)"
+effects = "read"
+scope = "workspace"
+text = "plugin"
+options = [
+  { positional = "name", value = "NAME", help = "Worktree name (defaults to the current set inside .worktrees/<name>)" },
+  { long = "metadata-only", help = "Return membership paths without observing branches or Git status" },
+]
+
+[commands."git worktree status"]
+summary = "Show detailed status of a worktree set"
+effects = "read"
+scope = "named-set"
+text = "plugin"
+options = [
+  { positional = "name", value = "NAME", required = true, help = "Worktree name" },
+]
+
+[commands."git worktree diff"]
+summary = "Show cross-repo diff vs base branch"
+effects = "read"
+scope = "named-set"
+text = "plugin"
+options = [
+  { positional = "name", value = "NAME", required = true, help = "Worktree name" },
+  { long = "base", value = "BASE", default = "main", help = "Base branch for comparison" },
+  { long = "stat", help = "Show diffstat summary only" },
+]
+
+[commands."git worktree exec"]
+summary = "Run a command across worktree repos"
+effects = "unknown"
+scope = "named-set"
+preview = "plan"
+options = [
+  { positional = "name", value = "NAME", required = true, help = "Worktree name" },
+  { positional = "commit-ish", value = "COMMIT_ISH", help = "Start from a specific commit-ish (ephemeral only)" },
+  { long = "ephemeral", help = "Atomic create+exec+remove (requires --every-repo or --repo, and -- <cmd>)" },
+  { long = "repo", value = "ALIAS[:BRANCH]", repeat = true, help = "Add specific repo(s) for ephemeral worktree (alias or alias:branch)" },
+  { long = "every-repo", help = "Add every repo meta reaches to the ephemeral worktree (see create)" },
+  { long = "meta", value = "KEY=VALUE", repeat = true, help = "Record custom metadata for ephemeral worktree (key=value)" },
+  { long = "from-pr", value = "OWNER/REPO#N", conflicts = ["commit-ish"], help = "Start from a PR's head branch (ephemeral only, owner/repo#N)" },
+  { long = "branch", value = "BRANCH", help = "Override branch name for ephemeral worktree" },
+  { positional = "command", value = "COMMAND", last = true, required = true, help = "Command and arguments to execute (after --)" },
+]
+
+[commands."git worktree prune"]
+summary = "Remove expired/orphaned worktree sets of this workspace"
+effects = "destructive"
+scope = "workspace"
+preview = "plan"

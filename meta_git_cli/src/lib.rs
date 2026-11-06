@@ -417,6 +417,47 @@ mod tests {
     use super::*;
     use meta_plugin::testing::Sandbox;
 
+    /// The clap type parsing `name` (a command of the manifest), when it
+    /// has one. Temporary: it goes with the clap types.
+    fn clap_of(name: &str) -> Option<clap::Command> {
+        use clap::CommandFactory;
+        let worktree = commands::worktree::clap_command();
+        match name {
+            "git clone" => Some(clone::CloneArgs::command()),
+            "git clone-missing" => Some(clone_missing::CloneMissingArgs::command()),
+            "git clone-prune" => Some(clone_missing::ClonePruneArgs::command()),
+            "git clone-sync" => Some(clone_missing::CloneSyncArgs::command()),
+            "git update" => Some(update::UpdateArgs::command()),
+            "git commit" => Some(commit::CommitArgs::command()),
+            "git worktree" => Some(worktree.clone()),
+            _ => {
+                let word = name.strip_prefix("git worktree ")?;
+                worktree.find_subcommand(word).cloned()
+            }
+        }
+    }
+
+    #[test]
+    fn the_clap_types_and_the_manifest_declare_the_same_commands() {
+        let text = include_str!("../meta-plugin.toml");
+        let manifest = meta_plugin::manifest::Manifest::parse(text).unwrap();
+        let mut differences = Vec::new();
+        for (name, command) in &manifest.commands {
+            let Some(clap) = clap_of(name) else {
+                assert!(command.raw, "{name}: no clap type, and not raw");
+                continue;
+            };
+            let found = meta_plugin::parser::differences(&command.summary, &command.options, &clap);
+            differences.extend(found.into_iter().map(|d| format!("{name}: {d}")));
+        }
+        assert!(differences.is_empty(), "{}", differences.join("\n"));
+        // every worktree subcommand is declared
+        for sub in commands::worktree::clap_command().get_subcommands() {
+            let name = format!("git worktree {}", sub.get_name());
+            assert!(manifest.commands.contains_key(&name), "{name}");
+        }
+    }
+
     fn argv(line: &str) -> Vec<String> {
         line.split_whitespace().map(str::to_string).collect()
     }

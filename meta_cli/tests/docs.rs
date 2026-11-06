@@ -147,20 +147,63 @@ fn is_meta(command: &str) -> bool {
     command == "meta" || command.starts_with("meta ")
 }
 
-/// meta's options that take a value (`meta --help`): the word after one isn't
-/// the command.
-const VALUED: &[&str] = &[
-    "-c",
-    "--config",
-    "-e",
-    "--exclude",
-    "-i",
-    "--include",
-    "-t",
-    "--tag",
-    "--depth",
-    "--fields",
-];
+/// What `meta --json help` declares: the docs are checked against the index,
+/// not a list of their own.
+struct Declared {
+    /// Spellings of meta's options that take a value: the word after one
+    /// isn't the command
+    valued: Vec<String>,
+    /// Every spelling of meta's options
+    spellings: Vec<String>,
+    /// The commands meta or its plugins own (not those that run as typed),
+    /// as their words and their options' spellings
+    owned: Vec<(Vec<String>, Vec<String>)>,
+}
+
+fn spellings(option: &serde_json::Value) -> Vec<String> {
+    let long = option["long"].as_str().map(|long| format!("--{long}"));
+    let short = option["short"].as_str().map(|short| format!("-{short}"));
+    long.into_iter().chain(short).collect()
+}
+
+fn declared() -> &'static Declared {
+    static DECLARED: std::sync::OnceLock<Declared> = std::sync::OnceLock::new();
+    DECLARED.get_or_init(|| {
+        let out = Command::new(env!("CARGO_BIN_EXE_meta"))
+            .args(["--json", "help"])
+            .output()
+            .unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let index = &envelope["results"][0]["data"];
+        let options = index["meta_options"].as_array().unwrap();
+        let owned = index["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|command| command["raw"] != true)
+            .map(|command| {
+                let name = command["name"].as_str().unwrap();
+                let words = name.split(' ').map(str::to_string).collect();
+                let options = command["options"].as_array().into_iter().flatten();
+                (words, options.flat_map(spellings).collect())
+            })
+            .collect();
+        Declared {
+            valued: options
+                .iter()
+                .filter(|option| option["value"].is_string())
+                .flat_map(spellings)
+                .collect(),
+            spellings: options.iter().flat_map(spellings).collect(),
+            owned,
+        }
+    })
+}
+
+/// Whether `word` is one of meta's options that takes a value.
+fn valued(word: &str) -> bool {
+    declared().valued.iter().any(|spelling| spelling == word)
+}
 
 /// The `meta` commands of a shell line (`a && b` has two), each the words
 /// after `meta` up to where the shell takes over. A word filled in
@@ -244,7 +287,7 @@ fn command_word(words: &[String]) -> usize {
         if expects_value {
             expects_value = false;
         } else if word.starts_with('-') {
-            expects_value = VALUED.contains(&word.as_str());
+            expects_value = valued(word);
         } else {
             return at;
         }
@@ -260,10 +303,7 @@ fn at_command_word(words: &[String]) -> bool {
         ["git", "plugin", "project", "init", "help", "worktree"].contains(&word.as_str())
     });
     after_command
-        || command_word(words) == words.len()
-            && !words
-                .last()
-                .is_some_and(|word| VALUED.contains(&word.as_str()))
+        || command_word(words) == words.len() && !words.last().is_some_and(|word| valued(word))
 }
 
 /// What a filled-in word becomes: a project and a tag of the sandbox, and a
@@ -580,10 +620,7 @@ impl Sandbox {
                 if words.last().is_some_and(|word| word == "--") {
                     words.pop();
                 }
-                if words
-                    .last()
-                    .is_some_and(|word| VALUED.contains(&word.as_str()))
-                {
+                if words.last().is_some_and(|word| valued(word)) {
                     words.push(FILL.into());
                 }
                 words.push("--help".into());
@@ -673,57 +710,27 @@ fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
     );
 }
 
-/// The commands meta or its plugins own, as the words that name them: their
-/// arguments are theirs, and none of them is one of meta's options.
-const OWNED: &[&[&str]] = &[
-    &["context"],
-    &["exec"],
-    &["plugin", "list"],
-    &["plugin", "search"],
-    &["project"],
-    &["git", "update"],
-    &["git", "clone"],
-    &["git", "clone-missing"],
-    &["git", "clone-prune"],
-    &["git", "clone-sync"],
-    &["git", "commit"],
-    &["git", "worktree"],
-];
-
-/// meta's options that a meta-owned command once had a copy of, by their
-/// long names and `-r`; `git clone`'s own `--depth` (history) and
-/// `--parallel N` (a count) are git clone's.
-const META_OPTIONS: &[&str] = &[
-    "--json",
-    "-r",
-    "--recursive",
-    "-A",
-    "--all",
-    "--dry-run",
-    "--strict",
-    "--include",
-    "--exclude",
-    "--tag",
-    "--depth",
-    "--parallel",
-];
-
 /// The option of meta's that `words` (after `meta`) types after a
-/// meta-owned command, before any `--`, if it does.
+/// meta-owned command, before any `--`, if it does: one that command doesn't
+/// declare (`git clone` has a `--depth` of its own).
 fn option_after_owned_command(words: &[String]) -> Option<&str> {
     let at = command_word(words);
     let command = words.get(at..).unwrap_or_default();
-    let owned = OWNED.iter().find(|owned| {
-        owned.len() <= command.len() && command.iter().zip(owned.iter()).all(|(w, o)| w == o)
-    })?;
-    let clone = owned == &["git", "clone"];
+    let declared = declared();
+    let (name, options) = declared
+        .owned
+        .iter()
+        .filter(|(name, _)| {
+            name.len() <= command.len() && command.iter().zip(name).all(|(w, n)| w == n)
+        })
+        .max_by_key(|(name, _)| name.len())?;
     command
         .iter()
-        .skip(owned.len())
+        .skip(name.len())
         .take_while(|word| *word != "--")
         .map(|word| word.split('=').next().unwrap_or(word))
         .find(|word| {
-            META_OPTIONS.contains(word) && !(clone && ["--depth", "--parallel"].contains(word))
+            declared.spellings.iter().any(|s| s == word) && !options.iter().any(|o| o == word)
         })
 }
 

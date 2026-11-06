@@ -80,9 +80,10 @@ meta as typed: `meta git <name>` runs `git <name>` in each repo.
 `meta plugin list` shows both.
 
 To learn who answers a command, read the first line of its help:
-`meta git clone --help` says it is adapted by meta-git (and which of git's
-options it takes); `meta git pull --help` says it runs as typed. `meta --help`
-lists each plugin's own commands.
+`meta git clone --help` starts `answered by: git …` (and says which of git's
+options it takes); `meta git pull --help` adds that it runs as typed.
+`meta --help` lists each plugin's own commands, and `meta --json help` every
+command there is, as data.
 
 ```bash
 # List installed plugins, then the tool extensions on PATH

@@ -18,6 +18,8 @@ fn git(args: &[&str]) -> Option<String> {
 
 fn main() -> Result<(), String> {
     meta_plugin::build::generate_to("meta-host.toml", "host.rs")?;
+    // compiled by tests/codegen.rs
+    meta_plugin::build::generate_to("tests/fixtures/hostile-plugin.toml", "hostile.rs")?;
     // a new commit, a branch switch, a fetch that packs refs, staging: build again
     for name in ["HEAD", "packed-refs", "index"] {
         if let Some(path) = git(&["rev-parse", "--git-path", name]) {

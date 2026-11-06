@@ -7,7 +7,7 @@
 
 use crate::subprocess_plugins::SubprocessPluginManager;
 use meta_plugin::manifest::{
-    Command, Index, Indexed, Manifest, PluginFile, Problem, Provider, Source, FILE,
+    Index, Indexed, Manifest, PluginFile, Problem, Provider, Source, FILE,
 };
 use std::path::{Path, PathBuf};
 
@@ -185,9 +185,10 @@ fn place_of(path: &Option<PathBuf>) -> String {
 fn add(index: &mut Index, source: Source, path: Option<PathBuf>, manifest: Manifest) {
     let provider = Provider {
         name: manifest.name.clone(),
-        version: manifest.version.clone().or_else(|| {
-            (source <= Source::Embedded).then(|| crate::VERSION.trim().to_string())
-        }),
+        version: manifest
+            .version
+            .clone()
+            .or_else(|| (source <= Source::Embedded).then(|| crate::VERSION.trim().to_string())),
         source,
         path,
     };
@@ -332,8 +333,7 @@ pub fn resolve<'a>(index: &'a Index, words: &[String]) -> Option<(&'a Indexed, u
 
 fn names(held: &Indexed, typed: &[String]) -> bool {
     let declared: Vec<&str> = held.name.split(' ').collect();
-    let Some(((last, words), (last_typed, typed))) =
-        declared.split_last().zip(typed.split_last())
+    let Some(((last, words), (last_typed, typed))) = declared.split_last().zip(typed.split_last())
     else {
         return false;
     };
@@ -394,15 +394,20 @@ pub fn answered_by(held: &Indexed, typed: &[String]) -> String {
     };
     let mut line = format!("answered by: {}{version} ({place})", provider.name);
     let as_typed = held.command.raw || held.name.split(' ').count() < typed.len();
-    for note in notes(&held.command, as_typed) {
+    for note in notes(held, as_typed) {
         line.push_str(" · ");
         line.push_str(&note);
     }
     meta_plugin::display::escape(&line).into_owned()
 }
 
-fn notes(command: &Command, as_typed: bool) -> Vec<String> {
-    let mut notes = Vec::new();
+fn notes(held: &Indexed, as_typed: bool) -> Vec<String> {
+    let command = &held.command;
+    let mut notes: Vec<String> = held
+        .disabled
+        .iter()
+        .map(|why| format!("disabled: {why}"))
+        .collect();
     if as_typed {
         notes.push("runs as typed".to_string());
     }
@@ -469,4 +474,143 @@ pub fn notices(index: &Index) -> String {
         text.push_str(&format!("\n{}\n", problem_line(problem)));
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn found(source: Source, place: &str, text: &str) -> Found {
+        Found {
+            source,
+            path: Some(PathBuf::from(place)),
+            manifest: Manifest::parse(text),
+        }
+    }
+
+    const GIT: &str = r#"
+name = "git"
+run = ["meta-git"]
+[commands.git]
+raw = true
+[commands."git pull"]
+effects = "write"
+[commands."git clean"]
+raw = true
+effects = "destructive"
+"#;
+
+    fn first_party() -> Found {
+        found(Source::Embedded, "first", GIT)
+    }
+
+    fn provider_of<'a>(index: &'a Index, name: &str) -> &'a str {
+        let held = index.commands.iter().find(|held| held.name == name);
+        held.map_or("nobody", |held| held.provider.name.as_str())
+    }
+
+    fn other(commands: &str) -> String {
+        format!("name = \"other\"\nrun = [\"o\"]\n{commands}")
+    }
+
+    #[test]
+    fn a_second_provider_without_overrides_is_disabled_and_the_first_keeps_the_command() {
+        let text = other("[commands.\"git pull\"]");
+        let index = build(vec![first_party(), found(Source::Workspace, "w", &text)]);
+        assert_eq!(provider_of(&index, "git pull"), "git");
+        assert_eq!(index.problems.len(), 1, "{:?}", index.problems);
+        assert_eq!(index.problems[0].place, "w");
+        assert!(index.problems[0].message.contains("overrides"));
+    }
+
+    #[test]
+    fn raw_words_belong_to_their_provider() {
+        let plain = other("[commands.\"git foo\"]");
+        let index = build(vec![first_party(), found(Source::Workspace, "w", &plain)]);
+        assert_eq!(provider_of(&index, "git foo"), "nobody");
+        assert!(index.problems[0].message.contains("overrides"));
+
+        let declared = format!("overrides = [\"git foo\"]\n{plain}");
+        let index = build(vec![
+            first_party(),
+            found(Source::Workspace, "w", &declared),
+        ]);
+        assert_eq!(provider_of(&index, "git foo"), "other");
+        assert!(index.problems.is_empty(), "{:?}", index.problems);
+    }
+
+    #[test]
+    fn an_override_is_nearer_or_refused_and_the_replaced_provider_is_named() {
+        let text = format!(
+            "overrides = [\"git pull\"]\n{}",
+            other("[commands.\"git pull\"]")
+        );
+        let index = build(vec![first_party(), found(Source::User, "u", &text)]);
+        assert_eq!(provider_of(&index, "git pull"), "other");
+        let held = index.commands.iter().find(|h| h.name == "git pull");
+        assert_eq!(held.unwrap().shadows[0].name, "git");
+
+        let index = build(vec![first_party(), found(Source::Embedded, "same", &text)]);
+        assert_eq!(provider_of(&index, "git pull"), "git");
+        assert!(index.problems[0].message.contains("nearer"));
+    }
+
+    #[test]
+    fn destructive_commands_help_and_plugin_are_never_overridden() {
+        for name in ["git clean", "help", "plugin list"] {
+            let command = format!("overrides = [\"{name}\"]\n");
+            let text = format!("{command}{}", other(&format!("[commands.\"{name}\"]")));
+            let index = build(vec![first_party(), found(Source::Workspace, "w", &text)]);
+            assert_ne!(provider_of(&index, name), "other", "{name}");
+            assert!(index.problems[0].message.contains("can't be overridden"));
+        }
+    }
+
+    #[test]
+    fn a_bad_manifest_or_command_disables_only_itself() {
+        let half = other("[commands.good]\n[commands.bad]\nrun = [\"p\"]\nplan = [\"q\"]");
+        let index = build(vec![
+            first_party(),
+            found(Source::Workspace, "broken", "name ="),
+            found(Source::Workspace, "half", &half),
+            found(
+                Source::Workspace,
+                "theirs",
+                "name = \"x\"\nmeta_options = [{ long = \"y\" }]",
+            ),
+        ]);
+        assert_eq!(provider_of(&index, "git"), "git");
+        assert_eq!(provider_of(&index, "good"), "other");
+        let held = index.commands.iter().find(|h| h.name == "bad").unwrap();
+        assert!(held
+            .disabled
+            .as_deref()
+            .unwrap()
+            .contains("both run and plan"));
+        let places: Vec<&str> = index.problems.iter().map(|p| p.place.as_str()).collect();
+        assert_eq!(places, ["broken", "half", "theirs"]);
+    }
+
+    #[test]
+    fn the_longest_declared_command_answers_and_an_alias_reaches_it() {
+        let index = build(vec![first_party()]);
+        let words = |line: &str| line.split(' ').map(str::to_string).collect::<Vec<_>>();
+        let name = |line| resolve(&index, &words(line)).map(|(h, n)| (h.name.clone(), n));
+        assert_eq!(name("git pull --rebase"), Some(("git pull".to_string(), 2)));
+        assert_eq!(name("git log -3"), Some(("git".to_string(), 1)));
+        assert_eq!(name("project ls"), Some(("project list".to_string(), 2)));
+        assert_eq!(name("nonesuch"), None);
+    }
+
+    #[test]
+    fn the_first_party_manifests_load_with_no_problem() {
+        let found = EMBEDDED.iter().map(|text| Found {
+            source: Source::Embedded,
+            path: None,
+            manifest: Manifest::parse(text),
+        });
+        let index = build(found.collect());
+        assert!(index.problems.is_empty(), "{:?}", index.problems);
+        assert!(index.commands.iter().all(|held| held.disabled.is_none()));
+    }
 }

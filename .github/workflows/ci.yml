@@ -127,6 +127,11 @@ jobs:
           ./target/debug/meta-git --meta-plugin-info | jq .name
         shell: bash
 
+      - name: The manifests load
+        if: runner.os == 'Linux'
+        run: ./target/debug/meta --json help | jq -e '.results[0].data | has("problems") | not'
+        shell: bash
+
       - name: Run integration tests
         run: META_BIN_DIR="$PWD/target/debug" bats tests/*.bats
         shell: bash

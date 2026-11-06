@@ -435,7 +435,11 @@ impl Opt {
 impl Manifest {
     /// The manifest in `text`.
     pub fn parse(text: &str) -> Result<Self, String> {
-        toml::from_str(text).map_err(|e| e.to_string())
+        toml::from_str(text).map_err(|e| {
+            let line = e.span().and_then(|span| text.get(..span.start));
+            let line = line.map_or(1, |before| before.matches('\n').count() + 1);
+            format!("line {line}: {}", e.message())
+        })
     }
 
     /// What is wrong with the manifest as a whole: no command of it can be

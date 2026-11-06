@@ -660,3 +660,143 @@ fn plugin_words_that_escape_alike_are_listed_once() {
     assert_eq!(help.matches("odd\\u{7f}").count(), 2, "{help}");
     assert!(!help.contains('\u{7f}'), "{help}");
 }
+
+/// A manifest in the workspace's plugin folders, by its plugin's name.
+fn manifest(fixture: &Fixture, name: &str, text: &str) -> PathBuf {
+    let dir = fixture.cwd.join(".meta/plugins").join(name);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("meta-plugin.toml"), text).unwrap();
+    dir
+}
+
+#[test]
+fn a_broken_manifest_leaves_every_other_command_working() {
+    let fixture = Fixture::new(true);
+    let broken = manifest(&fixture, "broken", "name = ");
+    let half = "name = \"half\"\nrun = [\"p\"]\n[commands.fine]\nsummary = \"Works\"\n\
+                [commands.wrong]\nplan = [\"q\"]\nrun = [\"r\"]\n";
+    manifest(&fixture, "half", half);
+
+    let listed = fixture.run(&["project", "list"]);
+    assert!(listed.status.success(), "{listed:?}");
+
+    // help and plugin list run, and say what is wrong
+    let help = fixture.run(&["help"]);
+    let text = String::from_utf8_lossy(&help.stdout);
+    assert!(help.status.success(), "{help:?}");
+    assert!(text.contains("broken/meta-plugin.toml"), "{text}");
+    assert!(text.contains("both run and plan"), "{text}");
+    assert!(text.contains("fine"), "{text}");
+    let plugins = fixture.run(&["plugin", "list"]);
+    assert!(plugins.status.success(), "{plugins:?}");
+    assert!(String::from_utf8_lossy(&plugins.stdout).contains("broken/meta-plugin.toml"));
+
+    // the index has the good command, and names why the other is off
+    let json = fixture.run(&["--json", "help"]);
+    let envelope: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    let commands = envelope["results"][0]["data"]["commands"]
+        .as_array()
+        .unwrap();
+    let command = |name: &str| commands.iter().find(|c| c["name"] == name).unwrap();
+    assert!(command("fine")["disabled"].is_null());
+    assert!(command("wrong")["disabled"]
+        .as_str()
+        .unwrap()
+        .contains("both"));
+    assert_eq!(command("project list")["provider"]["name"], "meta");
+
+    // and the broken one can be removed
+    let gone = fixture.run(&["plugin", "uninstall", "broken", "--local"]);
+    assert!(gone.status.success(), "{gone:?}");
+    assert!(!broken.exists());
+}
+
+#[test]
+fn a_file_on_path_that_a_command_of_metas_shadows_is_named_in_help() {
+    let fixture = Fixture::new(true);
+    let file = fixture.bin.join("meta-exec");
+    let ran = fixture.cwd.join("ran");
+    script(&file, &format!("touch '{}'", ran.display()));
+
+    let help = fixture.run(&["help"]);
+    let text = String::from_utf8_lossy(&help.stdout);
+    assert!(help.status.success(), "{help:?}");
+    assert!(
+        text.contains(&format!("{} never runs", file.display())),
+        "{text}"
+    );
+
+    // under --json it is data
+    let json = fixture.run(&["--json", "help"]);
+    let envelope: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    let files = envelope["results"][0]["data"]["files"].as_array().unwrap();
+    let found = files.iter().find(|f| f["word"] == "exec").unwrap();
+    assert_eq!(found["shadowed_by"], "exec");
+
+    // and it really doesn't run
+    assert!(fixture.run(&["exec", "--", "true"]).status.success());
+    assert!(!ran.exists());
+}
+
+#[test]
+fn a_command_only_a_manifest_declares_says_who_declares_it_and_why_it_cant_run() {
+    let fixture = Fixture::new(true);
+    manifest(
+        &fixture,
+        "tasks",
+        "name = \"tasks\"\n[commands.test]\nplan = [\"make\", \"test\"]\n",
+    );
+    let out = fixture.run(&["test"]);
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(text.contains("answered by: tasks"), "{text}");
+    assert!(text.contains("no meta-test"), "{text}");
+}
+
+#[test]
+fn completions_come_from_the_index_and_a_completer_that_hangs_gives_nothing() {
+    let fixture = Fixture::new(true);
+    let lists = |line: &[&str], want: &str| {
+        let mut args = vec!["__complete", "--"];
+        args.extend(line);
+        let out = fixture.run(&args);
+        assert!(out.status.success(), "{out:?}");
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(text.lines().any(|word| word == want), "{line:?}: {text}");
+    };
+    lists(&["gi"], "git");
+    lists(&["--js"], "--json");
+    lists(&["git", "work"], "worktree");
+    lists(
+        &["git", "worktree", "create", "x", "--every"],
+        "--every-repo",
+    );
+    lists(&["completions", "fi"], "fish");
+
+    // a completer gets the word and a request, and lists one word a line
+    let completer = fixture.bin.join("list-it");
+    script(
+        &completer,
+        "echo \"$META_COMPLETE_WORD-one   a description\"; test -s \"$META_REQUEST\" && echo seen",
+    );
+    let hang = fixture.bin.join("hang");
+    script(&hang, "exec sleep 30");
+    let text = format!(
+        "name = \"t\"\nrun = [\"p\"]\n[commands.t]\noptions = [\n\
+         {{ long = \"who\", value = \"W\", complete = [\"{}\"] }},\n\
+         {{ long = \"slow\", value = \"W\", complete = [\"{}\"] }},\n]\n",
+        completer.display(),
+        hang.display()
+    );
+    manifest(&fixture, "t", &text);
+    lists(&["t", "--who", "a"], "a-one");
+    let started = Instant::now();
+    let out = fixture.run(&["__complete", "--", "t", "--slow", ""]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+}

@@ -158,7 +158,11 @@ enum Commands {
     #[command(name = "__complete", hide = true)]
     Complete {
         /// The words after `meta`, the last one being completed
-        #[arg(value_name = "WORD", trailing_var_arg = true, allow_hyphen_values = true)]
+        #[arg(
+            value_name = "WORD",
+            trailing_var_arg = true,
+            allow_hyphen_values = true
+        )]
         words: Vec<String>,
     },
     /// Initialize meta integrations
@@ -633,7 +637,10 @@ fn help(
     plugins: &SubprocessPluginManager,
     report: &mut Report,
 ) -> Result<()> {
-    refuse_meta_option(words)?;
+    if let Some(error) = option_after_help(words) {
+        report.fail(error, false);
+        return Ok(());
+    }
     if cli.json {
         let index = index::load(plugins);
         let answer = match words.is_empty() {
@@ -642,7 +649,9 @@ fn help(
         };
         if let Some(answer) = answer {
             let data = serde_json::to_value(answer)?;
-            report.results.push(meta_plugin::ProjectResult::about_workspace(data));
+            report
+                .results
+                .push(meta_plugin::ProjectResult::about_workspace(data));
             return Ok(());
         }
     }
@@ -683,18 +692,19 @@ fn help(
     plugin_command(cli, &args, &plugin, report).map(|_| ())
 }
 
-/// The tip for one of meta's options typed after `help`, as for any command.
-fn refuse_meta_option(words: &[String]) -> Result<()> {
+/// The usage error for one of meta's options typed after `help`, with the
+/// tip every command gives; `None` when none was.
+fn option_after_help(words: &[String]) -> Option<meta_plugin::ErrorInfo> {
     let meta = meta_options();
-    let Some(rejected) = words.iter().take_while(|word| *word != "--").find(|word| {
-        word.starts_with('-')
-            && meta
-                .options
-                .iter()
-                .any(|o| o.spellings.iter().any(|s| s == word.split('=').next().unwrap_or(word)))
-    }) else {
-        return Ok(());
+    let is_meta = |word: &str| {
+        let spelling = word.split('=').next().unwrap_or(word);
+        let spelled = |o: &meta_plugin::args::MetaOption| o.spellings.iter().any(|s| s == spelling);
+        meta.options.iter().any(spelled)
     };
+    let rejected = words
+        .iter()
+        .take_while(|word| *word != "--")
+        .find(|word| is_meta(word))?;
     let line: Vec<String> = std::iter::once("help".to_string())
         .chain(words.iter().cloned())
         .collect();
@@ -705,13 +715,12 @@ fn refuse_meta_option(words: &[String]) -> Result<()> {
             .chain(rest.iter().cloned());
         meta_plugin::args::verdict(command_line().try_get_matches_from(line))
     };
-    let tip = meta.tip(&line, rejected, &check);
     let mut error = meta_plugin::ErrorInfo::new(
         meta_plugin::ErrorCode::Usage,
-        format!("meta help takes no option {}", escape(rejected)),
+        format!("unexpected argument '{}'", escape(rejected)),
     );
-    error.hint = tip;
-    Err(error.into())
+    error.hint = meta.tip(&line, rejected, &check);
+    Some(error)
 }
 
 /// `meta <word> ...`, served by `plugin`: its help, or the command in the
@@ -756,11 +765,13 @@ fn answered_by(cli: &Cli, args: &[String], plugin: &SubprocessPlugin) -> String 
         .take_while(|arg| !matches!(arg.as_str(), "--" | "--help" | "-h"))
         .cloned()
         .collect();
-    let line = SubprocessPluginManager::new(false).ok().and_then(|plugins| {
-        let index = index::load(&plugins);
-        let (held, _) = index::resolve(&index, &typed)?;
-        Some(index::answered_by(held, &typed))
-    });
+    let line = SubprocessPluginManager::new(false)
+        .ok()
+        .and_then(|plugins| {
+            let index = index::load(&plugins);
+            let (held, _) = index::resolve(&index, &typed)?;
+            Some(index::answered_by(held, &typed))
+        });
     let line = line.unwrap_or_else(|| {
         format!(
             "answered by: {} {} ({})",
@@ -796,7 +807,11 @@ fn command_help(
         Verb::AsTyped(tool) => {
             report.command = format!("{} {verb}", plugin.word);
             let help = as_typed_help(cli, args, plugin, tool);
-            help_message(cli, &format!("{}{help}", answered_by(cli, args, plugin)), report)?;
+            help_message(
+                cli,
+                &format!("{}{help}", answered_by(cli, args, plugin)),
+                report,
+            )?;
             Ok(None)
         }
         Verb::Unknown => ask_plugin(report),
@@ -1261,9 +1276,12 @@ fn handle_plugin_command(
                         "path": provider.path.as_deref().map(std::path::Path::to_string_lossy),
                     }));
                 }
-                warnings.extend(index.problems.iter().map(|problem| {
-                    meta_plugin::Warning::new(index::problem_line(problem))
-                }));
+                warnings.extend(
+                    index
+                        .problems
+                        .iter()
+                        .map(|problem| meta_plugin::Warning::new(index::problem_line(problem))),
+                );
                 if json {
                     // the records above are the --json output
                 } else if plugins.is_empty() && declared.is_empty() {
@@ -1564,5 +1582,31 @@ fn check_and_warn_orphan() {
             escape_path(&warning.parent_config),
             escape(&warning.suggested_key)
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The clap type of the built-in `words`, by its subcommands.
+    fn clap_of(words: &str) -> Option<clap::Command> {
+        let mut found = command_line();
+        for word in words.split(' ') {
+            found = found.find_subcommand(word)?.clone();
+        }
+        Some(found)
+    }
+
+    #[test]
+    fn the_clap_types_and_meta_host_toml_declare_the_same_commands() {
+        let manifest = host_manifest();
+        let mut differences = Vec::new();
+        for (name, command) in &manifest.commands {
+            let clap = clap_of(name).unwrap_or_else(|| panic!("{name}: no clap type"));
+            let found = meta_plugin::parser::differences(&command.summary, &command.options, &clap);
+            differences.extend(found.into_iter().map(|d| format!("{name}: {d}")));
+        }
+        assert!(differences.is_empty(), "{}", differences.join("\n"));
     }
 }

@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The groups whose facts have one source now.
-const ENABLED: &[u8] = &[3, 4, 8, 11, 12, 18, 19, 20, 21, 22, 23, 24, 25];
+const ENABLED: &[u8] = &[3, 4, 5, 7, 8, 9, 10, 11, 12, 18, 19, 20, 21, 22, 23, 24, 25];
 
 /// How a group is checked.
 enum Check {
@@ -84,7 +84,12 @@ const GROUPS: [(u8, &str, Check); 25] = [
     (
         7,
         "meta's options: listed once (MetaOptions)",
-        Check::Copies(&[("meta_cli/src/main.rs", "const SHOWN")]),
+        Check::Copies(&[
+            ("meta_cli/src/main.rs", "const SHOWN"),
+            ("meta_cli/src/main.rs", "pub struct Cli"),
+            ("meta_cli/tests/docs.rs", "const VALUED"),
+            ("meta_cli/tests/docs.rs", "const META_OPTIONS"),
+        ]),
     ),
     (
         8,
@@ -99,7 +104,7 @@ const GROUPS: [(u8, &str, Check); 25] = [
     (
         10,
         "a plugin command's options in prose: checked against its declaration",
-        Check::Copies(&[("claude-plugin/skills/meta-git/SKILL.md", "--parallel")]),
+        Check::Rule(options_in_prose),
     ),
     (11, "exit codes: meta_plugin::exit", Check::Rule(exit_codes)),
     (12, "--json output: one envelope", Check::Rule(one_envelope)),
@@ -717,6 +722,100 @@ fn skills_folder(repo: &Repo) -> Result<(), String> {
         }
     }
     all_ok(problems)
+}
+
+/// The long options a document gives a command are ones its declaration has:
+/// a command line that names a declared command (not one that runs as
+/// typed) names only that command's options, or meta's.
+fn options_in_prose(repo: &Repo) -> Result<(), String> {
+    let out = Command::new(env!("CARGO_BIN_EXE_meta"))
+        .args(["--json", "help"])
+        .output()
+        .unwrap();
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let index = &envelope["results"][0]["data"];
+    let longs = |options: &serde_json::Value| -> Vec<String> {
+        let options = options.as_array().into_iter().flatten();
+        options
+            .filter_map(|o| Some(format!("--{}", o["long"].as_str()?)))
+            .collect()
+    };
+    let meta = longs(&index["meta_options"]);
+    let valued: Vec<String> = index["meta_options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| o["value"].is_string())
+        .flat_map(|o| {
+            let long = o["long"].as_str().map(|long| format!("--{long}"));
+            long.into_iter()
+                .chain(o["short"].as_str().map(|short| format!("-{short}")))
+        })
+        .collect();
+    let commands: Vec<(Vec<&str>, bool, Vec<String>)> = index["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let name = c["name"].as_str().unwrap().split(' ').collect();
+            (name, c["raw"] == true, longs(&c["options"]))
+        })
+        .collect();
+    let (mut problems, mut checked) = (Vec::new(), 0);
+    for (file, text) in repo.texts().filter(|(file, _)| file.ends_with(".md")) {
+        let mut fenced = false;
+        for (at, line) in text.lines().enumerate() {
+            if line.trim_start().starts_with("```") {
+                fenced = !fenced;
+                continue;
+            }
+            let spans: Vec<&str> = match fenced {
+                true => vec![line],
+                false => line.split('`').skip(1).step_by(2).collect(),
+            };
+            for span in spans {
+                let span = span.trim_start().trim_start_matches("$ ");
+                let Some(rest) = span.strip_prefix("meta ") else {
+                    continue;
+                };
+                // up to where the shell takes over
+                let rest = rest.split(['|', ';', '#', '>', '&']).next().unwrap_or(rest);
+                let mut words = rest.split_whitespace().peekable();
+                while let Some(word) = words.next_if(|word| word.starts_with('-')) {
+                    if valued.iter().any(|v| v == word) {
+                        words.next();
+                    }
+                }
+                let words: Vec<&str> = words.collect();
+                let found = commands
+                    .iter()
+                    .filter(|(name, ..)| {
+                        name.len() <= words.len() && name.iter().zip(&words).all(|(n, w)| n == w)
+                    })
+                    .max_by_key(|(name, ..)| name.len());
+                let Some((name, false, options)) = found else {
+                    continue;
+                };
+                checked += 1;
+                let given = words.iter().skip(name.len()).take_while(|w| **w != "--");
+                for word in given.filter(|word| word.starts_with("--")) {
+                    let word = word.split('=').next().unwrap_or(word);
+                    if !options.iter().chain(&meta).any(|known| known == word) {
+                        let name = name.join(" ");
+                        problems.push(format!("{file}:{}: meta {name} has no {word}", at + 1));
+                    }
+                }
+            }
+        }
+    }
+    // a renamed folder can't make it pass: the docs show many
+    if checked < 30 {
+        problems.push(format!("only {checked} command lines in the docs"));
+    }
+    match problems.is_empty() {
+        true => Ok(()),
+        false => Err(problems.join("\n")),
+    }
 }
 
 /// No plugin holds a list of meta's option spellings: selection reaches a

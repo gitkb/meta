@@ -297,6 +297,7 @@ pub fn code_of(error: &anyhow::Error) -> ErrorCode {
             if let Some(info) = cause.downcast_ref::<ErrorInfo>() {
                 return Some(info.code);
             }
+            #[cfg(feature = "process")]
             if cause
                 .downcast_ref::<std::io::Error>()
                 .and_then(crate::process::TooMuchOutput::of)

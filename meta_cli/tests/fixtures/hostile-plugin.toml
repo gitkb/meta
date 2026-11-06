@@ -1,0 +1,53 @@
+# Everything a manifest may say that Rust can't say the same way: the
+# generated code must compile whatever a plugin's author chose.
+name = "hostile"
+run = ["hostile"]
+
+[commands."type"]
+summary = "A command named by a keyword, with \"quotes\" and a\nnew line"
+options = [
+  { long = "type", value = "T", help = "A keyword" },
+  { long = "self", value = "T", help = "A keyword with no raw form" },
+  { long = "Self", help = "Another" },
+  { long = "super", help = "And another" },
+  { long = "crate", help = "And another" },
+  { long = "fn", value = "T", repeat = true },
+  { long = "match", value = "T", required = true },
+  { long = "async", help = "A keyword since 2018" },
+  { long = "try", help = "A reserved word" },
+  { long = "with-hyphens", value = "T" },
+  { long = "2fa", help = "Starts with a digit" },
+]
+
+[commands."self"]
+summary = "A variant Rust keeps for itself"
+
+[commands."hyphen-ated sub-command"]
+summary = "Every type"
+options = [
+  { long = "a-string", value = "S", default = "x" },
+  { long = "an-int", value = "N", type = "int" },
+  { long = "a-uint", value = "N", type = "uint", default = "3" },
+  { long = "a-flag", type = "bool" },
+  { long = "a-path", value = "P", type = "path" },
+  { long = "some-paths", value = "P", type = "path", repeat = true },
+  { long = "a-required-path", value = "P", type = "path", required = true },
+  { long = "a-duration", value = "D", type = "duration" },
+  { long = "durations", value = "D", type = "duration", repeat = true },
+  { long = "a-choice", value = "C", choices = ["a", "b"], short = "c", alias = ["choice"] },
+  { long = "split", value = "S", delimiter = "," },
+  { long = "hyphen-value", value = "V", allow_hyphen = true, long_help = "Long\n\nhelp" },
+  { long = "needs", value = "V", requires = ["a-flag"], conflicts = ["an-int"] },
+  { positional = "first", value = "FIRST", required = true },
+  { positional = "the-rest", value = "REST", last = true },
+]
+
+[commands.passthrough]
+summary = "Words for another tool"
+raw = true
+plan = ["tool", "{raw}"]
+
+[commands.rest]
+options = [
+  { positional = "words", rest = true, allow_hyphen = true },
+]

@@ -39,7 +39,7 @@ preview = "plan"
 raw = true
 
 [commands."git clone"]
-summary = "Clone a meta repo and the repos its .meta.yaml lists (meta -r: nested ones too)"
+summary = "Clone a meta repository, then the repos its .meta.yaml lists"
 effects = "write"
 scope = "none"
 preview = "plan"
@@ -89,7 +89,7 @@ options = [
 ]
 
 [commands."git worktree"]
-summary = "Create isolated worktree sets for multi-repo branches"
+summary = "Manage git worktrees across repos"
 effects = "read"
 scope = "workspace"
 

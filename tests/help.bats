@@ -90,7 +90,8 @@ setup() {
     [[ "$output" != *"Commands:"* ]]
     run "$META_BIN" cargo build --help
     [ "$status" -eq 0 ]
-    [[ "${lines[0]}" == '`meta cargo build` runs as typed (`cargo build`) in each selected repo.' ]]
+    [[ "${lines[0]}" == "answered by: cargo "*"only where there is Cargo.toml"* ]]
+    [[ "${lines[1]}" == '`meta cargo build` runs as typed (`cargo build`) in each selected repo.' ]]
     [[ "$output" == *"Current scope: no repos here"* ]]
     [[ "$output" == *"For cargo's own options: cargo build --help"* ]]
     [[ "$output" != *"No Rust projects found"* ]]
@@ -258,17 +259,19 @@ EOF
     done
 }
 
-@test "a command's help says first who answers it: meta-git, or git as typed" {
+@test "a command's help says first who answers it, and how" {
     for words in "git clone --help" "help git clone" "git commit --help" "git update -h"; do
         run "$META_BIN" $words
         [ "$status" -eq 0 ]
-        [[ "${lines[0]}" == '`meta git '*'` is adapted by meta-git: meta'"'"'s own command, not git run as typed.' ]]
+        [[ "${lines[0]}" == "answered by: git "* ]]
+        [[ "${lines[0]}" != *"runs as typed"* ]]
         [[ "$output" == *"Git options: "* ]]
     done
     for words in "git pull --help" "help git pull"; do
         run "$META_BIN" $words
         [ "$status" -eq 0 ]
-        [[ "${lines[0]}" == '`meta git pull` runs as typed (`git pull`) in each selected repo.' ]]
+        [[ "${lines[0]}" == "answered by: git "*"runs as typed"* ]]
+        [[ "${lines[1]}" == '`meta git pull` runs as typed (`git pull`) in each selected repo.' ]]
         [[ "$output" == *"For git's own options: git pull --help"* ]]
     done
 }

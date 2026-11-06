@@ -431,14 +431,27 @@ Help says who answers each command. `meta --help` lists each plugin's own comman
 
 ```
 $ meta git clone --help
-`meta git clone` is adapted by meta-git: meta's own command, not git run as typed.
+answered by: git (built into meta)
 ...
 Git options: of git clone's own, only --depth, given to each clone.
 
 $ meta git pull --help
+answered by: git (built into meta) · runs as typed
+
 `meta git pull` runs as typed (`git pull`) in each selected repo.
 ...
 For git's own options: git pull --help
+```
+
+`meta --json help [COMMAND]` gives the same answer as data: each command with its provider, effects, scope, options and what conflicts with what, then meta's own options and anything wrong with a plugin's manifest. A broken manifest disables only the commands it touches.
+
+### Shell completion
+
+`meta completions bash|zsh|fish|powershell` prints a script that completes commands, options and values from the same index:
+
+```bash
+# bash, in ~/.bashrc
+source <(meta completions bash)
 ```
 
 ### Built-in Plugins

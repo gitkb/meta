@@ -94,6 +94,73 @@ fn value_parser(option: &Opt) -> ValueParser {
     }
 }
 
+/// How `options` differ from `command`, a clap type of the same command, as
+/// lines naming each difference. For the test that keeps a plugin's clap
+/// types and its manifest in step, until the host parses for plugins and
+/// the clap types go.
+pub fn differences(summary: &str, options: &[Opt], command: &clap::Command) -> Vec<String> {
+    let mut declared = clap::Command::new("x")
+        .disable_help_flag(true)
+        .args(args(options));
+    declared.build();
+    let mut actual = command
+        .clone()
+        .disable_help_flag(true)
+        .disable_version_flag(true);
+    actual.build();
+    let mut differences = Vec::new();
+    let about = actual
+        .get_about()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    if about != summary {
+        differences.push(format!("summary: {summary:?}, clap has {about:?}"));
+    }
+    let (declared, actual) = (shapes(&declared), shapes(&actual));
+    for shape in declared.iter().filter(|shape| !actual.contains(shape)) {
+        differences.push(format!("declared: {shape}"));
+    }
+    for shape in actual.iter().filter(|shape| !declared.contains(shape)) {
+        differences.push(format!("in clap: {shape}"));
+    }
+    differences
+}
+
+/// Each argument of `command` as one line of what it means, its order
+/// included: ids differ between the two, so they are named by spelling.
+fn shapes(command: &clap::Command) -> Vec<String> {
+    let name = |arg: &Arg| match arg.get_long() {
+        Some(long) => format!("--{long}"),
+        None => arg.get_id().as_str().replace('_', "-"),
+    };
+    command
+        .get_arguments()
+        .filter(|arg| !matches!(arg.get_id().as_str(), "help" | "version"))
+        .map(|arg| {
+            let mut conflicts: Vec<String> = command
+                .get_arg_conflicts_with(arg)
+                .into_iter()
+                .map(name)
+                .collect();
+            conflicts.sort();
+            format!(
+                "{} short={:?} at={:?} value={} many={} required={} default={:?} last={} \
+                 hyphen={} conflicts={conflicts:?} help={:?}",
+                name(arg),
+                arg.get_short(),
+                arg.get_index(),
+                arg.get_action().takes_values(),
+                matches!(arg.get_action(), ArgAction::Append),
+                arg.is_required_set(),
+                arg.get_default_values(),
+                arg.is_last_set(),
+                arg.is_allow_hyphen_values_set(),
+                arg.get_help().map(ToString::to_string).unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
 /// What `matches` holds of `options`, by option id: a flag as a bool, a
 /// value as its type, a list as an array. An option not given is left out.
 pub fn values(matches: &ArgMatches, options: &[Opt]) -> Map<String, Value> {

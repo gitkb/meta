@@ -2372,7 +2372,7 @@ stays_in_set() {
             env ${folder:+META_WORKTREES="$folder"} "$META_BIN" git worktree exec --ephemeral "e$RANDOM" --repo backend -- \
                 sh -c "pwd -P >> '$log'"
             [ -s "$log" ]
-            ! grep -qv "/\(\.worktrees\|sets\)/e[0-9]*\(/\|\$\)" "$log"
+            if grep -qv "/\(\.worktrees\|sets\)/e[0-9]*\(/\|\$\)" "$log"; then false; fi
         done
     done
     # no root checkout, no owner file: refused, and the workspace is one word away
@@ -2384,4 +2384,26 @@ stays_in_set() {
     [[ "$output" == *"in no set meta can name"* ]]
     run "$META_BIN" --primary --include backend exec -- pwd
     [ "$status" -eq 0 ]
+}
+
+# The rootless `META_WORKTREES`-unset row and a moved set's member join here
+# once a set is found from that place alone.
+@test "a set moved out of its worktrees folder: a root checkout keeps it one, and without one its top folder is ordinary" {
+    "$META_BIN" git worktree create rooted --repo backend
+    mkdir scratch
+    mv .worktrees/rooted scratch/rooted
+    git worktree repair scratch/rooted
+    git -C backend worktree repair "$TEST_DIR/scratch/rooted/backend"
+    stays_in_set scratch/rooted scratch/rooted
+    stays_in_set scratch/rooted scratch/rooted/backend
+
+    rm -rf .git
+    "$META_BIN" git worktree create rootless --repo backend
+    mv .worktrees/rootless scratch/rootless
+    log="$TEST_DIR/ran"
+    rm -f "$log"
+    # an ordinary folder under the workspace: it runs where the config above says
+    (cd scratch/rootless && "$META_BIN" exec -- sh -c "pwd -P >> '$log'")
+    grep -qx "$(cd backend && pwd -P)" "$log"
+    if grep -q "/scratch/" "$log"; then false; fi
 }

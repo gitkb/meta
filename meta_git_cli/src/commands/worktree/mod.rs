@@ -31,6 +31,13 @@ struct WorktreeParser {
     command: WorktreeCommands,
 }
 
+/// The clap type of `git worktree`, for the test that keeps it and the
+/// manifest in step.
+#[cfg(test)]
+pub(crate) fn clap_command() -> clap::Command {
+    <WorktreeParser as clap::CommandFactory>::command()
+}
+
 /// Refuse meta's selection for `command` on the whole set `name`: a
 /// selection that leaves out a checkout of it would read as "only these".
 /// The host applies `--include`/`--exclude`/`--tag` to the set it names;

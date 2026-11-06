@@ -70,7 +70,13 @@ pub fn complete(index: &Index, words: &[String]) -> Vec<String> {
     let command = before.get(meta.typed.len()..).unwrap_or_default();
     let found = match command.is_empty() {
         // a value of one of meta's options: nothing to offer but files
-        true if meta.typed.last().is_some_and(|word| takes_value(index, word)) => Vec::new(),
+        true if meta
+            .typed
+            .last()
+            .is_some_and(|word| takes_value(index, word)) =>
+        {
+            Vec::new()
+        }
         true if partial.starts_with('-') => meta_spellings(index),
         true => top(index),
         false => after_command(index, command, partial),
@@ -151,7 +157,11 @@ fn after_command(index: &Index, command: &[String], partial: &str) -> Vec<String
         .nth(args.iter().filter(|word| !word.starts_with('-')).count());
     next_words
         .into_iter()
-        .chain(positional.into_iter().flat_map(|option| values(held, option, words, partial)))
+        .chain(
+            positional
+                .into_iter()
+                .flat_map(|option| values(held, option, words, partial)),
+        )
         .collect()
 }
 
@@ -237,23 +247,9 @@ fn context_request(
         .and_then(Path::parent)
         .unwrap_or(&cwd)
         .to_path_buf();
-    let request = meta_plugin::Request {
-        command: words.join(" "),
-        args: Vec::new(),
-        cwd,
-        workspace: None,
-        scope: meta_plugin::Scope::None,
-        set: None,
-        lease: None,
-        projects: Vec::new(),
-        depth: None,
-        recursive: false,
-        settings: serde_json::Map::new(),
-        data_dir: dir.to_path_buf(),
-        plugin_dir,
-        meta: meta_plugin::Meta::default(),
-        meta_options: meta_plugin::args::MetaOptions::default(),
-    };
+    let mut request = meta_plugin::Request::new(words.join(" "), &cwd);
+    request.data_dir = dir.to_path_buf();
+    request.plugin_dir = plugin_dir;
     let path = dir.join("request.json");
     std::fs::write(&path, serde_json::to_vec(&request)?)?;
     Ok(path)

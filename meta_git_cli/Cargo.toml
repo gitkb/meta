@@ -39,7 +39,7 @@ rustix = { workspace = true, features = ["process", "termios"] }
 same-file = "1"
 
 [dev-dependencies]
-meta_plugin = { workspace = true, features = ["testing-git"] }
+meta_plugin = { workspace = true, features = ["testing-git", "parser"] }
 shlex.workspace = true
 
 [lints]

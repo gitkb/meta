@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, FromArgMatches, Subcommand};
 use meta_core::config::{self, find_meta_config, Workspace};
 use meta_core::repo_filter::{Filters, Reach};
 use meta_plugin::display::{escape, escape_lines, escape_path};
@@ -31,139 +31,55 @@ fn version() -> String {
     format!("{}{}", VERSION.trim(), env!("META_BUILD_COMMIT"))
 }
 
+/// meta-host.toml: meta's own options and commands, the one declaration of
+/// them.
+pub const HOST_MANIFEST: &str = include_str!("../meta-host.toml");
+
+/// The types `meta_plugin::build` generated from it.
+#[expect(
+    dead_code,
+    reason = "clap derive types parse the built-in commands until the host parses them itself"
+)]
+mod host {
+    include!(concat!(env!("OUT_DIR"), "/host.rs"));
+}
+pub use host::MetaOptions as Cli;
+
+/// meta-host.toml, read. The build generated its types from this very text,
+/// so a problem in it is a failed build, never this run.
+fn host_manifest() -> meta_plugin::manifest::Manifest {
+    meta_plugin::manifest::Manifest::parse(HOST_MANIFEST).unwrap_or_default()
+}
+
+/// meta's command line: its options from meta-host.toml, then its commands.
 /// meta's options go before the command; every word after the command
 /// belongs to it, so `meta git pull --tag v1` gives `--tag v1` to git.
-#[derive(Parser)]
-#[command(
-    // named meta however it was started (meta.exe, a link): its help and
-    // errors say `meta`, and meta's own help is told apart by its text
-    name = "meta",
-    bin_name = "meta",
-    author,
-    version = version(),
-    about,
-    long_about = None,
-    disable_help_subcommand = true,
-    after_help = "meta's options go before the command (meta --dry-run git update); \
-                  what follows the command belongs to it."
-)]
-pub struct Cli {
-    #[arg(long, help = "Add shell aliases to the global .looprc file")]
-    add_aliases_to_global_looprc: bool,
+pub fn command_line() -> clap::Command {
+    let manifest = host_manifest();
+    let meta = clap::Command::new("meta")
+        // named meta however it was started (meta.exe, a link): its help and
+        // errors say `meta`, and meta's own help is told apart by its text
+        .bin_name("meta")
+        .version(version())
+        .about(manifest.description.unwrap_or_default())
+        .disable_help_subcommand(true)
+        .after_help(
+            "meta's options go before the command (meta --dry-run git update); \
+             what follows the command belongs to it.",
+        )
+        .args(meta_plugin::parser::args(&manifest.meta_options));
+    Commands::augment_subcommands(meta)
+}
 
-    #[arg(
-        short,
-        long,
-        value_name = "FILE",
-        help = "Read FILE instead of .meta.yaml, looked for in the current directory and the ones above it"
-    )]
-    config: Option<PathBuf>,
-
-    #[arg(
-        short,
-        long,
-        value_delimiter = ',',
-        help = "Skip these repos: each value is a repo's .meta.yaml name or its whole path from the nearest .meta.yaml (with -r or -A, from the workspace root; . for that root), never part of one"
-    )]
-    exclude: Option<Vec<String>>,
-
-    #[arg(
-        short,
-        long,
-        value_delimiter = ',',
-        help = "Run in these repos (and in those --tag selects): each value is a repo's .meta.yaml name or its whole path from the nearest .meta.yaml (with -r or -A, from the workspace root; . for that root), never part of one"
-    )]
-    include: Option<Vec<String>>,
-
-    #[arg(
-        long,
-        help = "Print one JSON document (the envelope every command prints) instead of text"
-    )]
-    json: bool,
-
-    #[arg(
-        long,
-        conflicts_with = "json",
-        help = "Print each event as one JSON line as it happens ({\"event\": …}), then the envelope --json prints as the last line ({\"envelope\": …})"
-    )]
-    json_stream: bool,
-
-    #[arg(
-        long,
-        value_name = "FIELDS",
-        value_delimiter = ',',
-        help = "With --json, keep only these fields of each result (comma-separated; a.b reaches into a field, as data.name)"
-    )]
-    fields: Option<Vec<String>>,
-
-    #[arg(short, long, help = "Enable silent mode")]
-    silent: bool,
-
-    #[arg(short, long, action, help = "Enable verbose output")]
-    verbose: bool,
-
-    #[arg(
-        long,
-        short = 't',
-        value_name = "TAGS",
-        help = "Run in the repos with any of these tags, comma-separated (the root has none: add it with -i .)"
-    )]
-    tag: Option<String>,
-
-    #[arg(
-        long,
-        short = 'r',
-        help = "Also the meta repos nested under the nearest .meta.yaml (at the workspace root, the same as -A)"
-    )]
-    recursive: bool,
-
-    #[arg(
-        long,
-        short = 'A',
-        help = "The whole workspace, from its outermost .meta.yaml, wherever you are (inside a worktree set: no wider than the set)"
-    )]
-    all: bool,
-
-    #[arg(
-        long,
-        value_name = "N",
-        help = "How many levels of nested meta repos -r or -A goes down, from where it starts (default: unlimited)"
-    )]
-    depth: Option<usize>,
-
-    #[arg(
-        long,
-        help = "Show what would change, and change nothing (commands that can't preview refuse it)"
-    )]
-    dry_run: bool,
-
-    #[arg(long, help = "Run commands in parallel")]
-    parallel: bool,
-
-    #[arg(long, help = "Run commands sequentially (overrides config default)")]
-    sequential: bool,
-
-    #[arg(
-        long,
-        help = "Inside a worktree set, act on the workspace it was made from instead"
-    )]
-    primary: bool,
-
-    #[arg(
-        long,
-        conflicts_with_all = ["all", "primary"],
-        help = "Only the .meta.yaml in the directory meta runs from: no workspace above it, no worktree set around it"
-    )]
-    no_parent: bool,
-
-    #[arg(
-        long,
-        help = "Convert warnings to errors for all-or-nothing behavior (CI/automation)"
-    )]
-    strict: bool,
-
-    #[command(subcommand)]
-    command: Option<Commands>,
+/// What `matches` (of [`command_line`]) says: meta's options, and the command.
+fn parsed(matches: &clap::ArgMatches) -> Result<(Cli, Option<Commands>)> {
+    let values = meta_plugin::parser::values(matches, &host_manifest().meta_options);
+    let cli = serde_json::from_value(serde_json::Value::Object(values))?;
+    let command = match matches.subcommand().is_some() {
+        true => Some(Commands::from_arg_matches(matches)?),
+        false => None,
+    };
+    Ok((cli, command))
 }
 
 impl Cli {
@@ -183,9 +99,10 @@ impl Cli {
 
     /// `--include`, `--exclude` and `--tag`
     pub fn filters(&self) -> Filters {
+        let given = |values: &Vec<String>| Some(values.clone()).filter(|v| !v.is_empty());
         Filters::new(
-            self.include.clone(),
-            self.exclude.clone(),
+            given(&self.include),
+            given(&self.exclude),
             self.tag.as_deref(),
         )
     }
@@ -199,6 +116,14 @@ impl Cli {
             return Ok(cwd);
         }
         Ok(worktree::primary_dir(&cwd)?.unwrap_or(cwd))
+    }
+
+    /// meta's options from a whole command line, for tests.
+    #[cfg(test)]
+    pub fn parse_from<'a>(line: impl IntoIterator<Item = &'a str>) -> Self {
+        let matches = command_line().get_matches_from(line);
+        let values = meta_plugin::parser::values(&matches, &host_manifest().meta_options);
+        serde_json::from_value(serde_json::Value::Object(values)).unwrap()
     }
 }
 
@@ -355,7 +280,7 @@ impl PluginCommands {
 /// description and version, its own commands, and what becomes of the
 /// rest. Plugins name and describe themselves, so their values are escaped.
 fn help_with_plugins(plugins: &SubprocessPluginManager) -> String {
-    let mut cmd = Cli::command();
+    let mut cmd = command_line();
     for plugin in plugins.all() {
         // shown escaped; a word whose escaped form is taken (by a built-in
         // or another plugin's) is shown once
@@ -405,7 +330,7 @@ fn typed_command() -> String {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
     let skip = meta_options().typed.len();
-    let mut command = Cli::command();
+    let mut command = command_line();
     let mut words = Vec::new();
     for word in typed.iter().skip(skip) {
         let Some(sub) = command.find_subcommand(word).cloned() else {
@@ -510,8 +435,8 @@ fn run_cli() -> Result<()> {
     // meta's own --help also lists the commands plugins add, so it is
     // answered here, before anything else runs; every other result of
     // parsing is reported as usual
-    let mut cli: Cli = match Cli::try_parse() {
-        Ok(cli) => cli,
+    let matches = match command_line().try_get_matches() {
+        Ok(matches) => matches,
         Err(e) if is_root_help(&e) => {
             check_and_warn_orphan();
             let plugins = SubprocessPluginManager::new(false)?;
@@ -522,16 +447,17 @@ fn run_cli() -> Result<()> {
             running(&typed_command());
             match project::usage_error(&e) {
                 Some(error) => return Err(error),
-                None => meta_plugin::args::parse()?,
+                None => meta_plugin::args::parse_command(command_line())?,
             }
         }
     };
+    let (mut cli, command) = parsed(&matches)?;
     // the stream is JSON too: every command reads `json` for it, and only
     // the printing tells the two apart
     cli.json |= cli.json_stream;
     STREAM.store(cli.json_stream, std::sync::atomic::Ordering::Relaxed);
     meta_plugin::out::set_json(cli.json);
-    let fields = cli.fields.clone().unwrap_or_default();
+    let fields = cli.fields.clone();
     anyhow::ensure!(
         cli.json || fields.is_empty(),
         meta_plugin::exit::Usage(
@@ -552,15 +478,7 @@ fn run_cli() -> Result<()> {
         escape(cli.tag.as_deref().unwrap_or_default())
     );
 
-    if cli.add_aliases_to_global_looprc {
-        anyhow::ensure!(
-            cli.command.is_none(),
-            "--add-aliases-to-global-looprc imports your shell's aliases and runs no command"
-        );
-        return loop_lib::import_aliases(cli.dry_run);
-    }
-
-    let mut report = Report::new(match &cli.command {
+    let mut report = Report::new(match &command {
         None => "help",
         Some(Commands::Help { .. }) => "help",
         Some(Commands::Context(_)) => "context",
@@ -571,7 +489,7 @@ fn run_cli() -> Result<()> {
         Some(Commands::External(_)) => "",
     });
     running(&report.command);
-    match &cli.command {
+    match &command {
         None => help_message(&cli, &help_with_plugins(&subprocess_plugins), &mut report)?,
         Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins, &mut report)?,
         Some(Commands::Context(args)) => {
@@ -661,7 +579,7 @@ fn help_message(cli: &Cli, text: &str, report: &mut Report) -> Result<()> {
 /// Whether `error` is clap showing meta's own help (`meta --help`, also
 /// before a command: `meta --help exec`), not a command's
 fn is_root_help(error: &clap::Error) -> bool {
-    let mut root = Cli::command();
+    let mut root = command_line();
     root.build();
     let shown = error.render().to_string();
     error.kind() == clap::error::ErrorKind::DisplayHelp
@@ -679,7 +597,7 @@ fn help(
     let Some(first) = words.first() else {
         return help_message(cli, &help_with_plugins(plugins), report);
     };
-    let mut cmd = Cli::command();
+    let mut cmd = command_line();
     // built, so the subcommands carry their names and meta's help settings
     cmd.build();
     if cmd.find_subcommand(first).is_some() {
@@ -850,30 +768,13 @@ fn as_typed_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin, tool: &s
     )
 }
 
-/// The help of meta's options that choose the repos a command runs in, and
-/// how: from meta's own definitions, so it says what meta takes.
+/// The help of meta's options, from their one declaration.
 fn selection_options_help() -> String {
-    const SHOWN: [&str; 9] = [
-        "dry_run",
-        "recursive",
-        "depth",
-        "include",
-        "exclude",
-        "tag",
-        "parallel",
-        "sequential",
-        "primary",
-    ];
-    let options: Vec<clap::Arg> = Cli::command()
-        .get_arguments()
-        .filter(|arg| SHOWN.contains(&arg.get_id().as_str()))
-        .cloned()
-        .collect();
     clap::Command::new("meta")
         .disable_help_flag(true)
         .disable_version_flag(true)
         .help_template("{options}")
-        .args(options)
+        .args(meta_plugin::parser::args(&host_manifest().meta_options))
         .render_help()
         .to_string()
 }
@@ -986,7 +887,7 @@ fn meta_options() -> meta_plugin::args::MetaOptions {
         .skip(1)
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    meta_plugin::args::MetaOptions::of(&Cli::command(), &args)
+    meta_plugin::args::MetaOptions::of(&command_line(), &args)
 }
 
 /// meta, as the program that runs a command in each repo: its options, so a
@@ -1429,7 +1330,7 @@ fn unrecognized_command_error(
     run_it: bool,
 ) -> anyhow::Error {
     let first_cmd = command_args.first().map(|s| s.as_str()).unwrap_or("");
-    let cli = Cli::command();
+    let cli = command_line();
     let builtins: Vec<&str> = cli.get_subcommands().map(|sub| sub.get_name()).collect();
     // Plugins by their file names: none is started to list them
     let words = plugins.words();

@@ -1,0 +1,139 @@
+# meta's own options and built-in commands: their one declaration. clap is
+# built from `meta_options`, and `meta_plugin::build` generates the type the
+# code reads them through. The built-in commands' arguments are still parsed
+# by clap derive types in src/ until the host parses every command itself; a
+# test checks that the two agree.
+
+name = "meta"
+description = "Multi-repo management CLI with AI integration"
+run = ["meta"]
+
+meta_options = [
+  { long = "config", short = "c", value = "FILE", type = "path", help = "Read FILE instead of .meta.yaml, looked for in the current directory and the ones above it" },
+  { long = "exclude", short = "e", value = "EXCLUDE", delimiter = ",", help = "Skip these repos: each value is a repo's .meta.yaml name or its whole path from the nearest .meta.yaml (with -r or -A, from the workspace root; . for that root), never part of one" },
+  { long = "include", short = "i", value = "INCLUDE", delimiter = ",", help = "Run in these repos (and in those --tag selects): each value is a repo's .meta.yaml name or its whole path from the nearest .meta.yaml (with -r or -A, from the workspace root; . for that root), never part of one" },
+  { long = "json", help = "Print one JSON document (the envelope every command prints) instead of text" },
+  { long = "json-stream", conflicts = ["json"], help = "Print each event as one JSON line as it happens ({\"event\": …}), then the envelope --json prints as the last line ({\"envelope\": …})" },
+  { long = "fields", value = "FIELDS", delimiter = ",", help = "With --json, keep only these fields of each result (comma-separated; a.b reaches into a field, as data.name)" },
+  { long = "silent", short = "s", help = "Enable silent mode" },
+  { long = "verbose", short = "v", help = "Enable verbose output" },
+  { long = "tag", short = "t", value = "TAGS", help = "Run in the repos with any of these tags, comma-separated (the root has none: add it with -i .)" },
+  { long = "recursive", short = "r", help = "Also the meta repos nested under the nearest .meta.yaml (at the workspace root, the same as -A)" },
+  { long = "all", short = "A", help = "The whole workspace, from its outermost .meta.yaml, wherever you are (inside a worktree set: no wider than the set)" },
+  { long = "depth", value = "N", type = "uint", help = "How many levels of nested meta repos -r or -A goes down, from where it starts (default: unlimited)" },
+  { long = "dry-run", help = "Show what would change, and change nothing (commands that can't preview refuse it)" },
+  { long = "parallel", help = "Run commands in parallel" },
+  { long = "sequential", help = "Run commands sequentially (overrides config default)" },
+  { long = "primary", help = "Inside a worktree set, act on the workspace it was made from instead" },
+  { long = "no-parent", conflicts = ["all", "primary"], help = "Only the .meta.yaml in the directory meta runs from: no workspace above it, no worktree set around it" },
+  { long = "strict", help = "Convert warnings to errors for all-or-nothing behavior (CI/automation)" },
+]
+
+[commands.context]
+summary = "Show workspace context summary (meta -r context: nested meta repos' projects too)"
+effects = "read"
+scope = "selection"
+options = [
+  { long = "no-status", help = "Skip git status queries (structure only, faster)" },
+]
+
+[commands.exec]
+summary = "Run a command in each selected repo, as typed (no shell, no plugin)"
+effects = "unknown"
+scope = "selection"
+preview = "plan"
+options = [
+  { positional = "command", value = "COMMAND", rest = true, required = true, help = "The program and its arguments (after `--` when the program starts with `-`)" },
+]
+
+[commands.help]
+summary = "Print help for meta or for a command (meta help git worktree create)"
+effects = "read"
+options = [
+  { positional = "command", value = "COMMAND", rest = true, allow_hyphen = true, help = "The command, as you would type it after `meta`" },
+]
+
+[commands.completions]
+summary = "Print the script that completes meta's commands in a shell"
+effects = "read"
+options = [
+  { positional = "shell", value = "SHELL", required = true, choices = ["bash", "zsh", "fish", "powershell"], help = "The shell to complete in" },
+]
+
+[commands.__complete]
+summary = "List the completions of a command line (what the scripts of `meta completions` call)"
+effects = "read"
+hidden = true
+options = [
+  { positional = "words", value = "WORD", rest = true, allow_hyphen = true, help = "The words after `meta`, the last one being completed" },
+]
+
+[commands."init claude"]
+summary = "Install Claude Code skills, rules, and hooks for this meta repo"
+effects = "write"
+preview = "plan"
+options = [
+  { long = "force", short = "f", help = "Refresh skills and rules, merge meta hooks into settings" },
+  { long = "update", short = "u", help = "Update skills and rules only, preserve settings" },
+]
+
+[commands."plugin search"]
+summary = "Search for plugins in the registry"
+effects = "read"
+network = true
+options = [
+  { positional = "query", value = "QUERY", required = true, help = "Search query" },
+]
+
+[commands."plugin install"]
+summary = "Install a plugin (by registry name, owner/repo[@version] or URL)"
+effects = "write"
+network = true
+options = [
+  { positional = "name", value = "NAME", required = true, help = "Plugin name, owner/repo[@version] or archive URL" },
+  { long = "local", help = "Install plugin locally to project (.meta/plugins/) instead of globally" },
+]
+
+[commands."plugin list"]
+summary = "List the plugins meta finds, and the tool extensions on PATH they run"
+effects = "read"
+options = [
+  { long = "local", help = "List only project-local plugins (meta --json: name, version, description and path of each)" },
+]
+
+[commands."plugin uninstall"]
+summary = "Uninstall a plugin"
+effects = "write"
+options = [
+  { positional = "name", value = "NAME", required = true, help = "Plugin name" },
+  { long = "local", help = "Uninstall from project-local plugins" },
+]
+
+[commands."plugin update"]
+summary = "Update plugins to latest versions"
+effects = "write"
+network = true
+options = [
+  { positional = "name", value = "NAME", help = "Plugin name (updates all if not specified)" },
+  { long = "local", help = "Update from project-local plugins" },
+  { long = "check", help = "Check for updates without installing" },
+]
+
+[commands."project list"]
+summary = "List the projects defined in .meta.yaml"
+effects = "read"
+scope = "workspace"
+alias = ["ls"]
+
+[commands."project check"]
+summary = "Verify configured projects are cloned (meta --recursive checks nested meta repos as well)"
+effects = "read"
+scope = "selection"
+
+[commands."project dependents"]
+summary = "List the projects that depend on a project or capability"
+effects = "read"
+scope = "workspace"
+options = [
+  { positional = "project", value = "PROJECT", required = true, help = "Project name or provided capability to search for" },
+]

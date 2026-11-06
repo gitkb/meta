@@ -15,6 +15,12 @@ process = ["dep:rustix", "dep:signal-hook", "dep:win32job"]
 # temporary: clap parsing of a plugin's arguments and the tip for one of
 # meta's options typed after the command, until the host parses for plugins
 parse = ["dep:clap", "dep:strsim"]
+# reading manifests (`meta-plugin.toml`)
+manifest = ["dep:toml"]
+# a manifest's options as a command line
+parser = ["manifest", "dep:clap"]
+# generated request types, in a plugin's build script
+build = ["manifest"]
 # calling meta back (`meta --json …`) from a program meta started
 client = ["process"]
 # worktree sets for any provider: owner files, leases, hooks
@@ -34,9 +40,10 @@ indexmap = { workspace = true, features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
 shlex.workspace = true
-clap = { workspace = true, optional = true }
+clap = { workspace = true, features = ["string"], optional = true }
 strsim = { version = "0.11", optional = true }
 tempfile = { workspace = true, optional = true }
+toml = { version = "1", default-features = false, features = ["std", "parse", "serde"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process", "termios"], optional = true }
@@ -49,7 +56,7 @@ win32job = { version = "2", optional = true }
 same-file = { version = "1", optional = true }
 
 [dev-dependencies]
-meta_plugin = { path = ".", features = ["parse", "sets", "client", "testing-git"] }
+meta_plugin = { path = ".", features = ["parse", "parser", "build", "sets", "client", "testing-git"] }
 
 [lints]
 workspace = true

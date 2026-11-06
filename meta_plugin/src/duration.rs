@@ -3,6 +3,17 @@
 use crate::display::escape;
 use anyhow::Context;
 
+/// A duration as a request carries it: whole seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Seconds(pub u64);
+
+impl From<Seconds> for std::time::Duration {
+    fn from(seconds: Seconds) -> Self {
+        std::time::Duration::from_secs(seconds.0)
+    }
+}
+
 /// Parse a human-friendly duration string to seconds.
 /// Supported formats: "30s", "5m", "1h", "2d", "1w" (any case), or bare seconds "300".
 /// The result always fits in an `i64`, so timestamp arithmetic can't wrap.

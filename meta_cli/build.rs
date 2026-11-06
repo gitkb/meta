@@ -16,7 +16,8 @@ fn git(args: &[&str]) -> Option<String> {
     (output.status.success() && !text.is_empty()).then(|| text.to_string())
 }
 
-fn main() {
+fn main() -> Result<(), String> {
+    meta_plugin::build::generate_to("meta-host.toml", "host.rs")?;
     // a new commit, a branch switch, a fetch that packs refs, staging: build again
     for name in ["HEAD", "packed-refs", "index"] {
         if let Some(path) = git(&["rev-parse", "--git-path", name]) {
@@ -50,4 +51,5 @@ fn main() {
         .map(|commit| format!(" (git {commit}{dirty})"))
         .unwrap_or_default();
     println!("cargo:rustc-env=META_BUILD_COMMIT={commit}");
+    Ok(())
 }

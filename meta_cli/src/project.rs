@@ -186,7 +186,7 @@ pub fn usage_error(error: &clap::Error) -> Option<anyhow::Error> {
 /// commands: the one it is near, as the line typed with meta's options
 /// (`meta`'s) before the command, and the commands there are.
 fn unrecognized(words: &[String], meta: &meta_plugin::args::MetaOptions) -> anyhow::Error {
-    let mut cli = <Cli as clap::CommandFactory>::command();
+    let mut cli = crate::command_line();
     cli.build();
     let project = cli.find_subcommand_mut("project");
     let names: Vec<String> = project
@@ -680,7 +680,6 @@ fn dependents(target: &Target, project_name: &str) -> Result<Found> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
 
     /// The repos `meta <options> project …` reaches from `cwd`.
     fn target(cwd: &Path, options: &[&str]) -> Target {

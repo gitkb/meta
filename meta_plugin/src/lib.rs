@@ -61,6 +61,8 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "parse")]
 pub mod args;
+#[cfg(feature = "build")]
+pub mod build;
 #[cfg(feature = "client")]
 pub mod client;
 pub mod display;
@@ -68,8 +70,12 @@ pub mod duration;
 pub mod envelope;
 pub mod event;
 pub mod exit;
+#[cfg(feature = "manifest")]
+pub mod manifest;
 mod mode;
 pub mod out;
+#[cfg(feature = "parser")]
+pub mod parser;
 pub mod path;
 #[cfg(feature = "process")]
 pub mod process;
@@ -91,6 +97,15 @@ pub use repo_url::RepoUrl;
 pub use request::{Meta, Project, Request, Scope, Set, Workspace, Worktree};
 pub use response::{Answer, Plan, Response, Results, Step, Text};
 pub use serve::{run_plugin, usage, Ctx, PluginDefinition, REQUEST_VAR, RESPONSE_VAR};
+pub use wire_path::Word;
+
+/// The types [`build::generate`] wrote for this crate's manifest.
+#[macro_export]
+macro_rules! include_commands {
+    () => {
+        include!(concat!(env!("OUT_DIR"), "/commands.rs"));
+    };
+}
 
 /// The variable that names the lease a program's caller holds (see
 /// `sets::lease`): meta reads it and passes it on as `Request::lease`.

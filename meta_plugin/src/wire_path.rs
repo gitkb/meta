@@ -106,6 +106,62 @@ pub mod option {
     }
 }
 
+/// The same for a `Vec<PathBuf>`.
+pub mod list {
+    use super::*;
+
+    pub fn serialize<S: Serializer>(paths: &[PathBuf], serializer: S) -> Result<S::Ok, S::Error> {
+        let wires: Vec<Wire> = paths.iter().map(|path| wire(path)).collect();
+        wires.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<PathBuf>, D::Error> {
+        Vec::<Wire>::deserialize(deserializer)?
+            .into_iter()
+            .map(unwire)
+            .collect::<Result<_, _>>()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// `path` as it is sent.
+pub fn to_json(path: &Path) -> serde_json::Value {
+    match wire(path) {
+        Wire::Text(text) => serde_json::Value::String(text),
+        Wire::Bytes { lossy, bytes } => serde_json::json!({"lossy": lossy, "bytes": bytes}),
+    }
+}
+
+/// A word for another program, as typed: a raw command's arguments are the
+/// one place words reach a plugin, and a word need not be UTF-8.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Word {
+    /// As it shows
+    pub text: String,
+    /// The base64 of its bytes, when it is not UTF-8
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<String>,
+}
+
+impl Word {
+    pub fn of(word: &std::ffi::OsStr) -> Self {
+        Word {
+            text: word.to_string_lossy().into_owned(),
+            bytes: bytes_of(Path::new(word)),
+        }
+    }
+
+    /// The word as typed, byte for byte.
+    pub fn to_os_string(&self) -> Result<std::ffi::OsString, String> {
+        match &self.bytes {
+            Some(bytes) => from_bytes(bytes).map(PathBuf::into_os_string),
+            None => Ok(self.text.clone().into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +197,7 @@ mod tests {
         assert_eq!(sent["path"]["lossy"], "/w/caf\u{fffd}");
         assert_eq!(got, path);
         assert_eq!(from_bytes(&bytes_of(path).unwrap()).unwrap(), path);
+        let word = Word::of(path.as_os_str());
+        assert_eq!(word.to_os_string().unwrap(), path.as_os_str());
     }
 }

@@ -122,10 +122,11 @@ impl Meta {
 }
 
 /// What the host resolved before the call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Scope {
     /// No workspace needed (a clone makes one)
+    #[default]
     None,
     /// The workspace, with no selection applied: the command finds what it
     /// acts on in `workspace.members` (worktree commands)

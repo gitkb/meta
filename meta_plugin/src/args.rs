@@ -13,13 +13,21 @@ use std::ffi::OsStr;
 pub fn escaped_error<P: clap::Parser>(
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
 ) -> clap::Error {
+    escaped_error_of(&P::command(), args)
+}
+
+/// [`escaped_error`], for a command line built at run time.
+fn escaped_error_of(
+    command: &clap::Command,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+) -> clap::Error {
     let shown = args
         .into_iter()
         .map(|arg| escape(&arg.as_ref().to_string_lossy()).into_owned())
         .collect::<Vec<_>>();
-    match P::try_parse_from(shown) {
+    match command.clone().try_get_matches_from(shown) {
         Err(e) => e,
-        Ok(_) => P::command().error(
+        Ok(_) => command.clone().error(
             clap::error::ErrorKind::InvalidValue,
             "an argument contains a control character",
         ),
@@ -33,9 +41,15 @@ pub fn escaped_error<P: clap::Parser>(
 /// usage error; with `--json` before the command, a usage error is the
 /// JSON error report on stdout.
 pub fn parse<P: clap::Parser>() -> anyhow::Result<P> {
+    let matches = parse_command(P::command())?;
+    P::from_arg_matches(&matches).map_err(|e| crate::exit::Usage(message(&e)).into())
+}
+
+/// [`parse`], for a command line built at run time.
+pub fn parse_command(command: clap::Command) -> anyhow::Result<clap::ArgMatches> {
     use clap::error::{ContextKind, ContextValue, ErrorKind};
-    let e = match P::try_parse() {
-        Ok(parsed) => return Ok(parsed),
+    let e = match command.clone().try_get_matches() {
+        Ok(matches) => return Ok(matches),
         Err(e) => e,
     };
     let mut e = match e.kind() {
@@ -46,22 +60,22 @@ pub fn parse<P: clap::Parser>() -> anyhow::Result<P> {
             return Err(ExitWith(0).into());
         }
         ErrorKind::DisplayHelp | ErrorKind::DisplayVersion | ErrorKind::InvalidUtf8 => e,
-        _ => escaped_error::<P>(std::env::args_os()),
+        _ => escaped_error_of(&command, std::env::args_os()),
     };
     let args: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    let meta = MetaOptions::of(&P::command(), &args);
+    let meta = MetaOptions::of(&command, &args);
     let check = |moved: &[String], rest: &[String]| {
         let line = std::iter::once("meta")
             .chain(meta.typed.iter().map(String::as_str))
             .chain(moved.iter().map(String::as_str))
             .chain(rest.iter().map(String::as_str));
-        verdict(P::try_parse_from(line))
+        verdict(command.clone().try_get_matches_from(line))
     };
-    let command = args.get(meta.typed.len()..).unwrap_or_default();
-    let tip = meta.rejected(&e, command, &check);
+    let typed = args.get(meta.typed.len()..).unwrap_or_default();
+    let tip = meta.rejected(&e, typed, &check);
     if let Some(tip) = &tip {
         e.insert(
             ContextKind::Suggested,

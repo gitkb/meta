@@ -2,7 +2,7 @@
 //! [`meta_plugin::sets::fire`] with each event's payload.
 
 use anyhow::Result;
-use meta_core::config::HookEvent;
+use meta_plugin::sets::HookEvent;
 use std::collections::HashMap;
 use std::path::Path;
 

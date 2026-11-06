@@ -447,7 +447,7 @@ For git's own options: git pull --help
 
 ### Shell completion
 
-`meta completions bash|zsh|fish|powershell` prints a script that completes commands, options and values from the same index:
+`meta completions bash` (or `zsh`, `fish`, `powershell`) prints a script that completes commands, options and values from the same index:
 
 ```bash
 # bash, in ~/.bashrc

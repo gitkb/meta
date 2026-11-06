@@ -8,7 +8,7 @@ summary = "A command named by a keyword, with \"quotes\" and a\nnew line"
 options = [
   { long = "type", value = "T", help = "A keyword" },
   { long = "self", value = "T", help = "A keyword with no raw form" },
-  { long = "Self", help = "Another" },
+  { long = "Upper-Case", help = "Not how a field is spelled" },
   { long = "super", help = "And another" },
   { long = "crate", help = "And another" },
   { long = "fn", value = "T", repeat = true },

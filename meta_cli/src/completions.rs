@@ -1,4 +1,4 @@
-//! Shell completion: `meta completions <shell>` prints a script, which calls
+//! Shell completion: `meta completions bash` prints a script, which calls
 //! `meta __complete` on each TAB. Everything it offers comes from the index.
 
 use crate::index;

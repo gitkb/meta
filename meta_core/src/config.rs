@@ -169,28 +169,7 @@ pub struct WorktreeConfig {
     pub hooks: BTreeMap<HookEvent, String>,
 }
 
-/// The worktree events a hook can run at; any other name is an error. Its
-/// name is its serde name, which `Display` shows.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "kebab-case")]
-pub enum HookEvent {
-    PostCreate,
-    PostDestroy,
-    PostPrune,
-}
-
-impl std::fmt::Display for HookEvent {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.serialize(f)
-    }
-}
-
-impl HookEvent {
-    /// Its name in the config.
-    pub fn name(self) -> String {
-        self.to_string()
-    }
-}
+pub use meta_plugin::sets::HookEvent;
 
 /// A map of commands, each a YAML string: YAML would read `false` or `123`
 /// as the command "false" or "123".

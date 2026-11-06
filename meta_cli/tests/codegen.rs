@@ -18,14 +18,14 @@ use serde_json::json;
 
 #[test]
 fn a_hostile_manifest_compiles_and_decodes_by_its_own_names() {
-    let options = json!({"type": "t", "self": "s", "Self": true, "fn": ["a"], "match": "m",
+    let options = json!({"type": "t", "self": "s", "Upper-Case": true, "fn": ["a"], "match": "m",
                          "with-hyphens": "h", "2fa": true});
     let Some(Command::Type(type_)) = Command::decode("type", options).unwrap() else {
         panic!("not the command named type");
     };
     assert_eq!(type_.r#type.as_deref(), Some("t"));
     assert_eq!(type_.self_.as_deref(), Some("s"));
-    assert!(type_.Self_);
+    assert!(type_.upper_case);
     assert_eq!(type_.r#fn, ["a"]);
     assert_eq!(type_.r#match, "m");
     assert_eq!(type_.with_hyphens.as_deref(), Some("h"));

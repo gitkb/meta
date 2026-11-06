@@ -231,6 +231,31 @@ fn strays(dir: &Path, members: &[&Path], found: &mut Vec<PathBuf>) -> Result<()>
     Ok(())
 }
 
+/// The worktree events a hook can run at; any other name is an error. Its
+/// name is its serde name, which `Display` shows.
+#[derive(
+    Debug, serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum HookEvent {
+    PostCreate,
+    PostDestroy,
+    PostPrune,
+}
+
+impl std::fmt::Display for HookEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        serde::Serialize::serialize(self, f)
+    }
+}
+
+impl HookEvent {
+    /// Its name in the config.
+    pub fn name(self) -> String {
+        self.to_string()
+    }
+}
+
 /// Run the hook the workspace's `worktree.hooks` configures for `event`, if
 /// any, with `payload` as JSON on its stdin, from the folder of the config
 /// the hooks come from.

@@ -716,7 +716,12 @@ fn a_file_on_path_that_a_command_of_metas_shadows_is_named_in_help() {
     let fixture = Fixture::new(true);
     let file = fixture.bin.join("meta-exec");
     let ran = fixture.cwd.join("ran");
-    script(&file, &format!("touch '{}'", ran.display()));
+    // (asked for its info, it is started: only running it counts)
+    let body = format!(
+        "[ \"$1\" = --meta-plugin-info ] || touch '{}'",
+        ran.display()
+    );
+    script(&file, &body);
 
     let help = fixture.run(&["help"]);
     let text = String::from_utf8_lossy(&help.stdout);

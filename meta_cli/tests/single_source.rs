@@ -752,17 +752,28 @@ fn options_in_prose(repo: &Repo) -> Result<(), String> {
                 .chain(o["short"].as_str().map(|short| format!("-{short}")))
         })
         .collect();
+    // a command whose words go on to another program, as typed or after a
+    // positional list, gives them no options of its own
+    let as_typed = |c: &serde_json::Value| {
+        let options = c["options"].as_array().into_iter().flatten();
+        c["raw"] == true || options.into_iter().any(|o| o["rest"] == true)
+    };
     let commands: Vec<(Vec<&str>, bool, Vec<String>)> = index["commands"]
         .as_array()
         .unwrap()
         .iter()
         .map(|c| {
             let name = c["name"].as_str().unwrap().split(' ').collect();
-            (name, c["raw"] == true, longs(&c["options"]))
+            (name, as_typed(c), longs(&c["options"]))
         })
         .collect();
     let (mut problems, mut checked) = (Vec::new(), 0);
-    for (file, text) in repo.texts().filter(|(file, _)| file.ends_with(".md")) {
+    // every command has these, from clap; the old task notes are history
+    let always = ["--help".to_string(), "--version".to_string()];
+    let documents = repo
+        .texts()
+        .filter(|(file, _)| file.ends_with(".md") && !file.starts_with(".context/"));
+    for (file, text) in documents {
         let mut fenced = false;
         for (at, line) in text.lines().enumerate() {
             if line.trim_start().starts_with("```") {
@@ -800,7 +811,12 @@ fn options_in_prose(repo: &Repo) -> Result<(), String> {
                 let given = words.iter().skip(name.len()).take_while(|w| **w != "--");
                 for word in given.filter(|word| word.starts_with("--")) {
                     let word = word.split('=').next().unwrap_or(word);
-                    if !options.iter().chain(&meta).any(|known| known == word) {
+                    if !options
+                        .iter()
+                        .chain(&meta)
+                        .chain(&always)
+                        .any(|k| k == word)
+                    {
                         let name = name.join(" ");
                         problems.push(format!("{file}:{}: meta {name} has no {word}", at + 1));
                     }

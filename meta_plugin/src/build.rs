@@ -209,10 +209,10 @@ fn variant(name: &str) -> String {
     }
 }
 
-/// An option's id as a field: hyphens become underscores, and a keyword is
-/// escaped, or has `_` added where Rust has no escape for it.
+/// An option's id as a field: lower case, hyphens become underscores, and a
+/// keyword is escaped, or has `_` added where Rust has no escape for it.
 fn field(id: &str) -> String {
-    const NO_RAW_FORM: [&str; 4] = ["self", "Self", "super", "crate"];
+    const NO_RAW_FORM: [&str; 3] = ["self", "super", "crate"];
     const KEYWORDS: [&str; 47] = [
         "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do",
         "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl", "in",
@@ -222,6 +222,7 @@ fn field(id: &str) -> String {
     ];
     let snake: String = id
         .chars()
+        .flat_map(char::to_lowercase)
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
         .collect();
     let snake = match snake.chars().next().is_none_or(|c| c.is_numeric()) {
@@ -254,6 +255,7 @@ mod tests {
         assert_eq!(field("every-repo"), "every_repo");
         assert_eq!(field("type"), "r#type");
         assert_eq!(field("self"), "self_");
+        assert_eq!(field("Upper-Case"), "upper_case");
         assert_eq!(field("2fa"), "_2fa");
     }
 

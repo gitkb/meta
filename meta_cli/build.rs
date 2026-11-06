@@ -18,7 +18,8 @@ fn root() -> PathBuf {
 /// What git printed about meta's checkout, empty if that was nothing; `None`
 /// if it failed or there is no checkout. Never another repo's answer: not a
 /// `.git` left in this crate's folder by the days it was a repo of its own,
-/// nor that of a repo around a source archive.
+/// nor that of a repo around a source archive, nor the repo of a git hook
+/// that started this build.
 fn git_output(args: &[&str]) -> Option<String> {
     let root = root();
     if !root.join(".git").exists() {
@@ -28,7 +29,8 @@ fn git_output(args: &[&str]) -> Option<String> {
         clippy::disallowed_methods,
         reason = "the build script reads meta's own checkout, not a user's repo"
     )]
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    let output = meta_plugin::process::clean_env(&mut command)
         .args(args)
         .current_dir(root)
         .output()

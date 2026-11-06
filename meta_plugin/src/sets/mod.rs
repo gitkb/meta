@@ -13,6 +13,9 @@
 //!   meta-git's (every set made before the file existed is a git set). The
 //!   folder's name starts with `.`, as no set's can: a provider listing the
 //!   sets in the worktrees folder passes over names that start with `.`.
+//!   A worktrees folder named by `META_WORKTREES` is its caller's, who may
+//!   move a set out of it and remove it: a provider writes no owner file
+//!   there.
 //! - `.<set>.meta-lease` and its lock: the [`lease`] its creator or its
 //!   ephemeral run holds.
 //!

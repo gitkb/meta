@@ -2312,3 +2312,16 @@ J
     [ ! -e "$MOVED/.worktrees/t" ]
     mv "$MOVED" "$TEST_DIR"
 }
+
+@test "a caller's META_WORKTREES folder holds nothing of meta's once the set is moved out" {
+    # what atc does: make the set in a private folder, move it into place,
+    # remove the folder
+    STAGE="$TEST_DIR/.stage"
+    mkdir "$STAGE"
+    META_WORKTREES="$STAGE" "$META_BIN" git worktree create s --repo backend
+    [ -z "$(ls -A "$STAGE" | grep -v '^s$')" ]
+    mkdir -p "$TEST_DIR/.worktrees"
+    mv "$STAGE/s" "$TEST_DIR/.worktrees/s"
+    rmdir "$STAGE"
+    [ -z "$(ls -A "$TEST_DIR/.worktrees/s" | grep meta-set)" ]
+}

@@ -144,7 +144,10 @@ installs `meta`, the `meta-git` and `meta-cargo` plugins,
 `meta-mcp` and `loop` into `~/.cargo/bin` (the crates in the Makefile's
 `BIN_CRATES`), replacing any copies already there, with your default
 stable toolchain. `meta --version` names the commit it was built from
-(as in `<version> (git 1c96c7e 2026-11-03)`). Building also
+(as in `<version> (git 1c96c7e 2026-11-03)`), and `meta --version --json`
+prints it as `{"version", "source", "commit", "branch", "dirty", "built"}`,
+each git field `null` in a build from outside a git checkout, and `dirty`
+true only for changes to files git tracks. Building also
 needs a C compiler and linker and `make`, which most machines that build
 Rust already have (Xcode Command Line Tools on macOS, `build-essential` or
 your distro's equivalent on Linux, Visual Studio Build Tools on Windows,

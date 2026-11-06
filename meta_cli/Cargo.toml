@@ -36,6 +36,9 @@ rustix = { workspace = true, features = ["fs"] }
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { workspace = true, features = ["process"] }
 
+[build-dependencies]
+chrono.workspace = true
+
 [dev-dependencies]
 meta_plugin = { workspace = true, features = ["testing-git"] }
 indexmap.workspace = true

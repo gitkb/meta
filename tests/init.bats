@@ -409,7 +409,7 @@ EOF
     run "$META_BIN" init claude
     [ "$status" -eq 0 ]
     local skills
-    skills="$(ls -d "$BATS_TEST_DIRNAME"/../claude-plugin/skills/*/ | wc -l)"
+    skills=$(( $(ls -d "$BATS_TEST_DIRNAME"/../claude-plugin/skills/*/ | wc -l) ))
     [[ "$output" == *"$skills skills"* ]]
 }
 

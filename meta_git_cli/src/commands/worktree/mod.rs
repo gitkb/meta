@@ -190,12 +190,13 @@ fn handle_worktree_command(
             let mut records = Vec::new();
             match create::handle_create(args, ctx, request, &mut records) {
                 Ok(create::Made::Again) => crate::again(ctx, request),
-                Ok(made) => {
-                    if let create::Made::Created(created) = made {
-                        match ephemeral {
-                            true => created.lease.leave(),
-                            false => drop(created.lease),
-                        }
+                Ok(create::Made::Preview(must_clone)) => {
+                    Ok(Response::printed(records).skipping(must_clone))
+                }
+                Ok(create::Made::Created(created)) => {
+                    match ephemeral {
+                        true => created.lease.leave(),
+                        false => drop(created.lease),
                     }
                     Ok(Response::printed(records))
                 }

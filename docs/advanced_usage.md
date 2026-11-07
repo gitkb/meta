@@ -364,7 +364,7 @@ With `-r` or `-A`, the repos of nested meta repos are in that one list, their
 aliases paths from where the `.meta.yaml` is read. A path that isn't UTF-8 is
 `{"lossy", "bytes"}` in place of a string, `bytes` being its base64. A preview
 that first has to clone something can't know the plan, and returns no rows: it
-says so on stderr, and succeeds.
+succeeds, and `skipped` lists each repo to clone (`project`) and why (`reason`).
 
 ---
 

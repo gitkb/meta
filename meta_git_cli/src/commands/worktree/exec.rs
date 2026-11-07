@@ -114,7 +114,7 @@ fn handle_ephemeral_exec(args: ExecArgs, ctx: &Ctx, request: &Request) -> Result
         // the clones it made change the plan: from the top again
         super::create::Made::Again => return crate::again(ctx, request),
         // A preview makes no set
-        super::create::Made::Preview => {
+        super::create::Made::Preview(_) => {
             outln!(
                 "Then would run `{}` in each repo planned above, and remove the set.",
                 escape(&meta_plugin::display::display_command(cmd_parts))

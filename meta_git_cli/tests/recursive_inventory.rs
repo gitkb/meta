@@ -740,6 +740,32 @@ fn a_preview_that_must_clone_first_has_no_plan_and_no_row() {
 
     assert!(succeeded, "{envelope}");
     assert_eq!(envelope["results"], json!([]));
+    assert_eq!(
+        envelope["skipped"],
+        json!([{
+            "project": "later",
+            "reason": "not cloned: a create clones it first, so a preview has no plan",
+            "quiet": true,
+        }])
+    );
+}
+
+#[test]
+fn a_preview_names_the_uncloned_meta_repo_on_the_way() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work().join("ws");
+    sandbox.workspace(&root).uncloned("clients").build();
+    std::fs::write(
+        root.join(".meta.yaml"),
+        "projects:\n  clients:\n    repo: https://example.invalid/clients.git\n    meta: true\n",
+    )
+    .unwrap();
+
+    let (succeeded, envelope) = previewed(&sandbox, &root, "clients/desktop");
+
+    assert!(succeeded, "{envelope}");
+    assert_eq!(envelope["results"], json!([]));
+    assert_eq!(envelope["skipped"][0]["project"], "clients", "{envelope}");
 }
 
 /// (macOS file systems refuse such names)

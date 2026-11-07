@@ -3,7 +3,7 @@ use chrono::Utc;
 use colored::*;
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::{errln, outln};
-use meta_plugin::{Ctx, ProjectResult, Request};
+use meta_plugin::{Ctx, ProjectResult, Request, Skipped};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
@@ -30,8 +30,9 @@ pub(crate) struct Created {
 
 /// What a create did.
 pub(crate) enum Made {
-    /// Said what it would do (`--dry-run`)
-    Preview,
+    /// Said what it would do (`--dry-run`), with the repos it must clone
+    /// first when that stops it short of a plan
+    Preview(Vec<Skipped>),
     Created(Created),
     /// Cloned what the set needs that wasn't cloned: the configs those
     /// clones hold change the plan, so the command runs again from the top
@@ -124,7 +125,7 @@ pub(crate) fn handle_create(
                 places.join(", "),
                 escape(name)
             )?;
-            return Ok(Made::Preview);
+            return Ok(Made::Preview(must_clone_first(&parents)));
         }
         clone_missing(&index, &parents)?;
         return Ok(Made::Again);
@@ -140,7 +141,7 @@ pub(crate) fn handle_create(
                 places.join(", "),
                 escape(name)
             )?;
-            return Ok(Made::Preview);
+            return Ok(Made::Preview(must_clone_first(&planned.missing)));
         }
         clone_missing(&index, &planned.missing)?;
         return Ok(Made::Again);
@@ -213,7 +214,7 @@ pub(crate) fn handle_create(
                 })
                 .collect(),
         }));
-        return Ok(Made::Preview);
+        return Ok(Made::Preview(Vec::new()));
     }
 
     // Resolve/apply --from-pr: get PR head branch, override branch for the matching repo, and fetch
@@ -629,6 +630,19 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
     outln!()?;
     outln!("No directories, branches, records, hooks, or git excludes were written.")?;
     Ok(())
+}
+
+/// `repos` as a preview left them out of its plan; quiet, as its text has
+/// said so already.
+fn must_clone_first(repos: &[PlannedRepo]) -> Vec<Skipped> {
+    repos
+        .iter()
+        .map(|repo| Skipped {
+            project: repo.place.clone(),
+            reason: "not cloned: a create clones it first, so a preview has no plan".to_string(),
+            quiet: true,
+        })
+        .collect()
 }
 
 /// Why a repo is in a set being made. A project that isn't cloned is an

@@ -44,70 +44,12 @@ pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>>
             }
         }
     }
-    // A set in a folder its caller named: meta-git's record of the checkout
-    // around `cwd` says
-    let Some(real) = real else {
-        return Ok(None);
-    };
-    for checkout in real.ancestors().filter(|dir| dir.join(".git").is_file()) {
-        let Some(set) = recorded_set(checkout)?.and_then(|(set, _)| set.canonicalize().ok()) else {
-            continue;
-        };
-        if let Some(name) = set.file_name().and_then(|n| n.to_str()) {
-            if real.starts_with(&set) {
-                return Ok(Some((name.to_string(), set)));
-            }
-        }
-    }
     Ok(None)
 }
 
-/// The set and the workspace meta-git's record says the checkout at `dir`
-/// was made for. A set in a folder named by `META_WORKTREES` has no owner
-/// file: that folder is its caller's, who may move the set out and remove it,
-/// so meta leaves nothing else in it. Until the set's provider can be asked
-/// (PR 7 moves this into meta-git), the host reads the record for those sets.
-fn recorded_set(dir: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
-    Ok(crate::set_record::member(dir)?.map(|(_, record)| (record.set, record.project)))
-}
-
-/// The workspace meta-git's records say the set at `set_dir` was made from:
-/// the first checkout in it with a record made for this very folder.
-fn recorded_origin(set_dir: &Path) -> Option<PathBuf> {
-    let here = set_dir.canonicalize().ok()?;
-    let mut dirs = vec![set_dir.to_path_buf()];
-    // a bound: a set is folders leading to checkouts, not looked inside
-    let mut budget = 2000_usize;
-    while let Some(dir) = dirs.pop() {
-        if dir.join(".git").is_file() {
-            if let Ok(Some((set, project))) = recorded_set(&dir) {
-                if set == here && project.is_dir() {
-                    return Some(project);
-                }
-            }
-        }
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            budget = budget.checked_sub(1)?;
-            let name = entry.file_name();
-            if entry.file_type().is_ok_and(|kind| kind.is_dir())
-                && name != ".git"
-                && name != ".worktrees"
-            {
-                dirs.push(entry.path());
-            }
-        }
-    }
-    None
-}
-
 /// The workspace the set at `set_dir` belongs to: the one its owner file
-/// names while the file was made for this very folder; else, for a set in
-/// a folder named by `META_WORKTREES`, the one meta-git's records made for
-/// this folder name; else the workspace whose worktrees folder holds it,
-/// nearest above it (in a copied or moved workspace, the copy: what was
+/// names while the file was made for this very folder; else the workspace
+/// whose worktrees folder holds it, nearest above it (in a copied or moved workspace, the copy: what was
 /// made for another folder is stale, never followed). None when no
 /// workspace's sets are there (a set that stands for itself).
 fn set_origin(set_dir: &Path) -> Result<Option<PathBuf>> {
@@ -116,9 +58,6 @@ fn set_origin(set_dir: &Path) -> Result<Option<PathBuf>> {
         if owner.set == real(set_dir) && owner.workspace.is_dir() {
             return Ok(Some(owner.workspace));
         }
-    }
-    if let Some(project) = recorded_origin(set_dir) {
-        return Ok(Some(project));
     }
     let Some(sets) = set_dir.parent() else {
         return Ok(None);

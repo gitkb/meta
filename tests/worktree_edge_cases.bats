@@ -2313,17 +2313,150 @@ J
     mv "$MOVED" "$TEST_DIR"
 }
 
-@test "a caller's META_WORKTREES folder holds nothing of meta's once the set is moved out" {
+@test "a set under META_WORKTREES has its owner entry, and moving it out leaves only that beside" {
     # what atc does: make the set in a private folder, move it into place,
-    # remove the folder
+    # remove the entry and the folder
     STAGE="$TEST_DIR/.stage"
     mkdir "$STAGE"
     META_WORKTREES="$STAGE" "$META_BIN" git worktree create s --repo backend
-    [ -z "$(ls -A "$STAGE" | grep -v '^s$')" ]
+    [ "$(ls -A "$STAGE/.meta-sets")" = "s.json" ]
     mkdir -p "$TEST_DIR/.worktrees"
     mv "$STAGE/s" "$TEST_DIR/.worktrees/s"
-    rmdir "$STAGE"
+    [ "$(ls -A "$STAGE")" = ".meta-sets" ]
+    rm "$STAGE/.meta-sets/s.json"
+    rmdir "$STAGE/.meta-sets" "$STAGE"
     [ -z "$(ls -A "$TEST_DIR/.worktrees/s" | grep meta-set)" ]
+}
+
+# Puts a link to $2, a folder holding g.json that isn't meta's, at
+# $1/.meta-sets, keeping a real one aside
+owners_are_a_link() {
+    [ ! -e "$1/.meta-sets" ] || mv "$1/.meta-sets" "$1/.real-meta-sets"
+    mkdir -p "$1" "$2"
+    echo '{"outside":"must survive"}' > "$2/g.json"
+    ln -s "$2" "$1/.meta-sets"
+}
+
+outside_survived() {
+    [ "$(cat "$1/g.json")" = '{"outside":"must survive"}' ]
+}
+
+no_branch_gb() {
+    run git -C backend rev-parse --verify --quiet gb
+    [ "$status" -ne 0 ]
+}
+
+@test "create refuses a .meta-sets that is a link, naming it, before any checkout" {
+    S="$TEST_DIR/s" X="$BATS_TEST_TMPDIR/x"
+    owners_are_a_link "$S" "$X"
+    # a preview makes the same check, so it plans nothing that can't be made
+    META_WORKTREES="$S" run "$META_BIN" --dry-run git worktree create g --repo backend --branch gb
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets"* ]]
+    META_WORKTREES="$S" run "$META_BIN" git worktree create g --repo backend --branch gb
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets"* ]]
+    [[ "$output" == *"symlink"* ]]
+    outside_survived "$X"
+    [ ! -e "$S/g" ]
+    no_branch_gb
+    [ "$(git -C backend worktree list | wc -l)" -eq 1 ]
+    # and the same in the default folder
+    owners_are_a_link "$TEST_DIR/.worktrees" "$X"
+    run "$META_BIN" git worktree create g --repo backend --branch gb
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$TEST_DIR/.worktrees/.meta-sets"* ]]
+    outside_survived "$X"
+    [ ! -e "$TEST_DIR/.worktrees/g" ]
+    no_branch_gb
+}
+
+@test "create refuses a .meta-sets that is a dangling link, naming it" {
+    S="$TEST_DIR/s" GONE="$BATS_TEST_TMPDIR/gone"
+    mkdir "$S"
+    ln -s "$GONE" "$S/.meta-sets"
+    META_WORKTREES="$S" run "$META_BIN" git worktree create g --repo backend --branch gb
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets"* ]]
+    [[ "$output" == *"symlink"* ]]
+    [[ "$output" != *"os error"* ]]
+    [ ! -e "$GONE" ]
+    [ ! -e "$S/g" ]
+    no_branch_gb
+}
+
+@test "remove and prune refuse a .meta-sets that is a link, and delete nothing" {
+    S="$TEST_DIR/s" X="$BATS_TEST_TMPDIR/x"
+    export META_WORKTREES="$S"
+    "$META_BIN" git worktree create g --repo backend --branch gb --ttl 0
+    owners_are_a_link "$S" "$X"
+    run "$META_BIN" git worktree remove g --force
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets is a symlink"* ]]
+    outside_survived "$X"
+    [ -e "$S/g/backend/.git" ]
+    # whatever the order of the words, and in a preview
+    run "$META_BIN" git worktree remove --force g
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets is a symlink"* ]]
+    [ -e "$S/g/backend/.git" ]
+    run "$META_BIN" --dry-run git worktree remove --force g
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets is a symlink"* ]]
+    [ -e "$S/g/backend/.git" ]
+    run "$META_BIN" git worktree prune
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets"* ]]
+    outside_survived "$X"
+    [ -e "$S/g/backend/.git" ]
+    # prune finds the set from its records without the variable too
+    run env -u META_WORKTREES "$META_BIN" git worktree prune
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets"* ]]
+    outside_survived "$X"
+    [ -e "$S/g/backend/.git" ]
+    # a dangling link, the same
+    rm "$S/.meta-sets"
+    ln -s "$BATS_TEST_TMPDIR/gone" "$S/.meta-sets"
+    run "$META_BIN" git worktree remove g --force
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets"* ]]
+    [ -e "$S/g/backend/.git" ]
+    # with the real folder back, it goes
+    rm "$S/.meta-sets"
+    mv "$S/.real-meta-sets" "$S/.meta-sets"
+    "$META_BIN" git worktree remove g --force
+    [ ! -e "$S/g" ]
+    outside_survived "$X"
+}
+
+@test "prune deletes no stale lease when it refuses a .meta-sets that is a link" {
+    S="$TEST_DIR/s" X="$BATS_TEST_TMPDIR/x"
+    export META_WORKTREES="$S"
+    "$META_BIN" git worktree create g --repo backend --branch gb --ttl 0
+    # a create killed part way, its set then gone: only the lease is left
+    slow_checkout_hook
+    "$META_BIN" git worktree create old --repo frontend --no-deps &
+    local pid=$!
+    wait_for "$TEST_DIR/hook-started"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    git config --global --unset core.hooksPath
+    rm -rf "$S/old"
+    git -C frontend worktree prune
+    [ -e "$S/.old.meta-lease" ]
+    owners_are_a_link "$S" "$X"
+    run "$META_BIN" git worktree prune
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets is a symlink"* ]]
+    [ -e "$S/.old.meta-lease" ]
+    # with the real folder back, it goes
+    rm "$S/.meta-sets"
+    mv "$S/.real-meta-sets" "$S/.meta-sets"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [ ! -e "$S/.old.meta-lease" ]
+    [ ! -e "$S/g" ]
 }
 
 @test "an ephemeral run under META_WORKTREES with no root checkout leaves the workspace's files" {
@@ -2402,13 +2535,17 @@ stays_in_set_rows() {
     rm -rf .git
     echo precious > backend/untracked.txt
     META_WORKTREES="$TEST_DIR/sets" "$META_BIN" git worktree create kept --repo backend
+    [ -f sets/.meta-sets/kept.json ]
+    echo scratch > sets/kept/backend/scratch.txt
     cd sets/kept
     run "$META_BIN" exec -- git clean -fdx
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
+    [ ! -e backend/scratch.txt ]
     [ -f "$TEST_DIR/backend/untracked.txt" ]
-    [[ "$output" == *"$TEST_DIR/sets/kept"* ]]
-    [[ "$output" == *"--primary"* ]]
-    [[ "$output" == *"$TEST_DIR"* ]]
+    # from the member too, it runs in that checkout, not the primary one
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/sets/kept/backend"* ]]
     run "$META_BIN" --primary --include backend exec -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"$TEST_DIR/backend"* ]]

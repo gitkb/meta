@@ -13,9 +13,7 @@
 //!   meta-git's (every set made before the file existed is a git set). The
 //!   folder's name starts with `.`, as no set's can: a provider listing the
 //!   sets in the worktrees folder passes over names that start with `.`.
-//!   A worktrees folder named by `META_WORKTREES` is its caller's, who may
-//!   move a set out of it and remove it: a provider writes no owner file
-//!   there.
+//!   A link in its place is refused ([`owners_dir`]).
 //! - `.<set>.meta-lease` and its lock: the [`lease`] its creator or its
 //!   ephemeral run holds.
 //!
@@ -86,13 +84,27 @@ pub(crate) fn beside(set: &Path, suffix: &str) -> Result<PathBuf> {
     }
 }
 
+/// The folder of the owner files of the sets in the worktrees folder `dir`.
+/// A link there is refused, dangling or not: an owner file is never read,
+/// written or deleted through one, as what it leads to isn't meta's.
+pub fn owners_dir(dir: &Path) -> Result<PathBuf> {
+    let owners = dir.join(OWNERS_DIR);
+    if owners.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
+        anyhow::bail!(
+            "{} is a symlink, and meta keeps owner files only in a plain folder: delete the link",
+            escape_path(&owners)
+        );
+    }
+    Ok(owners)
+}
+
 /// The owner file of the set at `set`: `.meta-sets/<set>.json` beside it.
 fn owner_path(set: &Path) -> Result<PathBuf> {
     match (set.parent(), set.file_name()) {
         (Some(dir), Some(name)) => {
             let mut file = name.to_owned();
             file.push(".json");
-            Ok(dir.join(OWNERS_DIR).join(file))
+            Ok(owners_dir(dir)?.join(file))
         }
         _ => anyhow::bail!("{} has no folder to keep its files in", escape_path(set)),
     }
@@ -306,6 +318,36 @@ mod tests {
         forget(&set).unwrap();
         assert_eq!(owner(&set).unwrap(), None);
         assert!(!set.parent().unwrap().join(OWNERS_DIR).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_files_are_never_read_written_or_deleted_through_a_link() {
+        let temp = tempfile::tempdir().unwrap();
+        let (wt, outside) = (temp.path().join("wt"), temp.path().join("outside"));
+        let (set, file) = (wt.join("a"), outside.join("a.json"));
+        std::fs::create_dir_all(&set).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let theirs = r#"{"provider":"git","workspace":"/w","set":"/s"}"#;
+        std::fs::write(&file, theirs).unwrap();
+        let link = wt.join(OWNERS_DIR);
+        let gone = temp.path().join("gone");
+        for target in [&outside, &gone] {
+            std::os::unix::fs::symlink(target, &link).unwrap();
+            for refused in [
+                create(&set, "git", Path::new("/w")).unwrap_err(),
+                owner(&set).unwrap_err(),
+                provider(&set).unwrap_err(),
+            ] {
+                assert!(refused.to_string().contains("symlink"), "{refused:#}");
+            }
+            std::fs::remove_dir(&set).unwrap();
+            assert!(forget(&set).is_err());
+            std::fs::create_dir(&set).unwrap();
+            std::fs::remove_file(&link).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), theirs);
+        assert!(!gone.exists());
     }
 
     #[test]

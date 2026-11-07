@@ -2400,6 +2400,12 @@ no_branch_gb() {
     [[ "$output" == *"$S/.meta-sets"* ]]
     outside_survived "$X"
     [ -e "$S/g/backend/.git" ]
+    # prune finds the set from its records without the variable too
+    run env -u META_WORKTREES "$META_BIN" git worktree prune
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets"* ]]
+    outside_survived "$X"
+    [ -e "$S/g/backend/.git" ]
     # a dangling link, the same
     rm "$S/.meta-sets"
     ln -s "$BATS_TEST_TMPDIR/gone" "$S/.meta-sets"

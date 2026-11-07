@@ -142,7 +142,6 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
     let here = crate::here::Here::need(request)?;
     let workspace = Workspace::of(&here.home)?;
     let worktree_root = here.worktrees()?;
-    meta_plugin::sets::owners_dir(&worktree_root)?;
     let places = here.places();
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
     // A set whose lease is held is being created, or is an ephemeral set
@@ -254,6 +253,14 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
             }
             Ok(None) => {}
             Err(e) => ctx.warn_or_bail(format!("{e:#}"))?,
+        }
+    }
+
+    // A set's owner file goes with it, wherever its records say it is: a link
+    // in place of the owners' folder is refused before anything is deleted
+    for (candidate, _) in &to_remove {
+        if let Some(dir) = candidate.set.parent() {
+            meta_plugin::sets::owners_dir(dir)?;
         }
     }
 

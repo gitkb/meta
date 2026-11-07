@@ -2313,16 +2313,18 @@ J
     mv "$MOVED" "$TEST_DIR"
 }
 
-@test "a caller's META_WORKTREES folder holds nothing of meta's once the set is moved out" {
+@test "a set under META_WORKTREES has its owner entry, and moving it out leaves only that beside" {
     # what atc does: make the set in a private folder, move it into place,
-    # remove the folder
+    # remove the entry and the folder
     STAGE="$TEST_DIR/.stage"
     mkdir "$STAGE"
     META_WORKTREES="$STAGE" "$META_BIN" git worktree create s --repo backend
-    [ -z "$(ls -A "$STAGE" | grep -v '^s$')" ]
+    [ "$(ls -A "$STAGE/.meta-sets")" = "s.json" ]
     mkdir -p "$TEST_DIR/.worktrees"
     mv "$STAGE/s" "$TEST_DIR/.worktrees/s"
-    rmdir "$STAGE"
+    [ "$(ls -A "$STAGE")" = ".meta-sets" ]
+    rm "$STAGE/.meta-sets/s.json"
+    rmdir "$STAGE/.meta-sets" "$STAGE"
     [ -z "$(ls -A "$TEST_DIR/.worktrees/s" | grep meta-set)" ]
 }
 
@@ -2402,13 +2404,17 @@ stays_in_set_rows() {
     rm -rf .git
     echo precious > backend/untracked.txt
     META_WORKTREES="$TEST_DIR/sets" "$META_BIN" git worktree create kept --repo backend
+    [ -f sets/.meta-sets/kept.json ]
+    echo scratch > sets/kept/backend/scratch.txt
     cd sets/kept
     run "$META_BIN" exec -- git clean -fdx
-    [ "$status" -ne 0 ]
+    [ "$status" -eq 0 ]
+    [ ! -e backend/scratch.txt ]
     [ -f "$TEST_DIR/backend/untracked.txt" ]
-    [[ "$output" == *"$TEST_DIR/sets/kept"* ]]
-    [[ "$output" == *"--primary"* ]]
-    [[ "$output" == *"$TEST_DIR"* ]]
+    # from the member too, it runs in that checkout, not the primary one
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"$TEST_DIR/sets/kept/backend"* ]]
     run "$META_BIN" --primary --include backend exec -- pwd
     [ "$status" -eq 0 ]
     [[ "$output" == *"$TEST_DIR/backend"* ]]

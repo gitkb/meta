@@ -177,8 +177,7 @@ meta --tag cli exec -- pwd
 ```
 
 A set is a folder meta knows by its place: one in the worktrees folder that has
-an owner file in `.meta-sets/` beside it (meta writes one except in a folder
-`META_WORKTREES` names, which is its caller's), or the
+an owner file in `.meta-sets/` beside it, or the
 `<name>` folder of a `.worktrees/<name>` path. Its members are the workspace's
 projects whose folders are in it, at their paths, those nested inside another
 project of the set (e.g. `open-source/sdk/core` inside `open-source`) too, as

@@ -355,6 +355,17 @@ A selected set that is missing, empty or invalid is an error. Listing all sets
 reports the ones it can't read in `warnings` (on stderr in the text listing),
 so check them before treating the list as complete.
 
+### Previewing a worktree set
+
+`meta --json --dry-run git worktree create` returns the plan as one row, whose
+`data` is `{"repos": [{"alias", "source", "path"}]}`: each repo the create
+would make a worktree of, the checkout it comes from, and where it would go.
+With `-r` or `-A`, the repos of nested meta repos are in that one list, their
+aliases paths from where the `.meta.yaml` is read. A path that isn't UTF-8 is
+`{"lossy", "bytes"}` in place of a string, `bytes` being its base64. A preview
+that first has to clone something can't know the plan, and returns no rows: it
+says so on stderr, and succeeds.
+
 ---
 
 ## See Also

@@ -656,3 +656,83 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
     assert!(!invalid_root.status.success());
     assert!(is_error(&invalid_root.stdout));
 }
+
+/// `meta --json --dry-run -r git worktree create s --repo <repo>` in `cwd`:
+/// the real host and plugin; whether it succeeded, and its Envelope.
+fn previewed(sandbox: &Sandbox, cwd: &Path, repo: &str) -> (bool, Value) {
+    let bin = Path::new(env!("CARGO_BIN_EXE_meta-git")).parent().unwrap();
+    let mut meta = sandbox.command(bin.join("meta"));
+    as_meta_starts(&mut meta);
+    let output = meta
+        .args([
+            "--json",
+            "--dry-run",
+            "-r",
+            "git",
+            "worktree",
+            "create",
+            "s",
+        ])
+        .args(["--repo", repo, "--branch", "b"])
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    let envelope = serde_json::from_slice(&output.stdout).unwrap();
+    (output.status.success(), envelope)
+}
+
+#[test]
+fn a_preview_returns_its_plan_with_nested_repos_in_one_row() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work().join("ws");
+    sandbox
+        .workspace(&root)
+        .nested("app", |app| app.repo("lib"))
+        .build();
+
+    let (succeeded, envelope) = previewed(&sandbox, &root, "app/lib");
+
+    assert!(succeeded, "{envelope}");
+    let set = root.join(".worktrees/s");
+    assert_eq!(
+        envelope["results"],
+        json!([{"data": {"repos": [
+            {"alias": ".", "source": root, "path": set},
+            {"alias": "app", "source": root.join("app"), "path": set.join("app")},
+            {"alias": "app/lib", "source": root.join("app/lib"), "path": set.join("app/lib")},
+        ]}}])
+    );
+    assert!(!root.join(".worktrees").exists());
+}
+
+#[test]
+fn a_preview_that_must_clone_first_has_no_plan_and_no_row() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work().join("ws");
+    sandbox.workspace(&root).uncloned("later").build();
+
+    let (succeeded, envelope) = previewed(&sandbox, &root, "later");
+
+    assert!(succeeded, "{envelope}");
+    assert_eq!(envelope["results"], json!([]));
+}
+
+/// (macOS file systems refuse such names)
+#[cfg(target_os = "linux")]
+#[test]
+fn a_preview_names_a_path_that_is_not_utf8_by_its_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+    let sandbox = Sandbox::new();
+    let root = sandbox.work().join(std::ffi::OsStr::from_bytes(b"ws\xff"));
+    sandbox.workspace(&root).repo("app").build();
+
+    let (succeeded, envelope) = previewed(&sandbox, &root, "app");
+
+    assert!(succeeded, "{envelope}");
+    let repo = &envelope["results"][0]["data"]["repos"][1];
+    let path = |field: &str| {
+        meta_plugin::wire_path::from_bytes(repo[field]["bytes"].as_str().unwrap()).unwrap()
+    };
+    assert_eq!(path("source"), root.join("app"));
+    assert_eq!(path("path"), root.join(".worktrees/s/app"));
+}

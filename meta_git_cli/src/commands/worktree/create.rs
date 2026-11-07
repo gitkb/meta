@@ -13,7 +13,7 @@ use crate::worktree::helpers::*;
 use crate::worktree::hooks::fire_post_create;
 use crate::worktree::plan::{Found, Index, PlannedRepo};
 use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
-use crate::worktree::types::{CreateOutput, CreateRepoEntry};
+use crate::worktree::types::{CreateOutput, CreatePlan, CreatePlanRepo, CreateRepoEntry};
 use crate::worktree::RepoSpec;
 use meta_core::set_record::{self as record, SetRecord};
 use meta_plugin::duration::format_duration;
@@ -203,6 +203,16 @@ pub(crate) fn handle_create(
             custom_meta: &custom_meta,
         };
         print_create_dry_run(&plan)?;
+        records.push(ProjectResult::about_workspace(CreatePlan {
+            repos: kept
+                .iter()
+                .map(|repo| CreatePlanRepo {
+                    alias: repo.project.clone(),
+                    source: repo.source.clone(),
+                    path: planned_dest(&wt_dir, repo),
+                })
+                .collect(),
+        }));
         return Ok(Made::Preview);
     }
 
@@ -538,6 +548,14 @@ struct CreateDryRunPlan<'a> {
     custom_meta: &'a HashMap<String, String>,
 }
 
+/// Where a repo of the plan would go in the set at `wt_dir`.
+fn planned_dest(wt_dir: &std::path::Path, repo: &PlannedRepo) -> std::path::PathBuf {
+    match repo.place.as_str() {
+        "." => wt_dir.to_path_buf(),
+        place => wt_dir.join(place),
+    }
+}
+
 fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
     outln!(
         "[DRY RUN] Would create worktree set '{}' at {}",
@@ -576,18 +594,14 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
     }
 
     outln!("Planned repo operations:")?;
-    for PlannedRepo {
-        project: alias,
-        source,
-        place,
-        branch,
-    } in plan.repos_to_create
-    {
-        let dest = if place == "." {
-            plan.wt_dir.to_path_buf()
-        } else {
-            plan.wt_dir.join(place)
-        };
+    for repo in plan.repos_to_create {
+        let PlannedRepo {
+            project: alias,
+            source,
+            place,
+            branch,
+        } = repo;
+        let dest = planned_dest(plan.wt_dir, repo);
         let mut cmd = format!(
             "git -C {} worktree add -b {} {}",
             shell_quote(&source.display().to_string()),

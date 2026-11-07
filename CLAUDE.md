@@ -32,7 +32,7 @@ meta -r exec -- cargo test  # Runs across all nested repos
 
 ## Contracts with other repos
 
-Other repos run and read meta, so these are contracts: CLI arguments and option order, `--json` fields, exit codes, text a caller parses (`meta --dry-run git worktree create` output, `--metadata-only` in `meta git worktree list --help`), `.meta.yaml`, the `META_WORKTREES` variable, and the plugin protocol.
+Other repos run and read meta, so these are contracts: CLI arguments and option order, `--json` fields, exit codes, text a caller parses (`--metadata-only` in `meta git worktree list --help`), `.meta.yaml`, the `META_WORKTREES` variable, and the plugin protocol.
 
 Before merging a change to one, find its callers and test the real pair:
 

@@ -418,8 +418,9 @@ pub fn resolve_worktree_root(
 /// What a plugin is told of worktree sets for a command run from the
 /// workspace `config` (from `cwd` outside one), inside the set at `set` if
 /// any: where they go or why not, and the hooks of the workspace whose sets
-/// they are, which run in its folder. Inside a set, with `META_WORKTREES`
-/// unset, they go in the folder the set is in, beside it; else as
+/// they are, which run in its folder. Inside a set with its owner entry
+/// ([`meta_plugin::sets::owner`]), with `META_WORKTREES` unset, they go in
+/// the folder the set is in, where that entry is; else as
 /// [`resolve_worktree_root`] says (inside a set, for the workspace the set
 /// stands for, [`Configs::of`]).
 pub fn plugin_worktree(
@@ -428,7 +429,9 @@ pub fn plugin_worktree(
     set: Option<&Path>,
 ) -> meta_plugin::Worktree {
     let owner = config.map(|c| Configs::of(c.clone()).map_or_else(|_| c.clone(), |c| c.owner));
-    let dir = match (worktrees_var(), set.and_then(Path::parent)) {
+    // a folder only named like a set (a workspace in a `.worktrees`) has none
+    let owned = set.filter(|dir| matches!(meta_plugin::sets::owner(dir), Ok(Some(_))));
+    let dir = match (worktrees_var(), owned.and_then(Path::parent)) {
         (Ok(None), Some(beside)) => Ok(beside.to_path_buf()),
         _ => resolve_worktree_root(owner.as_ref(), config.map_or(cwd, |c| &c.dir)),
     };

@@ -80,8 +80,30 @@ fn every_place_has_one_folder_of_sets() {
     let (in_s, in_t) = (ws.join(".worktrees/s/app"), elsewhere.join("t/app"));
 
     let at_home = ws.join(".worktrees");
+    // a workspace of its own whose sets go in /wanted, in a `.worktrees`
+    // folder, with s's owner entry copied beside it: made for another folder
+    let (one, wanted) = (work.join("copy/.worktrees/one"), work.join("wanted"));
+    std::fs::create_dir_all(one.parent().unwrap().join(".meta-sets")).unwrap();
+    std::fs::create_dir_all(&wanted).unwrap();
+    sandbox.git(
+        &work,
+        &[
+            "clone",
+            "-q",
+            ws.join("app").to_str().unwrap(),
+            one.join("app").to_str().unwrap(),
+        ],
+    );
+    let config =
+        serde_json::json!({"projects": {"app": "git@x:o/app.git"}, "worktrees_dir": wanted});
+    std::fs::write(one.join(".meta.yaml"), config.to_string()).unwrap();
+    std::fs::copy(
+        at_home.join(".meta-sets/s.json"),
+        one.parent().unwrap().join(".meta-sets/one.json"),
+    )
+    .unwrap();
     // where the command runs, META_WORKTREES, the folder its sets are in
-    let table: [(&Path, Option<&str>, &Path); 7] = [
+    let table: [(&Path, Option<&str>, &Path); 8] = [
         (&ws, None, &at_home),
         (&ws, Some(elsewhere_var), &elsewhere),
         (&in_s, None, &at_home),
@@ -91,6 +113,8 @@ fn every_place_has_one_folder_of_sets() {
         (&in_t, None, &elsewhere),
         (&outside, None, &outside.join(".worktrees")),
         (&outside, Some(elsewhere_var), &elsewhere),
+        // an owner entry made for another folder is no proof of a set
+        (&one, None, &wanted),
     ];
     for (cwd, var, folder) in table {
         set_var(var);

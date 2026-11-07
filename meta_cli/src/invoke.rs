@@ -540,11 +540,6 @@ pub fn request(
     }
     // the lease of the program that called meta back, for its plugin alone
     request.lease = std::env::var(meta_plugin::LEASE_VAR).ok();
-    request.plugin_dir = plugin
-        .path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
     request.data_dir = meta_core::data_dir::data_subdir(&format!("data/{}", plugin.word))?;
     request.meta = meta_plugin::Meta {
         json: cli.json,
@@ -564,14 +559,13 @@ pub fn request(
 }
 
 /// Call `plugin` with `request` and do what it answers, into `report`.
-/// A delegate is returned: the command line to run instead.
 pub fn call(
     cli: &Cli,
     plugin: &SubprocessPlugin,
     request: &Request,
     target: Option<&Target>,
     report: &mut Report,
-) -> Result<Option<Vec<String>>> {
+) -> Result<()> {
     // a command run as typed is named with its verb: `git status`
     report.command = match (request.command.contains(' '), request.args.first()) {
         (false, Some(verb)) if !verb.starts_with('-') => format!("{} {verb}", request.command),
@@ -595,7 +589,7 @@ pub fn answer(
     response: Response,
     target: Option<&Target>,
     report: &mut Report,
-) -> Result<Option<Vec<String>>> {
+) -> Result<()> {
     let text = !cli.json;
     if text {
         for warning in &response.warnings {
@@ -642,10 +636,9 @@ pub fn answer(
             true => outln!("{}", message.trim_end())?,
             false => report.message = Some(message),
         },
-        Answer::Delegate(args) => return Ok(Some(args)),
         Answer::Error(error) => report.fail(error, false),
     }
-    Ok(None)
+    Ok(())
 }
 
 /// The records a command returned, in text: each under its project, its

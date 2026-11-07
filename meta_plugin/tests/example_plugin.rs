@@ -18,7 +18,6 @@ fn request(args: &[&str]) -> Request {
             {"name": "api", "path": "api", "abs": "/ws/api", "present": true},
             {"name": "web", "path": "apps/web", "abs": "/ws/apps/web", "present": true},
         ],
-        "plugin_dir": "/p",
         "data_dir": "/d",
         "meta": {},
     }))

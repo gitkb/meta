@@ -425,10 +425,6 @@ fn every_kind_of_answer_is_one_envelope_under_json() {
         ),
         (serde_json::json!({"message": "words"}), true),
         (
-            serde_json::json!({"delegate": ["exec", "--", "true"]}),
-            true,
-        ),
-        (
             serde_json::json!({"error": {"code": "dirty", "message": "a has changes"}}),
             false,
         ),
@@ -439,7 +435,7 @@ fn every_kind_of_answer_is_one_envelope_under_json() {
         let got = envelope(&out);
         assert_eq!(got.success, success, "{answer}: {got:?}");
         assert_eq!(out.status.success(), success, "{answer}");
-        assert!(got.command == "kind go" || got.command == "exec", "{got:?}");
+        assert_eq!(got.command, "kind go", "{got:?}");
         match answer
             .as_object()
             .and_then(|o| o.keys().next())
@@ -455,8 +451,6 @@ fn every_kind_of_answer_is_one_envelope_under_json() {
                 assert_eq!(got.skipped[0].project, "b");
             }
             Some("message") => assert_eq!(got.message.as_deref(), Some("words")),
-            // the delegate ran `meta exec -- true` in each repo
-            Some("delegate") => assert_eq!(got.results.len(), 3, "{got:?}"),
             _ => assert_eq!(got.error.unwrap().code, meta_plugin::ErrorCode::Dirty),
         }
     }

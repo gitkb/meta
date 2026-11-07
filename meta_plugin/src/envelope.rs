@@ -214,29 +214,15 @@ impl ErrorCode {
             _ => crate::exit::FAILURE,
         }
     }
-
-    /// The name on the wire (`not-found`).
-    pub fn name(self) -> &'static str {
-        match self {
-            ErrorCode::Usage => "usage",
-            ErrorCode::NotFound => "not-found",
-            ErrorCode::Conflict => "conflict",
-            ErrorCode::Dirty => "dirty",
-            ErrorCode::PluginFailed => "plugin-failed",
-            ErrorCode::ToolFailed => "tool-failed",
-            ErrorCode::Cancelled => "cancelled",
-            ErrorCode::TooMuchOutput => "too-much-output",
-            ErrorCode::Auth => "auth",
-            ErrorCode::Network => "network",
-            ErrorCode::RateLimited => "rate-limited",
-            ErrorCode::Failed => "failed",
-        }
-    }
 }
 
+/// The name on the wire (`not-found`), as serde writes it.
 impl fmt::Display for ErrorCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::String(name)) => f.write_str(&name),
+            _ => Err(fmt::Error),
+        }
     }
 }
 

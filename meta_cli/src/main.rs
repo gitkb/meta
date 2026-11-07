@@ -625,21 +625,17 @@ fn run_cli() -> Result<()> {
         )?,
         Some(Commands::Exec(args)) => invoke::exec(&cli, &args.command, &mut report)?,
         Some(Commands::Project(args)) => project::run(&cli, &args.command, &mut report)?,
-        Some(Commands::External(args)) => {
-            external(&cli, args, &subprocess_plugins, &mut report, false)?
-        }
+        Some(Commands::External(args)) => external(&cli, args, &subprocess_plugins, &mut report)?,
     }
     report.finish(cli.show(), cli.silent, &fields)
 }
 
-/// `meta <word> ...`, served by the plugin of `word`; `delegated` when a
-/// plugin asked for it (its own delegate is refused: it could loop).
+/// `meta <word> ...`, served by the plugin of `word`.
 fn external(
     cli: &Cli,
     args: &[String],
     plugins: &SubprocessPluginManager,
     report: &mut Report,
-    delegated: bool,
 ) -> Result<()> {
     // Only the plugin serving this word is started
     let plugin = match args.first() {
@@ -649,24 +645,7 @@ fn external(
     let Some(plugin) = plugin else {
         return Err(unrecognized_command_error(args, plugins, true));
     };
-    let delegate = plugin_command(cli, args, &plugin, report)?;
-    match delegate {
-        None => Ok(()),
-        Some(_) if delegated => Err(meta_plugin::ErrorInfo::new(
-            meta_plugin::ErrorCode::PluginFailed,
-            format!(
-                "plugin {} delegated a command that was itself a delegate",
-                escape(&plugin.word)
-            ),
-        )
-        .into()),
-        Some(line) if line.first().is_some_and(|w| w == "exec") => {
-            let argv = line.get(1..).unwrap_or_default();
-            let argv = argv.strip_prefix(&["--".to_string()]).unwrap_or(argv);
-            invoke::exec(cli, argv, report)
-        }
-        Some(line) => external(cli, &line, plugins, report, true),
-    }
+    plugin_command(cli, args, &plugin, report)
 }
 
 /// `text`, the help asked for: printed, or under `--json` the Envelope's
@@ -731,17 +710,17 @@ fn help(
         .cloned()
         .chain(["--help".to_string()])
         .collect();
-    plugin_command(cli, &args, &plugin, report).map(|_| ())
+    plugin_command(cli, &args, &plugin, report)
 }
 
 /// `meta <word> ...`, served by `plugin`: its help, or the command in the
-/// selected repos. What the plugin delegated to, if it did.
+/// selected repos.
 fn plugin_command(
     cli: &Cli,
     args: &[String],
     plugin: &SubprocessPlugin,
     report: &mut Report,
-) -> Result<Option<Vec<String>>> {
+) -> Result<()> {
     // A bare `meta <word>` and `meta <word> --help` print the plugin's
     // help; nested help requests reach the plugin's command, without its
     // repos. A --help after `--` is an argument for the command.
@@ -754,8 +733,7 @@ fn plugin_command(
     if args.len() == 1 || namespace_help {
         report.command = plugin.word.clone();
         let help = meta_plugin::help_text(&plugin.word, &plugin.info);
-        help_message(cli, &format!("{}\n", help.trim_end()), report)?;
-        return Ok(None);
+        return help_message(cli, &format!("{}\n", help.trim_end()), report);
     }
     if wants_help {
         return command_help(cli, args, plugin, report);
@@ -771,7 +749,7 @@ fn command_help(
     args: &[String],
     plugin: &SubprocessPlugin,
     report: &mut Report,
-) -> Result<Option<Vec<String>>> {
+) -> Result<()> {
     use meta_plugin::Verb;
     let verb = args.get(1).map(String::as_str).unwrap_or_default();
     let named = loop_lib::display_command(&[plugin.word.clone(), verb.to_string()]);
@@ -804,8 +782,7 @@ fn command_help(
         }
         Verb::AsTyped(tool) => {
             report.command = format!("{} {verb}", plugin.word);
-            help_message(cli, &as_typed_help(cli, args, plugin, tool), report)?;
-            Ok(None)
+            help_message(cli, &as_typed_help(cli, args, plugin, tool), report)
         }
         Verb::Unknown => ask_plugin(report),
     }
@@ -910,7 +887,7 @@ fn dispatch(
     args: &[String],
     plugin: &SubprocessPlugin,
     report: &mut Report,
-) -> Result<Option<Vec<String>>> {
+) -> Result<()> {
     running(
         &args
             .get(..plugin.command_len(args))

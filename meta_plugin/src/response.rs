@@ -29,9 +29,6 @@ pub enum Answer {
     Results(Results),
     /// Words for the user (a preview, "nothing to commit")
     Message(String),
-    /// Run this meta command line instead (once: a delegate's own delegate
-    /// is refused)
-    Delegate(Vec<String>),
     /// The command failed
     Error(ErrorInfo),
 }
@@ -70,12 +67,6 @@ pub struct Step {
     /// The exit codes that are success (default: 0 alone)
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub ok_codes: Vec<i32>,
-    /// Variables of `env` whose values are secret: never shown in a dry
-    /// run, the Envelope or a log. Every plugin, and every step, inherits
-    /// the user's environment; a secret a step needs that isn't there yet
-    /// goes in `env` and is named here.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub secret_env: Vec<String>,
 }
 
 fn zero() -> Vec<i32> {
@@ -95,7 +86,6 @@ impl Step {
             argv,
             env: BTreeMap::new(),
             ok_codes: zero(),
-            secret_env: Vec::new(),
         }
     }
 
@@ -177,10 +167,6 @@ impl Response {
         Self::printed(Vec::new())
     }
 
-    pub fn delegate(args: Vec<String>) -> Self {
-        Self::of(Answer::Delegate(args))
-    }
-
     pub fn error(error: ErrorInfo) -> Self {
         Self::of(Answer::Error(error))
     }
@@ -231,7 +217,6 @@ mod tests {
         assert_eq!(codes, Some(vec![0]));
         for written in [
             serde_json::json!({"message": "nothing to commit"}),
-            serde_json::json!({"delegate": ["git", "status"]}),
             serde_json::json!({"error": {"code": "dirty", "message": "api has changes"}}),
             serde_json::json!({"results": {"records": [{"project": "api", "data": 1}]}}),
         ] {

@@ -70,23 +70,9 @@ impl Race {
         let paths = [self.root.join("bin"), bin.to_path_buf()]
             .into_iter()
             .chain(std::env::split_paths(&path));
-        let strace = std::env::var_os("STRACE_ME").is_some();
-        let mut child = match strace {
-            true => {
-                let mut c = self.sandbox.command("strace");
-                c.args([
-                    "-f",
-                    "-e",
-                    "trace=openat",
-                    "-o",
-                    "/home/gsc/.cache/claude-tmp/meta-pr12-ephemeral/tmp/strace.out",
-                    env!("CARGO_BIN_EXE_meta-git"),
-                ]);
-                c
-            }
-            false => self.sandbox.command(env!("CARGO_BIN_EXE_meta-git")),
-        };
-        let child = child
+        let child = self
+            .sandbox
+            .command(env!("CARGO_BIN_EXE_meta-git"))
             .arg("--meta-plugin-exec")
             .current_dir(&self.ws)
             .env("PATH", std::env::join_paths(paths).unwrap())

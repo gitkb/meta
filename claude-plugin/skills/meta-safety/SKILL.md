@@ -92,6 +92,8 @@ meta --strict git worktree prune
 - Working with repos that legitimately don't have a ref
 - Exploratory work where partial context is acceptable
 
+For `meta git worktree create`, meta's `--strict` goes before the command like every meta option: `meta --strict git worktree create feature-test v2.0.0 --every-repo`.
+
 ### Running a Command in a Short-Lived Set
 
 ```bash
@@ -99,8 +101,6 @@ meta git worktree create tmp --repo a --branch b
 meta git worktree exec tmp -- cargo test
 meta git worktree remove tmp
 ```
-
-For `meta git worktree create`, meta's `--strict` goes before the command like every meta option: `meta --strict git worktree create feature-test v2.0.0 --every-repo`.
 
 ## Efficiency Tips
 

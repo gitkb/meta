@@ -12,8 +12,8 @@ publish = false
 default = ["process"]
 # the one owner of the processes a meta program starts
 process = ["dep:rustix", "dep:signal-hook", "dep:win32job"]
-# temporary: clap parsing of a plugin's arguments and the tip for one of
-# meta's options typed after the command, until the host parses for plugins
+# clap parsing of a plugin's arguments and the tip for one of meta's
+# options typed after the command
 parse = ["dep:clap", "dep:strsim"]
 # calling meta back (`meta --json …`) from a program meta started
 client = ["process"]

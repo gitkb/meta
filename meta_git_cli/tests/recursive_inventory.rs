@@ -183,7 +183,7 @@ fn ran(called: Called, json: bool) -> Ran {
         }
         Answer::Error(error) => (Vec::new(), None, Some(error)),
         Answer::Message(message) => (Vec::new(), Some(message), None),
-        Answer::Plan(_) | Answer::Delegate(_) => (Vec::new(), None, None),
+        Answer::Plan(_) => (Vec::new(), None, None),
     };
     if let Some(error) = &error {
         say(format!("Error: {}\n", error.message));

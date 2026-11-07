@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use meta_plugin::display::{escape, escape_path};
-use meta_plugin::{ErrorCode, Project, RepoUrl, Request};
+use meta_plugin::{ErrorCode, ListedProject, Project, RepoUrl, Request};
 use std::path::{Component, Path, PathBuf};
 
 /// The workspace a command runs in.
@@ -244,10 +244,11 @@ impl Listing {
             .iter()
             .filter(|row| row.place.is_some())
             .map(|row| Listed {
-                name: row.name.clone(),
+                name: row.listed.name.clone(),
                 path: row.place.clone().unwrap_or_default(),
-                repo: row.repo.clone(),
-                meta: row.is_meta,
+                repo: row.listed.repo.clone(),
+                // declared `meta: true` (a meta repo not cloned yet too)
+                meta: row.listed.meta,
             })
             .collect();
         Ok(Some(Listing {
@@ -266,7 +267,7 @@ pub(crate) fn whole_tree(dir: &Path) -> Result<(Vec<PathBuf>, Unreadable)> {
     let dirs = rows.iter().map(|row| row.abs.clone()).collect();
     let unreadable = rows
         .iter()
-        .filter_map(|row| Some((row.abs.clone(), row.error.clone()?)))
+        .filter_map(|row| Some((row.abs.clone(), row.listed.error.clone()?)))
         .collect();
     Ok((dirs, unreadable))
 }
@@ -274,15 +275,12 @@ pub(crate) fn whole_tree(dir: &Path) -> Result<(Vec<PathBuf>, Unreadable)> {
 /// The folders whose configs meta couldn't read, each with why.
 pub(crate) type Unreadable = Vec<(PathBuf, String)>;
 
-/// One row of `meta --json project list`.
+/// One row of `meta --json project list`, with where it is.
 struct Row {
-    name: String,
+    listed: ListedProject,
     abs: PathBuf,
     /// Its path from the folder listed (none for that folder itself)
     place: Option<String>,
-    repo: Option<RepoUrl>,
-    is_meta: bool,
-    error: Option<String>,
 }
 
 /// What meta's `project list` gives in `dir`, asked with `--json
@@ -319,12 +317,21 @@ fn project_list(dir: &Path, config: Option<&Path>, all: bool) -> Result<Option<V
     let mut rows = Vec::new();
     let mut listed: Option<PathBuf> = None;
     for result in envelope.results {
-        let data = result.data.unwrap_or_default();
-        let text = |key: &str| data.get(key).and_then(|v| v.as_str()).map(str::to_string);
+        let row: Option<ListedProject> = result
+            .data
+            .map(serde_json::from_value)
+            .transpose()
+            .with_context(asked)?;
+        let row = row.with_context(|| {
+            format!(
+                "The call of meta gave a project without its row ({})",
+                escape(result.project.as_deref().unwrap_or_default())
+            )
+        })?;
         let abs = result.path.map(PathBuf::from).with_context(|| {
             format!(
                 "The call of meta named a project without its folder ({})",
-                escape(&text("name").unwrap_or_default())
+                escape(&row.name)
             )
         })?;
         // the first row is the folder listed; the others are named from it
@@ -338,13 +345,9 @@ fn project_list(dir: &Path, config: Option<&Path>, all: bool) -> Result<Option<V
             }
         };
         rows.push(Row {
-            name: text("name").unwrap_or_default(),
-            place,
-            repo: text("repo").map(RepoUrl::from),
-            // declared `meta: true` (a meta repo not cloned yet too)
-            is_meta: data.get("meta").and_then(|v| v.as_bool()).unwrap_or(false),
-            error: text("error"),
+            listed: row,
             abs,
+            place,
         });
     }
     Ok(Some(rows))
@@ -381,6 +384,74 @@ pub(crate) mod tests {
             present: true,
             ..Project::default()
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_rows_meta_lists_are_read_back_typed() {
+        use std::os::unix::fs::PermissionsExt;
+        use_built_meta();
+        let sandbox = meta_plugin::testing::isolated!();
+        let root = sandbox.work().canonicalize().unwrap();
+        std::fs::write(
+            root.join(".meta.yaml"),
+            "projects:\n  full:\n    repo: git@x:o/full.git\n    tags: [a, b]\n    meta: true\n  \
+             bare:\n    path: libs/bare\n",
+        )
+        .unwrap();
+        // bare holds a config of its own; full can't be looked into
+        std::fs::create_dir_all(root.join("libs/bare")).unwrap();
+        std::fs::write(root.join("libs/bare/.meta.yaml"), "projects: {}\n").unwrap();
+        std::fs::create_dir(root.join("full")).unwrap();
+        let locked = std::fs::Permissions::from_mode(0o000);
+        std::fs::set_permissions(root.join("full"), locked).unwrap();
+        let rows = project_list(&root, None, false);
+        let open = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(root.join("full"), open).unwrap();
+        let rows: Vec<(ListedProject, Option<String>)> = rows
+            .unwrap()
+            .unwrap()
+            .into_iter()
+            .skip(1)
+            .map(|row| (row.listed, row.place))
+            .collect();
+        let error = format!(
+            "cannot look into {}: Permission denied (os error 13)",
+            escape_path(&root.join("full"))
+        );
+        assert_eq!(
+            rows,
+            [
+                (
+                    ListedProject {
+                        name: "bare".into(),
+                        path: "libs/bare".into(),
+                        repo: None,
+                        tags: Vec::new(),
+                        is_meta: true,
+                        meta: false,
+                        error: None,
+                        cwd: None,
+                        worktree: None,
+                    },
+                    Some("libs/bare".into())
+                ),
+                (
+                    ListedProject {
+                        name: "full".into(),
+                        path: "full".into(),
+                        repo: Some(RepoUrl::from("git@x:o/full.git")),
+                        tags: vec!["a".into(), "b".into()],
+                        is_meta: false,
+                        meta: true,
+                        error: Some(error),
+                        cwd: None,
+                        worktree: None,
+                    },
+                    Some("full".into())
+                ),
+            ]
+        );
     }
 
     #[test]

@@ -36,7 +36,7 @@
 //!    set it runs in) and starts the plugin with `--meta-plugin-exec`, the
 //!    [`Request`] in the file `META_REQUEST` names.
 //! 3. The plugin writes one [`Response`] (a [`Plan`] for the host to run,
-//!    [`Results`], a message, a delegate or an error, each with its
+//!    [`Results`], a message or an error, each with its
 //!    warnings and skipped projects) to the file `META_RESPONSE` names;
 //!    [`run_plugin`] does both for a Rust plugin. The plugin's stdin,
 //!    stdout and stderr are meta's, but under `--json` its stdout is meta's
@@ -68,6 +68,7 @@ pub mod duration;
 pub mod envelope;
 pub mod event;
 pub mod exit;
+pub mod listed;
 mod mode;
 pub mod out;
 pub mod path;
@@ -86,6 +87,7 @@ pub mod wire_path;
 
 pub use envelope::{Envelope, ErrorCode, ErrorInfo, ProjectResult, Skipped, Warning};
 pub use event::Event;
+pub use listed::{ListedProject, ListedWorktree};
 pub use mode::ExecutionMode;
 pub use repo_url::RepoUrl;
 pub use request::{Meta, Project, Request, Scope, Set, Workspace, Worktree};
@@ -95,10 +97,6 @@ pub use serve::{run_plugin, usage, Ctx, PluginDefinition, REQUEST_VAR, RESPONSE_
 /// The variable that names the lease a program's caller holds (see
 /// `sets::lease`): meta reads it and passes it on as `Request::lease`.
 pub const LEASE_VAR: &str = "META_LEASE";
-
-/// The variable a caller would name an exact selection in. Nothing reads it
-/// yet; meta strips it, with [`LEASE_VAR`], from every program it starts.
-pub const SELECTION_VAR: &str = "META_SELECTION";
 
 /// What a plugin's handler returns: an error carries its [`ErrorCode`] in
 /// an [`ErrorInfo`] (any other error is `failed`).

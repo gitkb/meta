@@ -510,9 +510,7 @@ fn request_fields(repo: &Repo) -> Result<(), String> {
         "include_filters",
         "tag_filters",
         "`listed_root`",
-        "`plugin_dir`",
         "`data_dir`",
-        "\"plugin_dir\"",
     ];
     markdown_without(repo, &fields)
 }

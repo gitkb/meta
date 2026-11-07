@@ -56,13 +56,6 @@ pub struct Request {
     /// even no levels deep (`--depth 0`)
     #[serde(default)]
     pub recursive: bool,
-    /// The plugin's settings from `.meta.yaml` (an empty object until
-    /// settings are declared).
-    #[serde(default)]
-    pub settings: serde_json::Map<String, serde_json::Value>,
-    /// The plugin's own directory (where its executable is).
-    #[serde(with = "wire_path")]
-    pub plugin_dir: PathBuf,
     /// A directory for the plugin's own files (`~/.meta/data/<plugin>`),
     /// made by the host, readable by the user alone.
     #[serde(with = "wire_path")]
@@ -271,8 +264,6 @@ impl Request {
             projects: Vec::new(),
             depth: Some(0),
             recursive: false,
-            settings: serde_json::Map::new(),
-            plugin_dir: PathBuf::new(),
             data_dir: PathBuf::new(),
             meta: Meta::default(),
             #[cfg(feature = "parse")]

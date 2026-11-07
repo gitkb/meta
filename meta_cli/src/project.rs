@@ -9,7 +9,9 @@ use meta_core::config::{self, MetaTreeNode};
 use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
 use meta_core::repo_filter::{repo_path, Candidate};
 use meta_plugin::display::escape;
-use meta_plugin::{outln, ErrorCode, ErrorInfo, ProjectResult, RepoUrl};
+use meta_plugin::{
+    outln, ErrorCode, ErrorInfo, ListedProject, ListedWorktree, ProjectResult, RepoUrl,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -264,42 +266,6 @@ fn workspace_target(cli: &Cli, start: &Path, name: &str) -> Result<Target> {
 struct Found {
     text: String,
     records: Vec<ProjectResult>,
-}
-
-/// One row of `meta --json project list`: a project, or the workspace the
-/// list is of (the first row).
-#[derive(Debug, Clone, Serialize)]
-struct ListedProject {
-    name: String,
-    /// From the workspace root, as the row's `project` (`.` for the root)
-    path: String,
-    /// Git remote URL. Should be present for all normal projects.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    repo: Option<RepoUrl>,
-    tags: Vec<String>,
-    /// Whether a `.meta.yaml` is in its folder now
-    is_meta: bool,
-    /// Whether its config says it is a meta repo (`meta: true`), cloned or not
-    meta: bool,
-    /// Why its folder couldn't be looked into (its own projects may be
-    /// missing from the list); absent when it could.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-    /// The directory the command ran from (the first row only)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cwd: Option<String>,
-    /// The worktree set it ran in (the first row only)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    worktree: Option<ListedWorktree>,
-}
-
-/// Linked worktree context for project list output.
-#[derive(Debug, Clone, Serialize)]
-struct ListedWorktree {
-    linked: bool,
-    physical_root: String,
-    canonical_root: String,
-    name: String,
 }
 
 /// One project that is not a clone of what its config lists.

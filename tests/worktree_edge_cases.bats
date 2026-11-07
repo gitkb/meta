@@ -815,7 +815,7 @@ J
 {"command": "git worktree remove", "args": ["src", "--force"], "cwd": "$TEST_DIR", "scope": "workspace",
  "workspace": {"root": "$TEST_DIR", "config": "$TEST_DIR/.meta.yaml", "listed_root": "$TEST_DIR"},
  "worktree": {"dir": "$TEST_DIR/backend"},
- "plugin_dir": "$TEST_DIR", "data_dir": "$TEST_DIR", "meta": {}}
+ "data_dir": "$TEST_DIR", "meta": {}}
 J
     META_REQUEST="$TEST_DIR/request.json" META_RESPONSE="$TEST_DIR/response.json" \
         run "$META_GIT_BIN" --meta-plugin-exec

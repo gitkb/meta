@@ -693,14 +693,39 @@ fn a_preview_returns_its_plan_with_nested_repos_in_one_row() {
     let (succeeded, envelope) = previewed(&sandbox, &root, "app/lib");
 
     assert!(succeeded, "{envelope}");
+    assert_eq!(
+        envelope["results"].as_array().unwrap().len(),
+        1,
+        "{envelope}"
+    );
+    let row = &envelope["results"][0];
+    assert_eq!(row.as_object().unwrap().len(), 1, "{row}");
+    let repos: Vec<(&str, &Path, &Path)> = row["data"]["repos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|repo| {
+            assert_eq!(repo.as_object().unwrap().len(), 3, "{repo}");
+            let path = |field: &str| Path::new(repo[field].as_str().unwrap());
+            (
+                repo["alias"].as_str().unwrap(),
+                path("source"),
+                path("path"),
+            )
+        })
+        .collect();
     let set = root.join(".worktrees/s");
     assert_eq!(
-        envelope["results"],
-        json!([{"data": {"repos": [
-            {"alias": ".", "source": root, "path": set},
-            {"alias": "app", "source": root.join("app"), "path": set.join("app")},
-            {"alias": "app/lib", "source": root.join("app/lib"), "path": set.join("app/lib")},
-        ]}}])
+        repos,
+        [
+            (".", root.as_path(), set.as_path()),
+            ("app", root.join("app").as_path(), set.join("app").as_path()),
+            (
+                "app/lib",
+                root.join("app/lib").as_path(),
+                set.join("app/lib").as_path()
+            ),
+        ]
     );
     assert!(!root.join(".worktrees").exists());
 }

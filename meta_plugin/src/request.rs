@@ -27,6 +27,10 @@ pub struct Request {
     /// clone, a command run outside any).
     #[serde(default)]
     pub workspace: Option<Workspace>,
+    /// Where worktree sets go and what runs around them, as the host
+    /// resolved them for this command: outside a workspace too.
+    #[serde(default)]
+    pub worktree: Worktree,
     /// What the host resolved for this command.
     pub scope: Scope,
     /// The worktree set the command runs in, when it runs inside one, or
@@ -157,16 +161,16 @@ pub struct Workspace {
     /// Inside a set, every member of the set.
     #[serde(default)]
     pub members: Vec<Project>,
-    pub worktree: Worktree,
 }
 
-/// Where the workspace keeps worktree sets, and what runs around them.
+/// Where worktree sets go, and what runs around them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Worktree {
-    /// The folder sets are made in (`META_WORKTREES`, `worktrees_dir`, or
-    /// `.worktrees` in the workspace's folder); none when the config's place
-    /// for them is refused (the worktree commands say why)
+    /// The folder sets are made in: `META_WORKTREES`, else the workspace's
+    /// `worktrees_dir`, else `.worktrees` in its folder; outside a workspace,
+    /// `META_WORKTREES`, else `.worktrees` where the command runs. None when
+    /// the config's place for them is refused (the worktree commands say why)
     #[serde(default, with = "wire_path::option")]
     pub dir: Option<PathBuf>,
     /// Why there is no `dir`: the config's place for sets was refused (a
@@ -260,6 +264,7 @@ impl Request {
             args: Vec::new(),
             cwd: cwd.into(),
             workspace: None,
+            worktree: Worktree::default(),
             scope: Scope::None,
             set: None,
             lease: None,

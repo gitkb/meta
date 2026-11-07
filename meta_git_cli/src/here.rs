@@ -11,6 +11,8 @@ use std::path::{Component, Path, PathBuf};
 /// The workspace a command runs in.
 pub(crate) struct Here<'a> {
     pub workspace: &'a meta_plugin::Workspace,
+    /// Where its sets go and what runs around them
+    pub worktree: &'a meta_plugin::Worktree,
     /// The folder of the config the command runs from: where its projects
     /// are listed
     pub dir: PathBuf,
@@ -27,13 +29,10 @@ impl<'a> Here<'a> {
             .config
             .parent()
             .map_or_else(|| workspace.listed_root.clone(), Path::to_path_buf);
-        let home = workspace
-            .worktree
-            .home
-            .clone()
-            .unwrap_or_else(|| dir.clone());
+        let home = request.worktree.home.clone().unwrap_or_else(|| dir.clone());
         Some(Here {
             workspace,
+            worktree: &request.worktree,
             dir,
             home,
         })
@@ -43,19 +42,6 @@ impl<'a> Here<'a> {
     pub fn need(request: &'a Request) -> Result<Here<'a>> {
         Self::of(request)
             .ok_or_else(|| anyhow::anyhow!("Not inside a meta project (no .meta.yaml found)"))
-    }
-
-    /// The folder its worktree sets are in; when meta refused the place
-    /// the config gives, meta's reason.
-    pub fn worktrees(&self) -> Result<PathBuf> {
-        let worktree = &self.workspace.worktree;
-        worktree.dir.clone().ok_or_else(|| match &worktree.refused {
-            Some(why) => anyhow::anyhow!("{why}"),
-            None => anyhow::anyhow!(
-                "Refusing to keep worktrees where {} puts them",
-                escape_path(&self.workspace.config)
-            ),
-        })
     }
 
     /// The projects listed under `dir` (the config's folder), each at its
@@ -85,15 +71,14 @@ impl<'a> Here<'a> {
     }
 }
 
-/// Where sets go for `request`: its workspace's worktrees folder; outside a
-/// workspace, `META_WORKTREES`, else `.worktrees` where the command runs.
+/// Where sets go for `request`, as meta resolved it (`Request::worktree`);
+/// when meta refused the place the config gives, meta's reason.
 pub(crate) fn worktree_root(request: &Request) -> Result<PathBuf> {
-    match Here::of(request) {
-        Some(here) => here.worktrees(),
-        None => Ok(std::env::var_os("META_WORKTREES")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| request.cwd.join(".worktrees"))),
-    }
+    let worktree = &request.worktree;
+    worktree.dir.clone().ok_or_else(|| match &worktree.refused {
+        Some(why) => anyhow::anyhow!("{why}"),
+        None => anyhow::anyhow!("The request names no folder for worktree sets"),
+    })
 }
 
 /// `path`'s place below `dir` (`a/b`), when it is one: not `dir` itself.

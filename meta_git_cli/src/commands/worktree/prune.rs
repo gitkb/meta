@@ -141,7 +141,7 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
     // goes with it
     let here = crate::here::Here::need(request)?;
     let workspace = Workspace::of(&here.home)?;
-    let worktree_root = here.worktrees()?;
+    let worktree_root = crate::here::worktree_root(request)?;
     let places = here.places();
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
     // A set whose lease is held is being created, or is an ephemeral set
@@ -393,7 +393,7 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
     records.extend(kept.iter().map(|entry| record(entry, "kept")));
     // What was done is reported first: a failing hook doesn't undo it
     let hook = match attempted {
-        true => fire_post_prune(&removed, Some(&here.workspace.worktree)),
+        true => fire_post_prune(&removed, Some(here.worktree)),
         false => Ok(()),
     };
     // a removal that failed is the error; a failing hook then only warns

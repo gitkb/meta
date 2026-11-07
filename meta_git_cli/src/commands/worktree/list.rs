@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::Utc;
 use colored::*;
 use meta_plugin::display::{escape, escape_path};
@@ -91,27 +91,13 @@ fn repo_entries(
 /// A selected set fails closed. All-set listing retains healthy sets and warnings.
 pub(crate) fn handle_list(args: ListArgs, ctx: &Ctx, request: &Request) -> Result<Response> {
     let json = request.meta.json;
-    let cwd = request.cwd.canonicalize()?;
     let places = crate::worktree::helpers::places(request);
     // the set it runs in, as meta found it
     let location = request
         .set
         .as_ref()
         .map(|set| (set.name.clone(), set.dir.clone()));
-    let worktree_root = match (&location, std::env::var_os("META_WORKTREES")) {
-        (Some((_, root)), None) => root
-            .parent()
-            .context("The worktree set has no parent folder")?
-            .to_path_buf(),
-        _ => {
-            let root = crate::here::worktree_root(request)?;
-            if root.is_absolute() {
-                root
-            } else {
-                cwd.join(root)
-            }
-        }
-    };
+    let worktree_root = crate::here::worktree_root(request)?;
     let selected = match args.name.as_ref() {
         Some(name) => {
             meta_plugin::sets::validate_name(name)?;

@@ -255,13 +255,20 @@ mod tests {
                     ..Project::default()
                 })
                 .collect(),
-            worktree: Default::default(),
         }
     }
+
+    static WORKTREE: meta_plugin::Worktree = meta_plugin::Worktree {
+        dir: None,
+        refused: None,
+        hooks: std::collections::BTreeMap::new(),
+        home: None,
+    };
 
     fn here(workspace: &meta_plugin::Workspace) -> Here<'_> {
         Here {
             workspace,
+            worktree: &WORKTREE,
             dir: PathBuf::from("/w"),
             home: PathBuf::from("/w"),
         }

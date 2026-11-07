@@ -31,7 +31,7 @@ pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>>
     let components: Vec<_> = cwd.components().collect();
     for (i, comp) in components.iter().enumerate() {
         if let Component::Normal(name) = comp {
-            if name.to_str() == Some(".worktrees") {
+            if name.to_str() == Some(meta_plugin::sets::WORKTREES_DIR) {
                 let task_name = match components.get(i + 1) {
                     Some(Component::Normal(n)) => match n.to_str() {
                         Some(n) => n.to_string(),
@@ -47,6 +47,15 @@ pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>>
     Ok(None)
 }
 
+/// The owner file beside the set at `set_dir`, when it was made for this
+/// very folder: one copied or moved beside another folder is stale.
+fn own_owner(set_dir: &Path) -> Result<Option<meta_plugin::sets::Owner>> {
+    let real = set_dir
+        .canonicalize()
+        .unwrap_or_else(|_| set_dir.to_path_buf());
+    Ok(meta_plugin::sets::owner(set_dir)?.filter(|owner| owner.set == real))
+}
+
 /// The workspace the set at `set_dir` belongs to: the one its owner file
 /// names while the file was made for this very folder; else the workspace
 /// whose worktrees folder holds it, nearest above it (in a copied or moved workspace, the copy: what was
@@ -54,8 +63,8 @@ pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>>
 /// workspace's sets are there (a set that stands for itself).
 fn set_origin(set_dir: &Path) -> Result<Option<PathBuf>> {
     let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    if let Some(owner) = meta_plugin::sets::owner(set_dir)? {
-        if owner.set == real(set_dir) && owner.workspace.is_dir() {
+    if let Some(owner) = own_owner(set_dir)? {
+        if owner.workspace.is_dir() {
             return Ok(Some(owner.workspace));
         }
     }
@@ -371,28 +380,82 @@ impl Configs {
     }
 }
 
-/// Where worktree sets go: `META_WORKTREES`, else the `worktrees_dir` of
-/// `owner`'s config (anywhere; checked when it was loaded), else its
-/// `.worktrees`; outside a workspace, `.worktrees` in `cwd`.
+/// The folder `META_WORKTREES` names, when it is set: an absolute path, or
+/// an error naming the value (an empty or relative one would put sets
+/// wherever meta happens to run, inside a project's repo even).
+fn worktrees_var() -> Result<Option<PathBuf>> {
+    use meta_plugin::sets::WORKTREES_VAR;
+    let Some(value) = std::env::var_os(WORKTREES_VAR) else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(value);
+    anyhow::ensure!(
+        path.is_absolute(),
+        "{WORKTREES_VAR} is '{}', not an absolute path: set it to the absolute path of the folder for worktree sets, or unset it",
+        escape_path(&path)
+    );
+    Ok(Some(path))
+}
+
+/// Where worktree sets go: `META_WORKTREES` (an absolute path; any other
+/// value is refused), else the `worktrees_dir` of `owner`'s config
+/// (anywhere; checked when it was loaded), else its `.worktrees`; outside a
+/// workspace, `.worktrees` in `cwd`.
 pub fn resolve_worktree_root(
     owner: Option<&crate::config::Workspace>,
     cwd: &Path,
 ) -> Result<PathBuf> {
-    if let Ok(env_path) = std::env::var("META_WORKTREES") {
-        return Ok(PathBuf::from(env_path));
+    use meta_plugin::sets::WORKTREES_DIR;
+    if let Some(path) = worktrees_var()? {
+        return Ok(path);
     }
     let Some(owner) = owner else {
-        return Ok(cwd.join(".worktrees"));
+        return Ok(cwd.join(WORKTREES_DIR));
     };
     // A link there is followed, wherever it leads (removal checks what is in
     // a set, not where it is), but not into git's data; a configured
     // worktrees_dir was checked when it was loaded
     let Some(configured) = &owner.worktrees_dir else {
-        crate::config::check_location(&owner.dir, ".worktrees", false)
-            .map_err(|why| anyhow::anyhow!("Refusing to keep worktrees in .worktrees: {why}"))?;
-        return Ok(owner.dir.join(".worktrees"));
+        crate::config::check_location(&owner.dir, WORKTREES_DIR, false).map_err(|why| {
+            anyhow::anyhow!("Refusing to keep worktrees in {WORKTREES_DIR}: {why}")
+        })?;
+        return Ok(owner.dir.join(WORKTREES_DIR));
     };
     Ok(owner.dir.join(configured))
+}
+
+/// What a plugin is told of worktree sets for a command run from the
+/// workspace `config` (from `cwd` outside one), inside the set at `set` if
+/// any: where they go or why not, and the hooks of the workspace whose sets
+/// they are, which run in its folder. Inside a set with its owner entry,
+/// made for that very folder, with `META_WORKTREES` unset, they go in
+/// the folder the set is in, where that entry is; else as
+/// [`resolve_worktree_root`] says (inside a set, for the workspace the set
+/// stands for, [`Configs::of`]).
+pub fn plugin_worktree(
+    config: Option<&crate::config::Workspace>,
+    cwd: &Path,
+    set: Option<&Path>,
+) -> meta_plugin::Worktree {
+    let owner = config.map(|c| Configs::of(c.clone()).map_or_else(|_| c.clone(), |c| c.owner));
+    // a folder only named like a set (a workspace in a `.worktrees`) has
+    // none, or one copied there from another folder
+    let owned = set.filter(|dir| matches!(own_owner(dir), Ok(Some(_))));
+    let dir = match (worktrees_var(), owned.and_then(Path::parent)) {
+        (Ok(None), Some(beside)) => Ok(beside.to_path_buf()),
+        _ => resolve_worktree_root(owner.as_ref(), config.map_or(cwd, |c| &c.dir)),
+    };
+    meta_plugin::Worktree {
+        // refused here, the worktree commands say why
+        refused: dir.as_ref().err().map(|e| format!("{e:#}")),
+        dir: dir.ok(),
+        hooks: owner
+            .iter()
+            .flat_map(|owner| &owner.worktree.hooks)
+            .map(|(event, command)| (event.name().to_string(), command.clone()))
+            .collect(),
+        home: owner.map(|owner| owner.dir),
+    }
 }
 
 #[cfg(test)]

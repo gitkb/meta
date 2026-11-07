@@ -1,5 +1,5 @@
 //! Worktree sets, for any provider: a set is a folder in the workspace's
-//! worktrees folder (`Request::workspace.worktree.dir`) holding checkouts of
+//! worktrees folder (`Request::worktree.dir`) holding checkouts of
 //! some of the workspace's projects, each at the project's path. meta finds
 //! the set a command runs in and its members (the projects whose folder is
 //! in the set) and sends them as `Request::set`; a provider makes and
@@ -31,6 +31,14 @@ pub use crate::LEASE_VAR;
 
 /// The provider that owns a set without an owner file.
 pub const DEFAULT_PROVIDER: &str = "git";
+
+/// The folder a workspace keeps its sets in, unless its config or
+/// [`WORKTREES_VAR`] names another.
+pub const WORKTREES_DIR: &str = ".worktrees";
+
+/// The variable naming the folder sets go in, whatever the workspace's
+/// config says.
+pub const WORKTREES_VAR: &str = "META_WORKTREES";
 
 /// The folder beside the sets that holds their owner files.
 pub const OWNERS_DIR: &str = ".meta-sets";

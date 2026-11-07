@@ -185,7 +185,7 @@ fn repair_advice(checkout: &Path) -> String {
     let parts: Vec<_> = checkout.components().collect();
     let Some(at) = parts
         .iter()
-        .rposition(|part| part.as_os_str() == ".worktrees")
+        .rposition(|part| part.as_os_str() == meta_plugin::sets::WORKTREES_DIR)
     else {
         return String::new();
     };

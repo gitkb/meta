@@ -27,6 +27,8 @@ pub struct Target {
     pub parallel: bool,
     /// The workspace, as a plugin is told it
     pub workspace: Option<meta_plugin::Workspace>,
+    /// Where its worktree sets go, as a plugin is told it
+    pub worktree: meta_plugin::Worktree,
     /// The worktree set it runs in
     pub set: Option<meta_plugin::Set>,
     /// How far into nested meta repos the selection reaches
@@ -97,27 +99,11 @@ fn workspace(
     if let Some(reach) = reach {
         resolve_dependencies(reach, root, &mut members);
     }
-    let owner = worktree::Configs::of(config.clone())
-        .map(|configs| configs.owner)
-        .unwrap_or_else(|_| config.clone());
-    let sets_dir = worktree::resolve_worktree_root(Some(&owner), &config.dir);
     meta_plugin::Workspace {
         root: root.to_path_buf(),
         config: config.config_path.clone(),
         listed_root: config::listed_root(&config.dir),
         members,
-        worktree: meta_plugin::Worktree {
-            dir: sets_dir.as_ref().ok().cloned(),
-            // refused here, the worktree commands say why
-            refused: sets_dir.as_ref().err().map(|e| format!("{e:#}")),
-            hooks: owner
-                .worktree
-                .hooks
-                .iter()
-                .map(|(event, command)| (event.name().to_string(), command.clone()))
-                .collect(),
-            home: Some(owner.dir.clone()),
-        },
     }
 }
 
@@ -274,6 +260,7 @@ fn target_with(
     };
     Ok(Target {
         workspace: Some(workspace(&reach.workspace, &root, &members, Some(&reach))),
+        worktree: worktree::plugin_worktree(Some(&reach.workspace), start, None),
         repos,
         parallel,
         root: reach.root,
@@ -424,6 +411,7 @@ fn in_set(
             let reach = Reach::of(c.clone(), cli.recursive, cli.all, cli.depth).ok();
             workspace(c, set_dir, &all, reach.as_ref())
         }),
+        worktree: worktree::plugin_worktree(config.as_ref(), start, Some(set_dir)),
         set: Some(set),
         root: set_dir.to_path_buf(),
         repos,
@@ -481,11 +469,7 @@ pub fn named_set(cli: &Cli, start: &Path, name: &str) -> Result<Option<Target>> 
     // the workspace alone: the filters select in the set
     let mut target = target_with(cli, start, &meta_core::repo_filter::Filters::default())?;
     target.repos = Vec::new();
-    let dir = target
-        .workspace
-        .as_ref()
-        .and_then(|w| w.worktree.dir.clone());
-    let set_dir = match dir {
+    let set_dir = match target.worktree.dir.clone() {
         Some(dir) if meta_plugin::sets::validate_name(name).is_ok() => dir.join(name),
         _ => return Ok(Some(target)),
     };
@@ -534,6 +518,14 @@ pub fn request(
     let mut request = Request::new(command.join(" "), start);
     request.args = rest.to_vec();
     request.scope = scope;
+    // sent with no target too (outside a workspace, they go where it runs);
+    // a command with none (a clone) doesn't fail on a config it doesn't read
+    request.worktree = match target {
+        Some(target) => target.worktree.clone(),
+        None => {
+            worktree::plugin_worktree(find_config(cli, start).ok().flatten().as_ref(), start, None)
+        }
+    };
     if let Some(target) = target {
         request.workspace = target.workspace.clone();
         request.set = target.set.clone();

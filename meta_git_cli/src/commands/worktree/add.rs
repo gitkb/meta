@@ -34,7 +34,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
 
     let here = Here::need(request)?;
     let meta_dir = &here.dir;
-    let wt_dir = here.worktrees()?.join(name);
+    let wt_dir = crate::here::worktree_root(request)?.join(name);
 
     if !wt_dir.exists() {
         anyhow::bail!(

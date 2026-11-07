@@ -1521,12 +1521,16 @@ EOF
     rm -rf "$OUT"
 }
 
-@test "worktree exec --include works with a relative META_WORKTREES" {
+@test "a relative or empty META_WORKTREES is refused, naming it" {
     "$META_BIN" git worktree create rel-root --repo backend --repo frontend
-    run env META_WORKTREES=.worktrees "$META_BIN" --include backend git worktree exec rel-root -- pwd
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"rel-root/backend"* ]]
-    [[ "$output" != *"rel-root/frontend"* ]]
+    for value in .worktrees ""; do
+        run env META_WORKTREES="$value" "$META_BIN" --include backend git worktree exec rel-root -- pwd
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"META_WORKTREES is '$value', not an absolute path"* ]]
+        run env META_WORKTREES="$value" "$META_BIN" git worktree create other --repo backend
+        [ "$status" -ne 0 ]
+        [ ! -e other ] && [ ! -e .worktrees/other ] && [ ! -e backend/other ]
+    done
 }
 
 @test "--primary inside a set acts on the workspace the set was made from" {

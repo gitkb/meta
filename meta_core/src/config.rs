@@ -512,7 +512,7 @@ impl Workspace {
                 })?;
                 dir
             }
-            None => ".worktrees".to_string(),
+            None => meta_plugin::sets::WORKTREES_DIR.to_string(),
         };
         // Projects can't go there when it is in the config's directory; one
         // around it (a set's copy of the config is in its worktrees_dir)
@@ -669,9 +669,12 @@ fn validate_project(
     // The configured worktree directory, and the default one always
     let in_worktrees = |value: &str| {
         let value = value.to_ascii_lowercase();
-        [worktrees.to_ascii_lowercase(), ".worktrees".to_string()]
-            .iter()
-            .any(|dir| value == *dir || value.starts_with(&format!("{dir}/")))
+        [
+            worktrees.to_ascii_lowercase(),
+            meta_plugin::sets::WORKTREES_DIR.to_string(),
+        ]
+        .iter()
+        .any(|dir| value == *dir || value.starts_with(&format!("{dir}/")))
     };
     for value in [&info.name, &info.path] {
         if in_worktrees(value) {

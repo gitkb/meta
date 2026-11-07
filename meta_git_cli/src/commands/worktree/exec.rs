@@ -136,7 +136,7 @@ fn handle_ephemeral_exec(args: ExecArgs, ctx: &Ctx, request: &Request) -> Result
     let removal = Meta::from_env()
         .and_then(|meta| {
             meta.cwd(&request.cwd)
-                .env("META_WORKTREES", &worktrees)
+                .env(meta_plugin::sets::WORKTREES_VAR, &worktrees)
                 .args(remove)
                 .lease(token.clone())
                 .finishing()

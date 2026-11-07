@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 // ==================== Domain Types ====================
 
@@ -62,6 +63,23 @@ pub struct CreateRepoEntry {
     /// What a new branch started from (`origin/main`, a commit-ish)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_from: Option<String>,
+}
+
+/// What a `--dry-run` create would make, in place of a [`CreateOutput`].
+#[derive(Debug, Serialize)]
+pub struct CreatePlan {
+    pub repos: Vec<CreatePlanRepo>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreatePlanRepo {
+    pub alias: String,
+    /// The checkout its worktree would be made from
+    #[serde(with = "meta_plugin::wire_path")]
+    pub source: PathBuf,
+    /// Where that worktree would go
+    #[serde(with = "meta_plugin::wire_path")]
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Serialize)]

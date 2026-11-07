@@ -3,7 +3,7 @@ use chrono::Utc;
 use colored::*;
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::{errln, outln};
-use meta_plugin::{Ctx, ProjectResult, Request};
+use meta_plugin::{Ctx, ProjectResult, Request, Skipped};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
@@ -13,7 +13,7 @@ use crate::worktree::helpers::*;
 use crate::worktree::hooks::fire_post_create;
 use crate::worktree::plan::{Found, Index, PlannedRepo};
 use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
-use crate::worktree::types::{CreateOutput, CreateRepoEntry};
+use crate::worktree::types::{CreateOutput, CreatePlan, CreatePlanRepo, CreateRepoEntry};
 use crate::worktree::RepoSpec;
 use meta_core::set_record::{self as record, SetRecord};
 use meta_plugin::duration::format_duration;
@@ -30,8 +30,9 @@ pub(crate) struct Created {
 
 /// What a create did.
 pub(crate) enum Made {
-    /// Said what it would do (`--dry-run`)
-    Preview,
+    /// Said what it would do (`--dry-run`), with the repos it must clone
+    /// first when that stops it short of a plan
+    Preview(Vec<Skipped>),
     Created(Created),
     /// Cloned what the set needs that wasn't cloned: the configs those
     /// clones hold change the plan, so the command runs again from the top
@@ -124,7 +125,7 @@ pub(crate) fn handle_create(
                 places.join(", "),
                 escape(name)
             )?;
-            return Ok(Made::Preview);
+            return Ok(Made::Preview(must_clone_first(&parents)));
         }
         clone_missing(&index, &parents)?;
         return Ok(Made::Again);
@@ -140,7 +141,7 @@ pub(crate) fn handle_create(
                 places.join(", "),
                 escape(name)
             )?;
-            return Ok(Made::Preview);
+            return Ok(Made::Preview(must_clone_first(&planned.missing)));
         }
         clone_missing(&index, &planned.missing)?;
         return Ok(Made::Again);
@@ -203,7 +204,17 @@ pub(crate) fn handle_create(
             custom_meta: &custom_meta,
         };
         print_create_dry_run(&plan)?;
-        return Ok(Made::Preview);
+        records.push(ProjectResult::about_workspace(CreatePlan {
+            repos: kept
+                .iter()
+                .map(|repo| CreatePlanRepo {
+                    alias: repo.project.clone(),
+                    source: repo.source.clone(),
+                    path: planned_dest(&wt_dir, repo),
+                })
+                .collect(),
+        }));
+        return Ok(Made::Preview(Vec::new()));
     }
 
     // Resolve/apply --from-pr: get PR head branch, override branch for the matching repo, and fetch
@@ -538,6 +549,14 @@ struct CreateDryRunPlan<'a> {
     custom_meta: &'a HashMap<String, String>,
 }
 
+/// Where a repo of the plan would go in the set at `wt_dir`.
+fn planned_dest(wt_dir: &std::path::Path, repo: &PlannedRepo) -> std::path::PathBuf {
+    match repo.place.as_str() {
+        "." => wt_dir.to_path_buf(),
+        place => wt_dir.join(place),
+    }
+}
+
 fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
     outln!(
         "[DRY RUN] Would create worktree set '{}' at {}",
@@ -576,18 +595,14 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
     }
 
     outln!("Planned repo operations:")?;
-    for PlannedRepo {
-        project: alias,
-        source,
-        place,
-        branch,
-    } in plan.repos_to_create
-    {
-        let dest = if place == "." {
-            plan.wt_dir.to_path_buf()
-        } else {
-            plan.wt_dir.join(place)
-        };
+    for repo in plan.repos_to_create {
+        let PlannedRepo {
+            project: alias,
+            source,
+            place,
+            branch,
+        } = repo;
+        let dest = planned_dest(plan.wt_dir, repo);
         let mut cmd = format!(
             "git -C {} worktree add -b {} {}",
             shell_quote(&source.display().to_string()),
@@ -615,6 +630,19 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
     outln!()?;
     outln!("No directories, branches, records, hooks, or git excludes were written.")?;
     Ok(())
+}
+
+/// `repos` as a preview left them out of its plan; quiet, as its text has
+/// said so already.
+fn must_clone_first(repos: &[PlannedRepo]) -> Vec<Skipped> {
+    repos
+        .iter()
+        .map(|repo| Skipped {
+            project: repo.place.clone(),
+            reason: "not cloned: a create clones it first, so a preview has no plan".to_string(),
+            quiet: true,
+        })
+        .collect()
 }
 
 /// Why a repo is in a set being made. A project that isn't cloned is an

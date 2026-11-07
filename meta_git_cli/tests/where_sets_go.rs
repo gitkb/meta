@@ -26,10 +26,13 @@ fn resolved(cwd: &Path) -> PathBuf {
 #[test]
 fn every_place_has_one_folder_of_sets() {
     let sandbox = meta_plugin::testing::isolated!();
-    let work = sandbox.work().canonicalize().unwrap();
+    // paths as given, never canonical: git can't make a worktree at a
+    // Windows `\\?\` path; compared as they really are
+    let real = |path: &Path| path.canonicalize().unwrap();
+    let work = sandbox.work();
     let ws = sandbox.workspace(&work.join("ws")).repo("app").build();
     let (elsewhere, outside) = (work.join("elsewhere"), work.join("outside"));
-    for dir in [&elsewhere, &outside] {
+    for dir in [&elsewhere, &outside.join(".worktrees")] {
         std::fs::create_dir_all(dir).unwrap();
     }
     // meta and meta-git as built (`cargo build --workspace --bins` first)
@@ -81,19 +84,26 @@ fn every_place_has_one_folder_of_sets() {
             Some(var) => std::env::set_var(WORKTREES_VAR, var),
             None => std::env::remove_var(WORKTREES_VAR),
         }
-        assert_eq!(resolved(cwd), folder, "meta_core from {cwd:?}, {var:?}");
+        assert_eq!(
+            real(&resolved(cwd)),
+            real(folder),
+            "meta_core from {cwd:?}, {var:?}"
+        );
         // a set in that folder alone is the one `list` finds by name
         let probe = folder.join("probe");
         let checkout = probe.join("app").display().to_string();
         let app = ws.join("app");
         sandbox.git(&app, &["worktree", "add", "-q", "--detach", &checkout]);
         let listed = run(cwd, var, &["--json", "git", "worktree", "list", "probe"]);
-        sandbox.git(&app, &["worktree", "remove", "--force", &checkout]);
         let listed: serde_json::Value = serde_json::from_slice(&listed).unwrap();
+        let root = listed["results"][0]["data"]["root"]
+            .as_str()
+            .unwrap_or_default();
         assert_eq!(
-            listed["results"][0]["data"]["root"],
-            probe.display().to_string(),
+            Path::new(root).canonicalize().ok(),
+            Some(real(&probe)),
             "list from {cwd:?}, {var:?}: {listed}"
         );
+        sandbox.git(&app, &["worktree", "remove", "--force", &checkout]);
     }
 }

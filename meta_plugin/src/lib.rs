@@ -94,10 +94,6 @@ pub use request::{Meta, Project, Request, Scope, Set, Workspace, Worktree};
 pub use response::{Answer, Plan, Response, Results, Step, Text};
 pub use serve::{run_plugin, usage, Ctx, PluginDefinition, REQUEST_VAR, RESPONSE_VAR};
 
-/// The variable that names the lease a program's caller holds (see
-/// `sets::lease`): meta reads it and passes it on as `Request::lease`.
-pub const LEASE_VAR: &str = "META_LEASE";
-
 /// What a plugin's handler returns: an error carries its [`ErrorCode`] in
 /// an [`ErrorInfo`] (any other error is `failed`).
 pub type Result<T, E = anyhow::Error> = std::result::Result<T, E>;

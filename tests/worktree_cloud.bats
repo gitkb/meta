@@ -4,7 +4,7 @@ load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
 # Integration tests for `meta git worktree` cloud/agent extensions (meta-6)
 # Tests: --meta, --ephemeral, --ttl, <commit-ish>, prune, lifecycle hooks,
-#         context detection, ephemeral exec, per-worktree records
+#         context detection, per-worktree records
 
 setup() {
     sandbox
@@ -531,45 +531,12 @@ assert 'removed' in payload
 
 # ============ Ephemeral Exec ============
 
-@test "worktree exec --ephemeral creates, runs, and destroys" {
-    run "$META_BIN" git worktree exec --ephemeral eph-exec --repo backend -- echo ephemeral-ok
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"ephemeral-ok"* ]]
-
-    # Worktree should be destroyed
-    [ ! -d ".worktrees/eph-exec" ]
-}
-
-@test "worktree exec --ephemeral destroys on command failure" {
-    run "$META_BIN" git worktree exec --ephemeral eph-fail --repo backend -- false
-    [ "$status" -ne 0 ]
-
-    # Worktree should still be destroyed
-    [ ! -d ".worktrees/eph-fail" ]
-}
-
-@test "worktree exec --ephemeral propagates exit code" {
-    # Use 'false' since loop_lib joins args into a single shell string
-    run "$META_BIN" git worktree exec --ephemeral eph-code --repo backend -- false
-    [ "$status" -ne 0 ]
-    # Worktree should still be cleaned up
-    [ ! -d ".worktrees/eph-code" ]
-}
-
-@test "worktree exec --ephemeral with --meta" {
-    run "$META_BIN" git worktree exec --ephemeral eph-meta --repo backend --meta agent=ci -- echo ok
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"ok"* ]]
-    # Worktree should be gone
-    [ ! -d ".worktrees/eph-meta" ]
-}
-
-@test "worktree exec --ephemeral leaves no worktree or record behind" {
-    run "$META_BIN" git worktree exec --ephemeral eph-store --repo backend -- echo done
-    [ "$status" -eq 0 ]
-
-    [ ! -e ".worktrees/eph-store" ]
-    [ ! -e "$TEST_DIR/backend/.git/worktrees/backend" ]
+@test "worktree exec takes no --ephemeral, and makes no set" {
+    run "$META_BIN" git worktree exec --ephemeral x --repo backend -- true
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--ephemeral"* ]]
+    [ ! -e ".worktrees/x" ]
+    [ ! -e ".worktrees/--ephemeral" ]
 }
 
 # ============ Context Detection ============
@@ -739,25 +706,6 @@ assert data['name'] == 'stdin-test'
 assert data['custom']['agent'] == 'test'
 assert len(data['repos']) == 1
 "
-}
-
-# ============ Ephemeral Exec Name Position ============
-
-@test "worktree exec --ephemeral with name after flags" {
-    # Name comes after --repo flag (tests enumerate-based extraction)
-    run "$META_BIN" git worktree exec --ephemeral --repo backend name-after-flags -- echo found-it
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"found-it"* ]]
-    [ ! -d ".worktrees/name-after-flags" ]
-}
-
-@test "worktree exec --ephemeral name matches repo value (regression)" {
-    # When worktree name equals a --repo value, the filter must use index-based
-    # exclusion (not string equality) to avoid stripping the --repo's value.
-    run "$META_BIN" git worktree exec --ephemeral --repo backend backend -- echo works
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"works"* ]]
-    [ ! -d ".worktrees/backend" ]
 }
 
 @test "worktree create with name after flags (extract_name robustness)" {

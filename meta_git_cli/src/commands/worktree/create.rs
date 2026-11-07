@@ -22,18 +22,13 @@ use meta_plugin::sets::lease;
 use super::cli_types::CreateArgs;
 use meta_plugin::display::shell_quote;
 
-/// A set a create made: its directory, and its lease, held until dropped.
-pub(crate) struct Created {
-    pub dir: std::path::PathBuf,
-    pub lease: lease::Held,
-}
-
 /// What a create did.
 pub(crate) enum Made {
     /// Said what it would do (`--dry-run`), with the repos it must clone
     /// first when that stops it short of a plan
     Preview(Vec<Skipped>),
-    Created(Created),
+    /// Made the set: its lease, held until dropped
+    Created(lease::Held),
     /// Cloned what the set needs that wasn't cloned: the configs those
     /// clones hold change the plan, so the command runs again from the top
     Again,
@@ -434,7 +429,7 @@ pub(crate) fn handle_create(
         }
         return Err(e);
     }
-    Ok(Made::Created(Created { dir: wt_dir, lease }))
+    Ok(Made::Created(lease))
 }
 
 /// How a repo's line ends: ` (new from origin/main)` for a branch this call
@@ -708,23 +703,7 @@ fn plan_repos(index: &Index, args: &CreateArgs, ctx: &Ctx, verbose: bool) -> Res
         // the root, when something is there for git (one git can't use is
         // skipped with the rest, saying why), and every project: by name,
         // or with --recursive, every place of the tree
-        // (exec --ephemeral --every-repo may give a repo its branch: --repo name:branch)
-        // (each such --repo is asked for, so two branches for one repo are refused)
-        let mut all = |found: Found| {
-            let specs: Vec<_> = args.repos.iter().filter(|r| r.alias == found.key).collect();
-            if specs.is_empty() {
-                return plan.add(found, branch(None), Why::All, false);
-            }
-            for spec in specs {
-                plan.add(
-                    found.clone(),
-                    branch(spec.branch.as_deref()),
-                    Why::All,
-                    true,
-                )?;
-            }
-            Ok(())
-        };
+        let mut all = |found: Found| plan.add(found, branch(None), Why::All, false);
         if !matches!(meta_core::gitdir::common_dir(meta_dir), Ok(None)) {
             all(index.find(".")?)?;
         }

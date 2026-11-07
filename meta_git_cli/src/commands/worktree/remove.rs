@@ -33,17 +33,15 @@ pub(crate) fn handle_remove(args: RemoveArgs, ctx: &Ctx, request: &Request) -> R
         verbose: request.meta.verbose,
         json: request.meta.json,
         strict: ctx.meta().strict,
-        lease: request.lease.as_deref(),
     };
     let mut records = Vec::new();
     let removed = remove_set(&args, &wt_dir, &here, ctx, how, &mut records);
     crate::printed_with_git(ctx, request, records, removed.err())
 }
 
-/// How a remove runs: meta's options, or what an ephemeral run's cleanup
-/// asks for.
+/// How a remove runs: meta's options.
 #[derive(Clone, Copy)]
-pub(crate) struct How<'a> {
+pub(crate) struct How {
     /// `--dry-run`: only say what would be removed
     pub preview: bool,
     pub verbose: bool,
@@ -51,9 +49,6 @@ pub(crate) struct How<'a> {
     pub json: bool,
     /// A failing hook is an error
     pub strict: bool,
-    /// The lease this run holds (its own, or its caller's): a set leased by
-    /// it is its own to remove
-    pub lease: Option<&'a str>,
 }
 
 /// Remove the set named `args.name` at `wt_dir`, after checking it; its
@@ -64,7 +59,7 @@ pub(crate) fn remove_set(
     wt_dir: &std::path::Path,
     here: &crate::here::Here<'_>,
     ctx: &Ctx,
-    how: How<'_>,
+    how: How,
     records: &mut Vec<ProjectResult>,
 ) -> Result<()> {
     let How {
@@ -72,26 +67,21 @@ pub(crate) fn remove_set(
         verbose,
         json,
         strict,
-        lease: token,
     } = how;
     let name = &args.name;
     let force = args.force;
     let wt_dir = wt_dir.to_path_buf();
 
     let workspace = Workspace::of(&here.home)?;
-    // A set being made is its creator's, and one in use by its ephemeral
-    // run is the run's (a run removing its own set holds its lease itself).
-    // Otherwise the set's lease is held until the set is deleted, so no
-    // create of it starts meanwhile; one its creator left marks a set it
+    // A set being made is its creator's. Otherwise the set's lease is held
+    // until the set is deleted, so no create of it starts meanwhile; one its creator left marks a set it
     // never finished, which is meta's to remove, recorded or not. A preview
     // only looks.
     let set = wt_dir
         .canonicalize()
         .with_context(|| format!("Cannot resolve {}", escape_path(&wt_dir)))?;
     let found = lease::find(&set);
-    let mine = found.as_ref().is_some_and(|found| found.held_by(token));
     let held = match () {
-        _ if mine => None,
         _ if preview => match &found {
             Some(found) if found.live => anyhow::bail!(
                 "Refusing to remove worktree '{name}': it is {}. Wait for that to finish, or \
@@ -109,7 +99,7 @@ pub(crate) fn remove_set(
     };
     let left = match (&held, &found) {
         (Some((left, _)), _) => left.clone(),
-        (None, Some(found)) if !mine => found.lease.clone(),
+        (None, Some(found)) => found.lease.clone(),
         _ => None,
     };
     // another workspace's lease, made from a repository both share, is no

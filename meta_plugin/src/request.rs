@@ -37,11 +37,6 @@ pub struct Request {
     /// the one it names (`scope = named-set`).
     #[serde(default)]
     pub set: Option<Set>,
-    /// The lease the caller holds (`META_LEASE`, set by a program that holds
-    /// a set's lease and called meta back): a command may treat that set as
-    /// its caller's (see [`crate::sets::lease::Found::held_by`]).
-    #[serde(default)]
-    pub lease: Option<String>,
     /// The selected projects, in order: meta's selection (`-r`, `-A`,
     /// `--depth`, `--include`, `--exclude`, `--tag`) applied. Empty is a
     /// selection of none, never "find them yourself".
@@ -198,7 +193,7 @@ pub struct Set {
     /// The provider that made it (see [`crate::sets::Owner`]): `git` for a
     /// set with no owner file
     pub provider: String,
-    /// Whether a creator or an ephemeral run holds its lease now
+    /// Whether its creator holds its lease now
     #[serde(default)]
     pub leased: bool,
 }
@@ -260,7 +255,6 @@ impl Request {
             worktree: Worktree::default(),
             scope: Scope::None,
             set: None,
-            lease: None,
             projects: Vec::new(),
             depth: Some(0),
             recursive: false,

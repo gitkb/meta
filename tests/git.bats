@@ -1634,7 +1634,7 @@ YAML
     [ ! -e dest ]
 }
 
-@test "a failed pull ends with the last stderr line; an ephemeral run's stderr is the user's unless silenced" {
+@test "a failed pull ends with the last stderr line" {
     with_remotes
     # git that fails every pull, saying why on its last line
     mkdir -p "$TEST_DIR/shim"
@@ -1647,19 +1647,4 @@ YAML
         [ "$status" -ne 0 ]
         [[ "$(grep -v '^[[:space:]]*$' <<<"$output" | tail -1)" == *": LAST diagnostic" ]]
     done
-    run "$META_BIN" git worktree exec --ephemeral "eph$RANDOM" --repo backend -- \
-        sh -c 'printf "FIRST diagnostic\nLAST diagnostic\n" >&2; exit 1'
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"LAST diagnostic"* ]]
-    [[ "$(tail -1 <<<"$output")" == *"failed in the ephemeral worktree (exit status: 1)" ]]
-    # silenced, it names the repo and not what it wrote, and nothing on success
-    run "$META_BIN" --silent git worktree exec --ephemeral "eph$RANDOM" --repo backend -- \
-        sh -c 'printf "LAST %s\n" diagnostic >&2; exit 1'
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"commands failed: ., backend"* ]]
-    [[ "$output" != *"LAST diagnostic"* ]]
-    run "$META_BIN" --silent git worktree exec --ephemeral "eph$RANDOM" --repo backend -- \
-        sh -c 'echo said; echo said-too >&2'
-    [ "$status" -eq 0 ]
-    [[ "$output" != *"said"* ]]
 }

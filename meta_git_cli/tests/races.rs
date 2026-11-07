@@ -1,8 +1,8 @@
 //! Commands that make and delete one worktree set at the same time: whatever
 //! order they run in, a set being made or used is never deleted, and a set
 //! its creator left half-made stays removable. Each test holds one command
-//! at a chosen step (a fake `gh`, a checkout hook, a record read through a
-//! FIFO) while another runs.
+//! at a chosen step (a fake `gh`, a checkout or post-create hook, a record
+//! read through a FIFO) while another runs.
 
 #![expect(
     clippy::unwrap_used,
@@ -70,9 +70,23 @@ impl Race {
         let paths = [self.root.join("bin"), bin.to_path_buf()]
             .into_iter()
             .chain(std::env::split_paths(&path));
-        let child = self
-            .sandbox
-            .command(env!("CARGO_BIN_EXE_meta-git"))
+        let strace = std::env::var_os("STRACE_ME").is_some();
+        let mut child = match strace {
+            true => {
+                let mut c = self.sandbox.command("strace");
+                c.args([
+                    "-f",
+                    "-e",
+                    "trace=openat",
+                    "-o",
+                    "/home/gsc/.cache/claude-tmp/meta-pr12-ephemeral/tmp/strace.out",
+                    env!("CARGO_BIN_EXE_meta-git"),
+                ]);
+                c
+            }
+            false => self.sandbox.command(env!("CARGO_BIN_EXE_meta-git")),
+        };
+        let child = child
             .arg("--meta-plugin-exec")
             .current_dir(&self.ws)
             .env("PATH", std::env::join_paths(paths).unwrap())
@@ -111,6 +125,19 @@ impl Race {
         .unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         path
+    }
+
+    /// Hold every create from now on in its post-create hook: its set made
+    /// and recorded, its lease still held. The hook says it started
+    /// (`post-create-started`) and waits for `release-post-create`.
+    fn hold_post_create(&self) {
+        let hook = self.holding(&self.root, "post-create", "");
+        let mut config = fs::read_to_string(self.ws.join(".meta.yaml")).unwrap();
+        config.push_str(&format!(
+            "worktree:\n  hooks:\n    post-create: '{}'\n",
+            hook.display()
+        ));
+        fs::write(self.ws.join(".meta.yaml"), config).unwrap();
     }
 
     fn wait_for(&self, file: &str) {
@@ -266,29 +293,23 @@ fn a_late_create_leaves_a_half_set_removable() {
     assert!(!sb.ws.join(".worktrees/same").exists());
 }
 
-/// prune reads the leases, then (held on a record read through a FIFO) an
-/// ephemeral run makes a set at a path whose old ephemeral set was deleted
-/// by hand. prune must leave the running set alone.
+/// prune finds an ephemeral set its create left (due: its lease is left),
+/// then, held on a record read through a FIFO, the set is deleted by hand
+/// and made again by an ephemeral create held in its post-create hook.
+/// prune must leave the set being made alone.
 #[test]
-fn prune_leaves_an_ephemeral_run_that_started_after_it_looked() {
-    prune_held_while_an_ephemeral_run_starts(|_| {});
+fn prune_leaves_an_ephemeral_create_that_started_after_it_looked() {
+    prune_held_while_an_ephemeral_create_starts(|_| {});
 }
 
 /// The same, with a repository that sorts first added while prune waits.
 #[test]
-fn prune_leaves_an_ephemeral_run_started_after_a_repository_was_added_during_it() {
-    prune_held_while_an_ephemeral_run_starts(add_a_first_repository);
+fn prune_leaves_an_ephemeral_create_started_after_a_repository_was_added_during_it() {
+    prune_held_while_an_ephemeral_create_starts(add_a_first_repository);
 }
 
-/// prune reads the leases, then (held on a record read through a FIFO)
-/// `meanwhile` runs and an ephemeral run makes a set at a path whose old
-/// ephemeral set was deleted by hand. prune must leave the running set alone.
-fn prune_held_while_an_ephemeral_run_starts(meanwhile: impl FnOnce(&Race)) {
+fn prune_held_while_an_ephemeral_create_starts(meanwhile: impl FnOnce(&Race)) {
     let sb = Race::new();
-    assert!(sb
-        .run(&["create", "aaa", "--repo", "backend", "--no-deps"])
-        .status
-        .success());
     let made = sb.run(&[
         "create",
         "zzz",
@@ -298,8 +319,40 @@ fn prune_held_while_an_ephemeral_run_starts(meanwhile: impl FnOnce(&Race)) {
         "--ephemeral",
     ]);
     assert!(made.status.success(), "{}", text(&made));
-    fs::remove_dir_all(sb.ws.join(".worktrees/zzz")).unwrap();
+    let mut create = None;
+    let pruned = prune_paused(&sb, || {
+        meanwhile(&sb);
+        fs::remove_dir_all(sb.ws.join(".worktrees/zzz")).unwrap();
+        sb.hold_post_create();
+        create = Some(sb.start(&[
+            "create",
+            "zzz",
+            "--repo",
+            "backend",
+            "--no-deps",
+            "--ephemeral",
+        ]));
+        sb.wait_for("post-create-started");
+    });
+    assert!(
+        sb.ws.join(".worktrees/zzz/backend").exists(),
+        "{}",
+        text(&pruned)
+    );
 
+    sb.release("post-create");
+    let create = create.unwrap().wait_with_output();
+    assert!(create.status.success(), "{}", text(&create));
+}
+
+/// `prune`, with set `aaa` made first: it finds the sets and reads their
+/// leases, then waits (on a second read of `aaa`'s record, through a FIFO)
+/// while `during` runs. Its output.
+fn prune_paused(sb: &Race, during: impl FnOnce()) -> Output {
+    assert!(sb
+        .run(&["create", "aaa", "--repo", "backend", "--no-deps"])
+        .status
+        .success());
     let admin = PathBuf::from(
         sb.sandbox
             .git(
@@ -323,126 +376,113 @@ fn prune_held_while_an_ephemeral_run_starts(meanwhile: impl FnOnce(&Race)) {
     // prune's first read of the record (finding the sets) goes through...
     let mut first = writer(record.clone()).join().unwrap();
     first.write_all(&saved).unwrap();
-    // ...and its second read (after it has read the leases) waits
     fifo(&record);
     drop(first);
-    let second = writer(record.clone());
-
-    meanwhile(&sb);
-    sb.holding(&sb.root, "command", "");
-    let run = sb.start(&[
-        "exec",
-        "--ephemeral",
-        "zzz",
-        "--repo",
-        "backend",
-        "--",
-        sb.root.join("command").to_str().unwrap(),
-    ]);
-    sb.wait_for("command-started");
-
+    // ...and its second (checking `aaa`, after it has read the leases)
+    // waits: once prune has opened the FIFO, `during` runs
+    let mut second = writer(record.clone()).join().unwrap();
     fs::remove_file(&record).unwrap();
     fs::write(&record, &saved).unwrap();
-    let mut second = second.join().unwrap();
+
+    during();
+
     second.write_all(&saved).unwrap();
     drop(second);
-    let pruned = prune.wait_with_output();
-    assert!(
-        sb.ws.join(".worktrees/zzz/backend").exists(),
-        "{}",
-        text(&pruned)
-    );
-
-    sb.release("command");
-    let run = run.wait_with_output();
-    assert!(run.status.success(), "{}", text(&run));
+    prune.wait_with_output()
 }
 
 /// Where the workspace root isn't a repository, the leases' home is its
 /// first repository by path, which moves when one that sorts first is
-/// added. prune must still see a running ephemeral set's lease.
+/// added. prune must still see the lease of a set being made, whose TTL
+/// has run out meanwhile; a set with the same TTL that no one holds goes.
 #[test]
-fn prune_leaves_an_ephemeral_run_after_a_repository_is_added() {
+fn prune_leaves_a_create_whose_ttl_ran_out_after_a_repository_is_added() {
     let sb = Race::new();
-    sb.holding(&sb.root, "command", "");
-    let run = sb.start(&[
-        "exec",
-        "--ephemeral",
+    let control = sb.run(&[
+        "create",
+        "ctl",
+        "--repo",
+        "backend",
+        "--no-deps",
+        "--ttl",
+        "1s",
+    ]);
+    assert!(control.status.success(), "{}", text(&control));
+    sb.hold_post_create();
+    let create = sb.start(&[
+        "create",
         "zzz",
         "--repo",
         "frontend",
-        "--",
-        sb.root.join("command").to_str().unwrap(),
+        "--no-deps",
+        "--ephemeral",
+        "--ttl",
+        "1s",
     ]);
-    sb.wait_for("command-started");
+    sb.wait_for("post-create-started");
+    std::thread::sleep(Duration::from_millis(2100));
 
-    let first = sb.ws.join("aaa");
-    fs::create_dir_all(&first).unwrap();
-    sb.sandbox.git(&first, &["init", "-q", "-b", "main"]);
-    sb.sandbox
-        .git(&first, &["commit", "-q", "--allow-empty", "-m", "initial"]);
-    fs::write(
-        sb.ws.join(".meta.yaml"),
-        "projects:\n  aaa:\n    path: aaa\n  backend:\n    path: backend\n  frontend:\n    path: frontend\n",
-    )
-    .unwrap();
+    add_a_first_repository(&sb);
     let pruned = sb.run(&["prune"]);
     assert!(pruned.status.success(), "{}", text(&pruned));
+    assert!(!sb.ws.join(".worktrees/ctl").exists(), "{}", text(&pruned));
     assert!(
         sb.ws.join(".worktrees/zzz/frontend").exists(),
         "{}",
         text(&pruned)
     );
 
-    sb.release("command");
-    let run = run.wait_with_output();
-    assert!(run.status.success(), "{}", text(&run));
+    sb.release("post-create");
+    let create = create.wait_with_output();
+    assert!(create.status.success(), "{}", text(&create));
 }
 
-/// A repository `aaa` (sorting before the others), listed in the workspace.
+/// A repository `aaa` (sorting before the others), listed in the workspace
+/// beside what its config already says.
 fn add_a_first_repository(sb: &Race) {
     let first = sb.ws.join("aaa");
     fs::create_dir_all(&first).unwrap();
     sb.sandbox.git(&first, &["init", "-q", "-b", "main"]);
     sb.sandbox
         .git(&first, &["commit", "-q", "--allow-empty", "-m", "initial"]);
-    fs::write(
-        sb.ws.join(".meta.yaml"),
-        "projects:\n  aaa:\n    path: aaa\n  backend:\n    path: backend\n  frontend:\n    path: frontend\n",
-    )
-    .unwrap();
+    let config = fs::read_to_string(sb.ws.join(".meta.yaml")).unwrap();
+    let config = config.replacen("projects:\n", "projects:\n  aaa:\n    path: aaa\n", 1);
+    fs::write(sb.ws.join(".meta.yaml"), config).unwrap();
 }
 
-/// An ephemeral run is stopped, its set deleted by hand, a repository
-/// added, and an ordinary set made again at that path: the lease the stopped
-/// run left must not make prune remove the new set.
+/// An ephemeral create is killed in its post-create hook (its set made and
+/// recorded, its lease held), leaving its lease. prune finds the set due
+/// through that lease; then, while prune waits, the set is deleted by hand,
+/// a repository added, and an ordinary set made again at that path. The
+/// lease the killed create left must not make prune remove the new set.
 #[test]
-fn a_lease_left_by_a_stopped_run_does_not_expire_a_set_made_again() {
+fn a_lease_left_by_a_killed_create_does_not_expire_a_set_made_again() {
     let sb = Race::new();
-    sb.holding(&sb.root, "command", "");
-    let mut run = sb.start(&[
-        "exec",
-        "--ephemeral",
+    sb.hold_post_create();
+    let mut create = sb.start(&[
+        "create",
         "same",
         "--repo",
         "frontend",
-        "--",
-        sb.root.join("command").to_str().unwrap(),
+        "--no-deps",
+        "--ephemeral",
     ]);
-    sb.wait_for("command-started");
+    sb.wait_for("post-create-started");
     rustix::process::kill_process(
-        rustix::process::Pid::from_child(&run.child),
+        rustix::process::Pid::from_child(&create.child),
         rustix::process::Signal::KILL,
     )
     .unwrap();
-    run.child.wait().unwrap();
-    sb.release("command");
-    fs::remove_dir_all(sb.ws.join(".worktrees/same")).unwrap();
-    add_a_first_repository(&sb);
-    let made = sb.run(&["create", "same", "--repo", "backend", "--no-deps"]);
-    assert!(made.status.success(), "{}", text(&made));
+    create.child.wait().unwrap();
+    // released: the hook holds no create from now on
+    sb.release("post-create");
 
-    let pruned = sb.run(&["prune"]);
+    let pruned = prune_paused(&sb, || {
+        fs::remove_dir_all(sb.ws.join(".worktrees/same")).unwrap();
+        add_a_first_repository(&sb);
+        let made = sb.run(&["create", "same", "--repo", "backend", "--no-deps"]);
+        assert!(made.status.success(), "{}", text(&made));
+    });
     assert!(pruned.status.success(), "{}", text(&pruned));
     assert!(
         sb.ws.join(".worktrees/same/backend").exists(),
@@ -452,22 +492,21 @@ fn a_lease_left_by_a_stopped_run_does_not_expire_a_set_made_again() {
 }
 
 /// `git clean -fdx` in the workspace deletes the loose files in the (ignored)
-/// worktrees folder, a running ephemeral set's lease among them. prune must
-/// not take a missing lease for a run that ended.
+/// worktrees folder, an ephemeral set's lease among them. prune must not
+/// take a missing lease for a create that ended; an ephemeral set whose
+/// lease was left goes.
 #[test]
-fn prune_leaves_an_ephemeral_run_whose_lease_was_deleted() {
+fn prune_leaves_an_ephemeral_set_whose_lease_was_deleted() {
     let sb = Race::new();
-    sb.holding(&sb.root, "command", "");
-    let run = sb.start(&[
-        "exec",
-        "--ephemeral",
+    let made = sb.run(&[
+        "create",
         "eph",
         "--repo",
         "backend",
-        "--",
-        sb.root.join("command").to_str().unwrap(),
+        "--no-deps",
+        "--ephemeral",
     ]);
-    sb.wait_for("command-started");
+    assert!(made.status.success(), "{}", text(&made));
     let worktrees = sb.ws.join(".worktrees");
     let mut deleted = 0;
     for entry in fs::read_dir(&worktrees).unwrap() {
@@ -477,13 +516,20 @@ fn prune_leaves_an_ephemeral_run_whose_lease_was_deleted() {
             deleted += 1;
         }
     }
-    assert_eq!(deleted, 2, "the lease and its lock");
+    // a create that is done left its lease and let go of the lock
+    assert_eq!(deleted, 1, "the lease");
+    let control = sb.run(&[
+        "create",
+        "ctl",
+        "--repo",
+        "frontend",
+        "--no-deps",
+        "--ephemeral",
+    ]);
+    assert!(control.status.success(), "{}", text(&control));
 
     let pruned = sb.run(&["prune"]);
     assert!(pruned.status.success(), "{}", text(&pruned));
     assert!(worktrees.join("eph/backend").exists(), "{}", text(&pruned));
-
-    sb.release("command");
-    let run = run.wait_with_output();
-    assert!(run.status.success(), "{}", text(&run));
+    assert!(!worktrees.join("ctl").exists(), "{}", text(&pruned));
 }

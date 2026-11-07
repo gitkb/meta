@@ -193,10 +193,10 @@ fn handle_worktree_command(
                 Ok(create::Made::Preview(must_clone)) => {
                     Ok(Response::printed(records).skipping(must_clone))
                 }
-                Ok(create::Made::Created(created)) => {
+                Ok(create::Made::Created(lease)) => {
                     match ephemeral {
-                        true => created.lease.leave(),
-                        false => drop(created.lease),
+                        true => lease.leave(),
+                        false => drop(lease),
                     }
                     Ok(Response::printed(records))
                 }
@@ -224,7 +224,7 @@ fn handle_worktree_command(
             whole_set(request, "diff", &args.name)?;
             diff::handle_diff(args, ctx, request)
         }
-        WorktreeCommands::Exec(args) => exec::handle_exec(args, ctx, request),
+        WorktreeCommands::Exec(args) => exec::handle_exec(args, request),
         WorktreeCommands::Prune => prune::handle_prune(ctx, request),
     }
 }

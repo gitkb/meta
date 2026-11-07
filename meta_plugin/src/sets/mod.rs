@@ -14,8 +14,7 @@
 //!   folder's name starts with `.`, as no set's can: a provider listing the
 //!   sets in the worktrees folder passes over names that start with `.`.
 //!   A link in its place is refused ([`owners_dir`]).
-//! - `.<set>.meta-lease` and its lock: the [`lease`] its creator or its
-//!   ephemeral run holds.
+//! - `.<set>.meta-lease` and its lock: the [`lease`] its creator holds.
 //!
 //! [`fire`] runs the workspace's `worktree.hooks` for a provider's set
 //! events, the same for every provider.
@@ -26,8 +25,6 @@ use crate::display::{escape, escape_path};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-
-pub use crate::LEASE_VAR;
 
 /// The provider that owns a set without an owner file.
 pub const DEFAULT_PROVIDER: &str = "git";

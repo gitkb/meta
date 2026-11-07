@@ -419,25 +419,6 @@ EOF
     [ ! -e "$TEST_DIR/.worktrees/two-branches" ]
 }
 
-@test "ephemeral exec fails when its cleanup fails" {
-    [ "$(id -u)" -ne 0 ] || skip "root writes any directory"
-    # The command itself makes its checkout undeletable before cleanup runs
-    run "$META_BIN" git worktree exec --ephemeral eph-store --repo backend -- chmod 555 .
-    chmod -R u+w "$TEST_DIR/.worktrees/eph-store"
-    [ "$status" -ne 0 ]
-    [ -d "$TEST_DIR/.worktrees/eph-store/backend" ]
-}
-
-@test "ephemeral exec reports a failed cleanup even when its command fails" {
-    [ "$(id -u)" -ne 0 ] || skip "root writes any directory"
-    # chmod succeeds on the checkout, then fails on the missing file
-    run "$META_BIN" git worktree exec --ephemeral eph-both --repo backend -- chmod 555 . "$TEST_DIR/missing"
-    chmod -R u+w "$TEST_DIR/.worktrees/eph-both"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"warning:"* ]]
-    [ -d "$TEST_DIR/.worktrees/eph-both/backend" ]
-}
-
 @test "a umask 002 checkout and data dir are used, and their plugins load" {
     # Stock Ubuntu/Debian/Fedora: user private groups, umask 002, so
     # directories are 0775. meta trusts them like git or cargo would.
@@ -2053,41 +2034,29 @@ wait_for() {
     [ -d .worktrees/busy/backend ]
 }
 
-@test "an ephemeral set whose run was stopped is removed all the same" {
-    "$META_BIN" git worktree exec --ephemeral eph-stopped --repo backend -- \
-        sh -c 'touch "$0/started"; sleep 30' "$TEST_DIR" &
-    local pid=$!
-    wait_for "$TEST_DIR/started"
-    kill -TERM "$pid"
-    wait "$pid" || true
-    # its removal was armed before the run: it finishes after the stop
-    local i=0
-    while [ -e .worktrees/eph-stopped ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
-    [ ! -e .worktrees/eph-stopped ]
-
-    run "$META_BIN" git worktree prune
-    [ "$status" -eq 0 ]
-    [[ "$output" != *"eph-stopped"* ]]
-}
-
-@test "prune and remove leave a running ephemeral set alone" {
-    "$META_BIN" git worktree exec --ephemeral eph-running --repo backend -- \
-        sh -c 'touch "$0/started"; while [ ! -e "$0/release" ] && [ -d "$0" ]; do sleep 0.05; done' "$TEST_DIR" &
+@test "prune and remove leave an ephemeral set being created alone" {
+    python3 - "$TEST_DIR" <<'PY'
+import json, sys
+c = json.load(open(".meta.yaml"))
+hook = 'touch "%s/started"; while [ ! -e "%s/release" ] && [ -d "%s" ]; do sleep 0.05; done' % ((sys.argv[1],) * 3)
+c.setdefault("worktree", {})["hooks"] = {"post-create": hook}
+json.dump(c, open(".meta.yaml", "w"))
+PY
+    "$META_BIN" git worktree create eph-making --repo backend --no-deps --ephemeral &
     local pid=$!
     wait_for "$TEST_DIR/started"
     run "$META_BIN" git worktree prune
     local pruned=$status pruned_output=$output
-    run "$META_BIN" git worktree remove eph-running --force
+    run "$META_BIN" git worktree remove eph-making --force
     local removed=$status removed_output=$output
-    [ -d .worktrees/eph-running/backend ]
+    [ -d .worktrees/eph-making/backend ]
     kill -0 "$pid"
     touch "$TEST_DIR/release"
     wait "$pid"
     [ "$pruned" -eq 0 ]
-    [[ "$pruned_output" != *"eph-running"* ]]
+    [[ "$pruned_output" != *"eph-making"* ]]
     [ "$removed" -ne 0 ]
-    [[ "$removed_output" == *"in use by the ephemeral run of pid"* ]]
-    [ ! -e .worktrees/eph-running ]
+    [[ "$removed_output" == *"being created by pid"* ]]
 }
 
 @test "making a set again over a worktree deleted by hand says how, and drops nothing" {
@@ -2228,19 +2197,6 @@ J
     [[ "$output" == *"eph-made (ephemeral"* ]]
     [ ! -e .worktrees/eph-made ]
     [ -z "$(ls -A .worktrees)" ]
-}
-
-@test "an ephemeral set its run couldn't remove itself is left for prune" {
-    [ "$(id -u)" -ne 0 ] || skip "root writes any directory"
-    run "$META_BIN" git worktree exec --ephemeral eph-left --repo backend -- chmod 555 .
-    [ "$status" -ne 0 ]
-    chmod -R u+w "$TEST_DIR/.worktrees/eph-left"
-    # the run left its lease: prune takes the set for one whose run ended
-    # (and keeps it here, as the failed removal left a folder git no longer
-    # knows)
-    run "$META_BIN" git worktree prune
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"eph-left (ephemeral, the run that made it"* ]]
 }
 
 @test "a terminal that hangs up ends meta and a command that ignores the hangup" {
@@ -2459,11 +2415,14 @@ no_branch_gb() {
     [ ! -e "$S/g" ]
 }
 
-@test "an ephemeral run under META_WORKTREES with no root checkout leaves the workspace's files" {
+@test "a command run in a set under META_WORKTREES with no root checkout leaves the workspace's files" {
     rm -rf .git
     echo precious > backend/untracked.txt
-    META_WORKTREES="$TEST_DIR/sets" run "$META_BIN" git worktree exec --ephemeral clean --repo backend -- git clean -fdx
+    export META_WORKTREES="$TEST_DIR/sets"
+    "$META_BIN" git worktree create clean --repo backend --branch clean
+    run "$META_BIN" git worktree exec clean -- git clean -fdx
     [ "$status" -eq 0 ]
+    "$META_BIN" git worktree remove clean
     [ -f backend/untracked.txt ]
     [ -z "$(ls -A sets 2>/dev/null)" ]
 }
@@ -2560,17 +2519,20 @@ stays_in_set_rows() {
     [[ "$output" == *"$TEST_DIR/backend"* ]]
 }
 
-@test "an ephemeral run stays in the set it made, and a folder of the worktrees folder that is no set is refused" {
+@test "worktree exec runs in the set it names, and a folder of the worktrees folder that is no set is refused" {
     cp .meta.yaml plain.yaml
     python3 -c 'import json; c=json.load(open(".meta.yaml")); c["worktrees_dir"]="wt"; json.dump(c,open("custom.yaml","w"))'
     for root in with without; do
         [ "$root" = with ] || rm -rf .git
-        # ephemeral, in the default folder and a caller's: in the set it made
+        # in the default folder and a caller's: in the set it made
         for folder in "" "$TEST_DIR/sets"; do
-            log="$TEST_DIR/ran-ephemeral"
+            log="$TEST_DIR/ran-in-set"
             rm -f "$log"
-            env ${folder:+META_WORKTREES="$folder"} "$META_BIN" git worktree exec --ephemeral "e$RANDOM" --repo backend -- \
+            set="e$RANDOM"
+            env ${folder:+META_WORKTREES="$folder"} "$META_BIN" git worktree create "$set" --repo backend --branch "$set"
+            env ${folder:+META_WORKTREES="$folder"} "$META_BIN" git worktree exec "$set" -- \
                 sh -c "pwd -P >> '$log'"
+            env ${folder:+META_WORKTREES="$folder"} "$META_BIN" git worktree remove "$set"
             [ -s "$log" ]
             ! grep -qv "/\(\.worktrees\|sets\)/e[0-9]*\(/\|\$\)" "$log" || false
         done

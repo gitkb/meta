@@ -911,12 +911,7 @@ fn dispatch(
     };
     // the host applies meta's selection: a command that finds its repos
     // itself takes none, nor one that acts on a whole named set
-    // (`exec --ephemeral` makes its set: there is nothing to select from yet)
-    let ephemeral = words
-        .iter()
-        .take_while(|w| **w != "--")
-        .any(|w| *w == "--ephemeral");
-    let whole_set = scope == Scope::NamedSet && (words.get(2) != Some(&"exec") || ephemeral);
+    let whole_set = scope == Scope::NamedSet && words.get(2) != Some(&"exec");
     let refuses_filters = matches!(scope, Scope::None | Scope::Workspace) || whole_set;
     refuse_filters(
         refuses_filters && !cli.filters().is_empty(),

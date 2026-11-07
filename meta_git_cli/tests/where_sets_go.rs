@@ -29,7 +29,9 @@ fn every_place_has_one_folder_of_sets() {
     let work = sandbox.work().canonicalize().unwrap();
     let ws = sandbox.workspace(&work.join("ws")).repo("app").build();
     let (elsewhere, outside) = (work.join("elsewhere"), work.join("outside"));
-    std::fs::create_dir_all(&outside).unwrap();
+    for dir in [&elsewhere, &outside] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
     // meta and meta-git as built (`cargo build --workspace --bins` first)
     let bin = Path::new(env!("CARGO_BIN_EXE_meta-git")).parent().unwrap();
     let meta = bin.join(format!("meta{}", std::env::consts::EXE_SUFFIX));

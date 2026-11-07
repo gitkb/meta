@@ -813,8 +813,8 @@ J
     # a request that names backend as the place for sets, as no host would
     cat > "$TEST_DIR/request.json" <<J
 {"command": "git worktree remove", "args": ["src", "--force"], "cwd": "$TEST_DIR", "scope": "workspace",
- "workspace": {"root": "$TEST_DIR", "config": "$TEST_DIR/.meta.yaml", "listed_root": "$TEST_DIR",
-               "worktree": {"dir": "$TEST_DIR/backend"}},
+ "workspace": {"root": "$TEST_DIR", "config": "$TEST_DIR/.meta.yaml", "listed_root": "$TEST_DIR"},
+ "worktree": {"dir": "$TEST_DIR/backend"},
  "plugin_dir": "$TEST_DIR", "data_dir": "$TEST_DIR", "meta": {}}
 J
     META_REQUEST="$TEST_DIR/request.json" META_RESPONSE="$TEST_DIR/response.json" \

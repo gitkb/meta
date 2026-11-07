@@ -260,7 +260,7 @@ fn target_with(
     };
     Ok(Target {
         workspace: Some(workspace(&reach.workspace, &root, &members, Some(&reach))),
-        worktree: worktree::plugin_worktree(Some(&reach.workspace), start),
+        worktree: worktree::plugin_worktree(Some(&reach.workspace), start, None),
         repos,
         parallel,
         root: reach.root,
@@ -411,7 +411,7 @@ fn in_set(
             let reach = Reach::of(c.clone(), cli.recursive, cli.all, cli.depth).ok();
             workspace(c, set_dir, &all, reach.as_ref())
         }),
-        worktree: worktree::plugin_worktree(config.as_ref(), start),
+        worktree: worktree::plugin_worktree(config.as_ref(), start, Some(set_dir)),
         set: Some(set),
         root: set_dir.to_path_buf(),
         repos,
@@ -522,7 +522,9 @@ pub fn request(
     // a command with none (a clone) doesn't fail on a config it doesn't read
     request.worktree = match target {
         Some(target) => target.worktree.clone(),
-        None => worktree::plugin_worktree(find_config(cli, start).ok().flatten().as_ref(), start),
+        None => {
+            worktree::plugin_worktree(find_config(cli, start).ok().flatten().as_ref(), start, None)
+        }
     };
     if let Some(target) = target {
         request.workspace = target.workspace.clone();

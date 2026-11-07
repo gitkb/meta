@@ -136,13 +136,18 @@ fn request(
         (Err(_), Scope::Workspace) => None,
         (Err(e), _) => return Err(format!("{e:#}")),
     };
+    let set = set_of(cwd);
     // where sets go: `worktrees` when given (as `META_WORKTREES` gives it)
-    request.worktree = meta_core::worktree::plugin_worktree(found.as_ref(), cwd);
+    request.worktree = meta_core::worktree::plugin_worktree(
+        found.as_ref(),
+        cwd,
+        set.as_ref().map(|s| s.dir.as_path()),
+    );
     if let Some(dir) = worktrees {
         (request.worktree.dir, request.worktree.refused) = (Some(dir.to_path_buf()), None);
     }
     request.workspace = found.map(as_meta_sends);
-    request.set = set_of(cwd);
+    request.set = set;
     request.meta = Meta {
         json: flag("json"),
         dry_run: flag("dry_run"),

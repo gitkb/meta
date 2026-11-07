@@ -55,7 +55,7 @@ impl Race {
         request.args = rest.iter().map(|a| a.to_string()).collect();
         request.scope = Scope::Workspace;
         let found = meta_core::config::Workspace::find(&self.ws, None).unwrap();
-        request.worktree = meta_core::worktree::plugin_worktree(found.as_ref(), &self.ws);
+        request.worktree = meta_core::worktree::plugin_worktree(found.as_ref(), &self.ws, None);
         request.workspace = found.map(as_meta_sends);
         // it can call meta back: the `meta` built beside it (`cargo build
         // --workspace --bins` first)

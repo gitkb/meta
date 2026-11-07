@@ -91,14 +91,13 @@ fn repo_entries(
 /// A selected set fails closed. All-set listing retains healthy sets and warnings.
 pub(crate) fn handle_list(args: ListArgs, ctx: &Ctx, request: &Request) -> Result<Response> {
     let json = request.meta.json;
-    let cwd = request.cwd.canonicalize()?;
     let places = crate::worktree::helpers::places(request);
     // the set it runs in, as meta found it
     let location = request
         .set
         .as_ref()
         .map(|set| (set.name.clone(), set.dir.clone()));
-    let worktree_root = cwd.join(crate::here::worktree_root(request)?);
+    let worktree_root = crate::here::worktree_root(request)?;
     let selected = match args.name.as_ref() {
         Some(name) => {
             meta_plugin::sets::validate_name(name)?;

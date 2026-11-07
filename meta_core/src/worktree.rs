@@ -375,14 +375,15 @@ impl Configs {
 /// `owner`'s config (anywhere; checked when it was loaded), else its
 /// `.worktrees`; outside a workspace, `.worktrees` in `cwd`. Inside a set,
 /// `owner` is the workspace the set stands for ([`Configs::of`]), so the
-/// variable wins there too.
+/// variable wins there too. A relative `META_WORKTREES` is from the folder
+/// meta runs in.
 pub fn resolve_worktree_root(
     owner: Option<&crate::config::Workspace>,
     cwd: &Path,
 ) -> Result<PathBuf> {
     use meta_plugin::sets::{WORKTREES_DIR, WORKTREES_VAR};
     if let Some(env_path) = std::env::var_os(WORKTREES_VAR) {
-        return Ok(PathBuf::from(env_path));
+        return Ok(std::env::current_dir()?.join(env_path));
     }
     let Some(owner) = owner else {
         return Ok(cwd.join(WORKTREES_DIR));

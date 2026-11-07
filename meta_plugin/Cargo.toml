@@ -20,7 +20,7 @@ client = ["process"]
 # worktree sets for any provider: owner files, leases, hooks
 sets = ["dep:same-file"]
 # a sandbox and workspace builder for plugin tests
-testing = ["process", "dep:tempfile"]
+testing = ["process", "dep:tempfile", "sets"]
 # the same, with git repositories in the workspace
 testing-git = ["testing"]
 

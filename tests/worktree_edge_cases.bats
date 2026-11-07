@@ -2395,6 +2395,15 @@ no_branch_gb() {
     [[ "$output" == *"$S/.meta-sets is a symlink"* ]]
     outside_survived "$X"
     [ -e "$S/g/backend/.git" ]
+    # whatever the order of the words, and in a preview
+    run "$META_BIN" git worktree remove --force g
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets is a symlink"* ]]
+    [ -e "$S/g/backend/.git" ]
+    run "$META_BIN" --dry-run git worktree remove --force g
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets is a symlink"* ]]
+    [ -e "$S/g/backend/.git" ]
     run "$META_BIN" git worktree prune
     [ "$status" -ne 0 ]
     [[ "$output" == *"$S/.meta-sets"* ]]
@@ -2419,6 +2428,35 @@ no_branch_gb() {
     "$META_BIN" git worktree remove g --force
     [ ! -e "$S/g" ]
     outside_survived "$X"
+}
+
+@test "prune deletes no stale lease when it refuses a .meta-sets that is a link" {
+    S="$TEST_DIR/s" X="$BATS_TEST_TMPDIR/x"
+    export META_WORKTREES="$S"
+    "$META_BIN" git worktree create g --repo backend --branch gb --ttl 0
+    # a create killed part way, its set then gone: only the lease is left
+    slow_checkout_hook
+    "$META_BIN" git worktree create old --repo frontend --no-deps &
+    local pid=$!
+    wait_for "$TEST_DIR/hook-started"
+    kill -TERM "$pid"
+    wait "$pid" || true
+    git config --global --unset core.hooksPath
+    rm -rf "$S/old"
+    git -C frontend worktree prune
+    [ -e "$S/.old.meta-lease" ]
+    owners_are_a_link "$S" "$X"
+    run "$META_BIN" git worktree prune
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$S/.meta-sets is a symlink"* ]]
+    [ -e "$S/.old.meta-lease" ]
+    # with the real folder back, it goes
+    rm "$S/.meta-sets"
+    mv "$S/.real-meta-sets" "$S/.meta-sets"
+    run "$META_BIN" git worktree prune
+    [ "$status" -eq 0 ]
+    [ ! -e "$S/.old.meta-lease" ]
+    [ ! -e "$S/g" ]
 }
 
 @test "an ephemeral run under META_WORKTREES with no root checkout leaves the workspace's files" {

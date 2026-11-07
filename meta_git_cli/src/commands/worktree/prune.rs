@@ -175,14 +175,10 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
         }
     }
     // a lease left behind by a set that is gone too names nothing
-    abandoned.retain(|set, found| {
-        let stale =
-            is_missing(set) && set.parent().is_some_and(is_plain_dir) && !sets.contains_key(set);
-        if stale && !dry_run {
-            let _ = found.delete();
-        }
-        !stale
-    });
+    let (stale, abandoned): (BTreeMap<_, _>, BTreeMap<_, _>) =
+        abandoned.into_iter().partition(|(set, _)| {
+            is_missing(set) && set.parent().is_some_and(is_plain_dir) && !sets.contains_key(set)
+        });
     let now = Utc::now().timestamp();
     let mut to_remove: Vec<(Candidate, Option<SetRecord>)> = Vec::new();
     for (set, found) in &abandoned {
@@ -261,6 +257,11 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
     for (candidate, _) in &to_remove {
         if let Some(dir) = candidate.set.parent() {
             meta_plugin::sets::owners_dir(dir)?;
+        }
+    }
+    if !dry_run {
+        for found in stale.values() {
+            let _ = found.delete();
         }
     }
 

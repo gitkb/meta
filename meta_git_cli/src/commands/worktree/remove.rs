@@ -18,7 +18,9 @@ pub(crate) fn handle_remove(args: RemoveArgs, ctx: &Ctx, request: &Request) -> R
     // Hooks come from the owner: inside the set being removed, its own
     // config goes with it
     let here = crate::here::Here::need(request)?;
-    let wt_dir = here.worktrees()?.join(&args.name);
+    let worktree_root = here.worktrees()?;
+    meta_plugin::sets::owners_dir(&worktree_root)?;
+    let wt_dir = worktree_root.join(&args.name);
     if !wt_dir.exists() {
         anyhow::bail!(
             "Worktree '{}' not found at {}",

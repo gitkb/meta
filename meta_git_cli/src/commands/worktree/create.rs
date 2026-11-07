@@ -82,6 +82,7 @@ pub(crate) fn handle_create(
     }
     let here = Here::need(request)?;
     let worktree_root = here.worktrees()?;
+    meta_plugin::sets::owners_dir(&worktree_root)?;
 
     // Check if worktree already exists
     let wt_dir = worktree_root.join(name);

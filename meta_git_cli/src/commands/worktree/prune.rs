@@ -142,6 +142,7 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
     let here = crate::here::Here::need(request)?;
     let workspace = Workspace::of(&here.home)?;
     let worktree_root = here.worktrees()?;
+    meta_plugin::sets::owners_dir(&worktree_root)?;
     let places = here.places();
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
     // A set whose lease is held is being created, or is an ephemeral set

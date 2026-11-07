@@ -31,7 +31,7 @@ pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>>
     let components: Vec<_> = cwd.components().collect();
     for (i, comp) in components.iter().enumerate() {
         if let Component::Normal(name) = comp {
-            if name.to_str() == Some(".worktrees") {
+            if name.to_str() == Some(meta_plugin::sets::WORKTREES_DIR) {
                 let task_name = match components.get(i + 1) {
                     Some(Component::Normal(n)) => match n.to_str() {
                         Some(n) => n.to_string(),
@@ -373,26 +373,60 @@ impl Configs {
 
 /// Where worktree sets go: `META_WORKTREES`, else the `worktrees_dir` of
 /// `owner`'s config (anywhere; checked when it was loaded), else its
-/// `.worktrees`; outside a workspace, `.worktrees` in `cwd`.
+/// `.worktrees`; outside a workspace, `.worktrees` in `cwd`. Inside a set,
+/// `owner` is the workspace the set stands for ([`Configs::of`]), so the
+/// variable wins there too.
 pub fn resolve_worktree_root(
     owner: Option<&crate::config::Workspace>,
     cwd: &Path,
 ) -> Result<PathBuf> {
-    if let Ok(env_path) = std::env::var("META_WORKTREES") {
+    use meta_plugin::sets::{WORKTREES_DIR, WORKTREES_VAR};
+    if let Some(env_path) = std::env::var_os(WORKTREES_VAR) {
         return Ok(PathBuf::from(env_path));
     }
     let Some(owner) = owner else {
-        return Ok(cwd.join(".worktrees"));
+        return Ok(cwd.join(WORKTREES_DIR));
     };
     // A link there is followed, wherever it leads (removal checks what is in
     // a set, not where it is), but not into git's data; a configured
     // worktrees_dir was checked when it was loaded
     let Some(configured) = &owner.worktrees_dir else {
-        crate::config::check_location(&owner.dir, ".worktrees", false)
-            .map_err(|why| anyhow::anyhow!("Refusing to keep worktrees in .worktrees: {why}"))?;
-        return Ok(owner.dir.join(".worktrees"));
+        crate::config::check_location(&owner.dir, WORKTREES_DIR, false).map_err(|why| {
+            anyhow::anyhow!("Refusing to keep worktrees in {WORKTREES_DIR}: {why}")
+        })?;
+        return Ok(owner.dir.join(WORKTREES_DIR));
     };
     Ok(owner.dir.join(configured))
+}
+
+/// What a plugin is told of worktree sets for a command run from the
+/// workspace `config` (from `cwd` outside one): where they go
+/// ([`resolve_worktree_root`]) or why not, and the hooks of the workspace
+/// whose sets they are, which run in its folder.
+pub fn plugin_worktree(
+    config: Option<&crate::config::Workspace>,
+    cwd: &Path,
+) -> meta_plugin::Worktree {
+    let Some(config) = config else {
+        return meta_plugin::Worktree {
+            dir: resolve_worktree_root(None, cwd).ok(),
+            ..Default::default()
+        };
+    };
+    let owner = Configs::of(config.clone()).map_or_else(|_| config.clone(), |c| c.owner);
+    let dir = resolve_worktree_root(Some(&owner), &config.dir);
+    meta_plugin::Worktree {
+        // refused here, the worktree commands say why
+        refused: dir.as_ref().err().map(|e| format!("{e:#}")),
+        dir: dir.ok(),
+        hooks: owner
+            .worktree
+            .hooks
+            .iter()
+            .map(|(event, command)| (event.name().to_string(), command.clone()))
+            .collect(),
+        home: Some(owner.dir),
+    }
 }
 
 #[cfg(test)]

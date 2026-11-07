@@ -361,7 +361,7 @@ impl ScannedDirs {
     /// Whether to look for members inside `dir`.
     fn searched(dir: &Path) -> bool {
         dir.file_name()
-            .is_none_or(|name| name != ".git" && name != ".worktrees")
+            .is_none_or(|name| name != ".git" && name != meta_plugin::sets::WORKTREES_DIR)
     }
 
     /// Whether the checkout at `dir`, inside the set at `root`, is a member.

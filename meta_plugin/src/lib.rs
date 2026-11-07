@@ -362,13 +362,13 @@ mod tests {
             config: PathBuf::from("/w/other.yaml"),
             listed_root: PathBuf::from("/w"),
             members: vec![project.clone()],
-            worktree: Worktree {
-                dir: Some(PathBuf::from("/w/.worktrees")),
-                hooks: [("post-create".to_string(), "make".to_string())].into(),
-                home: None,
-                refused: None,
-            },
         });
+        sent.worktree = Worktree {
+            dir: Some(PathBuf::from("/w/.worktrees")),
+            hooks: [("post-create".to_string(), "make".to_string())].into(),
+            home: None,
+            refused: None,
+        };
         sent.projects = vec![project.clone()];
         sent.meta.strict = true;
         let got = round_trip(&sent);
@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(got.args, sent.args);
         let workspace = got.workspace.unwrap();
         assert_eq!(workspace.config, PathBuf::from("/w/other.yaml"));
-        assert_eq!(workspace.worktree.hooks["post-create"], "make");
+        assert_eq!(got.worktree.hooks["post-create"], "make");
         assert!(got.meta.strict && !got.meta.dry_run);
         // a key the protocol doesn't have is refused, not ignored
         let mut wire = serde_json::to_value(&sent).unwrap();

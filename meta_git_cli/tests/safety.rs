@@ -136,7 +136,12 @@ fn request(
         (Err(_), Scope::Workspace) => None,
         (Err(e), _) => return Err(format!("{e:#}")),
     };
-    request.workspace = found.map(|w| as_meta_sends(w, worktrees));
+    // where sets go: `worktrees` when given (as `META_WORKTREES` gives it)
+    request.worktree = meta_core::worktree::plugin_worktree(found.as_ref(), cwd);
+    if let Some(dir) = worktrees {
+        (request.worktree.dir, request.worktree.refused) = (Some(dir.to_path_buf()), None);
+    }
+    request.workspace = found.map(as_meta_sends);
     request.set = set_of(cwd);
     request.meta = Meta {
         json: flag("json"),
@@ -149,18 +154,13 @@ fn request(
 }
 
 /// The workspace `found` as meta sends it: its whole tree (from the
-/// outermost config) as members, and where its sets go (`worktrees`, as
-/// `META_WORKTREES` gives it, else its config's), their hooks and home.
-fn as_meta_sends(
-    found: meta_core::config::Workspace,
-    worktrees: Option<&Path>,
-) -> meta_plugin::Workspace {
-    use meta_core::{config, repo_filter, worktree};
+/// outermost config) as members.
+fn as_meta_sends(found: meta_core::config::Workspace) -> meta_plugin::Workspace {
+    use meta_core::{config, repo_filter};
     let (root, repos) = match repo_filter::Reach::of(found.clone(), true, true, None) {
         Ok(reach) => (reach.root.clone(), reach.scope().repos),
         Err(_) => (found.dir.clone(), Vec::new()),
     };
-    let owner = worktree::Configs::of(found.clone()).map_or_else(|_| found.clone(), |c| c.owner);
     let members = repos
         .iter()
         .map(|repo| {
@@ -180,28 +180,11 @@ fn as_meta_sends(
             }
         })
         .collect();
-    let placed = worktree::resolve_worktree_root(Some(&owner), &found.dir);
     meta_plugin::Workspace {
         root,
         config: found.config_path.clone(),
         listed_root: config::listed_root(&found.dir),
         members,
-        worktree: meta_plugin::Worktree {
-            dir: worktrees
-                .map(Path::to_path_buf)
-                .or(placed.as_ref().ok().cloned()),
-            refused: match (worktrees, &placed) {
-                (None, Err(why)) => Some(format!("{why:#}")),
-                _ => None,
-            },
-            hooks: owner
-                .worktree
-                .hooks
-                .iter()
-                .map(|(event, command)| (event.name().to_string(), command.clone()))
-                .collect(),
-            home: Some(owner.dir.clone()),
-        },
     }
 }
 

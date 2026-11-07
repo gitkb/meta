@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::Utc;
 use colored::*;
 use meta_plugin::display::{escape, escape_path};
@@ -98,20 +98,7 @@ pub(crate) fn handle_list(args: ListArgs, ctx: &Ctx, request: &Request) -> Resul
         .set
         .as_ref()
         .map(|set| (set.name.clone(), set.dir.clone()));
-    let worktree_root = match (&location, std::env::var_os("META_WORKTREES")) {
-        (Some((_, root)), None) => root
-            .parent()
-            .context("The worktree set has no parent folder")?
-            .to_path_buf(),
-        _ => {
-            let root = crate::here::worktree_root(request)?;
-            if root.is_absolute() {
-                root
-            } else {
-                cwd.join(root)
-            }
-        }
-    };
+    let worktree_root = cwd.join(crate::here::worktree_root(request)?);
     let selected = match args.name.as_ref() {
         Some(name) => {
             meta_plugin::sets::validate_name(name)?;

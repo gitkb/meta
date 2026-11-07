@@ -81,7 +81,7 @@ pub(crate) fn handle_create(
         anyhow::bail!("Specify repos with --repo <alias> or use --every-repo");
     }
     let here = Here::need(request)?;
-    let worktree_root = here.worktrees()?;
+    let worktree_root = crate::here::worktree_root(request)?;
     meta_plugin::sets::owners_dir(&worktree_root)?;
 
     // Check if worktree already exists
@@ -423,7 +423,7 @@ pub(crate) fn handle_create(
         ephemeral,
         ttl_seconds,
         &output.custom,
-        Some(&here.workspace.worktree),
+        Some(here.worktree),
     )
     .or_else(|e| ctx.warn_or_bail(format!("{e:#}")));
     records.push(ProjectResult::about_workspace(&output).at(&wt_dir));

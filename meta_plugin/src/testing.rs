@@ -349,7 +349,7 @@ const UNSET: [&str; 13] = [
     // the `-c` settings a git around the tests was given
     "GIT_CONFIG_COUNT",
     "GIT_CONFIG_PARAMETERS",
-    "META_WORKTREES",
+    crate::sets::WORKTREES_VAR,
     "META_GITHUB_URL",
     "META_PLATFORM",
     "GIT_TEMPLATE_DIR",

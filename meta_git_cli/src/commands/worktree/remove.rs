@@ -18,7 +18,7 @@ pub(crate) fn handle_remove(args: RemoveArgs, ctx: &Ctx, request: &Request) -> R
     // Hooks come from the owner: inside the set being removed, its own
     // config goes with it
     let here = crate::here::Here::need(request)?;
-    let worktree_root = here.worktrees()?;
+    let worktree_root = crate::here::worktree_root(request)?;
     meta_plugin::sets::owners_dir(&worktree_root)?;
     let wt_dir = worktree_root.join(&args.name);
     if !wt_dir.exists() {
@@ -301,7 +301,7 @@ pub(crate) fn remove_set(
         return Ok(());
     }
     // What was done is reported first: a failing hook doesn't undo it
-    match fire_post_destroy(name, &wt_dir, force, Some(&here.workspace.worktree)) {
+    match fire_post_destroy(name, &wt_dir, force, Some(here.worktree)) {
         Err(e) if strict => anyhow::bail!("{e:#} (strict mode)"),
         Err(e) => ctx.warn(format!("{e:#}")),
         Ok(()) => {}

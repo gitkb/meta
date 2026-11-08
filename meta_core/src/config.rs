@@ -6,40 +6,10 @@
 use anyhow::Context;
 use meta_plugin::display::{escape, escape_path, is_unsafe_char};
 use meta_plugin::RepoUrl;
+use serde::de::IntoDeserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-
-/// Represents a project entry in the .meta.yaml.
-/// Can be either a simple git URL string or an extended object with additional fields.
-#[derive(Debug, Clone)]
-pub enum ProjectEntry {
-    /// Simple format: just a git URL string
-    Simple(RepoUrl),
-    /// Extended format: object with repo, path, tags, and dependency info
-    Extended(ExtendedEntry),
-}
-
-/// An extended project entry's fields; others are left to other tools. Each
-/// string is one YAML wrote as a string: YAML would read `false` or `123` as
-/// "false" or "123".
-#[derive(Debug, Clone, Deserialize)]
-pub struct ExtendedEntry {
-    /// Git remote URL (optional for local-only projects).
-    #[serde(default, deserialize_with = "some_string")]
-    pub repo: Option<RepoUrl>,
-    #[serde(default, deserialize_with = "some_string")]
-    pub path: Option<String>,
-    #[serde(default, deserialize_with = "strings")]
-    pub tags: Vec<String>,
-    #[serde(default, deserialize_with = "strings")]
-    pub provides: Vec<String>,
-    #[serde(default, deserialize_with = "strings")]
-    pub depends_on: Vec<String>,
-    /// If true, this directory contains a nested .meta.yaml
-    #[serde(default)]
-    pub meta: bool,
-}
 
 /// A YAML string, as `T`.
 fn some_string<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -80,6 +50,52 @@ impl<'de> Deserialize<'de> for YamlString {
     }
 }
 
+/// A project's entry in the .meta.yaml: its repo URL, or a mapping of its
+/// fields; and its `path` as written (none when left out or null), which
+/// [`Workspace::load`] defaults to the project's name.
+#[derive(Debug)]
+struct ProjectEntry {
+    info: ProjectInfo,
+    path: Option<String>,
+}
+
+/// An entry's keys except `path`, which it keeps for itself, so the load can
+/// tell a path left out from an empty one.
+struct PathTaken<'a, M> {
+    map: M,
+    path: &'a mut Option<String>,
+    /// Whether `path` was written, `~` included: a second one is an error.
+    seen: bool,
+}
+
+impl<'de, M: serde::de::MapAccess<'de>> serde::de::MapAccess<'de> for PathTaken<'_, M> {
+    type Error = M::Error;
+
+    fn next_key_seed<K: serde::de::DeserializeSeed<'de>>(
+        &mut self,
+        seed: K,
+    ) -> Result<Option<K::Value>, M::Error> {
+        while let Some(key) = self.map.next_key::<String>()? {
+            if key != "path" {
+                return seed.deserialize(key.into_deserializer()).map(Some);
+            }
+            if self.seen {
+                return Err(serde::de::Error::duplicate_field("path"));
+            }
+            self.seen = true;
+            *self.path = self.map.next_value::<Option<YamlString>>()?.map(|p| p.0);
+        }
+        Ok(None)
+    }
+
+    fn next_value_seed<V: serde::de::DeserializeSeed<'de>>(
+        &mut self,
+        seed: V,
+    ) -> Result<V::Value, M::Error> {
+        self.map.next_value_seed(seed)
+    }
+}
+
 /// A URL or a mapping, and an error that says so (and what was wrong in the
 /// mapping) for anything else: an untagged enum's would only say no form
 /// matched.
@@ -97,35 +113,60 @@ impl<'de> Deserialize<'de> for ProjectEntry {
             }
 
             fn visit_str<E: serde::de::Error>(self, url: &str) -> Result<Self::Value, E> {
-                Ok(ProjectEntry::Simple(RepoUrl::from(url.to_string())))
+                Ok(ProjectEntry {
+                    info: ProjectInfo {
+                        repo: Some(RepoUrl::from(url.to_string())),
+                        ..ProjectInfo::default()
+                    },
+                    path: None,
+                })
             }
 
             fn visit_map<M: serde::de::MapAccess<'de>>(
                 self,
                 map: M,
             ) -> Result<Self::Value, M::Error> {
-                ExtendedEntry::deserialize(serde::de::value::MapAccessDeserializer::new(map))
-                    .map(ProjectEntry::Extended)
+                let mut path = None;
+                let taken = PathTaken {
+                    map,
+                    path: &mut path,
+                    seen: false,
+                };
+                let info =
+                    ProjectInfo::deserialize(serde::de::value::MapAccessDeserializer::new(taken))?;
+                Ok(ProjectEntry { info, path })
             }
         }
         deserializer.deserialize_any(EntryVisitor)
     }
 }
 
-/// Parsed project info after normalization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A project: its entry in the .meta.yaml, then, once [`Workspace::load`]
+/// has named and checked it, what every command reads. Keys it doesn't know
+/// are left to other tools. Each string is one YAML wrote as a string: YAML
+/// would read `false` or `123` as "false" or "123".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProjectInfo {
+    /// Its key in `projects`, not a field of its entry.
+    #[serde(skip_deserializing)]
     pub name: String,
+    /// Where it lives; [`ProjectEntry`] reads it.
+    #[serde(skip_deserializing)]
     pub path: String,
     /// Git remote URL (optional for local-only projects).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "some_string"
+    )]
     pub repo: Option<RepoUrl>,
+    #[serde(default, deserialize_with = "strings")]
     pub tags: Vec<String>,
     /// What this project provides (e.g., APIs, libraries)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "strings")]
     pub provides: Vec<String>,
     /// What this project depends on (other project names or provided items)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "strings")]
     pub depends_on: Vec<String>,
     /// If true, this directory contains a nested .meta.yaml
     #[serde(default)]
@@ -149,15 +190,10 @@ impl ProjectInfo {
 
 /// Default settings that can be configured in .meta.yaml
 #[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct MetaDefaults {
-    /// Run commands in parallel by default (defaults to true)
-    #[serde(default = "default_true")]
+    /// Run commands in parallel by default
     pub parallel: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Default for MetaDefaults {
@@ -220,9 +256,9 @@ fn commands<'de, D: serde::Deserializer<'de>>(
 pub struct MetaConfig {
     /// Projects in this meta repo. Values can be:
     /// - A git URL string: `project: git@github.com:org/repo.git`
-    /// - An extended object: `project: { repo: ..., path: ..., meta: true }`
+    /// - A mapping of its fields: `project: { repo: ..., path: ..., meta: true }`
     #[serde(default, deserialize_with = "unique_projects")]
-    pub projects: HashMap<String, ProjectEntry>,
+    projects: HashMap<String, ProjectEntry>,
     #[serde(default)]
     pub defaults: MetaDefaults,
     /// Custom directory for worktrees (overrides default .worktrees/)
@@ -489,7 +525,7 @@ impl Workspace {
         }
         .with_context(parse_error)?;
 
-        // Convert project entries to normalized, validated ProjectInfo
+        // Name, normalize and validate the projects
         // in name order, so the first bad entry reported is always the same one
         let base_dir = meta_path
             .parent()
@@ -525,35 +561,9 @@ impl Workspace {
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         let checked: Vec<(ProjectInfo, PathBuf)> = entries
             .into_iter()
-            .map(|(name, entry)| {
-                let (repo, path, tags, provides, depends_on, meta) = match entry {
-                    // Simple string -> git URL
-                    ProjectEntry::Simple(url) => {
-                        (Some(url), name.clone(), vec![], vec![], vec![], false)
-                    }
-                    // Extended object -> repo with additional fields
-                    // meta: true indicates this project is also a meta-repo (has its own .meta.yaml)
-                    ProjectEntry::Extended(ExtendedEntry {
-                        repo,
-                        path,
-                        tags,
-                        provides,
-                        depends_on,
-                        meta,
-                    }) => {
-                        let resolved_path = path.unwrap_or_else(|| name.clone());
-                        (repo, resolved_path, tags, provides, depends_on, meta)
-                    }
-                };
-                let mut info = ProjectInfo {
-                    name,
-                    path,
-                    repo,
-                    tags,
-                    provides,
-                    depends_on,
-                    meta,
-                };
+            .map(|(name, ProjectEntry { mut info, path })| {
+                info.path = path.unwrap_or_else(|| name.clone());
+                info.name = name;
                 let location =
                     validate_project(base_dir, &worktrees, worktrees_at.as_deref(), &mut info)
                         .map_err(|reason| {
@@ -1457,6 +1467,105 @@ mod tests {
             let err = format!("{:#}", load(yaml).unwrap_err());
             assert!(err.contains(says) && err.contains(".meta.yaml"), "{err}");
         }
+        // an empty path is refused naming its project, in an entry a merge
+        // key fills too; a null one is left out
+        for yaml in [
+            "projects:\n  api:\n    path: \"\"\n",
+            "projects:\n  a: &b\n    repo: x.git\n  api:\n    <<: *b\n    path: \"\"\n",
+        ] {
+            let err = format!("{:#}", load(yaml).unwrap_err());
+            assert!(
+                err.contains("Invalid project 'api' in") && err.ends_with(": path is empty"),
+                "{err}"
+            );
+        }
+        // a second path, null or not, is refused as any field written twice
+        for yaml in [
+            "projects:\n  api:\n    path: a\n    path: b\n",
+            "projects:\n  api:\n    path: ~\n    path: b\n",
+        ] {
+            let err = format!("{:#}", load(yaml).unwrap_err());
+            assert!(err.contains("duplicate field `path`"), "{err}");
+        }
+        let null = load("projects:\n  api:\n    path: ~\n").unwrap();
+        assert_eq!(null.projects[0].path, "api");
+    }
+
+    #[test]
+    fn every_field_and_url_form_loads_with_defaults_for_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".meta.yaml");
+        std::fs::write(
+            &config,
+            "projects:
+  scp: git@github.com:org/scp.git
+  url:
+    repo: https://github.com/org/url.git
+    path: libs/url
+    tags: [x, y]
+    provides: [api]
+    depends_on: [scp]
+    meta: true
+    branch: main
+  ssh:
+    repo: ssh://git@host:2222/ssh.git
+  helper: ext::ssh -p 2222 host %S helper
+  local:
+    repo: ../origin/local
+  none: {}
+",
+        )
+        .unwrap();
+        let loaded: Vec<_> = Workspace::load(&config)
+            .unwrap()
+            .projects
+            .into_iter()
+            .map(|p| {
+                let repo = p.repo.map(|r| r.raw().to_string());
+                (
+                    p.name,
+                    p.path,
+                    repo,
+                    p.tags,
+                    p.provides,
+                    p.depends_on,
+                    p.meta,
+                )
+            })
+            .collect();
+        let none = Vec::<String>::new;
+        let strings = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let entry = |name: &str, path: &str, repo: Option<&str>| {
+            let repo = repo.map(str::to_string);
+            (
+                name.to_string(),
+                path.to_string(),
+                repo,
+                none(),
+                none(),
+                none(),
+                false,
+            )
+        };
+        assert_eq!(
+            loaded,
+            vec![
+                entry("helper", "helper", Some("ext::ssh -p 2222 host %S helper")),
+                entry("local", "local", Some("../origin/local")),
+                entry("none", "none", None),
+                entry("scp", "scp", Some("git@github.com:org/scp.git")),
+                entry("ssh", "ssh", Some("ssh://git@host:2222/ssh.git")),
+                (
+                    "url".to_string(),
+                    "libs/url".to_string(),
+                    Some("https://github.com/org/url.git".to_string()),
+                    strings(&["x", "y"]),
+                    strings(&["api"]),
+                    strings(&["scp"]),
+                    true,
+                ),
+            ]
+        );
     }
 
     // ============================================================================

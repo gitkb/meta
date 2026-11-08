@@ -6,6 +6,7 @@
 use anyhow::Context;
 use meta_plugin::display::{escape, escape_path, is_unsafe_char};
 use meta_plugin::RepoUrl;
+use serde::de::IntoDeserializer;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -50,8 +51,44 @@ impl<'de> Deserialize<'de> for YamlString {
 }
 
 /// A project's entry in the .meta.yaml: its repo URL, or a mapping of its
-/// fields.
-struct ProjectEntry(ProjectInfo);
+/// fields; and its `path` as written (none when left out or null), which
+/// [`Workspace::load`] defaults to the project's name.
+#[derive(Debug)]
+struct ProjectEntry {
+    info: ProjectInfo,
+    path: Option<String>,
+}
+
+/// An entry's keys but `path`, which it keeps for itself, so the load can
+/// tell a path left out from an empty one.
+struct PathTaken<'a, M> {
+    map: M,
+    path: &'a mut Option<String>,
+}
+
+impl<'de, M: serde::de::MapAccess<'de>> serde::de::MapAccess<'de> for PathTaken<'_, M> {
+    type Error = M::Error;
+
+    fn next_key_seed<K: serde::de::DeserializeSeed<'de>>(
+        &mut self,
+        seed: K,
+    ) -> Result<Option<K::Value>, M::Error> {
+        while let Some(key) = self.map.next_key::<String>()? {
+            if key != "path" {
+                return seed.deserialize(key.into_deserializer()).map(Some);
+            }
+            *self.path = self.map.next_value::<Option<YamlString>>()?.map(|p| p.0);
+        }
+        Ok(None)
+    }
+
+    fn next_value_seed<V: serde::de::DeserializeSeed<'de>>(
+        &mut self,
+        seed: V,
+    ) -> Result<V::Value, M::Error> {
+        self.map.next_value_seed(seed)
+    }
+}
 
 /// A URL or a mapping, and an error that says so (and what was wrong in the
 /// mapping) for anything else: an untagged enum's would only say no form
@@ -70,18 +107,27 @@ impl<'de> Deserialize<'de> for ProjectEntry {
             }
 
             fn visit_str<E: serde::de::Error>(self, url: &str) -> Result<Self::Value, E> {
-                Ok(ProjectEntry(ProjectInfo {
-                    repo: Some(RepoUrl::from(url.to_string())),
-                    ..ProjectInfo::default()
-                }))
+                Ok(ProjectEntry {
+                    info: ProjectInfo {
+                        repo: Some(RepoUrl::from(url.to_string())),
+                        ..ProjectInfo::default()
+                    },
+                    path: None,
+                })
             }
 
             fn visit_map<M: serde::de::MapAccess<'de>>(
                 self,
                 map: M,
             ) -> Result<Self::Value, M::Error> {
-                ProjectInfo::deserialize(serde::de::value::MapAccessDeserializer::new(map))
-                    .map(ProjectEntry)
+                let mut path = None;
+                let taken = PathTaken {
+                    map,
+                    path: &mut path,
+                };
+                let info =
+                    ProjectInfo::deserialize(serde::de::value::MapAccessDeserializer::new(taken))?;
+                Ok(ProjectEntry { info, path })
             }
         }
         deserializer.deserialize_any(EntryVisitor)
@@ -97,9 +143,8 @@ pub struct ProjectInfo {
     /// Its key in `projects`, not a field of its entry.
     #[serde(skip_deserializing)]
     pub name: String,
-    /// Where it lives; empty only while an entry that leaves it out is
-    /// unread (it is then the name).
-    #[serde(default, deserialize_with = "project_path")]
+    /// Where it lives; [`ProjectEntry`] reads it.
+    #[serde(skip_deserializing)]
     pub path: String,
     /// Git remote URL (optional for local-only projects).
     #[serde(
@@ -119,14 +164,6 @@ pub struct ProjectInfo {
     /// If true, this directory contains a nested .meta.yaml
     #[serde(default)]
     pub meta: bool,
-}
-
-/// A project's `path`: one YAML wrote as an empty string is an error.
-fn project_path<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
-    match some_string::<D, String>(deserializer)? {
-        Some(path) if path.is_empty() => Err(serde::de::Error::custom("path is empty")),
-        path => Ok(path.unwrap_or_default()),
-    }
 }
 
 impl ProjectInfo {
@@ -214,7 +251,7 @@ pub struct MetaConfig {
     /// - A git URL string: `project: git@github.com:org/repo.git`
     /// - A mapping of its fields: `project: { repo: ..., path: ..., meta: true }`
     #[serde(default, deserialize_with = "unique_projects")]
-    pub projects: HashMap<String, ProjectInfo>,
+    projects: HashMap<String, ProjectEntry>,
     #[serde(default)]
     pub defaults: MetaDefaults,
     /// Custom directory for worktrees (overrides default .worktrees/)
@@ -227,10 +264,10 @@ pub struct MetaConfig {
 /// A project map in which no key appears twice: serde would keep the last.
 fn unique_projects<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<HashMap<String, ProjectInfo>, D::Error> {
+) -> Result<HashMap<String, ProjectEntry>, D::Error> {
     struct ProjectsVisitor;
     impl<'de> serde::de::Visitor<'de> for ProjectsVisitor {
-        type Value = HashMap<String, ProjectInfo>;
+        type Value = HashMap<String, ProjectEntry>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             formatter.write_str("a map of unique project keys")
@@ -248,7 +285,7 @@ fn unique_projects<'de, D: serde::Deserializer<'de>>(
                         escape(&key)
                     )));
                 }
-                projects.insert(key, map.next_value::<ProjectEntry>()?.0);
+                projects.insert(key, map.next_value()?);
             }
             Ok(projects)
         }
@@ -517,10 +554,8 @@ impl Workspace {
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         let checked: Vec<(ProjectInfo, PathBuf)> = entries
             .into_iter()
-            .map(|(name, mut info)| {
-                if info.path.is_empty() {
-                    info.path = name.clone();
-                }
+            .map(|(name, ProjectEntry { mut info, path })| {
+                info.path = path.unwrap_or_else(|| name.clone());
                 info.name = name;
                 let location =
                     validate_project(base_dir, &worktrees, worktrees_at.as_deref(), &mut info)
@@ -1417,7 +1452,6 @@ mod tests {
                 "projects:\n  api:\n    repo: 123\n",
                 "projects.api.repo: invalid type: integer `123`, expected a string",
             ),
-            ("projects:\n  api:\n    path: \"\"\n", "path is empty"),
             (
                 "projects:\n  api:\n    tags: [1]\n",
                 "projects.api.tags[0]: invalid type: integer `1`, expected a string",
@@ -1426,6 +1460,20 @@ mod tests {
             let err = format!("{:#}", load(yaml).unwrap_err());
             assert!(err.contains(says) && err.contains(".meta.yaml"), "{err}");
         }
+        // an empty path is refused naming its project, in an entry a merge
+        // key fills too; a null one is left out
+        for yaml in [
+            "projects:\n  api:\n    path: \"\"\n",
+            "projects:\n  a: &b\n    repo: x.git\n  api:\n    <<: *b\n    path: \"\"\n",
+        ] {
+            let err = format!("{:#}", load(yaml).unwrap_err());
+            assert!(
+                err.contains("Invalid project 'api' in") && err.ends_with(": path is empty"),
+                "{err}"
+            );
+        }
+        let null = load("projects:\n  api:\n    path: ~\n").unwrap();
+        assert_eq!(null.projects[0].path, "api");
     }
 
     #[test]

@@ -75,7 +75,7 @@ meta git commit -m "wip: before refactor"
 meta --dry-run exec -- <command>
 ```
 
-Commit rather than stash: every worktree of a repo shares one stash, so another session's `git stash pop` can take yours. If you must stash, name it (`meta exec -- git stash push -u -m before-refactor`) and restore it by that name.
+Commit rather than stash: every worktree of a repo shares one stash, so another session's `git stash pop` can take yours. If you must stash, name it (`meta exec -- git stash push -u -m before-refactor`), find its commit with `git stash list --format='%H %gs'` in each repo, and restore that with `git stash apply <sha>`.
 
 **Recovering**: run `git reflog` inside the set, in the affected repo: it lists the commits that worktree's `HEAD` pointed to, and `git switch -c recovered <sha>` brings one back. From the primary checkout you won't see them, and a set's reflog goes with the set, so recover before you remove it. `meta exec -- git reflog -n 20`, run in the set, looks across its repos (`meta --include <repo> exec -- …` for one). The reflog only recovers commits, not uncommitted changes. A backup branch keeps only commits.
 
@@ -148,7 +148,7 @@ The meta MCP server (`meta-mcp`; see the `meta-workspace` skill for how to start
 
 | Tool | Purpose | Without MCP |
 |------|---------|-------------|
-| `meta_git_multi_commit` | Per-repo commit messages in one call (for audit trails when changes differ) | `meta --include <repo> git commit -m "…"`, once per repo |
+| `meta_git_multi_commit` | Per-repo commit messages in one call (for audit trails when changes differ) | `meta -r --include <repo> git commit -m "…"`, once per repo (the tool itself takes only this level's repos) |
 | `meta_git_status` | Each repo's `git status` text, the root and nested repos included | `meta -r --json git status` |
 | `meta_git_diff` | Structured diff output, this level's repos only | `meta git diff` |
 | `meta_git_branch` | Branch info of the root and every nested repo | `meta -r exec -- git status -sb` |

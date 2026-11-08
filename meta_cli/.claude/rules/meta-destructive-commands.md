@@ -22,7 +22,7 @@ Multi-repo workspaces amplify the impact of destructive commands. The primary ch
    ```
 
 4. **Know what can't be undone**
-   - Push with `--force-with-lease`, not `--force`: it refuses to overwrite commits you haven't seen.
+   - Push with `--force-with-lease`, not `--force`: it refuses to overwrite commits your last fetch didn't bring. A background fetch can defeat that, so look at the remote branch first.
    - Commit before `git reset --hard`: it discards uncommitted work for good.
    - `git clean -fd` removes untracked files for good; `git clean -nd` previews it.
 

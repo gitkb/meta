@@ -5,7 +5,9 @@ use meta_plugin::{errln, outln};
 use meta_plugin::{Ctx, ProjectResult, Request, Response};
 
 use crate::here::Here;
-use crate::worktree::git_ops::{git_worktree_add, worktree_start, WorktreeStart};
+use crate::worktree::git_ops::{
+    ensure_checkout_config_is_not_bare, git_worktree_add, worktree_start, WorktreeStart,
+};
 use crate::worktree::helpers::*;
 use crate::worktree::origin::{branches_on_origin, Wanted};
 use crate::worktree::plan::{Index, PlannedRepo};
@@ -186,9 +188,12 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
             // what the run checks before adding
             let branch = resolve_branch(name, None, spec.branch.as_deref());
             let start = match on_origin.get(source) {
-                Some(commit) => WorktreeStart::Remote {
-                    commit: commit.clone(),
-                },
+                Some(commit) => {
+                    ensure_checkout_config_is_not_bare(source)?;
+                    WorktreeStart::Remote {
+                        commit: commit.clone(),
+                    }
+                }
                 None => worktree_start(source, &branch, from_ref)?,
             };
             repos.push(CreateRepoEntry {

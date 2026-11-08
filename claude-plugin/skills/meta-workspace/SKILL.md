@@ -100,12 +100,12 @@ The meta MCP server gives structured JSON. Start it with `meta-mcp`, which speak
 {"mcpServers": {"meta": {"command": "meta-mcp", "args": []}}}
 ```
 
-Its read tools see what `meta -r` sees: the root and nested repos, and inside a set that set's members only.
+The tools below, `meta_git_status` and `meta_git_branch` see what `meta -r` sees: the root and nested repos, and inside a set that set's members only. The exceptions: `meta_git_diff` and `meta_execution_order` see this level's repos only, and in a set `meta_analyze_impact` also names projects the config lists that the set doesn't hold.
 
 | Tool | Purpose | Without MCP |
 |------|---------|-------------|
 | `meta_workspace_state` | Counts: repos, dirty, clean, ahead, behind, and repos per branch, tag and build system | `meta -r git status` |
-| `meta_query_repos` | Filter repos by state (`query`: `dirty:true`, `tag:backend`, `branch:main`) | `meta -r --json context` |
+| `meta_query_repos` | Filter repos by state (`query`: `dirty:true`, `tag:backend`, `branch:main`) | `meta -r --json context` (no row for the root's git state: add `meta -r git status`) |
 | `meta_analyze_impact` | Direct and transitive dependents of a repo (`project`: name, or nested path) | `meta -r project dependents <repo>` (direct only) |
 | `meta_execution_order` | Build/deploy order of this level's repos, from their `depends_on` | none: read `depends_on` in `.meta.yaml` |
 

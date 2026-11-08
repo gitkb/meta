@@ -109,7 +109,7 @@ message = """
 git stash clear removes ALL stash entries permanently. \
 In a multi-repo workspace, this could discard important work across repos. Safer alternatives:
 - git stash list to review what will be cleared
-- git stash show <stash> to inspect contents first
+- git stash show -p -u <stash> to inspect contents first, untracked files too
 """
 
 [[patterns]]

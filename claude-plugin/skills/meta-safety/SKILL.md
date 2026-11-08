@@ -49,12 +49,12 @@ meta --include repo1,repo2 git commit -m "feat: update shared API"
 meta -r --tag backend git push
 
 # Per-repo commit messages (when changes differ)
-# Use the meta_git_multi_commit MCP tool, or `meta --include <repo> git commit -m "…"` once per repo
+# Use the meta_git_multi_commit MCP tool (this level's repos only), or `meta -r --include <repo> git commit -m "…"` once per repo
 ```
 
 ## Query DSL (MCP)
 
-The `meta_query_repos` MCP tool (argument `query`) filters repos by state, the root and nested repos included. Without MCP: `meta -r --json context`.
+The `meta_query_repos` MCP tool (argument `query`) filters repos by state, the root and nested repos included. Without MCP: `meta -r --json context` has no row for the root's git state, so add `meta -r git status`.
 
 | Query | Result |
 |-------|--------|

@@ -94,7 +94,8 @@ tracking nothing), never from whatever the workspace's checkout has checked
 out; only a repo whose remote names no default branch starts from its HEAD,
 with a warning. The output names the start of each new branch:
 `backend -> auth-fix (new from origin/main)`. `--dry-run` asks origin too, says
-the same start, and writes nothing.
+the same start, and writes nothing; when a repo the set needs isn't cloned it stops
+at naming the clones, and `--from-pr` shows a placeholder for the PR's branch.
 
 A repo the set needs that isn't cloned (one asked for, a dependency, or a
 parent on the way to a nested repo) is cloned first, as
@@ -159,7 +160,8 @@ meta -r git update               # once it is on the default branch: pulls the c
 
 For a repo nested in a meta repo, do the same in that meta repo's set
 (`meta -r git worktree create add-svc --repo platform`, then edit
-`platform/.meta.yaml` and `platform/.gitignore`). `provides` and `depends_on`
+`platform/.meta.yaml` and `platform/.gitignore`, and use `git -C platform` for the
+add, commit and push). `provides` and `depends_on`
 are lists of names. `meta project` has no command that adds one. `meta git clone-missing`
 refuses to run inside a set, and `meta git worktree add` knows only the
 projects of the primary checkout's config, so a repo can't join a set before its

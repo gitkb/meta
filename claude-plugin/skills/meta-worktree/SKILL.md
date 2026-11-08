@@ -212,8 +212,9 @@ meta git worktree diff auth-fix --stat        # the summary only
 worktree repos too (`-r` and `-A` change nothing there and are refused);
 `meta --strict git worktree list` fails on what it can't read instead of
 skipping it. Run `list` from the workspace root: a nested folder can't see a set
-made with `-A`. Inside a set, `meta project list` shows the whole workspace, not
-the set's members; `meta git status` or `meta git worktree list` shows those.
+made with `-A`. Inside a set, `meta project list` and `meta context` show the whole workspace's
+projects, not the set's members; `meta git status` or `meta git worktree list`
+shows those.
 
 ## Running Commands
 
@@ -233,8 +234,8 @@ when you want one.
 
 ## Context Detection
 
-Inside `.worktrees/<name>/`, plain meta commands scope themselves to that set's
-repos:
+Inside `.worktrees/<name>/`, meta commands that run in repos scope themselves to
+that set's repos (`meta project list` and `meta context` still list the workspace):
 
 ```bash
 cd .worktrees/auth-fix/backend
@@ -291,7 +292,7 @@ else (`kept branch 'auth-fix' in …/backend: 1 commit on no remote, other branc
 or tag`). A branch the set only checked out (`--repo api:release/2.3`, an
 existing one) is never deleted, nor are the branches of sets made by a meta
 older than this; `remove` names those as left. `--json` lists each branch with
-its action (deleted, kept, left) and reason.
+its action (deleted, kept, left), and for kept and left the reason.
 
 ## Lifecycle Hooks
 

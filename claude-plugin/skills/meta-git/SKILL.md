@@ -149,7 +149,7 @@ The meta MCP server (`meta-mcp`; see the `meta-workspace` skill for how to start
 | Tool | Purpose | Without MCP |
 |------|---------|-------------|
 | `meta_git_multi_commit` | Per-repo commit messages in one call (for audit trails when changes differ) | `meta --include <repo> git commit -m "…"`, once per repo |
-| `meta_git_status` | Git status of the root and every nested repo | `meta -r --json git status` |
+| `meta_git_status` | Each repo's `git status` text, the root and nested repos included | `meta -r --json git status` |
 | `meta_git_diff` | Structured diff output, this level's repos only | `meta git diff` |
 | `meta_git_branch` | Branch info of the root and every nested repo | `meta -r exec -- git status -sb` |
 

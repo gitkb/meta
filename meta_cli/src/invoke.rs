@@ -158,14 +158,24 @@ fn resolve_dependencies(
             std::iter::once(key.clone()).chain(provided)
         })
         .collect();
+    // what an entry as written may name anywhere: a project's name too
+    let anywhere: std::collections::HashSet<&str> = keyed
+        .iter()
+        .flat_map(|(_, _, _, info)| info.provides.iter().chain(std::iter::once(&info.name)))
+        .map(String::as_str)
+        .collect();
     let mut nodes: Vec<ProjectDependencies> = keyed
         .iter()
         .map(|(_, key, prefix, info)| {
+            // its own config's first, else anyone's; one that names
+            // nothing stays qualified, where a meta repo not cloned may
+            // hold it
             let qualify = |name: &String| {
                 let qualified = format!("{prefix}{name}");
-                match known.contains(&qualified) && name != "." {
-                    true => qualified,
-                    false => name.clone(),
+                match name == "." || !known.contains(&qualified) && anywhere.contains(name.as_str())
+                {
+                    true => name.clone(),
+                    false => qualified,
                 }
             };
             // what it provides, as its meta repo and as anyone else names

@@ -195,7 +195,8 @@ impl Calls {
 
     /// Runs `command` to its end, as `Command::output`, but with no input,
     /// and stopped (with whatever it started) if the call is cancelled. A
-    /// cancelled call starts nothing more.
+    /// cancelled call starts nothing more. Each stream is kept as
+    /// [`read_capped`] keeps it.
     pub(crate) fn output(&self, command: &mut Command) -> std::io::Result<Output> {
         Ok(self.output_lines(command, usize::MAX)?.0)
     }
@@ -222,8 +223,8 @@ impl Calls {
             child.stop(true);
             return Err(std::io::Error::other("no pipe to the program"));
         };
-        let stdout = std::thread::spawn(move || read_lines(stdout, max_lines));
-        let stderr = std::thread::spawn(move || read_capped(stderr, CAPTURE_LIMIT));
+        let stdout = std::thread::spawn(move || read_capped(stdout, max_lines, "stdout"));
+        let stderr = std::thread::spawn(move || read_capped(stderr, usize::MAX, "stderr"));
         // Until it has ended and its pipes are closed: something it started
         // in the background may still hold them. Once cancelled, until its
         // whole process group is gone, even what closed its pipes; then
@@ -272,7 +273,7 @@ impl Calls {
             (Vec::new(), false)
         };
         let stderr = if stderr.is_finished() {
-            stderr.join().map_err(|_| lost())??
+            stderr.join().map_err(|_| lost())??.0
         } else {
             Vec::new()
         };
@@ -295,31 +296,38 @@ fn not_started(id: &str) {
     );
 }
 
-/// `pipe` to its end, keeping its first `limit` bytes. The rest is read and
-/// dropped, so the program never blocks on a full pipe, and a line at the
-/// end says how much was dropped.
-fn read_capped(mut pipe: impl Read, limit: usize) -> std::io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    pipe.by_ref().take(limit as u64).read_to_end(&mut bytes)?;
-    let dropped = std::io::copy(&mut pipe, &mut std::io::sink())?;
-    if dropped > 0 {
-        let cut =
-            format!("\n[meta-mcp: stderr cut at {limit} bytes; {dropped} more were dropped]\n");
-        bytes.extend_from_slice(cut.as_bytes());
-    }
-    Ok(bytes)
-}
-
-/// Up to `max` lines of `pipe`, and whether there were more.
-fn read_lines(pipe: impl Read, max: usize) -> std::io::Result<(Vec<u8>, bool)> {
+/// What a program wrote to `pipe` (its `stream`, stdout or stderr), as
+/// every captured stream is kept: its first `max_lines` lines, then its pipe
+/// is closed, which stops it, and the flag says whether there was more; but
+/// never more than [`CAPTURE_LIMIT`] bytes. Past those, the rest is read
+/// and dropped, so the program never blocks on a full pipe, and a last line
+/// says how much was.
+fn read_capped(
+    pipe: impl Read,
+    max_lines: usize,
+    stream: &str,
+) -> std::io::Result<(Vec<u8>, bool)> {
     let mut reader = BufReader::new(pipe);
     let mut bytes = Vec::new();
-    for _ in 0..max {
-        if reader.read_until(b'\n', &mut bytes)? == 0 {
+    let mut lines = 0;
+    while lines < max_lines && bytes.len() < CAPTURE_LIMIT {
+        let room = (CAPTURE_LIMIT - bytes.len()) as u64;
+        if (&mut reader).take(room).read_until(b'\n', &mut bytes)? == 0 {
             return Ok((bytes, false));
         }
+        lines += 1;
     }
-    Ok((bytes, !reader.fill_buf()?.is_empty()))
+    if lines >= max_lines {
+        return Ok((bytes, !reader.fill_buf()?.is_empty()));
+    }
+    let dropped = std::io::copy(&mut reader, &mut std::io::sink())?;
+    if dropped > 0 {
+        let cut = format!(
+            "\n[meta-mcp: {stream} cut at {CAPTURE_LIMIT} bytes; {dropped} more were dropped]\n"
+        );
+        bytes.extend_from_slice(cut.as_bytes());
+    }
+    Ok((bytes, false))
 }
 
 #[cfg(test)]

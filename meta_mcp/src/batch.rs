@@ -2,7 +2,7 @@
 //! atomic batch that failed.
 
 use crate::run::git;
-use crate::tools::{all_failed, BatchArgs, Reply, Scope};
+use crate::tools::{all_failed, BatchArgs, Reply};
 use crate::McpServer;
 use anyhow::{Context, Result};
 
@@ -21,7 +21,8 @@ impl McpServer {
             anyhow::bail!("'command' is empty: name the program to run");
         };
         let atomic = args.atomic == Some(true);
-        let targets = self.workspace()?.select(&Scope::of(None, args.tag)?)?;
+        let workspace = self.workspace()?;
+        let targets = workspace.select(&workspace.scope(None, args.tag)?)?;
 
         // Atomic: every target must be a clean git repository before anything
         // runs, so a rollback discards only what the command changed.

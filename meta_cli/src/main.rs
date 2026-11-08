@@ -608,12 +608,9 @@ fn run_cli() -> Result<()> {
     // Where plugins are; nothing is started until a command needs one
     let subprocess_plugins = SubprocessPluginManager::new(cli.verbose)?;
 
-    // `--tag "$UNSET"` is a slip, not "every repo"
-    anyhow::ensure!(
-        cli.tag.is_none() || !cli.filters().tags.is_empty(),
-        "--tag '{}' names no tag",
-        escape(cli.tag.as_deref().unwrap_or_default())
-    );
+    if let Some(tag) = cli.tag.as_deref() {
+        Filters::tags(tag)?;
+    }
 
     let mut report = Report::new(match cli.command {
         None => "help".to_string(),

@@ -110,7 +110,7 @@ fn finds_its_repos(name: &str) -> bool {
 }
 
 /// meta's filter options, by their long spellings.
-const FILTERS: [&str; 3] = ["--include", "--exclude", "--tag"];
+pub(crate) const FILTERS: [&str; 3] = ["--include", "--exclude", "--tag"];
 
 /// Run `meta project …`, into `report`.
 pub fn run(cli: &Cli, command: &ProjectCommands, report: &mut Report) -> Result<()> {
@@ -164,9 +164,9 @@ pub fn usage_error(error: &clap::Error) -> Option<anyhow::Error> {
     let error = match crate::refuse_filters(filtered, &["project", verb]) {
         Err(refused) => refused,
         Ok(()) => {
-            let refusing = meta.refusing(&FILTERS);
             let response =
-                meta_plugin::parse_args::<ProjectArgs>("project", args, &refusing).err()?;
+                meta_plugin::parse_args::<ProjectArgs>("project", args, &meta.refusing_filters())
+                    .err()?;
             match response.answer {
                 meta_plugin::Answer::Error(error) => error.into(),
                 _ => return None,

@@ -13,6 +13,7 @@ fn main() {
     run_plugin(PluginDefinition {
         info: info(),
         execute,
+        targeting: None,
     });
 }
 
@@ -31,6 +32,7 @@ pub(crate) fn info() -> PluginInfo {
             ],
             ..PluginHelp::default()
         }),
+        answers_targeting: false,
     }
 }
 

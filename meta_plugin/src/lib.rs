@@ -32,6 +32,9 @@
 //!    `--meta-plugin-info` (plugin responds with `PluginInfo` JSON within
 //!    5 seconds). `meta`, `meta help`, `meta --help` and `meta plugin list`
 //!    ask every plugin.
+//!    A plugin whose info says `answers_targeting` is then started with
+//!    `--meta-plugin-targeting` and the line's words, and prints what they
+//!    act on ([`Targeting`]), under the same limits.
 //! 2. The host resolves the invocation (the workspace, the selection, the
 //!    set it runs in) and starts the plugin with `--meta-plugin-exec`, the
 //!    [`Request`] in the file `META_REQUEST` names.
@@ -120,6 +123,58 @@ pub struct PluginInfo {
     pub description: Option<String>,
     #[serde(default)]
     pub help: Option<PluginHelp>,
+    /// Whether the plugin answers `--meta-plugin-targeting` (see
+    /// [`Targeting`]); [`run_plugin`] sets it from
+    /// [`PluginDefinition::targeting`]. A plugin that doesn't is never asked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub answers_targeting: bool,
+}
+
+/// What a command line acts on, as the plugin serving it answers
+/// `meta-<word> --meta-plugin-targeting <word> <args>...` (one JSON value:
+/// `"Selection"`, `{"WholeSet":"s"}`). The host asks before it finds any
+/// workspace, and resolves the request from the answer. A plugin that
+/// doesn't answer gets [`Targeting::Selection`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Targeting {
+    /// Needs no workspace (a clone makes one)
+    None,
+    /// The workspace, with no selection: the command finds its repos itself
+    Workspace,
+    /// The projects meta's options select
+    Selection,
+    /// The whole worktree set it names
+    WholeSet(String),
+    /// The checkouts meta's options select in the set it names
+    SelectedSet(String),
+    /// A line the plugin won't run (its usage error or help): no repos
+    Unparsed,
+}
+
+impl Targeting {
+    /// Whether meta's `--include`/`--exclude`/`--tag` are refused: the
+    /// command finds its repos itself, or acts on a whole set.
+    pub fn refuses_filters(&self) -> bool {
+        matches!(self, Self::None | Self::Workspace | Self::WholeSet(_))
+    }
+
+    /// The set it names
+    pub fn set(&self) -> Option<&str> {
+        match self {
+            Self::WholeSet(name) | Self::SelectedSet(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    /// The scope the host sends for it
+    pub fn scope(&self) -> Scope {
+        match self {
+            Self::None | Self::Unparsed => Scope::None,
+            Self::Workspace => Scope::Workspace,
+            Self::Selection => Scope::Selection,
+            Self::WholeSet(_) | Self::SelectedSet(_) => Scope::NamedSet,
+        }
+    }
 }
 
 /// Help information for a plugin's commands.
@@ -479,6 +534,7 @@ mod tests {
             commands: vec![forged.clone()],
             description: Some(forged.clone()),
             help: None,
+            answers_targeting: false,
         };
         let plain = help_text(&forged, &info);
         info.help = Some(PluginHelp {
@@ -510,6 +566,7 @@ mod tests {
                 runs_as_typed: Some("git".to_string()),
                 ..PluginHelp::default()
             }),
+            answers_targeting: false,
         };
         assert_eq!(info.verb("clone"), Verb::Own);
         assert_eq!(info.verb("log"), Verb::AsTyped("git"));

@@ -39,6 +39,8 @@ meta's options go before the command and reach a plugin resolved: the selection 
 
 `commands` in a plugin's info start with its word. For `meta git worktree create x`, the longest listed command that matches the typed words whole (`git worktree create`) is the request's command and the rest (`x`) its arguments; with none matching, the command is the word alone. `meta <word>` and `meta <word> --help` print the plugin's help, from its info. `runs_as_typed` names the tool that every other command runs as typed, in each selected repo (`git` for meta-git: `meta git log` runs `git log`); for its help meta answers itself.
 
+By default meta sends a plugin's command the projects meta's options select. A plugin whose commands act on something else (the workspace itself, or a worktree set they name) says so: its info has `"answers_targeting": true`, and meta then starts it once more before the call, with `--meta-plugin-targeting` and the line's words (`meta-git --meta-plugin-targeting git worktree remove --force s`). It prints one `meta_plugin::Targeting` as JSON (`"Selection"`, `"Workspace"`, `"None"`, `"Unparsed"`, `{"WholeSet":"s"}`, `{"SelectedSet":"s"}`), and meta acts on that answer: which set the line names, whether meta's filters are refused, whether that set's provider is checked. A failed, slow or malformed answer stops the command with nothing run. In Rust, `PluginDefinition::targeting` answers it from the plugin's own clap parse (`meta_git_cli::targeting`); a plugin that leaves it out is never asked.
+
 ## Other languages
 
 The same plugin in Python, as `meta-hello` (executable) on PATH or in a plugins folder:

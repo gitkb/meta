@@ -153,6 +153,10 @@ impl Ctx {
 pub struct PluginDefinition {
     pub info: PluginInfo,
     pub execute: fn(&Ctx, Request) -> anyhow::Result<Response>,
+    /// What a line acts on (its words, from the plugin's word on), for
+    /// `--meta-plugin-targeting`; none: the host never asks, and sends the
+    /// projects meta's options select.
+    pub targeting: Option<fn(&[String]) -> crate::Targeting>,
 }
 
 /// Run a plugin: answer `--meta-plugin-info` and `--meta-plugin-exec`, and
@@ -180,7 +184,22 @@ fn serve(plugin: &PluginDefinition) -> anyhow::Result<()> {
         .ok_or_else(|| usage(String::new()))?;
     match flag.to_str() {
         Some("--meta-plugin-info") => {
-            crate::outln!("{}", serde_json::to_string(&plugin.info)?)?;
+            let info = crate::PluginInfo {
+                answers_targeting: plugin.targeting.is_some(),
+                ..plugin.info.clone()
+            };
+            crate::outln!("{}", serde_json::to_string(&info)?)?;
+            Ok(())
+        }
+        Some(flag @ "--meta-plugin-targeting") => {
+            let Some(targeting) = plugin.targeting else {
+                return Err(usage(format!("Unknown flag: {flag}\n")));
+            };
+            let words: Vec<String> = std::env::args_os()
+                .skip(2)
+                .map(|word| word.to_string_lossy().into_owned())
+                .collect();
+            crate::outln!("{}", serde_json::to_string(&targeting(&words))?)?;
             Ok(())
         }
         Some("--meta-plugin-exec") => execute(plugin),

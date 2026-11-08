@@ -110,6 +110,9 @@ pub struct MetaOption {
     /// host says so in the request: then no tip suggests it)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub refused: bool,
+    /// Whether it selects repos (`--include`): the host says which do
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub filter: bool,
 }
 
 /// meta's own options, which go before the command, and what was typed of
@@ -145,6 +148,7 @@ impl MetaOptions {
                 ),
                 number: arg.get_value_parser().type_id() == std::any::TypeId::of::<usize>(),
                 refused: false,
+                filter: false,
             })
             .collect();
         let mut typed = Vec::new();
@@ -169,6 +173,34 @@ impl MetaOptions {
             option.refused |= option.spellings.iter().any(|s| longs.contains(&s.as_str()));
         }
         refused
+    }
+
+    /// These, with the filters refused: the command takes no selection.
+    pub fn refusing_filters(&self) -> Self {
+        let mut refused = self.clone();
+        for option in &mut refused.options {
+            option.refused |= option.filter;
+        }
+        refused
+    }
+
+    /// `words` (typed after the command) without meta's options among them
+    /// and their values, up to `--`: the command's own words.
+    pub fn without(&self, words: &[String]) -> Vec<String> {
+        let mut own = Vec::new();
+        let mut words = words.iter();
+        while let Some(word) = words.next() {
+            if word == "--" {
+                own.extend(std::iter::once(word).chain(words).cloned());
+                break;
+            }
+            match option_word(&self.options, word) {
+                Some(true) => drop(words.next()),
+                Some(false) => {}
+                None => own.push(word.clone()),
+            }
+        }
+        own
     }
 
     /// The tip for clap's `error` about `command` (the words from the

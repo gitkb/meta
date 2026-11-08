@@ -19,7 +19,7 @@ use log::debug;
 use meta_plugin::display::escape;
 use meta_plugin::{
     has_help_token, Ctx, Plan, PluginHelp, PluginInfo, ProjectResult, Request, Response, Step,
-    Warning,
+    Targeting, Warning,
 };
 
 /// `meta git`: the git commands meta adapts; any other runs as typed.
@@ -74,6 +74,30 @@ pub fn plugin_info() -> PluginInfo {
             ],
             note: None,
         }),
+        answers_targeting: false,
+    }
+}
+
+/// What `words` (`git ...`, as typed after meta's options) act on, as
+/// [`GitCli`] parses them: what the host resolves for the call.
+pub fn targeting(words: &[String]) -> Targeting {
+    use clap::Parser;
+    use commands::worktree::cli_types::WorktreeCommands as W;
+    match GitCli::try_parse_from(words).map(|cli| cli.command) {
+        Ok(Some(GitCommand::Clone(_))) => Targeting::None,
+        Ok(Some(GitCommand::Update(_))) => Targeting::Workspace,
+        Ok(Some(GitCommand::Worktree(worktree))) => match worktree.command {
+            W::Create(_) | W::List(_) | W::Prune | W::Help { .. } => Targeting::Workspace,
+            W::Add(args) => Targeting::WholeSet(args.name),
+            W::Remove(args) => Targeting::WholeSet(args.name),
+            W::Status(args) => Targeting::WholeSet(args.name),
+            W::Diff(args) => Targeting::WholeSet(args.name),
+            W::Exec(args) => Targeting::SelectedSet(args.name),
+        },
+        // commit, clone-*, and git as typed
+        Ok(_) => Targeting::Selection,
+        // clap's error or help: the call prints it and runs nothing
+        Err(_) => Targeting::Unparsed,
     }
 }
 
@@ -107,14 +131,20 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
         .map(str::to_string)
         .chain(args.iter().cloned())
         .collect();
+    // meta's filters typed after a command that takes none: the tip says
+    // it doesn't take them, not where they go
+    let bare: Vec<String> = std::iter::once("git".to_string())
+        .chain(request.meta_options.without(&words))
+        .collect();
+    let meta = match targeting(&bare).refuses_filters() {
+        true => request.meta_options.refusing_filters(),
+        false => request.meta_options.clone(),
+    };
     // worktree list and status show nested repos either way: meta's -r and
-    // -A are no options of theirs, so a tip after them says so, not where
-    // they go
+    // -A are no options of theirs either
     let meta = match named(&words).as_str() {
-        "worktree list" | "worktree status" => {
-            request.meta_options.refusing(&["--recursive", "--all"])
-        }
-        _ => request.meta_options.clone(),
+        "worktree list" | "worktree status" => meta.refusing(&["--recursive", "--all"]),
+        _ => meta,
     };
     let parse = |words: &[String]| meta_plugin::parse_args::<GitCli>("git", words, &meta);
     let cli = match parse(&words) {

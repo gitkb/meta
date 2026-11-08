@@ -28,7 +28,6 @@ chrono.workspace = true
 indicatif.workspace = true
 log.workspace = true
 colored.workspace = true
-indexmap.workspace = true
 dirs.workspace = true
 walkdir = "2.3"
 

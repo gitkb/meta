@@ -15,7 +15,6 @@ mod update;
 mod commands;
 mod worktree;
 
-use indexmap::IndexMap;
 use log::debug;
 use meta_plugin::display::escape;
 use meta_plugin::{
@@ -23,64 +22,48 @@ use meta_plugin::{
     Warning,
 };
 
-/// What meta-git says about itself: the commands it routes, and its help.
-pub fn plugin_info() -> PluginInfo {
-    // The git commands meta adapts; every other one runs as typed
-    let mut adapted = IndexMap::new();
-    adapted.insert(
-        "clone".to_string(),
-        "Clone a meta repo and the repos its .meta.yaml lists (meta -r: nested ones too)"
-            .to_string(),
-    );
-    adapted.insert(
-        "clone-missing".to_string(),
-        "Clone the projects in .meta.yaml that aren't cloned; change nothing else".to_string(),
-    );
-    adapted.insert(
-        "clone-prune".to_string(),
-        "Remove the repos no .meta.yaml lists that hold nothing unpushed".to_string(),
-    );
-    adapted.insert(
-        "clone-sync".to_string(),
-        "clone-missing, then clone-prune".to_string(),
-    );
-    adapted.insert(
-        "commit".to_string(),
-        "Commit changes with optional per-repo messages".to_string(),
-    );
-    adapted.insert(
-        "update".to_string(),
-        "Fast-forward cloned repos (git pull --ff-only) and clone missing ones".to_string(),
-    );
-    adapted.insert(
-        "worktree".to_string(),
-        "Create isolated worktree sets for multi-repo branches".to_string(),
-    );
+/// `meta git`: the git commands meta adapts; any other runs as typed.
+#[derive(clap::Parser)]
+// `meta git help log` is git's
+#[command(name = "meta git", disable_help_subcommand = true)]
+struct GitCli {
+    #[command(subcommand)]
+    command: Option<GitCommand>,
+    /// Any other git command, as typed. Never read: `request.args` is
+    /// what runs.
+    #[arg(hide = true, trailing_var_arg = true, allow_hyphen_values = true)]
+    as_typed: Vec<String>,
+}
 
+/// The git commands meta adapts, in the order help shows them.
+#[derive(clap::Subcommand)]
+enum GitCommand {
+    Clone(clone::CloneArgs),
+    CloneMissing(clone_missing::CloneMissingArgs),
+    ClonePrune(clone_missing::ClonePruneArgs),
+    CloneSync(clone_missing::CloneSyncArgs),
+    Commit(commit::CommitArgs),
+    Update(update::UpdateArgs),
+    Worktree(commands::worktree::WorktreeParser),
+}
+
+/// What meta-git says about itself: the commands it routes and their
+/// summaries, read from [`GitCli`], and its help.
+pub fn plugin_info() -> PluginInfo {
+    use clap::CommandFactory;
+    let cli = GitCli::command();
+    let summary = |c: &clap::Command| c.get_about().map(ToString::to_string).unwrap_or_default();
     PluginInfo {
         name: "git".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        commands: vec![
-            "git clone".to_string(),
-            "git clone-missing".to_string(),
-            "git clone-prune".to_string(),
-            "git clone-sync".to_string(),
-            "git update".to_string(),
-            "git commit".to_string(),
-            "git worktree".to_string(),
-            "git worktree create".to_string(),
-            "git worktree add".to_string(),
-            "git worktree remove".to_string(),
-            "git worktree list".to_string(),
-            "git worktree status".to_string(),
-            "git worktree diff".to_string(),
-            "git worktree exec".to_string(),
-            "git worktree prune".to_string(),
-        ],
+        commands: routed("git", &cli),
         description: Some("Git operations for meta repositories".to_string()),
         help: Some(PluginHelp {
             usage: "Usage: meta git <COMMAND> [OPTIONS]".to_string(),
-            commands: adapted,
+            commands: cli
+                .get_subcommands()
+                .map(|c| (c.get_name().to_string(), summary(c)))
+                .collect(),
             runs_as_typed: Some("git".to_string()),
             examples: vec![
                 "meta git clone https://github.com/org/meta-repo.git".to_string(),
@@ -92,6 +75,17 @@ pub fn plugin_info() -> PluginInfo {
             note: None,
         }),
     }
+}
+
+/// Every command under `cli`, spelled from `words`: `git worktree`,
+/// `git worktree create`, ...
+fn routed(words: &str, cli: &clap::Command) -> Vec<String> {
+    cli.get_subcommands()
+        .flat_map(|c| {
+            let words = format!("{words} {}", c.get_name());
+            std::iter::once(words.clone()).chain(routed(&words, c))
+        })
+        .collect()
 }
 
 /// Answer `request`: a command meta-git adapts, or any other git command,
@@ -106,117 +100,44 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
         request.depth
     );
 
-    let help_requested = has_help_token(command, args);
-
-    // Worktree commands parse their own arguments, help included
-    if command.starts_with("git worktree") {
-        return commands::worktree::execute_worktree_command(ctx, request);
-    }
-
-    // Commands meta adapts parse their own arguments, help included
+    // The words after `git`, as typed
+    let words: Vec<String> = command
+        .split_whitespace()
+        .skip(1)
+        .map(str::to_string)
+        .chain(args.iter().cloned())
+        .collect();
     let meta = &request.meta_options;
-    match command {
-        "git clone" => {
-            if let Some(line) = meta_depth_line(args, meta) {
-                return Err(meta_plugin::usage(format!(
-                    "--meta-depth is gone: how deep into nested meta repos is meta's own --depth, \
-                     before the command with -r (after `git clone`, --depth is git's history \
-                     depth), as in {line}"
-                )));
-            }
-            return match meta_plugin::parse_args(command, args, meta) {
-                Ok(args) => clone::execute_git_clone(args, ctx, request),
-                Err(response) => Ok(*response),
-            };
+    let parse = |words: &[String]| meta_plugin::parse_args::<GitCli>("git", words, meta);
+    let cli = match parse(&words) {
+        Ok(cli) => cli,
+        Err(response) => return Ok(*response),
+    };
+    let help_requested = has_help_token(command, args);
+    match cli.command {
+        Some(GitCommand::Clone(args)) => clone::execute_git_clone(args, ctx, request),
+        Some(GitCommand::Update(args)) => update::execute_git_update(args, ctx, request),
+        Some(GitCommand::CloneMissing(args)) => clone_missing::execute(args.into(), ctx, request),
+        Some(GitCommand::ClonePrune(args)) => clone_missing::execute(args.into(), ctx, request),
+        Some(GitCommand::CloneSync(args)) => clone_missing::execute(args.into(), ctx, request),
+        // meta sends a help request without its repos: whatever clap made
+        // of the arguments, it never commits
+        Some(GitCommand::Commit(_)) if help_requested => {
+            let help = ["commit".to_string(), "--help".to_string()];
+            Ok(parse(&help).map_or_else(|response| *response, |_| Response::done()))
         }
-        "git update" => {
-            return match meta_plugin::parse_args(command, args, meta) {
-                Ok(args) => update::execute_git_update(args, ctx, request),
-                Err(response) => Ok(*response),
-            };
+        Some(GitCommand::Commit(args)) => commit::execute_git_commit(args, request),
+        Some(GitCommand::Worktree(worktree)) => {
+            commands::worktree::handle_worktree_command(worktree.command, ctx, request)
         }
-        "git clone-missing" => {
-            return match meta_plugin::parse_args::<clone_missing::CloneMissingArgs>(
-                command, args, meta,
-            ) {
-                Ok(args) => clone_missing::execute(args.into(), ctx, request),
-                Err(response) => Ok(*response),
-            };
-        }
-        "git clone-prune" => {
-            return match meta_plugin::parse_args::<clone_missing::ClonePruneArgs>(
-                command, args, meta,
-            ) {
-                Ok(args) => clone_missing::execute(args.into(), ctx, request),
-                Err(response) => Ok(*response),
-            };
-        }
-        "git clone-sync" => {
-            return match meta_plugin::parse_args::<clone_missing::CloneSyncArgs>(
-                command, args, meta,
-            ) {
-                Ok(args) => clone_missing::execute(args.into(), ctx, request),
-                Err(response) => Ok(*response),
-            };
-        }
-        "git commit" => {
-            // meta sends a help request without its repos: whatever clap
-            // makes of the arguments, it never commits
-            let help = ["--help".to_string()];
-            let args = if help_requested { &help[..] } else { args };
-            return match meta_plugin::parse_args(command, args, meta) {
-                Ok(args) => commit::execute_git_commit(args, request),
-                Err(response) => Ok(*response),
-            };
-        }
-        _ => {}
-    }
-
-    // meta answers the help of a command it runs as typed itself
-    if help_requested {
-        return Ok(Response::message(meta_plugin::help_text(
+        // meta answers the help of a command it runs as typed itself
+        None if help_requested => Ok(Response::message(meta_plugin::help_text(
             "git",
             &plugin_info(),
-        )));
+        ))),
+        // Every other git command runs as typed in each repo
+        None => execute_raw_git_command(ctx, request),
     }
-
-    // Every other git command runs as typed in each repo
-    execute_raw_git_command(ctx, request)
-}
-
-/// For a clone typed with the `--meta-depth N` it no longer takes, the line
-/// with `-r --depth N` before the command (meta's -r after it moved there
-/// too), when that line parses.
-fn meta_depth_line(args: &[String], meta: &meta_plugin::args::MetaOptions) -> Option<String> {
-    let at = args
-        .iter()
-        .position(|a| a == "--meta-depth" || a.starts_with("--meta-depth="))?;
-    let word = args.get(at)?;
-    let (depth, taken) = match word.split_once('=') {
-        Some((_, depth)) => (depth.to_string(), 1),
-        None => (args.get(at + 1)?.clone(), 2),
-    };
-    if depth.parse::<usize>().is_err() || meta.typed_has("--depth") {
-        return None;
-    }
-    let recursive = |a: &String| a == "-r" || a == "--recursive";
-    let rest: Vec<String> = args
-        .iter()
-        .enumerate()
-        .filter(|(i, a)| (*i < at || *i >= at + taken) && !recursive(a))
-        .map(|(_, a)| a.clone())
-        .collect();
-    meta_plugin::parse_args::<clone::CloneArgs>("git clone", &rest, meta).ok()?;
-    // -r may be in a cluster: `-rv`
-    let already = meta.typed_has("--recursive");
-    let line: Vec<String> = std::iter::once("meta".to_string())
-        .chain(meta.typed.iter().cloned())
-        .chain((!already).then(|| "-r".to_string()))
-        .chain(["--depth".to_string(), depth])
-        .chain(["git".to_string(), "clone".to_string()])
-        .chain(rest)
-        .collect();
-    Some(meta_plugin::display::escape(&meta_plugin::display::display_command(&line)).into_owned())
 }
 
 /// Records a command printed itself, for one that failed with `failure`
@@ -437,24 +358,33 @@ mod tests {
     }
 
     #[test]
-    fn the_commands_meta_git_adapts_are_the_ones_it_routes_and_each_names_its_git_options() {
-        let info = plugin_info();
-        let adapted: std::collections::BTreeSet<&str> = info
-            .help
-            .as_ref()
-            .unwrap()
-            .commands
-            .keys()
-            .map(String::as_str)
-            .collect();
-        let routed = info
-            .commands
-            .iter()
-            .filter_map(|command| command.split_whitespace().nth(1))
-            .collect();
-        assert_eq!(adapted, routed);
+    fn a_line_clap_has_no_command_for_is_git_as_typed() {
+        use clap::{CommandFactory, Parser};
+        GitCli::command().debug_assert();
+        let parse = |line: &str| GitCli::try_parse_from(argv(&format!("meta-git {line}")));
+        for line in [
+            "-c key=value status",
+            "--no-pager log -1",
+            "-C d status",
+            "log --oneline -3",
+            "pull -r",
+            "help log",
+            "status -- x",
+            "-C d worktree remove s",
+        ] {
+            let cli = parse(line).unwrap();
+            assert!(cli.command.is_none(), "{line}");
+            assert_eq!(cli.as_typed, argv(line), "{line}");
+        }
+        let cli = parse("worktree remove s").unwrap();
+        assert!(matches!(cli.command, Some(GitCommand::Worktree(_))));
+        assert!(cli.as_typed.is_empty());
+    }
+
+    #[test]
+    fn each_command_meta_git_adapts_names_its_git_options() {
         let sandbox = Sandbox::new();
-        for verb in adapted {
+        for verb in plugin_info().help.unwrap().commands.keys() {
             let response = answer(&format!("git {verb}"), "--help", &sandbox.work(), vec![]);
             let help = match response.answer {
                 Answer::Message(help) => help,

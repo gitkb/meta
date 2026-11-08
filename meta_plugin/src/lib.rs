@@ -304,9 +304,21 @@ pub fn parse_args<P: clap::Parser>(
                     );
                 }
                 let mut message = crate::args::message(&escaped);
-                // a command that isn't one: the ones there are
+                // a command that isn't one: the ones there are, under the
+                // last command the words before it name
                 if e.kind() == ErrorKind::InvalidSubcommand {
-                    let help = P::command().bin_name(&name).render_help().to_string();
+                    let mut root = P::command().bin_name(&name);
+                    root.build();
+                    let bad = e
+                        .get(ContextKind::InvalidSubcommand)
+                        .map(ToString::to_string);
+                    let help = args
+                        .iter()
+                        .take_while(|word| Some(word.as_str()) != bad.as_deref())
+                        .fold(&root, |cmd, word| cmd.find_subcommand(word).unwrap_or(cmd))
+                        .clone()
+                        .render_help()
+                        .to_string();
                     let error = message.split("\n\nUsage:").next().unwrap_or_default();
                     message = format!("{error}\n\n{}", help.trim_end());
                 }

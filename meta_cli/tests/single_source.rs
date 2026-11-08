@@ -35,12 +35,7 @@ enum Check {
     Copies(&'static [(&'static str, &'static str)]),
 }
 
-const GROUPS: [(u8, &str, Check); 25] = [
-    (
-        1,
-        "meta-git's commands: declared once, in its manifest",
-        Check::Copies(&[("meta_git_cli/src/lib.rs", "help: Some(PluginHelp {")]),
-    ),
+const GROUPS: [(u8, &str, Check); 24] = [
     (
         2,
         "git worktree's subcommands: declared once",

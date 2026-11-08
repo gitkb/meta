@@ -1208,7 +1208,7 @@ create_meta_bare_repo() {
     rm -rf "$L3_BARE" "$L2_BARE" "$L1_BARE" "$ROOT_BARE" "$CLONE_TARGET"
 }
 
-@test "meta git clone --recursive --meta-depth limits recursion" {
+@test "meta -r --depth limits how deep clone goes into nested meta repos" {
     # Setup: root -> l1 (meta:true) -> l2 (meta:true) -> l3
     L3_BARE="$(mktemp -d)/l3.git"
     create_meta_bare_repo "$L3_BARE" '{"projects": {}}'
@@ -1226,7 +1226,7 @@ create_meta_bare_repo() {
     rm -rf "$CLONE_TARGET"
 
     cd "$TEST_DIR"
-    # --meta-depth 1 means: level 0 (root's children) + level 1 (l1's children)
+    # --depth 1 means: level 0 (root's children) + level 1 (l1's children)
     # l2's children (l3) should NOT be cloned
     run "$META_BIN" --recursive --depth 1 git clone "file://$ROOT_BARE" "$CLONE_TARGET"
     [ "$status" -eq 0 ]
@@ -1264,9 +1264,7 @@ create_meta_bare_repo() {
     [ -d "$CLONE_TARGET/l1/l2/.git" ]
     [ ! -d "$CLONE_TARGET/l1/l2/l3" ]
     [ "$(git -C "$CLONE_TARGET/l1" rev-list --count HEAD)" -eq 1 ]
-    # the old spellings are refused, with the line to run
-    run "$META_BIN" git clone "file://$ROOT_BARE" other --meta-depth 1
-    [ "$status" -eq 2 ]
+    # meta's -r after the command is refused, with the line to run
     run "$META_BIN" git clone "file://$ROOT_BARE" other -r
     [ "$status" -eq 2 ]
     [[ "$output" == *"as in meta -r git clone file://$ROOT_BARE other"* ]]

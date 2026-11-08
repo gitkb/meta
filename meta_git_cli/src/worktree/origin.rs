@@ -192,6 +192,7 @@ fn fetch(repo: &Wanted) -> Result<()> {
 /// `command` never waits for a person: no password prompt, and ssh gives up
 /// on a host that doesn't answer. The ssh command the user set still runs.
 pub(super) fn no_prompts<'a>(command: &'a mut Command, repo: &Path) -> &'a mut Command {
+    command.env("GIT_TERMINAL_PROMPT", "0");
     let ssh = std::env::var("GIT_SSH_COMMAND")
         .ok()
         .filter(|ssh| !ssh.is_empty())
@@ -199,10 +200,16 @@ pub(super) fn no_prompts<'a>(command: &'a mut Command, repo: &Path) -> &'a mut C
             lookup(repo, ["config", "--get", "core.sshCommand"])
                 .ok()
                 .flatten()
-        })
-        .unwrap_or_else(|| "ssh".to_string());
-    command.env("GIT_TERMINAL_PROMPT", "0").env(
-        "GIT_SSH_COMMAND",
-        format!("{ssh} -o BatchMode=yes -o ConnectTimeout={ASK_SECONDS}"),
-    )
+        });
+    // `GIT_SSH` is a program git runs without a shell: no options to add,
+    // and a `GIT_SSH_COMMAND` would replace it
+    let program_set = std::env::var_os("GIT_SSH").is_some_and(|ssh| !ssh.is_empty());
+    if ssh.is_some() || !program_set {
+        let ssh = ssh.unwrap_or_else(|| "ssh".to_string());
+        command.env(
+            "GIT_SSH_COMMAND",
+            format!("{ssh} -o BatchMode=yes -o ConnectTimeout={ASK_SECONDS}"),
+        );
+    }
+    command
 }

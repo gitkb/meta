@@ -90,27 +90,12 @@ workspace from its root; --json emits one record per dependent project.")]
     Other(Vec<String>),
 }
 
-impl ProjectCommands {
-    /// Its words, as the Envelope names the command.
-    pub fn name(&self) -> &'static str {
-        match self {
-            ProjectCommands::List => "project list",
-            ProjectCommands::Check => "project check",
-            ProjectCommands::Dependents { .. } => "project dependents",
-            ProjectCommands::Other(_) => "project",
-        }
-    }
-}
-
 /// Whether `meta project <name>` finds its projects itself, in the
 /// `.meta.yaml` files: it takes none of meta's filters. `check` checks the
 /// projects they select.
 fn finds_its_repos(name: &str) -> bool {
     name != "check"
 }
-
-/// meta's filter options, by their long spellings.
-pub(crate) const FILTERS: [&str; 3] = ["--include", "--exclude", "--tag"];
 
 /// Run `meta project …`, into `report`.
 pub fn run(cli: &Cli, command: &ProjectCommands, report: &mut Report) -> Result<()> {
@@ -160,7 +145,12 @@ pub fn usage_error(error: &clap::Error) -> Option<anyhow::Error> {
         return None;
     }
     // filters typed before the command are refused first, as when it runs
-    let filtered = FILTERS.iter().any(|filter| meta.typed_has(filter));
+    let filtered = meta
+        .options
+        .iter()
+        .filter(|option| option.filter)
+        .filter_map(|option| option.spellings.first())
+        .any(|filter| meta.typed_has(filter));
     let error = match crate::refuse_filters(filtered, &["project", verb]) {
         Err(refused) => refused,
         Ok(()) => {
@@ -173,14 +163,6 @@ pub fn usage_error(error: &clap::Error) -> Option<anyhow::Error> {
             }
         }
     };
-    // with --json, the error in the Envelope
-    if meta
-        .typed
-        .iter()
-        .any(|word| word == "--json" || word == "--json-stream")
-    {
-        meta_plugin::out::set_json(true);
-    }
     Some(error)
 }
 

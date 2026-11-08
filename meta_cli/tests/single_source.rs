@@ -35,7 +35,7 @@ enum Check {
     Copies(&'static [(&'static str, &'static str)]),
 }
 
-const GROUPS: [(u8, &str, Check); 24] = [
+const GROUPS: [(u8, &str, Check); 21] = [
     (
         2,
         "git worktree's subcommands: declared once",
@@ -55,11 +55,6 @@ const GROUPS: [(u8, &str, Check); 24] = [
         Check::Rule(project_once),
     ),
     (
-        5,
-        "meta's own commands: listed once, by the index",
-        Check::Copies(&[("meta_cli/tests/docs.rs", "const OWNED")]),
-    ),
-    (
         6,
         "help and usage: rendered from the declarations",
         Check::Copies(&[
@@ -77,19 +72,9 @@ const GROUPS: [(u8, &str, Check); 24] = [
         ]),
     ),
     (
-        7,
-        "meta's options: listed once (MetaOptions)",
-        Check::Copies(&[("meta_cli/src/main.rs", "const SHOWN")]),
-    ),
-    (
         8,
         "meta's option spellings: never in a plugin",
         Check::Rule(no_option_spellings),
-    ),
-    (
-        9,
-        "loop's options: loop's own, not a copy in meta",
-        Check::Copies(&[("meta_cli/src/main.rs", "add_aliases_to_global_looprc")]),
     ),
     (
         10,
@@ -428,7 +413,12 @@ fn project_once(repo: &Repo) -> Result<(), String> {
         .map(|file| format!("{file}: a plugin serves meta project"))
         .collect();
     for (file, text) in repo.texts() {
-        if !file.ends_with(".rs") || file == THIS || file.contains("/tests/") {
+        // docs_lint.rs: a module of meta's built only for its tests
+        if !file.ends_with(".rs")
+            || file == THIS
+            || file.contains("/tests/")
+            || file == "meta_cli/src/docs_lint.rs"
+        {
             continue;
         }
         let code = text.split("#[cfg(test)]").next().unwrap_or_default();

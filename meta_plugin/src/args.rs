@@ -30,7 +30,8 @@ pub fn escaped_error<P: clap::Parser>(
 /// is printed with [`escaped_error`] (help and version print as usual, and
 /// so does clap's invalid UTF-8 error, which doesn't echo the value) and
 /// returned as the [`ExitWith`] code clap gives it: 0 for help, 2 for a
-/// usage error; with `--json` before the command, a usage error is the
+/// usage error; under `--json` ([`crate::out::set_json`], which the caller
+/// sets from the options typed before the command), a usage error is the
 /// JSON error report on stdout.
 pub fn parse<P: clap::Parser>() -> anyhow::Result<P> {
     use clap::error::{ContextKind, ContextValue, ErrorKind};
@@ -68,15 +69,10 @@ pub fn parse<P: clap::Parser>() -> anyhow::Result<P> {
             ContextValue::StyledStrs(vec![tip.clone().into()]),
         );
     }
-    // with --json, the error in the envelope, its tip the hint
+    // with --json (the caller has set it), the error in the envelope, its
+    // tip the hint
     let shown = matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion);
-    if !shown
-        && meta
-            .typed
-            .iter()
-            .any(|word| word == "--json" || word == "--json-stream")
-    {
-        crate::out::set_json(true);
+    if !shown && crate::out::json() {
         let mut error = crate::ErrorInfo::new(crate::ErrorCode::Usage, message(&e));
         error.hint = tip;
         return Err(error.into());
@@ -94,6 +90,10 @@ pub fn message(error: &clap::Error) -> String {
     message.trim_end().to_string()
 }
 
+/// The help heading of meta's options that select repos (`--include`): an
+/// option under it is a [`MetaOption::filter`].
+pub const FILTER_HEADING: &str = "Filters";
+
 /// One of meta's own options: its spellings (`--recursive`, `-r`).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MetaOption {
@@ -110,7 +110,8 @@ pub struct MetaOption {
     /// host says so in the request: then no tip suggests it)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub refused: bool,
-    /// Whether it selects repos (`--include`): the host says which do
+    /// Whether it selects repos (`--include`): listed under
+    /// [`FILTER_HEADING`]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub filter: bool,
 }
@@ -148,7 +149,7 @@ impl MetaOptions {
                 ),
                 number: arg.get_value_parser().type_id() == std::any::TypeId::of::<usize>(),
                 refused: false,
-                filter: false,
+                filter: arg.get_help_heading() == Some(FILTER_HEADING),
             })
             .collect();
         let mut typed = Vec::new();

@@ -107,8 +107,16 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
         .map(str::to_string)
         .chain(args.iter().cloned())
         .collect();
-    let meta = &request.meta_options;
-    let parse = |words: &[String]| meta_plugin::parse_args::<GitCli>("git", words, meta);
+    // worktree list and status show nested repos either way: meta's -r and
+    // -A are no options of theirs, so a tip after them says so, not where
+    // they go
+    let meta = match named(&words).as_str() {
+        "worktree list" | "worktree status" => {
+            request.meta_options.refusing(&["--recursive", "--all"])
+        }
+        _ => request.meta_options.clone(),
+    };
+    let parse = |words: &[String]| meta_plugin::parse_args::<GitCli>("git", words, &meta);
     let cli = match parse(&words) {
         Ok(cli) => cli,
         Err(response) => return Ok(*response),
@@ -135,6 +143,21 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
         // Every other git command runs as typed in each repo
         None => execute_raw_git_command(ctx, request),
     }
+}
+
+/// The command of [`GitCli`] that `words` name: each word that names a
+/// subcommand of the one before it (`worktree list`).
+fn named(words: &[String]) -> String {
+    use clap::CommandFactory;
+    let mut cmd = GitCli::command();
+    let mut names = Vec::new();
+    for word in words {
+        if let Some(sub) = cmd.find_subcommand(word) {
+            names.push(word.as_str());
+            cmd = sub.clone();
+        }
+    }
+    names.join(" ")
 }
 
 /// The help of the command `words` name (after `git`), as `--help` after

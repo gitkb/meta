@@ -420,38 +420,39 @@ fn meta_owned_commands_take_no_copy_of_meta_options() {
         let again = workspace.meta(line);
         assert_ne!(again.status.code(), Some(2), "{line:?}: {}", text(&again));
     }
-    // -r on list and status is refused: the strict scan is --strict's, and
-    // nested repos are listed either way. Typed after the command, -r gets
-    // the tip that it goes before, and the line with it there says so.
+    // -r and -A on list and status are refused: the strict scan is
+    // --strict's, and nested repos are listed either way. Typed after the
+    // command, the tip says the command doesn't take them, with no line.
     for typed in [
-        &["git", "worktree", "list", "-r"][..],
-        &["-r", "git", "worktree", "list"],
+        &["-r", "git", "worktree", "list"][..],
         &["--recursive", "git", "worktree", "status", "t"],
-        &["git", "worktree", "list", "--all"],
         &["-A", "git", "worktree", "list"],
-        &["git", "worktree", "list", "-rv"],
     ] {
-        let mut out = workspace.meta(typed);
+        let out = workspace.meta(typed);
         assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
-        if typed[0] == "git" {
-            assert!(
-                text(&out).contains("goes before the command"),
-                "{}",
-                text(&out)
-            );
-            let line = tip_line(&out);
-            if line.is_empty() {
-                continue;
-            }
-            let words: Vec<&str> = line.iter().map(String::as_str).collect();
-            out = workspace.meta(&words);
-            assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
-        }
         assert!(
             text(&out).contains("meta --strict git worktree"),
             "{typed:?}: {}",
             text(&out)
         );
+    }
+    for typed in [
+        &["git", "worktree", "list", "-r"][..],
+        &["git", "worktree", "list", "--recursive"],
+        &["git", "worktree", "list", "--all"],
+        &["git", "worktree", "list", "-A"],
+        &["git", "worktree", "list", "-rv"],
+        &["git", "worktree", "status", "t", "-r"],
+        &["git", "worktree", "status", "t", "--all"],
+    ] {
+        let out = workspace.meta(typed);
+        assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
+        assert!(
+            text(&out).contains("is an option of meta itself, and this command doesn't take it"),
+            "{typed:?}: {}",
+            text(&out)
+        );
+        assert!(tip_line(&out).is_empty(), "{typed:?}: {}", text(&out));
     }
     let strict = workspace.meta(&["--strict", "git", "worktree", "status", "t"]);
     assert!(strict.status.success(), "{}", text(&strict));

@@ -1,5 +1,4 @@
-//! A lease names a worktree set while a provider creates it, and an
-//! ephemeral set for as long as the run it was made for lasts.
+//! A lease names a worktree set while a provider creates it.
 //!
 //! A set's lease lives beside the set's folder, in the worktrees folder:
 //! `.<set>.meta-lease`, written once an OS lock is held on
@@ -18,11 +17,6 @@
 //! removed, after the same checks as any set. A lease isn't in a
 //! repository: forging one takes write access to the worktrees folder,
 //! which already lets anyone delete the set (owner decision, 2026-10-31).
-//!
-//! Whose a lease is, its token says: [`Held::token`] for the holder, and a
-//! program the holder starts (a `meta` it calls back through
-//! [`crate::client`]) gets the token in [`super::LEASE_VAR`], which meta
-//! passes its plugin as `Request::lease`; [`Found::held_by`] tells.
 
 use crate::display::escape_path;
 use anyhow::{Context, Result};
@@ -39,7 +33,8 @@ pub struct Lease {
     /// The creating process, for messages only: whether it lives is the lock's
     /// to say.
     pub pid: u32,
-    /// The set is ephemeral: its creator holds the lease for the whole run.
+    /// The set is ephemeral: its creator leaves the lease when done, so the
+    /// next `prune` removes the set.
     #[serde(default)]
     pub ephemeral: bool,
     /// This lease and no other (two creators can have one process id, in
@@ -70,19 +65,12 @@ impl Lease {
 #[derive(Debug)]
 pub struct Held {
     path: PathBuf,
-    token: String,
     _lock: File,
     /// Let go of the lock but leave the lease, as a creator that is gone does.
     leave: bool,
 }
 
 impl Held {
-    /// What names this lease, for the programs its holder starts (see
-    /// [`Found::held_by`]).
-    pub fn token(&self) -> &str {
-        &self.token
-    }
-
     /// Let go of the lock and leave the lease where it is: the set is the
     /// next `prune`'s to remove (`create --ephemeral`).
     pub fn leave(mut self) {
@@ -111,18 +99,6 @@ pub struct Found {
 }
 
 impl Found {
-    /// Whether it is the lease `token` names (a [`Held::token`]; a process id
-    /// doesn't say: another machine, or another pid namespace, can have the
-    /// same one). A live lease only: one its holder let go of is no one's.
-    pub fn held_by(&self, token: Option<&str>) -> bool {
-        self.live
-            && token.is_some_and(|token| {
-                self.lease
-                    .as_ref()
-                    .is_some_and(|lease| !lease.token.is_empty() && lease.token == token)
-            })
-    }
-
     /// Who holds it, for messages.
     pub fn holder(&self) -> String {
         match &self.lease {
@@ -134,9 +110,6 @@ impl Found {
     /// What its holder is doing with the set, for messages.
     pub fn doing(&self) -> String {
         match &self.lease {
-            Some(lease) if lease.ephemeral => {
-                format!("in use by the ephemeral run of {}", self.holder())
-            }
             Some(_) => format!("being created by {}", self.holder()),
             None => "in use by another meta".to_string(),
         }
@@ -185,8 +158,8 @@ impl Drop for Claim {
 }
 
 /// Hold the lease of the set at `set` (resolved) while it is deleted. Fails
-/// if its creator or ephemeral run still holds it. The lease its creator
-/// left, if one was (the set is half-made, or its ephemeral run ended).
+/// if its creator still holds it. The lease its creator left, if one was
+/// (the set is half-made, or ephemeral).
 pub fn hold(set: &Path) -> Result<(Option<Lease>, Claim)> {
     let path = path_for(set)?;
     let Some(lock) = lock(&path)? else {
@@ -337,7 +310,6 @@ pub fn take(lease: &Lease) -> Result<Held> {
     written.with_context(|| format!("Cannot write {}", escape_path(&path)))?;
     Ok(Held {
         path,
-        token: lease.token.clone(),
         _lock: lock,
         leave: false,
     })
@@ -418,8 +390,7 @@ mod tests {
         let mine = lease(&set);
         let held = take(&mine).unwrap();
         let found = find(&set).unwrap();
-        assert!(found.live && found.held_by(Some(held.token())));
-        assert!(!found.held_by(None) && !found.held_by(Some("another")));
+        assert!(found.live);
         assert_eq!(found.lease, Some(mine));
         // another creator, or a command deleting the set, is refused
         let refused = take(&lease(&set)).unwrap_err().to_string();
@@ -440,7 +411,7 @@ mod tests {
         left_behind(&lease(&set));
         let found = find(&set).unwrap();
         // it names this process, which doesn't hold it: a pid says nothing
-        assert!(!found.live && !found.held_by(Some(&lease(&set).token)));
+        assert!(!found.live);
         assert_eq!(all(set.parent().unwrap()).len(), 1);
         let refused = take(&lease(&set)).unwrap_err().to_string();
         assert!(refused.contains("left half-made"), "{refused}");
@@ -493,10 +464,9 @@ mod tests {
         let set = temp.path().join("wt/a");
         std::fs::create_dir_all(set.parent().unwrap()).unwrap();
         let held = take(&lease(&set)).unwrap();
-        let token = held.token().to_string();
         held.leave();
         let found = find(&set).unwrap();
-        assert!(!found.live && !found.held_by(Some(&token)));
+        assert!(!found.live);
         assert!(found.lease.is_some());
     }
 

@@ -110,11 +110,13 @@ meta git worktree create ci-check --every-repo --ttl 1h
 # Mark as ephemeral and store metadata for tooling
 meta git worktree create ci-check --every-repo --ephemeral --meta agent=review-bot --meta run_id=abc123
 
-# Create, run a command, then force-remove, in one step
-meta git worktree exec --ephemeral lint-check --every-repo -- make lint
+# Run a command in a set of its own
+meta git worktree create tmp --repo a --branch b
+meta git worktree exec tmp -- cargo test
+meta git worktree remove tmp
 ```
 
-`prune` removes sets whose TTL has expired, ephemeral sets whose run has
+`prune` removes sets whose TTL has expired, ephemeral sets whose create has
 ended, and sets a stopped `create` left half-made; for a set whose directory
 is gone it only forgets meta's record (git's entries stay: a worktree that was
 moved can still be repaired). meta never drops git's entries itself: after a
@@ -127,8 +129,7 @@ workspace's: remove each member with `git worktree remove`, run in the repo it
 was made from. A member whose repo was deleted with that checkout has no git
 record left, so git can't remove it: copy out any files you want to keep,
 then delete its folder by hand. `create --ephemeral` makes a set the next
-`prune` removes; `exec --ephemeral` removes its set when the command ends, and
-if the run is stopped first, `prune` removes it. A TTL is a backstop for a
+`prune` removes. A TTL is a backstop for a
 session that dies before removing its sets.
 
 ## Inspecting Worktrees
@@ -208,10 +209,10 @@ workspace: sets whose every worktree is recorded in one of the workspace's
 repositories. Another workspace's set is never touched, even when both share a
 `META_WORKTREES` directory; `remove` refuses it and names its workspace. Run
 from inside a set, they act on the workspace the set was made from.
-`--force` and `exec --ephemeral` discard that work: commit and push first.
+`--force` discards that work: commit and push first.
 
 Like `git worktree remove`, files git ignores (`.env`, `target/`) don't count
-as work and go with the set. `remove` (and `exec --ephemeral`) then deletes
+as work and go with the set. `remove` then deletes
 each branch create or add made for the set, in the workspace's repos, when
 every commit on it is also on a remote, another branch or a tag, as `git
 branch -d` would. Commits only a reflog holds (reset, amended or rebased away)
@@ -230,7 +231,7 @@ Configure hooks in the meta config (`.meta.yaml`):
 worktree:
   hooks:
     post-create: my-tool worktree on-create
-    post-destroy: my-tool worktree on-destroy   # runs on `remove` and ephemeral cleanup
+    post-destroy: my-tool worktree on-destroy   # runs on `remove`
     post-prune: my-tool worktree on-prune
 ```
 
@@ -240,8 +241,7 @@ stdin. Its stdout is discarded and its stderr goes to meta's. A hook runs
 once the command's work is done (on the terminal its stderr, and a warning
 about it, show before the command's report). A hook that fails is a warning
 naming it and its exit code (or signal), and an error under `--strict`; either
-way the work stays done. `exec --ephemeral` takes no `--strict`: its
-hooks only warn. Any other hook name is a config error.
+way the work stays done. Any other hook name is a config error.
 
 `create` keeps the worktrees folder out of the workspace repository's
 `git status` by listing it in that repository's `.git/info/exclude`, which is
@@ -256,7 +256,7 @@ flag and custom metadata. Git deletes the record with the worktree. The record
 is how `remove` and `prune` know meta made a set: a set made by hand, or by a
 meta from before records, is refused, and so is a set holding a worktree meta
 has no record of (one added by hand with `git worktree add`); remove those with
-`git worktree remove`. While `create` (or `exec --ephemeral`) runs, a lease beside the set,
+`git worktree remove`. While `create` runs, a lease beside the set,
 `<worktrees dir>/.<set>.meta-lease` (and its `.lock`), names it: `remove` refuses a set
 that is being created, and takes back one whose creator stopped part way,
 worktrees not recorded yet included.

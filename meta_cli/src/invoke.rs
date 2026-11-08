@@ -435,7 +435,7 @@ fn find_config(cli: &Cli, start: &Path) -> Result<Option<Config>> {
     }
 }
 
-/// Whether a creator or an ephemeral run holds the lease of the set at `dir`.
+/// Whether a creator holds the lease of the set at `dir`.
 fn leased(dir: &Path) -> bool {
     dir.canonicalize()
         .ok()
@@ -538,8 +538,6 @@ pub fn request(
         request.depth = cli.depth;
         request.recursive = true;
     }
-    // the lease of the program that called meta back, for its plugin alone
-    request.lease = std::env::var(meta_plugin::LEASE_VAR).ok();
     request.data_dir = meta_core::data_dir::data_subdir(&format!("data/{}", plugin.word))?;
     request.meta = meta_plugin::Meta {
         json: cli.json,

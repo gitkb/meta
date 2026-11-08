@@ -106,7 +106,7 @@ fn set_of_admin(admin: &Path, worktree_root: &Path) -> Option<PathBuf> {
 
 /// Why an existing set with `record` is due for pruning, if it is: the
 /// reason and, for an expired TTL, its age. (An ephemeral set is pruned once
-/// the run that made it is gone and left its lease beside it: see the
+/// the create that made it is done and left its lease beside it: see the
 /// leases in `handle_prune`. No lease is no proof the run ended: `git clean`
 /// may have deleted it. A set whose repositories were removed from the
 /// project, or whose project is gone, is no longer this workspace's: prune
@@ -144,9 +144,9 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
     let worktree_root = crate::here::worktree_root(request)?;
     let places = here.places();
     let (sets, mut kept) = find_sets(&workspace, &worktree_root);
-    // A set whose lease is held is being created, or is an ephemeral set
-    // whose run goes on: prune leaves it. One whose creator is gone without
-    // finishing it is pruned, recorded or not.
+    // A set whose lease is held is being created: prune leaves it. One
+    // whose creator is gone without finishing it, or left it as ephemeral,
+    // is pruned, recorded or not.
     let mut held = BTreeSet::new();
     let mut abandoned = BTreeMap::new();
     // Leases sit beside their sets: in the worktrees folder, and beside each
@@ -190,7 +190,10 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let reason = match found.lease.as_ref().is_some_and(|l| l.ephemeral) {
-            true => format!("ephemeral, the run that made it ({}) ended", found.holder()),
+            true => format!(
+                "ephemeral, the create that made it ({}) ended",
+                found.holder()
+            ),
             false => format!("abandoned while {} was creating it", found.holder()),
         };
         to_remove.push((Candidate::new(set, name, reason, None), None));
@@ -327,8 +330,8 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
             // Checked again: a directory above may have become a link since
             Some(check) => match path_moved(wt_path) {
                 // The set's lease, held through the deletion so no create of
-                // it starts meanwhile. Refused if one is creating it or an
-                // ephemeral run uses it; an abandoned set whose lease is
+                // it starts meanwhile. Refused if one is creating it; an
+                // abandoned set whose lease is
                 // another's now was made again since.
                 None => {
                     let held = lease::hold(wt_path);

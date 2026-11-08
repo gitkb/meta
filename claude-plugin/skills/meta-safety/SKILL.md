@@ -92,13 +92,15 @@ meta --strict git worktree prune
 - Working with repos that legitimately don't have a ref
 - Exploratory work where partial context is acceptable
 
-### Ephemeral Cleanup Behavior
-
-`meta git worktree exec --ephemeral` creates the set in best-effort mode (`strict=false`, so a repo missing a ref is skipped), even if you specified `--strict`, runs the command, then removes the set. Cleanup only runs if creation succeeded.
-
-If cleanup fails, meta prints the error and exits non-zero even when the command itself succeeded, and the set may be left in place. Check with `meta git worktree list` and remove it with `meta git worktree remove <name>`.
-
 For `meta git worktree create`, meta's `--strict` goes before the command like every meta option: `meta --strict git worktree create feature-test v2.0.0 --every-repo`.
+
+### Running a Command in a Short-Lived Set
+
+```bash
+meta git worktree create tmp --repo a --branch b
+meta git worktree exec tmp -- cargo test
+meta git worktree remove tmp
+```
 
 ## Efficiency Tips
 

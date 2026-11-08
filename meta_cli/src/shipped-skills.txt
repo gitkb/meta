@@ -214,3 +214,5 @@ meta-worktree/SKILL.md 1722c48ffdd1ead07b6217591d62f8e89573691d
 meta-exec/SKILL.md 932d6ba56e6f99f16848515f348e026e3340202b
 meta-exec/SKILL.md 4619da9a57de74603b4ded8c4c71215fdc3ebbf4
 meta-worktree/SKILL.md bba48735228866103bfa6ae73f3aad4ebeb29331
+meta-worktree/SKILL.md 1cf643a303494e49c6f92544b3fd3d5f60379adf
+meta-safety/SKILL.md 1153bac335d94cb5c98b9d65e7547d8537cc3df8

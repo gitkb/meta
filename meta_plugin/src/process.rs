@@ -130,13 +130,12 @@ pub fn spawn_finishing(command: &mut Command) -> io::Result<Owned> {
 
 fn start(command: &mut Command, grouped: bool) -> io::Result<Owned> {
     // a plugin's call is its own: what it starts never writes its answer
-    // or its events, nor holds its caller's lease, unless the
-    // call is that program's (meta calling a plugin sets them)
+    // or its events, unless the call is that program's (meta calling a
+    // plugin sets them)
     for var in [
         crate::REQUEST_VAR,
         crate::RESPONSE_VAR,
         crate::event::EVENTS_VAR,
-        crate::LEASE_VAR,
     ] {
         if !command.get_envs().any(|(name, _)| name == var) {
             command.env_remove(var);

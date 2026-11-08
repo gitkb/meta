@@ -157,8 +157,6 @@ preview() {
     cd "$SANDBOX/empty"
     preview 1 git worktree create e --every-repo
     [[ "$output" == *"No repos selected; no worktree was created"* ]]
-    preview 1 git worktree exec e --ephemeral --every-repo -- true
-    [[ "$output" == *"No repos selected; no worktree was created"* ]]
 }
 
 @test "worktree create --from-pr previews the checks a run makes before GitHub" {
@@ -217,29 +215,26 @@ preview() {
     [[ "$output" == *"[DRY RUN]"*"touch made-by-exec"* ]]
 }
 
-@test "worktree exec --ephemeral creates, runs and removes nothing" {
-    preview 0 git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
+@test "worktree create previews what a run would make" {
+    preview 0 git worktree create eph --repo backend
     [[ "$output" == *"Would create worktree set 'eph'"* ]]
-    [[ "$output" == *"Then would run \`touch made-by-exec\` in each repo planned above, and remove the set."* ]]
     # no nested config is read (here a broken one)
     printf '{broken' > "$WS/frontend/.meta.yaml"
-    preview 0 git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
+    preview 0 git worktree create eph --repo backend
     rm "$WS/frontend/.meta.yaml"
     # a repo without the start commit is skipped, as in a run
     git -C "$WS/frontend" tag only-in-frontend
-    preview 0 git worktree exec eph only-in-frontend --ephemeral --every-repo -- touch made-by-exec
+    preview 0 git worktree create eph only-in-frontend --every-repo
     [[ "$output" == *"Skipping 'backend': ref 'only-in-frontend' not found"* ]]
     [[ "$output" == *"frontend:"* ]]
     [[ "$output" != *"backend:"* ]]
     # a ref no repo has fails as in a run
-    preview 1 git worktree exec eph nosuchref --ephemeral --every-repo -- touch made-by-exec
-    [[ "$output" == *"No selected repo has ref 'nosuchref'; no worktree was created"* ]]
     preview 1 git worktree create new nosuchref --every-repo
     [[ "$output" == *"No selected repo has ref 'nosuchref'"* ]]
     # the set it makes holds the repos it names: a filter is refused, as in a run
-    preview 2 --include backend git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
+    preview 2 --include backend git worktree create eph --repo backend
     [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
-    preview 2 --exclude backend git worktree exec eph --ephemeral --repo backend -- touch made-by-exec
+    preview 2 --exclude backend git worktree create eph --repo backend
     [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
 }
 

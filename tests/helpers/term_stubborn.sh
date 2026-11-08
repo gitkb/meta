@@ -6,7 +6,7 @@
 # command is.
 meta=$1 dir=$2
 cd "$dir" || exit 1
-"$meta" git worktree exec stubborn --repo backend -- sh -c \
+"$meta" git worktree exec stubborn -- sh -c \
     'trap "" TERM; echo $$ > "$0/stubborn"; while [ -d "$0" ]; do sleep 0.05; done' "$dir" &
 pid=$!
 for _ in $(seq 200); do [ -s "$dir/stubborn" ] && break; sleep 0.1; done

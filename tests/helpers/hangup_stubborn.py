@@ -39,8 +39,8 @@ if pid == 0:
     # a hangup ignored here (bats under nohup) would stay ignored in meta
     signal.signal(signal.SIGHUP, signal.SIG_DFL)
     # meta is this terminal's foreground job, and its session's leader
-    os.execv(meta, [meta, "git", "worktree", "exec", "stubborn", "--repo",
-                    "backend", "--", "sh", "-c", command, test_dir])
+    os.execv(meta, [meta, "git", "worktree", "exec", "stubborn", "--", "sh",
+                    "-c", command, test_dir])
 
 stubborn_file = os.path.join(test_dir, "stubborn")
 deadline = time.monotonic() + 20

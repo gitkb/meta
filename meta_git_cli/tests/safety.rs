@@ -983,51 +983,6 @@ fn one_repo_named_twice_is_refused_only_on_two_branches() {
 }
 
 #[test]
-fn an_ephemeral_exec_of_all_keeps_a_branch_given_for_one_repo() {
-    let sandbox = Sandbox::new();
-    let ws = workspace(&sandbox, &["a", "b"]);
-    let out = meta_git(
-        &sandbox,
-        &ws,
-        "git worktree exec",
-        &[
-            "run",
-            "--ephemeral",
-            "--every-repo",
-            "--repo",
-            "a:asked",
-            "--",
-            "true",
-        ],
-        json!({"dry_run": true}),
-    );
-    assert!(out.status.success(), "{}", stderr(&out));
-    let plan = String::from_utf8_lossy(&out.stdout);
-    assert!(plan.contains("branch: asked"), "{plan}");
-    assert!(plan.contains("branch: run"), "{plan}");
-    // and one repo on two branches is refused, as without --every-repo
-    let out = meta_git(
-        &sandbox,
-        &ws,
-        "git worktree exec",
-        &[
-            "run",
-            "--ephemeral",
-            "--every-repo",
-            "--repo",
-            "a:x",
-            "--repo",
-            "a:y",
-            "--",
-            "true",
-        ],
-        json!({"dry_run": true}),
-    );
-    assert!(!out.status.success());
-    assert!(stderr(&out).contains("given twice"), "{}", stderr(&out));
-}
-
-#[test]
 fn a_root_git_cannot_use_is_no_reason_to_fail_a_create_without_it() {
     let sandbox = Sandbox::new();
     let root = &sandbox.work();
@@ -1047,40 +1002,6 @@ fn a_root_git_cannot_use_is_no_reason_to_fail_a_create_without_it() {
     for set in ["n", "l"] {
         assert!(ws.join(".worktrees").join(set).join("a/README").exists());
     }
-}
-
-#[test]
-fn an_ephemeral_exec_removes_the_set_it_made_wherever_the_config_moves_sets() {
-    let sandbox = Sandbox::new();
-    let root = &sandbox.work();
-    let ws = workspace(&sandbox, &["a"]);
-    // the command moves the workspace's worktrees elsewhere meanwhile
-    let mut config: Value =
-        serde_json::from_str(&fs::read_to_string(ws.join(".meta.yaml")).unwrap()).unwrap();
-    config["worktrees_dir"] = json!("elsewhere");
-    fs::write(root.join("moved.yaml"), config.to_string()).unwrap();
-    let command = format!(
-        "cp '{}' '{}'",
-        root.join("moved.yaml").display(),
-        ws.join(".meta.yaml").display()
-    );
-    let out = worktree(
-        &sandbox,
-        &ws,
-        &[
-            "exec",
-            "eph",
-            "--ephemeral",
-            "--repo",
-            "a",
-            "--",
-            "sh",
-            "-c",
-            &command,
-        ],
-    );
-    assert!(out.status.success(), "{}", stderr(&out));
-    assert!(!ws.join(".worktrees/eph").exists(), "{}", stderr(&out));
 }
 
 #[test]

@@ -171,37 +171,8 @@ pub struct DiffArgs {
 
 #[derive(Args)]
 pub struct ExecArgs {
-    // NOTE: Positional arg order matters — name, commit_ish, command must stay in this order.
     /// Worktree name
     pub name: String,
-
-    /// Start from a specific commit-ish (ephemeral only)
-    pub commit_ish: Option<String>,
-
-    /// Atomic create+exec+remove (requires --every-repo or --repo, and -- <cmd>)
-    #[arg(long)]
-    pub ephemeral: bool,
-
-    // --- Ephemeral-only create flags (ignored when not --ephemeral) ---
-    /// Add specific repo(s) for ephemeral worktree (alias or alias:branch)
-    #[arg(long = "repo", value_name = "ALIAS[:BRANCH]")]
-    pub repos: Vec<RepoSpec>,
-
-    /// Add every repo meta reaches to the ephemeral worktree (see create)
-    #[arg(long)]
-    pub every_repo: bool,
-
-    /// Record custom metadata for ephemeral worktree (key=value)
-    #[arg(long = "meta", value_name = "KEY=VALUE")]
-    pub custom_meta: Vec<String>,
-
-    /// Start from a PR's head branch (ephemeral only, owner/repo#N)
-    #[arg(long, value_name = "OWNER/REPO#N", conflicts_with = "commit_ish")]
-    pub from_pr: Option<String>,
-
-    /// Override branch name for ephemeral worktree
-    #[arg(long = "branch")]
-    pub branch: Option<String>,
 
     /// Command and arguments to execute (after --)
     #[arg(last = true, required = true)]

@@ -41,10 +41,6 @@ pub const DEPTH_VAR: &str = "META_DEPTH";
 pub const MAX_DEPTH: u32 = 8;
 /// The most a call's Envelope may hold: a bigger one is refused, not cut.
 pub const MAX_ENVELOPE: u64 = 64 << 20;
-/// The flag a plugin built with [`crate::run_plugin`] answers by waiting for
-/// its stdin to close, then running the command after it (see
-/// [`Meta::finishing`]).
-pub const FINISH_FLAG: &str = "--meta-plugin-finish";
 
 /// How many meta calls are around this program (0 when none).
 pub fn depth() -> Result<u32> {
@@ -64,7 +60,6 @@ pub struct Meta {
     depth: u32,
     cwd: Option<PathBuf>,
     args: Vec<OsString>,
-    lease: Option<String>,
     env: Vec<(OsString, OsString)>,
 }
 
@@ -94,7 +89,6 @@ impl Meta {
             depth,
             cwd: None,
             args: Vec::new(),
-            lease: None,
             env: Vec::new(),
         })
     }
@@ -122,13 +116,6 @@ impl Meta {
         self
     }
 
-    /// Pass on the lease this program holds (a [`crate::sets::lease::Held`]'s
-    /// token): the command treats the set as its caller's.
-    pub fn lease(mut self, token: impl Into<String>) -> Self {
-        self.lease = Some(token.into());
-        self
-    }
-
     fn command(&self, json: bool) -> Command {
         #[expect(
             clippy::disallowed_methods,
@@ -143,10 +130,6 @@ impl Meta {
             .args(&self.args)
             .envs(self.env.iter().map(|(k, v)| (k, v)))
             .env(DEPTH_VAR, self.depth.to_string());
-        match &self.lease {
-            Some(token) => command.env(crate::LEASE_VAR, token),
-            None => command.env_remove(crate::LEASE_VAR),
-        };
         if let Some(dir) = &self.cwd {
             command.current_dir(dir);
         }
@@ -181,174 +164,10 @@ impl Meta {
     /// Ctrl-C itself; off one it gets a group of its own, which this
     /// program's stop reaches ([`crate::process::spawn`]).
     pub fn inherit(self) -> Result<ExitStatus> {
-        self.start_inherited()?.wait()
-    }
-
-    /// [`Meta::inherit`], started: its process id is known before it ends
-    /// (for [`Finishing::running`]).
-    pub fn start_inherited(self) -> Result<Inherited> {
         let mut command = self.command(false);
-        let child = crate::process::spawn(&mut command)
+        let mut child = crate::process::spawn(&mut command)
             .with_context(|| format!("Cannot run {}", escape_path(&self.exe)))?;
-        Ok(Inherited { child })
-    }
-}
-
-impl Meta {
-    /// Start it now, to run once this program has ended, however it ends
-    /// (a Ctrl-C, SIGTERM, even SIGKILL), or once [`Finishing::run`] says
-    /// so: cleanup that must finish, such as removing what a cancelled
-    /// command made. A copy of this program (it must be built with
-    /// [`crate::run_plugin`]) waits, out of reach of every stop
-    /// ([`crate::process::spawn_finishing`]), until this program's end of
-    /// its stdin closes, then runs the command, its output this program's.
-    pub fn finishing(self) -> Result<Finishing> {
-        use std::process::Stdio;
-        let waiter = std::env::current_exe().context("Cannot tell which program this is")?;
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "this program itself, which runs meta, with no repository's git env"
-        )]
-        let mut command = Command::new(&waiter);
-        crate::process::clean_env(&mut command);
-        command
-            .arg(FINISH_FLAG)
-            .arg(&self.exe)
-            .args(&self.args)
-            .envs(self.env.iter().map(|(k, v)| (k, v)))
-            .env(DEPTH_VAR, self.depth.to_string())
-            .stdin(Stdio::piped());
-        match &self.lease {
-            Some(token) => command.env(crate::LEASE_VAR, token),
-            None => command.env_remove(crate::LEASE_VAR),
-        };
-        if let Some(dir) = &self.cwd {
-            command.current_dir(dir);
-        }
-        let mut child = crate::process::spawn_finishing(&mut command)
-            .with_context(|| format!("Cannot start {}", escape_path(&waiter)))?;
-        let stdin = child.stdin();
-        Ok(Finishing { child, stdin })
-    }
-}
-
-/// A [`Meta::inherit`] call that is running.
-pub struct Inherited {
-    child: crate::process::Owned,
-}
-
-impl Inherited {
-    /// Its process id.
-    pub fn id(&self) -> u32 {
-        self.child.id()
-    }
-
-    /// Wait for it to end: its exit status.
-    pub fn wait(mut self) -> Result<ExitStatus> {
-        self.child.wait().context("Cannot wait for meta")
-    }
-}
-
-/// A command waiting to run once this program ends (see [`Meta::finishing`]).
-pub struct Finishing {
-    child: crate::process::Owned,
-    /// Held open until it is time: closed, the command runs
-    stdin: Option<std::process::ChildStdin>,
-}
-
-impl Finishing {
-    /// Say that the run with process id `pid` (a meta this program started)
-    /// works on what the command cleans up. Should this program end before
-    /// it says [`Finishing::ended`] (killed outright), the waiter stops that
-    /// run (SIGTERM, then SIGKILL after 10 seconds) and waits for its end
-    /// before it runs the command, so the cleanup never pulls the ground
-    /// from under it.
-    pub fn running(&mut self, pid: u32) {
-        self.say(&format!("run {pid}"));
-    }
-
-    /// Say that the run named with [`Finishing::running`] has ended.
-    pub fn ended(&mut self) {
-        self.say("ended");
-    }
-
-    fn say(&mut self, line: &str) {
-        use std::io::Write;
-        if let Some(stdin) = &mut self.stdin {
-            let _ = writeln!(stdin, "{line}");
-            let _ = stdin.flush();
-        }
-    }
-
-    /// Run it now and wait for it: its exit status. A stop that comes
-    /// meanwhile ends this program, not the command.
-    pub fn run(mut self) -> Result<ExitStatus> {
-        drop(self.stdin.take());
-        self.child.wait().context("Cannot wait for meta")
-    }
-}
-
-/// The waiter of [`Meta::finishing`]: wait for stdin to close, then run the
-/// command `args` names (a program, then its arguments) and end as it ends.
-pub(crate) fn finish(args: &[std::ffi::OsString]) -> Result<()> {
-    use std::io::BufRead;
-    // the run its caller named and didn't see end, if any
-    let mut running: Option<u32> = None;
-    for line in std::io::stdin().lock().lines() {
-        let Ok(line) = line else { break };
-        match line.split_once(' ') {
-            Some(("run", pid)) => running = pid.trim().parse().ok(),
-            _ if line == "ended" => running = None,
-            _ => {}
-        }
-    }
-    // elsewhere (Windows) the job meta put its plugin in ends that run
-    #[cfg(unix)]
-    if let Some(pid) = running.and_then(|pid| i32::try_from(pid).ok()) {
-        stop_and_wait(pid);
-    }
-    #[cfg(not(unix))]
-    let _ = running;
-    let Some((program, args)) = args.split_first() else {
-        anyhow::bail!("{FINISH_FLAG} takes the command to run");
-    };
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "meta, which its caller named, with the env it was given"
-    )]
-    let mut command = Command::new(program);
-    command.args(args).stdin(std::process::Stdio::null());
-    // the lease its caller passed on is the command's (a child doesn't get
-    // one unless given it)
-    if let Some(token) = std::env::var_os(crate::LEASE_VAR) {
-        command.env(crate::LEASE_VAR, token);
-    }
-    let status = crate::process::status(&mut command)
-        .with_context(|| format!("Cannot run {}", escape_path(std::path::Path::new(program))))?;
-    match status.success() {
-        true => Ok(()),
-        false => Err(crate::exit::ExitWith::of(status).into()),
-    }
-}
-
-/// Stop the process `pid` (SIGTERM; SIGKILL after 10 seconds) and wait
-/// for its end.
-#[cfg(unix)]
-fn stop_and_wait(pid: i32) {
-    use rustix::process::{kill_process, test_kill_process, Pid, Signal};
-    let Some(pid) = Pid::from_raw(pid) else {
-        return;
-    };
-    let gone = || test_kill_process(pid).is_err();
-    let _ = kill_process(pid, Signal::TERM);
-    let start = std::time::Instant::now();
-    let mut killed = false;
-    while !gone() {
-        if !killed && start.elapsed() > std::time::Duration::from_secs(10) {
-            let _ = kill_process(pid, Signal::KILL);
-            killed = true;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        child.wait().context("Cannot wait for meta")
     }
 }
 
@@ -369,11 +188,6 @@ pub struct Running {
 }
 
 impl Running {
-    /// Its process id.
-    pub fn id(&self) -> u32 {
-        self.child.id()
-    }
-
     /// Wait for it to end, and read its Envelope. A call that prints none
     /// (meta was killed, say) is an error with its exit status; one that
     /// printed more than [`MAX_ENVELOPE`] is stopped and refused.
@@ -447,13 +261,12 @@ mod tests {
     }
 
     #[test]
-    fn a_call_passes_its_depth_and_only_the_lease_it_was_given() {
+    fn a_call_passes_its_depth() {
         let meta = Meta {
             exe: PathBuf::from("meta"),
             depth: 3,
             cwd: Some(PathBuf::from("/w")),
             args: vec!["exec".into()],
-            lease: None,
             env: Vec::new(),
         };
         let envs = |command: &Command| -> Vec<(String, Option<String>)> {
@@ -471,10 +284,6 @@ mod tests {
         let args: Vec<_> = plain.get_args().collect();
         assert_eq!(args, ["--json", "exec"]);
         assert!(envs(&plain).contains(&(DEPTH_VAR.into(), Some("3".into()))));
-        // one this program inherited is not passed on unasked
-        assert!(envs(&plain).contains(&(crate::LEASE_VAR.into(), None)));
-        let leased = meta.lease("tok").command(false);
-        assert!(envs(&leased).contains(&(crate::LEASE_VAR.into(), Some("tok".into()))));
     }
 
     /// Run `f` with `vars` set (`None`: unset) in this test's environment.

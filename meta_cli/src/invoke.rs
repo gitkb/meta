@@ -158,11 +158,14 @@ fn resolve_dependencies(
             std::iter::once(key.clone()).chain(provided)
         })
         .collect();
-    // what an entry as written may name anywhere: a project's name too
+    // what an entry as written may name anywhere: a project's place, its
+    // name or what it provides
     let anywhere: std::collections::HashSet<&str> = keyed
         .iter()
-        .flat_map(|(_, _, _, info)| info.provides.iter().chain(std::iter::once(&info.name)))
-        .map(String::as_str)
+        .flat_map(|(_, key, _, info)| {
+            let named = info.provides.iter().chain([&info.name, key]);
+            named.map(String::as_str)
+        })
         .collect();
     let mut nodes: Vec<ProjectDependencies> = keyed
         .iter()

@@ -657,8 +657,15 @@ fn nested_include(recursive: &Recursive, project: &str) -> Result<String> {
 fn tree_graph(
     recursive: &Recursive,
 ) -> Result<(dependency_graph::DependencyGraph, HashMap<String, PathBuf>)> {
-    let (mut projects, dirs) =
-        dependency_graph::in_tree(&recursive.dir, &recursive.config.projects, None)?;
+    // a set with no root checkout holds the top config's projects at their
+    // places in a set (one outside the workspace at its name)
+    let mut top = recursive.config.projects.clone();
+    if recursive.in_set() && recursive.config.dir != recursive.dir {
+        for project in &mut top {
+            project.path = project.set_place().to_string();
+        }
+    }
+    let (mut projects, dirs) = dependency_graph::in_tree(&recursive.dir, &top, None)?;
     if recursive.in_set() {
         let members: Vec<PathBuf> = recursive
             .select(&Filters::default())?
@@ -2233,6 +2240,19 @@ mod tests {
         let projects = call(&server, "meta_list_projects", json!({})).unwrap().text;
         assert!(projects.starts_with("Found 1 project"), "{projects}");
         assert!(projects.contains("- sib (sib)"), "{projects}");
+        // and the tools that read the tree find it there too
+        let impact = json(call(
+            &server,
+            "meta_analyze_impact",
+            json!({"project": "sib"}),
+        ));
+        assert_eq!(impact["direct_dependents"], json!([]), "{impact}");
+        let status = json(call(&server, "meta_git_status", json!({"project": "sib"})));
+        assert_eq!(
+            status["results"].as_array().map(Vec::len),
+            Some(1),
+            "{status}"
+        );
     }
 
     #[test]

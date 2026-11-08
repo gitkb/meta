@@ -398,27 +398,85 @@ fn a_dependency_the_set_holds_is_not_warned_about() {
     assert!(!text(&out).contains("only -r"), "{}", text(&out));
 }
 
-/// `-r` follows a dependency across nesting levels, both ways, through a
-/// capability too, as `meta -r project dependents` reads it.
+/// `-r` doesn't follow a dependency across nesting levels: it is named, with
+/// the `--repo` that adds it, and once named nothing is said.
 #[test]
-fn r_follows_dependencies_across_levels() {
+fn r_names_a_dependency_across_levels_and_the_repo_to_add() {
     let f = fixture();
     f.config("platform", "core", json!({"provides": ["core-cap"]}));
     f.config(".", "a", json!({"depends_on": ["core-cap"]}));
     let out = ok(f.meta(&["-r", "git", "worktree", "create", "t", "--repo", "a"]));
-    assert!(f.set("t/platform/core").is_dir(), "{}", text(&out));
-    f.config("platform", "core", json!({"depends_on": ["b"]}));
-    let out = ok(f.meta(&[
+    let said = text(&out);
+    assert!(!f.set("t/platform/core").exists(), "{said}");
+    assert!(
+        said.contains("'platform/core', at another nesting level")
+            && said.trim_end().ends_with("--repo platform/core"),
+        "{said}"
+    );
+    let line = [
+        "--strict",
         "-r",
         "git",
         "worktree",
         "create",
         "u",
         "--repo",
+        "a",
+        "--repo",
         "platform/core",
-    ]));
-    assert!(f.set("u/b").is_dir(), "{}", text(&out));
+    ];
+    let out = ok(f.meta(&line));
     assert!(!text(&out).contains("warning"), "{}", text(&out));
+}
+
+/// On the PR's second head a nested provider took a top-level dependency
+/// from the provider of its own config.
+#[test]
+fn a_capability_two_levels_provide_resolves_in_its_own_config() {
+    let f = fixture();
+    f.config(".", "b", json!({"provides": ["cap"]}));
+    f.config("platform", "core", json!({"provides": ["cap"]}));
+    f.config(".", "a", json!({"depends_on": ["cap"]}));
+    for (name, options) in [("s", vec!["--strict"]), ("t", vec!["--strict", "-r"])] {
+        let tail = ["git", "worktree", "create", name, "--repo", "a"];
+        let out = ok(f.meta(&[&options[..], &tail[..]].concat()));
+        assert!(f.set(name).join("b").is_dir(), "{}", text(&out));
+        assert!(
+            !f.set(name).join("platform/core").exists(),
+            "{}",
+            text(&out)
+        );
+    }
+}
+
+/// On the PR's second head, created from inside a nested meta repo, a
+/// dependency at the parent level was left out without a word.
+#[test]
+fn from_a_nested_meta_repo_a_parent_level_dependency_is_named() {
+    let f = fixture();
+    f.config(".", "b", json!({"provides": ["b-cap"]}));
+    f.config("platform", "core", json!({"depends_on": ["b-cap"]}));
+    let out = f
+        .sandbox
+        .command(env!("CARGO_BIN_EXE_meta"))
+        .args(["git", "worktree", "create", "s", "--repo", "core"])
+        .current_dir(f.ws.join("platform"))
+        .env(
+            "PATH",
+            format!(
+                "{}:/usr/bin:/bin",
+                Path::new(env!("CARGO_BIN_EXE_meta"))
+                    .with_file_name("")
+                    .display()
+            ),
+        )
+        .output()
+        .unwrap();
+    let said = text(&ok(out));
+    assert!(
+        said.contains("depends on 'b', at another nesting level"),
+        "{said}"
+    );
 }
 
 #[test]
@@ -426,7 +484,7 @@ fn only_a_dependency_across_nesting_is_warned_about() {
     let f = fixture();
     let warned = |f: &Fixture, words: &[&str]| {
         let out = ok(f.meta(words));
-        text(&out).contains("only -r follows")
+        text(&out).contains("--repo")
     };
     // --no-deps is silent
     assert!(!warned(

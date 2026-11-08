@@ -39,7 +39,7 @@ pub struct Index<'a> {
     /// `dir`'s place from the workspace root, with a `/` (empty at the
     /// root): what meta's names of nested projects start with
     pub prefix: String,
-    pub tree: Tree<'a>,
+    tree: Tree<'a>,
     /// meta's members of the workspace, each URL as configured
     pub members: &'a [meta_plugin::Project],
     /// With `--recursive`: how deep (none: no limit)

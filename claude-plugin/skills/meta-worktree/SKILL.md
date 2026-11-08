@@ -40,17 +40,17 @@ workspace's sets.
 Run these from the workspace root. **Use `-r` when a repo you name, or one it
 depends on, is nested in a meta repo**, and `-A` when the target is at another
 nesting level than the folder you are in: without them a set holds only this
-level's repos, and each dependency the set won't hold is named in a warning with
-the `--repo` that adds it (with `--strict`, an error, and nothing is made);
-`--no-deps` leaves dependencies out without a word. `-r`
-follows a dependency across nesting levels, by name, path or what a repo
-`provides`.
+level's repos. **`-r` doesn't follow a dependency across nesting levels** (a
+top-level repo that depends on a nested one, or the other way round): name that
+repo with `--repo` too. Each dependency the set won't hold is named in a warning
+that ends with the `--repo` that adds it (with `--strict`, an error, and nothing
+is made); `--no-deps` leaves dependencies out without a word.
 
 ```bash
 # Specific repos (the root repo and their dependencies are added automatically)
 meta git worktree create auth-fix --repo backend --repo frontend
 
-# A nested repo and its dependencies, across nesting levels
+# A nested repo and its dependencies in the same meta repo
 meta -r git worktree create sdk-fix --repo open-source/sdk/core
 
 # Only the named repos (and, for a repo nested inside another project's path, that parent project)

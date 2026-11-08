@@ -723,3 +723,87 @@ exit 0"#,
     assert!(!log.contains("--meta-plugin-exec"), "{log}");
     assert!(root.join(".worktrees/s/a/.jj").is_dir());
 }
+
+/// A git command meta-git doesn't adapt reaches git in each selected repo
+/// exactly as typed: git's own leading options, `help`, flags of the
+/// command's, `--` and the words after it, one word with spaces.
+#[test]
+fn a_raw_git_line_reaches_git_byte_for_byte_in_each_repo() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    fs::write(
+        root.join(".meta.yaml"),
+        r#"{"projects":{"a":"https://example.invalid/a.git","b":"https://example.invalid/b.git"}}"#,
+    )
+    .unwrap();
+    for project in ["a", "b"] {
+        fs::create_dir_all(root.join(project)).unwrap();
+        sandbox.git(&root.join(project), &["init", "-q"]);
+    }
+    // a git that, for a command meta planned (it sets GIT_PAGER), logs
+    // where it ran and each word it got, in one write, then succeeds;
+    // meta's own git calls reach the real git
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|dir| dir.join("git"))
+        .find(|git| git.is_file())
+        .unwrap();
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let log = root.join("git.log");
+    script(
+        &bin.join("git"),
+        &format!(
+            r#"[ "$GIT_PAGER" = cat ] || exec "{}" "$@"
+line="${{PWD##*/}}"; for word; do line="$line$(printf '\037')$word"; done
+printf '%s\n' "$line" >> "{}""#,
+            real.display(),
+            log.display()
+        ),
+    );
+    // meta-git, built beside meta
+    let plugins = Path::new(env!("CARGO_BIN_EXE_meta")).parent().unwrap();
+    let workspace = root.file_name().unwrap().to_string_lossy().into_owned();
+    let lines: &[&[&str]] = &[
+        &["-c", "key=value", "status"],
+        &["--no-pager", "log", "-1"],
+        &["-C", "d", "status"],
+        &["-C", "d", "worktree", "remove", "s"],
+        &["help", "log"],
+        &["log", "--oneline", "-3"],
+        &["pull", "-r"],
+        &["status", "--", "x"],
+        &["log", "--format=%h %s", "--", "a b", "--help"],
+    ];
+    for line in lines {
+        if log.exists() {
+            fs::remove_file(&log).unwrap();
+        }
+        let output = sandbox
+            .command(env!("CARGO_BIN_EXE_meta"))
+            .arg("git")
+            .args(*line)
+            .current_dir(&root)
+            .env(
+                "PATH",
+                format!("{}:{}:/usr/bin:/bin", bin.display(), plugins.display()),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "meta git {line:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut ran: Vec<String> = fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        ran.sort();
+        let typed = line.iter().map(|w| format!("\x1f{w}")).collect::<String>();
+        // the workspace's own repo, a and b
+        let mut repos = [workspace.as_str(), "a", "b"].map(|repo| format!("{repo}{typed}"));
+        repos.sort();
+        assert_eq!(ran, repos, "{line:?}");
+    }
+}

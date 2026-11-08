@@ -24,18 +24,54 @@ impl Filters {
         Self {
             include: include.unwrap_or_default(),
             exclude: exclude.unwrap_or_default(),
-            tags: tag
-                .into_iter()
-                .flat_map(|tags| tags.split(','))
-                .map(str::trim)
-                .filter(|tag| !tag.is_empty())
-                .map(str::to_string)
-                .collect(),
+            tags: tag.map(split_tags).unwrap_or_default(),
         }
+    }
+
+    /// The tags `tag`, a `--tag` value, names. One of blanks alone names
+    /// none and is refused: `--tag "$UNSET"` is a slip, not "every repo".
+    pub fn tags(tag: &str) -> Result<Vec<String>> {
+        let tags = split_tags(tag);
+        if tags.is_empty() {
+            bail!("--tag '{}' names no tag", escape(tag));
+        }
+        Ok(tags)
+    }
+
+    /// Refuses a `--tag` tag that none of `known` is (every tag of the
+    /// projects in the configs read): a typo never runs a command in fewer
+    /// repos than meant. `read_from` names the config; `hint` ends the error.
+    pub fn check_tags(&self, known: &[String], read_from: &str, hint: &str) -> Result<()> {
+        let Some(tag) = self.tags.iter().find(|tag| !known.contains(tag)) else {
+            return Ok(());
+        };
+        let mut known: Vec<&str> = known.iter().map(String::as_str).collect();
+        known.sort_unstable();
+        known.dedup();
+        let known = match known.as_slice() {
+            [] => "no project has a tag".to_string(),
+            known => format!(
+                "the tags are {}",
+                known
+                    .iter()
+                    .map(|t| escape(t))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        bail!(
+            "--tag '{}' is no project's tag{read_from}: {known}.{hint}",
+            escape(tag)
+        )
     }
 
     pub fn is_empty(&self) -> bool {
         self.include.is_empty() && self.exclude.is_empty() && self.tags.is_empty()
+    }
+
+    /// Whether a project with `project_tags` has one of the `--tag` tags.
+    pub fn tagged(&self, project_tags: &[String]) -> bool {
+        self.tags.iter().any(|tag| project_tags.contains(tag))
     }
 }
 
@@ -344,39 +380,18 @@ impl Scope {
         for value in &filters.include {
             chosen.extend(named("--include", value)?);
         }
-        for tag in &filters.tags {
-            if !known.contains(tag) {
-                let mut known: Vec<&str> = known.iter().map(String::as_str).collect();
-                known.sort_unstable();
-                known.dedup();
-                let known = match known.as_slice() {
-                    [] => "no project has a tag".to_string(),
-                    known => format!(
-                        "the tags are {}",
-                        known
-                            .iter()
-                            .map(|t| escape(t))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                };
-                let hint = if nested {
-                    ""
-                } else {
-                    " --recursive reads the tags of nested meta repos too."
-                };
-                bail!(
-                    "--tag '{}' is no project's tag{read_from}: {known}.{hint}",
-                    escape(tag)
-                );
-            }
-            chosen.extend(
-                repos
-                    .iter()
-                    .filter(|r| r.candidate.tags().contains(tag))
-                    .map(|r| r.id.as_path()),
-            );
-        }
+        let hint = if nested {
+            ""
+        } else {
+            " --recursive reads the tags of nested meta repos too."
+        };
+        filters.check_tags(&known, &read_from, hint)?;
+        chosen.extend(
+            repos
+                .iter()
+                .filter(|r| filters.tagged(r.candidate.tags()))
+                .map(|r| r.id.as_path()),
+        );
         let mut excluded = Vec::new();
         for value in &filters.exclude {
             excluded.extend(named("--exclude", value)?);
@@ -393,6 +408,16 @@ impl Scope {
         }
         Ok(selected)
     }
+}
+
+/// The tags of a `--tag` value: its comma-separated entries, trimmed, with
+/// blank ones left out.
+fn split_tags(tag: &str) -> Vec<String> {
+    tag.split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// A repo `select` chooses among: as given, as filters name it, and the

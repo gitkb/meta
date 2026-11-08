@@ -35,7 +35,7 @@ enum Check {
     Copies(&'static [(&'static str, &'static str)]),
 }
 
-const GROUPS: [(u8, &str, Check); 20] = [
+const GROUPS: [(u8, &str, Check); 17] = [
     (
         2,
         "git worktree's subcommands: declared once",
@@ -83,21 +83,6 @@ const GROUPS: [(u8, &str, Check); 20] = [
     ),
     (11, "exit codes: meta_plugin::exit", Check::Rule(exit_codes)),
     (12, "--json output: one envelope", Check::Rule(one_envelope)),
-    (
-        13,
-        "the build systems meta knows: one list",
-        Check::Copies(&[("meta_core/src/query.rs", r#"("meson.build", "meson")"#)]),
-    ),
-    (
-        14,
-        "MCP tools' arguments: from the commands they run",
-        Check::Copies(&[("meta_mcp/src/tools.rs", "fn has_any_tag")]),
-    ),
-    (
-        15,
-        "the MCP tool list: derived, never counted in prose",
-        Check::Copies(&[("README.md", "26 tools")]),
-    ),
     (
         16,
         "command examples: checked in every tracked file",

@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use meta_core::config::{self, ProjectInfo};
 use meta_core::dependency_graph::{self, ProjectDependencies};
 use meta_core::query::{Query, RepoState, WorkspaceState};
+use meta_core::repo_filter::Filters;
 use meta_plugin::display::escape;
 use meta_plugin::{Envelope, ProjectResult};
 use schemars::JsonSchema;
@@ -469,6 +470,7 @@ pub(crate) struct BatchArgs {
 /// The workspace a tool acts in: its root, and the projects its config lists.
 pub(crate) struct Workspace {
     pub(crate) dir: PathBuf,
+    pub(crate) config_path: PathBuf,
     pub(crate) projects: Vec<ProjectInfo>,
 }
 
@@ -485,27 +487,40 @@ pub(crate) struct Target {
 /// Which projects a tool acts on.
 pub(crate) enum Scope {
     All,
-    /// Those with any of these comma-separated tags
-    Tags(String),
+    /// Those with any of these tags, read as `meta --tag` reads them
+    Tags(Filters),
     /// The one with this name (`.` for the root)
     Project(String),
 }
 
 impl Scope {
-    /// From a tool's `project` and `tag`: a blank tag list is no filter
-    /// (as no `tag` at all); both at once are refused, as neither can say
-    /// what the other means.
-    pub(crate) fn of(project: Option<String>, tag: Option<String>) -> Result<Self> {
-        let tag = tag.filter(|tags| tags.split(',').any(|tag| !tag.trim().is_empty()));
-        Ok(match (project, tag) {
+    /// From a tool's `project` and `tag`, the tag read and checked as
+    /// `meta --tag` does it: one that names no tag (blanks alone), or a tag
+    /// none of `known` is, is refused (`read_from` names the config). Both
+    /// at once are refused, as neither can say what the other means.
+    fn of(
+        project: Option<String>,
+        tag: Option<String>,
+        known: &[String],
+        read_from: &str,
+    ) -> Result<Self> {
+        let tags = tag.as_deref().map(Filters::tags).transpose()?;
+        Ok(match (project, tags) {
             (Some(_), Some(_)) => anyhow::bail!("Give 'project' or 'tag', not both"),
             (Some(project), None) => Scope::Project(project),
-            (None, Some(tags)) => Scope::Tags(tags),
+            (None, Some(tags)) => {
+                let filters = Filters {
+                    tags,
+                    ..Filters::default()
+                };
+                filters.check_tags(known, read_from, "")?;
+                Scope::Tags(filters)
+            }
             (None, None) => Scope::All,
         })
     }
 
-    fn tags(&self) -> Option<&str> {
+    fn tags(&self) -> Option<&Filters> {
         match self {
             Scope::Tags(tags) => Some(tags),
             _ => None,
@@ -514,6 +529,21 @@ impl Scope {
 }
 
 impl Workspace {
+    /// The projects a tool's `project` and `tag` select ([`Scope::of`]),
+    /// with this config's tags known.
+    pub(crate) fn scope(&self, project: Option<String>, tag: Option<String>) -> Result<Scope> {
+        let known: Vec<String> = self.projects.iter().flat_map(|p| p.tags.clone()).collect();
+        Scope::of(project, tag, &known, &self.read_from())
+    }
+
+    /// Where its tags are read from, as `meta --tag`'s errors say it.
+    fn read_from(&self) -> String {
+        format!(
+            " (from {})",
+            meta_plugin::display::escape_path(&self.config_path)
+        )
+    }
+
     fn target(&self, project: &ProjectInfo) -> Target {
         Target {
             name: project.name.clone(),
@@ -550,19 +580,11 @@ impl Workspace {
             Scope::All | Scope::Tags(_) => self
                 .projects
                 .iter()
-                .filter(|p| scope.tags().is_none_or(|tags| has_any_tag(tags, &p.tags)))
+                .filter(|p| scope.tags().is_none_or(|tags| tags.tagged(&p.tags)))
                 .map(|p| self.target(p))
                 .collect(),
         })
     }
-}
-
-/// Whether `project_tags` holds any of the comma-separated `tags`, as
-/// `meta --tag` selects.
-fn has_any_tag(tags: &str, project_tags: &[String]) -> bool {
-    tags.split(',')
-        .map(str::trim)
-        .any(|tag| !tag.is_empty() && project_tags.iter().any(|t| t == tag))
 }
 
 /// Whether results that each succeeded or not mean the tool failed: there
@@ -585,9 +607,18 @@ impl McpServer {
 
     /// The workspace around the server's directory, its config read afresh.
     pub(crate) fn workspace(&self) -> Result<Workspace> {
-        let config::Workspace { dir, projects, .. } = config::Workspace::in_dir(self.meta_dir()?)?
+        let config::Workspace {
+            dir,
+            config_path,
+            projects,
+            ..
+        } = config::Workspace::in_dir(self.meta_dir()?)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
-        Ok(Workspace { dir, projects })
+        Ok(Workspace {
+            dir,
+            config_path,
+            projects,
+        })
     }
 
     /// meta in `dir`, with `--json` and `args`, in the projects `scope`
@@ -598,7 +629,7 @@ impl McpServer {
         let mut meta = crate::run::meta()?.cwd(&workspace.dir);
         match scope {
             Scope::All => {}
-            Scope::Tags(tags) => meta = meta.args(["--tag", tags.as_str()]),
+            Scope::Tags(tags) => meta = meta.args(["--tag", &tags.tags.join(",")]),
             Scope::Project(name) => {
                 let path = workspace.project(name)?.path;
                 let outside = std::path::Path::new(&path).is_absolute()
@@ -703,7 +734,7 @@ impl McpServer {
 
     fn list_projects(&self, args: TagArgs) -> Result<String> {
         let workspace = self.workspace()?;
-        let projects = workspace.select(&Scope::of(None, args.tag)?)?;
+        let projects = workspace.select(&workspace.scope(None, args.tag)?)?;
         let mut output = format!(
             "Found {} project(s) in {}\n\n",
             projects.len(),
@@ -724,7 +755,8 @@ impl McpServer {
         }
         let mut meta_args = vec!["exec", "--"];
         meta_args.extend(args.command.iter().map(String::as_str));
-        self.run_meta(&self.workspace()?, &Scope::of(None, args.tag)?, &meta_args)
+        let workspace = self.workspace()?;
+        self.run_meta(&workspace, &workspace.scope(None, args.tag)?, &meta_args)
     }
 
     fn get_config(&self, _args: NoArgs) -> Result<String> {
@@ -750,8 +782,9 @@ impl McpServer {
     // ========================================================================
 
     fn git_status(&self, args: StatusArgs) -> Result<Reply> {
-        let scope = Scope::of(args.project, args.tag)?;
-        self.run_meta(&self.workspace()?, &scope, &["git", "status"])
+        let workspace = self.workspace()?;
+        let scope = workspace.scope(args.project, args.tag)?;
+        self.run_meta(&workspace, &scope, &["git", "status"])
     }
 
     fn git_pull(&self, args: PullArgs) -> Result<Reply> {
@@ -759,17 +792,20 @@ impl McpServer {
         if args.rebase == Some(true) {
             git_args.push("--rebase");
         }
-        self.run_meta(&self.workspace()?, &Scope::of(None, args.tag)?, &git_args)
+        let workspace = self.workspace()?;
+        self.run_meta(&workspace, &workspace.scope(None, args.tag)?, &git_args)
     }
 
     fn git_push(&self, args: TagArgs) -> Result<Reply> {
-        let scope = Scope::of(None, args.tag)?;
-        self.run_meta(&self.workspace()?, &scope, &["git", "push"])
+        let workspace = self.workspace()?;
+        let scope = workspace.scope(None, args.tag)?;
+        self.run_meta(&workspace, &scope, &["git", "push"])
     }
 
     fn git_fetch(&self, args: TagArgs) -> Result<Reply> {
-        let scope = Scope::of(None, args.tag)?;
-        self.run_meta(&self.workspace()?, &scope, &["git", "fetch"])
+        let workspace = self.workspace()?;
+        let scope = workspace.scope(None, args.tag)?;
+        self.run_meta(&workspace, &scope, &["git", "fetch"])
     }
 
     fn git_diff(&self, args: DiffArgs) -> Result<Reply> {
@@ -780,7 +816,7 @@ impl McpServer {
         };
         let mut results = Vec::new();
         let mut successes = Vec::new();
-        for project in workspace.select(&Scope::of(args.project, args.tag)?)? {
+        for project in workspace.select(&workspace.scope(args.project, args.tag)?)? {
             if !project.dir.exists() {
                 continue;
             }
@@ -815,7 +851,7 @@ impl McpServer {
             behind: Option<usize>,
         }
         let workspace = self.workspace()?;
-        let scope = Scope::of(None, args.tag)?;
+        let scope = workspace.scope(None, args.tag)?;
         let context = self.call_meta(&workspace, &scope, &["context"])?;
         let repos: Vec<Repo> = context
             .results
@@ -865,8 +901,9 @@ impl McpServer {
         };
         let mut meta_args = vec!["git", "add", "--"];
         meta_args.extend(files.iter().map(String::as_str));
-        let scope = Scope::of(args.project, args.tag)?;
-        let reply = self.run_meta(&self.workspace()?, &scope, &meta_args)?;
+        let workspace = self.workspace()?;
+        let scope = workspace.scope(args.project, args.tag)?;
+        let reply = self.run_meta(&workspace, &scope, &meta_args)?;
         Ok(Reply {
             text: format!("Staged files: {}\n{}", files.join(", "), reply.text),
             ..reply
@@ -874,12 +911,9 @@ impl McpServer {
     }
 
     fn git_commit(&self, args: CommitArgs) -> Result<Reply> {
-        let scope = Scope::of(args.project, args.tag)?;
-        self.run_meta(
-            &self.workspace()?,
-            &scope,
-            &["git", "commit", "-m", &args.message],
-        )
+        let workspace = self.workspace()?;
+        let scope = workspace.scope(args.project, args.tag)?;
+        self.run_meta(&workspace, &scope, &["git", "commit", "-m", &args.message])
     }
 
     fn git_checkout(&self, args: CheckoutArgs) -> Result<Reply> {
@@ -907,7 +941,7 @@ impl McpServer {
             git_args.push("-b");
         }
         git_args.extend([args.branch.as_str(), "--"]);
-        self.run_meta(&workspace, &Scope::of(None, args.tag)?, &git_args)
+        self.run_meta(&workspace, &workspace.scope(None, args.tag)?, &git_args)
     }
 
     fn git_multi_commit(&self, args: MultiCommitArgs) -> Result<Reply> {
@@ -966,24 +1000,12 @@ impl McpServer {
     fn detect_build_systems(&self, args: TagArgs) -> Result<String> {
         let workspace = self.workspace()?;
         let mut results = Vec::new();
-        for project in workspace.select(&Scope::of(None, args.tag)?)? {
+        for project in workspace.select(&workspace.scope(None, args.tag)?)? {
             let dir = &project.dir;
             if !dir.exists() {
                 continue;
             }
-            let has = |file: &str| dir.join(file).exists();
-            let build_systems: Vec<&str> = [
-                ("cargo", has("Cargo.toml")),
-                ("npm", has("package.json")),
-                ("make", has("Makefile") || has("makefile")),
-                ("go", has("go.mod")),
-                ("maven", has("pom.xml")),
-                ("gradle", has("build.gradle") || has("build.gradle.kts")),
-                ("python", has("pyproject.toml") || has("setup.py")),
-            ]
-            .into_iter()
-            .filter_map(|(name, found)| found.then_some(name))
-            .collect();
+            let build_systems = meta_core::query::detect_build_systems(dir);
             results.push(serde_json::json!({
                 "project": project.name,
                 "path": project.path,
@@ -994,9 +1016,8 @@ impl McpServer {
     }
 
     fn run_tests(&self, args: TestArgs) -> Result<Reply> {
-        let targets = self
-            .workspace()?
-            .select(&Scope::of(args.project, args.tag)?)?;
+        let workspace = self.workspace()?;
+        let targets = workspace.select(&workspace.scope(args.project, args.tag)?)?;
         self.run_each(&targets, |dir| repo_command(dir, RepoAction::Test))
     }
 
@@ -1004,7 +1025,7 @@ impl McpServer {
         let workspace = self.workspace()?;
         // Root builds remain included even when a tag filter selects child repos.
         let mut targets = vec![workspace.project(".")?];
-        targets.extend(workspace.select(&Scope::of(None, args.tag)?)?);
+        targets.extend(workspace.select(&workspace.scope(None, args.tag)?)?);
         let release = args.release == Some(true);
         self.run_each(&targets, |dir| {
             repo_command(dir, RepoAction::Build { release })
@@ -1012,7 +1033,8 @@ impl McpServer {
     }
 
     fn clean(&self, args: TagArgs) -> Result<Reply> {
-        let targets = self.workspace()?.select(&Scope::of(None, args.tag)?)?;
+        let workspace = self.workspace()?;
+        let targets = workspace.select(&workspace.scope(None, args.tag)?)?;
         self.run_each(&targets, |dir| {
             let has = |file: &str| dir.join(file).is_file();
             // npm has no clean; removing node_modules is left to the user
@@ -1130,7 +1152,6 @@ impl McpServer {
         const MAX_MATCHES: usize = 50;
 
         let workspace = self.workspace()?;
-        let scope = Scope::of(None, args.tag)?;
 
         // Each project once, the ones nested in a meta project too (as
         // `meta -r project list`), named by its path in the
@@ -1138,6 +1159,9 @@ impl McpServer {
         // error of its own.
         let mut targets = Vec::new();
         search_targets(&workspace.dir, "", &workspace.projects, &mut targets);
+        // the tags `meta -r --tag` knows: the nested projects' too
+        let known: Vec<String> = targets.iter().flat_map(|t| t.tags.clone()).collect();
+        let scope = Scope::of(None, args.tag, &known, &workspace.read_from())?;
 
         let mut results = Vec::new();
         // whether a project gave an answer, matches or none
@@ -1161,7 +1185,8 @@ impl McpServer {
                 }
             };
             let project_path = workspace.dir.join(&name);
-            if scope.tags().is_some_and(|tag| !has_any_tag(tag, &tags)) || !project_path.exists() {
+            if scope.tags().is_some_and(|filters| !filters.tagged(&tags)) || !project_path.exists()
+            {
                 continue;
             }
 
@@ -1285,7 +1310,7 @@ impl McpServer {
         let depth = args.depth.unwrap_or(3);
         let workspace = self.workspace()?;
         let mut results = Vec::new();
-        for project in workspace.select(&Scope::of(args.project, args.tag)?)? {
+        for project in workspace.select(&workspace.scope(args.project, args.tag)?)? {
             if !project.dir.exists() {
                 continue;
             }
@@ -1367,7 +1392,7 @@ impl McpServer {
     }
 
     fn execution_order(&self, args: TagArgs) -> Result<String> {
-        let scope = Scope::of(None, args.tag)?;
+        let scope = self.workspace()?.scope(None, args.tag)?;
         let graph = self.dependency_graph()?;
         let order: Vec<&str> = graph
             .execution_order()?
@@ -1376,14 +1401,14 @@ impl McpServer {
                 scope.tags().is_none_or(|tags| {
                     graph
                         .get_project(name)
-                        .is_some_and(|project| has_any_tag(tags, &project.tags))
+                        .is_some_and(|project| tags.tagged(&project.tags))
                 })
             })
             .collect();
         Ok(serde_json::to_string_pretty(&serde_json::json!({
             "execution_order": order,
             "count": order.len(),
-            "tag_filter": scope.tags()
+            "tag_filter": scope.tags().map(|tags| tags.tags.join(","))
         }))?)
     }
 }
@@ -1767,7 +1792,8 @@ mod tests {
                 );
             }
         }
-        // project and tag at once: neither wins silently; a blank tag is no tag
+        // project and tag at once: neither wins silently; a blank tag is
+        // refused, as `meta --tag` refuses it
         let err = call(
             &server,
             "meta_get_file_tree",
@@ -1776,12 +1802,14 @@ mod tests {
         assert!(err
             .err()
             .is_some_and(|e| e.to_string().contains("not both")));
-        let tree = json(call(
+        let err = call(
             &server,
             "meta_get_file_tree",
             json!({"project": "a", "tag": " , "}),
-        ));
-        assert_eq!(tree[0]["project"], "a", "{tree}");
+        );
+        assert!(err
+            .err()
+            .is_some_and(|e| e.to_string().contains("names no tag")));
     }
 
     #[test]
@@ -1890,11 +1918,156 @@ mod tests {
     }
 
     #[test]
-    fn build_tags_select_like_meta_tag() {
-        let tags = ["red".to_string()];
-        assert!(has_any_tag("red", &tags));
-        assert!(has_any_tag("blue, red", &tags));
-        assert!(!has_any_tag("blue", &tags));
+    fn tags_select_and_refuse_as_meta_tag_does() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let config = r#"{"projects":{"a":{"repo":"x","tags":["red"],"meta":true},
+            "b":{"repo":"x","tags":["blue","red"]},"c":{"repo":"x","tags":["green"]},"d":"x"}}"#;
+        let (server, root) = server(&sandbox, config);
+        // a nested project's tag: `meta --tag` (no -r) doesn't know it
+        std::fs::create_dir(root.join("a")).unwrap();
+        let nested = r#"{"projects":{"n":{"repo":"x","tags":["ui"]}}}"#;
+        std::fs::write(root.join("a/.meta.yaml"), nested).unwrap();
+        let workspace = server.workspace().unwrap();
+        // what `meta --tag` (with -r: `recursive`) selects among the same
+        // projects (the root, which MCP's tag scopes never take, aside), or
+        // its error
+        let host = |tag: Option<&str>, recursive: bool| -> Result<Vec<String>, String> {
+            let filters = match tag {
+                Some(tag) => Filters::tags(tag).map_err(|e| format!("{e:#}"))?,
+                None => vec![],
+            };
+            let filters = Filters {
+                tags: filters,
+                ..Filters::default()
+            };
+            let tree = match recursive {
+                true => config::walk_projects(&workspace.dir, &workspace.projects, None).unwrap(),
+                false => vec![],
+            };
+            let scope = meta_core::repo_filter::Scope::workspace(
+                &workspace.dir,
+                Some(&workspace.config_path),
+                &workspace.projects,
+                &tree,
+            );
+            Ok(scope
+                .select_repos(&filters)
+                .map_err(|e| format!("{e:#}"))?
+                .iter()
+                .filter_map(|repo| repo.name().map(str::to_string))
+                .collect())
+        };
+        let all = ["a", "b", "c", "d"];
+        for (tag, want) in [
+            (None, &all[..]),
+            (Some("red"), &["a", "b"][..]),
+            (Some(" red "), &["a", "b"]),
+            (Some("green,blue"), &["b", "c"]),
+            (Some(" blue , green ,"), &["b", "c"]),
+            (Some("red,green"), &["a", "b", "c"]),
+        ] {
+            let mcp: Vec<String> = workspace
+                .select(&workspace.scope(None, tag.map(str::to_string)).unwrap())
+                .unwrap()
+                .into_iter()
+                .map(|target| target.name)
+                .collect();
+            assert_eq!(mcp, want, "{tag:?}");
+            assert_eq!(host(tag, false).unwrap(), want, "{tag:?}");
+        }
+        // blank and unknown tags: every tool that takes `tag` refuses them
+        // with meta's error, before anything runs
+        let tagged: Vec<_> = contract()
+            .into_iter()
+            .filter(|(_, arguments, _)| arguments.contains(&"tag"))
+            .collect();
+        assert_eq!(tagged.len(), 19);
+        for tag in [
+            "",
+            ",",
+            " ",
+            "nothing",
+            "red,nothing",
+            "RED",
+            "red green",
+            "ui",
+        ] {
+            for (tool, _, smallest) in &tagged {
+                // the search reads nested projects, as `meta -r` does
+                let recursive = *tool == "meta_search_code";
+                let mut arguments = smallest.clone();
+                arguments["tag"] = json!(tag);
+                let result = call(&server, tool, arguments)
+                    .map(|reply| reply.text)
+                    .map_err(|e| format!("{e:#}"));
+                match host(Some(tag), recursive) {
+                    Ok(_) => assert!(result.is_ok(), "{tool} {tag:?}: {result:?}"),
+                    // MCP takes no -r, so its error leaves out that hint
+                    Err(refused) => {
+                        let refused = refused.trim_end_matches(
+                            " --recursive reads the tags of nested meta repos too.",
+                        );
+                        assert!(
+                            result.as_ref().err().is_some_and(|e| e.contains(refused)),
+                            "{tool} {tag:?}: {result:?}, not {refused:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn detect_build_systems_reports_every_system_meta_knows() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let (server, root) = server(&sandbox, r#"{"projects":{"all":"x"}}"#);
+        let dir = root.join("all");
+        std::fs::create_dir(&dir).unwrap();
+        for marker in [
+            "meson.build",
+            "CMakeLists.txt",
+            "setup.py",
+            "pyproject.toml",
+            "build.gradle.kts",
+            "build.gradle",
+            "pom.xml",
+            "makefile",
+            "Makefile",
+            "go.mod",
+            "package.json",
+            "Cargo.toml",
+        ] {
+            std::fs::write(dir.join(marker), "").unwrap();
+        }
+        let results = json(call(&server, "meta_detect_build_systems", json!({})));
+        assert_eq!(
+            results[0]["build_systems"],
+            json!(["cargo", "npm", "go", "make", "maven", "gradle", "python", "cmake", "meson"])
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn output_past_the_capture_bound_is_drained_and_said_cut() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let (server, root) = server(&sandbox, r#"{"projects":{}}"#);
+        // 32 MiB on each stream, twice the bound; then it still ends, as
+        // nothing blocks it
+        let make =
+            "all:\n\t@yes x | head -c 33554432\n\t@yes y | head -c 33554432 >&2\n\t@touch ended\n";
+        std::fs::write(root.join("Makefile"), make).unwrap();
+        let results = json(call(&server, "meta_build", json!({})));
+        let limit = meta_plugin::process::CAPTURE_LIMIT;
+        for stream in ["stdout", "stderr"] {
+            let text = results[0][stream].as_str().unwrap();
+            let cut = format!(
+                "\n[meta-mcp: {stream} cut at {limit} bytes; {} more were dropped]\n",
+                (32 << 20) - limit
+            );
+            assert!(text.ends_with(&cut), "{stream}: {:?}", text.lines().last());
+            assert_eq!(text.len(), limit + cut.len(), "{stream}");
+        }
+        assert!(root.join("ended").exists());
     }
 
     #[test]
@@ -1930,9 +2103,11 @@ mod tests {
             );
         }
 
-        // a blank list is no filter, in every tool
-        let tree = json(call(&server, "meta_get_file_tree", json!({"tag": " , "})));
-        assert_eq!(tree.as_array().unwrap().len(), 3, "{tree}");
+        // a blank list is refused, as `meta --tag` refuses it
+        let err = call(&server, "meta_get_file_tree", json!({"tag": " , "}));
+        assert!(err
+            .err()
+            .is_some_and(|e| e.to_string().contains("names no tag")));
 
         // null, as clients send for an option they don't use, is the default
         json(call(&server, "meta_get_file_tree", json!({"depth": null})));

@@ -1,6 +1,6 @@
 # Meta MCP Server
 
-`meta-mcp` is an MCP (Model Context Protocol) server that gives AI agents structured access to a meta workspace through 26 tools: core operations, git, build and test, code discovery, and workspace analysis.
+`meta-mcp` is an MCP (Model Context Protocol) server that gives AI agents structured access to a meta workspace through tools for core operations, git, build and test, code discovery, and workspace analysis.
 
 ## Installation
 
@@ -25,22 +25,17 @@ Claude Code's `meta` plugin (`claude plugin install meta@gitkb`) registers it fo
 
 ## Tool Reference
 
-`tools/list` gives each tool's description and the schema of its arguments. Each tool takes only the arguments listed for it. A misspelled argument, or a value of the wrong type (`"atomic": "true"` for `true`), is an error that names the tool, the argument and the value, and nothing runs. `null` is the same as leaving an argument out.
+`tools/list` is the list of tools: each one's name, description and the schema of its arguments. This page says what they do beyond that. Each tool takes only the arguments listed for it. A misspelled argument, or a value of the wrong type (`"atomic": "true"` for `true`), is an error that names the tool, the argument and the value, and nothing runs. `null` is the same as leaving an argument out.
 
-A `tag` argument takes one tag or a comma-separated list, and selects the projects that have any of them, as `meta --tag` does. A blank list is no filter. The tools that run `meta` (`meta_exec` and the `meta git` ones) act where `meta` would, the workspace root included; the others act on the projects of `.meta.yaml`, and on the root only when `project` is `.` (`meta_build` always includes it).
+A `tag` argument takes one tag or a comma-separated list, and selects the projects that have any of them, as `meta --tag` does. As `meta --tag` does, a tool refuses a list that names no tag (`""`, `","`) and a tag no project has, with meta's error, and runs nothing; `meta_search_code` knows the tags of nested projects too, as `meta -r` does. The tools that run `meta` (`meta_exec` and the `meta git` ones) act where `meta` would, the workspace root included; the others act on the projects of `.meta.yaml`, and on the root only when `project` is `.` (`meta_build` always includes it).
 
 A `project` argument is a project's name in `.meta.yaml`, or `.` for the workspace root. It is never a path, so a tool goes only where the config puts a project (which may be outside the workspace); a name the config doesn't list is an error. `meta_git_multi_commit` and `meta_git_diff` refuse a project folder that is not a git repository of its own (git would use the repository around it); the tools that run `meta` act in it as `meta` does. A tool that takes both `project` and `tag` refuses them together.
 
-Tools that act in several repositories report each one: its directory or name, whether it succeeded, and its output. The result is an error (`isError: true`) only when the tool itself failed or every repository failed; for the rest, an entry with `success: false` or an `error` field is a repository that failed (`meta_git_diff` and `meta_search_code` entries carry only `error`). `meta_git_branch` is never an error as a whole: a repository it can't read is an entry with `branch: null` and an `error`.
+Tools that act in several repositories report each one: its directory or name, whether it succeeded, and its output. The result is an error (`isError: true`) only when the tool itself failed or every repository failed; for the rest, an entry with `success: false` or an `error` field is a repository that failed (`meta_git_diff` and `meta_search_code` entries carry only `error`). `meta_git_branch` is never an error as a whole: a repository it can't read is an entry with `branch: null` and an `error`. A program a tool runs itself (the build, test and batch tools, `meta_search_code`) keeps the first 16 MiB of its stdout and of its stderr; the rest is read and dropped, and a last line on that stream says how much was.
 
 ### Core
 
-| Tool | Arguments | What it does |
-|------|-----------|--------------|
-| `meta_list_projects` | `tag` | Lists the projects, with their paths and tags |
-| `meta_exec` | `command`, `tag` | Runs `meta exec` with `command`: the program and its arguments, one per item, with no shell (for one: `["sh", "-c", "..."]`) |
-| `meta_get_config` | none | The config file's path and its text, as it is |
-| `meta_get_project_path` | `project` | `{"project", "path", "exists"}`: the project's absolute path |
+`meta_exec` runs `meta exec` with `command`: the program and its arguments, one per item, with no shell (for one: `["sh", "-c", "..."]`). `meta_get_config` gives the config file's path and its text, as it is; `meta_get_project_path` gives `{"project", "path", "exists"}`, the project's absolute path.
 
 ```json
 {"name": "meta_exec", "arguments": {"command": ["git", "log", "--format=%h %s", "-1"], "tag": "frontend"}}
@@ -48,18 +43,7 @@ Tools that act in several repositories report each one: its directory or name, w
 
 ### Git
 
-| Tool | Arguments | What it does |
-|------|-----------|--------------|
-| `meta_git_status` | `project`, `tag` | `meta git status` |
-| `meta_git_pull` | `tag`, `rebase` | `meta git pull` (`--rebase` with `rebase: true`) |
-| `meta_git_push` | `tag` | `meta git push` |
-| `meta_git_fetch` | `tag` | `meta git fetch` |
-| `meta_git_diff` | `project`, `tag`, `staged` | `git diff` (`--staged`) in each repository; only those with a diff are listed |
-| `meta_git_branch` | `tag` | Each repository's branch, tracking branch, and commits ahead and behind |
-| `meta_git_add` | `files`, `project`, `tag` | `meta git add` with `files`, passed to git as given (default `["."]`) |
-| `meta_git_commit` | `message`, `project`, `tag` | `meta git commit -m`: commits what is staged, in each repository with staged changes |
-| `meta_git_checkout` | `branch`, `create`, `tag` | `meta git checkout` (`-b` with `create: true`). A name `git check-ref-format --branch` refuses (such as `--orphan=x`) is an error, and it is never taken for a file to restore |
-| `meta_git_multi_commit` | `commits` | Commits what is staged with a different message in each project |
+`meta_git_status`, `meta_git_pull` (`--rebase` with `rebase: true`), `meta_git_push`, `meta_git_fetch`, `meta_git_add` and `meta_git_commit` run those `meta git` commands. `meta_git_add` passes `files` to git as given (default `["."]`); `meta_git_commit` commits what is staged, in each repository with staged changes. `meta_git_checkout` runs `meta git checkout` (`-b` with `create: true`); a name `git check-ref-format --branch` refuses (such as `--orphan=x`) is an error, and it is never taken for a file to restore. `meta_git_diff` runs `git diff` (`--staged`) in each repository and lists only those with a diff; `meta_git_branch` gives each repository's branch, tracking branch, and commits ahead and behind.
 
 `meta_git_multi_commit` takes a list of `{"project", "message"}` (`"."` for the root). Every `project` is checked before anything is committed: one `.meta.yaml` doesn't list is an error, and no commit is made. An entry that fails has git's reason in `error` (`nothing to commit`, say).
 
@@ -89,14 +73,9 @@ Tools that act in several repositories report each one: its directory or name, w
 
 ### Build and test
 
-| Tool | Arguments | What it does |
-|------|-----------|--------------|
-| `meta_detect_build_systems` | `tag` | Which of cargo, npm, make, go, maven, gradle and python each project uses, by its files |
-| `meta_run_tests` | `project`, `tag` | `cargo test`, `npm test`, `go test ./...` or `make test`, by the first of `Cargo.toml`, `package.json`, `go.mod`, `Makefile` a project has |
-| `meta_build` | `release`, `tag` | `cargo build` (`--release`), `npm run build`, `go build ./...` or `make`, the same way, in the workspace root and then each selected project |
-| `meta_clean` | `tag` | `cargo clean`, `go clean` or `make clean`; npm projects are skipped |
+`meta_detect_build_systems` gives each project's build systems by its files, from the list `meta_query_repos`'s `language:` reads (below). `meta_run_tests` runs `cargo test`, `npm test`, `go test ./...` or `make test`, by the first of `Cargo.toml`, `package.json`, `go.mod`, `Makefile` a project has; `meta_build` runs `cargo build` (`--release` with `release: true`), `npm run build`, `go build ./...` or `make` the same way, in the workspace root and then each selected project; `meta_clean` runs `cargo clean`, `go clean` or `make clean`, and skips npm projects.
 
-They run one project at a time, in project-name order (`meta_build` the root first), and skip a project with none of those files. `meta_build` always includes the root, even with a `tag`, and doesn't follow `meta_execution_order`: for dependency order, build each project in the order that tool gives.
+These three run one project at a time, in project-name order (`meta_build` the root first), and skip a project with none of those files. `meta_build` always includes the root, even with a `tag`, and doesn't follow `meta_execution_order`: for dependency order, build each project in the order that tool gives.
 
 ### Discovery
 

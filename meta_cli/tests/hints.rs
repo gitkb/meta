@@ -312,13 +312,17 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
         &["exec", "--tag", "", "--", "pwd"],
         &["git", "commit", "-m", "x", "--include", "--foo"],
         &["git", "clone", url, "d", "--depth", "5", "--typo"],
+        // meta's -A before create selects no repos: create still needs --repo
+        &["git", "worktree", "create", "x1", "--all"],
+        // an option no command has
+        &["git", "clone", url, "o1", "--meta-depth", "2"],
     ] {
         let out = workspace.meta(typed);
         assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
         assert!(tip_line(&out).is_empty(), "{typed:?}: {}", text(&out));
         // nor clap's "use '-- --include'", which hands it to the command
         let said = text(&out);
-        assert!(said.contains("--typo") || !said.contains("-- --"), "{said}");
+        assert!(!said.contains("-- --"), "{said}");
     }
     // a cluster of meta's short options before the command is read too:
     // the --json among them makes the usage error JSON
@@ -326,37 +330,6 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
     assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     let error: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(error["success"], false, "{}", text(&out));
-    // clone's --meta-depth is meta's --depth, with -r
-    let out = workspace.meta(&[
-        "git",
-        "clone",
-        url,
-        "d",
-        "--meta-depth",
-        "1",
-        "--depth",
-        "5",
-    ]);
-    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
-    assert_eq!(
-        tip_line(&out),
-        ["-r", "--depth", "1", "git", "clone", url, "d", "--depth", "5"],
-        "{}",
-        text(&out)
-    );
-    // -r typed in a cluster before the command is not given again
-    let out = workspace.meta(&["-rv", "git", "clone", url, "d", "--meta-depth", "1"]);
-    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
-    let line = tip_line(&out);
-    assert_eq!(
-        line,
-        ["-rv", "--depth", "1", "git", "clone", url, "d"],
-        "{}",
-        text(&out)
-    );
-    let words: Vec<&str> = line.iter().map(String::as_str).collect();
-    let again = workspace.meta(&words);
-    assert_ne!(again.status.code(), Some(2), "{words:?}: {}", text(&again));
     let out = workspace.meta(&["git", "update", "--include", "api"]);
     assert!(
         text(&out)
@@ -366,6 +339,9 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
     );
     let out = workspace.meta(&["git", "clone", url, "d", "--depth", "5", "--typo"]);
     assert!(!text(&out).contains("option of meta"), "{}", text(&out));
+    // clap's "use '-- --x'" only where the words after `--` are taken
+    let out = workspace.meta(&["git", "worktree", "exec", "t", "--foo"]);
+    assert!(text(&out).contains("use '-- --foo'"), "{}", text(&out));
 }
 
 #[test]
@@ -444,49 +420,40 @@ fn meta_owned_commands_take_no_copy_of_meta_options() {
         let again = workspace.meta(line);
         assert_ne!(again.status.code(), Some(2), "{line:?}: {}", text(&again));
     }
-    // -r on list and status is refused before or after: the strict scan is
-    // --strict's, and nested repos are listed either way
+    // -r and -A on list and status are refused: the strict scan is
+    // --strict's, and nested repos are listed either way. Typed after the
+    // command, the tip says the command doesn't take them, with no line.
     for typed in [
-        &["git", "worktree", "list", "-r"][..],
-        &["-r", "git", "worktree", "list"],
+        &["-r", "git", "worktree", "list"][..],
         &["--recursive", "git", "worktree", "status", "t"],
-        &["git", "worktree", "list", "--all"],
         &["-A", "git", "worktree", "list"],
-        &["git", "worktree", "list", "-rv"],
     ] {
         let out = workspace.meta(typed);
         assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
         assert!(
             text(&out).contains("meta --strict git worktree"),
-            "{}",
+            "{typed:?}: {}",
             text(&out)
         );
     }
-    // create's own --all became --every-repo; so did -A typed after it
-    // with no --repo
-    let out = workspace.meta(&["git", "worktree", "create", "e", "-A"]);
-    assert_eq!(
-        tip_line(&out),
-        ["git", "worktree", "create", "e", "--every-repo"],
-        "{}",
-        text(&out)
-    );
-    // and another of meta's after it moves too
-    let out = workspace.meta(&["git", "worktree", "create", "e", "--all", "--json"]);
-    assert_eq!(
-        tip_line(&out),
-        ["--json", "git", "worktree", "create", "e", "--every-repo"],
-        "{}",
-        text(&out)
-    );
-    let out = workspace.meta(&["git", "worktree", "create", "e", "--all"]);
-    assert_eq!(out.status.code(), Some(2), "{}", text(&out));
-    assert_eq!(
-        tip_line(&out),
-        ["git", "worktree", "create", "e", "--every-repo"],
-        "{}",
-        text(&out)
-    );
+    for typed in [
+        &["git", "worktree", "list", "-r"][..],
+        &["git", "worktree", "list", "--recursive"],
+        &["git", "worktree", "list", "--all"],
+        &["git", "worktree", "list", "-A"],
+        &["git", "worktree", "list", "-rv"],
+        &["git", "worktree", "status", "t", "-r"],
+        &["git", "worktree", "status", "t", "--all"],
+    ] {
+        let out = workspace.meta(typed);
+        assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
+        assert!(
+            text(&out).contains("is an option of meta itself, and this command doesn't take it"),
+            "{typed:?}: {}",
+            text(&out)
+        );
+        assert!(tip_line(&out).is_empty(), "{typed:?}: {}", text(&out));
+    }
     let strict = workspace.meta(&["--strict", "git", "worktree", "status", "t"]);
     assert!(strict.status.success(), "{}", text(&strict));
 }

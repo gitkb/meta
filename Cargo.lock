@@ -925,7 +925,6 @@ dependencies = [
  "clap",
  "colored",
  "dirs",
- "indexmap",
  "indicatif",
  "log",
  "meta_core",

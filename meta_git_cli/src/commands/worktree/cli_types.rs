@@ -54,6 +54,14 @@ pub enum WorktreeCommands {
     Exec(ExecArgs),
     /// Remove expired/orphaned worktree sets of this workspace
     Prune,
+    /// Print this message or the help of the given subcommand(s)
+    ///
+    /// clap's own help subcommand is off in all of `meta git` (a setting
+    /// clap gives every subcommand), so that `meta git help log` is git's.
+    Help {
+        /// The subcommand whose help to print
+        command: Vec<String>,
+    },
 }
 
 #[derive(Args)]
@@ -71,7 +79,11 @@ pub struct CreateArgs {
     pub branch: Option<String>,
 
     /// Add specific repo(s) (alias or alias:branch)
-    #[arg(long = "repo", value_name = "ALIAS[:BRANCH]")]
+    #[arg(
+        long = "repo",
+        value_name = "ALIAS[:BRANCH]",
+        required_unless_present = "every_repo"
+    )]
     pub repos: Vec<RepoSpec>,
 
     /// Add every repo meta reaches: those of the nearest .meta.yaml, with

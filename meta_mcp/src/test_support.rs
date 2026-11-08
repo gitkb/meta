@@ -7,6 +7,29 @@ use meta_plugin::testing::Sandbox;
 pub(crate) use meta_plugin::testing::{gone, wait_for};
 use std::path::PathBuf;
 
+/// Have the tools call the `meta` built beside the tests (in the target
+/// folder, above `deps/`). Each test that does runs in a process of its own
+/// (`isolated!`).
+pub(crate) fn use_built_meta() {
+    let exe = std::env::current_exe().unwrap();
+    let meta = exe
+        .ancestors()
+        .nth(2)
+        .unwrap()
+        .join(format!("meta{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        meta.is_file(),
+        "{} is not built: cargo build --workspace --bins first",
+        meta.display()
+    );
+    // its plugins too, whatever another meta on PATH brings
+    let built = meta.parent().unwrap().to_path_buf();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let dirs = std::iter::once(built).chain(std::env::split_paths(&path));
+    std::env::set_var("PATH", std::env::join_paths(dirs).unwrap());
+    std::env::set_var(meta_plugin::client::EXE_VAR, meta);
+}
+
 /// A server for a workspace whose `.meta.yaml` is `config`.
 pub(crate) fn server(sandbox: &Sandbox, config: &str) -> (McpServer, PathBuf) {
     let root = sandbox.work().join("workspace");

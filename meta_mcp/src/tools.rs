@@ -1909,6 +1909,7 @@ mod tests {
     #[test]
     fn the_read_tools_see_what_meta_r_sees() {
         let sandbox = meta_plugin::testing::isolated!();
+        crate::test_support::use_built_meta();
         let root = crate::test_support::nested(&sandbox);
         let server = McpServer::at(root.clone()).unwrap();
         let dirty = |query: &str| {
@@ -2009,6 +2010,7 @@ mod tests {
     #[test]
     fn inside_a_set_the_tools_see_and_act_on_the_set() {
         let sandbox = meta_plugin::testing::isolated!();
+        crate::test_support::use_built_meta();
         let root = crate::test_support::nested(&sandbox);
         for origin_of in ["", "web", "platform", "platform/core", "platform/api"] {
             let up = sandbox
@@ -2211,6 +2213,7 @@ mod tests {
     #[test]
     fn tags_select_and_refuse_as_meta_tag_does() {
         let sandbox = meta_plugin::testing::isolated!();
+        crate::test_support::use_built_meta();
         let config = r#"{"projects":{"a":{"repo":"x","tags":["red"],"meta":true},
             "b":{"repo":"x","tags":["blue","red"]},"c":{"repo":"x","tags":["green"]},"d":"x"}}"#;
         let (server, root) = server(&sandbox, config);

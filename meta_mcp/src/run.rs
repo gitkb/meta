@@ -2,6 +2,7 @@
 //! stopped when the client cancels the call.
 
 use meta_plugin::client::{self, Meta};
+use meta_plugin::process::CAPTURE_LIMIT;
 use meta_plugin::Envelope;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -217,15 +218,12 @@ impl Calls {
         // Its own process group (job on Windows), so cancelling stops what
         // it starts too
         let mut child = meta_plugin::process::spawn_group(command)?;
-        let (Some(stdout), Some(mut stderr)) = (child.stdout(), child.stderr()) else {
+        let (Some(stdout), Some(stderr)) = (child.stdout(), child.stderr()) else {
             child.stop(true);
             return Err(std::io::Error::other("no pipe to the program"));
         };
         let stdout = std::thread::spawn(move || read_lines(stdout, max_lines));
-        let stderr = std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            stderr.read_to_end(&mut bytes).map(|_| bytes)
-        });
+        let stderr = std::thread::spawn(move || read_capped(stderr, CAPTURE_LIMIT));
         // Until it has ended and its pipes are closed: something it started
         // in the background may still hold them. Once cancelled, until its
         // whole process group is gone, even what closed its pipes; then
@@ -295,6 +293,21 @@ fn not_started(id: &str) {
         std::io::stderr(),
         "meta-mcp: request {id} not started: the server is stopping"
     );
+}
+
+/// `pipe` to its end, keeping its first `limit` bytes. The rest is read and
+/// dropped, so the program never blocks on a full pipe, and a line at the
+/// end says how much was dropped.
+fn read_capped(mut pipe: impl Read, limit: usize) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    pipe.by_ref().take(limit as u64).read_to_end(&mut bytes)?;
+    let dropped = std::io::copy(&mut pipe, &mut std::io::sink())?;
+    if dropped > 0 {
+        let cut =
+            format!("\n[meta-mcp: stderr cut at {limit} bytes; {dropped} more were dropped]\n");
+        bytes.extend_from_slice(cut.as_bytes());
+    }
+    Ok(bytes)
 }
 
 /// Up to `max` lines of `pipe`, and whether there were more.

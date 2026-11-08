@@ -37,6 +37,11 @@ impl Filters {
     pub fn is_empty(&self) -> bool {
         self.include.is_empty() && self.exclude.is_empty() && self.tags.is_empty()
     }
+
+    /// Whether a project with `project_tags` has one of the `--tag` tags.
+    pub fn tagged(&self, project_tags: &[String]) -> bool {
+        self.tags.iter().any(|tag| project_tags.contains(tag))
+    }
 }
 
 /// A repo a command may run in: its directory, and its project in
@@ -370,13 +375,13 @@ impl Scope {
                     escape(tag)
                 );
             }
-            chosen.extend(
-                repos
-                    .iter()
-                    .filter(|r| r.candidate.tags().contains(tag))
-                    .map(|r| r.id.as_path()),
-            );
         }
+        chosen.extend(
+            repos
+                .iter()
+                .filter(|r| filters.tagged(r.candidate.tags()))
+                .map(|r| r.id.as_path()),
+        );
         let mut excluded = Vec::new();
         for value in &filters.exclude {
             excluded.extend(named("--exclude", value)?);

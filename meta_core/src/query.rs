@@ -242,8 +242,9 @@ impl RepoState {
     }
 }
 
-/// Detect build systems in a project directory
-fn detect_build_systems(path: &Path) -> Vec<String> {
+/// The build systems a project directory uses, by its files, each once,
+/// in this list's order.
+pub fn detect_build_systems(path: &Path) -> Vec<String> {
     let mut systems = Vec::new();
 
     let checks = [

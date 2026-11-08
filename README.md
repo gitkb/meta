@@ -464,7 +464,7 @@ See [docs/plugin_development.md](docs/plugin_development.md) for the full guide.
 
 Meta is designed for AI agents from day one. Three integration points:
 
-### MCP Server (26 tools)
+### MCP Server
 
 ```json
 {
@@ -558,7 +558,7 @@ Configure with `.looprc`. See [docs/loop.md](docs/loop.md) for details.
 - [x] Project tags and filtering
 - [x] JSON output mode
 - [x] Nested meta repos (`--recursive`)
-- [x] MCP server for AI agents (26 tools)
+- [x] MCP server for AI agents
 - [x] Multi-commit support (`meta git commit --edit`)
 - [x] Plugin help system
 - [x] Query DSL for agents (MCP `meta_query_repos`)

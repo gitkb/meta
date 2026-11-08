@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use meta_core::config::{self, ProjectInfo};
 use meta_core::dependency_graph::{self, ProjectDependencies};
 use meta_core::query::{Query, RepoState, WorkspaceState};
+use meta_core::repo_filter::Filters;
 use meta_plugin::display::escape;
 use meta_plugin::{Envelope, ProjectResult};
 use schemars::JsonSchema;
@@ -485,8 +486,8 @@ pub(crate) struct Target {
 /// Which projects a tool acts on.
 pub(crate) enum Scope {
     All,
-    /// Those with any of these comma-separated tags
-    Tags(String),
+    /// Those with any of these tags, read as `meta --tag` reads them
+    Tags(Filters),
     /// The one with this name (`.` for the root)
     Project(String),
 }
@@ -496,16 +497,16 @@ impl Scope {
     /// (as no `tag` at all); both at once are refused, as neither can say
     /// what the other means.
     pub(crate) fn of(project: Option<String>, tag: Option<String>) -> Result<Self> {
-        let tag = tag.filter(|tags| tags.split(',').any(|tag| !tag.trim().is_empty()));
-        Ok(match (project, tag) {
-            (Some(_), Some(_)) => anyhow::bail!("Give 'project' or 'tag', not both"),
-            (Some(project), None) => Scope::Project(project),
-            (None, Some(tags)) => Scope::Tags(tags),
-            (None, None) => Scope::All,
+        let tags = Filters::new(None, None, tag.as_deref());
+        Ok(match (project, tags.tags.is_empty()) {
+            (Some(_), false) => anyhow::bail!("Give 'project' or 'tag', not both"),
+            (Some(project), true) => Scope::Project(project),
+            (None, false) => Scope::Tags(tags),
+            (None, true) => Scope::All,
         })
     }
 
-    fn tags(&self) -> Option<&str> {
+    fn tags(&self) -> Option<&Filters> {
         match self {
             Scope::Tags(tags) => Some(tags),
             _ => None,
@@ -550,19 +551,11 @@ impl Workspace {
             Scope::All | Scope::Tags(_) => self
                 .projects
                 .iter()
-                .filter(|p| scope.tags().is_none_or(|tags| has_any_tag(tags, &p.tags)))
+                .filter(|p| scope.tags().is_none_or(|tags| tags.tagged(&p.tags)))
                 .map(|p| self.target(p))
                 .collect(),
         })
     }
-}
-
-/// Whether `project_tags` holds any of the comma-separated `tags`, as
-/// `meta --tag` selects.
-fn has_any_tag(tags: &str, project_tags: &[String]) -> bool {
-    tags.split(',')
-        .map(str::trim)
-        .any(|tag| !tag.is_empty() && project_tags.iter().any(|t| t == tag))
 }
 
 /// Whether results that each succeeded or not mean the tool failed: there
@@ -598,7 +591,7 @@ impl McpServer {
         let mut meta = crate::run::meta()?.cwd(&workspace.dir);
         match scope {
             Scope::All => {}
-            Scope::Tags(tags) => meta = meta.args(["--tag", tags.as_str()]),
+            Scope::Tags(tags) => meta = meta.args(["--tag", &tags.tags.join(",")]),
             Scope::Project(name) => {
                 let path = workspace.project(name)?.path;
                 let outside = std::path::Path::new(&path).is_absolute()
@@ -971,19 +964,7 @@ impl McpServer {
             if !dir.exists() {
                 continue;
             }
-            let has = |file: &str| dir.join(file).exists();
-            let build_systems: Vec<&str> = [
-                ("cargo", has("Cargo.toml")),
-                ("npm", has("package.json")),
-                ("make", has("Makefile") || has("makefile")),
-                ("go", has("go.mod")),
-                ("maven", has("pom.xml")),
-                ("gradle", has("build.gradle") || has("build.gradle.kts")),
-                ("python", has("pyproject.toml") || has("setup.py")),
-            ]
-            .into_iter()
-            .filter_map(|(name, found)| found.then_some(name))
-            .collect();
+            let build_systems = meta_core::query::detect_build_systems(dir);
             results.push(serde_json::json!({
                 "project": project.name,
                 "path": project.path,
@@ -1161,7 +1142,8 @@ impl McpServer {
                 }
             };
             let project_path = workspace.dir.join(&name);
-            if scope.tags().is_some_and(|tag| !has_any_tag(tag, &tags)) || !project_path.exists() {
+            if scope.tags().is_some_and(|filters| !filters.tagged(&tags)) || !project_path.exists()
+            {
                 continue;
             }
 
@@ -1376,14 +1358,14 @@ impl McpServer {
                 scope.tags().is_none_or(|tags| {
                     graph
                         .get_project(name)
-                        .is_some_and(|project| has_any_tag(tags, &project.tags))
+                        .is_some_and(|project| tags.tagged(&project.tags))
                 })
             })
             .collect();
         Ok(serde_json::to_string_pretty(&serde_json::json!({
             "execution_order": order,
             "count": order.len(),
-            "tag_filter": scope.tags()
+            "tag_filter": scope.tags().map(|tags| tags.tags.join(","))
         }))?)
     }
 }
@@ -1890,11 +1872,92 @@ mod tests {
     }
 
     #[test]
-    fn build_tags_select_like_meta_tag() {
-        let tags = ["red".to_string()];
-        assert!(has_any_tag("red", &tags));
-        assert!(has_any_tag("blue, red", &tags));
-        assert!(!has_any_tag("blue", &tags));
+    fn tags_select_the_projects_meta_tag_does() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let config = r#"{"projects":{"a":{"repo":"x","tags":["red"]},
+            "b":{"repo":"x","tags":["blue","red"]},"c":{"repo":"x","tags":["green"]},"d":"x"}}"#;
+        let (server, _) = server(&sandbox, config);
+        let workspace = server.workspace().unwrap();
+        let all = ["a", "b", "c", "d"];
+        for (tag, want) in [
+            (None, &all[..]),
+            (Some("red"), &["a", "b"][..]),
+            (Some(" red "), &["a", "b"]),
+            (Some("green,blue"), &["b", "c"]),
+            (Some(" blue , green ,"), &["b", "c"]),
+            (Some("red,green"), &["a", "b", "c"]),
+        ] {
+            let mcp: Vec<String> = workspace
+                .select(&Scope::of(None, tag.map(str::to_string)).unwrap())
+                .unwrap()
+                .into_iter()
+                .map(|target| target.name)
+                .collect();
+            // what `meta --tag` selects among the same projects (the root,
+            // which MCP's tag scopes never take, aside)
+            let host: Vec<String> = meta_core::repo_filter::Scope::workspace(
+                &workspace.dir,
+                None,
+                &workspace.projects,
+                &[],
+            )
+            .select_repos(&Filters::new(None, None, tag))
+            .unwrap()
+            .iter()
+            .filter_map(|repo| repo.name().map(str::to_string))
+            .collect();
+            assert_eq!(mcp, want, "{tag:?}");
+            assert_eq!(host, want, "{tag:?}");
+        }
+    }
+
+    #[test]
+    fn detect_build_systems_reports_every_system_meta_knows() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let (server, root) = server(&sandbox, r#"{"projects":{"all":"x"}}"#);
+        let dir = root.join("all");
+        std::fs::create_dir(&dir).unwrap();
+        for marker in [
+            "meson.build",
+            "CMakeLists.txt",
+            "setup.py",
+            "pyproject.toml",
+            "build.gradle.kts",
+            "build.gradle",
+            "pom.xml",
+            "makefile",
+            "Makefile",
+            "go.mod",
+            "package.json",
+            "Cargo.toml",
+        ] {
+            std::fs::write(dir.join(marker), "").unwrap();
+        }
+        let results = json(call(&server, "meta_detect_build_systems", json!({})));
+        assert_eq!(
+            results[0]["build_systems"],
+            json!(["cargo", "npm", "go", "make", "maven", "gradle", "python", "cmake", "meson"])
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn stderr_past_the_capture_bound_is_drained_and_said_cut() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let (server, root) = server(&sandbox, r#"{"projects":{}}"#);
+        // 32 MiB, twice the bound; then it still ends, as nothing blocks it
+        let make = "all:\n\t@yes x | head -c 33554432 >&2\n\t@echo finished\n";
+        std::fs::write(root.join("Makefile"), make).unwrap();
+        let results = json(call(&server, "meta_build", json!({})));
+        let stderr = results[0]["stderr"].as_str().unwrap();
+        let limit = meta_plugin::process::CAPTURE_LIMIT;
+        let cut = format!(
+            "\n[meta-mcp: stderr cut at {limit} bytes; {} more were dropped]\n",
+            (32 << 20) - limit
+        );
+        assert!(stderr.ends_with(&cut), "{:?}", stderr.lines().last());
+        assert_eq!(stderr.len(), limit + cut.len());
+        assert!(results[0]["stdout"].as_str().unwrap().contains("finished"));
     }
 
     #[test]

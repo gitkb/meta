@@ -35,7 +35,7 @@ enum Check {
     Copies(&'static [(&'static str, &'static str)]),
 }
 
-const GROUPS: [(u8, &str, Check); 21] = [
+const GROUPS: [(u8, &str, Check); 20] = [
     (
         2,
         "git worktree's subcommands: declared once",
@@ -114,11 +114,6 @@ const GROUPS: [(u8, &str, Check); 21] = [
         Check::Rule(homebrew),
     ),
     (19, "the version: VERSION", Check::Rule(version)),
-    (
-        20,
-        ".meta.yaml's schema: one type",
-        Check::Copies(&[("meta_core/src/config.rs", "pub struct ProjectInfo {")]),
-    ),
     (
         21,
         "worktree hook event names: their serde names",

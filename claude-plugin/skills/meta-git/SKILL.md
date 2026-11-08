@@ -75,7 +75,7 @@ meta git commit -m "wip: before refactor"
 meta --dry-run exec -- <command>
 ```
 
-Commit rather than stash: every worktree of a repo shares one stash, so another session's `git stash pop` can take yours. If you must stash, name it (`meta exec -- git stash push -u -m before-refactor`), find its commit with `git stash list --format='%H %gs'` in each repo, and restore that with `git stash apply <sha>`.
+Commit rather than stash: every worktree of a repo shares one stash, so another session's `git stash pop` can take yours. If you must stash, name it (`meta exec -- git stash push -u -m before-refactor`), find its commit with `git stash list --format='%H %gs'` in each repo, and restore that with `git stash apply --index <sha>` (`--index` keeps what was staged staged).
 
 **Recovering**: run `git reflog` inside the set, in the affected repo: it lists the commits that worktree's `HEAD` pointed to, and `git switch -c recovered <sha>` brings one back. From the primary checkout you won't see them, and a set's reflog goes with the set, so recover before you remove it. `meta exec -- git reflog -n 20`, run in the set, looks across its repos (`meta --include <repo> exec -- …` for one). The reflog only recovers commits, not uncommitted changes. A backup branch keeps only commits.
 

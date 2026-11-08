@@ -713,6 +713,13 @@ impl McpServer {
             ..
         } = config::Workspace::in_dir(self.meta_dir()?)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
+        // a set with no root checkout holds the top config's projects at
+        // their places in a set (one outside the workspace at its name)
+        if self.rootless_set.is_some() {
+            for project in &mut projects {
+                project.path = project.set_place().to_string();
+            }
+        }
         let dir = self.rootless_set.clone().unwrap_or(dir);
         // in a set, the projects it holds
         if let Some(members) = self.members()? {
@@ -2188,6 +2195,44 @@ mod tests {
         assert!(bare.join("web/built").exists());
         assert!(!root.join("web/ran").exists());
         assert!(!root.join("web/built").exists());
+    }
+
+    /// In a set with no root checkout, a project outside the workspace is
+    /// at its name, and is a member there.
+    #[test]
+    fn a_rootless_set_holds_an_outside_project_at_its_name() {
+        let sandbox = meta_plugin::testing::isolated!();
+        crate::test_support::use_built_meta();
+        let root = crate::test_support::nested(&sandbox);
+        sandbox.repo(&sandbox.work().join("sib"));
+        std::fs::write(
+            root.join(".meta.yaml"),
+            r#"{"projects":{"web":"x","platform":{"repo":"x","meta":true},"sib":{"repo":"x","path":"../sib"}}}"#,
+        )
+        .unwrap();
+        let made = crate::run::meta()
+            .unwrap()
+            .cwd(&root)
+            .args([
+                "git",
+                "worktree",
+                "create",
+                "o",
+                "--repo",
+                "sib",
+                "--no-deps",
+            ])
+            .json()
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(made.error.is_none(), "{:?}", made.error);
+        let set = root.join(".worktrees/o");
+        assert!(set.join("sib/.git").exists() && !set.join(".git").exists());
+        let server = McpServer::at(set).unwrap();
+        let projects = call(&server, "meta_list_projects", json!({})).unwrap().text;
+        assert!(projects.starts_with("Found 1 project"), "{projects}");
+        assert!(projects.contains("- sib (sib)"), "{projects}");
     }
 
     #[test]

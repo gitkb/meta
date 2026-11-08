@@ -54,7 +54,7 @@ meta -r --tag backend git push
 
 ## Query DSL (MCP)
 
-The `meta_query_repos` MCP tool (argument `query`) filters repos by state, the root and nested repos included. Without MCP: `meta -r --json context` has no row for the root's git state, so add `meta -r git status`.
+The `meta_query_repos` MCP tool (argument `query`) filters repos by state, the root and nested repos included. Without MCP: `meta -r --json context` has no row for the root's git state, so add `meta -r git status` (in a set with no root checkout, `context` lists the workspace's repos, not the set's: use `meta git status` there).
 
 | Query | Result |
 |-------|--------|

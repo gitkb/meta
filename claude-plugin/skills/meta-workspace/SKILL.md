@@ -100,7 +100,7 @@ The meta MCP server gives structured JSON. Start it with `meta-mcp`, which speak
 {"mcpServers": {"meta": {"command": "meta-mcp", "args": []}}}
 ```
 
-The tools below, `meta_git_status` and `meta_git_branch` see what `meta -r` sees: the root and nested repos, and inside a set that set's members only. The exceptions: `meta_git_diff` and `meta_execution_order` see this level's repos only, and in a set `meta_analyze_impact` also names projects the config lists that the set doesn't hold.
+The tools below, `meta_git_status` and `meta_git_branch` see what `meta -r` sees: the root and nested repos, and inside a set that set's members only. The exceptions: `meta_git_diff` and `meta_execution_order` see this level's repos only, and in a set `meta_analyze_impact` names only the set's members as dependents, so a dependent the set doesn't hold is not there: run it from the workspace root for the whole impact.
 
 | Tool | Purpose | Without MCP |
 |------|---------|-------------|

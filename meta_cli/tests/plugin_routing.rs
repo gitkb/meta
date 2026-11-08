@@ -769,6 +769,7 @@ printf '%s\n' "$line" >> "{}""#,
         &["-C", "d", "status"],
         &["-C", "d", "worktree", "remove", "s"],
         &["help", "log"],
+        &["help"],
         &["log", "--oneline", "-3"],
         &["pull", "-r"],
         &["status", "--", "x"],
@@ -806,4 +807,37 @@ printf '%s\n' "$line" >> "{}""#,
         repos.sort();
         assert_eq!(ran, repos, "{line:?}");
     }
+    // meta-git's own commands keep their help subcommand, and run no git
+    if log.exists() {
+        fs::remove_file(&log).unwrap();
+    }
+    for (line, shown) in [
+        (
+            &["git", "worktree", "help"][..],
+            "Usage: meta git worktree <COMMAND>",
+        ),
+        (
+            &["git", "worktree", "help", "create"],
+            "Usage: meta git worktree create",
+        ),
+        (
+            &["--json", "git", "worktree", "help"],
+            "Usage: meta git worktree <COMMAND>",
+        ),
+    ] {
+        let output = sandbox
+            .command(env!("CARGO_BIN_EXE_meta"))
+            .args(line)
+            .current_dir(&root)
+            .env(
+                "PATH",
+                format!("{}:{}:/usr/bin:/bin", bin.display(), plugins.display()),
+            )
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "meta {line:?}: {said}");
+        assert!(said.contains(shown), "meta {line:?}: {said}");
+    }
+    assert!(!log.exists());
 }

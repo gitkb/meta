@@ -122,10 +122,7 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
         Some(GitCommand::CloneSync(args)) => clone_missing::execute(args.into(), ctx, request),
         // meta sends a help request without its repos: whatever clap made
         // of the arguments, it never commits
-        Some(GitCommand::Commit(_)) if help_requested => {
-            let help = ["commit".to_string(), "--help".to_string()];
-            Ok(parse(&help).map_or_else(|response| *response, |_| Response::done()))
-        }
+        Some(GitCommand::Commit(_)) if help_requested => Ok(help(["commit".to_string()], request)),
         Some(GitCommand::Commit(args)) => commit::execute_git_commit(args, request),
         Some(GitCommand::Worktree(worktree)) => {
             commands::worktree::handle_worktree_command(worktree.command, ctx, request)
@@ -137,6 +134,16 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
         ))),
         // Every other git command runs as typed in each repo
         None => execute_raw_git_command(ctx, request),
+    }
+}
+
+/// The help of the command `words` name (after `git`), as `--help` after
+/// them prints it.
+pub(crate) fn help(words: impl IntoIterator<Item = String>, request: &Request) -> Response {
+    let words: Vec<String> = words.into_iter().chain(["--help".to_string()]).collect();
+    match meta_plugin::parse_args::<GitCli>("git", &words, &request.meta_options) {
+        Err(response) => *response,
+        Ok(_) => Response::done(),
     }
 }
 
@@ -369,6 +376,7 @@ mod tests {
             "log --oneline -3",
             "pull -r",
             "help log",
+            "help",
             "status -- x",
             "-C d worktree remove s",
         ] {
@@ -379,6 +387,14 @@ mod tests {
         let cli = parse("worktree remove s").unwrap();
         assert!(matches!(cli.command, Some(GitCommand::Worktree(_))));
         assert!(cli.as_typed.is_empty());
+        // meta-git's own trees keep a help subcommand
+        let cli = parse("worktree help create").unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(GitCommand::Worktree(commands::worktree::WorktreeParser {
+                command: commands::worktree::cli_types::WorktreeCommands::Help { .. }
+            }))
+        ));
     }
 
     #[test]

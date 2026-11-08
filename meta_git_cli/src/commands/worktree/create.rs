@@ -72,9 +72,6 @@ pub(crate) fn handle_create(
     let depth = request.depth;
     let recursive = request.recursive;
 
-    if args.repos.is_empty() && !args.every_repo {
-        anyhow::bail!("Specify repos with --repo <alias> or use --every-repo");
-    }
     let here = Here::need(request)?;
     let worktree_root = crate::here::worktree_root(request)?;
     meta_plugin::sets::owners_dir(&worktree_root)?;

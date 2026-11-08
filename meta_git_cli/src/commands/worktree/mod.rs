@@ -83,7 +83,10 @@ pub(crate) fn handle_worktree_command(
 ) -> Result<Response> {
     if !matches!(
         command,
-        WorktreeCommands::List(_) | WorktreeCommands::Status(_) | WorktreeCommands::Diff(_)
+        WorktreeCommands::List(_)
+            | WorktreeCommands::Status(_)
+            | WorktreeCommands::Diff(_)
+            | WorktreeCommands::Help { .. }
     ) {
         readable_records(request)?;
     }
@@ -145,6 +148,10 @@ pub(crate) fn handle_worktree_command(
         }
         WorktreeCommands::Exec(args) => exec::handle_exec(args, request),
         WorktreeCommands::Prune => prune::handle_prune(ctx, request),
+        WorktreeCommands::Help { command } => Ok(crate::help(
+            std::iter::once("worktree".to_string()).chain(command),
+            request,
+        )),
     }
 }
 

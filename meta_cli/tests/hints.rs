@@ -312,13 +312,17 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
         &["exec", "--tag", "", "--", "pwd"],
         &["git", "commit", "-m", "x", "--include", "--foo"],
         &["git", "clone", url, "d", "--depth", "5", "--typo"],
+        // meta's -A before create selects no repos: create still needs --repo
+        &["git", "worktree", "create", "x1", "--all"],
+        // an option no command has
+        &["git", "clone", url, "o1", "--meta-depth", "2"],
     ] {
         let out = workspace.meta(typed);
         assert_eq!(out.status.code(), Some(2), "{typed:?}: {}", text(&out));
         assert!(tip_line(&out).is_empty(), "{typed:?}: {}", text(&out));
         // nor clap's "use '-- --include'", which hands it to the command
         let said = text(&out);
-        assert!(said.contains("--typo") || !said.contains("-- --"), "{said}");
+        assert!(!said.contains("-- --"), "{said}");
     }
     // a cluster of meta's short options before the command is read too:
     // the --json among them makes the usage error JSON
@@ -335,6 +339,9 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
     );
     let out = workspace.meta(&["git", "clone", url, "d", "--depth", "5", "--typo"]);
     assert!(!text(&out).contains("option of meta"), "{}", text(&out));
+    // clap's "use '-- --x'" only where the words after `--` are taken
+    let out = workspace.meta(&["git", "worktree", "exec", "t", "--foo"]);
+    assert!(text(&out).contains("use '-- --foo'"), "{}", text(&out));
 }
 
 #[test]

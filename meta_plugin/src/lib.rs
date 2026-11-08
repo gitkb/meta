@@ -283,7 +283,36 @@ pub fn parse_args<P: clap::Parser>(
                 e.render().to_string().trim_end().to_string(),
             )),
             _ => {
+                let mut root = P::command().bin_name(&name);
+                root.build();
+                // the command the words name: each one that names a
+                // subcommand of the one before it, up to `stop`
+                let named = |stop: Option<&str>| {
+                    args.iter()
+                        .take_while(|word| Some(word.as_str()) != stop)
+                        .fold(&root, |cmd, word| cmd.find_subcommand(word).unwrap_or(cmd))
+                };
                 let mut escaped = crate::args::escaped_error::<P>(&argv);
+                // clap's "to pass '--x' as a value, use '-- --x'" is true
+                // only of a command that takes the words after `--`
+                let trailing = named(None)
+                    .get_positionals()
+                    .any(|arg| arg.is_last_set() || arg.is_trailing_var_arg_set());
+                if let (false, Some(ContextValue::StyledStrs(said))) =
+                    (trailing, escaped.get(ContextKind::Suggested))
+                {
+                    let kept: Vec<_> = said
+                        .iter()
+                        .filter(|tip| !tip.to_string().starts_with("to pass '"))
+                        .cloned()
+                        .collect();
+                    // none left: no tip, nor the blank line before tips
+                    let kept = match kept.is_empty() {
+                        true => ContextValue::None,
+                        false => ContextValue::StyledStrs(kept),
+                    };
+                    escaped.insert(ContextKind::Suggested, kept);
+                }
                 let typed: Vec<String> = command
                     .split_whitespace()
                     .map(str::to_string)
@@ -307,18 +336,10 @@ pub fn parse_args<P: clap::Parser>(
                 // a command that isn't one: the ones there are, under the
                 // last command the words before it name
                 if e.kind() == ErrorKind::InvalidSubcommand {
-                    let mut root = P::command().bin_name(&name);
-                    root.build();
                     let bad = e
                         .get(ContextKind::InvalidSubcommand)
                         .map(ToString::to_string);
-                    let help = args
-                        .iter()
-                        .take_while(|word| Some(word.as_str()) != bad.as_deref())
-                        .fold(&root, |cmd, word| cmd.find_subcommand(word).unwrap_or(cmd))
-                        .clone()
-                        .render_help()
-                        .to_string();
+                    let help = named(bad.as_deref()).clone().render_help().to_string();
                     let error = message.split("\n\nUsage:").next().unwrap_or_default();
                     message = format!("{error}\n\n{}", help.trim_end());
                 }

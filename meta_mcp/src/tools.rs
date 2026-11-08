@@ -14,6 +14,7 @@ use meta_plugin::{Envelope, ProjectResult};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -644,12 +645,37 @@ fn nested_include(recursive: &Recursive, project: &str) -> Result<String> {
     if project == "." {
         return Ok(include(".", &path_of(&recursive.dir)));
     }
-    let (projects, dirs) =
-        dependency_graph::in_tree(&recursive.dir, &recursive.config.projects, None)?;
-    let graph = dependency_graph::DependencyGraph::build(projects);
+    let (graph, dirs) = tree_graph(recursive)?;
     let key = graph.find(project)?.ok_or_else(|| not_found(project))?;
     let dir = dirs.get(key).ok_or_else(|| not_found(project))?;
     Ok(include(project, &path_of(dir)))
+}
+
+/// The dependency graph of what `meta -r` reaches (in a set, its members
+/// only), keyed as `meta -r project dependents` keys it, with each key's
+/// folder.
+fn tree_graph(
+    recursive: &Recursive,
+) -> Result<(dependency_graph::DependencyGraph, HashMap<String, PathBuf>)> {
+    let (mut projects, dirs) =
+        dependency_graph::in_tree(&recursive.dir, &recursive.config.projects, None)?;
+    if recursive.in_set() {
+        let members: Vec<PathBuf> = recursive
+            .select(&Filters::default())?
+            .iter()
+            .map(|m| real(&m.dir))
+            .collect();
+        projects.retain(|p| {
+            dirs.get(&p.name)
+                .is_some_and(|dir| members.contains(&real(dir)))
+        });
+    }
+    Ok((dependency_graph::DependencyGraph::build(projects), dirs))
+}
+
+/// `dir` as the file system names it, or as given.
+fn real(dir: &Path) -> PathBuf {
+    dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf())
 }
 
 /// A tool's answer from meta's Envelope: an error when every repo failed.
@@ -683,15 +709,39 @@ impl McpServer {
         let config::Workspace {
             dir,
             config_path,
-            projects,
+            mut projects,
             ..
         } = config::Workspace::in_dir(self.meta_dir()?)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
+        let dir = self.rootless_set.clone().unwrap_or(dir);
+        // in a set, the projects it holds
+        if let Some(members) = self.members()? {
+            projects.retain(|p| members.contains(&real(&dir.join(&p.path))));
+        }
         Ok(Workspace {
-            dir: self.rootless_set.clone().unwrap_or(dir),
+            dir,
             config_path,
             projects,
         })
+    }
+
+    /// The folders of the members of the set the server is in; none outside
+    /// one.
+    fn members(&self) -> Result<Option<Vec<PathBuf>>> {
+        let Some(set) = &self.set else {
+            return Ok(None);
+        };
+        let config = meta_core::worktree::set_config(set, None)?
+            .map(|path| config::Workspace::load(&path))
+            .transpose()?;
+        let members = meta_core::worktree::set_members(set, config.as_ref(), &Filters::default())?;
+        Ok(Some(members.iter().map(|m| real(&m.dir)).collect()))
+    }
+
+    /// Where meta, run from where the server started, names repos from:
+    /// the set's root, else the workspace's.
+    fn names_from(&self, workspace: &Workspace) -> PathBuf {
+        self.set.clone().unwrap_or_else(|| workspace.dir.clone())
     }
 
     /// What `meta -r` reaches from where the server started.
@@ -708,10 +758,9 @@ impl McpServer {
             Scope::All => Vec::new(),
             Scope::Tags(tags) => vec!["--tag".to_string(), tags.tags.join(",")],
             Scope::Project(name) => {
-                vec![
-                    "--include".to_string(),
-                    include(name, &workspace.project(name)?.path),
-                ]
+                let dir = workspace.project(name)?.dir;
+                let path = repo_path(&dir, &self.names_from(workspace));
+                vec!["--include".to_string(), include(name, &path)]
             }
         };
         self.call_with(&options, args)
@@ -1451,10 +1500,7 @@ impl McpServer {
     }
 
     fn analyze_impact(&self, args: ProjectArgs) -> Result<String> {
-        let recursive = self.recursive()?;
-        let (projects, _) =
-            dependency_graph::in_tree(&recursive.dir, &recursive.config.projects, None)?;
-        let graph = dependency_graph::DependencyGraph::build(projects);
+        let (graph, _) = tree_graph(&self.recursive()?)?;
         // The root depends on nothing and nothing on it: no dependents
         let key = match args.project.as_str() {
             "." => ".",
@@ -2075,7 +2121,39 @@ mod tests {
             assert_eq!(listed(&branches, "project"), members);
             let status = json(call(&server, "meta_git_status", json!({})));
             assert_eq!(listed(&status["results"], "project"), members, "{status}");
+            // svc depends on api, but the set doesn't hold it
+            let impact = json(call(
+                &server,
+                "meta_analyze_impact",
+                json!({"project": "platform/api"}),
+            ));
+            assert_eq!(impact["direct_dependents"], json!([]), "{impact}");
+            let impact = json(call(
+                &server,
+                "meta_analyze_impact",
+                json!({"project": "core"}),
+            ));
+            assert_eq!(
+                impact["direct_dependents"],
+                json!(["platform/api"]),
+                "{impact}"
+            );
         }
+        // from a nested member, a project of its config is the one in the set
+        std::fs::write(set.join("platform/api/new"), "x").unwrap();
+        let server = McpServer::at(set.join("platform")).unwrap();
+        let added = call(
+            &server,
+            "meta_git_add",
+            json!({"project": "api", "files": ["new"]}),
+        )
+        .unwrap();
+        assert!(!added.is_error, "{}", added.text);
+        let staged = sandbox.git(
+            &set.join("platform/api"),
+            &["diff", "--cached", "--name-only"],
+        );
+        assert_eq!(staged.trim(), "new");
 
         make(&[
             "git",
@@ -2088,16 +2166,23 @@ mod tests {
         ]);
         let bare = root.join(".worktrees/bare");
         assert!(!bare.join(".git").exists());
-        std::fs::write(bare.join("web/Makefile"), "build:\n\ttouch built\n").unwrap();
-        std::fs::write(root.join("web/Makefile"), "build:\n\ttouch built\n").unwrap();
         let server = McpServer::at(bare.clone()).unwrap();
         let branches = json(call(&server, "meta_git_branch", json!({})));
         assert_eq!(listed(&branches, "project"), ["web"]);
-        json(call(
-            &server,
-            "meta_batch_execute",
-            json!({"command": ["touch", "ran"]}),
-        ));
+        // its members only, an atomic batch too: no project it doesn't hold
+        for (atomic, command) in [(true, vec!["true"]), (false, vec!["touch", "ran"])] {
+            let batch = json(call(
+                &server,
+                "meta_batch_execute",
+                json!({"command": command, "atomic": atomic}),
+            ));
+            assert_eq!(batch["has_failure"], false, "{batch}");
+            assert_eq!(listed(&batch["results"], "project"), ["web"], "{batch}");
+        }
+        let projects = call(&server, "meta_list_projects", json!({})).unwrap().text;
+        assert!(projects.starts_with("Found 1 project"), "{projects}");
+        std::fs::write(bare.join("web/Makefile"), "build:\n\ttouch built\n").unwrap();
+        std::fs::write(root.join("web/Makefile"), "build:\n\ttouch built\n").unwrap();
         call(&server, "meta_build", json!({})).unwrap();
         assert!(bare.join("web/ran").exists());
         assert!(bare.join("web/built").exists());

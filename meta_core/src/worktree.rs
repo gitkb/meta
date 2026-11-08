@@ -291,6 +291,11 @@ impl Recursive {
         }))
     }
 
+    /// Whether it is a set's members.
+    pub fn in_set(&self) -> bool {
+        self.in_set
+    }
+
     /// The repos of it that `filters` select, the root included when it is
     /// a checkout, each once.
     pub fn select(

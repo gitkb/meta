@@ -358,7 +358,7 @@ fn a_nested_repo_says_which_dependency_only_r_follows() {
     let out = envelope(&out);
     let warnings = out["warnings"].to_string();
     assert!(
-        warnings.contains("'core'") && warnings.contains("-r"),
+        warnings.contains("'platform/core'") && warnings.contains("--repo platform/core"),
         "{out}"
     );
     // nothing is added for it
@@ -377,6 +377,48 @@ fn strict_refuses_it_and_r_follows_it() {
     let out = ok(create_api(&f, &["-r"]));
     assert!(!text(&out).contains("only -r follows"), "{}", text(&out));
     assert!(f.set("s/platform/core").is_dir());
+}
+
+/// On the PR's first head this warned, and `--strict` failed, though the
+/// set held every dependency.
+#[test]
+fn a_dependency_the_set_holds_is_not_warned_about() {
+    let f = fixture();
+    let out = ok(f.meta(&[
+        "--strict",
+        "git",
+        "worktree",
+        "create",
+        "s",
+        "--repo",
+        "platform/api",
+        "--repo",
+        "platform/core",
+    ]));
+    assert!(!text(&out).contains("only -r"), "{}", text(&out));
+}
+
+/// `-r` follows a dependency across nesting levels, both ways, through a
+/// capability too, as `meta -r project dependents` reads it.
+#[test]
+fn r_follows_dependencies_across_levels() {
+    let f = fixture();
+    f.config("platform", "core", json!({"provides": ["core-cap"]}));
+    f.config(".", "a", json!({"depends_on": ["core-cap"]}));
+    let out = ok(f.meta(&["-r", "git", "worktree", "create", "t", "--repo", "a"]));
+    assert!(f.set("t/platform/core").is_dir(), "{}", text(&out));
+    f.config("platform", "core", json!({"depends_on": ["b"]}));
+    let out = ok(f.meta(&[
+        "-r",
+        "git",
+        "worktree",
+        "create",
+        "u",
+        "--repo",
+        "platform/core",
+    ]));
+    assert!(f.set("u/b").is_dir(), "{}", text(&out));
+    assert!(!text(&out).contains("warning"), "{}", text(&out));
 }
 
 #[test]

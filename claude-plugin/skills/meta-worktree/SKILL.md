@@ -40,8 +40,10 @@ workspace's sets.
 Run these from the workspace root. **Use `-r` when a repo you name, or one it
 depends on, is nested in a meta repo**, and `-A` when the target is at another
 nesting level than the folder you are in: without them a set holds only this
-level's repos, and each dependency only `-r` follows is named in a warning (with
-`--strict`, an error, and nothing is made).
+level's repos, and each dependency the set won't hold is named in a warning with
+the `--repo` that adds it (with `--strict`, an error, and nothing is made). `-r`
+follows a dependency across nesting levels, by name, path or what a repo
+`provides`.
 
 ```bash
 # Specific repos (the root repo and their dependencies are added automatically)

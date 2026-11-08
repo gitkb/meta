@@ -108,57 +108,82 @@ fn workspace(
     }
 }
 
-/// Resolve the `depends_on` of `members` (named from `root`) within
-/// `reach`, as `meta git worktree create` follows them: by name among the
-/// config's own projects, or with `-r`/`-A` by place through the whole tree
-/// it walks (an entry qualified with the place of the meta repo that lists
-/// it), through what a project provides too. A member outside the reach
-/// keeps its entries as written. Without `-r`/`-A`, a dependency that
-/// `whole_tree` holds outside the reach (nested, or for a nested member
-/// anywhere) is a problem saying only `-r` follows it.
+/// Resolve the `depends_on` of `members` (named from `root`), as `meta git
+/// worktree create` follows them, by place through the whole tree
+/// (`whole_tree`, or without it the tree `reach` walks; in a flat reach
+/// with neither, by name among the config's own projects). An entry names
+/// a project of its own config first (qualified with the place of the meta
+/// repo that lists it), else one anywhere: by its place, its name or what
+/// it provides, as `meta -r project dependents` reads them. Which of them a
+/// create follows is its own to decide (`-r` follows them all).
 fn resolve_dependencies(
     reach: &Reach,
     root: &Path,
     members: &mut [Project],
     whole_tree: &[Candidate],
 ) {
-    use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
-    let repos = reach.scope().repos;
-    let flat = reach.tree.is_empty();
-    // each project of the reach: its folder, its key in the graph, its info
-    let keyed: Vec<(PathBuf, String, &config::ProjectInfo)> = repos
+    use meta_core::dependency_graph::{DependencyGraph, DependencyProblem, ProjectDependencies};
+    let by_name = reach.tree.is_empty() && whole_tree.is_empty();
+    let repos = match whole_tree.is_empty() {
+        true => reach.scope().repos,
+        false => whole_tree.to_vec(),
+    };
+    // each project: its folder, its key in the graph, the place of the
+    // meta repo that lists it ("open-source/gitkb/" for
+    // "open-source/gitkb/core"), its info
+    let keyed: Vec<(PathBuf, String, String, &config::ProjectInfo)> = repos
         .iter()
         .filter_map(|repo| {
             let info = repo.info.as_ref()?;
-            let key = match flat {
+            let key = match by_name {
                 true => info.name.clone(),
                 false => repo_path(&repo.dir, root),
             };
-            Some((repo.dir.clone(), key, info))
-        })
-        .collect();
-    let keys: std::collections::HashSet<&str> = keyed.iter().map(|(_, k, _)| k.as_str()).collect();
-    let mut nodes: Vec<ProjectDependencies> = keyed
-        .iter()
-        .map(|(_, key, info)| {
-            // "open-source/gitkb/core" listed as "core": "open-source/gitkb/"
-            let prefix = match flat {
+            let prefix = match by_name {
                 true => "",
                 false => key
                     .strip_suffix(info.path.as_str())
                     .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
                     .unwrap_or(""),
+            }
+            .to_string();
+            Some((repo.dir.clone(), key, prefix, info))
+        })
+        .collect();
+    // what an entry qualified with its meta repo's place may name
+    let known: std::collections::HashSet<String> = keyed
+        .iter()
+        .flat_map(|(_, key, prefix, info)| {
+            let provided = info.provides.iter().map(move |p| format!("{prefix}{p}"));
+            std::iter::once(key.clone()).chain(provided)
+        })
+        .collect();
+    let mut nodes: Vec<ProjectDependencies> = keyed
+        .iter()
+        .map(|(_, key, prefix, info)| {
+            let qualify = |name: &String| {
+                let qualified = format!("{prefix}{name}");
+                match known.contains(&qualified) && name != "." {
+                    true => qualified,
+                    false => name.clone(),
+                }
             };
-            let qualify = |name: &String| match keys.contains(name.as_str()) || name == "." {
-                true => name.clone(),
-                false => format!("{prefix}{name}"),
-            };
+            // what it provides, as its meta repo and as anyone else names
+            // it; its own name too, where that isn't its key
+            let mut provides: Vec<String> = Vec::new();
+            for item in info.provides.iter().chain(std::iter::once(&info.name)) {
+                for name in [format!("{prefix}{item}"), item.clone()] {
+                    if name != *key && !provides.contains(&name) {
+                        provides.push(name);
+                    }
+                }
+            }
             ProjectDependencies {
                 name: key.clone(),
                 path: key.clone(),
                 repo: info.repo.clone(),
                 tags: info.tags.clone(),
-                provides: info.provides.iter().map(qualify).collect(),
+                provides,
                 depends_on: info.depends_on.iter().map(qualify).collect(),
             }
         })
@@ -169,34 +194,18 @@ fn resolve_dependencies(
     let path_of = |key: &str| {
         keyed
             .iter()
-            .find(|(_, k, _)| k == key)
-            .map(|(dir, _, _)| repo_path(dir, root))
+            .find(|(_, k, _, _)| k == key)
+            .map(|(dir, ..)| repo_path(dir, root))
     };
-    let only_recursive = |dep: &str| {
-        flat && whole_tree.iter().any(|repo| {
-            repo.info
-                .as_ref()
-                .is_some_and(|i| i.name == dep || i.provides.iter().any(|p| p == dep))
-                || repo_path(&repo.dir, root) == dep
-        })
-    };
-    let needs_recursive =
-        |dep: &str| format!("depends on '{}', which only -r follows", escape(dep));
     for member in members.iter_mut() {
-        let Some((_, key, _)) = keyed.iter().find(|(dir, _, _)| *dir == member.abs) else {
-            member.dependency_problems = member
-                .depends_on
-                .iter()
-                .filter(|dep| only_recursive(dep))
-                .map(|dep| needs_recursive(dep))
-                .collect();
+        let Some((_, key, ..)) = keyed.iter().find(|(dir, ..)| *dir == member.abs) else {
             continue;
         };
         let resolved = graph.get_dependencies(key);
         let problems = graph.problems_of(key);
         // the resolved ones, then those that name nothing, as qualified
         let unresolved = problems.iter().filter_map(|p| match p {
-            meta_core::dependency_graph::DependencyProblem::Unresolved(dep) => Some(dep.clone()),
+            DependencyProblem::Unresolved(dep) => Some(dep.clone()),
             _ => None,
         });
         member.depends_on = resolved
@@ -207,12 +216,7 @@ fn resolve_dependencies(
         member.dependency_problems = problems
             .iter()
             .map(|problem| match problem {
-                meta_core::dependency_graph::DependencyProblem::Unresolved(dep)
-                    if only_recursive(dep) =>
-                {
-                    needs_recursive(dep)
-                }
-                meta_core::dependency_graph::DependencyProblem::Unresolved(_) if flat => {
+                DependencyProblem::Unresolved(_) if by_name => {
                     format!("{problem} (nested projects count with -r)")
                 }
                 _ => problem.to_string(),

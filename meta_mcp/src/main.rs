@@ -130,6 +130,8 @@ struct McpServer {
     /// root: its projects are the primary's config's, but its checkouts
     /// are here
     rootless_set: Option<PathBuf>,
+    /// The set it is in: its tools see only the set's members
+    set: Option<PathBuf>,
     calls: run::Calls,
 }
 
@@ -164,8 +166,9 @@ impl McpServer {
     fn at(start: PathBuf) -> Result<Self> {
         use meta_core::{config, worktree};
         let nearest = config::nearest_meta_dir(&start)?;
-        let rootless_set = worktree::detect_worktree_location(&start)?
-            .map(|(_, set)| set)
+        let set = worktree::detect_worktree_location(&start)?.map(|(_, set)| set);
+        let rootless_set = set
+            .clone()
             .filter(|set| !nearest.as_ref().is_some_and(|near| near.starts_with(set)));
         let meta_dir = match &rootless_set {
             Some(set) => worktree::set_config(set, None)?
@@ -177,6 +180,7 @@ impl McpServer {
             start,
             meta_dir,
             rootless_set,
+            set,
             calls: run::Calls::default(),
         })
     }
@@ -188,6 +192,7 @@ impl McpServer {
             start: PathBuf::from("."),
             meta_dir: None,
             rootless_set: None,
+            set: None,
             calls: run::Calls::default(),
         }
     }

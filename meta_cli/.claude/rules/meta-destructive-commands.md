@@ -28,7 +28,7 @@ Multi-repo workspaces amplify the impact of destructive commands. The primary ch
 
 ## Blocked by `agent guard`
 
-gitkb's `agent guard`, the PreToolUse hook, refuses these, as `.claude/agent-guard.toml` lists them. It is a safety net, not a lock: when the agent fails, the command runs.
+gitkb's `agent guard`, the PreToolUse hook, refuses these by default (a project can change them). It is a safety net, not a lock: when the agent fails, the command runs.
 
 - `git push` with `--force` or `-f`, unless the line has `--force-with-lease`
 - `git reset --hard`

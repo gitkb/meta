@@ -893,6 +893,9 @@ fn plan_repos(index: &Index, args: &CreateArgs, ctx: &Ctx, verbose: bool) -> Res
     let again = !missing.is_empty() && !ctx.meta().strict && !ctx.dry_run();
     if !args.no_deps && !again {
         report_problems(index, followed.iter().map(String::as_str), ctx)?;
+        if !index.is_recursive() {
+            report_left_out(index, &followed, &repos, ctx)?;
+        }
     }
     if !not_cloned.is_empty() {
         not_cloned.extend(missing);
@@ -1105,6 +1108,35 @@ fn not_cloned_error(repos: &[PlannedRepo], root: Option<std::path::PathBuf>) -> 
 /// line (`-A`): none for a shallow one.
 fn root_of(index: &Index) -> Option<std::path::PathBuf> {
     index.is_recursive().then(|| index.listed_root.clone())
+}
+
+/// Without `--recursive`, a create follows only the dependencies its
+/// config lists itself: each dependency of a project in `set` that another
+/// level holds, and that none of `repos` (the set) is, is said, with how to
+/// add it (with `--strict`, an error). Nothing is added for it.
+fn report_left_out(index: &Index, set: &[String], repos: &[PlannedRepo], ctx: &Ctx) -> Result<()> {
+    let set: BTreeSet<&str> = set.iter().map(String::as_str).collect();
+    for project in set {
+        let Some(node) = index.listed(project) else {
+            continue;
+        };
+        for dep in &node.project.depends_on {
+            let Some(target) = index.tree.nodes.iter().find(|n| n.project.path == *dep) else {
+                continue;
+            };
+            if repos.iter().any(|r| r.source == target.project.abs) {
+                continue;
+            }
+            let place = dep.strip_prefix(&index.prefix).unwrap_or(dep);
+            ctx.warn_or_bail(format!(
+                "'{}' depends on '{}', which only -r follows: add -r, or name it with --repo {}",
+                escape(project),
+                escape(place),
+                escape(place)
+            ))?;
+        }
+    }
+    Ok(())
 }
 
 /// Report what meta ran into resolving the `depends_on` of each project in

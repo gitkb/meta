@@ -59,11 +59,13 @@ struct ProjectEntry {
     path: Option<String>,
 }
 
-/// An entry's keys but `path`, which it keeps for itself, so the load can
+/// An entry's keys except `path`, which it keeps for itself, so the load can
 /// tell a path left out from an empty one.
 struct PathTaken<'a, M> {
     map: M,
     path: &'a mut Option<String>,
+    /// Whether `path` was written, `~` included: a second one is an error.
+    seen: bool,
 }
 
 impl<'de, M: serde::de::MapAccess<'de>> serde::de::MapAccess<'de> for PathTaken<'_, M> {
@@ -77,6 +79,10 @@ impl<'de, M: serde::de::MapAccess<'de>> serde::de::MapAccess<'de> for PathTaken<
             if key != "path" {
                 return seed.deserialize(key.into_deserializer()).map(Some);
             }
+            if self.seen {
+                return Err(serde::de::Error::duplicate_field("path"));
+            }
+            self.seen = true;
             *self.path = self.map.next_value::<Option<YamlString>>()?.map(|p| p.0);
         }
         Ok(None)
@@ -124,6 +130,7 @@ impl<'de> Deserialize<'de> for ProjectEntry {
                 let taken = PathTaken {
                     map,
                     path: &mut path,
+                    seen: false,
                 };
                 let info =
                     ProjectInfo::deserialize(serde::de::value::MapAccessDeserializer::new(taken))?;
@@ -1471,6 +1478,14 @@ mod tests {
                 err.contains("Invalid project 'api' in") && err.ends_with(": path is empty"),
                 "{err}"
             );
+        }
+        // a second path, null or not, is refused as any field written twice
+        for yaml in [
+            "projects:\n  api:\n    path: a\n    path: b\n",
+            "projects:\n  api:\n    path: ~\n    path: b\n",
+        ] {
+            let err = format!("{:#}", load(yaml).unwrap_err());
+            assert!(err.contains("duplicate field `path`"), "{err}");
         }
         let null = load("projects:\n  api:\n    path: ~\n").unwrap();
         assert_eq!(null.projects[0].path, "api");

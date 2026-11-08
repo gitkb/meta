@@ -360,13 +360,6 @@ SCRIPT
     [[ "$output" == *G2* ]]
 }
 
-@test "--add-aliases-to-global-looprc with a command refuses and runs nothing" {
-    run "$META_BIN" --add-aliases-to-global-looprc exec -- touch RAN </dev/null
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"runs no command"* ]]
-    [ ! -e RAN ] && [ ! -e api/RAN ]
-}
-
 @test "loop handles commands with pipes via script" {
     cat > "$TEST_DIR/api/pipe.sh" <<'SCRIPT'
 #!/bin/sh
@@ -988,13 +981,6 @@ YAML
     run --separate-stderr "$META_BIN" --json --include api git status -r
     [ "$status" -eq 1 ]
     [[ "$(jq -r .error.hint <<<"$output")" == *"as in meta --json --include api -r git status" ]]
-}
-
-@test "--help with --add-aliases-to-global-looprc only prints help" {
-    run sh -c "printf 'y\ny\ny\n' | '$META_BIN' --add-aliases-to-global-looprc --help"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Usage: meta"* ]]
-    [ ! -e "$HOME/.looprc" ]
 }
 
 # Live output is the command's own: meta puts no pipe between it and the

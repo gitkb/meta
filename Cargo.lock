@@ -871,6 +871,7 @@ dependencies = [
  "log",
  "loop_lib",
  "meta_core",
+ "meta_git_cli",
  "meta_plugin",
  "nix",
  "proc-macro2",

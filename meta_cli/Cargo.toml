@@ -43,6 +43,7 @@ meta_plugin.workspace = true
 [dev-dependencies]
 meta_plugin = { workspace = true, features = ["testing-git"] }
 indexmap.workspace = true
+meta_git_cli = { path = "../meta_git_cli" }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 shlex.workspace = true
 syn = { version = "2", features = ["full", "visit"] }

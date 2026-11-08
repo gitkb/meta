@@ -25,7 +25,6 @@
 
 #![expect(
     clippy::disallowed_methods,
-    clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
 )]
 #![cfg(unix)]
@@ -34,7 +33,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+use clap::CommandFactory;
+use meta_plugin::args::MetaOptions;
 use syn::visit::Visit;
+
+use crate::Cli;
 
 /// A command found somewhere, as the words after `meta`.
 struct Line {
@@ -147,20 +150,20 @@ fn is_meta(command: &str) -> bool {
     command == "meta" || command.starts_with("meta ")
 }
 
-/// meta's options that take a value (`meta --help`): the word after one isn't
-/// the command.
-const VALUED: &[&str] = &[
-    "-c",
-    "--config",
-    "-e",
-    "--exclude",
-    "-i",
-    "--include",
-    "-t",
-    "--tag",
-    "--depth",
-    "--fields",
-];
+/// meta's options, as its clap tree declares them, and the ones of them
+/// `words` (after `meta`) types before the command.
+fn meta_options(words: &[String]) -> MetaOptions {
+    MetaOptions::of(&Cli::command(), words)
+}
+
+/// Whether `word` is a spelling of one of meta's options that takes a
+/// value: the word after it isn't the command.
+fn valued(word: &str) -> bool {
+    meta_options(&[])
+        .options
+        .iter()
+        .any(|option| option.takes_value && option.spellings.iter().any(|s| s == word))
+}
 
 /// The `meta` commands of a shell line (`a && b` has two), each the words
 /// after `meta` up to where the shell takes over. A word filled in
@@ -239,17 +242,7 @@ fn previewed(words: &[String]) -> Vec<String> {
 /// Where the command word is in `words`: the first word after meta's
 /// options and their values.
 fn command_word(words: &[String]) -> usize {
-    let mut expects_value = false;
-    for (at, word) in words.iter().enumerate() {
-        if expects_value {
-            expects_value = false;
-        } else if word.starts_with('-') {
-            expects_value = VALUED.contains(&word.as_str());
-        } else {
-            return at;
-        }
-    }
-    words.len()
+    meta_options(words).typed.len()
 }
 
 /// Whether the next word after `words` is where a command word goes: the
@@ -260,10 +253,7 @@ fn at_command_word(words: &[String]) -> bool {
         ["git", "plugin", "project", "init", "help", "worktree"].contains(&word.as_str())
     });
     after_command
-        || command_word(words) == words.len()
-            && !words
-                .last()
-                .is_some_and(|word| VALUED.contains(&word.as_str()))
+        || command_word(words) == words.len() && !words.last().is_some_and(|word| valued(word))
 }
 
 /// What a filled-in word becomes: a project and a tag of the sandbox, and a
@@ -317,8 +307,10 @@ fn rust_files(dir: &Path, each: &mut impl FnMut(&Path)) {
         if path.is_dir() {
             rust_files(&path, each);
         } else if path.extension().is_some_and(|ext| ext == "rs")
-            // test helpers that tests include
-            && !path.file_stem().is_some_and(|stem| stem == "test_support" || stem == "tests")
+            // test helpers that tests include, and this test
+            && !path.file_stem().is_some_and(|stem| {
+                ["test_support", "tests", "docs_lint"].iter().any(|s| stem == *s)
+            })
         {
             each(&path);
         }
@@ -580,10 +572,7 @@ impl Sandbox {
                 if words.last().is_some_and(|word| word == "--") {
                     words.pop();
                 }
-                if words
-                    .last()
-                    .is_some_and(|word| VALUED.contains(&word.as_str()))
-                {
+                if words.last().is_some_and(|word| valued(word)) {
                     words.push(FILL.into());
                 }
                 words.push("--help".into());
@@ -616,7 +605,9 @@ impl Sandbox {
 #[test]
 fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let bin = Path::new(env!("CARGO_BIN_EXE_meta")).parent().unwrap();
+    // the test runs from target/<profile>/deps, next to the binaries
+    let exe = std::env::current_exe().unwrap();
+    let bin = exe.parent().and_then(Path::parent).unwrap();
     // the plugin guide's example plugin serves `meta hello`
     for plugin in ["meta-git", "meta-cargo", "examples/meta-hello"] {
         assert!(
@@ -673,57 +664,51 @@ fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
     );
 }
 
-/// The commands meta or its plugins own, as the words that name them: their
-/// arguments are theirs, and none of them is one of meta's options.
-const OWNED: &[&[&str]] = &[
-    &["context"],
-    &["exec"],
-    &["plugin", "list"],
-    &["plugin", "search"],
-    &["project"],
-    &["git", "update"],
-    &["git", "clone"],
-    &["git", "clone-missing"],
-    &["git", "clone-prune"],
-    &["git", "clone-sync"],
-    &["git", "commit"],
-    &["git", "worktree"],
-];
-
-/// meta's options that a meta-owned command once had a copy of, by their
-/// long names and `-r`; `git clone`'s own `--depth` (history) and
-/// `--parallel N` (a count) are git clone's.
-const META_OPTIONS: &[&str] = &[
-    "--json",
-    "-r",
-    "--recursive",
-    "-A",
-    "--all",
-    "--dry-run",
-    "--strict",
-    "--include",
-    "--exclude",
-    "--tag",
-    "--depth",
-    "--parallel",
-];
+/// The commands meta or its plugins own, as the words that name them: meta's
+/// built-in commands and the git commands meta-git adapts, from their clap
+/// trees. Their arguments are theirs, and none of them is one of meta's
+/// options.
+fn owned() -> Vec<Vec<String>> {
+    let builtin = Cli::command()
+        .get_subcommands()
+        .map(|command| vec![command.get_name().to_string()])
+        .collect::<Vec<_>>();
+    let git = meta_git_cli::plugin_info()
+        .help
+        .into_iter()
+        .flat_map(|help| help.commands.into_keys())
+        .map(|command| vec!["git".to_string(), command]);
+    builtin.into_iter().chain(git).collect()
+}
 
 /// The option of meta's that `words` (after `meta`) types after a
-/// meta-owned command, before any `--`, if it does.
+/// meta-owned command, before any `--`, if it does. `git clone`'s own
+/// `--depth` (history) and `--parallel N` (a count) are git clone's.
 fn option_after_owned_command(words: &[String]) -> Option<&str> {
     let at = command_word(words);
     let command = words.get(at..).unwrap_or_default();
-    let owned = OWNED.iter().find(|owned| {
+    let owned = owned().into_iter().find(|owned| {
         owned.len() <= command.len() && command.iter().zip(owned.iter()).all(|(w, o)| w == o)
     })?;
-    let clone = owned == &["git", "clone"];
+    let clone = owned == ["git", "clone"];
+    // a command whose words from its first argument on are a program's
+    // (`exec git --version`) ends at that word
+    let trailing = owned.first().is_some_and(|name| {
+        Cli::command()
+            .find_subcommand(name)
+            .is_some_and(|sub| sub.get_arguments().any(clap::Arg::is_trailing_var_arg_set))
+    });
+    let meta = meta_options(&[]);
     command
         .iter()
         .skip(owned.len())
-        .take_while(|word| *word != "--")
+        .take_while(|word| *word != "--" && !(trailing && !word.starts_with('-')))
         .map(|word| word.split('=').next().unwrap_or(word))
         .find(|word| {
-            META_OPTIONS.contains(word) && !(clone && ["--depth", "--parallel"].contains(word))
+            meta.options
+                .iter()
+                .any(|option| option.spellings.iter().any(|s| s == word))
+                && !(clone && ["--depth", "--parallel"].contains(word))
         })
 }
 
@@ -745,6 +730,7 @@ fn no_meta_option_follows_a_meta_owned_command() {
         "git pull -r",
         "git pull --tag v1",
         "exec -- make --json",
+        "exec git --version",
         "git clone URL d --depth 1 --parallel 8",
         "--include api git worktree exec t -- make --dry-run",
     ] {

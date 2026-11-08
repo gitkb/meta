@@ -8,6 +8,8 @@ use meta_plugin::{errln, out, outln};
 use std::path::PathBuf;
 
 mod context;
+#[cfg(test)]
+mod docs_lint;
 mod events;
 mod init;
 mod invoke;
@@ -45,6 +47,14 @@ fn version_json() -> serde_json::Value {
     })
 }
 
+/// The headings meta's options are listed under: which repos a command
+/// runs in, how it runs them, and what meta prints. `as_typed_help` shows
+/// the first three.
+const SCOPE: &str = "Scope";
+use meta_plugin::args::FILTER_HEADING as FILTERS;
+const RUNNING: &str = "Running";
+const OUTPUT: &str = "Output";
+
 /// meta's options go before the command; every word after the command
 /// belongs to it, so `meta git pull --tag v1` gives `--tag v1` to git.
 #[derive(Parser)]
@@ -54,18 +64,16 @@ fn version_json() -> serde_json::Value {
     name = "meta",
     bin_name = "meta",
     author,
-    version = version(),
     about,
+    disable_version_flag = true,
     long_about = None,
     disable_help_subcommand = true,
     after_help = "meta's options go before the command (meta --dry-run git update); \
                   what follows the command belongs to it."
 )]
 pub struct Cli {
-    #[arg(long, help = "Add shell aliases to the global .looprc file")]
-    add_aliases_to_global_looprc: bool,
-
     #[arg(
+        help_heading = SCOPE,
         short,
         long,
         value_name = "FILE",
@@ -74,6 +82,7 @@ pub struct Cli {
     config: Option<PathBuf>,
 
     #[arg(
+        help_heading = FILTERS,
         short,
         long,
         value_delimiter = ',',
@@ -82,6 +91,7 @@ pub struct Cli {
     exclude: Option<Vec<String>>,
 
     #[arg(
+        help_heading = FILTERS,
         short,
         long,
         value_delimiter = ',',
@@ -90,12 +100,14 @@ pub struct Cli {
     include: Option<Vec<String>>,
 
     #[arg(
+        help_heading = OUTPUT,
         long,
         help = "Print one JSON document (the envelope every command prints) instead of text"
     )]
     json: bool,
 
     #[arg(
+        help_heading = OUTPUT,
         long,
         conflicts_with = "json",
         help = "Print each event as one JSON line as it happens ({\"event\": …}), then the envelope --json prints as the last line ({\"envelope\": …})"
@@ -103,6 +115,7 @@ pub struct Cli {
     json_stream: bool,
 
     #[arg(
+        help_heading = OUTPUT,
         long,
         value_name = "FIELDS",
         value_delimiter = ',',
@@ -110,13 +123,14 @@ pub struct Cli {
     )]
     fields: Option<Vec<String>>,
 
-    #[arg(short, long, help = "Enable silent mode")]
+    #[arg(help_heading = OUTPUT, short, long, help = "Enable silent mode")]
     silent: bool,
 
-    #[arg(short, long, action, help = "Enable verbose output")]
+    #[arg(help_heading = OUTPUT, short, long, action, help = "Enable verbose output")]
     verbose: bool,
 
     #[arg(
+        help_heading = FILTERS,
         long,
         short = 't',
         value_name = "TAGS",
@@ -125,6 +139,7 @@ pub struct Cli {
     tag: Option<String>,
 
     #[arg(
+        help_heading = SCOPE,
         long,
         short = 'r',
         help = "Also the meta repos nested under the nearest .meta.yaml (at the workspace root, the same as -A)"
@@ -132,6 +147,7 @@ pub struct Cli {
     recursive: bool,
 
     #[arg(
+        help_heading = SCOPE,
         long,
         short = 'A',
         help = "The whole workspace, from its outermost .meta.yaml, wherever you are (inside a worktree set: no wider than the set)"
@@ -139,6 +155,7 @@ pub struct Cli {
     all: bool,
 
     #[arg(
+        help_heading = SCOPE,
         long,
         value_name = "N",
         help = "How many levels of nested meta repos -r or -A goes down, from where it starts (default: unlimited)"
@@ -146,24 +163,27 @@ pub struct Cli {
     depth: Option<usize>,
 
     #[arg(
+        help_heading = RUNNING,
         long,
         help = "Show what would change, and change nothing (commands that can't preview refuse it)"
     )]
     dry_run: bool,
 
-    #[arg(long, help = "Run commands in parallel")]
+    #[arg(help_heading = RUNNING, long, help = "Run commands in parallel")]
     parallel: bool,
 
-    #[arg(long, help = "Run commands sequentially (overrides config default)")]
+    #[arg(help_heading = RUNNING, long, help = "Run commands sequentially (overrides config default)")]
     sequential: bool,
 
     #[arg(
+        help_heading = SCOPE,
         long,
         help = "Inside a worktree set, act on the workspace it was made from instead"
     )]
     primary: bool,
 
     #[arg(
+        help_heading = SCOPE,
         long,
         conflicts_with_all = ["all", "primary"],
         help = "Only the .meta.yaml in the directory meta runs from: no workspace above it, no worktree set around it"
@@ -171,10 +191,19 @@ pub struct Cli {
     no_parent: bool,
 
     #[arg(
+        help_heading = RUNNING,
         long,
         help = "Convert warnings to errors for all-or-nothing behavior (CI/automation)"
     )]
     strict: bool,
+
+    #[arg(
+        short = 'V',
+        long,
+        help_heading = OUTPUT,
+        help = "Print version (with --json: as JSON)"
+    )]
+    version: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -349,19 +378,6 @@ enum PluginCommands {
     },
 }
 
-impl PluginCommands {
-    /// Its words, as the Envelope names the command.
-    fn name(&self) -> &'static str {
-        match self {
-            PluginCommands::Search { .. } => "plugin search",
-            PluginCommands::Install { .. } => "plugin install",
-            PluginCommands::List { .. } => "plugin list",
-            PluginCommands::Uninstall { .. } => "plugin uninstall",
-            PluginCommands::Update { .. } => "plugin update",
-        }
-    }
-}
-
 // === Help Utilities ===
 
 /// meta's help, with an entry for each plugin's command word (each plugin is
@@ -414,11 +430,22 @@ static COMMAND: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 /// one of them expects a subcommand; empty when the first word is no command
 /// of meta's.
 fn typed_command() -> String {
-    let typed: Vec<String> = std::env::args_os()
+    command_of(&typed_args())
+}
+
+/// This process's arguments, after the program's name.
+fn typed_args() -> Vec<String> {
+    std::env::args_os()
         .skip(1)
         .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
-    let skip = meta_options().typed.len();
+        .collect()
+}
+
+/// What [`typed_command`] names for `typed`, the words after `meta`.
+fn command_of(typed: &[String]) -> String {
+    let skip = meta_plugin::args::MetaOptions::of(&Cli::command(), typed)
+        .typed
+        .len();
     let mut command = Cli::command();
     let mut words = Vec::new();
     for word in typed.iter().skip(skip) {
@@ -434,6 +461,14 @@ fn typed_command() -> String {
         command = sub;
     }
     words.join(" ")
+}
+
+/// Whether meta's options before the command ask for JSON (`--json` or
+/// `--json-stream`), in any spelling clap takes, whatever else is wrong with
+/// them (`--depth x`): a usage error is then the Envelope.
+fn typed_json() -> bool {
+    let meta = meta_options();
+    meta.typed_has("--json") || meta.typed_has("--json-stream")
 }
 
 /// The command being run is `name` (the Envelope of an error names it).
@@ -525,22 +560,29 @@ fn run_cli() -> Result<()> {
     // answered here, before anything else runs; every other result of
     // parsing is reported as usual
     let mut cli: Cli = match Cli::try_parse() {
+        Ok(cli) if cli.version => {
+            match cli.json {
+                true => outln!("{}", version_json())?,
+                false => outln!("meta {}", version())?,
+            }
+            return Ok(());
+        }
         Ok(cli) => cli,
         Err(e) if is_root_help(&e) => {
             check_and_warn_orphan();
             let plugins = SubprocessPluginManager::new(false)?;
             return Ok(out!("{}", help_with_plugins(&plugins))?);
         }
-        // clap stops at --version, so it may not have read a --json after it
-        Err(e)
-            if e.kind() == clap::error::ErrorKind::DisplayVersion
-                && std::env::args_os().any(|arg| arg == "--json") =>
-        {
-            return Ok(outln!("{}", version_json())?);
-        }
         Err(e) => {
             // the Envelope of a usage error names the command it is about
             running(&typed_command());
+            use clap::error::ErrorKind;
+            if !matches!(
+                e.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+            ) {
+                meta_plugin::out::set_json(typed_json());
+            }
             match project::usage_error(&e) {
                 Some(error) => return Err(error),
                 None => meta_plugin::args::parse()?,
@@ -573,23 +615,9 @@ fn run_cli() -> Result<()> {
         escape(cli.tag.as_deref().unwrap_or_default())
     );
 
-    if cli.add_aliases_to_global_looprc {
-        anyhow::ensure!(
-            cli.command.is_none(),
-            "--add-aliases-to-global-looprc imports your shell's aliases and runs no command"
-        );
-        return loop_lib::import_aliases(cli.dry_run);
-    }
-
-    let mut report = Report::new(match &cli.command {
-        None => "help",
-        Some(Commands::Help { .. }) => "help",
-        Some(Commands::Context(_)) => "context",
-        Some(Commands::Init(_)) => "init claude",
-        Some(Commands::Plugin(args)) => args.command.name(),
-        Some(Commands::Exec(_)) => "exec",
-        Some(Commands::Project(args)) => args.command.name(),
-        Some(Commands::External(_)) => "",
+    let mut report = Report::new(match cli.command {
+        None => "help".to_string(),
+        Some(_) => typed_command(),
     });
     running(&report.command);
     match &cli.command {
@@ -851,26 +879,15 @@ fn as_typed_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin, tool: &s
 /// The help of meta's options that choose the repos a command runs in, and
 /// how: from meta's own definitions, so it says what meta takes.
 fn selection_options_help() -> String {
-    const SHOWN: [&str; 9] = [
-        "dry_run",
-        "recursive",
-        "depth",
-        "include",
-        "exclude",
-        "tag",
-        "parallel",
-        "sequential",
-        "primary",
-    ];
     let options: Vec<clap::Arg> = Cli::command()
         .get_arguments()
-        .filter(|arg| SHOWN.contains(&arg.get_id().as_str()))
+        .filter(|arg| arg.get_help_heading() != Some(OUTPUT))
         .cloned()
         .collect();
     clap::Command::new("meta")
         .disable_help_flag(true)
         .disable_version_flag(true)
-        .help_template("{options}")
+        .help_template("{all-args}")
         .args(options)
         .render_help()
         .to_string()
@@ -947,18 +964,7 @@ fn refuse_filters(filtered: bool, command: &[impl AsRef<str>]) -> Result<()> {
 
 /// meta's options, and what of this process's arguments is them
 fn meta_options() -> meta_plugin::args::MetaOptions {
-    let args: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
-    let mut options = meta_plugin::args::MetaOptions::of(&Cli::command(), &args);
-    for option in &mut options.options {
-        option.filter = option
-            .spellings
-            .iter()
-            .any(|s| project::FILTERS.contains(&s.as_str()));
-    }
-    options
+    meta_plugin::args::MetaOptions::of(&Cli::command(), &typed_args())
 }
 
 /// meta, as the program that runs a command in each repo: its options, so a
@@ -1503,5 +1509,104 @@ fn check_and_warn_orphan() {
             escape_path(&warning.parent_config),
             escape(&warning.suggested_key)
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn words(line: &str) -> Vec<String> {
+        line.split_whitespace().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn each_option_of_meta_is_listed_under_its_heading() {
+        let mut expected = [
+            ("config", SCOPE),
+            ("recursive", SCOPE),
+            ("all", SCOPE),
+            ("depth", SCOPE),
+            ("primary", SCOPE),
+            ("no_parent", SCOPE),
+            ("include", FILTERS),
+            ("exclude", FILTERS),
+            ("tag", FILTERS),
+            ("dry_run", RUNNING),
+            ("parallel", RUNNING),
+            ("sequential", RUNNING),
+            ("strict", RUNNING),
+            ("json", OUTPUT),
+            ("json_stream", OUTPUT),
+            ("fields", OUTPUT),
+            ("silent", OUTPUT),
+            ("verbose", OUTPUT),
+            ("version", OUTPUT),
+        ]
+        .map(|(id, heading)| (id.to_string(), Some(heading.to_string())));
+        let mut found: Vec<_> = Cli::command()
+            .get_arguments()
+            .filter(|arg| !arg.is_positional())
+            .map(|arg| {
+                let heading = arg.get_help_heading().map(str::to_string);
+                (arg.get_id().to_string(), heading)
+            })
+            .collect();
+        expected.sort();
+        found.sort();
+        assert_eq!(found, expected);
+        // the filters a command can refuse are the ones under that heading
+        let filters: Vec<_> = meta_options()
+            .options
+            .into_iter()
+            .filter(|option| option.filter)
+            .flat_map(|option| option.spellings)
+            .collect();
+        assert_eq!(
+            filters,
+            ["--exclude", "-e", "--include", "-i", "--tag", "-t"]
+        );
+    }
+
+    #[test]
+    fn typed_command_names_each_command_of_meta() {
+        let table = [
+            ("context", "context"),
+            ("--json exec -- ls", "exec"),
+            ("help git log", "help"),
+            ("init claude", "init claude"),
+            ("plugin search x", "plugin search"),
+            ("plugin install x", "plugin install"),
+            ("-v plugin list", "plugin list"),
+            ("plugin uninstall x", "plugin uninstall"),
+            ("plugin update", "plugin update"),
+            ("-r --depth 2 project list", "project list"),
+            ("project ls", "project list"),
+            ("project check", "project check"),
+            ("-i api project dependents x", "project dependents"),
+            ("project nonesuch", "project nonesuch"),
+            ("-i api git status", ""),
+        ];
+        for (line, named) in table {
+            assert_eq!(command_of(&words(line)), named, "meta {line}");
+        }
+        // a row for each command clap declares
+        fn leaves(command: &clap::Command, above: &str, into: &mut Vec<String>) {
+            for sub in command.get_subcommands() {
+                let name = format!("{above}{}", sub.get_name());
+                match sub.has_subcommands() {
+                    true => leaves(sub, &format!("{name} "), into),
+                    false => into.push(name),
+                }
+            }
+        }
+        let mut declared = Vec::new();
+        leaves(&Cli::command(), "", &mut declared);
+        for name in declared {
+            assert!(
+                table.iter().any(|(_, named)| *named == name),
+                "no row for {name}"
+            );
+        }
     }
 }

@@ -244,11 +244,6 @@ preview() {
     [[ "$output" == *"[DRY RUN]"*"touch made-by-exec"* ]]
 }
 
-@test "--add-aliases-to-global-looprc previews" {
-    preview 0 --add-aliases-to-global-looprc
-    [[ "$output" == *"Would add your shell's aliases"* ]]
-}
-
 @test "git clone previews" {
     preview 0 git clone "file://$SANDBOX/remotes/backend.git" cloned
     [[ "$output" == *"Would clone meta repository"* ]]

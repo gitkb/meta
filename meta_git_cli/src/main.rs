@@ -9,6 +9,7 @@ fn main() {
     run_plugin(PluginDefinition {
         info: meta_git_cli::plugin_info(),
         execute,
+        targeting: Some(meta_git_cli::targeting),
     });
 }
 

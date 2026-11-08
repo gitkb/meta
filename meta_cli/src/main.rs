@@ -878,64 +878,42 @@ fn selection_options_help() -> String {
 
 // === Command Dispatch ===
 
-/// `args` (starting with the plugin's word) through `plugin`, in the repos
-/// meta's options select. `git clone` makes the workspace, so it needs
-/// none; worktree commands find their repos in the set they name (in the
-/// workspace's members).
+/// `args` (starting with the plugin's word) through `plugin`, in what the
+/// plugin says the line acts on: no workspace, the workspace, the projects
+/// meta's options select, or a worktree set it names.
 fn dispatch(
     cli: &Cli,
     args: &[String],
     plugin: &SubprocessPlugin,
     report: &mut Report,
 ) -> Result<()> {
-    running(
-        &args
-            .get(..plugin.command_len(args))
-            .unwrap_or_default()
-            .join(" "),
-    );
+    use meta_plugin::Targeting;
+    let command = args.get(..plugin.command_len(args)).unwrap_or_default();
+    running(&command.join(" "));
+    let want = plugin.targeting(args)?;
+    refuse_filters(want.refuses_filters() && !cli.filters().is_empty(), command)?;
     let start = cli.start_dir()?;
-    let words: Vec<&str> = args.iter().map(String::as_str).collect();
-    // the set a worktree command names: the word after its verb
-    let named = words.get(3).copied().filter(|name| !name.starts_with('-'));
-    let scope = match words.as_slice() {
-        ["git", "clone", ..] => Scope::None,
-        ["git", "update", ..] => Scope::Workspace,
-        ["git", "worktree", "exec" | "remove" | "status" | "diff" | "add", ..]
-            if named.is_some() =>
-        {
-            Scope::NamedSet
-        }
-        ["git", "worktree", ..] => Scope::Workspace,
-        _ => Scope::Selection,
-    };
-    // the host applies meta's selection: a command that finds its repos
-    // itself takes none, nor one that acts on a whole named set
-    let whole_set = scope == Scope::NamedSet && words.get(2) != Some(&"exec");
-    let refuses_filters = matches!(scope, Scope::None | Scope::Workspace) || whole_set;
-    refuse_filters(
-        refuses_filters && !cli.filters().is_empty(),
-        args.get(..3).unwrap_or(args),
-    )?;
-    let target = match (scope, named) {
+    let target = match &want {
         // a clone runs where it is, in a workspace or none
-        (Scope::None, _) => None,
-        (Scope::NamedSet, Some(name)) => invoke::named_set(cli, &start, name)?,
+        Targeting::None | Targeting::Unparsed => None,
+        Targeting::WholeSet(name) | Targeting::SelectedSet(name) => {
+            invoke::named_set(cli, &start, name)?
+        }
         // outside a workspace, the command says what it needs itself; a
         // config that is refused is an error here
-        (Scope::Workspace | Scope::NamedSet, _) => match invoke::target(cli, &start) {
+        Targeting::Workspace => match invoke::target(cli, &start) {
             Ok(target) => Some(target),
             Err(e) if meta_plugin::envelope::code_of(&e) == meta_plugin::ErrorCode::NotFound => {
                 None
             }
             Err(e) => return Err(e),
         },
-        (Scope::Selection, _) => Some(invoke::target(cli, &start)?),
+        Targeting::Selection => Some(invoke::target(cli, &start)?),
     };
     // a set is acted on by name only by the provider that made it: one VCS
     // never removes another's checkouts
     if let Some(set) = target.as_ref().and_then(|t| t.set.as_ref()) {
-        if scope == Scope::NamedSet && set.provider != plugin.word {
+        if want.set().is_some() && set.provider != plugin.word {
             return Err(meta_plugin::ErrorInfo::new(
                 meta_plugin::ErrorCode::Conflict,
                 format!(
@@ -949,13 +927,7 @@ fn dispatch(
             .into());
         }
     }
-    let mut request = invoke::request(cli, plugin, args, &start, scope, target.as_ref())?;
-    // typed after the command, they get no tip to type them before it
-    if refuses_filters {
-        request.meta_options = request
-            .meta_options
-            .refusing(&["--include", "--exclude", "--tag"]);
-    }
+    let request = invoke::request(cli, plugin, args, &start, want.scope(), target.as_ref())?;
     invoke::call(cli, plugin, &request, target.as_ref(), report)
 }
 
@@ -979,7 +951,14 @@ fn meta_options() -> meta_plugin::args::MetaOptions {
         .skip(1)
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    meta_plugin::args::MetaOptions::of(&Cli::command(), &args)
+    let mut options = meta_plugin::args::MetaOptions::of(&Cli::command(), &args);
+    for option in &mut options.options {
+        option.filter = option
+            .spellings
+            .iter()
+            .any(|s| project::FILTERS.contains(&s.as_str()));
+    }
+    options
 }
 
 /// meta, as the program that runs a command in each repo: its options, so a

@@ -31,31 +31,6 @@ pub(crate) struct WorktreeParser {
     pub(crate) command: WorktreeCommands,
 }
 
-/// Refuse meta's selection for `command` on the whole set `name`: a
-/// selection that leaves out a checkout of it would read as "only these".
-/// The host applies `--include`/`--exclude`/`--tag` to the set it names;
-/// only `exec` runs in the checkouts they select.
-fn whole_set(request: &Request, command: &str, name: &str) -> Result<()> {
-    let Some(set) = request.set.as_ref().filter(|set| set.name == name) else {
-        return Ok(());
-    };
-    let narrowed = set
-        .members
-        .iter()
-        .any(|member| !request.projects.iter().any(|p| p.abs == member.abs));
-    if narrowed {
-        return Err(ErrorInfo::new(
-            ErrorCode::Usage,
-            format!(
-                "meta git worktree {command} does not take --include/--exclude/--tag; use `meta \
-                 --include <repo> git worktree exec <name> -- <command>`"
-            ),
-        )
-        .into());
-    }
-    Ok(())
-}
-
 /// Refuse to make or act on sets from inside a set whose checkouts hold a
 /// record of meta-git's that can't be read: which workspace the set stands
 /// for, and so where its sets are, is then unknown. Naming the record.
@@ -110,14 +85,8 @@ pub(crate) fn handle_worktree_command(
                 Err(e) => crate::printed_with_git(ctx, request, records, Some(e)),
             }
         }
-        WorktreeCommands::Add(args) => {
-            whole_set(request, "add", &args.name)?;
-            add::handle_add(args, ctx, request)
-        }
-        WorktreeCommands::Remove(args) => {
-            whole_set(request, "remove", &args.name)?;
-            remove::handle_remove(args, ctx, request)
-        }
+        WorktreeCommands::Add(args) => add::handle_add(args, ctx, request),
+        WorktreeCommands::Remove(args) => remove::handle_remove(args, ctx, request),
         WorktreeCommands::List(_) | WorktreeCommands::Status(_) if request.recursive => {
             let list = match command {
                 WorktreeCommands::List(_) => "list",
@@ -138,14 +107,10 @@ pub(crate) fn handle_worktree_command(
             list::handle_list(args, ctx, request)
         }
         WorktreeCommands::Status(mut args) => {
-            whole_set(request, "status", &args.name)?;
             args.strict = ctx.meta().strict;
             status::handle_status(args, ctx, request)
         }
-        WorktreeCommands::Diff(args) => {
-            whole_set(request, "diff", &args.name)?;
-            diff::handle_diff(args, ctx, request)
-        }
+        WorktreeCommands::Diff(args) => diff::handle_diff(args, ctx, request),
         WorktreeCommands::Exec(args) => exec::handle_exec(args, request),
         WorktreeCommands::Prune => prune::handle_prune(ctx, request),
         WorktreeCommands::Help { command } => Ok(crate::help(

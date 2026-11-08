@@ -32,11 +32,23 @@ impl NoInfo {
     }
 }
 
-/// Query metadata with one deadline for both process exit and stdout EOF.
+/// Ask the plugin at `path` for its info.
 pub(crate) fn probe_plugin_info(path: &Path) -> Result<PluginInfo, NoInfo> {
+    probe(path, &["--meta-plugin-info".to_string()], "its info")
+}
+
+/// The JSON answer (`what`) of the plugin at `path` started with `args`
+/// (a flag first, then its words), with one deadline for both process
+/// exit and stdout EOF, and at most 1 MiB of it read.
+fn probe<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    args: &[String],
+    what: &str,
+) -> Result<T, NoInfo> {
+    let flag = args.first().map(String::as_str).unwrap_or_default();
     let not_a_plugin = |reason: String| {
         NoInfo::NotAPlugin(anyhow::anyhow!(
-            "Plugin {} did not answer --meta-plugin-info with its info: {}",
+            "Plugin {} did not answer {flag} with {what}: {}",
             escape_path(path),
             escape(&reason)
         ))
@@ -48,7 +60,7 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<PluginInfo, NoInfo> {
     )]
     let mut command = Command::new(path);
     command
-        .arg("--meta-plugin-info")
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -79,7 +91,7 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<PluginInfo, NoInfo> {
                     let bytes =
                         output.map_err(|e| not_a_plugin(format!("reading it failed ({e})")))?;
                     return serde_json::from_slice(&bytes)
-                        .map_err(|e| not_a_plugin(format!("its answer is not plugin info ({e})")));
+                        .map_err(|e| not_a_plugin(format!("its answer is not {what} ({e})")));
                 }
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(1))
@@ -99,7 +111,7 @@ pub(crate) fn probe_plugin_info(path: &Path) -> Result<PluginInfo, NoInfo> {
     child.stop(true);
     let _ = child.wait();
     Err(NoInfo::NoAnswer(anyhow::anyhow!(
-        "Plugin {} did not answer --meta-plugin-info within 5 seconds",
+        "Plugin {} did not answer {flag} within 5 seconds",
         escape_path(path)
     )))
 }
@@ -313,6 +325,26 @@ impl SubprocessPlugin {
             .map(|words| words.len())
             .max()
             .unwrap_or(1)
+    }
+
+    /// What `args` (the line, from the plugin's word on) act on: the
+    /// plugin's answer, when its info says it answers; otherwise the
+    /// projects meta's options select. A failed or malformed answer is an
+    /// error naming the plugin; a set name that isn't one, the name's.
+    pub fn targeting(&self, args: &[String]) -> Result<meta_plugin::Targeting> {
+        if !self.info.answers_targeting {
+            return Ok(meta_plugin::Targeting::Selection);
+        }
+        let flagged: Vec<String> = std::iter::once("--meta-plugin-targeting".to_string())
+            .chain(args.iter().cloned())
+            .collect();
+        let answer: meta_plugin::Targeting =
+            probe(&self.path, &flagged, "what the line acts on").map_err(NoInfo::into_error)?;
+        // as typed, mostly: said as the name's own error
+        if let Some(name) = answer.set() {
+            meta_plugin::sets::validate_name(name)?;
+        }
+        Ok(answer)
     }
 
     /// Call the plugin with `request`: the request in a file, its answer
@@ -536,6 +568,7 @@ mod tests {
                 commands: commands.iter().map(|c| c.to_string()).collect(),
                 description: None,
                 help: None,
+                answers_targeting: false,
             },
         }
     }

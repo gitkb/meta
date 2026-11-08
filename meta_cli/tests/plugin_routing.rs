@@ -700,28 +700,106 @@ fn a_named_set_command_from_a_provider_that_does_not_own_the_set_is_refused() {
         &root.join("bin/meta-git"),
         &format!(
             r#"echo "$1" >> "{}"
-[ "$1" = --meta-plugin-info ] && echo '{{"name":"git","version":"1","commands":["git worktree remove"]}}'
+[ "$1" = --meta-plugin-info ] && echo '{{"name":"git","version":"1","commands":["git worktree remove"],"answers_targeting":true}}'
+[ "$1" = --meta-plugin-targeting ] && echo '{{"WholeSet":"s"}}'
 exit 0"#,
             root.join("git.log").display()
         ),
     );
-    let output = run_meta(
-        &sandbox,
-        &root,
-        &["--json", "git", "worktree", "remove", "s"],
-    );
-    assert!(!output.status.success());
-    let error = envelope(&output).error.unwrap();
-    assert_eq!(error.code, meta_plugin::ErrorCode::Conflict);
-    assert!(
-        error.message.contains("made by meta-jj"),
-        "{}",
-        error.message
-    );
+    for line in [["s", "--force"], ["--force", "s"]] {
+        let args: Vec<&str> = ["--json", "git", "worktree", "remove"]
+            .into_iter()
+            .chain(line)
+            .collect();
+        let output = run_meta(&sandbox, &root, &args);
+        assert!(!output.status.success());
+        let error = envelope(&output).error.unwrap();
+        assert_eq!(error.code, meta_plugin::ErrorCode::Conflict);
+        assert!(
+            error.message.contains("made by meta-jj"),
+            "{line:?}: {}",
+            error.message
+        );
+    }
     // meta-git never got the call, and the set is untouched
     let log = fs::read_to_string(root.join("git.log")).unwrap_or_default();
+    assert!(log.contains("--meta-plugin-targeting"), "{log}");
     assert!(!log.contains("--meta-plugin-exec"), "{log}");
     assert!(root.join(".worktrees/s/a/.jj").is_dir());
+}
+
+#[test]
+fn a_plugin_that_does_not_say_it_answers_is_never_asked() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    // spy writes no response, so the call fails: only its starts matter
+    run_meta(&sandbox, &root, &["spy", "x"]);
+    assert_eq!(
+        spy_starts(&root),
+        "--meta-plugin-info\n--meta-plugin-exec\n"
+    );
+}
+
+/// A plugin `meta-aim` that says it answers what a line acts on, and
+/// answers by running `answer.sh`; it logs each start's words.
+fn aiming(root: &Path, answer: &str) {
+    fs::write(root.join("answer.sh"), answer).unwrap();
+    script(
+        &root.join("bin/meta-aim"),
+        &format!(
+            r#"echo "$@" >> "{root}/aim.log"
+case "$1" in
+  --meta-plugin-info) echo '{{"name":"aim","version":"1","commands":["aim"],"answers_targeting":true}}' ;;
+  --meta-plugin-targeting) . "{root}/answer.sh" ;;
+  --meta-plugin-exec) echo '{{"message":""}}' > "$META_RESPONSE" ;;
+esac"#,
+            root = root.display()
+        ),
+    );
+}
+
+#[test]
+fn a_plugins_answer_is_what_the_host_acts_on_and_a_bad_one_runs_nothing() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work();
+    workspace(&sandbox, &root);
+    aiming(&root, "echo '\"Selection\"'");
+    meta(&sandbox, &root, &["aim", "x", "--y"]);
+    let log = fs::read_to_string(root.join("aim.log")).unwrap();
+    assert!(log.contains("--meta-plugin-targeting aim x --y\n"), "{log}");
+    assert!(log.contains("--meta-plugin-exec"), "{log}");
+    for (answer, says) in [
+        (
+            "echo nope",
+            "meta-aim did not answer --meta-plugin-targeting",
+        ),
+        ("exit 3", "meta-aim did not answer --meta-plugin-targeting"),
+        (
+            "echo '{\"WholeSet\":null}'",
+            "meta-aim did not answer --meta-plugin-targeting",
+        ),
+        (
+            "echo '\"Everything\"'",
+            "meta-aim did not answer --meta-plugin-targeting",
+        ),
+        (
+            "sleep 60",
+            "meta-aim did not answer --meta-plugin-targeting within 5 seconds",
+        ),
+        // checked before the workspace's broken config is read
+        ("echo '{\"WholeSet\":\"../x\"}'", "cannot start with '.'"),
+    ] {
+        aiming(&root, answer);
+        fs::write(root.join(".meta.yaml"), "{broken").unwrap();
+        fs::remove_file(root.join("aim.log")).unwrap();
+        let output = run_meta(&sandbox, &root, &["aim", "x"]);
+        let said = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{answer}: {said}");
+        assert!(said.contains(says), "{answer}: {said}");
+        let log = fs::read_to_string(root.join("aim.log")).unwrap();
+        assert!(!log.contains("--meta-plugin-exec"), "{answer}: {log}");
+    }
 }
 
 /// A git command meta-git doesn't adapt reaches git in each selected repo

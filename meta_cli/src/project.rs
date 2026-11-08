@@ -6,14 +6,13 @@ use crate::report::Report;
 use crate::Cli;
 use anyhow::Result;
 use meta_core::config::{self, MetaTreeNode};
-use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
+use meta_core::dependency_graph::{self, DependencyGraph};
 use meta_core::repo_filter::{repo_path, Candidate};
 use meta_plugin::display::escape;
 use meta_plugin::{
     outln, ErrorCode, ErrorInfo, ListedProject, ListedWorktree, ProjectResult, RepoUrl,
 };
 use serde::Serialize;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Arguments for `meta project`
@@ -560,49 +559,10 @@ struct Dependent<'a> {
 /// it), its own by name and nested ones by their path from it (two nested
 /// repos may share a name); with -A, in the tree of the outermost workspace.
 fn dependents(target: &Target, project_name: &str) -> Result<Found> {
-    fn walk(
-        nodes: Vec<MetaTreeNode>,
-        prefix: &str,
-        dir: &Path,
-        out: &mut Vec<ProjectDependencies>,
-        dirs: &mut HashMap<String, PathBuf>,
-    ) {
-        for node in nodes {
-            let path = format!("{prefix}/{}", node.info.path);
-            let abs = dir.join(&node.info.path);
-            let mut project = ProjectDependencies::from(node.info);
-            // `depends_on` names it, so its name stands for it as well
-            project
-                .provides
-                .push(std::mem::replace(&mut project.name, path.clone()));
-            out.push(project);
-            dirs.insert(path.clone(), abs.clone());
-            walk(node.children, &path, &abs, out, dirs);
-        }
-    }
     let (workspace, config) = workspace(target)?;
     let root = &workspace.root;
     let dir = listed_in(target, &config);
-    let mut projects = Vec::new();
-    let mut dirs = HashMap::new();
-    let top = match target.depth {
-        Some(0) => config
-            .projects
-            .iter()
-            .cloned()
-            .map(|info| (info, Vec::new()))
-            .collect::<Vec<_>>(),
-        depth => config::walk_projects(&dir, &config.projects, depth)?
-            .into_iter()
-            .map(|node| (node.info, node.children))
-            .collect(),
-    };
-    for (info, children) in top {
-        let abs = dir.join(&info.path);
-        walk(children, &info.path, &abs, &mut projects, &mut dirs);
-        dirs.insert(info.name.clone(), abs);
-        projects.push(info.into());
-    }
+    let (projects, dirs) = dependency_graph::in_tree(&dir, &config.projects, target.depth)?;
     let graph = DependencyGraph::build(projects);
     let found = graph
         .dependents_of(project_name)

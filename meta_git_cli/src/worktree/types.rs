@@ -80,6 +80,10 @@ pub struct CreatePlanRepo {
     /// Where that worktree would go
     #[serde(with = "meta_plugin::wire_path")]
     pub path: PathBuf,
+    pub created_branch: bool,
+    /// What a new branch would start from (`origin/main`, a commit-ish)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_from: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

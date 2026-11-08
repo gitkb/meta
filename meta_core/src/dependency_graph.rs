@@ -17,8 +17,9 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::config::ProjectInfo;
+use crate::config::{walk_projects, MetaTreeNode, ProjectInfo};
 use meta_plugin::RepoUrl;
+use std::path::{Path, PathBuf};
 
 /// Represents a project with dependency information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +47,57 @@ impl From<ProjectInfo> for ProjectDependencies {
             depends_on: p.depends_on,
         }
     }
+}
+
+/// Every project of the tree whose top level is `projects` (their config's,
+/// checked out in `dir`), `depth` levels of nesting as `--depth` counts them,
+/// keyed for a [`DependencyGraph`]: those `projects` lists by name, nested ones
+/// by their path from `dir` (two may share a name), which also provide their
+/// name. With the folder of each key.
+pub fn in_tree(
+    dir: &Path,
+    projects: &[ProjectInfo],
+    depth: Option<usize>,
+) -> Result<(Vec<ProjectDependencies>, HashMap<String, PathBuf>)> {
+    fn walk(
+        nodes: Vec<MetaTreeNode>,
+        prefix: &str,
+        dir: &Path,
+        out: &mut Vec<ProjectDependencies>,
+        dirs: &mut HashMap<String, PathBuf>,
+    ) {
+        for node in nodes {
+            let path = format!("{prefix}/{}", node.info.path);
+            let abs = dir.join(&node.info.path);
+            let mut project = ProjectDependencies::from(node.info);
+            // `depends_on` names it, so its name stands for it as well
+            project
+                .provides
+                .push(std::mem::replace(&mut project.name, path.clone()));
+            out.push(project);
+            dirs.insert(path.clone(), abs.clone());
+            walk(node.children, &path, &abs, out, dirs);
+        }
+    }
+    let top = match depth {
+        Some(0) => projects
+            .iter()
+            .cloned()
+            .map(|info| (info, Vec::new()))
+            .collect::<Vec<_>>(),
+        depth => walk_projects(dir, projects, depth)?
+            .into_iter()
+            .map(|node| (node.info, node.children))
+            .collect(),
+    };
+    let (mut found, mut dirs) = (Vec::new(), HashMap::new());
+    for (info, children) in top {
+        let abs = dir.join(&info.path);
+        walk(children, &info.path, &abs, &mut found, &mut dirs);
+        dirs.insert(info.name.clone(), abs);
+        found.push(info.into());
+    }
+    Ok((found, dirs))
 }
 
 /// Dependency graph for analyzing relationships between projects
@@ -250,38 +302,59 @@ impl DependencyGraph {
         Some(dependents)
     }
 
+    /// The key of the project `name` names, as [`Self::dependents_of`] reads
+    /// a name: a project's own key, else what one project provides. `None`
+    /// when nothing does; an error when several provide it.
+    pub fn find(&self, name: &str) -> Result<Option<&str>> {
+        if let Some((key, _)) = self.projects.get_key_value(name) {
+            return Ok(Some(key));
+        }
+        let mut providers: Vec<&str> = self
+            .providers
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        providers.sort_unstable();
+        providers.dedup();
+        match providers.as_slice() {
+            [] => Ok(None),
+            [one] => Ok(Some(one)),
+            several => anyhow::bail!(
+                "'{}' is ambiguous: it names {}. Use the whole path.",
+                meta_plugin::display::escape(name),
+                meta_plugin::display::escape(&several.join(", "))
+            ),
+        }
+    }
+
     /// Get all transitive dependents (impact analysis)
     /// Returns all projects that would be affected if the given project changes
     pub fn analyze_impact(&self, project: &str) -> ImpactAnalysis {
+        let dependents = |name: &str| self.dependents_of(name).unwrap_or_default();
         let mut visited = HashSet::new();
-        let mut direct_dependents = Vec::new();
         let mut transitive_dependents = Vec::new();
-        let mut queue = VecDeque::new();
-
-        // Get direct dependents
-        if let Some(deps) = self.dependents.get(project) {
-            for dep in deps {
-                direct_dependents.push(dep.clone());
-                queue.push_back((dep.as_str(), 1));
-            }
-        }
+        let direct_dependents: Vec<String> = dependents(project)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let mut queue: VecDeque<(String, usize)> = direct_dependents
+            .iter()
+            .map(|dep| (dep.clone(), 1))
+            .collect();
 
         // BFS to find all transitive dependents
         while let Some((current, depth)) = queue.pop_front() {
-            if visited.contains(current) {
+            if !visited.insert(current.clone()) {
                 continue;
             }
-            visited.insert(current);
-
             if depth > 1 {
-                transitive_dependents.push(current.to_string());
+                transitive_dependents.push(current.clone());
             }
-
-            if let Some(deps) = self.dependents.get(current) {
-                for dep in deps {
-                    if !visited.contains(dep.as_str()) {
-                        queue.push_back((dep.as_str(), depth + 1));
-                    }
+            for dep in dependents(&current) {
+                if !visited.contains(dep) {
+                    queue.push_back((dep.to_string(), depth + 1));
                 }
             }
         }

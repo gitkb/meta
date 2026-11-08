@@ -122,7 +122,14 @@ struct ToolContent {
 // ============================================================================
 
 struct McpServer {
+    /// Where it was started: every tool runs meta from here, so it acts in
+    /// the worktree set it is in, if any
+    start: PathBuf,
     meta_dir: Option<PathBuf>,
+    /// The set it is in, when that holds no checkout of the workspace's
+    /// root: its projects are the primary's config's, but its checkouts
+    /// are here
+    rootless_set: Option<PathBuf>,
     calls: run::Calls,
 }
 
@@ -150,14 +157,37 @@ struct Cancelled {
 impl McpServer {
     fn new() -> Result<Self> {
         // Find .meta.yaml in current directory or parents
-        let cwd = std::env::current_dir()?;
-        let meta_dir = meta_core::config::nearest_meta_dir(&cwd)?;
-        Ok(Self::in_dir(meta_dir))
+        Self::at(std::env::current_dir()?)
     }
 
-    fn in_dir(meta_dir: Option<PathBuf>) -> Self {
-        Self {
+    /// The server of the workspace or worktree set around `start`.
+    fn at(start: PathBuf) -> Result<Self> {
+        use meta_core::{config, worktree};
+        let nearest = config::nearest_meta_dir(&start)?;
+        let rootless_set = worktree::detect_worktree_location(&start)?
+            .map(|(_, set)| set)
+            .filter(|set| !nearest.as_ref().is_some_and(|near| near.starts_with(set)));
+        let meta_dir = match &rootless_set {
+            Some(set) => worktree::set_config(set, None)?
+                .and_then(|path| path.parent().map(PathBuf::from))
+                .or(nearest),
+            None => nearest,
+        };
+        Ok(Self {
+            start,
             meta_dir,
+            rootless_set,
+            calls: run::Calls::default(),
+        })
+    }
+
+    /// A server around no workspace.
+    #[cfg(test)]
+    fn nowhere() -> Self {
+        Self {
+            start: PathBuf::from("."),
+            meta_dir: None,
+            rootless_set: None,
             calls: run::Calls::default(),
         }
     }
@@ -579,7 +609,7 @@ mod tests {
 
     #[test]
     fn test_notifications_get_no_reply() {
-        let server = McpServer::in_dir(None);
+        let server = McpServer::nowhere();
         let request = |line: &str| serde_json::from_str::<JsonRpcRequest>(line).unwrap();
 
         for line in [
@@ -601,7 +631,7 @@ mod tests {
 
     /// Feeds `input` to the server and returns each reply line as JSON.
     fn serve(input: &[u8]) -> Vec<serde_json::Value> {
-        let server = McpServer::in_dir(None);
+        let server = McpServer::nowhere();
         let mut output = Vec::new();
         server.serve(input, &mut output).unwrap();
         String::from_utf8(output)

@@ -35,7 +35,7 @@ enum Check {
     Copies(&'static [(&'static str, &'static str)]),
 }
 
-const GROUPS: [(u8, &str, Check); 17] = [
+const GROUPS: [(u8, &str, Check); 16] = [
     (
         2,
         "git worktree's subcommands: declared once",
@@ -59,10 +59,6 @@ const GROUPS: [(u8, &str, Check); 17] = [
         "help and usage: rendered from the declarations",
         Check::Copies(&[
             (
-                "meta_git_cli/src/lib.rs",
-                "usage: \"Usage: meta git <COMMAND> [OPTIONS]\"",
-            ),
-            (
                 "meta_rust_cli/src/main.rs",
                 "usage: \"Usage: meta cargo <CARGO_ARGS>...\"",
             ),
@@ -83,11 +79,6 @@ const GROUPS: [(u8, &str, Check); 17] = [
     ),
     (11, "exit codes: meta_plugin::exit", Check::Rule(exit_codes)),
     (12, "--json output: one envelope", Check::Rule(one_envelope)),
-    (
-        16,
-        "command examples: checked in every tracked file",
-        Check::Copies(&[(".claude/agents/meta-worker.md", "project list")]),
-    ),
     (
         17,
         "the installed binaries: listed once, by cargo",

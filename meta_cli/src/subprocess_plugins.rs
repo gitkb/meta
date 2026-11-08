@@ -342,7 +342,12 @@ impl SubprocessPlugin {
             probe(&self.path, &flagged, "what the line acts on").map_err(NoInfo::into_error)?;
         // as typed, mostly: said as the name's own error
         if let Some(name) = answer.set() {
-            meta_plugin::sets::validate_name(name)?;
+            meta_plugin::sets::validate_name(name).map_err(|e| {
+                anyhow::anyhow!(
+                    "Plugin meta-{} named an invalid set: {e:#}",
+                    escape(&self.word)
+                )
+            })?;
         }
         Ok(answer)
     }

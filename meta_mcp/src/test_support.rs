@@ -12,7 +12,7 @@ pub(crate) fn server(sandbox: &Sandbox, config: &str) -> (McpServer, PathBuf) {
     let root = sandbox.work().join("workspace");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join(".meta.yaml"), config).unwrap();
-    (McpServer::in_dir(Some(root.clone())), root)
+    (McpServer::at(root.clone()).unwrap(), root)
 }
 
 /// A meta workspace with projects `a` (tag `x`) and `b`, each a git repo
@@ -26,6 +26,47 @@ pub(crate) fn workspace(sandbox: &Sandbox) -> (McpServer, PathBuf) {
         sandbox.repo(&root.join(name));
     }
     (server, root)
+}
+
+/// A workspace whose root is a repo that ignores its children, with `web`
+/// and the nested meta repo `platform` holding `core`, `api` (depends on
+/// `core`) and `svc` (depends on `api`), the last three tagged `deep`.
+pub(crate) fn nested(sandbox: &Sandbox) -> PathBuf {
+    let root = sandbox.work().join("workspace");
+    sandbox.repo(&root);
+    for dir in [
+        "web",
+        "platform",
+        "platform/core",
+        "platform/api",
+        "platform/svc",
+    ] {
+        sandbox.repo(&root.join(dir));
+    }
+    let write = |path: &str, text: &str| std::fs::write(root.join(path), text).unwrap();
+    write(
+        ".meta.yaml",
+        r#"{"projects":{"web":"x","platform":{"repo":"x","meta":true}}}"#,
+    );
+    write(
+        ".gitignore",
+        "web
+platform
+.worktrees
+",
+    );
+    sandbox.git(&root, &["add", ".meta.yaml", ".gitignore"]);
+    sandbox.git(&root, &["commit", "-qm", "meta"]);
+    write(
+        "platform/.meta.yaml",
+        r#"{"projects":{"core":{"repo":"x","tags":["deep"]},
+            "api":{"repo":"x","tags":["deep"],"depends_on":["core"]},
+            "svc":{"repo":"x","tags":["deep"],"depends_on":["api"]}}}"#,
+    );
+    write("platform/.gitignore", "core\napi\nsvc\n");
+    sandbox.git(&root.join("platform"), &["add", ".meta.yaml", ".gitignore"]);
+    sandbox.git(&root.join("platform"), &["commit", "-qm", "meta"]);
+    root
 }
 
 /// Calls `tool` with `arguments` as a client does.

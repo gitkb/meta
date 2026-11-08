@@ -248,6 +248,7 @@ EOF
     [[ "$output" == *"$adapted"* ]]
 
     run "$META_BIN" git --help
+    [[ "$output" == *"Usage: meta [OPTIONS] git <COMMAND>"* ]]
     [[ "$output" == *"Pass-through: any other git command runs as typed in each selected repo, git's own extensions on PATH included"* ]]
 
     for words in "fake --help" "help fake" "fake"; do

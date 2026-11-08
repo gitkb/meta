@@ -94,10 +94,11 @@ fn workspace(
     root: &Path,
     members: &[Candidate],
     reach: Option<&Reach>,
+    whole_tree: &[Candidate],
 ) -> meta_plugin::Workspace {
     let mut members = projects(members, root);
     if let Some(reach) = reach {
-        resolve_dependencies(reach, root, &mut members);
+        resolve_dependencies(reach, root, &mut members, whole_tree);
     }
     meta_plugin::Workspace {
         root: root.to_path_buf(),
@@ -112,8 +113,15 @@ fn workspace(
 /// config's own projects, or with `-r`/`-A` by place through the whole tree
 /// it walks (an entry qualified with the place of the meta repo that lists
 /// it), through what a project provides too. A member outside the reach
-/// keeps its entries as written.
-fn resolve_dependencies(reach: &Reach, root: &Path, members: &mut [Project]) {
+/// keeps its entries as written. Without `-r`/`-A`, a dependency that
+/// `whole_tree` holds outside the reach (nested, or for a nested member
+/// anywhere) is a problem saying only `-r` follows it.
+fn resolve_dependencies(
+    reach: &Reach,
+    root: &Path,
+    members: &mut [Project],
+    whole_tree: &[Candidate],
+) {
     use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
     let repos = reach.scope().repos;
     let flat = reach.tree.is_empty();
@@ -164,8 +172,24 @@ fn resolve_dependencies(reach: &Reach, root: &Path, members: &mut [Project]) {
             .find(|(_, k, _)| k == key)
             .map(|(dir, _, _)| repo_path(dir, root))
     };
+    let only_recursive = |dep: &str| {
+        flat && whole_tree.iter().any(|repo| {
+            repo.info
+                .as_ref()
+                .is_some_and(|i| i.name == dep || i.provides.iter().any(|p| p == dep))
+                || repo_path(&repo.dir, root) == dep
+        })
+    };
+    let needs_recursive =
+        |dep: &str| format!("depends on '{}', which only -r follows", escape(dep));
     for member in members.iter_mut() {
         let Some((_, key, _)) = keyed.iter().find(|(dir, _, _)| *dir == member.abs) else {
+            member.dependency_problems = member
+                .depends_on
+                .iter()
+                .filter(|dep| only_recursive(dep))
+                .map(|dep| needs_recursive(dep))
+                .collect();
             continue;
         };
         let resolved = graph.get_dependencies(key);
@@ -183,6 +207,11 @@ fn resolve_dependencies(reach: &Reach, root: &Path, members: &mut [Project]) {
         member.dependency_problems = problems
             .iter()
             .map(|problem| match problem {
+                meta_core::dependency_graph::DependencyProblem::Unresolved(dep)
+                    if only_recursive(dep) =>
+                {
+                    needs_recursive(dep)
+                }
                 meta_core::dependency_graph::DependencyProblem::Unresolved(_) if flat => {
                     format!("{problem} (nested projects count with -r)")
                 }
@@ -259,7 +288,13 @@ fn target_with(
         false => Some(0),
     };
     Ok(Target {
-        workspace: Some(workspace(&reach.workspace, &root, &members, Some(&reach))),
+        workspace: Some(workspace(
+            &reach.workspace,
+            &root,
+            &members,
+            Some(&reach),
+            &members,
+        )),
         worktree: worktree::plugin_worktree(Some(&reach.workspace), start, None),
         repos,
         parallel,
@@ -372,12 +407,8 @@ fn in_set(
     )?;
     // a workspace of its own inside the set's folder (a clone, or a set
     // inside it) is the target, unless it is a member's
-    if let Some(found) = config::find_meta_config(start, cli.config.as_ref())? {
-        let dir = found.parent().unwrap_or(set_dir);
-        let member = |c: &Candidate| c.dir == dir;
-        if dir != set_dir && dir.starts_with(set_dir) && !all.iter().any(member) {
-            return Ok(None);
-        }
+    if worktree::own_workspace_in_set(start, set_dir, cli.config.as_ref(), &all)? {
+        return Ok(None);
     }
     // Inside a set, a command never falls back to the workspace's own
     // checkouts: they aren't the ones the caller is in
@@ -409,7 +440,7 @@ fn in_set(
         parallel: parallel(config.as_ref()),
         workspace: config.as_ref().map(|c| {
             let reach = Reach::of(c.clone(), cli.recursive, cli.all, cli.depth).ok();
-            workspace(c, set_dir, &all, reach.as_ref())
+            workspace(c, set_dir, &all, reach.as_ref(), &[])
         }),
         worktree: worktree::plugin_worktree(config.as_ref(), start, Some(set_dir)),
         set: Some(set),

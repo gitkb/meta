@@ -35,26 +35,26 @@ meta -r --tag backend --exclude legacy --sequential exec -- make deploy
 
 When modifying a repo that other repos depend on:
 
-1. **Check dependents**: Use `meta_analyze_impact <repo-name>` (MCP tool) to see transitive dependents
+1. **Check dependents**: `meta -r project dependents <repo>` lists what depends on it directly; the MCP tool `meta_analyze_impact` (argument `project`) adds transitive dependents
 2. **Plan cascading changes**: If `meta_core` changes, repos that depend on it may need updates
-3. **Build in order**: there is no CLI flag for dependency order; get it from the MCP tool `meta_execution_order` and build the repos one at a time in that order
+3. **Build in order**: there is no CLI flag for dependency order; get it from the MCP tool `meta_execution_order` (see the `meta-workspace` skill for starting the server), or read `depends_on` in `.meta.yaml`, and build the repos one at a time in that order
 
 ## Efficient Commits
 
 ```bash
-# Commit only in repos repo1 and repo2 (.meta.yaml name or path from the root)
+# In a worktree set: commit only in repos repo1 and repo2 (.meta.yaml name or path from the root)
 meta --include repo1,repo2 git commit -m "feat: update shared API"
 
 # Push the tagged repos (not the root; add it with --include .)
 meta -r --tag backend git push
 
 # Per-repo commit messages (when changes differ)
-# Use meta_git_multi_commit MCP tool
+# Use the meta_git_multi_commit MCP tool, or `meta --include <repo> git commit -m "…"` once per repo
 ```
 
 ## Query DSL (MCP)
 
-The `meta_query_repos` MCP tool filters repos by state:
+The `meta_query_repos` MCP tool (argument `query`) filters repos by state, the root and nested repos included. Without MCP: `meta -r --json context`.
 
 | Query | Result |
 |-------|--------|
@@ -106,5 +106,5 @@ meta git worktree remove tmp
 
 - One `meta git status` replaces N individual `git status` calls
 - One `meta -r --tag X exec -- cmd` replaces N `cd && cmd` sequences
-- `meta_analyze_impact` before modifying providers prevents cascading fix-up commits
+- `meta -r project dependents <repo>` before modifying providers prevents cascading fix-up commits
 - `meta --dry-run exec -- dangerous-cmd` previews before executing

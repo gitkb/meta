@@ -86,7 +86,8 @@ pub struct Meta {
     pub strict: bool,
     #[serde(default)]
     pub verbose: bool,
-    /// `--silent`: say nothing on success.
+    /// `--silent`: discard the output of the programs meta runs; a plugin
+    /// command that answers for itself still prints.
     #[serde(default)]
     pub silent: bool,
     /// Whether output is coloured.

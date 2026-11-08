@@ -123,7 +123,7 @@ A row that failed has an `error` (`{"code", "message"}`), and so does the whole 
 
 ## Silent Mode
 
-Suppress command output: stdout and stderr of every command go nowhere. If any failed, the closing error names the repos (`Error: 2 commands failed: app, platform`); to see why, run it again without `--silent`:
+Discard the output of the programs meta runs for `exec`, raw git commands (`meta git status`), `cargo`, `git commit -m` and `git worktree exec`: their stdout and stderr go nowhere. Commands that answer for themselves (`git clone`, `git update`, `git commit --edit`, `git worktree` other than `exec`) still print. If any failed, the closing error names the repos (`Error: 2 commands failed: app, platform`); to see why, run it again without `--silent`:
 
 ```bash
 meta --silent exec -- npm install
@@ -192,6 +192,6 @@ This is filesystem-based detection—no store dependency: the set's members are 
 ## Efficiency Tips
 
 - **Target precisely**: Use `--include`/`--exclude`/`--tag` to run commands in only the repos you need — avoids running commands you'll have to undo
-- **Dependency order**: There is no CLI flag for dependency order. Get it from the MCP tool `meta_execution_order` (from `depends_on` in `.meta.yaml`), then run repos one at a time in that order with `--include`
+- **Dependency order**: There is no CLI flag for dependency order. Get it from the MCP tool `meta_execution_order` (from `depends_on` in `.meta.yaml`; see the `meta-workspace` skill to start the server) or read `depends_on` yourself, then run repos one at a time in that order with `--include`
 - **Cross-repo dependencies**: Use `--sequential` when one repo's step needs another's output; parallel is the default
 - **Dry run first**: `meta --dry-run exec -- dangerous-command` shows what would happen before committing

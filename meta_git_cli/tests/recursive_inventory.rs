@@ -693,7 +693,14 @@ fn a_preview_returns_its_plan_with_nested_repos_in_one_row() {
         .unwrap()
         .iter()
         .map(|repo| {
-            assert_eq!(repo.as_object().unwrap().len(), 3, "{repo}");
+            let known = ["alias", "source", "path", "created_branch", "started_from"];
+            assert!(
+                repo.as_object()
+                    .unwrap()
+                    .keys()
+                    .all(|key| known.contains(&key.as_str())),
+                "{repo}"
+            );
             let path = |field: &str| Path::new(repo[field].as_str().unwrap());
             (
                 repo["alias"].as_str().unwrap(),

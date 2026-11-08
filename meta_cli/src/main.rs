@@ -123,7 +123,7 @@ pub struct Cli {
     )]
     fields: Option<Vec<String>>,
 
-    #[arg(help_heading = OUTPUT, short, long, help = "Enable silent mode")]
+    #[arg(help_heading = OUTPUT, short, long, help = "Discard the output of the programs meta runs (commands that answer for themselves still print)")]
     silent: bool,
 
     #[arg(help_heading = OUTPUT, short, long, action, help = "Enable verbose output")]

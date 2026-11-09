@@ -380,7 +380,8 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
     tar -czf "$SCRATCH/dot.tar.gz" -C "$SCRATCH/built" .
     run programs check "$SCRATCH/dot.tar.gz"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"./meta: not at the archive's top level (name it meta)"* ]]
+    [[ "$output" == *"dot.tar.gz: its members are named ./NAME: name each program alone"* ]]
+    [[ "$output" != *missing* ]]
 
     chmod -x "$SCRATCH/built/b"
     tar -czf "$SCRATCH/plain.tar.gz" -C "$SCRATCH/built" meta alpha b

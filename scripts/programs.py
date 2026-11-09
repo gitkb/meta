@@ -87,11 +87,18 @@ def archived(asset):
 
 def members(asset):
     """The programs ASSET holds, and what is wrong with any other member: a
-    program is an executable file at the archive's top level, once."""
+    program is an executable file at the archive's top level, once. None
+    for the programs when the members can't be read as names at all."""
+    held = archived(asset)
+    if any(name == "." or name.startswith("./") for name, _ in held):
+        return None, [
+            "its members are named ./NAME: name each program alone "
+            "(tar -czf ARCHIVE -C DIR NAME..., not tar -C DIR .)"
+        ]
     programs, problems = [], []
-    for name, wrong in archived(asset):
+    for name, wrong in held:
         bare = name.rstrip("/")
-        if "/" in bare or bare in (".", ".."):
+        if "/" in bare or bare == "..":
             problems.append(f"{name}: not at the archive's top level (name it {os.path.basename(bare)})")
         elif wrong:
             problems.append(f"{name}: {wrong}, not a program file")
@@ -105,6 +112,8 @@ def members(asset):
 def check(asset, bins):
     """ASSET holds each program once, under its name, and nothing else."""
     (held, problems), wanted = members(asset), names(asset, bins)
+    if held is None:
+        fail(f"{asset}: {'; '.join(problems)}")
     missing = [name for name in wanted if name not in held]
     extra = [name for name in held if name not in wanted]
     if missing:

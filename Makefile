@@ -5,7 +5,7 @@ include Makefile.context.mk
 
 .DEFAULT_GOAL := build-all
 
-build-all: build
+build-all: build remove-old-copies
 
 build:
 	cargo build
@@ -13,15 +13,24 @@ build:
 # Every program the workspace declares as a [[bin]] (scripts/programs.py
 # lists them), installed globally via cargo install. --force replaces any
 # binary of the same name, e.g. one from a release download
-install:
+install: remove-old-copies
 	@dirs=$$(python3 scripts/programs.py packages --dirs) && for dir in $$dirs; do \
 		cargo install --locked --force --path "$$dir" || exit 1; \
 	done
 
 install-all: install
 
-clean:
+clean: remove-old-copies
 	cargo clean
+
+# Copies of meta's programs that the old build-plugins and install-plugins
+# targets put in this checkout's .meta/plugins and in ~/.meta/plugins. meta
+# finds plugins there before PATH, so they would hide the programs built and
+# installed now. Other plugins there stay.
+remove-old-copies:
+	@bins=$$(python3 scripts/programs.py bins) && for bin in $$bins; do \
+		rm -f ".meta/plugins/$$bin" "$$HOME/.meta/plugins/$$bin"; \
+	done
 
 # Install git hooks (commit-msg validates release-safe subjects; pre-push runs CI checks locally)
 # Uses git rev-parse to handle worktrees and submodules correctly
@@ -90,9 +99,9 @@ integration-test:
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) META_CLI_PATH=target/debug/meta CARGO_BIN_EXE_meta=target/debug/meta cargo nextest run --workspace
 
 # By package name, so it still matches after a version bump since the install
-uninstall:
+uninstall: remove-old-copies
 	@packages=$$(python3 scripts/programs.py packages) && for package in $$packages; do \
 		cargo uninstall "$$package" || true; \
 	done
 
-.PHONY: build-all install install-all uninstall clean install-hooks build run test bats release integration-test
+.PHONY: build-all install install-all uninstall clean remove-old-copies install-hooks build run test bats release integration-test

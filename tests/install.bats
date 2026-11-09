@@ -77,6 +77,7 @@ run_ps1() {
     mkdir "$TEST_DIR/odd"
     cp "$TEST_DIR/archive/meta" "$TEST_DIR/odd/meta"
     printf '#!/bin/sh\necho new 1.0.0\n' > "$TEST_DIR/odd/meta-new"
+    chmod +x "$TEST_DIR/odd/meta-new"
     tar -czf "$RELEASES/latest/download/$ASSET" -C "$TEST_DIR/odd" meta meta-new
     (cd "$RELEASES/latest/download" && sha256 "$ASSET" > "$ASSET.sha256")
     run bash "$BATS_TEST_DIRNAME/../install.sh"
@@ -92,6 +93,33 @@ run_ps1() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"$ASSET holds no meta; nothing was installed"* ]]
     [ ! -e "$INSTALL_DIR" ]
+}
+
+# serve this tar as the release's archive, with its checksum
+serve() {
+    cp "$1" "$RELEASES/latest/download/$ASSET"
+    (cd "$RELEASES/latest/download" && sha256 "$ASSET" > "$ASSET.sha256")
+}
+
+@test "install.sh installs nothing from an archive with anything but programs in it" {
+    local bad="$TEST_DIR/bad"
+    mkdir -p "$bad/docs" && cp "$TEST_DIR/archive/meta" "$TEST_DIR/archive/loop" "$bad/"
+    echo readme > "$bad/README.md"
+    tar -cf "$TEST_DIR/twice.tar" -C "$bad" meta loop && tar -rf "$TEST_DIR/twice.tar" -C "$bad" loop
+    gzip -c "$TEST_DIR/twice.tar" > "$TEST_DIR/twice.tar.gz"
+    tar -czf "$TEST_DIR/folder.tar.gz" -C "$bad" meta loop docs
+    tar -czf "$TEST_DIR/readme.tar.gz" -C "$bad" meta loop README.md
+    tar -czf "$TEST_DIR/dot.tar.gz" -C "$bad" ./meta ./loop
+    local archive expected
+    for archive in twice:"loop twice" folder:"docs/, not a program at its top level" \
+        readme:"README.md, which is not an executable file" dot:"./meta, not a program at its top level"; do
+        expected="${archive#*:}"
+        serve "$TEST_DIR/${archive%%:*}.tar.gz"
+        run bash "$BATS_TEST_DIRNAME/../install.sh"
+        [ "$status" -eq 1 ]
+        [[ "$output" == *"$ASSET holds $expected; nothing was installed"* ]]
+        [ ! -e "$INSTALL_DIR" ]
+    done
 }
 
 @test "install.sh refuses a tampered archive and leaves the installed meta alone" {
@@ -159,6 +187,48 @@ run_ps1() {
     done
 }
 
+@test "install.ps1 accepts a certutil checksum, as older releases publish" {
+    local zip hash
+    for zip in meta-windows-x64.zip meta-windows-arm64.zip; do
+        hash=$(sha256 "$RELEASES/latest/download/$zip" | awk '{print $1}')
+        printf 'SHA256 hash of %s:\r\n%s\r\nCertUtil: -hashfile command completed successfully.\r\n' \
+            "$zip" "$hash" > "$RELEASES/latest/download/$zip.sha256"
+    done
+    run_ps1
+    [ "$status" -eq 0 ]
+    [ "$(cat "$INSTALL_DIR/meta.exe")" = "fake meta" ]
+}
+
+# serve a zip of these files (paths under $TEST_DIR/winbad) as both Windows archives
+serve_zip() {
+    local zip
+    for zip in meta-windows-x64.zip meta-windows-arm64.zip; do
+        (cd "$TEST_DIR/winbad" && python3 -c 'import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    for f in sys.argv[2:]: z.write(f)' "$RELEASES/latest/download/$zip" "$@")
+        (cd "$RELEASES/latest/download" && sha256 "$zip" > "$zip.sha256")
+    done
+}
+
+@test "install.ps1 installs nothing from an archive with anything but programs in it, or without meta.exe" {
+    command -v pwsh > /dev/null || skip "pwsh is not installed"
+    mkdir -p "$TEST_DIR/winbad/docs"
+    cp "$TEST_DIR/archive/meta.exe" "$TEST_DIR/archive/loop.exe" "$TEST_DIR/winbad/"
+    echo readme > "$TEST_DIR/winbad/README.md"
+    echo doc > "$TEST_DIR/winbad/docs/a.exe"
+    local case files expected
+    for case in "meta.exe loop.exe docs/a.exe|docs/a.exe, not a program at its top level" \
+        "meta.exe README.md|README.md, not a program at its top level" \
+        "loop.exe|no meta.exe"; do
+        files="${case%%|*}" expected="${case#*|}"
+        serve_zip $files
+        run_ps1
+        [ "$status" -eq 1 ]
+        [[ "$output" == *"holds $expected; nothing was installed"* ]]
+        [ ! -e "$INSTALL_DIR" ]
+    done
+}
+
 @test "install.ps1 refuses a tampered archive" {
     tamper meta-windows-x64.zip
     tamper meta-windows-arm64.zip
@@ -217,6 +287,7 @@ built() {
     local name
     for name in "$@"; do
         echo "$name" > "$SCRATCH/built/$name"
+        chmod +x "$SCRATCH/built/$name"
     done
 }
 
@@ -287,14 +358,41 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
     [[ "$output" == *"missing alpha.exe"* ]]
 }
 
+@test "the archive check takes only programs: once each, executable files, by their bare names" {
+    scratch_workspace
+    built meta alpha b
+    mkdir "$SCRATCH/folder" && cp "$SCRATCH/built/meta" "$SCRATCH/built/b" "$SCRATCH/folder/" && mkdir "$SCRATCH/folder/alpha"
+    tar -czf "$SCRATCH/folder.tar.gz" -C "$SCRATCH/folder" meta alpha b
+    run programs check "$SCRATCH/folder.tar.gz"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"alpha: a folder, not a program file"* && "$output" == *"missing alpha"* ]]
+
+    tar -cf "$SCRATCH/twice.tar" -C "$SCRATCH/built" meta alpha b && tar -rf "$SCRATCH/twice.tar" -C "$SCRATCH/built" meta
+    gzip "$SCRATCH/twice.tar"
+    run programs check "$SCRATCH/twice.tar.gz"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"meta: in it twice"* ]]
+
+    tar -czf "$SCRATCH/dot.tar.gz" -C "$SCRATCH/built" .
+    run programs check "$SCRATCH/dot.tar.gz"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"./meta: not at the archive's top level (name it meta)"* ]]
+
+    chmod -x "$SCRATCH/built/b"
+    tar -czf "$SCRATCH/plain.tar.gz" -C "$SCRATCH/built" meta alpha b
+    run programs check "$SCRATCH/plain.tar.gz"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"b: not executable, not a program file"* ]]
+}
+
 @test "a new or renamed bin target reaches the archive and the formula with no other edit" {
     scratch_workspace
     printf '\n[[bin]]\nname = "gamma"\npath = "src/lib.rs"\n' >> "$SCRATCH/lib/Cargo.toml"
     sed -i.bak 's/name = "alpha"/name = "alpha2"/' "$SCRATCH/a/Cargo.toml"
     built meta alpha2 b gamma
     local platform
+    # one dist folder for all four, as a run by hand reuses it
     for platform in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
-        rm -rf "$SCRATCH/dist"
         programs package "$SCRATCH/built" "$SCRATCH/dist" "$SCRATCH/meta-$platform.tar.gz"
     done
     [ "$(listing "$SCRATCH/meta-linux-x64.tar.gz")" = "alpha2 b gamma meta" ]
@@ -306,4 +404,33 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
     # the formula needs every platform's archive
     run programs formula 1.2.3 "$SCRATCH/meta-linux-x64.tar.gz"
     [ "$status" -ne 0 ]
+    # and installs only programs
+    mkdir "$SCRATCH/built/docs"
+    tar -czf "$SCRATCH/meta-linux-arm64.tar.gz" -C "$SCRATCH/built" meta alpha2 b gamma docs
+    run programs formula 1.2.3 "$SCRATCH"/meta-*.tar.gz
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"docs: a folder, not a program file"* ]]
+}
+
+@test "make install, uninstall and clean remove old copies of the programs from the plugin folders, and only those" {
+    scratch_workspace
+    mkdir -p "$SCRATCH/scripts" "$SCRATCH/stub"
+    cp "$BATS_TEST_DIRNAME/../Makefile" "$BATS_TEST_DIRNAME/../Makefile.context.mk" "$SCRATCH/"
+    cp "$PROGRAMS" "$SCRATCH/scripts/"
+    # cargo that reads metadata for real and only records the rest
+    printf '#!/bin/sh\n[ "$1" = metadata ] && exec "%s" "$@"\necho "cargo $*" >> "%s"\n' \
+        "$(command -v cargo)" "$TEST_DIR/cargo.log" > "$SCRATCH/stub/cargo"
+    chmod +x "$SCRATCH/stub/cargo"
+    local target
+    for target in install uninstall clean; do
+        mkdir -p "$HOME/.meta/plugins" "$SCRATCH/.meta/plugins"
+        touch "$HOME/.meta/plugins/meta" "$HOME/.meta/plugins/alpha" "$HOME/.meta/plugins/meta-other" \
+            "$SCRATCH/.meta/plugins/b" "$SCRATCH/.meta/plugins/meta-other"
+        PATH="$SCRATCH/stub:$PATH" run make -C "$SCRATCH" "$target"
+        [ "$status" -eq 0 ]
+        [ "$(ls "$HOME/.meta/plugins")" = "meta-other" ]
+        [ "$(ls "$SCRATCH/.meta/plugins")" = "meta-other" ]
+    done
+    grep -q 'cargo install --locked --force --path a$' "$TEST_DIR/cargo.log"
+    grep -q 'cargo uninstall pkg_a$' "$TEST_DIR/cargo.log"
 }

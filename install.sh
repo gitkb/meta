@@ -114,6 +114,23 @@ install_meta() {
     if [ ! -f "$programs/meta" ]; then
         error "${asset} holds no meta; nothing was installed"
     fi
+    # Each member must be a program, once: an executable file at the top
+    # level. Anything else and nothing is installed.
+    local name twice
+    twice=$(tar -tzf "${tmp_dir}/${asset}" | sort | uniq -d | head -n 1)
+    if [ -n "$twice" ]; then
+        error "${asset} holds ${twice} twice; nothing was installed"
+    fi
+    while IFS= read -r name; do
+        case "$name" in
+            */* | .*) error "${asset} holds ${name}, not a program at its top level; nothing was installed" ;;
+        esac
+    done < <(tar -tzf "${tmp_dir}/${asset}")
+    for name in "$programs"/*; do
+        if [ ! -f "$name" ] || [ -L "$name" ] || [ ! -x "$name" ]; then
+            error "${asset} holds ${name##*/}, which is not an executable file; nothing was installed"
+        fi
+    done
 
     # Create install directory if needed
     mkdir -p "$INSTALL_DIR"

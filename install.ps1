@@ -85,15 +85,36 @@ function Install-Meta {
         Write-Err "Checksum mismatch for $asset; nothing was installed`n  Expected: $expected`n  Actual:   $actual"
     }
 
+    # Each entry must be a program, once: an .exe at the top level. Anything
+    # else and nothing is installed.
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+        $entries = @($zip.Entries | ForEach-Object { $_.FullName })
+        $zip.Dispose()
+    } catch {
+        Write-Err "Failed to read archive: $_"
+    }
+    $seen = @{}
+    foreach ($name in $entries) {
+        if ($name -match '[/\\]' -or $name -notlike "*.exe") {
+            Write-Err "$asset holds $name, not a program at its top level; nothing was installed"
+        }
+        if ($seen.ContainsKey($name)) {
+            Write-Err "$asset holds $name twice; nothing was installed"
+        }
+        $seen[$name] = $true
+    }
+    if (-not $seen.ContainsKey("meta.exe")) {
+        Write-Err "$asset holds no meta.exe; nothing was installed"
+    }
+
     Write-Info "Extracting..."
     $programs = Join-Path $tempDir "programs"
     try {
         Expand-Archive -Path $zipPath -DestinationPath $programs -Force
     } catch {
         Write-Err "Failed to extract archive: $_"
-    }
-    if (-not (Test-Path (Join-Path $programs "meta.exe"))) {
-        Write-Err "$asset holds no meta.exe; nothing was installed"
     }
 
     # Create install directory if needed

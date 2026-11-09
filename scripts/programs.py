@@ -65,20 +65,50 @@ def names(asset, bins):
 
 
 def archived(asset):
+    """(name, what is wrong with it as a program, or None) for each member."""
     if windows(asset):
         with zipfile.ZipFile(asset) as archive:
-            return archive.namelist()
+            return [
+                (info.filename, "a folder" if info.is_dir() else None)
+                for info in archive.infolist()
+            ]
     with tarfile.open(asset) as archive:
-        return [member.name for member in archive.getmembers()]
+        return [
+            (
+                member.name,
+                "a folder" if member.isdir()
+                else "not a regular file" if not member.isreg()
+                else "not executable" if not member.mode & 0o111
+                else None,
+            )
+            for member in archive.getmembers()
+        ]
+
+
+def members(asset):
+    """The programs ASSET holds, and what is wrong with any other member: a
+    program is an executable file at the archive's top level, once."""
+    programs, problems = [], []
+    for name, wrong in archived(asset):
+        bare = name.rstrip("/")
+        if "/" in bare or bare in (".", ".."):
+            problems.append(f"{name}: not at the archive's top level (name it {os.path.basename(bare)})")
+        elif wrong:
+            problems.append(f"{name}: {wrong}, not a program file")
+        elif name in programs:
+            problems.append(f"{name}: in it twice")
+        else:
+            programs.append(name)
+    return programs, problems
 
 
 def check(asset, bins):
-    held, wanted = archived(asset), names(asset, bins)
+    """ASSET holds each program once, under its name, and nothing else."""
+    (held, problems), wanted = members(asset), names(asset, bins)
     missing = [name for name in wanted if name not in held]
     extra = [name for name in held if name not in wanted]
-    problems = []
     if missing:
-        problems.append(f"missing {', '.join(missing)}")
+        problems.insert(0, f"missing {', '.join(missing)}")
     if extra:
         problems.append(f"not a declared program: {', '.join(extra)}")
     if problems:
@@ -91,7 +121,7 @@ def sha256(path):
 
 
 def package(source, dist, asset, bins):
-    os.makedirs(dist)
+    os.makedirs(dist, exist_ok=True)
     wanted = names(asset, bins)
     for name in wanted:
         path = os.path.join(source, name)
@@ -123,7 +153,11 @@ def formula(version, assets):
     by_name = {os.path.basename(asset): asset for asset in assets}
     if sorted(by_name) != sorted(PLATFORMS):
         fail(f"the formula needs exactly {', '.join(PLATFORMS)}; got {', '.join(sorted(by_name))}")
-    held = {name: archived(path) for name, path in by_name.items()}
+    held = {}
+    for name, path in by_name.items():
+        held[name], problems = members(path)
+        if problems:
+            fail(f"{path}: {'; '.join(problems)}")
     first = held["meta-linux-x64.tar.gz"]
     for name, files in held.items():
         if sorted(files) != sorted(first):

@@ -288,7 +288,9 @@ fn homebrew(repo: &Repo) -> Result<(), String> {
 /// meta's programs are the workspace's bin targets, which
 /// `scripts/programs.py` reads from `cargo metadata`: the files that build,
 /// package and install them name none of them. `meta` is the exception, as
-/// the one program the installers require.
+/// the one program the installers require, and so is install.sh's
+/// `OLD_PLUGIN_COPIES` line, the one list of the copies old make targets
+/// left in the plugin folders (the Makefile reads it).
 fn programs_once(repo: &Repo) -> Result<(), String> {
     let out = Command::new(env!("CARGO"))
         .args([
@@ -334,6 +336,9 @@ fn programs_once(repo: &Repo) -> Result<(), String> {
     ] {
         let text = std::fs::read_to_string(repo.root.join(file)).unwrap();
         for (at, line) in text.lines().enumerate() {
+            if file == "install.sh" && line.starts_with("OLD_PLUGIN_COPIES=") {
+                continue;
+            }
             for program in &programs {
                 let named = line.match_indices(program.as_str()).any(|(i, _)| {
                     !word(line[..i].chars().next_back())

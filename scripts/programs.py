@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -68,10 +69,7 @@ def archived(asset):
     """(name, what is wrong with it as a program, or None) for each member."""
     if windows(asset):
         with zipfile.ZipFile(asset) as archive:
-            return [
-                (info.filename, "a folder" if info.is_dir() else None)
-                for info in archive.infolist()
-            ]
+            return [(info.filename, zip_member(info)) for info in archive.infolist()]
     with tarfile.open(asset) as archive:
         return [
             (
@@ -97,7 +95,7 @@ def members(asset):
         ]
     programs, problems = [], []
     for name, wrong in held:
-        bare = name.rstrip("/")
+        bare = name.replace("\\", "/").rstrip("/")
         if "/" in bare or bare == "..":
             problems.append(f"{name}: not at the archive's top level (name it {os.path.basename(bare)})")
         elif wrong:
@@ -107,6 +105,17 @@ def members(asset):
         else:
             programs.append(name)
     return programs, problems
+
+
+def zip_member(info):
+    """What is wrong with a zip entry as a program: by its Unix mode, when the
+    zip has one (a Windows zip has none)."""
+    mode = info.external_attr >> 16
+    if info.is_dir() or stat.S_ISDIR(mode):
+        return "a folder"
+    if mode and not stat.S_ISREG(mode):
+        return "a link" if stat.S_ISLNK(mode) else "not a regular file"
+    return None
 
 
 def check(asset, bins):

@@ -85,20 +85,28 @@ function Install-Meta {
         Write-Err "Checksum mismatch for $asset; nothing was installed`n  Expected: $expected`n  Actual:   $actual"
     }
 
-    # Each entry must be a program, once: an .exe at the top level. Anything
+    # Each entry must be a program, once: a regular .exe file at the top
+    # level. The entries are checked before anything is extracted; anything
     # else and nothing is installed.
     try {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-        $entries = @($zip.Entries | ForEach-Object { $_.FullName })
+        # name, and Unix file type when the zip records one (0 when it doesn't)
+        $entries = @($zip.Entries | ForEach-Object {
+            [pscustomobject]@{ Name = $_.FullName; Type = ($_.ExternalAttributes -shr 16) -band 0xF000 }
+        })
         $zip.Dispose()
     } catch {
         Write-Err "Failed to read archive: $_"
     }
     $seen = @{}
-    foreach ($name in $entries) {
+    foreach ($entry in $entries) {
+        $name = $entry.Name
         if ($name -match '[/\\]' -or $name -notlike "*.exe") {
             Write-Err "$asset holds $name, not a program at its top level; nothing was installed"
+        }
+        if ($entry.Type -ne 0 -and $entry.Type -ne 0x8000) {
+            Write-Err "$asset holds $name, which is not a regular file; nothing was installed"
         }
         if ($seen.ContainsKey($name)) {
             Write-Err "$asset holds $name twice; nothing was installed"

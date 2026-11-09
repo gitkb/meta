@@ -63,14 +63,16 @@ run_ps1() {
 }
 
 @test "install.sh installs every program of a release whose checksum matches" {
-    # copies an old `make install-plugins` left, which meta would run first
+    # a copy an old `make install-plugins` left, which meta would run first,
+    # and the user's own plugins, which stay
     mkdir -p "$HOME/.meta/plugins"
-    touch "$HOME/.meta/plugins/meta-cargo" "$HOME/.meta/plugins/meta-other"
+    touch "$HOME/.meta/plugins/meta-cargo" "$HOME/.meta/plugins/meta-mcp" "$HOME/.meta/plugins/meta-other"
     run bash "$BATS_TEST_DIRNAME/../install.sh"
     [ "$status" -eq 0 ]
     [[ "$output" == *"Installation complete"* ]]
+    [[ "$output" == *"Removed the old copy $HOME/.meta/plugins/meta-cargo"* ]]
     [ "$(ls "$INSTALL_DIR" | sort)" = "$(sort <<< "$BINS")" ]
-    [ "$(ls "$HOME/.meta/plugins")" = "meta-other" ]
+    [ "$(ls "$HOME/.meta/plugins" | tr '\n' ' ')" = "meta-mcp meta-other " ]
     for binary in $BINS; do
         run "$INSTALL_DIR/$binary"
         [ "$output" = "$binary 1.0.0" ]
@@ -105,6 +107,18 @@ serve() {
     (cd "$RELEASES/latest/download" && sha256 "$ASSET" > "$ASSET.sha256")
 }
 
+@test "install.sh into ~/.meta/plugins, or a link to it, keeps what it installed" {
+    mkdir -p "$HOME/.meta/plugins"
+    ln -s "$HOME/.meta/plugins" "$TEST_DIR/plugins-link"
+    local dir
+    for dir in "$HOME/.meta/plugins" "$TEST_DIR/plugins-link"; do
+        rm -f "$HOME/.meta/plugins"/*
+        INSTALL_DIR="$dir" run bash "$BATS_TEST_DIRNAME/../install.sh"
+        [ "$status" -eq 0 ]
+        [ "$(ls "$HOME/.meta/plugins" | sort)" = "$(sort <<< "$BINS")" ]
+    done
+}
+
 @test "install.sh installs nothing from an archive with anything but programs in it" {
     local bad="$TEST_DIR/bad"
     mkdir -p "$bad/docs" && cp "$TEST_DIR/archive/meta" "$TEST_DIR/archive/loop" "$bad/"
@@ -114,9 +128,12 @@ serve() {
     tar -czf "$TEST_DIR/folder.tar.gz" -C "$bad" meta loop docs
     tar -czf "$TEST_DIR/readme.tar.gz" -C "$bad" meta loop README.md
     tar -czf "$TEST_DIR/dot.tar.gz" -C "$bad" ./meta ./loop
+    mkdir "$TEST_DIR/hard" && cp "$TEST_DIR/archive/meta" "$TEST_DIR/hard/" && ln "$TEST_DIR/hard/meta" "$TEST_DIR/hard/loop"
+    tar -czf "$TEST_DIR/hard.tar.gz" -C "$TEST_DIR/hard" meta loop
     local archive expected
     for archive in twice:"loop twice" folder:"docs/, not a program at its top level" \
-        readme:"README.md, which is not an executable file" dot:"./meta, not a program at its top level"; do
+        readme:"README.md, which is not an executable file" dot:"./meta, not a program at its top level" \
+        hard:"loop, which is not an executable file"; do
         expected="${archive#*:}"
         serve "$TEST_DIR/${archive%%:*}.tar.gz"
         run bash "$BATS_TEST_DIRNAME/../install.sh"
@@ -231,6 +248,16 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
         [[ "$output" == *"holds $expected; nothing was installed"* ]]
         [ ! -e "$INSTALL_DIR" ]
     done
+    # a Unix symlink among the entries
+    local zip
+    for zip in meta-windows-x64.zip meta-windows-arm64.zip; do
+        symlink_zip "$RELEASES/latest/download/$zip" b.exe
+        (cd "$RELEASES/latest/download" && sha256 "$zip" > "$zip.sha256")
+    done
+    run_ps1
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"holds b.exe, which is not a regular file; nothing was installed"* ]]
+    [ ! -e "$INSTALL_DIR" ]
 }
 
 @test "install.ps1 refuses a tampered archive" {
@@ -293,6 +320,17 @@ built() {
         echo "$name" > "$SCRATCH/built/$name"
         chmod +x "$SCRATCH/built/$name"
     done
+}
+
+# symlink_zip ZIP LINK: meta.exe, alpha.exe and b.exe as regular files, but
+# LINK a Unix symlink (as a zip made on Unix records one)
+symlink_zip() {
+    python3 -c 'import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    for name in ("meta.exe", "alpha.exe", "b.exe"):
+        info = zipfile.ZipInfo(name)
+        info.external_attr = ((0o120777 if name == sys.argv[2] else 0o100755) << 16)
+        z.writestr(info, "meta.exe" if name == sys.argv[2] else "fake " + name)' "$1" "$2"
 }
 
 # an archive's files, sorted, on one line
@@ -383,6 +421,20 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
     [[ "$output" == *"dot.tar.gz: its members are named ./NAME: name each program alone"* ]]
     [[ "$output" != *missing* ]]
 
+    # b a hard link to meta: an executable file once extracted, but not a
+    # program file in the archive
+    mkdir "$SCRATCH/hard" && cp "$SCRATCH/built/meta" "$SCRATCH/built/alpha" "$SCRATCH/hard/" && ln "$SCRATCH/hard/meta" "$SCRATCH/hard/b"
+    tar -czf "$SCRATCH/hard.tar.gz" -C "$SCRATCH/hard" meta alpha b
+    run programs check "$SCRATCH/hard.tar.gz"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"b: not a regular file, not a program file"* ]]
+
+    # b.exe a Unix symlink in a zip
+    symlink_zip "$SCRATCH/link.zip" b.exe
+    run programs check "$SCRATCH/link.zip"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"b.exe: a link, not a program file"* ]]
+
     chmod -x "$SCRATCH/built/b"
     tar -czf "$SCRATCH/plain.tar.gz" -C "$SCRATCH/built" meta alpha b
     run programs check "$SCRATCH/plain.tar.gz"
@@ -417,25 +469,74 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
     [[ "$output" == *"docs: a folder, not a program file"* ]]
 }
 
-@test "make install, uninstall and clean remove old copies of the programs from the plugin folders, and only those" {
+# the plugin folders as an old `make install-all` and a user left them: the
+# two old copies (a file and a link), the user's own meta-mcp, and a plugin
+# named after no program
+plugin_folders() {
+    rm -rf "$HOME/.meta/plugins" "$SCRATCH/.meta/plugins"
+    mkdir -p "$HOME/.meta/plugins" "$SCRATCH/.meta/plugins" "$TEST_DIR/elsewhere"
+    echo kept > "$TEST_DIR/elsewhere/meta-cargo"
+    local dir
+    for dir in "$HOME/.meta/plugins" "$SCRATCH/.meta/plugins"; do
+        echo old > "$dir/meta-git"
+        ln -s "$TEST_DIR/elsewhere/meta-cargo" "$dir/meta-cargo"
+        echo mine > "$dir/meta-mcp"
+        echo other > "$dir/alpha"
+    done
+}
+
+@test "make install and uninstall remove only the two old plugin copies, once installed; make clean only the checkout's" {
     scratch_workspace
     mkdir -p "$SCRATCH/scripts" "$SCRATCH/stub"
-    cp "$BATS_TEST_DIRNAME/../Makefile" "$BATS_TEST_DIRNAME/../Makefile.context.mk" "$SCRATCH/"
+    cp "$BATS_TEST_DIRNAME/../Makefile" "$BATS_TEST_DIRNAME/../Makefile.context.mk" \
+        "$BATS_TEST_DIRNAME/../install.sh" "$SCRATCH/"
     cp "$PROGRAMS" "$SCRATCH/scripts/"
-    # cargo that reads metadata for real and only records the rest
-    printf '#!/bin/sh\n[ "$1" = metadata ] && exec "%s" "$@"\necho "cargo $*" >> "%s"\n' \
+    # cargo that reads metadata for real, records the rest, and fails an
+    # install when FAIL is set
+    printf '#!/bin/sh\n[ "$1" = metadata ] && exec "%s" "$@"\necho "cargo $*" >> "%s"\n[ "$1" = install ] && [ -n "$FAIL" ] && exit 1\nexit 0\n' \
         "$(command -v cargo)" "$TEST_DIR/cargo.log" > "$SCRATCH/stub/cargo"
     chmod +x "$SCRATCH/stub/cargo"
+    export PATH="$SCRATCH/stub:$PATH"
+    local all="alpha meta-cargo meta-git meta-mcp " left="alpha meta-mcp "
+
+    # building touches neither folder
+    plugin_folders
+    run make -C "$SCRATCH"
+    [ "$status" -eq 0 ]
+    [ "$(ls "$HOME/.meta/plugins" | tr '\n' ' ')" = "$all" ]
+    [ "$(ls "$SCRATCH/.meta/plugins" | tr '\n' ' ')" = "$all" ]
+
+    # clean: the checkout's old copies only
+    run make -C "$SCRATCH" clean
+    [ "$status" -eq 0 ]
+    [ "$(ls "$SCRATCH/.meta/plugins" | tr '\n' ' ')" = "$left" ]
+    [ "$(ls "$HOME/.meta/plugins" | tr '\n' ' ')" = "$all" ]
+    [[ "$output" == *"Removed the old copy .meta/plugins/meta-git"* ]]
+
+    # an install that fails removes nothing
+    FAIL=1 run make -C "$SCRATCH" install
+    [ "$status" -ne 0 ]
+    [ "$(ls "$HOME/.meta/plugins" | tr '\n' ' ')" = "$all" ]
+
+    # install, then uninstall: the two old copies go (the link, not what it
+    # points to), the rest stays, and each removal is named
     local target
-    for target in install uninstall clean; do
-        mkdir -p "$HOME/.meta/plugins" "$SCRATCH/.meta/plugins"
-        touch "$HOME/.meta/plugins/meta" "$HOME/.meta/plugins/alpha" "$HOME/.meta/plugins/meta-other" \
-            "$SCRATCH/.meta/plugins/b" "$SCRATCH/.meta/plugins/meta-other"
-        PATH="$SCRATCH/stub:$PATH" run make -C "$SCRATCH" "$target"
+    for target in install uninstall; do
+        plugin_folders
+        run make -C "$SCRATCH" "$target"
         [ "$status" -eq 0 ]
-        [ "$(ls "$HOME/.meta/plugins")" = "meta-other" ]
-        [ "$(ls "$SCRATCH/.meta/plugins")" = "meta-other" ]
+        [ "$(ls "$HOME/.meta/plugins" | tr '\n' ' ')" = "$left" ]
+        [ "$(ls "$SCRATCH/.meta/plugins" | tr '\n' ' ')" = "$all" ]
+        [[ "$output" == *"Removed the old copy $HOME/.meta/plugins/meta-git"* ]]
+        [[ "$output" == *"Removed the old copy $HOME/.meta/plugins/meta-cargo"* ]]
+        [ "$(cat "$TEST_DIR/elsewhere/meta-cargo")" = kept ]
     done
     grep -q 'cargo install --locked --force --path a$' "$TEST_DIR/cargo.log"
     grep -q 'cargo uninstall pkg_a$' "$TEST_DIR/cargo.log"
+
+    # a folder with an old copy's name is never removed, and doesn't fail
+    rm -rf "$HOME/.meta/plugins"/* && mkdir "$HOME/.meta/plugins/meta-cargo"
+    run make -C "$SCRATCH" uninstall
+    [ "$status" -eq 0 ]
+    [ -d "$HOME/.meta/plugins/meta-cargo" ]
 }

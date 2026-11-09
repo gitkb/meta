@@ -5,7 +5,7 @@ include Makefile.context.mk
 
 .DEFAULT_GOAL := build-all
 
-build-all: build remove-old-copies
+build-all: build
 
 build:
 	cargo build
@@ -13,23 +13,32 @@ build:
 # Every program the workspace declares as a [[bin]] (scripts/programs.py
 # lists them), installed globally via cargo install. --force replaces any
 # binary of the same name, e.g. one from a release download
-install: remove-old-copies
+install:
 	@dirs=$$(python3 scripts/programs.py packages --dirs) && for dir in $$dirs; do \
 		cargo install --locked --force --path "$$dir" || exit 1; \
 	done
+	@$(call remove_old_copies,$$HOME/.meta/plugins)
 
 install-all: install
 
-clean: remove-old-copies
+clean:
+	@$(call remove_old_copies,.meta/plugins)
 	cargo clean
 
-# Copies of meta's programs that the old build-plugins and install-plugins
-# targets put in this checkout's .meta/plugins and in ~/.meta/plugins. meta
-# finds plugins there before PATH, so they would hide the programs built and
-# installed now. Other plugins there stay.
-remove-old-copies:
-	@bins=$$(python3 scripts/programs.py bins) && for bin in $$bins; do \
-		rm -f ".meta/plugins/$$bin" "$$HOME/.meta/plugins/$$bin"; \
+# The copies the old build-plugins and install-plugins targets put in this
+# checkout's .meta/plugins and in ~/.meta/plugins, where meta looks before
+# PATH. One list, install.sh's.
+OLD_PLUGIN_COPIES := $(shell sed -n 's/^OLD_PLUGIN_COPIES="\(.*\)"$$/\1/p' install.sh)
+ifeq ($(OLD_PLUGIN_COPIES),)
+$(error install.sh has no OLD_PLUGIN_COPIES="..." line)
+endif
+
+# $(call remove_old_copies,DIR): remove each old copy from DIR (a file or a
+# link, never a folder), saying so on stderr
+remove_old_copies = for name in $(OLD_PLUGIN_COPIES); do \
+		if [ -L "$(1)/$$name" ] || [ -f "$(1)/$$name" ]; then \
+			rm -f "$(1)/$$name" && echo "Removed the old copy $(1)/$$name" >&2 || exit 1; \
+		fi; \
 	done
 
 # Install git hooks (commit-msg validates release-safe subjects; pre-push runs CI checks locally)
@@ -99,9 +108,10 @@ integration-test:
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) META_CLI_PATH=target/debug/meta CARGO_BIN_EXE_meta=target/debug/meta cargo nextest run --workspace
 
 # By package name, so it still matches after a version bump since the install
-uninstall: remove-old-copies
+uninstall:
 	@packages=$$(python3 scripts/programs.py packages) && for package in $$packages; do \
 		cargo uninstall "$$package" || true; \
 	done
+	@$(call remove_old_copies,$$HOME/.meta/plugins)
 
-.PHONY: build-all install install-all uninstall clean remove-old-copies install-hooks build run test bats release integration-test
+.PHONY: build-all install install-all uninstall clean install-hooks build run test bats release integration-test

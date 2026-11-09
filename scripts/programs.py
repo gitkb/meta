@@ -13,7 +13,8 @@ archives, the Homebrew formula, the tests) comes from here.
   programs.py formula VERSION ASSET.. the Homebrew formula for these archives,
                                       installing what they hold
 
---manifest-path PATH (before the command) reads another workspace.
+It reads the workspace it is in, from any directory; --manifest-path PATH
+(before the command) reads another.
 """
 
 import argparse
@@ -32,11 +33,11 @@ def fail(message):
 
 
 def metadata(manifest):
-    argv = ["cargo", "metadata", "--no-deps", "--format-version", "1"]
-    if manifest:
-        argv += ["--manifest-path", manifest]
-    out = subprocess.run(argv, check=True, stdout=subprocess.PIPE, text=True).stdout
-    data = json.loads(out)
+    argv = ["cargo", "metadata", "--no-deps", "--format-version", "1", "--manifest-path", manifest]
+    run = subprocess.run(argv, stdout=subprocess.PIPE, text=True)
+    if run.returncode != 0:
+        fail(f"{' '.join(argv)} failed (exit {run.returncode})")
+    data = json.loads(run.stdout)
     members = set(data["workspace_members"])
     return data["workspace_root"], [p for p in data["packages"] if p["id"] in members]
 
@@ -165,7 +166,10 @@ end
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--manifest-path")
+    parser.add_argument(
+        "--manifest-path",
+        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Cargo.toml"),
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("bins")
     packages = commands.add_parser("packages")

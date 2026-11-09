@@ -237,6 +237,11 @@ print(" ".join(sorted(names)))' "$1"
     [ "$(sort <<< "$output" | tr '\n' ' ')" = "b pkg_a " ]
     run programs packages --dirs
     [ "$(sort <<< "$output" | tr '\n' ' ')" = "a b " ]
+    # without --manifest-path, the workspace it is in, from anywhere
+    cd /
+    run python3 "$PROGRAMS" bins
+    [ "$status" -eq 0 ]
+    [[ "$output" == *meta* ]]
 }
 
 @test "release packaging holds exactly the declared programs, Unix and Windows names" {

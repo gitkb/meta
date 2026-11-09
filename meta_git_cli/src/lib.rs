@@ -16,7 +16,6 @@ mod commands;
 mod worktree;
 
 use log::debug;
-use meta_plugin::display::escape;
 use meta_plugin::{
     has_help_token, Ctx, Plan, PluginHelp, PluginInfo, ProjectResult, Request, Response, Step,
     Targeting, Warning,
@@ -76,7 +75,11 @@ pub fn plugin_info() -> PluginInfo {
                 "meta git status                     # git status in each repo".to_string(),
                 "meta git log --oneline -3           # git log, as typed".to_string(),
             ],
-            note: None,
+            note: Some(
+                "A git command run as typed skips each selected repo that isn't cloned, \
+                 with a warning (with --strict, an error)."
+                    .to_string(),
+            ),
         }),
         answers_targeting: false,
     }
@@ -335,13 +338,7 @@ fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<
     let mut steps = Vec::new();
     for project in &request.projects {
         if !project.present {
-            ctx.warn_or_bail(Warning::about(
-                &project.path,
-                format!(
-                    "{} is not cloned; `meta git clone-missing` clones it",
-                    escape(&project.path)
-                ),
-            ))?;
+            ctx.warn_or_bail(Warning::not_cloned(&project.path))?;
             continue;
         }
         let mut step = Step::new(Some(&project.path), &project.abs, argv.clone());

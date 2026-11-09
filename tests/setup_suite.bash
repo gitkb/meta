@@ -12,8 +12,9 @@ setup_suite() {
             python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')" || return 1
         META_BIN_DIR="$target/debug"
     fi
-    local bin missing=""
-    for bin in meta meta-git meta-cargo meta-mcp loop; do
+    local bin bins missing=""
+    bins="$(python3 "$(dirname "${BASH_SOURCE[0]}")/../scripts/programs.py" bins)" || return 1
+    for bin in $bins; do
         [ -x "$META_BIN_DIR/$bin" ] || missing="$missing $bin"
     done
     if [ -n "$missing" ]; then

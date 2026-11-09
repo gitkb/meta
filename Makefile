@@ -5,47 +5,49 @@ include Makefile.context.mk
 
 .DEFAULT_GOAL := build-all
 
-# Build everything for development (plugins go to .meta/plugins/ for local discovery)
-build-all: build build-plugins
+build-all: build
 
 build:
 	cargo build
 
-# Build plugins and install to project-local .meta/plugins/ (for development)
-build-plugins:
-	cargo build --release -p meta_git_cli
-	cargo build --release -p meta_rust_cli
-	mkdir -p .meta/plugins
-	cp target/release/meta-git .meta/plugins/meta-git
-	cp target/release/meta-cargo .meta/plugins/meta-cargo
+# Every program the workspace declares as a [[bin]] (scripts/programs.py
+# lists them), installed globally via cargo install. --force replaces any
+# binary of the same name, e.g. one from a release download
+install:
+	@dirs=$$(python3 scripts/programs.py packages --dirs) && for dir in $$dirs; do \
+		cargo install --locked --force --path "$$dir" || exit 1; \
+	done
+	@$(call remove_old_copies,$$HOME/.meta/plugins,$(CARGO_BIN))
 
-# Crates whose binaries `make install` and `make uninstall` handle: the
-# binaries release.yml ships
-BIN_CRATES := meta_cli meta_git_cli meta_rust_cli meta_mcp loop_cli
+install-all: install
 
-# Install meta, its plugins, meta-mcp and loop globally via cargo install.
-# --force replaces any binary of the same name, e.g. one from a release download
-install: $(BIN_CRATES:%=install-%)
-
-$(BIN_CRATES:%=install-%): install-%:
-	cargo install --locked --force --path $*
-
-# Install plugins globally to ~/.meta/plugins/
-install-plugins: build-plugins
-	mkdir -p ~/.meta/plugins
-	cp target/release/meta-git ~/.meta/plugins/meta-git
-	cp target/release/meta-cargo ~/.meta/plugins/meta-cargo
-
-# Install everything globally (meta binary + plugins to both cargo bin and ~/.meta/plugins/)
-install-all: install install-plugins
-
-clean: clean-plugins
+clean:
+	@$(call remove_old_copies,.meta/plugins,$$HOME/.meta/plugins)
 	cargo clean
 
-clean-plugins:
-	rm -rf .meta/plugins
+# The copies the old build-plugins and install-plugins targets put in this
+# checkout's .meta/plugins and in ~/.meta/plugins, where meta looks before
+# PATH. One list, install.sh's.
+OLD_PLUGIN_COPIES := $(shell sed -n 's/^OLD_PLUGIN_COPIES="\(.*\)"$$/\1/p' install.sh)
+ifeq ($(OLD_PLUGIN_COPIES),)
+$(error install.sh has no OLD_PLUGIN_COPIES="..." line)
+endif
 
-rebuild-plugins: clean-plugins build-plugins
+# Where cargo install puts the programs (an install.root in a cargo config
+# is not read)
+CARGO_BIN := $(or $(CARGO_INSTALL_ROOT),$(CARGO_HOME),$(HOME)/.cargo)/bin
+
+# $(call remove_old_copies,DIR,KEEP): remove each old copy from DIR (a file
+# or a link, never a folder), saying so on stderr; nothing when DIR is KEEP,
+# compared after following links
+remove_old_copies = dir="$(1)"; keep="$(2)"; \
+	if [ -d "$$dir" ] && { [ ! -d "$$keep" ] || [ "$$(cd "$$dir" && pwd -P)" != "$$(cd "$$keep" && pwd -P)" ]; }; then \
+		for name in $(OLD_PLUGIN_COPIES); do \
+			if [ -L "$$dir/$$name" ] || [ -f "$$dir/$$name" ]; then \
+				rm -f "$$dir/$$name" && echo "Removed the old copy $$dir/$$name" >&2 || exit 1; \
+			fi; \
+		done; \
+	fi
 
 # Install git hooks (commit-msg validates release-safe subjects; pre-push runs CI checks locally)
 # Uses git rev-parse to handle worktrees and submodules correctly
@@ -113,12 +115,11 @@ integration-test:
 	cargo build -p meta
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) META_CLI_PATH=target/debug/meta CARGO_BIN_EXE_meta=target/debug/meta cargo nextest run --workspace
 
-uninstall: $(BIN_CRATES:%=uninstall-%)
-	rm -f ~/.meta/plugins/meta-git ~/.meta/plugins/meta-cargo
+# By package name, so it still matches after a version bump since the install
+uninstall:
+	@packages=$$(python3 scripts/programs.py packages) && for package in $$packages; do \
+		cargo uninstall "$$package" || true; \
+	done
+	@$(call remove_old_copies,$$HOME/.meta/plugins,$(CARGO_BIN))
 
-# By package name (from the crate's [package] section), so it still matches
-# after a version bump since the install
-$(BIN_CRATES:%=uninstall-%): uninstall-%:
-	-cargo uninstall $$(sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"/\1/p' $*/Cargo.toml)
-
-.PHONY: install $(BIN_CRATES:%=install-%) uninstall $(BIN_CRATES:%=uninstall-%) install-hooks build run test bats release integration-test
+.PHONY: build-all install install-all uninstall clean install-hooks build run test bats release integration-test

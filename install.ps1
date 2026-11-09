@@ -73,7 +73,8 @@ function Install-Meta {
     Get-Download "$baseUrl/$asset" $zipPath
     Get-Download "$baseUrl/$asset.sha256" $checksumPath
 
-    # The release publishes certutil output: a header line, the hash, a footer line
+    # The hash is the file's first 64 hex digits (older releases published certutil
+    # output: a header line, the hash, a footer line)
     Write-Info "Verifying checksum..."
     $expected = [regex]::Match("$(Get-Content -Raw $checksumPath)", '\b[0-9a-fA-F]{64}\b').Value
     if (-not $expected) {
@@ -84,9 +85,42 @@ function Install-Meta {
         Write-Err "Checksum mismatch for $asset; nothing was installed`n  Expected: $expected`n  Actual:   $actual"
     }
 
-    Write-Info "Extracting..."
+    # Each entry must be a program, once: a regular .exe file at the top
+    # level. The entries are checked before anything is extracted; anything
+    # else and nothing is installed.
     try {
-        Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+        # name, and Unix file type when the zip records one (0 when it doesn't)
+        $entries = @($zip.Entries | ForEach-Object {
+            [pscustomobject]@{ Name = $_.FullName; Type = ($_.ExternalAttributes -shr 16) -band 0xF000 }
+        })
+        $zip.Dispose()
+    } catch {
+        Write-Err "Failed to read archive: $_"
+    }
+    $seen = @{}
+    foreach ($entry in $entries) {
+        $name = $entry.Name
+        if ($name -match '[/\\]' -or $name -notlike "*.exe") {
+            Write-Err "$asset holds $name, not a program at its top level; nothing was installed"
+        }
+        if ($entry.Type -ne 0 -and $entry.Type -ne 0x8000) {
+            Write-Err "$asset holds $name, which is not a regular file; nothing was installed"
+        }
+        if ($seen.ContainsKey($name)) {
+            Write-Err "$asset holds $name twice; nothing was installed"
+        }
+        $seen[$name] = $true
+    }
+    if (-not $seen.ContainsKey("meta.exe")) {
+        Write-Err "$asset holds no meta.exe; nothing was installed"
+    }
+
+    Write-Info "Extracting..."
+    $programs = Join-Path $tempDir "programs"
+    try {
+        Expand-Archive -Path $zipPath -DestinationPath $programs -Force
     } catch {
         Write-Err "Failed to extract archive: $_"
     }
@@ -96,17 +130,11 @@ function Install-Meta {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     }
 
-    # Install binaries
+    # Install the programs the release holds
     Write-Info "Installing to $InstallDir..."
-    $expectedBinaries = @("meta.exe", "meta-git.exe", "meta-cargo.exe", "meta-mcp.exe", "loop.exe")
-    foreach ($binary in $expectedBinaries) {
-        $binaryPath = Join-Path $tempDir $binary
-        if (Test-Path $binaryPath) {
-            Copy-Item $binaryPath -Destination $InstallDir -Force
-            Write-Info "Installed $binary"
-        } else {
-            Write-Warn "$binary is not in this release; build main to get it (see the first lines above)"
-        }
+    foreach ($binary in Get-ChildItem -Path $programs -File) {
+        Copy-Item $binary.FullName -Destination $InstallDir -Force
+        Write-Info "Installed $($binary.Name)"
     }
 
     # Cleanup

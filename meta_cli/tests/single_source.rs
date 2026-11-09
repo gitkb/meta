@@ -14,6 +14,7 @@
 
 #![expect(
     clippy::disallowed_methods,
+    clippy::indexing_slicing,
     clippy::string_slice,
     clippy::unwrap_used,
     reason = "test helpers: a panic is a failed test, and tests start the programs they test"
@@ -23,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The groups whose facts have one source now.
-const ENABLED: &[u8] = &[3, 4, 8, 11, 12, 18, 19, 22, 24, 25];
+const ENABLED: &[u8] = &[3, 4, 8, 11, 12, 17, 18, 19, 22, 24, 25];
 
 /// How a group is checked.
 enum Check {
@@ -60,7 +61,7 @@ const GROUPS: [(u8, &str, Check); 16] = [
         Check::Copies(&[
             (
                 "meta_rust_cli/src/main.rs",
-                "usage: \"Usage: meta cargo <CARGO_ARGS>...\"",
+                "usage: \"Usage: meta [OPTIONS] cargo <CARGO_ARGS>...\"",
             ),
             ("meta_cli/src/main.rs", "fn as_typed_help"),
             ("meta_cli/src/main.rs", "fn help_with_plugins"),
@@ -82,7 +83,7 @@ const GROUPS: [(u8, &str, Check); 16] = [
     (
         17,
         "the installed binaries: listed once, by cargo",
-        Check::Copies(&[("install.sh", "meta-git")]),
+        Check::Rule(programs_once),
     ),
     (
         18,
@@ -281,6 +282,77 @@ fn homebrew(repo: &Repo) -> Result<(), String> {
     {
         Some(file) => Err(format!("{file} is a second formula")),
         None => Ok(()),
+    }
+}
+
+/// meta's programs are the workspace's bin targets, which
+/// `scripts/programs.py` reads from `cargo metadata`: the files that build,
+/// package and install them name none of them. `meta` is the exception, as
+/// the one program the installers require, and so is install.sh's
+/// `OLD_PLUGIN_COPIES` line, the one list of the copies old make targets
+/// left in the plugin folders (the Makefile reads it).
+fn programs_once(repo: &Repo) -> Result<(), String> {
+    let out = Command::new(env!("CARGO"))
+        .args([
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
+        .arg(repo.root.join("Cargo.toml"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let programs: Vec<String> = metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|package| package["targets"].as_array().unwrap())
+        .filter(|target| {
+            target["kind"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|kind| kind == "bin")
+        })
+        .map(|target| target["name"].as_str().unwrap().to_string())
+        .filter(|name| name != "meta")
+        .collect();
+    assert!(programs.len() >= 4, "only {programs:?}");
+    let word =
+        |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let mut problems = Vec::new();
+    for file in [
+        "install.sh",
+        "install.ps1",
+        ".github/workflows/release.yml",
+        "Makefile",
+    ] {
+        let text = std::fs::read_to_string(repo.root.join(file)).unwrap();
+        for (at, line) in text.lines().enumerate() {
+            if file == "install.sh" && line.starts_with("OLD_PLUGIN_COPIES=") {
+                continue;
+            }
+            for program in &programs {
+                let named = line.match_indices(program.as_str()).any(|(i, _)| {
+                    !word(line[..i].chars().next_back())
+                        && !word(line[i + program.len()..].chars().next())
+                });
+                if named {
+                    problems.push(format!("{file}:{}: names {program}", at + 1));
+                }
+            }
+        }
+    }
+    match problems.is_empty() {
+        true => Ok(()),
+        false => Err(problems.join("; ")),
     }
 }
 

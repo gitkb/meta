@@ -229,7 +229,7 @@ impl PluginInfo {
 impl PluginHelp {
     /// What becomes of the commands that aren't the plugin's own, if it
     /// runs them as typed: "any other git command runs as typed in each
-    /// selected repo". Not escaped.
+    /// selected repo it applies to" (its note says which). Not escaped.
     pub fn as_typed_rule(&self) -> Option<String> {
         let tool = self.runs_as_typed.as_ref()?;
         let which = if self.commands.is_empty() {
@@ -238,7 +238,7 @@ impl PluginHelp {
             "any other"
         };
         Some(format!(
-            "{which} {tool} command runs as typed in each selected repo"
+            "{which} {tool} command runs as typed in each selected repo it applies to"
         ))
     }
 }
@@ -577,7 +577,9 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("any other git command runs as typed in each selected repo"),
+            text.contains(
+                "any other git command runs as typed in each selected repo it applies to"
+            ),
             "{text}"
         );
         // a plugin that runs nothing as typed decides the rest itself

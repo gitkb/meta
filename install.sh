@@ -10,6 +10,9 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${VERSION:-latest}"
 # Base URL of the release downloads; point it at a mirror of the GitHub releases.
 META_DOWNLOAD_URL="${META_DOWNLOAD_URL:-https://github.com/gitkb/meta/releases}"
+# The copies the old `make install-plugins` put in ~/.meta/plugins, where meta
+# looks before PATH; the Makefile reads this line too
+OLD_PLUGIN_COPIES="meta-git meta-cargo"
 
 # Colors for output
 RED='\033[0;31m'
@@ -74,6 +77,22 @@ sha256() {
     fi
 }
 
+# Remove OLD_PLUGIN_COPIES from ~/.meta/plugins (a file or a link, never a
+# folder), unless that is where this install put the programs
+remove_old_copies() {
+    local dir="$HOME/.meta/plugins" name
+    [ -d "$dir" ] || return 0
+    if [ "$(cd "$dir" && pwd -P)" = "$(cd "$INSTALL_DIR" && pwd -P)" ]; then
+        return 0
+    fi
+    for name in $OLD_PLUGIN_COPIES; do
+        if [ -L "$dir/$name" ] || [ -f "$dir/$name" ]; then
+            rm -f "$dir/$name"
+            echo "Removed the old copy $dir/$name, which meta would run before the one just installed" >&2
+        fi
+    done
+}
+
 # Download, verify and install
 install_meta() {
     local platform
@@ -107,25 +126,46 @@ install_meta() {
         error "Checksum mismatch for ${asset}; nothing was installed\n  Expected: ${expected}\n  Actual:   ${actual}"
     fi
 
+    # Each member must be a program, once: an executable regular file at the
+    # top level (tar -tv's mode starts with - and the owner may run it, x or
+    # setuid s, as programs.py check reads the mode). The
+    # archive is checked before anything is extracted; anything else and
+    # nothing is installed.
+    local name mode twice
+    twice=$(tar -tzf "${tmp_dir}/${asset}" | sort | uniq -d | head -n 1)
+    if [ -n "$twice" ]; then
+        error "${asset} holds ${twice} twice; nothing was installed"
+    fi
+    while IFS= read -r name && IFS= read -r mode <&3; do
+        case "$name" in
+            */* | .*) error "${asset} holds ${name}, not a program at its top level; nothing was installed" ;;
+        esac
+        case "$mode" in
+            -??[xs]*) ;;
+            *) error "${asset} holds ${name}, which is not an executable file; nothing was installed" ;;
+        esac
+    done < <(tar -tzf "${tmp_dir}/${asset}") 3< <(tar -tvzf "${tmp_dir}/${asset}" | cut -c1-10)
+    if ! tar -tzf "${tmp_dir}/${asset}" | grep -qx meta; then
+        error "${asset} holds no meta; nothing was installed"
+    fi
+
     info "Extracting..."
-    tar -xzf "${tmp_dir}/${asset}" -C "$tmp_dir"
+    local programs="${tmp_dir}/programs"
+    mkdir "$programs"
+    tar -xzf "${tmp_dir}/${asset}" -C "$programs"
 
     # Create install directory if needed
     mkdir -p "$INSTALL_DIR"
 
-    # Install binaries
+    # Install the programs the release holds
     info "Installing to ${INSTALL_DIR}..."
-    local expected_binaries=("meta" "meta-git" "meta-cargo" "meta-mcp" "loop")
-    for binary_name in "${expected_binaries[@]}"; do
-        local binary="$tmp_dir/$binary_name"
-        if [ -f "$binary" ]; then
-            cp "$binary" "$INSTALL_DIR/"
-            chmod +x "$INSTALL_DIR/$binary_name"
-            info "Installed $binary_name"
-        else
-            warn "$binary_name is not in this release; build main to get it (see the first lines above)"
-        fi
+    local binary
+    for binary in "$programs"/*; do
+        cp "$binary" "$INSTALL_DIR/"
+        chmod +x "$INSTALL_DIR/${binary##*/}"
+        info "Installed ${binary##*/}"
     done
+    remove_old_copies
 
     # Check if INSTALL_DIR is in PATH
     if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then

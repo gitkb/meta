@@ -11,7 +11,7 @@ fn main() {
             commands: vec!["cargo".to_string()],
             description: Some("Run cargo across the Rust repos of a meta workspace".to_string()),
             help: Some(PluginHelp {
-                usage: "Usage: meta cargo <CARGO_ARGS>...".to_string(),
+                usage: "Usage: meta [OPTIONS] cargo <CARGO_ARGS>...".to_string(),
                 commands: IndexMap::new(),
                 runs_as_typed: Some("cargo".to_string()),
                 examples: vec![
@@ -21,8 +21,10 @@ fn main() {
                     "meta cargo --version".to_string(),
                 ],
                 note: Some(
-                    "Repos without a Cargo.toml are skipped. A Cargo workspace that spans repos \
-                     runs in each of them; for one run from its root, use plain cargo there."
+                    "It runs in each selected repo that has a Cargo.toml. One without is \
+                     skipped; one not cloned is a warning (with --strict, an error). A Cargo \
+                     workspace that spans repos runs in each of them; for one run from its \
+                     root, use plain cargo there."
                         .to_string(),
                 ),
             }),
@@ -33,6 +35,6 @@ fn main() {
     });
 }
 
-fn execute(_ctx: &Ctx, request: Request) -> meta_plugin::Result<Response> {
-    Ok(meta_rust_cli::execute_command(&request))
+fn execute(ctx: &Ctx, request: Request) -> meta_plugin::Result<Response> {
+    meta_rust_cli::execute_command(ctx, &request)
 }

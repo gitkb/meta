@@ -1598,7 +1598,7 @@ YAML
     [[ "$output" == *"Usage: meta git update"* ]]
     run "$META_BIN" git status --help
     [ "$status" -eq 0 ]
-    [[ "${lines[0]}" == '`meta git status` runs as typed (`git status`) in each selected repo.' ]]
+    [[ "${lines[0]}" == '`meta git status` runs as typed (`git status`) in each selected repo it applies to.' ]]
 }
 
 @test "meta help never runs the command, even with -- in the words" {

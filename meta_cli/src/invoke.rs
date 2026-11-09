@@ -182,7 +182,7 @@ fn resolve_dependencies(
     let here = Reach::of(reach.workspace.clone(), true, false, None)
         .ok()
         .map(|reach| reach.scope().repos);
-    let elsewhere = Elsewhere::of(whole_tree, here.as_deref(), root);
+    let elsewhere = Elsewhere::of(whole_tree, here.as_deref(), root, &reach.workspace.dir);
     for member in members.iter_mut() {
         let Some((_, key, info)) = keyed.iter().find(|(dir, _, _)| *dir == member.abs) else {
             // outside the reach (a nested repo without -r): only what
@@ -246,6 +246,9 @@ struct Elsewhere<'a> {
     recursive: meta_core::dependency_graph::DependencyGraph,
     /// The folders `-r` reaches from there
     reached: Vec<PathBuf>,
+    /// The folder of the config the command starts at: a `--repo` there is
+    /// a path from it
+    start: PathBuf,
 }
 
 /// Each project of `repos`: its folder, its path from `root`, the place of
@@ -272,7 +275,12 @@ fn placed<'a>(
 impl<'a> Elsewhere<'a> {
     /// The projects of `whole_tree`, and `-r`'s graph of `here` (what it
     /// reaches from where the command starts; the whole tree if unknown).
-    fn of(whole_tree: &'a [Candidate], here: Option<&[Candidate]>, root: &Path) -> Self {
+    fn of(
+        whole_tree: &'a [Candidate],
+        here: Option<&[Candidate]>,
+        root: &Path,
+        start: &Path,
+    ) -> Self {
         use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
         let projects = placed(whole_tree, root);
         let reach = placed(here.unwrap_or(whole_tree), root);
@@ -299,6 +307,7 @@ impl<'a> Elsewhere<'a> {
         Self {
             recursive: DependencyGraph::build(nodes),
             reached: reach.iter().map(|(dir, ..)| dir.to_path_buf()).collect(),
+            start: start.to_path_buf(),
             projects,
         }
     }
@@ -311,10 +320,11 @@ impl<'a> Elsewhere<'a> {
     fn left_out(&self, dir: &Path, dep: &str, flat: bool) -> Option<meta_plugin::LeftOut> {
         use meta_plugin::display::escape;
         let (_, own_path, prefix, _) = self.projects.iter().find(|(d, ..)| *d == dir)?;
-        let names = |(_, path, at, info): &&(&Path, String, String, &config::ProjectInfo)| {
+        // a name or capability, or a path from the dependent's config or the root
+        let names = |(_, path, _, info): &&(&Path, String, String, &config::ProjectInfo)| {
             info.name == dep
                 || info.provides.iter().any(|p| p == dep)
-                || *path == format!("{at}{dep}")
+                || *path == format!("{prefix}{dep}")
                 || path == dep
         };
         let own: Vec<_> = self
@@ -340,13 +350,17 @@ impl<'a> Elsewhere<'a> {
             .get_dependencies(own_path)
             .contains(&path.as_str());
         let shown = escape(path);
-        let problem = match (flat && r_follows, self.reached.iter().any(|d| d == found_dir)) {
+        // what `--repo` takes from where the command starts: a repo of its
+        // tree by its path from there, any other with -A from the root
+        let inside = self.reached.iter().any(|d| d == found_dir);
+        let named = escape(&repo_path(found_dir, &self.start)).into_owned();
+        let problem = match (flat && r_follows, inside) {
             (true, _) => format!(
-                "depends on '{shown}', which only -r follows: add -r, or name it with --repo {shown}"
+                "depends on '{shown}', which only -r follows: add -r, or name it with --repo {named}"
             ),
             (false, true) => format!(
                 "depends on '{shown}' (written '{}'), which -r doesn't follow: name it with \
-                 --repo {shown}",
+                 --repo {named}",
                 escape(dep)
             ),
             // outside what -r reaches from here: -A names it from the root

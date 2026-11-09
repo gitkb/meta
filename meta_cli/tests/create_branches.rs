@@ -525,10 +525,11 @@ fn meta_in(f: &Fixture, dir: &Path, words: &[&str]) -> Value {
 }
 
 /// What a warning's advice adds, taken literally: meta's options (`add -r`,
-/// `add -A`) and the create's (the `--repo` it ends with; `add -r` is the
-/// first choice, so then none).
-fn advice(warning: &str) -> (Vec<String>, Vec<String>) {
-    if warning.contains("only -r follows: add -r") {
+/// `add -A`) and the create's (the `--repo` it ends with). For "only -r
+/// follows: add -r, or name it with --repo …", `second` takes the second
+/// choice.
+fn advice(warning: &str, second: bool) -> (Vec<String>, Vec<String>) {
+    if warning.contains("only -r follows: add -r") && !second {
         return (vec!["-r".to_string()], Vec::new());
     }
     let options = match warning.contains("add -A") {
@@ -539,59 +540,124 @@ fn advice(warning: &str) -> (Vec<String>, Vec<String>) {
     (options, vec!["--repo".to_string(), repo])
 }
 
-/// Each warning's advice, followed literally, gives the set the repo with
-/// no warning: from inside a nested meta repo (where `-r` doesn't reach the
-/// parent level, so the advice is `-A`), and from the root (`add -r`). On
-/// the PR's fourth head the advice from inside said `add -r` or a bare
-/// `--repo`, neither of which works there.
+/// The fixture with a nested meta repo inside `platform`: `platform/inner`,
+/// holding `x`.
+fn fixture_with_inner() -> Fixture {
+    let sandbox = Sandbox::new();
+    let ws = sandbox
+        .workspace(&sandbox.work().join("ws"))
+        .repo("a")
+        .repo("b")
+        .nested("platform", |w| {
+            w.repo("api").repo("core").nested("inner", |w| w.repo("x"))
+        })
+        .build();
+    Fixture { sandbox, ws }
+}
+
+/// In the fixture with `platform/inner`, after `set_up`: `meta <options> git
+/// worktree create s --repo <asked>` from `from` gives one warning;
+/// following its advice literally (`second`: its second choice) gives a set
+/// holding `wanted` (its place in the set) and no warning.
+fn follow(
+    set_up: impl Fn(&Fixture),
+    from: &str,
+    options: &[&str],
+    asked: &str,
+    second: bool,
+    wanted: &str,
+) {
+    let f = fixture_with_inner();
+    set_up(&f);
+    let dir = f.ws.join(from);
+    let create = |(more_options, more): (Vec<String>, Vec<String>)| {
+        let line = ["git", "worktree", "create", "s", "--repo", asked];
+        let words: Vec<&str> = options
+            .iter()
+            .copied()
+            .chain(more_options.iter().map(String::as_str))
+            .chain(line)
+            .chain(more.iter().map(String::as_str))
+            .collect();
+        meta_in(&f, &dir, &words)
+    };
+    let first = create((Vec::new(), Vec::new()));
+    let warnings = first["warnings"].as_array().unwrap();
+    let [warning] = warnings.as_slice() else {
+        panic!("{wanted}: {first}");
+    };
+    let warning = warning["message"].as_str().unwrap();
+    assert!(warning.contains("--repo "), "{wanted}: {warning}");
+    meta_in(&f, &dir, &["git", "worktree", "remove", "s"]);
+    let followed = create(advice(warning, second));
+    assert_eq!(followed["warnings"], json!([]), "{warning}: {followed}");
+    let data = &followed["results"][0]["data"];
+    let root = data["root"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{warning}: {followed}"));
+    let held = data["repos"].as_array().unwrap().iter().any(|r| {
+        r["path"]
+            .as_str()
+            .is_some_and(|p| Path::new(p).ends_with(wanted) && p.starts_with(root))
+    });
+    assert!(held, "{warning}: {followed}");
+}
+
+/// From inside a nested meta repo, a parent-level dependency's advice is
+/// `-A` (on the PR's fourth head it said `add -r`, which doesn't reach it);
+/// from the root, `add -r`.
 #[test]
 fn following_a_warning_literally_adds_the_repo() {
-    for (core, from, asked, wanted) in [
-        (json!({"depends_on": ["b"]}), "platform", "core", "b"),
-        (json!({"depends_on": ["b-cap"]}), "platform", "core", "b"),
-        (
-            json!({"depends_on": ["core"]}),
-            ".",
-            "platform/api",
-            "platform/core",
-        ),
-    ] {
-        let f = fixture();
+    let core_on = |dep: &'static str| {
+        move |f: &Fixture| f.config("platform", "core", json!({"depends_on": [dep]}))
+    };
+    follow(core_on("b"), "platform", &[], "core", false, "b");
+    let by_capability = |f: &Fixture| {
         f.config(".", "b", json!({"provides": ["b-cap"]}));
-        f.config("platform", "core", core.clone());
-        let dir = f.ws.join(from);
-        let create = |(options, more): (Vec<String>, Vec<String>)| {
-            let line = ["git", "worktree", "create", "s", "--repo", asked];
-            let words: Vec<&str> = options
-                .iter()
-                .map(String::as_str)
-                .chain(line)
-                .chain(more.iter().map(String::as_str))
-                .collect();
-            meta_in(&f, &dir, &words)
-        };
-        let first = create((Vec::new(), Vec::new()));
-        let warnings = first["warnings"].as_array().unwrap();
-        let [warning] = warnings.as_slice() else {
-            panic!("{core}: {first}");
-        };
-        let warning = warning["message"].as_str().unwrap();
-        meta_in(&f, &dir, &["git", "worktree", "remove", "s"]);
-        let followed = create(advice(warning));
-        assert_eq!(
-            followed["warnings"],
-            json!([]),
-            "{core} {warning}: {followed}"
-        );
-        let repos = followed["results"][0]["data"]["repos"].as_array().unwrap();
-        let root = followed["results"][0]["data"]["root"].as_str().unwrap();
-        assert!(
-            repos
-                .iter()
-                .any(|r| r["path"] == json!(Path::new(root).join(wanted).display().to_string())),
-            "{core} {warning}: {followed}"
-        );
-    }
+        core_on("b-cap")(f);
+    };
+    follow(by_capability, "platform", &[], "core", false, "b");
+    let api_on_core = |f: &Fixture| f.config("platform", "api", json!({"depends_on": ["core"]}));
+    follow(
+        api_on_core,
+        ".",
+        &[],
+        "platform/api",
+        false,
+        "platform/core",
+    );
+}
+
+/// The advice names a repo of the folder's tree by its path from there (on
+/// the PR's fifth head, by its path from the root, which `platform/` reads
+/// as unknown): a capability of a nested meta repo, with `-r`.
+#[test]
+fn from_a_nested_meta_repo_the_advice_names_a_capability_s_repo_from_there() {
+    let set_up = |f: &Fixture| {
+        f.config("platform/inner", "x", json!({"provides": ["x-cap"]}));
+        f.config("platform", "api", json!({"depends_on": ["x-cap"]}));
+    };
+    follow(set_up, "platform", &["-r"], "api", false, "inner/x");
+}
+
+/// The same for the second choice of "only -r follows": a path into a nested
+/// meta repo, without `-r`.
+#[test]
+fn from_a_nested_meta_repo_the_second_choice_names_the_repo_from_there() {
+    let set_up = |f: &Fixture| f.config("platform", "api", json!({"depends_on": ["inner/x"]}));
+    follow(set_up, "platform", &[], "api", true, "inner/x");
+}
+
+/// The same for a name whose project has another `path:`, under `-r`.
+#[test]
+fn from_a_nested_meta_repo_a_name_with_another_path_is_named_from_there() {
+    let set_up = |f: &Fixture| {
+        std::fs::create_dir_all(f.ws.join("platform/libs")).unwrap();
+        std::fs::rename(f.ws.join("platform/core"), f.ws.join("platform/libs/core")).unwrap();
+        f.config("platform", "core", json!({"path": "libs/core"}));
+        f.config("platform", "api", json!({"depends_on": ["core"]}));
+    };
+    follow(set_up, "platform", &["-r"], "api", false, "libs/core");
 }
 
 /// What the guidance says `-r` does follow: a path from the workspace root,

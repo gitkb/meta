@@ -5,47 +5,23 @@ include Makefile.context.mk
 
 .DEFAULT_GOAL := build-all
 
-# Build everything for development (plugins go to .meta/plugins/ for local discovery)
-build-all: build build-plugins
+build-all: build
 
 build:
 	cargo build
 
-# Build plugins and install to project-local .meta/plugins/ (for development)
-build-plugins:
-	cargo build --release -p meta_git_cli
-	cargo build --release -p meta_rust_cli
-	mkdir -p .meta/plugins
-	cp target/release/meta-git .meta/plugins/meta-git
-	cp target/release/meta-cargo .meta/plugins/meta-cargo
+# Every program the workspace declares as a [[bin]] (scripts/programs.py
+# lists them), installed globally via cargo install. --force replaces any
+# binary of the same name, e.g. one from a release download
+install:
+	@dirs=$$(python3 scripts/programs.py packages --dirs) && for dir in $$dirs; do \
+		cargo install --locked --force --path "$$dir" || exit 1; \
+	done
 
-# Crates whose binaries `make install` and `make uninstall` handle: the
-# binaries release.yml ships
-BIN_CRATES := meta_cli meta_git_cli meta_rust_cli meta_mcp loop_cli
+install-all: install
 
-# Install meta, its plugins, meta-mcp and loop globally via cargo install.
-# --force replaces any binary of the same name, e.g. one from a release download
-install: $(BIN_CRATES:%=install-%)
-
-$(BIN_CRATES:%=install-%): install-%:
-	cargo install --locked --force --path $*
-
-# Install plugins globally to ~/.meta/plugins/
-install-plugins: build-plugins
-	mkdir -p ~/.meta/plugins
-	cp target/release/meta-git ~/.meta/plugins/meta-git
-	cp target/release/meta-cargo ~/.meta/plugins/meta-cargo
-
-# Install everything globally (meta binary + plugins to both cargo bin and ~/.meta/plugins/)
-install-all: install install-plugins
-
-clean: clean-plugins
+clean:
 	cargo clean
-
-clean-plugins:
-	rm -rf .meta/plugins
-
-rebuild-plugins: clean-plugins build-plugins
 
 # Install git hooks (commit-msg validates release-safe subjects; pre-push runs CI checks locally)
 # Uses git rev-parse to handle worktrees and submodules correctly
@@ -113,12 +89,10 @@ integration-test:
 	cargo build -p meta
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) META_CLI_PATH=target/debug/meta CARGO_BIN_EXE_meta=target/debug/meta cargo nextest run --workspace
 
-uninstall: $(BIN_CRATES:%=uninstall-%)
-	rm -f ~/.meta/plugins/meta-git ~/.meta/plugins/meta-cargo
+# By package name, so it still matches after a version bump since the install
+uninstall:
+	@packages=$$(python3 scripts/programs.py packages) && for package in $$packages; do \
+		cargo uninstall "$$package" || true; \
+	done
 
-# By package name (from the crate's [package] section), so it still matches
-# after a version bump since the install
-$(BIN_CRATES:%=uninstall-%): uninstall-%:
-	-cargo uninstall $$(sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"/\1/p' $*/Cargo.toml)
-
-.PHONY: install $(BIN_CRATES:%=install-%) uninstall $(BIN_CRATES:%=uninstall-%) install-hooks build run test bats release integration-test
+.PHONY: build-all install install-all uninstall clean install-hooks build run test bats release integration-test

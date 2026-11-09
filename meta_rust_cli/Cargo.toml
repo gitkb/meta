@@ -16,7 +16,7 @@ name = "meta_rust_cli"
 path = "src/lib.rs"
 
 [dependencies]
-meta_plugin = { workspace = true, features = ["parse"] }
+meta_plugin.workspace = true
 indexmap.workspace = true
 
 [dev-dependencies]

@@ -35,7 +35,7 @@ enum Check {
     Copies(&'static [(&'static str, &'static str)]),
 }
 
-const GROUPS: [(u8, &str, Check); 16] = [
+const GROUPS: [(u8, &str, Check); 15] = [
     (
         2,
         "git worktree's subcommands: declared once",
@@ -58,10 +58,6 @@ const GROUPS: [(u8, &str, Check); 16] = [
         6,
         "help and usage: rendered from the declarations",
         Check::Copies(&[
-            (
-                "meta_rust_cli/src/main.rs",
-                "usage: \"Usage: meta cargo <CARGO_ARGS>...\"",
-            ),
             ("meta_cli/src/main.rs", "fn as_typed_help"),
             ("meta_cli/src/main.rs", "fn help_with_plugins"),
             ("meta_plugin/src/lib.rs", "pub fn help_text"),
@@ -79,11 +75,6 @@ const GROUPS: [(u8, &str, Check); 16] = [
     ),
     (11, "exit codes: meta_plugin::exit", Check::Rule(exit_codes)),
     (12, "--json output: one envelope", Check::Rule(one_envelope)),
-    (
-        17,
-        "the installed binaries: listed once, by cargo",
-        Check::Copies(&[("install.sh", "meta-git")]),
-    ),
     (
         18,
         "the Homebrew formula: release.yml's",

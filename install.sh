@@ -108,23 +108,23 @@ install_meta() {
     fi
 
     info "Extracting..."
-    tar -xzf "${tmp_dir}/${asset}" -C "$tmp_dir"
+    local programs="${tmp_dir}/programs"
+    mkdir "$programs"
+    tar -xzf "${tmp_dir}/${asset}" -C "$programs"
+    if [ ! -f "$programs/meta" ]; then
+        error "${asset} holds no meta; nothing was installed"
+    fi
 
     # Create install directory if needed
     mkdir -p "$INSTALL_DIR"
 
-    # Install binaries
+    # Install the programs the release holds
     info "Installing to ${INSTALL_DIR}..."
-    local expected_binaries=("meta" "meta-git" "meta-cargo" "meta-mcp" "loop")
-    for binary_name in "${expected_binaries[@]}"; do
-        local binary="$tmp_dir/$binary_name"
-        if [ -f "$binary" ]; then
-            cp "$binary" "$INSTALL_DIR/"
-            chmod +x "$INSTALL_DIR/$binary_name"
-            info "Installed $binary_name"
-        else
-            warn "$binary_name is not in this release; build main to get it (see the first lines above)"
-        fi
+    local binary
+    for binary in "$programs"/*; do
+        cp "$binary" "$INSTALL_DIR/"
+        chmod +x "$INSTALL_DIR/${binary##*/}"
+        info "Installed ${binary##*/}"
     done
 
     # Check if INSTALL_DIR is in PATH

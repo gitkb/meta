@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
+      - scripts/programs.py
   workflow_dispatch:
 
 permissions:
@@ -28,26 +29,21 @@ jobs:
         include:
           - target: x86_64-apple-darwin
             os: macos-latest
-            binary_name: meta
             asset_name: meta-darwin-x64.tar.gz
           - target: aarch64-apple-darwin
             os: macos-latest
-            binary_name: meta
             asset_name: meta-darwin-arm64.tar.gz
           # Linux builds run on Homebrew's Linux floor (the homebrew/brew
           # image is Ubuntu 22.04, glibc 2.35): a binary needs the glibc it
           # was linked against, and ubuntu-latest's is newer
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
-            binary_name: meta
             asset_name: meta-linux-x64.tar.gz
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04-arm
-            binary_name: meta
             asset_name: meta-linux-arm64.tar.gz
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            binary_name: meta.exe
             asset_name: meta-windows-x64.zip
 
     steps:
@@ -60,26 +56,12 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build release binaries
-        run: |
-          cargo build --release --target ${{ matrix.target }} -p meta --locked
-          cargo build --release --target ${{ matrix.target }} -p meta_git_cli --locked
-          cargo build --release --target ${{ matrix.target }} -p meta_rust_cli --locked
-          cargo build --release --target ${{ matrix.target }} -p meta-mcp --locked
-          cargo build --release --target ${{ matrix.target }} -p loop_cli --locked
+        run: cargo build --release --target ${{ matrix.target }} --workspace --bins --locked
 
+      # The archive holds exactly the workspace's [[bin]] programs
       - name: Package (Unix)
         if: runner.os != 'Windows'
-        run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dist/
-          cp target/${{ matrix.target }}/release/meta-git dist/
-          cp target/${{ matrix.target }}/release/meta-cargo dist/
-          cp target/${{ matrix.target }}/release/meta-mcp dist/
-          cp target/${{ matrix.target }}/release/loop dist/
-          cd dist
-          tar -czvf ../${{ matrix.asset_name }} *
-          cd ..
-          shasum -a 256 ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
+        run: python3 scripts/programs.py package target/${{ matrix.target }}/release dist ${{ matrix.asset_name }}
 
       # Homebrew's floor, so a runner image change can't ship binaries that
       # fail with "version `GLIBC_2.xx' not found" on users' machines
@@ -102,17 +84,7 @@ jobs:
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
-        run: |
-          mkdir dist
-          copy target\${{ matrix.target }}\release\${{ matrix.binary_name }} dist\
-          copy target\${{ matrix.target }}\release\meta-git.exe dist\
-          copy target\${{ matrix.target }}\release\meta-cargo.exe dist\
-          copy target\${{ matrix.target }}\release\meta-mcp.exe dist\
-          copy target\${{ matrix.target }}\release\loop.exe dist\
-          cd dist
-          7z a -tzip ..\${{ matrix.asset_name }} *
-          cd ..
-          certutil -hashfile ${{ matrix.asset_name }} SHA256 > ${{ matrix.asset_name }}.sha256
+        run: python scripts/programs.py package target/${{ matrix.target }}/release dist ${{ matrix.asset_name }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -296,67 +268,9 @@ jobs:
         env:
           TAG: ${{ needs.release.outputs.tag }}
 
-      - name: Calculate checksums
-        id: checksums
-        run: |
-          # Read checksums from sha256 files
-          DARWIN_ARM64=$(cat artifacts/meta-darwin-arm64.tar.gz/meta-darwin-arm64.tar.gz.sha256 | awk '{print $1}')
-          DARWIN_X64=$(cat artifacts/meta-darwin-x64.tar.gz/meta-darwin-x64.tar.gz.sha256 | awk '{print $1}')
-          LINUX_ARM64=$(cat artifacts/meta-linux-arm64.tar.gz/meta-linux-arm64.tar.gz.sha256 | awk '{print $1}')
-          LINUX_X64=$(cat artifacts/meta-linux-x64.tar.gz/meta-linux-x64.tar.gz.sha256 | awk '{print $1}')
-
-          echo "darwin_arm64=$DARWIN_ARM64" >> $GITHUB_OUTPUT
-          echo "darwin_x64=$DARWIN_X64" >> $GITHUB_OUTPUT
-          echo "linux_arm64=$LINUX_ARM64" >> $GITHUB_OUTPUT
-          echo "linux_x64=$LINUX_X64" >> $GITHUB_OUTPUT
-
+      # It installs what the archives hold
       - name: Generate Homebrew formula
-        run: |
-          cat > meta-cli.rb << 'FORMULA'
-          # typed: false
-          # frozen_string_literal: true
-
-          class MetaCli < Formula
-            desc "Multi-repo management CLI with AI integration"
-            homepage "https://github.com/gitkb/meta"
-            version "${{ steps.version.outputs.version }}"
-            license "MIT"
-
-            on_macos do
-              on_arm do
-                url "https://github.com/gitkb/meta/releases/download/v#{version}/meta-darwin-arm64.tar.gz"
-                sha256 "${{ steps.checksums.outputs.darwin_arm64 }}"
-              end
-              on_intel do
-                url "https://github.com/gitkb/meta/releases/download/v#{version}/meta-darwin-x64.tar.gz"
-                sha256 "${{ steps.checksums.outputs.darwin_x64 }}"
-              end
-            end
-
-            on_linux do
-              on_arm do
-                url "https://github.com/gitkb/meta/releases/download/v#{version}/meta-linux-arm64.tar.gz"
-                sha256 "${{ steps.checksums.outputs.linux_arm64 }}"
-              end
-              on_intel do
-                url "https://github.com/gitkb/meta/releases/download/v#{version}/meta-linux-x64.tar.gz"
-                sha256 "${{ steps.checksums.outputs.linux_x64 }}"
-              end
-            end
-
-            def install
-              bin.install "meta"
-              bin.install "meta-git"
-              bin.install "meta-cargo"
-              bin.install "meta-mcp"
-              bin.install "loop"
-            end
-
-            test do
-              system "#{bin}/meta", "--version"
-            end
-          end
-          FORMULA
+        run: python3 scripts/programs.py formula "${{ steps.version.outputs.version }}" artifacts/*/meta-*.tar.gz > meta-cli.rb
 
       - name: Push to Homebrew tap
         env:

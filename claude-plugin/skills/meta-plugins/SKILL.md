@@ -39,7 +39,7 @@ Handles all `meta git *` commands with special cases:
 
 ### Cargo Plugin (`meta-cargo`)
 
-Runs any cargo command in each selected repo that has a `Cargo.toml`, skipping the rest (listed on stderr). `meta exec -- cargo ...` runs cargo in every repo instead.
+Runs any cargo command in each selected repo that has a `Cargo.toml`. A repo without one is skipped, and named (under `--json`, in the envelope's `skipped`). A repo that isn't cloned is a warning (under `--json`, in `warnings`), with `--strict` an error. `meta exec -- cargo ...` runs cargo in every repo instead.
 
 ```bash
 meta cargo build --release   # cargo build --release in each Rust repo

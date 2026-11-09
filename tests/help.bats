@@ -86,12 +86,12 @@ setup() {
 
     run "$META_BIN" cargo --help
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Pass-through: every cargo command runs as typed in each selected repo"* ]]
+    [[ "$output" == *"Pass-through: every cargo command runs as typed in each selected repo it applies to"* ]]
     [[ "$output" != *"Commands:"* ]]
     run "$META_BIN" cargo build --help
     [ "$status" -eq 0 ]
-    [[ "${lines[0]}" == '`meta cargo build` runs as typed (`cargo build`) in each selected repo.' ]]
-    [[ "$output" == *"Current scope: no repos here"* ]]
+    [[ "${lines[0]}" == '`meta cargo build` runs as typed (`cargo build`) in each selected repo it applies to.' ]]
+    [[ "$output" == *"Selected: no repos here"* ]]
     [[ "$output" == *"For cargo's own options: cargo build --help"* ]]
     [[ "$output" != *"No Rust projects found"* ]]
 }
@@ -249,7 +249,7 @@ EOF
 
     run "$META_BIN" git --help
     [[ "$output" == *"Usage: meta [OPTIONS] git <COMMAND>"* ]]
-    [[ "$output" == *"Pass-through: any other git command runs as typed in each selected repo, git's own extensions on PATH included"* ]]
+    [[ "$output" == *"Pass-through: any other git command runs as typed in each selected repo it applies to, git's own extensions on PATH included"* ]]
 
     for words in "fake --help" "help fake" "fake"; do
         run "$META_BIN" $words
@@ -269,7 +269,7 @@ EOF
     for words in "git pull --help" "help git pull"; do
         run "$META_BIN" $words
         [ "$status" -eq 0 ]
-        [[ "${lines[0]}" == '`meta git pull` runs as typed (`git pull`) in each selected repo.' ]]
+        [[ "${lines[0]}" == '`meta git pull` runs as typed (`git pull`) in each selected repo it applies to.' ]]
         [[ "$output" == *"For git's own options: git pull --help"* ]]
     done
 }

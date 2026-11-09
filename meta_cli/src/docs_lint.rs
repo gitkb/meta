@@ -608,11 +608,15 @@ fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
     // the test runs from target/<profile>/deps, next to the binaries
     let exe = std::env::current_exe().unwrap();
     let bin = exe.parent().and_then(Path::parent).unwrap();
-    // the plugin guide's example plugin serves `meta hello`
-    for plugin in ["meta-git", "meta-cargo", "examples/meta-hello"] {
+    // meta's programs, and the plugin guide's example plugin (`meta hello`)
+    for program in programs(root)
+        .iter()
+        .map(String::as_str)
+        .chain(["examples/meta-hello"])
+    {
         assert!(
-            bin.join(plugin).is_file(),
-            "{plugin} is not in {}: build the workspace first (cargo build --workspace --bins --examples)",
+            bin.join(program).is_file(),
+            "{program} is not in {}: build the workspace first (cargo build --workspace --bins --examples)",
             bin.display()
         );
     }
@@ -662,6 +666,41 @@ fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
         lines.len(),
         rejected.join("\n")
     );
+}
+
+/// The workspace's programs: its packages' bin targets, as cargo lists them.
+fn programs(root: &Path) -> Vec<String> {
+    let out = Command::new(env!("CARGO"))
+        .args([
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
+        .arg(root.join("Cargo.toml"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    metadata["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|package| package["targets"].as_array().unwrap())
+        .filter(|target| {
+            target["kind"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|kind| kind == "bin")
+        })
+        .map(|target| target["name"].as_str().unwrap().to_string())
+        .collect()
 }
 
 /// The commands meta or its plugins own, as the words that name them: meta's

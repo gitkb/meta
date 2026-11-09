@@ -160,6 +160,18 @@ impl Warning {
             project: Some(project.into()),
         }
     }
+
+    /// A selected project that is listed but not cloned, so nothing ran in
+    /// it: every plugin says it the same way.
+    pub fn not_cloned(project: &str) -> Self {
+        Warning::about(
+            project,
+            format!(
+                "{} is not cloned; `meta git clone-missing` clones it",
+                crate::display::escape(project)
+            ),
+        )
+    }
 }
 
 impl From<String> for Warning {

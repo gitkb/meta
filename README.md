@@ -140,9 +140,9 @@ git clone https://github.com/gitkb/meta && make -C meta install
 ```
 
 This builds meta from the main branch with the committed `Cargo.lock` and
-installs `meta`, the `meta-git` and `meta-cargo` plugins,
-`meta-mcp` and `loop` into `~/.cargo/bin` (the crates in the Makefile's
-`BIN_CRATES`), replacing any copies already there, with your default
+installs `meta` and every other program its crates declare (their
+`[[bin]]` targets: `python3 scripts/programs.py bins` lists them) into
+`~/.cargo/bin`, replacing any copies already there, with your default
 stable toolchain. `meta --version` names the commit it was built from
 (as in `<version> (git 1c96c7e 2026-11-03)`), and `meta --version --json`
 prints it as `{"version", "source", "commit", "branch", "dirty", "built"}`,
@@ -431,7 +431,7 @@ $ meta git clone --help
 Git options: of git clone's own, only --depth, given to each clone.
 
 $ meta git pull --help
-`meta git pull` runs as typed (`git pull`) in each selected repo.
+`meta git pull` runs as typed (`git pull`) in each selected repo it applies to.
 ...
 For git's own options: git pull --help
 ```

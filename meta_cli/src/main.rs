@@ -862,9 +862,9 @@ fn as_typed_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin, tool: &s
         .map(|note| format!("\n{}\n", escape(note)))
         .unwrap_or_default();
     format!(
-        "`meta {typed}` runs as typed (`{run}`) in each selected repo.\n\n\
+        "`meta {typed}` runs as typed (`{run}`) in each selected repo it applies to.\n\n\
          Usage: meta [META_OPTIONS] {typed} [{}_ARGS...]\n\n\
-         Current scope: {scope}\n\n\
+         Selected: {scope}\n\n\
          Meta options (before `{word}`):\n{}\n\n\
          Examples:\n  meta {typed}\n  meta --dry-run {typed}\n  meta --recursive --dry-run {typed}\n\n\
          For {tool}'s own options: {run} --help\n{note}",

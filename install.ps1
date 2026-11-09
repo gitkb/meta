@@ -73,7 +73,8 @@ function Install-Meta {
     Get-Download "$baseUrl/$asset" $zipPath
     Get-Download "$baseUrl/$asset.sha256" $checksumPath
 
-    # The release publishes certutil output: a header line, the hash, a footer line
+    # The hash is the file's first 64 hex digits (older releases published certutil
+    # output: a header line, the hash, a footer line)
     Write-Info "Verifying checksum..."
     $expected = [regex]::Match("$(Get-Content -Raw $checksumPath)", '\b[0-9a-fA-F]{64}\b').Value
     if (-not $expected) {
@@ -85,10 +86,14 @@ function Install-Meta {
     }
 
     Write-Info "Extracting..."
+    $programs = Join-Path $tempDir "programs"
     try {
-        Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
+        Expand-Archive -Path $zipPath -DestinationPath $programs -Force
     } catch {
         Write-Err "Failed to extract archive: $_"
+    }
+    if (-not (Test-Path (Join-Path $programs "meta.exe"))) {
+        Write-Err "$asset holds no meta.exe; nothing was installed"
     }
 
     # Create install directory if needed
@@ -96,17 +101,11 @@ function Install-Meta {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     }
 
-    # Install binaries
+    # Install the programs the release holds
     Write-Info "Installing to $InstallDir..."
-    $expectedBinaries = @("meta.exe", "meta-git.exe", "meta-cargo.exe", "meta-mcp.exe", "loop.exe")
-    foreach ($binary in $expectedBinaries) {
-        $binaryPath = Join-Path $tempDir $binary
-        if (Test-Path $binaryPath) {
-            Copy-Item $binaryPath -Destination $InstallDir -Force
-            Write-Info "Installed $binary"
-        } else {
-            Write-Warn "$binary is not in this release; build main to get it (see the first lines above)"
-        }
+    foreach ($binary in Get-ChildItem -Path $programs -File) {
+        Copy-Item $binary.FullName -Destination $InstallDir -Force
+        Write-Info "Installed $($binary.Name)"
     }
 
     # Cleanup

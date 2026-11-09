@@ -142,6 +142,12 @@ install_meta() {
         cp "$binary" "$INSTALL_DIR/"
         chmod +x "$INSTALL_DIR/${binary##*/}"
         info "Installed ${binary##*/}"
+        # a copy that `make install-plugins` once put there: meta would run
+        # it before the one just installed
+        if [ -f "$HOME/.meta/plugins/${binary##*/}" ]; then
+            rm -f "$HOME/.meta/plugins/${binary##*/}"
+            info "Removed the old copy in ~/.meta/plugins/${binary##*/}"
+        fi
     done
 
     # Check if INSTALL_DIR is in PATH

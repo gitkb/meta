@@ -63,10 +63,14 @@ run_ps1() {
 }
 
 @test "install.sh installs every program of a release whose checksum matches" {
+    # copies an old `make install-plugins` left, which meta would run first
+    mkdir -p "$HOME/.meta/plugins"
+    touch "$HOME/.meta/plugins/meta-cargo" "$HOME/.meta/plugins/meta-other"
     run bash "$BATS_TEST_DIRNAME/../install.sh"
     [ "$status" -eq 0 ]
     [[ "$output" == *"Installation complete"* ]]
     [ "$(ls "$INSTALL_DIR" | sort)" = "$(sort <<< "$BINS")" ]
+    [ "$(ls "$HOME/.meta/plugins")" = "meta-other" ]
     for binary in $BINS; do
         run "$INSTALL_DIR/$binary"
         [ "$output" = "$binary 1.0.0" ]

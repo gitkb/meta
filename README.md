@@ -142,8 +142,9 @@ git clone https://github.com/gitkb/meta && make -C meta install
 This builds meta from the main branch with the committed `Cargo.lock` and
 installs `meta` and every other program its crates declare (their
 `[[bin]]` targets: `python3 scripts/programs.py bins` lists them) into
-`~/.cargo/bin`, replacing any copies already there, with your default
-stable toolchain. `meta --version` names the commit it was built from
+`~/.cargo/bin`, replacing any copies already there (and deleting copies of
+them in `~/.meta/plugins`, which meta would otherwise run first), with your
+default stable toolchain. `meta --version` names the commit it was built from
 (as in `<version> (git 1c96c7e 2026-11-03)`), and `meta --version --json`
 prints it as `{"version", "source", "commit", "branch", "dirty", "built"}`,
 each git field `null` in a build from outside a git checkout, and `dirty`

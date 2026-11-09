@@ -107,15 +107,9 @@ install_meta() {
         error "Checksum mismatch for ${asset}; nothing was installed\n  Expected: ${expected}\n  Actual:   ${actual}"
     fi
 
-    info "Extracting..."
-    local programs="${tmp_dir}/programs"
-    mkdir "$programs"
-    tar -xzf "${tmp_dir}/${asset}" -C "$programs"
-    if [ ! -f "$programs/meta" ]; then
-        error "${asset} holds no meta; nothing was installed"
-    fi
     # Each member must be a program, once: an executable file at the top
-    # level. Anything else and nothing is installed.
+    # level. Anything else and nothing is installed. Names are checked
+    # before anything is extracted.
     local name twice
     twice=$(tar -tzf "${tmp_dir}/${asset}" | sort | uniq -d | head -n 1)
     if [ -n "$twice" ]; then
@@ -126,6 +120,14 @@ install_meta() {
             */* | .*) error "${asset} holds ${name}, not a program at its top level; nothing was installed" ;;
         esac
     done < <(tar -tzf "${tmp_dir}/${asset}")
+
+    info "Extracting..."
+    local programs="${tmp_dir}/programs"
+    mkdir "$programs"
+    tar -xzf "${tmp_dir}/${asset}" -C "$programs"
+    if [ ! -f "$programs/meta" ]; then
+        error "${asset} holds no meta; nothing was installed"
+    fi
     for name in "$programs"/*; do
         if [ ! -f "$name" ] || [ -L "$name" ] || [ ! -x "$name" ]; then
             error "${asset} holds ${name##*/}, which is not an executable file; nothing was installed"

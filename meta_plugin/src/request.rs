@@ -228,6 +228,10 @@ pub struct Project {
     /// on 'db', which 'a' and 'b' provide; 'b' is used")
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependency_problems: Vec<String>,
+    /// Dependencies that name a repo this config's create doesn't follow:
+    /// said only when the set won't hold that repo.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub left_out: Vec<LeftOut>,
     /// Whether its config says it is a meta repo (`meta: true`): one with a
     /// `.meta.yaml` of its own listing projects
     #[serde(default)]
@@ -285,32 +289,12 @@ impl Request {
     }
 }
 
-/// The dependency problem for a repo, at `path` from the workspace root,
-/// that a create doesn't follow: one only `-r` follows (`only_r`), or one at
-/// another nesting level, which `-r` doesn't follow either.
-/// [`unfollowed_repo`] reads the repo back, so a create says it only when
-/// the set won't hold that repo.
-pub fn unfollowed(path: &str, only_r: bool) -> String {
-    let path = crate::display::escape(path);
-    match only_r {
-        true => format!(
-            "depends on '{path}', which only -r follows: add -r, or name it with --repo {path}"
-        ),
-        false => format!(
-            "depends on '{path}', at another nesting level: -r doesn't follow a dependency \
-             across nesting levels, so name it (with -A, from anywhere) with --repo {path}"
-        ),
-    }
-}
-
-/// The repo (its path, escaped as shown) an [`unfollowed`] problem names,
-/// and whether only `-r` follows it; None for any other problem.
-pub fn unfollowed_repo(problem: &str) -> Option<(&str, bool)> {
-    let rest = problem.strip_prefix("depends on '")?;
-    let (path, rest) = rest.split_once('\'')?;
-    match rest {
-        _ if rest.starts_with(", which only -r follows: ") => Some((path, true)),
-        _ if rest.starts_with(", at another nesting level: ") => Some((path, false)),
-        _ => None,
-    }
+/// A dependency a create doesn't follow, which names one repo: that repo,
+/// by its path from the workspace root, and what to say when the set won't
+/// hold it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeftOut {
+    pub repo: String,
+    pub problem: String,
 }

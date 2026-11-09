@@ -64,6 +64,7 @@ fn projects(repos: &[Candidate], root: &Path) -> Vec<Project> {
                 tags: repo.tags().to_vec(),
                 depends_on: info.map(|i| i.depends_on.clone()).unwrap_or_default(),
                 dependency_problems: Vec::new(),
+                left_out: Vec::new(),
                 meta: info.is_some_and(|i| i.meta),
                 level: None,
                 present: repo.dir.exists(),
@@ -115,8 +116,8 @@ fn workspace(
 /// it), through what a project provides too. A member outside the reach
 /// keeps its entries as written. An entry that names nothing there but one
 /// repo elsewhere in `whole_tree` (the whole workspace) is a problem naming
-/// that repo ([`meta_plugin::request::unfollowed`]): one only `-r` follows,
-/// or one at another nesting level, which `-r` doesn't follow either.
+/// that repo: the member's `left_out`, which a create says only when the
+/// set won't hold that repo.
 fn resolve_dependencies(
     reach: &Reach,
     root: &Path,
@@ -181,11 +182,11 @@ fn resolve_dependencies(
     for member in members.iter_mut() {
         let Some((_, key, info)) = keyed.iter().find(|(dir, _, _)| *dir == member.abs) else {
             // outside the reach (a nested repo without -r): only what
-            // another level holds is said
-            member.dependency_problems = member
+            // names one repo elsewhere is said
+            member.left_out = member
                 .depends_on
                 .iter()
-                .filter_map(|dep| elsewhere.problem(&member.abs, dep))
+                .filter_map(|dep| elsewhere.left_out(&member.abs, dep, flat))
                 .collect();
             continue;
         };
@@ -209,32 +210,42 @@ fn resolve_dependencies(
                 .cloned()
                 .unwrap_or_else(|| qualified.to_string())
         };
-        member.dependency_problems = problems
-            .iter()
-            .map(|problem| match problem {
-                meta_core::dependency_graph::DependencyProblem::Unresolved(dep) => elsewhere
-                    .problem(&member.abs, &written(dep))
-                    .unwrap_or_else(|| match flat {
-                        true => format!("{problem} (nested projects count with -r)"),
-                        false => problem.to_string(),
-                    }),
-                _ => problem.to_string(),
-            })
-            .collect();
+        member.dependency_problems = Vec::new();
+        for problem in problems {
+            let left_out = match problem {
+                meta_core::dependency_graph::DependencyProblem::Unresolved(dep) => {
+                    elsewhere.left_out(&member.abs, &written(dep), flat)
+                }
+                _ => None,
+            };
+            match (left_out, problem) {
+                (Some(left_out), _) => member.left_out.push(left_out),
+                (None, meta_core::dependency_graph::DependencyProblem::Unresolved(_)) if flat => {
+                    member
+                        .dependency_problems
+                        .push(format!("{problem} (nested projects count with -r)"));
+                }
+                (None, _) => member.dependency_problems.push(problem.to_string()),
+            }
+        }
     }
 }
 
 /// Every project of the whole workspace, for an entry the reach can't
-/// resolve: which one repo elsewhere it names.
+/// resolve: which one repo elsewhere it names, and whether `-r` follows it.
 struct Elsewhere<'a> {
     /// Each project's folder, its path from the root, the place of the meta
     /// repo that lists it (`platform/`, empty at the top), its info
     projects: Vec<(&'a Path, String, String, &'a config::ProjectInfo)>,
+    /// The whole tree's graph as `-r` resolves it (by path, an entry
+    /// qualified with its meta repo's place)
+    recursive: meta_core::dependency_graph::DependencyGraph,
 }
 
 impl<'a> Elsewhere<'a> {
     fn of(whole_tree: &'a [Candidate], root: &Path) -> Self {
-        let projects = whole_tree
+        use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
+        let projects: Vec<_> = whole_tree
             .iter()
             .filter_map(|repo| {
                 let info = repo.info.as_ref()?;
@@ -247,14 +258,40 @@ impl<'a> Elsewhere<'a> {
                 Some((repo.dir.as_path(), path, prefix, info))
             })
             .collect();
-        Self { projects }
+        let keys: std::collections::HashSet<&str> =
+            projects.iter().map(|(_, path, ..)| path.as_str()).collect();
+        let mut nodes: Vec<ProjectDependencies> = projects
+            .iter()
+            .map(|(_, path, prefix, info)| {
+                let qualify = |name: &String| match keys.contains(name.as_str()) || name == "." {
+                    true => name.clone(),
+                    false => format!("{prefix}{name}"),
+                };
+                ProjectDependencies {
+                    name: path.clone(),
+                    path: path.clone(),
+                    repo: info.repo.clone(),
+                    tags: info.tags.clone(),
+                    provides: info.provides.iter().map(qualify).collect(),
+                    depends_on: info.depends_on.iter().map(qualify).collect(),
+                }
+            })
+            .collect();
+        nodes.sort_by(|a, b| a.name.cmp(&b.name));
+        Self {
+            recursive: DependencyGraph::build(nodes),
+            projects,
+        }
     }
 
-    /// The problem for the entry `dep` of the project at `dir`, when it
-    /// names one repo: of its own config first (by name, path or what it
-    /// provides), else anywhere. None when it names none or several.
-    fn problem(&self, dir: &Path, dep: &str) -> Option<String> {
-        let (_, _, prefix, _) = self.projects.iter().find(|(d, ..)| *d == dir)?;
+    /// The entry `dep` (as written) of the project at `dir`, when it names
+    /// one repo, of its own config first (by name, path or what it
+    /// provides), else anywhere: that repo, and what to say when the set
+    /// won't hold it (`flat`: the create has no `-r`). None when it names
+    /// none or several.
+    fn left_out(&self, dir: &Path, dep: &str, flat: bool) -> Option<meta_plugin::LeftOut> {
+        use meta_plugin::display::escape;
+        let (_, own_path, prefix, _) = self.projects.iter().find(|(d, ..)| *d == dir)?;
         let names = |(_, path, at, info): &&(&Path, String, String, &config::ProjectInfo)| {
             info.name == dep
                 || info.provides.iter().any(|p| p == dep)
@@ -276,10 +313,29 @@ impl<'a> Elsewhere<'a> {
                 .collect(),
             _ => own,
         };
-        let [(_, path, at, _)] = found.as_slice() else {
+        let [(_, path, ..)] = found.as_slice() else {
             return None;
         };
-        Some(meta_plugin::request::unfollowed(path, at == prefix))
+        let r_follows = self
+            .recursive
+            .get_dependencies(own_path)
+            .contains(&path.as_str());
+        let shown = escape(path);
+        let problem = match flat && r_follows {
+            true => format!(
+                "depends on '{shown}', which only -r follows: add -r, or name it with --repo {shown}"
+            ),
+            false => format!(
+                "depends on '{shown}' (written '{}'), which -r doesn't follow: it follows a path \
+                 from the workspace root, or a path or capability of the same .meta.yaml; name it \
+                 with --repo {shown}",
+                escape(dep)
+            ),
+        };
+        Some(meta_plugin::LeftOut {
+            repo: path.clone(),
+            problem,
+        })
     }
 }
 

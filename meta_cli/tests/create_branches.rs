@@ -409,7 +409,7 @@ fn r_names_a_dependency_across_levels_and_the_repo_to_add() {
     let said = text(&out);
     assert!(!f.set("t/platform/core").exists(), "{said}");
     assert!(
-        said.contains("'platform/core', at another nesting level")
+        said.contains("depends on 'platform/core' (written 'core-cap'), which -r doesn't follow")
             && said.trim_end().ends_with("--repo platform/core"),
         "{said}"
     );
@@ -474,9 +474,79 @@ fn from_a_nested_meta_repo_a_parent_level_dependency_is_named() {
         .unwrap();
     let said = text(&ok(out));
     assert!(
-        said.contains("depends on 'b', at another nesting level"),
+        said.contains("depends on 'b'") && said.contains("--repo b"),
         "{said}"
     );
+}
+
+/// Under `-r`, a dependency written as a project's name, where that project
+/// has another `path:`, isn't followed: it is said (on the PR's third head it
+/// wasn't), and once the set holds the repo nothing is.
+#[test]
+fn r_names_a_dependency_written_as_a_name_whose_path_differs() {
+    let f = fixture();
+    let rename = |from: &str, to: &str| {
+        fs::create_dir_all(f.ws.join(to).parent().unwrap()).unwrap();
+        fs::rename(f.ws.join(from), f.ws.join(to)).unwrap();
+    };
+    rename("b", "libs/b");
+    f.config(".", "b", json!({"path": "libs/b"}));
+    f.config(".", "a", json!({"depends_on": ["b"]}));
+    rename("platform/core", "platform/libs/core");
+    f.config("platform", "core", json!({"path": "libs/core"}));
+    for (asked, needed) in [("a", "libs/b"), ("platform/api", "platform/libs/core")] {
+        let line = [
+            "--strict", "-r", "git", "worktree", "create", "s", "--repo", asked,
+        ];
+        let out = f.meta(&line);
+        let said = text(&out);
+        assert!(!out.status.success(), "{said}");
+        assert!(said.contains(&format!("--repo {needed}")), "{said}");
+        assert!(!f.set("s").exists(), "{said}");
+        let out = ok(f.meta(&[&line[..], &["--repo", needed]].concat()));
+        assert!(f.set("s").join(needed).is_dir(), "{}", text(&out));
+        ok(f.meta(&["git", "worktree", "remove", "s"]));
+    }
+}
+
+/// The repo a warning names is data beside it, never read back from the
+/// text: an apostrophe in what the dependency is written as (config refuses
+/// one in a project's name or path, not in a capability) changes nothing.
+#[test]
+fn a_held_dependency_with_an_apostrophe_is_not_warned_about() {
+    let f = fixture();
+    f.config("platform", "core", json!({"provides": ["co're-cap"]}));
+    f.config("platform", "api", json!({"depends_on": ["co're-cap"]}));
+    let line = [
+        "--strict",
+        "git",
+        "worktree",
+        "create",
+        "s",
+        "--repo",
+        "platform/api",
+    ];
+    let out = f.meta(&line);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("--repo platform/core"),
+        "{}",
+        text(&out)
+    );
+    let out = ok(f.meta(&[&line[..], &["--repo", "platform/core"]].concat()));
+    assert!(!text(&out).contains("warning"), "{}", text(&out));
+}
+
+/// What the guidance says `-r` does follow: a path from the workspace root,
+/// across nesting levels too.
+#[test]
+fn r_follows_a_path_from_the_root_across_levels() {
+    let f = fixture();
+    f.config(".", "a", json!({"depends_on": ["platform/core"]}));
+    let out = ok(f.meta(&[
+        "--strict", "-r", "git", "worktree", "create", "s", "--repo", "a",
+    ]));
+    assert!(f.set("s/platform/core").is_dir(), "{}", text(&out));
 }
 
 #[test]

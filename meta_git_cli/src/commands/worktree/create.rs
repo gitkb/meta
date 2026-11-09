@@ -1115,13 +1115,13 @@ fn report_problems<'a>(
     repos: &[PlannedRepo],
     ctx: &Ctx,
 ) -> Result<()> {
-    // a repo meta named because this create doesn't follow it: said only
-    // when the set won't hold it
+    // a repo this create doesn't follow: said only when the set won't hold
+    // it
     let held = |path: &str| {
         index
             .members
             .iter()
-            .filter(|m| escape(&m.path) == path)
+            .filter(|m| m.path == path)
             .any(|m| repos.iter().any(|r| r.source == m.abs))
     };
     // a project reached twice is reported once
@@ -1130,12 +1130,12 @@ fn report_problems<'a>(
         let Some(node) = index.listed(project) else {
             continue;
         };
-        for problem in &node.project.dependency_problems {
-            match meta_plugin::request::unfollowed_repo(problem) {
-                Some((path, _)) if held(path) => continue,
-                Some((_, true)) if index.is_recursive() => continue,
-                _ => {}
+        for left_out in &node.project.left_out {
+            if !held(&left_out.repo) {
+                ctx.warn_or_bail(format!("'{}' {}", escape(project), left_out.problem))?;
             }
+        }
+        for problem in &node.project.dependency_problems {
             ctx.warn_or_bail(format!("'{}' {problem}", escape(project)))?;
         }
     }

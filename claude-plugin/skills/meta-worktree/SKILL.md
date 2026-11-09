@@ -40,11 +40,14 @@ workspace's sets.
 Run these from the workspace root. **Use `-r` when a repo you name, or one it
 depends on, is nested in a meta repo**, and `-A` when the target is at another
 nesting level than the folder you are in: without them a set holds only this
-level's repos. **`-r` doesn't follow a dependency across nesting levels** (a
-top-level repo that depends on a nested one, or the other way round): name that
-repo with `--repo` too. Each dependency the set won't hold is named in a warning
-that ends with the `--repo` that adds it (with `--strict`, an error, and nothing
-is made); `--no-deps` leaves dependencies out without a word.
+level's repos. `-r` follows a dependency written as a repo's path from the
+workspace root, across nesting levels too, and one written as a path or a
+capability (`provides`) of the dependent's own `.meta.yaml`. **It doesn't resolve
+a capability or a name from another nesting level, or a project name whose
+`path:` differs from it.** Each dependency the set won't hold is named in a
+warning that ends with the `--repo` that adds it: follow it (with `--strict`
+the warning is an error, and nothing is made). `--no-deps` leaves dependencies
+out without a word.
 
 ```bash
 # Specific repos (the root repo and their dependencies are added automatically)

@@ -326,9 +326,8 @@ impl<'a> Elsewhere<'a> {
                 "depends on '{shown}', which only -r follows: add -r, or name it with --repo {shown}"
             ),
             false => format!(
-                "depends on '{shown}' (written '{}'), which -r doesn't follow: it follows a path \
-                 from the workspace root, or a path or capability of the same .meta.yaml; name it \
-                 with --repo {shown}",
+                "depends on '{shown}' (written '{}'), which -r doesn't follow: name it with \
+                 --repo {shown}",
                 escape(dep)
             ),
         };

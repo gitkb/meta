@@ -329,7 +329,8 @@ fn read_capped(
         }
         lines += 1;
     }
-    if lines >= max_lines {
+    // the cap on lines came first, unless the last line is cut short
+    if lines >= max_lines && bytes.ends_with(b"\n") {
         return Ok((bytes, !reader.fill_buf()?.is_empty()));
     }
     let dropped = std::io::copy(&mut reader, &mut std::io::sink())?;
@@ -394,6 +395,19 @@ mod tests {
             .unwrap();
         assert_eq!(out.stdout, b"1\n2\n3\n");
         assert!(!truncated && out.status.success());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_last_line_the_byte_cap_cuts_is_left_out() {
+        let sandbox = Sandbox::new();
+        let script = format!("echo a; head -c {CAPTURE_LIMIT} /dev/zero | tr '\\0' x; echo");
+        let mut sh = sandbox.command("sh");
+        let (out, truncated) = Calls::default()
+            .output_lines(sh.args(["-c", &script]), 2)
+            .unwrap();
+        assert_eq!(out.stdout, b"a\n");
+        assert!(truncated);
     }
 
     /// Cancelling the running call stops its program and what that started,

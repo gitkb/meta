@@ -201,7 +201,8 @@ setup() {
         [[ "$output" != *"--version"* ]]
     done
     # these find their repos, or act on a whole set: no filters
-    for line in "project list --help" "git worktree remove --help"; do
+    for line in "project list --help" "git worktree remove --help" "git worktree add --help" \
+        "git worktree create --help"; do
         run "$META_BIN" $line
         [ "$status" -eq 0 ]
         for option in --recursive --json --fields --silent --strict --no-parent; do

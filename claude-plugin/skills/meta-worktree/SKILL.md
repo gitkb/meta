@@ -10,8 +10,8 @@ by default. It lets a change span several repos without touching the primary
 checkout, and lets several tasks run side by side.
 
 The repo names below (`backend`, `frontend`, `api`) are examples: `meta -A --json
-project list` lists yours, and a repo of a nested meta repo is named by its path
-from the workspace root, with `-r` or `-A` for the commands that select repos.
+project list` lists yours. A repo of a nested meta repo needs `-r` (its path from
+the nearest `.meta.yaml`) or `-A` (its path from the workspace root).
 
 ```
 .worktrees/

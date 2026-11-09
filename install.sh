@@ -127,7 +127,8 @@ install_meta() {
     fi
 
     # Each member must be a program, once: an executable regular file at the
-    # top level (tar -tv's mode starts with - and the owner may run it). The
+    # top level (tar -tv's mode starts with - and the owner may run it, x or
+    # setuid s, as programs.py check reads the mode). The
     # archive is checked before anything is extracted; anything else and
     # nothing is installed.
     local name mode twice
@@ -140,7 +141,7 @@ install_meta() {
             */* | .*) error "${asset} holds ${name}, not a program at its top level; nothing was installed" ;;
         esac
         case "$mode" in
-            -??x*) ;;
+            -??[xs]*) ;;
             *) error "${asset} holds ${name}, which is not an executable file; nothing was installed" ;;
         esac
     done < <(tar -tzf "${tmp_dir}/${asset}") 3< <(tar -tvzf "${tmp_dir}/${asset}" | cut -c1-10)

@@ -76,7 +76,7 @@ def archived(asset):
                 member.name,
                 "a folder" if member.isdir()
                 else "not a regular file" if not member.isreg()
-                else "not executable" if not member.mode & 0o111
+                else "not executable" if not member.mode & 0o100
                 else None,
             )
             for member in archive.getmembers()

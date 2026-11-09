@@ -441,6 +441,13 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
     run programs check "$SCRATCH/typeless.zip"
     [ "$status" -eq 0 ]
 
+    # only others may run b, as install.sh refuses too
+    chmod 0455 "$SCRATCH/built/b"
+    tar -czf "$SCRATCH/others.tar.gz" -C "$SCRATCH/built" meta alpha b
+    run programs check "$SCRATCH/others.tar.gz"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"b: not executable, not a program file"* ]]
+
     chmod -x "$SCRATCH/built/b"
     tar -czf "$SCRATCH/plain.tar.gz" -C "$SCRATCH/built" meta alpha b
     run programs check "$SCRATCH/plain.tar.gz"
@@ -545,4 +552,23 @@ plugin_folders() {
     run make -C "$SCRATCH" uninstall
     [ "$status" -eq 0 ]
     [ -d "$HOME/.meta/plugins/meta-cargo" ]
+
+    # ~/.meta/plugins a link to the folder cargo installs into: install keeps
+    # what it installed there, wherever CARGO_INSTALL_ROOT or CARGO_HOME puts it
+    local var root
+    for var in CARGO_INSTALL_ROOT CARGO_HOME; do
+        root="$TEST_DIR/root-$var"
+        mkdir -p "$root/bin" && echo new > "$root/bin/meta-git" && echo new > "$root/bin/meta-cargo"
+        rm -rf "$HOME/.meta/plugins" && ln -s "$root/bin" "$HOME/.meta/plugins"
+        env "$var=$root" make -C "$SCRATCH" install
+        [ "$(ls "$root/bin" | tr '\n' ' ')" = "meta-cargo meta-git " ]
+    done
+
+    # the checkout's .meta/plugins a link to ~/.meta/plugins: clean leaves it
+    rm -rf "$HOME/.meta/plugins" "$SCRATCH/.meta/plugins"
+    mkdir -p "$HOME/.meta/plugins" && echo old > "$HOME/.meta/plugins/meta-git"
+    ln -s "$HOME/.meta/plugins" "$SCRATCH/.meta/plugins"
+    run make -C "$SCRATCH" clean
+    [ "$status" -eq 0 ]
+    [ -f "$HOME/.meta/plugins/meta-git" ]
 }

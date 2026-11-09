@@ -17,12 +17,12 @@ install:
 	@dirs=$$(python3 scripts/programs.py packages --dirs) && for dir in $$dirs; do \
 		cargo install --locked --force --path "$$dir" || exit 1; \
 	done
-	@$(call remove_old_copies,$$HOME/.meta/plugins)
+	@$(call remove_old_copies,$$HOME/.meta/plugins,$(CARGO_BIN))
 
 install-all: install
 
 clean:
-	@$(call remove_old_copies,.meta/plugins)
+	@$(call remove_old_copies,.meta/plugins,$$HOME/.meta/plugins)
 	cargo clean
 
 # The copies the old build-plugins and install-plugins targets put in this
@@ -33,13 +33,21 @@ ifeq ($(OLD_PLUGIN_COPIES),)
 $(error install.sh has no OLD_PLUGIN_COPIES="..." line)
 endif
 
-# $(call remove_old_copies,DIR): remove each old copy from DIR (a file or a
-# link, never a folder), saying so on stderr
-remove_old_copies = for name in $(OLD_PLUGIN_COPIES); do \
-		if [ -L "$(1)/$$name" ] || [ -f "$(1)/$$name" ]; then \
-			rm -f "$(1)/$$name" && echo "Removed the old copy $(1)/$$name" >&2 || exit 1; \
-		fi; \
-	done
+# Where cargo install puts the programs (an install.root in a cargo config
+# is not read)
+CARGO_BIN := $(or $(CARGO_INSTALL_ROOT),$(CARGO_HOME),$(HOME)/.cargo)/bin
+
+# $(call remove_old_copies,DIR,KEEP): remove each old copy from DIR (a file
+# or a link, never a folder), saying so on stderr; nothing when DIR is KEEP,
+# compared after following links
+remove_old_copies = dir="$(1)"; keep="$(2)"; \
+	if [ -d "$$dir" ] && { [ ! -d "$$keep" ] || [ "$$(cd "$$dir" && pwd -P)" != "$$(cd "$$keep" && pwd -P)" ]; }; then \
+		for name in $(OLD_PLUGIN_COPIES); do \
+			if [ -L "$$dir/$$name" ] || [ -f "$$dir/$$name" ]; then \
+				rm -f "$$dir/$$name" && echo "Removed the old copy $$dir/$$name" >&2 || exit 1; \
+			fi; \
+		done; \
+	fi
 
 # Install git hooks (commit-msg validates release-safe subjects; pre-push runs CI checks locally)
 # Uses git rev-parse to handle worktrees and submodules correctly
@@ -112,6 +120,6 @@ uninstall:
 	@packages=$$(python3 scripts/programs.py packages) && for package in $$packages; do \
 		cargo uninstall "$$package" || true; \
 	done
-	@$(call remove_old_copies,$$HOME/.meta/plugins)
+	@$(call remove_old_copies,$$HOME/.meta/plugins,$(CARGO_BIN))
 
 .PHONY: build-all install install-all uninstall clean install-hooks build run test bats release integration-test

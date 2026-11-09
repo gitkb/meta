@@ -34,7 +34,7 @@ indexmap = { workspace = true, features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
 shlex.workspace = true
-clap = { workspace = true, optional = true }
+clap = { workspace = true, optional = true, features = ["string"] }
 strsim = { version = "0.11", optional = true }
 tempfile = { workspace = true, optional = true }
 

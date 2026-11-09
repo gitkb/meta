@@ -5,7 +5,17 @@ description: Understanding and operating in meta repository workspaces with .met
 
 # Meta Workspace Skill
 
-This project is a **meta repository** - a parent repo that manages a graph of child repositories. Understanding this structure is essential for effective operation.
+This project is a **meta repository** - a parent repo that manages a graph of child repositories, each with its own git history. Understanding this structure is essential for effective operation.
+
+In the commands below, `<repo>` is a repo's `.meta.yaml` name or its path from the nearest `.meta.yaml` (with `-r` or `-A`, from the workspace root: a repo of a nested meta repo needs one of them), and `<tag>` one of its tags. The `.meta.yaml` shown is an example.
+
+## Working in a Meta Repo
+
+1. **The primary checkout is pull-only** (`meta -r git update`): every change goes in a worktree set (the `meta-worktree` skill).
+2. **Use `meta git` for cross-repo git**, not raw `git`: `meta git status` shows every repo at once; `meta git commit -m "msg"` commits what is staged, in each repo that has staged changes.
+3. **Use `meta exec` for cross-repo commands**, not `cd <repo> && <command>`: `meta exec -- npm install` runs in every repo; `meta --include <repo>,<repo> exec -- <command>` in the ones named.
+4. **Check scope before committing**: `meta git status` shows which repos have changes; commit only where you mean to.
+5. **Target precisely with filters**: `--include <repo>,<repo>` only these repos, `--exclude <repo>` all but this one, `--tag <tag>` the repos with this tag.
 
 ## Starting a Session
 
@@ -23,9 +33,9 @@ For what depends on what, read `depends_on` and `provides` in `.meta.yaml`, or a
 
 Run `meta git status` to see the current state of every repo at this level (`meta -r git status`: the meta repos nested below it too; `meta -A git status`: the whole workspace, from anywhere).
 
-Keep `.meta/skills`, `.claude` and `.agents` committed in the root repo (`meta init claude` writes them, untracked), or a worktree set made from `origin/main` won't have this guidance.
+Keep `.meta/skills`, `.agents` and `.claude` committed in the root repo (`meta init skills` writes them, untracked), or a worktree set made from `origin/main` won't have this guidance.
 
-## Why This Matters for You (Claude)
+## Why This Matters
 
 In a meta repo, changes often span multiple repositories. Using `meta` commands instead of plain `git` lets you:
 - **Operate on every repo with one command** - fewer tool calls, less context
@@ -64,15 +74,15 @@ meta git status
 When projects have tags, filter operations:
 
 ```bash
-# Frontend repos (not the root: it has no tags; add it with --include .;
+# The tagged repos (not the root: it has no tags; add it with --include .;
 # -r: the tags of nested meta repos' projects too)
-meta -r --tag frontend git status
+meta -r --tag <tag> git status
 
-# Multiple tags (comma-separated)
-meta -r --tag backend,api exec -- make test
+# Any of several tags (comma-separated)
+meta -r --tag <tag>,<tag> exec -- make test
 
 # Exclude specific repos
-meta --exclude legacy-service git pull
+meta --exclude <repo> git pull
 ```
 
 ## Nested Meta Repos
@@ -105,14 +115,14 @@ The tools below, `meta_git_status` and `meta_git_branch` see what `meta -r` sees
 | Tool | Purpose | Without MCP |
 |------|---------|-------------|
 | `meta_workspace_state` | Counts: repos, dirty, clean, ahead, behind, and repos per branch, tag and build system | `meta -r git status` |
-| `meta_query_repos` | Filter repos by state (`query`: `dirty:true`, `tag:backend`, `branch:main`) | `meta -r --json context` (no row for the root's git state: add `meta -r git status`) |
+| `meta_query_repos` | Filter repos by state (`query`: `dirty:true`, `tag:<tag>`, `branch:main`) | `meta -r --json context` (no row for the root's git state: add `meta -r git status`) |
 | `meta_analyze_impact` | Direct and transitive dependents of a repo (`project`: name, or nested path) | `meta -r project dependents <repo>` (direct only) |
 | `meta_execution_order` | Build/deploy order of this level's repos, from their `depends_on` | none: read `depends_on` in `.meta.yaml` |
 
 ## Efficiency Tips
 
 - **One command, all repos**: `meta git status` replaces N individual `cd && git status` calls
-- **Targeted operations**: `meta --include repo1,repo2 exec -- cmd` operates on only the named repos (`.meta.yaml` name or path from the workspace root)
-- **Tag-based filtering**: `meta -r --tag backend exec -- cargo test` scopes to tagged repos
+- **Targeted operations**: `meta --include <repo>,<repo> exec -- <command>` operates on only the named repos
+- **Tag-based filtering**: `meta -r --tag <tag> exec -- cargo test` scopes to tagged repos
 - **Dependency awareness**: `meta -r project dependents <repo>` (or the MCP tool `meta_analyze_impact`) shows who depends on a repo before you modify it — prevents cascading fix-up commits
 - **Session start**: Always run `meta -A --json project list` first to get the workspace map

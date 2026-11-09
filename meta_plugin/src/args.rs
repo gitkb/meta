@@ -114,6 +114,16 @@ pub struct MetaOption {
     /// [`FILTER_HEADING`]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub filter: bool,
+    /// What it does, as meta's help says
+    #[serde(default)]
+    pub help: String,
+    /// The heading meta's help lists it under; none for one that is no
+    /// option of a command (`--version`)
+    #[serde(default)]
+    pub heading: Option<String>,
+    /// The name of its value (`TAGS`), for one that takes a value
+    #[serde(default)]
+    pub value_name: Option<String>,
 }
 
 /// meta's own options, which go before the command, and what was typed of
@@ -150,6 +160,16 @@ impl MetaOptions {
                 number: arg.get_value_parser().type_id() == std::any::TypeId::of::<usize>(),
                 refused: false,
                 filter: arg.get_help_heading() == Some(FILTER_HEADING),
+                help: arg.get_help().map(ToString::to_string).unwrap_or_default(),
+                heading: arg.get_help_heading().map(str::to_string),
+                value_name: arg.get_action().takes_values().then(|| {
+                    arg.get_value_names()
+                        .and_then(|names| names.first())
+                        .map_or_else(
+                            || arg.get_id().to_string().to_uppercase(),
+                            ToString::to_string,
+                        )
+                }),
             })
             .collect();
         let mut typed = Vec::new();
@@ -174,6 +194,37 @@ impl MetaOptions {
             option.refused |= option.spellings.iter().any(|s| longs.contains(&s.as_str()));
         }
         refused
+    }
+
+    /// The help of the options the command takes (none refused, each with a
+    /// heading), under their headings, as `meta --help` shows them: for a
+    /// command's help, its `word` the one they go before.
+    pub fn help(&self, word: &str) -> String {
+        let args = self.options.iter().filter(|o| !o.refused).filter_map(|o| {
+            let long = o.spellings.iter().find_map(|s| s.strip_prefix("--"))?;
+            let short = o
+                .spellings
+                .iter()
+                .find_map(|s| s.strip_prefix('-').filter(|s| s.len() == 1))
+                .and_then(|s| s.chars().next());
+            let arg = clap::Arg::new(long.to_string())
+                .long(long.to_string())
+                .short(short)
+                .help(o.help.clone())
+                .help_heading(o.heading.clone()?);
+            Some(match &o.value_name {
+                Some(name) => arg.value_name(name.clone()),
+                None => arg.action(clap::ArgAction::SetTrue),
+            })
+        });
+        let shown = clap::Command::new("meta")
+            .disable_help_flag(true)
+            .disable_version_flag(true)
+            .help_template("{all-args}")
+            .args(args)
+            .render_help()
+            .to_string();
+        format!("Meta options (before `{word}`):\n{}", shown.trim_end())
     }
 
     /// These, with the filters refused: the command takes no selection.

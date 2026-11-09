@@ -9,6 +9,10 @@ A worktree set is a named group of git worktrees, one per repo, on one branch
 by default. It lets a change span several repos without touching the primary
 checkout, and lets several tasks run side by side.
 
+The repo names below (`backend`, `frontend`, `api`) are examples: `meta -A --json
+project list` lists yours, and a repo of a nested meta repo is named by its path
+from the workspace root, with `-r` or `-A` for the commands that select repos.
+
 ```
 .worktrees/
   auth-fix/           # set name; also the default branch name

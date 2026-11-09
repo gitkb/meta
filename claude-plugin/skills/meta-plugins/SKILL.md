@@ -44,7 +44,7 @@ Runs any cargo command in each selected repo that has a `Cargo.toml`. A repo wit
 ```bash
 meta cargo build --release   # cargo build --release in each Rust repo
 meta cargo fmt --check       # any cargo subcommand passes through
-meta --include api cargo clippy --all-targets -- -D warnings
+meta --include <repo> cargo clippy --all-targets -- -D warnings   # <repo>: a repo's .meta.yaml name or path
 ```
 
 ## Plugin Discovery

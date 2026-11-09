@@ -54,5 +54,5 @@ Use [GitHub Issues](https://github.com/gitkb/meta/issues) for bugs, feature requ
 
 - [Plugin Development Guide](docs/plugin_development.md)
 - [Architecture Overview](docs/architecture_overview.md)
-- [Claude Code Skills](docs/claude_code_skills.md): editing the skills
+- [Agent Skills](docs/agent_skills.md): editing the skills
 - [FAQ / Troubleshooting Guide](docs/faq_troubleshooting.md)

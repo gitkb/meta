@@ -314,7 +314,8 @@ pub fn has_help_token(command: &str, args: &[String]) -> bool {
 }
 
 /// Parse the arguments of `meta <command>` with `P`, or the response to give
-/// instead: its help (or version) as a message, its error, escaped, as a
+/// instead: its help (or version) as a message, the help followed by meta's
+/// options the command takes, its error, escaped, as a
 /// usage error. An option of meta's typed
 /// after the command that `P` rejects gets the tip with the line to run
 /// (`meta` sends its options in the request: `&request.meta_options`;
@@ -332,11 +333,17 @@ pub fn parse_args<P: clap::Parser>(
     P::try_parse_from(&argv).map_err(|e| {
         use clap::error::{ContextKind, ContextValue, ErrorKind};
         match e.kind() {
-            ErrorKind::DisplayHelp
-            | ErrorKind::DisplayVersion
-            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => Box::new(Response::message(
+            ErrorKind::DisplayVersion => Box::new(Response::message(
                 e.render().to_string().trim_end().to_string(),
             )),
+            ErrorKind::DisplayHelp | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
+                let word = command.split_whitespace().next().unwrap_or(command);
+                Box::new(Response::message(format!(
+                    "{}\n\n{}",
+                    e.render().to_string().trim_end(),
+                    meta.help(word)
+                )))
+            }
             _ => {
                 let mut root = P::command().bin_name(&name);
                 root.build();

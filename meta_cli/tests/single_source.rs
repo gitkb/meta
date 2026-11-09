@@ -106,8 +106,8 @@ const GROUPS: [(u8, &str, Check); 16] = [
     ),
     (
         23,
-        "the shipped skills: the skills folder",
-        Check::Copies(&[("meta_cli/src/shipped-skills.txt", "meta")]),
+        "the shipped skills and rules: the skills folder and history",
+        Check::Copies(&[("meta_cli/src/shipped.txt", "meta")]),
     ),
     (
         24,

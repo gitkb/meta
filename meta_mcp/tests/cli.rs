@@ -428,6 +428,27 @@ fn search_fences_off_a_linked_plain_project_by_its_real_path() {
     );
 }
 
+#[test]
+fn search_past_the_capture_bound_says_truncated_with_whole_matches() {
+    let sandbox = Sandbox::new();
+    let ws = sandbox.work();
+    std::fs::create_dir_all(ws.join("plain")).unwrap();
+    std::fs::write(ws.join(".meta.yaml"), "projects:\n  plain: {}\n").unwrap();
+    // one match, then one longer than the bound
+    let long = "x".repeat(meta_plugin::process::CAPTURE_LIMIT + 1);
+    std::fs::write(ws.join("plain/f.txt"), format!("hit\nhit{long}\n")).unwrap();
+    let found = call(
+        &sandbox,
+        &ws,
+        "meta_search_code",
+        serde_json::json!({"pattern": "hit"}),
+    );
+    assert_eq!(
+        found,
+        serde_json::json!([{"project": "plain", "matches": ["f.txt:1:hit"], "truncated": true}])
+    );
+}
+
 /// While a tool runs, `ping` and `tools/list` are answered; cancelling it
 /// stops what it started, and it gets no reply.
 #[test]

@@ -483,13 +483,13 @@ Meta is designed for AI agents from day one. Three integration points:
 
 See [docs/mcp_server.md](docs/mcp_server.md) for full documentation.
 
-### Claude Code Skills
+### Agent Skills
 
 ```bash
-meta init claude
+meta init skills
 ```
 
-Installs purpose-built skills that teach Claude Code how to work with multi-repo codebases — using `meta git` instead of `git`, committing or stashing before risky changes, filtering by tags, and understanding plugin interception. It writes only inside the workspace, in the folder with its `.meta.yaml`: the skills go in `.meta/skills/` and are linked into `.claude/skills/`, `.agents/skills/` and the skills folder of each other agent whose folder exists, such as `.cursor/` (`meta --dry-run init claude` shows what it would write). It also prints the `claude plugin` commands that install the same skills for all your projects. See [docs/claude_code_skills.md](docs/claude_code_skills.md).
+Installs purpose-built skills that teach coding agents how to work with multi-repo codebases — using `meta git` instead of `git`, committing before risky changes, filtering by tags, and understanding plugin interception. It writes only inside the workspace, in the folder with its `.meta.yaml`: the skills go in `.meta/skills/` and are linked into `.agents/skills/` (Codex, Cursor, OpenCode, Copilot, Gemini CLI and others) and `.claude/skills/` (Claude Code); `meta --dry-run init skills` shows what it would write. For Claude Code it also adds context hooks to `.claude/settings.json`, and prints the `claude plugin` commands that install the same skills for all your projects. See [docs/agent_skills.md](docs/agent_skills.md).
 
 ### JSON Output
 
@@ -545,7 +545,7 @@ Configure with `.looprc`. See [docs/loop.md](docs/loop.md) for details.
 - **[Architecture Overview](docs/architecture_overview.md)** — System design
 - **[MCP Server Guide](docs/mcp_server.md)** — AI agent integration
 - **[Plugin Development](docs/plugin_development.md)** — Writing plugins
-- **[Claude Code Skills](docs/claude_code_skills.md)** — AI workflow skills
+- **[Agent Skills](docs/agent_skills.md)** — AI workflow skills
 - **[Advanced Usage](docs/advanced_usage.md)** — Power-user features
 - **[Loop System](docs/loop.md)** — Loop engine details
 - **[FAQ / Troubleshooting](docs/faq_troubleshooting.md)** — Common issues

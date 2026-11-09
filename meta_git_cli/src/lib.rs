@@ -143,7 +143,12 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
     let bare: Vec<String> = std::iter::once("git".to_string())
         .chain(request.meta_options.without(&words))
         .collect();
-    let meta = match targeting(&bare).refuses_filters() {
+    let help_requested = has_help_token(command, args);
+    let used = match help_requested {
+        true => as_used(&bare),
+        false => bare,
+    };
+    let meta = match targeting(&used).refuses_filters() {
         true => request.meta_options.refusing_filters(),
         false => request.meta_options.clone(),
     };
@@ -158,7 +163,6 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
         Ok(cli) => cli,
         Err(response) => return Ok(*response),
     };
-    let help_requested = has_help_token(command, args);
     match cli.command {
         Some(GitCommand::Clone(args)) => clone::execute_git_clone(args, ctx, request),
         Some(GitCommand::Update(args)) => update::execute_git_update(args, ctx, request),
@@ -180,6 +184,36 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
         // Every other git command runs as typed in each repo
         None => execute_raw_git_command(ctx, request),
     }
+}
+
+/// The line `words` (`git worktree remove --help`) ask help for, as a use
+/// of the command would be: without its help flags, and when that doesn't
+/// parse, with the command's required arguments given as their names
+/// (`git worktree remove NAME`). Its help lists the options that use takes.
+fn as_used(words: &[String]) -> Vec<String> {
+    use clap::CommandFactory;
+    let mut line: Vec<String> = words
+        .iter()
+        .take_while(|word| *word != "--")
+        .filter(|word| !matches!(word.as_str(), "--help" | "-h"))
+        .cloned()
+        .collect();
+    if targeting(&line) != Targeting::Unparsed {
+        return line;
+    }
+    let mut cmd = GitCli::command();
+    for word in line.iter().skip(1) {
+        match cmd.find_subcommand(word) {
+            Some(sub) => cmd = sub.clone(),
+            None => break,
+        }
+    }
+    line.extend(
+        cmd.get_positionals()
+            .filter(|arg| arg.is_required_set())
+            .map(|arg| arg.get_id().to_string().to_uppercase()),
+    );
+    line
 }
 
 /// The command of [`GitCli`] that `words` name: each word that names a

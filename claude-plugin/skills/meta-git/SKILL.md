@@ -7,6 +7,8 @@ description: Git operations across multiple repositories — status, commit, pus
 
 Git operations across multiple repositories. One command operates on the root repo and every project in this meta level; add `-r` (`meta -r git status`) to include the meta repos nested under it, or `-A` for the whole workspace from anywhere.
 
+In the commands below, `<repo>` is a repo's `.meta.yaml` name or its path from the nearest `.meta.yaml` (with `-r` or `-A`, from the workspace root: a repo of a nested meta repo needs one of them), and `<tag>` one of its tags; `meta -A --json project list` lists both. Other repo and tag names (`api`, `backend`) are examples.
+
 **The primary checkout is pull-only.** Commit, stage, push and batch-edit inside a worktree set (the `meta-worktree` skill), where these commands act on the set's repos only. In the primary checkout, read or run `meta -r git update`.
 
 ## The Core Insight
@@ -106,13 +108,13 @@ Target specific repos, with meta's options before `git`. `--tag` selects the tag
 
 ```bash
 # By tag (-r: the tags of nested meta repos' projects too)
-meta -r --tag backend git status
+meta -r --tag <tag> git status
 
 # By repo: .meta.yaml name or path from the root (`api` does not match `api-tests`)
-meta --include api,web git push
+meta --include <repo>,<repo> git push
 
 # Exclude repos
-meta --exclude legacy git pull
+meta --exclude <repo> git pull
 ```
 
 ## Workflow Patterns
@@ -120,7 +122,7 @@ meta --exclude legacy git pull
 ### Starting Work
 ```bash
 meta -r git update                              # In the primary checkout: get latest
-meta git worktree create my-task --repo api     # A set for this task (-r or -A for nested repos)
+meta git worktree create my-task --repo <repo>  # A set for this task (-r or -A for nested repos)
 cd .worktrees/my-task
 meta git status                                 # What's the current state?
 ```
@@ -130,7 +132,7 @@ meta git status                                 # What's the current state?
 meta git status                                 # In the set: review changes across repos
 meta git add -A                                 # Stage in all repos
 meta git commit -m "feat: ..."                  # Commit with shared message
-meta --include api git push -u origin HEAD      # Push the repos you changed
+meta --include <repo> git push -u origin HEAD   # Push the repos you changed
 ```
 
 ### Safe Batch Refactoring
@@ -155,7 +157,7 @@ The meta MCP server (`meta-mcp`; see the `meta-workspace` skill for how to start
 
 ## Efficiency Tips
 
-- **Targeted commits**: `meta --include repo1,repo2 git commit -m "msg"` commits only in the named repos
-- **Tag-based push**: `meta -r --tag backend git push` pushes the tagged repos only
+- **Targeted commits**: `meta --include <repo>,<repo> git commit -m "msg"` commits only in the named repos
+- **Tag-based push**: `meta -r --tag <tag> git push` pushes the tagged repos only
 - **Per-repo messages**: Use `meta_git_multi_commit` when changes in different repos need different commit messages
 - **One-call status**: `meta git status` replaces N individual `cd && git status` sequences

@@ -276,8 +276,8 @@ preview() {
     preview 0 context
 }
 
-@test "init claude previews" {
-    preview 0 init claude
+@test "init skills previews" {
+    preview 0 init skills
     [[ "$output" == *"Would create"*"settings.json"* ]]
     [[ "$output" == *"nothing was written"* ]]
 }

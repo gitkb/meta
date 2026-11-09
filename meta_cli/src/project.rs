@@ -92,7 +92,7 @@ workspace from its root; --json emits one record per dependent project.")]
 /// Whether `meta project <name>` finds its projects itself, in the
 /// `.meta.yaml` files: it takes none of meta's filters. `check` checks the
 /// projects they select.
-fn finds_its_repos(name: &str) -> bool {
+pub(crate) fn finds_its_repos(name: &str) -> bool {
     name != "check"
 }
 

@@ -7,6 +7,8 @@ description: Execute commands across all repos — parallel, filtered, dry-run m
 
 Execute any command in the root repo and every project at this meta level (add `-r` for the meta repos nested under it, `-A` for the whole workspace from anywhere). Meta extends `loop`, a tool for running commands across directories.
 
+In the commands below, `<repo>` is a repo's `.meta.yaml` name or its path from the nearest `.meta.yaml` (with `-r` or `-A`, from the workspace root: a repo of a nested meta repo needs one of them), and `<tag>` one of its tags; `meta -A --json project list` lists both. Other repo and tag names (`api`, `backend`) are examples.
+
 ## The Execution Model
 
 `meta exec` runs a command in each repo directory:
@@ -57,7 +59,7 @@ Parallel mode:
 
 ## Filtering Options
 
-Control which repos run the command:
+Control which repos run the command (examples):
 
 ```bash
 # Only these repos: each value is a repo's .meta.yaml name or its path from the workspace root
@@ -194,4 +196,4 @@ This is filesystem-based detection—no store dependency: the set's members are 
 - **Target precisely**: Use `--include`/`--exclude`/`--tag` to run commands in only the repos you need — avoids running commands you'll have to undo
 - **Dependency order**: There is no CLI flag for dependency order. Get it from the MCP tool `meta_execution_order` (from `depends_on` in `.meta.yaml`; see the `meta-workspace` skill to start the server) or read `depends_on` yourself, then run repos one at a time in that order with `--include`
 - **Cross-repo dependencies**: Use `--sequential` when one repo's step needs another's output; parallel is the default
-- **Dry run first**: `meta --dry-run exec -- dangerous-command` shows what would happen before committing
+- **Dry run first**: `meta --dry-run exec -- <command>` shows what would happen before committing

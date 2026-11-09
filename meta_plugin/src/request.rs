@@ -86,7 +86,8 @@ pub struct Meta {
     pub strict: bool,
     #[serde(default)]
     pub verbose: bool,
-    /// `--silent`: say nothing on success.
+    /// `--silent`: discard the output of the programs meta runs; a plugin
+    /// command that answers for itself still prints.
     #[serde(default)]
     pub silent: bool,
     /// Whether output is coloured.
@@ -227,6 +228,10 @@ pub struct Project {
     /// on 'db', which 'a' and 'b' provide; 'b' is used")
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependency_problems: Vec<String>,
+    /// Dependencies that name a repo this config's create doesn't follow:
+    /// said only when the set won't hold that repo.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub left_out: Vec<LeftOut>,
     /// Whether its config says it is a meta repo (`meta: true`): one with a
     /// `.meta.yaml` of its own listing projects
     #[serde(default)]
@@ -282,4 +287,14 @@ impl Request {
             .into()
         })
     }
+}
+
+/// A dependency a create doesn't follow, which names one repo: that repo,
+/// by its path from the workspace root, and what to say when the set won't
+/// hold it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeftOut {
+    pub repo: String,
+    pub problem: String,
 }

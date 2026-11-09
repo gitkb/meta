@@ -18,9 +18,12 @@ meta -A --json project list
 This returns repos, paths, and tags. Use this to:
 - Know which repos exist before making changes
 - Identify available tags for filtering operations
-- Understand the project graph
+
+For what depends on what, read `depends_on` and `provides` in `.meta.yaml`, or ask `meta -r project dependents <repo>`.
 
 Run `meta git status` to see the current state of every repo at this level (`meta -r git status`: the meta repos nested below it too; `meta -A git status`: the whole workspace, from anywhere).
+
+Keep `.meta/skills`, `.claude` and `.agents` committed in the root repo (`meta init claude` writes them, untracked), or a worktree set made from `origin/main` won't have this guidance.
 
 ## Why This Matters for You (Claude)
 
@@ -91,19 +94,25 @@ meta's `--depth N`, before the command, limits how deep into nested meta repos i
 
 ## MCP Tools for Workspace Discovery
 
-When the meta MCP server is available, these tools provide structured JSON for programmatic workspace operations:
+The meta MCP server gives structured JSON. Start it with `meta-mcp`, which speaks MCP over stdio for the workspace or set it starts in, or install the Claude Code plugin, which registers it. To register it yourself, in `.mcp.json`:
 
-| Tool | Purpose |
-|------|---------|
-| `meta_workspace_state` | Full workspace state in one call (projects, branches, dirty status) |
-| `meta_query_repos` | Filter repos by state: `dirty:true`, `tag:backend`, `branch:main` |
-| `meta_analyze_impact` | Check transitive dependents before modifying a repo |
-| `meta_execution_order` | Get topological build/deploy order respecting dependency graph |
+```json
+{"mcpServers": {"meta": {"command": "meta-mcp", "args": []}}}
+```
+
+The tools below, `meta_git_status` and `meta_git_branch` see what `meta -r` sees: the root and nested repos, and inside a set that set's members only. The exceptions: `meta_git_diff` and `meta_execution_order` see this level's repos only, and in a set `meta_analyze_impact` names only the set's members as dependents, so a dependent the set doesn't hold is not there: run it from the workspace root for the whole impact.
+
+| Tool | Purpose | Without MCP |
+|------|---------|-------------|
+| `meta_workspace_state` | Counts: repos, dirty, clean, ahead, behind, and repos per branch, tag and build system | `meta -r git status` |
+| `meta_query_repos` | Filter repos by state (`query`: `dirty:true`, `tag:backend`, `branch:main`) | `meta -r --json context` (no row for the root's git state: add `meta -r git status`) |
+| `meta_analyze_impact` | Direct and transitive dependents of a repo (`project`: name, or nested path) | `meta -r project dependents <repo>` (direct only) |
+| `meta_execution_order` | Build/deploy order of this level's repos, from their `depends_on` | none: read `depends_on` in `.meta.yaml` |
 
 ## Efficiency Tips
 
 - **One command, all repos**: `meta git status` replaces N individual `cd && git status` calls
 - **Targeted operations**: `meta --include repo1,repo2 exec -- cmd` operates on only the named repos (`.meta.yaml` name or path from the workspace root)
 - **Tag-based filtering**: `meta -r --tag backend exec -- cargo test` scopes to tagged repos
-- **Dependency awareness**: `meta_analyze_impact <repo>` shows who depends on a repo before you modify it — prevents cascading fix-up commits
+- **Dependency awareness**: `meta -r project dependents <repo>` (or the MCP tool `meta_analyze_impact`) shows who depends on a repo before you modify it — prevents cascading fix-up commits
 - **Session start**: Always run `meta -A --json project list` first to get the workspace map

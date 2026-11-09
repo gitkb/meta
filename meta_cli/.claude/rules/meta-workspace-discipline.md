@@ -1,6 +1,6 @@
 # Meta Workspace Discipline
 
-You are working in a **meta-repo** — multiple independent git repositories managed together.
+You are working in a **meta-repo** — multiple independent git repositories managed together. The primary checkout is pull-only (`meta -r git update`); every change goes in a worktree set (the `meta-worktree` skill).
 
 ## Required Behaviors
 

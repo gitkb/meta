@@ -19,22 +19,47 @@ checkout, and lets several tasks run side by side.
 ## When to Use Worktrees
 
 **Every change gets its own worktree set**, even a one-line fix in one repo.
-Keep the primary checkout on the default branch and only pull it; never commit,
-switch branches or leave edits there.
+The primary checkout is pull-only: it stays on the default branch and only
+`meta -r git update` changes it (it fast-forwards every repo and clones the
+missing ones, after a PR lands or at the start of a task). Never commit, switch
+branches or leave edits there.
 
 Read-only work (reading code, searching, answering questions) may stay in the
 primary checkout.
 
-Create one set per task, with only the repos it touches, and remove it once the
-work is pushed. Before a session ends, remove every set it created. Inside a
-set, `meta git worktree` commands find sets where the checkout the set was
-made from keeps them, so running them there acts on the workspace's sets.
+Create one set per task, with only the repos it touches, and give each set its
+own build output (for Cargo, a `CARGO_TARGET_DIR` of its own or the set's own
+`target/`): builds shared between sets silently reuse each other's results.
+Remove a set once the work is pushed; **before a session ends, remove every set
+it created.** Inside a set, `meta git worktree` commands find sets where the
+checkout the set was made from keeps them, so running them there acts on the
+workspace's sets.
 
 ## Creating Worktrees
+
+Run these from the workspace root. **Use `-r` when a repo you name, or one it
+depends on, is nested in a meta repo**, and `-A` when the target is at another
+nesting level than the folder you are in: without them a set holds only this
+level's repos. `-r` follows a dependency written as a repo's path from the
+workspace root, across nesting levels too, and one written as a path or a
+capability (`provides`) of the dependent's own `.meta.yaml`. **It doesn't resolve
+a capability or a name from another nesting level (unless that name is also the
+repo's path from the root), or a project name whose `path:` differs from it.**
+Started inside a nested meta repo, `-r` reaches only that repo's tree. Each
+dependency the set won't hold that meta can name (one repo is or provides it) is
+named in a warning that ends with the `--repo` that adds it, spelled as it works
+from the folder you ran in (a repo of that folder's tree by its path from there,
+any other with `-A` and its path from the root), and says to add `-r` or `-A`
+where that is what it takes: follow it as written (with `--strict` the warning is
+an error, and nothing is made). A dependency nothing or several repos provide
+keeps its own warning. `--no-deps` leaves dependencies out without a word.
 
 ```bash
 # Specific repos (the root repo and their dependencies are added automatically)
 meta git worktree create auth-fix --repo backend --repo frontend
+
+# A nested repo and its dependencies in the same meta repo
+meta -r git worktree create sdk-fix --repo open-source/sdk/core
 
 # Only the named repos (and, for a repo nested inside another project's path, that parent project)
 meta git worktree create auth-fix --repo backend --no-deps
@@ -54,24 +79,34 @@ meta git worktree create incident-42 v2.3.1 --repo api
 # Continue a GitHub PR on a child repo: checks out its head branch
 meta git worktree create review --from-pr org/api#42 --repo api
 
-# Nested meta repos: resolve across the whole workspace, aliases are root-relative paths
-# (-A from anywhere; -r from the nearest .meta.yaml down, aliases from there)
-meta -A git worktree create sdk-fix --repo open-source/sdk/core
+# Aliases with -A are paths from the workspace root, from anywhere
+# (-r starts at the nearest .meta.yaml, aliases from there)
+meta -A git worktree create sdk-fix-2 --repo open-source/sdk/core
 
 # Preview without creating anything
 meta --dry-run git worktree create auth-fix --repo backend
 ```
 
+`meta --json git worktree create …` reports the set as `results[0].data`: its
+`root`, and `repos[]` with each repo's `alias`, `path` and `branch`. To see what
+depends on a repo before you change it: `meta -r project dependents <repo>`.
+
 Add a repo to an existing set with `meta git worktree add auth-fix --repo another-service`
 (`meta git worktree add auth-fix v2.3.1 --repo another-service` starts it from a commit-ish).
 
-Each repo's branch is checked out if it exists locally, else made tracking
-`origin/<branch>` if the remote has it. Otherwise a new branch starts from the
-commit-ish given, or else from the remote's default branch (`origin/HEAD`,
+A commit-ish starts a new branch. Without one, each repo's branch is checked out
+if it exists locally, else made tracking `origin/<branch>` if this clone has
+that ref. Otherwise meta asks origin (once per repo, up to 5 seconds, with no
+prompts): a branch origin has is fetched and tracked, with its commits. If origin
+can't answer, a warning names the repo and branch and the branch starts as new
+(with `--strict`, an error before anything is made); a repo with no `origin` is
+not asked. A new branch starts from the remote's default branch (`origin/HEAD`,
 tracking nothing), never from whatever the workspace's checkout has checked
 out; only a repo whose remote names no default branch starts from its HEAD,
 with a warning. The output names the start of each new branch:
-`backend -> auth-fix (new from origin/main)`.
+`backend -> auth-fix (new from origin/main)`. `--dry-run` asks origin too, says
+the same start, and writes nothing; when a repo the set needs isn't cloned it stops
+at naming the clones, and `--from-pr` shows a placeholder for the PR's branch.
 
 A repo the set needs that isn't cloned (one asked for, a dependency, or a
 parent on the way to a nested repo) is cloned first, as
@@ -100,6 +135,48 @@ always makes a new branch, which fails when `my-feature` already exists locally.
 With `--from-pr` on a child repo whose PR branch already exists locally, `create`
 checks that branch out as it is (the fetch only updates `origin/<branch>`), so
 pull it in the new worktree.
+
+## Working in a Set
+
+```bash
+cd .worktrees/auth-fix
+meta git status                  # only this set's repos
+meta git add -A                  # `meta git commit` commits only what is staged
+meta git commit -m "feat: add token refresh"
+meta --include backend git push -u origin HEAD   # the repos you changed; a new branch has no upstream yet
+```
+
+With nothing staged, `meta git commit` says so and exits 0, having committed
+nothing, so stage first. `--include` takes a project's name or its path in the
+set (`platform/api`); leave it off and `push -u` publishes an empty branch in
+every repo of the set.
+
+## Adding a Repo to the Workspace
+
+The config change goes through a set like any other change; the new repo is
+cloned into the primary checkout once it lands:
+
+```bash
+meta git worktree create add-svc --repo .
+cd .worktrees/add-svc
+# add to .meta.yaml, under projects:   svc: git@github.com:org/svc.git
+echo svc >> .gitignore           # or the root repo would stage it as an embedded repo
+git add .meta.yaml .gitignore
+git commit -m "chore: add svc to the workspace"
+git push -u origin HEAD          # then land it, as a PR or however the repo takes changes
+cd ../..
+meta git worktree remove add-svc
+meta -r git update               # once it is on the default branch: pulls the config, clones svc
+```
+
+For a repo nested in a meta repo, do the same in that meta repo's set
+(`meta -r git worktree create add-svc --repo platform`, then edit
+`platform/.meta.yaml` and `platform/.gitignore`, and use `git -C platform` for the
+add, commit and push). `provides` and `depends_on`
+are lists of names. `meta project` has no command that adds one. `meta git clone-missing`
+refuses to run inside a set, and `meta git worktree add` knows only the
+projects of the primary checkout's config, so a repo can't join a set before its
+config has landed.
 
 ## Short-Lived and Automated Sets
 
@@ -135,7 +212,7 @@ session that dies before removing its sets.
 ## Inspecting Worktrees
 
 ```bash
-meta git worktree list                 # every set; inside a set, just that one
+meta git worktree list                 # from the workspace root: every set; inside a set, just that one
 meta git worktree list auth-fix
 meta --json git worktree list
 meta git worktree list --metadata-only # membership paths only, no Git status
@@ -147,7 +224,10 @@ meta git worktree diff auth-fix --stat        # the summary only
 `list` and `status` show every repo of the set, those nested beneath other
 worktree repos too (`-r` and `-A` change nothing there and are refused);
 `meta --strict git worktree list` fails on what it can't read instead of
-skipping it.
+skipping it. Run `list` from the workspace root: a nested folder can't see a set
+made with `-A`. Inside a set, `meta project list` and `meta context` show the whole workspace's
+projects, not the set's members; `meta git status` or `meta git worktree list`
+shows those.
 
 ## Running Commands
 
@@ -167,8 +247,8 @@ when you want one.
 
 ## Context Detection
 
-Inside `.worktrees/<name>/`, plain meta commands scope themselves to that set's
-repos:
+Inside `.worktrees/<name>/`, meta commands that run in repos scope themselves to
+that set's repos (`meta project list` and `meta context` still list the workspace):
 
 ```bash
 cd .worktrees/auth-fix/backend
@@ -193,6 +273,9 @@ are in the set.
 
 ## Cleanup
 
+`cd` out of a set before removing it: your shell would be left in a folder that
+no longer exists.
+
 ```bash
 meta git worktree remove auth-fix          # refuses a set with work it would lose
 meta git worktree remove auth-fix --force  # discards that work
@@ -209,7 +292,8 @@ workspace: sets whose every worktree is recorded in one of the workspace's
 repositories. Another workspace's set is never touched, even when both share a
 `META_WORKTREES` directory; `remove` refuses it and names its workspace. Run
 from inside a set, they act on the workspace the set was made from.
-`--force` discards that work: commit and push first.
+`--force` discards that work: commit and push first. A set's reflog goes with
+the set: recover anything you reset away before removing it.
 
 Like `git worktree remove`, files git ignores (`.env`, `target/`) don't count
 as work and go with the set. `remove` then deletes
@@ -221,7 +305,7 @@ else (`kept branch 'auth-fix' in …/backend: 1 commit on no remote, other branc
 or tag`). A branch the set only checked out (`--repo api:release/2.3`, an
 existing one) is never deleted, nor are the branches of sets made by a meta
 older than this; `remove` names those as left. `--json` lists each branch with
-its action (deleted, kept, left) and reason.
+its action (deleted, kept, left), and for kept and left the reason.
 
 ## Lifecycle Hooks
 

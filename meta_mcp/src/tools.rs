@@ -5,13 +5,16 @@ use crate::McpServer;
 use anyhow::{Context, Result};
 use meta_core::config::{self, ProjectInfo};
 use meta_core::dependency_graph::{self, ProjectDependencies};
+use meta_core::git::RepoStatus;
 use meta_core::query::{Query, RepoState, WorkspaceState};
-use meta_core::repo_filter::Filters;
+use meta_core::repo_filter::{repo_path, Filters};
+use meta_core::worktree::Recursive;
 use meta_plugin::display::escape;
 use meta_plugin::{Envelope, ProjectResult};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -565,12 +568,9 @@ impl Workspace {
             });
         }
         let project = self.projects.iter().find(|p| p.name == name);
-        project.map(|p| self.target(p)).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Project '{}' not found: name a project of .meta.yaml, or . for the workspace root",
-                escape(name)
-            )
-        })
+        project
+            .map(|p| self.target(p))
+            .ok_or_else(|| not_found(name))
     }
 
     /// The projects `scope` selects, in config order.
@@ -585,6 +585,112 @@ impl Workspace {
                 .collect(),
         })
     }
+}
+
+/// The repos `meta -r` reaches that `filters` select and that exist, in its
+/// order, as the read tools see them: what each is called, its folder, its
+/// tags.
+fn reached(
+    recursive: &Recursive,
+    filters: &Filters,
+) -> Result<Vec<(String, PathBuf, Vec<String>)>> {
+    Ok(recursive
+        .select(filters)?
+        .into_iter()
+        .filter(|repo| repo.dir.exists())
+        .map(|repo| {
+            (
+                recursive.name_of(&repo),
+                repo.dir.clone(),
+                repo.tags().to_vec(),
+            )
+        })
+        .collect())
+}
+
+/// The error for a `project` no repo is.
+fn not_found(name: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Project '{}' not found: name a project of .meta.yaml, or . for the workspace root",
+        escape(name)
+    )
+}
+
+/// The `--tag` filter a tool's `tag` asks for; one naming no tag is refused.
+fn tag_filter(tag: &str) -> Result<Filters> {
+    Ok(Filters {
+        tags: Filters::tags(tag)?,
+        ..Filters::default()
+    })
+}
+
+/// The `--include` value for the project `name`, at `path` from where meta
+/// names its repos: its path, so meta can't take it for another's name.
+fn include(name: &str, path: &str) -> String {
+    let outside = Path::new(path).is_absolute() || path.split('/').any(|part| part == "..");
+    match path {
+        "." => path.to_string(),
+        // a project outside the workspace has no path from its root; meta
+        // refuses its name if another's path is it
+        _ if outside => name.to_string(),
+        path => format!("./{path}"),
+    }
+}
+
+/// The `--include` value for `project` under `meta -r`, which names repos
+/// from its root: `.` or a name, a nested repo's whole path or its bare name
+/// when that is unique.
+fn nested_include(recursive: &Recursive, project: &str) -> Result<String> {
+    let path_of = |dir: &Path| repo_path(dir, &recursive.root);
+    if project == "." {
+        return Ok(include(".", &path_of(&recursive.dir)));
+    }
+    let (graph, dirs) = tree_graph(recursive)?;
+    let key = graph.find(project)?.ok_or_else(|| not_found(project))?;
+    let dir = dirs.get(key).ok_or_else(|| not_found(project))?;
+    Ok(include(project, &path_of(dir)))
+}
+
+/// The dependency graph of what `meta -r` reaches (in a set, its members
+/// only), keyed as `meta -r project dependents` keys it, with each key's
+/// folder.
+fn tree_graph(
+    recursive: &Recursive,
+) -> Result<(dependency_graph::DependencyGraph, HashMap<String, PathBuf>)> {
+    // a set with no root checkout holds the top config's projects at their
+    // places in a set (one outside the workspace at its name)
+    let mut top = recursive.config.projects.clone();
+    if recursive.in_set() && recursive.config.dir != recursive.dir {
+        for project in &mut top {
+            project.path = project.set_place().to_string();
+        }
+    }
+    let (mut projects, dirs) = dependency_graph::in_tree(&recursive.dir, &top, None)?;
+    if recursive.in_set() {
+        let members: Vec<PathBuf> = recursive
+            .select(&Filters::default())?
+            .iter()
+            .map(|m| real(&m.dir))
+            .collect();
+        projects.retain(|p| {
+            dirs.get(&p.name)
+                .is_some_and(|dir| members.contains(&real(dir)))
+        });
+    }
+    Ok((dependency_graph::DependencyGraph::build(projects), dirs))
+}
+
+/// `dir` as the file system names it, or as given.
+fn real(dir: &Path) -> PathBuf {
+    dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf())
+}
+
+/// A tool's answer from meta's Envelope: an error when every repo failed.
+fn reply(envelope: Envelope) -> Result<Reply> {
+    Ok(Reply {
+        is_error: all_failed(envelope.results.iter().map(|row| !row.is_failure())),
+        text: serde_json::to_string(&envelope)?,
+    })
 }
 
 /// Whether results that each succeeded or not mean the tool failed: there
@@ -610,10 +716,22 @@ impl McpServer {
         let config::Workspace {
             dir,
             config_path,
-            projects,
+            mut projects,
             ..
         } = config::Workspace::in_dir(self.meta_dir()?)?
             .ok_or_else(|| anyhow::anyhow!("No meta config found"))?;
+        // a set with no root checkout holds the top config's projects at
+        // their places in a set (one outside the workspace at its name)
+        if self.rootless_set.is_some() {
+            for project in &mut projects {
+                project.path = project.set_place().to_string();
+            }
+        }
+        let dir = self.rootless_set.clone().unwrap_or(dir);
+        // in a set, the projects it holds
+        if let Some(members) = self.members()? {
+            projects.retain(|p| members.contains(&real(&dir.join(&p.path))));
+        }
         Ok(Workspace {
             dir,
             config_path,
@@ -621,29 +739,50 @@ impl McpServer {
         })
     }
 
+    /// The folders of the members of the set the server is in; none outside
+    /// one.
+    fn members(&self) -> Result<Option<Vec<PathBuf>>> {
+        let Some(set) = &self.set else {
+            return Ok(None);
+        };
+        let config = meta_core::worktree::set_config(set, None)?
+            .map(|path| config::Workspace::load(&path))
+            .transpose()?;
+        let members = meta_core::worktree::set_members(set, config.as_ref(), &Filters::default())?;
+        Ok(Some(members.iter().map(|m| real(&m.dir)).collect()))
+    }
+
+    /// Where meta, run from where the server started, names repos from:
+    /// the set's root, else the workspace's.
+    fn names_from(&self, workspace: &Workspace) -> PathBuf {
+        self.set.clone().unwrap_or_else(|| workspace.dir.clone())
+    }
+
+    /// What `meta -r` reaches from where the server started.
+    fn recursive(&self) -> Result<Recursive> {
+        Recursive::from(&self.start)?.ok_or_else(|| anyhow::anyhow!("No meta repository found"))
+    }
+
     /// meta in `dir`, with `--json` and `args`, in the projects `scope`
     /// selects (a project by its path, so meta can't take it for another's
     /// name). Its Envelope; an error only when meta gave no result and said
     /// why.
     fn call_meta(&self, workspace: &Workspace, scope: &Scope, args: &[&str]) -> Result<Envelope> {
-        let mut meta = crate::run::meta()?.cwd(&workspace.dir);
-        match scope {
-            Scope::All => {}
-            Scope::Tags(tags) => meta = meta.args(["--tag", &tags.tags.join(",")]),
+        let options = match scope {
+            Scope::All => Vec::new(),
+            Scope::Tags(tags) => vec!["--tag".to_string(), tags.tags.join(",")],
             Scope::Project(name) => {
-                let path = workspace.project(name)?.path;
-                let outside = std::path::Path::new(&path).is_absolute()
-                    || path.split('/').any(|part| part == "..");
-                let include = match path.as_str() {
-                    "." => path,
-                    // a project outside the workspace has no path from its
-                    // root; meta refuses its name if another's path is it
-                    _ if outside => name.clone(),
-                    path => format!("./{path}"),
-                };
-                meta = meta.args(["--include".to_string(), include]);
+                let dir = workspace.project(name)?.dir;
+                let path = repo_path(&dir, &self.names_from(workspace));
+                vec!["--include".to_string(), include(name, &path)]
             }
-        }
+        };
+        self.call_with(&options, args)
+    }
+
+    /// `meta --json <options> <args>` from where the server started.
+    fn call_with(&self, options: &[String], args: &[&str]) -> Result<Envelope> {
+        let meta = crate::run::meta()?.cwd(&self.start).args(options);
         // the command, not its arguments, which may be long
         let words: Vec<&str> = args
             .iter()
@@ -677,11 +816,7 @@ impl McpServer {
     /// [`McpServer::call_meta`], answered with its Envelope: an error when
     /// every repo failed.
     fn run_meta(&self, workspace: &Workspace, scope: &Scope, args: &[&str]) -> Result<Reply> {
-        let envelope = self.call_meta(workspace, scope, args)?;
-        Ok(Reply {
-            is_error: all_failed(envelope.results.iter().map(|row| !row.is_failure())),
-            text: serde_json::to_string(&envelope)?,
-        })
+        reply(self.call_meta(workspace, scope, args)?)
     }
 
     /// `meta git <args>` in the project `target` alone: its result, or why
@@ -782,9 +917,24 @@ impl McpServer {
     // ========================================================================
 
     fn git_status(&self, args: StatusArgs) -> Result<Reply> {
-        let workspace = self.workspace()?;
-        let scope = workspace.scope(args.project, args.tag)?;
-        self.run_meta(&workspace, &scope, &["git", "status"])
+        let recursive = self.recursive()?;
+        let mut options = vec!["-r".to_string()];
+        match (args.project, args.tag) {
+            (Some(_), Some(_)) => anyhow::bail!("Give 'project' or 'tag', not both"),
+            (Some(project), None) => {
+                options.extend([
+                    "--include".to_string(),
+                    nested_include(&recursive, &project)?,
+                ]);
+            }
+            (None, Some(tag)) => {
+                let filters = tag_filter(&tag)?;
+                recursive.select(&filters)?;
+                options.extend(["--tag".to_string(), filters.tags.join(",")]);
+            }
+            (None, None) => {}
+        }
+        reply(self.call_with(&options, &["git", "status"])?)
     }
 
     fn git_pull(&self, args: PullArgs) -> Result<Reply> {
@@ -840,46 +990,32 @@ impl McpServer {
     }
 
     fn git_branch(&self, args: TagArgs) -> Result<String> {
-        /// What `meta context` says of a repo's branch.
-        #[derive(Deserialize)]
-        struct Repo {
-            name: String,
-            branch: Option<String>,
-            detached: Option<bool>,
-            upstream: Option<String>,
-            ahead: Option<usize>,
-            behind: Option<usize>,
-        }
-        let workspace = self.workspace()?;
-        let scope = workspace.scope(None, args.tag)?;
-        let context = self.call_meta(&workspace, &scope, &["context"])?;
-        let repos: Vec<Repo> = context
-            .results
-            .into_iter()
-            .filter(|row| row.project.is_some())
-            .filter_map(|row| serde_json::from_value(row.data?).ok())
-            .collect();
+        let filters = match args.tag {
+            Some(tag) => tag_filter(&tag)?,
+            None => Filters::default(),
+        };
+        let recursive = self.recursive()?;
         let mut results = Vec::new();
-        for project in workspace.select(&scope)? {
-            if !project.dir.exists() {
-                continue;
-            }
-            let repo = repos.iter().find(|repo| repo.name == project.name);
+        for (project, dir, _) in reached(&recursive, &filters)? {
             // a work tree git refuses (`core.bare=true`) still has its
             // branch; what git can't read at all is unknown, never level
             // with main
-            results.push(match repo {
-                Some(repo) if repo.branch.is_some() || repo.detached == Some(true) => {
+            let status = RepoStatus::read(&dir).ok();
+            let read_work_tree = status.is_some();
+            let refs = status.or_else(|| RepoStatus::refs(&dir).ok().flatten());
+            results.push(match refs {
+                Some(refs) if refs.branch.is_some() || read_work_tree => {
+                    let (ahead, behind) = refs.ahead_behind.unwrap_or_default();
                     serde_json::json!({
-                        "project": project.name,
-                        "branch": repo.branch.clone().unwrap_or_else(|| "HEAD".to_string()),
-                        "tracking": repo.upstream.clone().filter(|upstream| !upstream.is_empty()),
-                        "ahead": repo.ahead.unwrap_or_default(),
-                        "behind": repo.behind.unwrap_or_default()
+                        "project": project,
+                        "branch": refs.branch.unwrap_or_else(|| "HEAD".to_string()),
+                        "tracking": refs.upstream.filter(|upstream| !upstream.is_empty()),
+                        "ahead": ahead,
+                        "behind": behind
                     })
                 }
                 _ => serde_json::json!({
-                    "project": project.name,
+                    "project": project,
                     "branch": null,
                     "tracking": null,
                     "ahead": null,
@@ -1324,7 +1460,7 @@ impl McpServer {
 
     fn list_plugins(&self, _args: NoArgs) -> Result<String> {
         let meta = crate::run::meta()?
-            .cwd(&self.workspace()?.dir)
+            .cwd(&self.start)
             .args(["plugin", "list"]);
         let envelope = self.calls.meta(meta).context("Failed to list plugins")?;
         if let Some(error) = &envelope.error {
@@ -1339,13 +1475,10 @@ impl McpServer {
 
     fn query_repos(&self, args: QueryArgs) -> Result<String> {
         let query = Query::parse(&args.query)?;
-        let workspace = self.workspace()?;
+        let recursive = self.recursive()?;
         let mut matching = Vec::new();
-        for project in workspace.select(&Scope::All)? {
-            if !project.dir.exists() {
-                continue;
-            }
-            let state = RepoState::collect(&project.name, &project.dir, &project.tags)?;
+        for (name, dir, tags) in reached(&recursive, &Filters::default())? {
+            let state = RepoState::collect(&name, &dir, &tags)?;
             if state.matches(&query) {
                 matching.push(state);
             }
@@ -1358,13 +1491,10 @@ impl McpServer {
     }
 
     fn workspace_state(&self, _args: NoArgs) -> Result<String> {
-        let workspace = self.workspace()?;
+        let recursive = self.recursive()?;
         let mut repo_states = Vec::new();
-        for project in workspace.select(&Scope::All)? {
-            if !project.dir.exists() {
-                continue;
-            }
-            if let Ok(state) = RepoState::collect(&project.name, &project.dir, &project.tags) {
+        for (name, dir, tags) in reached(&recursive, &Filters::default())? {
+            if let Ok(state) = RepoState::collect(&name, &dir, &tags) {
                 repo_states.push(state);
             }
         }
@@ -1384,11 +1514,13 @@ impl McpServer {
     }
 
     fn analyze_impact(&self, args: ProjectArgs) -> Result<String> {
+        let (graph, _) = tree_graph(&self.recursive()?)?;
         // The root depends on nothing and nothing on it: no dependents
-        let project = self.workspace()?.project(&args.project)?;
-        Ok(serde_json::to_string_pretty(
-            &self.dependency_graph()?.analyze_impact(&project.name),
-        )?)
+        let key = match args.project.as_str() {
+            "." => ".",
+            project => graph.find(project)?.ok_or_else(|| not_found(project))?,
+        };
+        Ok(serde_json::to_string_pretty(&graph.analyze_impact(key))?)
     }
 
     fn execution_order(&self, args: TagArgs) -> Result<String> {
@@ -1649,7 +1781,7 @@ mod tests {
         assert_eq!(names, listed);
         // No workspace: a call whose arguments are read stops there, and
         // runs nothing
-        let server = McpServer::in_dir(None);
+        let server = McpServer::nowhere();
         for (tool, (_, arguments, smallest)) in TOOLS.iter().zip(contract) {
             let schema = &tool.input_schema;
             let mut properties: Vec<_> = schema["properties"]
@@ -1812,6 +1944,317 @@ mod tests {
             .is_some_and(|e| e.to_string().contains("names no tag")));
     }
 
+    /// `(names of the repos a read tool lists)`, sorted.
+    fn listed(rows: &serde_json::Value, key: &str) -> Vec<String> {
+        let mut names: Vec<String> = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row[key].as_str().unwrap().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    const REACHED: [&str; 6] = [
+        ".",
+        "platform",
+        "platform/api",
+        "platform/core",
+        "platform/svc",
+        "web",
+    ];
+
+    /// On main these tools saw the top level only: no root, nothing nested.
+    #[test]
+    fn the_read_tools_see_what_meta_r_sees() {
+        let sandbox = meta_plugin::testing::isolated!();
+        crate::test_support::use_built_meta();
+        let root = crate::test_support::nested(&sandbox);
+        let server = McpServer::at(root.clone()).unwrap();
+        let dirty = |query: &str| {
+            json(call(&server, "meta_query_repos", json!({"query": query})))["projects"].clone()
+        };
+        // an untracked file in the root, and a modified one nested
+        std::fs::write(root.join("stray"), "x").unwrap();
+        std::fs::write(root.join("platform/api/README"), "changed").unwrap();
+        assert_eq!(listed(&dirty("dirty:true"), "name"), [".", "platform/api"]);
+        let state = json(call(&server, "meta_workspace_state", json!({})));
+        assert_eq!(state["total_projects"], 6, "{state}");
+        assert_eq!(state["dirty_projects"], 2, "{state}");
+
+        assert_eq!(
+            listed(&dirty("tag:deep"), "name"),
+            ["platform/api", "platform/core", "platform/svc"]
+        );
+        assert_eq!(listed(&dirty("tag:none"), "name"), Vec::<String>::new());
+        assert!(call(&server, "meta_query_repos", json!({"query": "tag:"})).is_err());
+
+        let branches = call(&server, "meta_git_branch", json!({}));
+        assert_eq!(listed(&json(branches), "project"), REACHED);
+        let status = json(call(&server, "meta_git_status", json!({})));
+        assert_eq!(listed(&status["results"], "project"), REACHED, "{status}");
+
+        for tool in ["meta_git_status", "meta_git_branch"] {
+            for tag in ["no-such", " , "] {
+                assert!(
+                    call(&server, tool, json!({"tag": tag})).is_err(),
+                    "{tool} {tag}"
+                );
+            }
+        }
+        let tagged = json(call(&server, "meta_git_branch", json!({"tag": "deep"})));
+        assert_eq!(
+            listed(&tagged, "project"),
+            ["platform/api", "platform/core", "platform/svc"]
+        );
+        let tagged = json(call(&server, "meta_git_status", json!({"tag": "deep"})));
+        assert_eq!(tagged["results"].as_array().unwrap().len(), 3, "{tagged}");
+        for project in ["platform/api", "api"] {
+            let one = json(call(
+                &server,
+                "meta_git_status",
+                json!({"project": project}),
+            ));
+            assert_eq!(
+                listed(&one["results"], "project"),
+                ["platform/api"],
+                "{one}"
+            );
+        }
+    }
+
+    #[test]
+    fn impact_reaches_through_nesting_by_path_or_unique_name() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let root = crate::test_support::nested(&sandbox);
+        let server = McpServer::at(root.clone()).unwrap();
+        for project in ["platform/core", "core"] {
+            let impact = json(call(
+                &server,
+                "meta_analyze_impact",
+                json!({"project": project}),
+            ));
+            assert_eq!(
+                impact["direct_dependents"],
+                json!(["platform/api"]),
+                "{impact}"
+            );
+            assert_eq!(
+                impact["transitive_dependents"],
+                json!(["platform/svc"]),
+                "{impact}"
+            );
+            assert_eq!(impact["total_affected"], 2, "{impact}");
+        }
+        // two repos of that name: refused, not guessed
+        std::fs::write(
+            root.join(".meta.yaml"),
+            r#"{"projects":{"web":"x","platform":{"repo":"x","meta":true},"other":{"repo":"x","meta":true}}}"#,
+        )
+        .unwrap();
+        sandbox.repo(&root.join("other/core"));
+        std::fs::write(
+            root.join("other/.meta.yaml"),
+            r#"{"projects":{"core":"x"}}"#,
+        )
+        .unwrap();
+        let err = call(&server, "meta_analyze_impact", json!({"project": "core"}));
+        assert!(err
+            .err()
+            .is_some_and(|e| e.to_string().contains("ambiguous")));
+    }
+
+    /// In a set: its members only, from its root or a nested member; a
+    /// set with no root checkout acts on itself, not on the primary.
+    #[test]
+    fn inside_a_set_the_tools_see_and_act_on_the_set() {
+        let sandbox = meta_plugin::testing::isolated!();
+        crate::test_support::use_built_meta();
+        let root = crate::test_support::nested(&sandbox);
+        for origin_of in ["", "web", "platform", "platform/core", "platform/api"] {
+            let up = sandbox
+                .work()
+                .join("up")
+                .join(origin_of.replace('/', "-") + ".git");
+            sandbox.git(
+                &sandbox.work(),
+                &[
+                    "clone",
+                    "-q",
+                    "--bare",
+                    root.join(origin_of).to_str().unwrap(),
+                    up.to_str().unwrap(),
+                ],
+            );
+            sandbox.git(
+                &root.join(origin_of),
+                &["remote", "add", "origin", up.to_str().unwrap()],
+            );
+        }
+        let make = |line: &[&str]| {
+            let out = crate::run::meta()
+                .unwrap()
+                .cwd(&root)
+                .args(line)
+                .json()
+                .unwrap()
+                .wait()
+                .unwrap();
+            assert!(out.error.is_none(), "{:?}", out.error);
+        };
+        make(&[
+            "-r",
+            "git",
+            "worktree",
+            "create",
+            "s",
+            "--repo",
+            "platform/api",
+        ]);
+        let set = root.join(".worktrees/s");
+        std::fs::write(root.join("web/stray"), "x").unwrap();
+        std::fs::write(set.join("platform/api/README"), "changed").unwrap();
+        for start in [set.clone(), set.join("platform/api")] {
+            let server = McpServer::at(start).unwrap();
+            let state = json(call(&server, "meta_workspace_state", json!({})));
+            assert_eq!(state["total_projects"], 4, "{state}");
+            assert_eq!(state["dirty_projects"], 1, "{state}");
+            let dirty = json(call(
+                &server,
+                "meta_query_repos",
+                json!({"query": "dirty:true"}),
+            ));
+            assert_eq!(
+                listed(&dirty["projects"], "name"),
+                ["platform/api"],
+                "{dirty}"
+            );
+            let branches = json(call(&server, "meta_git_branch", json!({})));
+            let members = [".", "platform", "platform/api", "platform/core"];
+            assert_eq!(listed(&branches, "project"), members);
+            let status = json(call(&server, "meta_git_status", json!({})));
+            assert_eq!(listed(&status["results"], "project"), members, "{status}");
+            // svc depends on api, but the set doesn't hold it
+            let impact = json(call(
+                &server,
+                "meta_analyze_impact",
+                json!({"project": "platform/api"}),
+            ));
+            assert_eq!(impact["direct_dependents"], json!([]), "{impact}");
+            let impact = json(call(
+                &server,
+                "meta_analyze_impact",
+                json!({"project": "core"}),
+            ));
+            assert_eq!(
+                impact["direct_dependents"],
+                json!(["platform/api"]),
+                "{impact}"
+            );
+        }
+        // from a nested member, a project of its config is the one in the set
+        std::fs::write(set.join("platform/api/new"), "x").unwrap();
+        let server = McpServer::at(set.join("platform")).unwrap();
+        let added = call(
+            &server,
+            "meta_git_add",
+            json!({"project": "api", "files": ["new"]}),
+        )
+        .unwrap();
+        assert!(!added.is_error, "{}", added.text);
+        let staged = sandbox.git(
+            &set.join("platform/api"),
+            &["diff", "--cached", "--name-only"],
+        );
+        assert_eq!(staged.trim(), "new");
+
+        make(&[
+            "git",
+            "worktree",
+            "create",
+            "bare",
+            "--repo",
+            "web",
+            "--no-deps",
+        ]);
+        let bare = root.join(".worktrees/bare");
+        assert!(!bare.join(".git").exists());
+        let server = McpServer::at(bare.clone()).unwrap();
+        let branches = json(call(&server, "meta_git_branch", json!({})));
+        assert_eq!(listed(&branches, "project"), ["web"]);
+        // its members only, an atomic batch too: no project it doesn't hold
+        for (atomic, command) in [(true, vec!["true"]), (false, vec!["touch", "ran"])] {
+            let batch = json(call(
+                &server,
+                "meta_batch_execute",
+                json!({"command": command, "atomic": atomic}),
+            ));
+            assert_eq!(batch["has_failure"], false, "{batch}");
+            assert_eq!(listed(&batch["results"], "project"), ["web"], "{batch}");
+        }
+        let projects = call(&server, "meta_list_projects", json!({})).unwrap().text;
+        assert!(projects.starts_with("Found 1 project"), "{projects}");
+        std::fs::write(bare.join("web/Makefile"), "build:\n\ttouch built\n").unwrap();
+        std::fs::write(root.join("web/Makefile"), "build:\n\ttouch built\n").unwrap();
+        call(&server, "meta_build", json!({})).unwrap();
+        assert!(bare.join("web/ran").exists());
+        assert!(bare.join("web/built").exists());
+        assert!(!root.join("web/ran").exists());
+        assert!(!root.join("web/built").exists());
+    }
+
+    /// In a set with no root checkout, a project outside the workspace is
+    /// at its name, and is a member there.
+    #[test]
+    fn a_rootless_set_holds_an_outside_project_at_its_name() {
+        let sandbox = meta_plugin::testing::isolated!();
+        crate::test_support::use_built_meta();
+        let root = crate::test_support::nested(&sandbox);
+        sandbox.repo(&sandbox.work().join("sib"));
+        std::fs::write(
+            root.join(".meta.yaml"),
+            r#"{"projects":{"web":"x","platform":{"repo":"x","meta":true},"sib":{"repo":"x","path":"../sib"}}}"#,
+        )
+        .unwrap();
+        let made = crate::run::meta()
+            .unwrap()
+            .cwd(&root)
+            .args([
+                "git",
+                "worktree",
+                "create",
+                "o",
+                "--repo",
+                "sib",
+                "--no-deps",
+            ])
+            .json()
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(made.error.is_none(), "{:?}", made.error);
+        let set = root.join(".worktrees/o");
+        assert!(set.join("sib/.git").exists() && !set.join(".git").exists());
+        let server = McpServer::at(set).unwrap();
+        let projects = call(&server, "meta_list_projects", json!({})).unwrap().text;
+        assert!(projects.starts_with("Found 1 project"), "{projects}");
+        assert!(projects.contains("- sib (sib)"), "{projects}");
+        // and the tools that read the tree find it there too
+        let impact = json(call(
+            &server,
+            "meta_analyze_impact",
+            json!({"project": "sib"}),
+        ));
+        assert_eq!(impact["direct_dependents"], json!([]), "{impact}");
+        let status = json(call(&server, "meta_git_status", json!({"project": "sib"})));
+        assert_eq!(
+            status["results"].as_array().map(Vec::len),
+            Some(1),
+            "{status}"
+        );
+    }
+
     #[test]
     fn multi_commit_refuses_a_project_outside_the_workspace_before_committing() {
         let sandbox = meta_plugin::testing::isolated!();
@@ -1851,7 +2294,7 @@ mod tests {
         let child = tmp.join("child");
         std::fs::create_dir(&child).unwrap();
         std::fs::write(child.join(".meta.yaml"), "projects: {}\n").unwrap();
-        let server = McpServer::in_dir(Some(child.clone()));
+        let server = McpServer::at(child.clone()).unwrap();
         assert!(call(&server, "meta_list_projects", json!({})).is_ok());
         std::fs::remove_file(child.join(".meta.yaml")).unwrap();
         let err = call(&server, "meta_list_projects", json!({}))
@@ -1920,6 +2363,7 @@ mod tests {
     #[test]
     fn tags_select_and_refuse_as_meta_tag_does() {
         let sandbox = meta_plugin::testing::isolated!();
+        crate::test_support::use_built_meta();
         let config = r#"{"projects":{"a":{"repo":"x","tags":["red"],"meta":true},
             "b":{"repo":"x","tags":["blue","red"]},"c":{"repo":"x","tags":["green"]},"d":"x"}}"#;
         let (server, root) = server(&sandbox, config);
@@ -1993,8 +2437,9 @@ mod tests {
             "ui",
         ] {
             for (tool, _, smallest) in &tagged {
-                // the search reads nested projects, as `meta -r` does
-                let recursive = *tool == "meta_search_code";
+                // these read nested projects, as `meta -r` does
+                let recursive =
+                    ["meta_search_code", "meta_git_status", "meta_git_branch"].contains(tool);
                 let mut arguments = smallest.clone();
                 arguments["tag"] = json!(tag);
                 let result = call(&server, tool, arguments)

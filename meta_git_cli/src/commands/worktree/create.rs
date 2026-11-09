@@ -11,6 +11,7 @@ use crate::here::Here;
 use crate::worktree::git_ops::*;
 use crate::worktree::helpers::*;
 use crate::worktree::hooks::fire_post_create;
+use crate::worktree::origin::{branches_on_origin, Wanted};
 use crate::worktree::plan::{Found, Index, PlannedRepo};
 use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
 use crate::worktree::types::{CreateOutput, CreatePlan, CreatePlanRepo, CreateRepoEntry};
@@ -140,6 +141,27 @@ pub(crate) fn handle_create(
         return Ok(Made::Again);
     }
 
+    // What origin has of the branches this clone hasn't fetched, before
+    // anything is made; a PR's repo takes the PR's branch instead
+    let pr_place = from_pr_spec
+        .and_then(|spec| parse_from_pr(spec).ok())
+        .and_then(|(pr_repo, _)| {
+            repos_to_create
+                .iter()
+                .find(|repo| repo.place != "." && repo_matches_spec(&repo.source, &pr_repo))
+                .map(|repo| repo.place.clone())
+        });
+    let wanted: Vec<Wanted> = repos_to_create
+        .iter()
+        .filter(|repo| Some(&repo.place) != pr_place.as_ref())
+        .map(|repo| Wanted {
+            project: &repo.project,
+            source: &repo.source,
+            branch: &repo.branch,
+        })
+        .collect();
+    let on_origin = branches_on_origin(&wanted, from_ref, ctx)?;
+
     // A preview makes the checks a run makes (all but asking GitHub for a
     // PR's branch), skips what it skips and fails where it fails
     if mode.is_preview() {
@@ -179,17 +201,26 @@ pub(crate) fn handle_create(
         // what the run checks before each add; a PR's branch is fetched
         // first, so its repo gets only the check that doesn't need it
         let pr_branch = from_pr_spec.map(|spec| format!("<the head branch of {spec}>"));
+        let mut starts = Vec::with_capacity(kept.len());
         for repo in &kept {
-            if pr_branch.as_ref() == Some(&repo.branch) {
-                ensure_checkout_config_is_not_bare(&repo.source)?;
-            } else {
-                worktree_start(&repo.source, &repo.branch, from_ref)?;
-            }
+            let commit = on_origin.get(&repo.source).cloned();
+            starts.push(
+                if pr_branch.as_ref() == Some(&repo.branch) || commit.is_some() {
+                    ensure_checkout_config_is_not_bare(&repo.source)?;
+                    WorktreeStart::Remote {
+                        commit: commit.unwrap_or_default(),
+                    }
+                } else {
+                    worktree_start(&repo.source, &repo.branch, from_ref)?
+                },
+            );
         }
         let plan = CreateDryRunPlan {
             name,
             wt_dir: &wt_dir,
             repos_to_create: &kept,
+            starts: &starts,
+            on_origin: &on_origin,
             from_ref,
             from_pr_spec,
             ephemeral,
@@ -200,10 +231,13 @@ pub(crate) fn handle_create(
         records.push(ProjectResult::about_workspace(CreatePlan {
             repos: kept
                 .iter()
-                .map(|repo| CreatePlanRepo {
+                .zip(&starts)
+                .map(|(repo, start)| CreatePlanRepo {
                     alias: repo.project.clone(),
                     source: repo.source.clone(),
                     path: planned_dest(&wt_dir, repo),
+                    created_branch: start.is_new_branch(),
+                    started_from: start.base(&repo.branch),
                 })
                 .collect(),
         }));
@@ -432,7 +466,11 @@ pub(crate) fn handle_create(
 /// How a repo's line ends: ` (new from origin/main)` for a branch this call
 /// made, nothing for an existing one.
 pub(super) fn new_branch_note(repo: &CreateRepoEntry) -> String {
-    match (repo.created_branch, &repo.started_from) {
+    branch_note(repo.created_branch, repo.started_from.as_deref())
+}
+
+fn branch_note(created_branch: bool, started_from: Option<&str>) -> String {
+    match (created_branch, started_from) {
         (true, Some(base)) => format!(" (new from {})", escape(base)),
         (true, None) => " (new)".to_string(),
         (false, _) => String::new(),
@@ -529,6 +567,9 @@ struct CreateDryRunPlan<'a> {
     name: &'a str,
     wt_dir: &'a std::path::Path,
     repos_to_create: &'a [PlannedRepo],
+    /// How each of them would start
+    starts: &'a [WorktreeStart],
+    on_origin: &'a HashMap<std::path::PathBuf, String>,
     from_ref: Option<&'a str>,
     from_pr_spec: Option<&'a str>,
     ephemeral: bool,
@@ -582,7 +623,7 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
     }
 
     outln!("Planned repo operations:")?;
-    for repo in plan.repos_to_create {
+    for (repo, start) in plan.repos_to_create.iter().zip(plan.starts) {
         let PlannedRepo {
             project: alias,
             source,
@@ -590,15 +631,15 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
             branch,
         } = repo;
         let dest = planned_dest(plan.wt_dir, repo);
-        let mut cmd = format!(
-            "git -C {} worktree add -b {} {}",
-            shell_quote(&source.display().to_string()),
-            shell_quote(branch),
-            shell_quote(&dest.display().to_string())
-        );
-        if let Some(from_ref) = plan.from_ref {
-            cmd.push(' ');
-            cmd.push_str(&shell_quote(from_ref));
+        let git = format!("git -C {}", shell_quote(&source.display().to_string()));
+        let add: Vec<String> = worktree_add_args(start, &dest, branch)
+            .iter()
+            .map(|arg| shell_quote(&arg.to_string_lossy()))
+            .collect();
+        let mut cmd = format!("{git} {}", add.join(" "));
+        if plan.on_origin.contains_key(source) {
+            let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+            cmd = format!("{git} fetch origin {} && {cmd}", shell_quote(&refspec));
         }
         outln!("  {}:", escape(alias))?;
         outln!("    source: {}", escape_path(source))?;
@@ -610,7 +651,8 @@ fn print_create_dry_run(plan: &CreateDryRunPlan<'_>) -> Result<()> {
             outln!("    (a link: if the root checkout holds it, the repo goes where it leads)")?;
         }
         outln!("    dest:   {}", escape_path(&dest))?;
-        outln!("    branch: {}", escape(branch))?;
+        let note = branch_note(start.is_new_branch(), start.base(branch).as_deref());
+        outln!("    branch: {}{note}", escape(branch))?;
         outln!("    bash:   {}", escape(&cmd))?;
     }
 
@@ -850,7 +892,7 @@ fn plan_repos(index: &Index, args: &CreateArgs, ctx: &Ctx, verbose: bool) -> Res
     // top, and says them then; with --strict, before it clones anything)
     let again = !missing.is_empty() && !ctx.meta().strict && !ctx.dry_run();
     if !args.no_deps && !again {
-        report_problems(index, followed.iter().map(String::as_str), ctx)?;
+        report_problems(index, followed.iter().map(String::as_str), &repos, ctx)?;
     }
     if !not_cloned.is_empty() {
         not_cloned.extend(missing);
@@ -1070,14 +1112,29 @@ fn root_of(index: &Index) -> Option<std::path::PathBuf> {
 fn report_problems<'a>(
     index: &Index,
     set: impl IntoIterator<Item = &'a str>,
+    repos: &[PlannedRepo],
     ctx: &Ctx,
 ) -> Result<()> {
+    // a repo this create doesn't follow: said only when the set won't hold
+    // it
+    let held = |path: &str| {
+        index
+            .members
+            .iter()
+            .filter(|m| m.path == path)
+            .any(|m| repos.iter().any(|r| r.source == m.abs))
+    };
     // a project reached twice is reported once
     let set: BTreeSet<&str> = set.into_iter().collect();
     for project in set {
-        let Some(node) = index.node(project) else {
+        let Some(node) = index.listed(project) else {
             continue;
         };
+        for left_out in &node.project.left_out {
+            if !held(&left_out.repo) {
+                ctx.warn_or_bail(format!("'{}' {}", escape(project), left_out.problem))?;
+            }
+        }
         for problem in &node.project.dependency_problems {
             ctx.warn_or_bail(format!("'{}' {problem}", escape(project)))?;
         }

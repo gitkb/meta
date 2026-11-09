@@ -5,7 +5,7 @@ use meta_core::git::{lookup, run, RepoStatus};
 use meta_core::gitdir::{common_dir, Checkout};
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::errln;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 /// A git command that failed in a repo: its error says what failed where,
@@ -39,7 +39,7 @@ impl std::error::Error for GitFailed {}
 /// `git <args>` in `dir`, a command that changes the repo of `repo`: when
 /// it fails, a [`GitFailed`] (its stderr kept, bounded as every captured
 /// output is).
-fn change<I, S>(repo: &Path, dir: &Path, args: I) -> Result<String>
+pub(super) fn change<I, S>(repo: &Path, dir: &Path, args: I) -> Result<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -171,6 +171,11 @@ impl WorktreeStart {
         }
     }
 
+    /// Whether it makes a new branch.
+    pub fn is_new_branch(&self) -> bool {
+        !matches!(self, Self::Existing)
+    }
+
     /// What a new branch starts from, as said to the user (`origin/main`,
     /// `HEAD (topic)`); none for an existing branch.
     pub fn base(&self, branch: &str) -> Option<String> {
@@ -281,27 +286,37 @@ pub fn git_worktree_add(
 ) -> Result<WorktreeStart> {
     let start = worktree_start(repo_path, branch, from_ref)?;
     leftover_entry(repo_path, worktree_dest)?;
-    let remote_ref = format!("origin/{branch}");
-    let mut args: Vec<&OsStr> = vec!["worktree".as_ref(), "add".as_ref()];
+    change(
+        repo_path,
+        repo_path,
+        worktree_add_args(&start, worktree_dest, branch),
+    )?;
+    Ok(start)
+}
+
+/// The arguments of the `git worktree add` that starts a worktree at `dest`
+/// on `branch` as `start` says.
+pub fn worktree_add_args(start: &WorktreeStart, dest: &Path, branch: &str) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["worktree".into(), "add".into()];
     match start {
-        WorktreeStart::Remote { .. } => args.push("--track".as_ref()),
+        WorktreeStart::Remote { .. } => args.push("--track".into()),
         // a branch of its own: pushing or pulling it must not reach main
-        WorktreeStart::Default { .. } => args.push("--no-track".as_ref()),
+        WorktreeStart::Default { .. } => args.push("--no-track".into()),
         _ => {}
     }
     if !matches!(start, WorktreeStart::Existing) {
-        args.extend_from_slice(&["-b".as_ref(), branch.as_ref()]);
+        args.extend(["-b".into(), branch.into()]);
     }
-    args.push(worktree_dest.as_os_str());
-    match &start {
-        WorktreeStart::Ref { name, .. } => args.push(name.as_ref()),
-        WorktreeStart::Existing => args.push(branch.as_ref()),
-        WorktreeStart::Remote { .. } => args.push(remote_ref.as_ref()),
-        WorktreeStart::Default { name, .. } => args.push(name.as_ref()),
+    args.push(dest.into());
+    match start {
+        WorktreeStart::Ref { name, .. } | WorktreeStart::Default { name, .. } => {
+            args.push(name.into());
+        }
+        WorktreeStart::Existing => args.push(branch.into()),
+        WorktreeStart::Remote { .. } => args.push(format!("origin/{branch}").into()),
         WorktreeStart::Head { .. } => {}
     }
-    change(repo_path, repo_path, args)?;
-    Ok(start)
+    args
 }
 
 /// Fail, saying what to do, if git still has an entry for a worktree of

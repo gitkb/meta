@@ -788,7 +788,10 @@ fn a_plugins_answer_is_what_the_host_acts_on_and_a_bad_one_runs_nothing() {
             "meta-aim did not answer --meta-plugin-targeting within 5 seconds",
         ),
         // checked before the workspace's broken config is read
-        ("echo '{\"WholeSet\":\"../x\"}'", "cannot start with '.'"),
+        (
+            "echo '{\"WholeSet\":\"../x\"}'",
+            "Plugin meta-aim named an invalid set",
+        ),
     ] {
         aiming(&root, answer);
         fs::write(root.join(".meta.yaml"), "{broken").unwrap();

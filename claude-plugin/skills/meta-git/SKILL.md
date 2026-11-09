@@ -7,6 +7,8 @@ description: Git operations across multiple repositories — status, commit, pus
 
 Git operations across multiple repositories. One command operates on the root repo and every project in this meta level; add `-r` (`meta -r git status`) to include the meta repos nested under it, or `-A` for the whole workspace from anywhere.
 
+**The primary checkout is pull-only.** Commit, stage, push and batch-edit inside a worktree set (the `meta-worktree` skill), where these commands act on the set's repos only. In the primary checkout, read or run `meta -r git update`.
+
 ## The Core Insight
 
 **Use `meta git` instead of `git`** when you want to operate across the workspace:
@@ -59,24 +61,30 @@ meta git update    # Fast-forward cloned repos, clone the missing ones
 
 ## Before Batch Operations (Critical)
 
-Before making sweeping changes, commit or stash uncommitted work in every repo:
+Inside your set, before making sweeping changes, commit uncommitted work in every repo:
 
 ```bash
 # See which repos have uncommitted changes
 meta git status
 
-# Commit them at this meta level (`meta -r git …` for nested ones, `meta -A git …` for the whole workspace); `meta git commit` commits only staged changes
+# Commit them (`meta git commit` commits only staged changes; with nothing staged it says so and exits 0)
 meta git add -A
 meta git commit -m "wip: before refactor"
-
-# Or stash them instead (untracked files included)
-meta exec -- git stash push -u -m before-refactor
 
 # Preview a batch command before running it
 meta --dry-run exec -- <command>
 ```
 
-**Recovering**: `git reflog` in the affected repo lists the commits its `HEAD` pointed to; `git switch -c recovered <sha>` brings one back. Use `meta exec -- git reflog -n 20` to look across all repos (`--include <repo>` for one). The reflog only recovers commits, not uncommitted changes, so commit or stash first. A backup branch keeps only commits.
+Commit rather than stash: every worktree of a repo shares one stash, so another session's `git stash pop` can take yours. If you must stash, name it (`meta exec -- git stash push -u -m before-refactor`), find its commit with `git stash list --format='%H %gs'` in each repo, and restore that with `git stash apply --index <sha>` (`--index` keeps what was staged staged).
+
+**Recovering**: run `git reflog` inside the set, in the affected repo: it lists the commits that worktree's `HEAD` pointed to, and `git switch -c recovered <sha>` brings one back. From the primary checkout you won't see them, and a set's reflog goes with the set, so recover before you remove it. `meta exec -- git reflog -n 20`, run in the set, looks across its repos (`meta --include <repo> exec -- …` for one). The reflog only recovers commits, not uncommitted changes. A backup branch keeps only commits.
+
+**Undoing a commit**, in the set, one repo at a time with `--include`:
+
+```bash
+meta --include <repo> exec -- git reset --soft HEAD~1   # not pushed: the changes come back staged
+meta --include <repo> exec -- git revert --no-edit HEAD # pushed: a new commit undoes it
+```
 
 ## Common Git Operations
 
@@ -111,39 +119,39 @@ meta --exclude legacy git pull
 
 ### Starting Work
 ```bash
-meta git status              # What's the current state?
-meta git add -A              # Stage pending work
-meta git commit -m "wip"     # Commit it before changes
-meta git pull                # Get latest
+meta -r git update                              # In the primary checkout: get latest
+meta git worktree create my-task --repo api     # A set for this task (-r or -A for nested repos)
+cd .worktrees/my-task
+meta git status                                 # What's the current state?
 ```
 
 ### After Making Changes
 ```bash
-meta git status              # Review changes across repos
-meta git add .               # Stage in all repos
-meta git commit -m "feat: ..." # Commit with shared message
-meta git push                # Push all repos
+meta git status                                 # In the set: review changes across repos
+meta git add -A                                 # Stage in all repos
+meta git commit -m "feat: ..."                  # Commit with shared message
+meta --include api git push -u origin HEAD      # Push the repos you changed
 ```
 
 ### Safe Batch Refactoring
 ```bash
-meta git add -A && meta git commit -m "wip: before changes"  # Save pending work first
+meta git add -A && meta git commit -m "wip: before changes"  # In the set: save pending work first
 # ... make changes across repos ...
 meta git status              # Review
-# If something went wrong, in the affected repo:
+# If something went wrong, in the affected repo of the set:
 git reflog                   # Find an earlier commit, then: git switch -c recovered <sha>
 ```
 
 ## MCP Tools for Git Operations
 
-When the meta MCP server is available, these tools provide structured JSON output:
+The meta MCP server (`meta-mcp`; see the `meta-workspace` skill for how to start it) gives structured JSON. Every tool has a CLI equivalent:
 
-| Tool | Purpose |
-|------|---------|
-| `meta_git_multi_commit` | Per-repo commit messages in one call (for audit trails when changes differ) |
-| `meta_git_status` | Structured git status across all repos |
-| `meta_git_diff` | Structured diff output |
-| `meta_git_branch` | Branch info across repos |
+| Tool | Purpose | Without MCP |
+|------|---------|-------------|
+| `meta_git_multi_commit` | Per-repo commit messages in one call (for audit trails when changes differ) | `meta -r --include <repo> git commit -m "…"`, once per repo (the tool itself takes only this level's repos) |
+| `meta_git_status` | Each repo's `git status` text, the root and nested repos included | `meta -r --json git status` |
+| `meta_git_diff` | Structured diff output, this level's repos only | `meta git diff` |
+| `meta_git_branch` | Branch info of the root and every nested repo | `meta -r exec -- git status -sb` |
 
 ## Efficiency Tips
 

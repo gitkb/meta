@@ -64,6 +64,7 @@ fn projects(repos: &[Candidate], root: &Path) -> Vec<Project> {
                 tags: repo.tags().to_vec(),
                 depends_on: info.map(|i| i.depends_on.clone()).unwrap_or_default(),
                 dependency_problems: Vec::new(),
+                left_out: Vec::new(),
                 meta: info.is_some_and(|i| i.meta),
                 level: None,
                 present: repo.dir.exists(),
@@ -94,10 +95,11 @@ fn workspace(
     root: &Path,
     members: &[Candidate],
     reach: Option<&Reach>,
+    whole_tree: &[Candidate],
 ) -> meta_plugin::Workspace {
     let mut members = projects(members, root);
     if let Some(reach) = reach {
-        resolve_dependencies(reach, root, &mut members);
+        resolve_dependencies(reach, root, &mut members, whole_tree);
     }
     meta_plugin::Workspace {
         root: root.to_path_buf(),
@@ -112,8 +114,16 @@ fn workspace(
 /// config's own projects, or with `-r`/`-A` by place through the whole tree
 /// it walks (an entry qualified with the place of the meta repo that lists
 /// it), through what a project provides too. A member outside the reach
-/// keeps its entries as written.
-fn resolve_dependencies(reach: &Reach, root: &Path, members: &mut [Project]) {
+/// keeps its entries as written. An entry that names nothing there but one
+/// repo elsewhere in `whole_tree` (the whole workspace) is a problem naming
+/// that repo: the member's `left_out`, which a create says only when the
+/// set won't hold that repo.
+fn resolve_dependencies(
+    reach: &Reach,
+    root: &Path,
+    members: &mut [Project],
+    whole_tree: &[Candidate],
+) {
     use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
     let repos = reach.scope().repos;
     let flat = reach.tree.is_empty();
@@ -130,21 +140,25 @@ fn resolve_dependencies(reach: &Reach, root: &Path, members: &mut [Project]) {
         })
         .collect();
     let keys: std::collections::HashSet<&str> = keyed.iter().map(|(_, k, _)| k.as_str()).collect();
+    // an entry of the project at `key`, as the graph names it
+    let qualify_with = |key: &str, info: &config::ProjectInfo, name: &String| {
+        // "open-source/gitkb/core" listed as "core": "open-source/gitkb/"
+        let prefix = match flat {
+            true => "",
+            false => key
+                .strip_suffix(info.path.as_str())
+                .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
+                .unwrap_or(""),
+        };
+        match keys.contains(name.as_str()) || name == "." {
+            true => name.clone(),
+            false => format!("{prefix}{name}"),
+        }
+    };
     let mut nodes: Vec<ProjectDependencies> = keyed
         .iter()
         .map(|(_, key, info)| {
-            // "open-source/gitkb/core" listed as "core": "open-source/gitkb/"
-            let prefix = match flat {
-                true => "",
-                false => key
-                    .strip_suffix(info.path.as_str())
-                    .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
-                    .unwrap_or(""),
-            };
-            let qualify = |name: &String| match keys.contains(name.as_str()) || name == "." {
-                true => name.clone(),
-                false => format!("{prefix}{name}"),
-            };
+            let qualify = |name: &String| qualify_with(key, info, name);
             ProjectDependencies {
                 name: key.clone(),
                 path: key.clone(),
@@ -164,8 +178,20 @@ fn resolve_dependencies(reach: &Reach, root: &Path, members: &mut [Project]) {
             .find(|(_, k, _)| k == key)
             .map(|(dir, _, _)| repo_path(dir, root))
     };
+    // what -r reaches from the config the command starts at
+    let here = Reach::of(reach.workspace.clone(), true, false, None)
+        .ok()
+        .map(|reach| reach.scope().repos);
+    let elsewhere = Elsewhere::of(whole_tree, here.as_deref(), root, &reach.workspace.dir);
     for member in members.iter_mut() {
-        let Some((_, key, _)) = keyed.iter().find(|(dir, _, _)| *dir == member.abs) else {
+        let Some((_, key, info)) = keyed.iter().find(|(dir, _, _)| *dir == member.abs) else {
+            // outside the reach (a nested repo without -r): only what
+            // names one repo elsewhere is said
+            member.left_out = member
+                .depends_on
+                .iter()
+                .filter_map(|dep| elsewhere.left_out(&member.abs, dep, flat))
+                .collect();
             continue;
         };
         let resolved = graph.get_dependencies(key);
@@ -180,15 +206,174 @@ fn resolve_dependencies(reach: &Reach, root: &Path, members: &mut [Project]) {
             .filter_map(|dep| path_of(dep))
             .chain(unresolved)
             .collect();
-        member.dependency_problems = problems
-            .iter()
-            .map(|problem| match problem {
-                meta_core::dependency_graph::DependencyProblem::Unresolved(_) if flat => {
-                    format!("{problem} (nested projects count with -r)")
+        // an entry as written, by how this graph qualified it
+        let written = |qualified: &str| {
+            info.depends_on
+                .iter()
+                .find(|dep| qualify_with(key, info, dep) == qualified)
+                .cloned()
+                .unwrap_or_else(|| qualified.to_string())
+        };
+        member.dependency_problems = Vec::new();
+        for problem in problems {
+            let left_out = match problem {
+                meta_core::dependency_graph::DependencyProblem::Unresolved(dep) => {
+                    elsewhere.left_out(&member.abs, &written(dep), flat)
                 }
-                _ => problem.to_string(),
+                _ => None,
+            };
+            match (left_out, problem) {
+                (Some(left_out), _) => member.left_out.push(left_out),
+                (None, meta_core::dependency_graph::DependencyProblem::Unresolved(_)) if flat => {
+                    member
+                        .dependency_problems
+                        .push(format!("{problem} (nested projects count with -r)"));
+                }
+                (None, _) => member.dependency_problems.push(problem.to_string()),
+            }
+        }
+    }
+}
+
+/// Every project of the whole workspace, for an entry the reach can't
+/// resolve: which one repo elsewhere it names, and whether `-r` follows it.
+struct Elsewhere<'a> {
+    /// Each project's folder, its path from the root, the place of the meta
+    /// repo that lists it (`platform/`, empty at the top), its info
+    projects: Vec<(&'a Path, String, String, &'a config::ProjectInfo)>,
+    /// The graph of what `-r` reaches from where the command starts, as `-r`
+    /// resolves it (by path, an entry qualified with its meta repo's place)
+    recursive: meta_core::dependency_graph::DependencyGraph,
+    /// The folders `-r` reaches from there
+    reached: Vec<PathBuf>,
+    /// The folder of the config the command starts at: a `--repo` there is
+    /// a path from it
+    start: PathBuf,
+}
+
+/// Each project of `repos`: its folder, its path from `root`, the place of
+/// the meta repo that lists it, its info.
+fn placed<'a>(
+    repos: &'a [Candidate],
+    root: &Path,
+) -> Vec<(&'a Path, String, String, &'a config::ProjectInfo)> {
+    repos
+        .iter()
+        .filter_map(|repo| {
+            let info = repo.info.as_ref()?;
+            let path = repo_path(&repo.dir, root);
+            let prefix = path
+                .strip_suffix(info.path.as_str())
+                .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
+                .unwrap_or("")
+                .to_string();
+            Some((repo.dir.as_path(), path, prefix, info))
+        })
+        .collect()
+}
+
+impl<'a> Elsewhere<'a> {
+    /// The projects of `whole_tree`, and `-r`'s graph of `here` (what it
+    /// reaches from where the command starts; the whole tree if unknown).
+    fn of(
+        whole_tree: &'a [Candidate],
+        here: Option<&[Candidate]>,
+        root: &Path,
+        start: &Path,
+    ) -> Self {
+        use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
+        let projects = placed(whole_tree, root);
+        let reach = placed(here.unwrap_or(whole_tree), root);
+        let keys: std::collections::HashSet<&str> =
+            reach.iter().map(|(_, path, ..)| path.as_str()).collect();
+        let mut nodes: Vec<ProjectDependencies> = reach
+            .iter()
+            .map(|(_, path, prefix, info)| {
+                let qualify = |name: &String| match keys.contains(name.as_str()) || name == "." {
+                    true => name.clone(),
+                    false => format!("{prefix}{name}"),
+                };
+                ProjectDependencies {
+                    name: path.clone(),
+                    path: path.clone(),
+                    repo: info.repo.clone(),
+                    tags: info.tags.clone(),
+                    provides: info.provides.iter().map(qualify).collect(),
+                    depends_on: info.depends_on.iter().map(qualify).collect(),
+                }
             })
             .collect();
+        nodes.sort_by(|a, b| a.name.cmp(&b.name));
+        Self {
+            recursive: DependencyGraph::build(nodes),
+            reached: reach.iter().map(|(dir, ..)| dir.to_path_buf()).collect(),
+            start: start.to_path_buf(),
+            projects,
+        }
+    }
+
+    /// The entry `dep` (as written) of the project at `dir`, when it names
+    /// one repo, of its own config first (by name, path or what it
+    /// provides), else anywhere: that repo, and what to say when the set
+    /// won't hold it (`flat`: the create has no `-r`). None when it names
+    /// none or several.
+    fn left_out(&self, dir: &Path, dep: &str, flat: bool) -> Option<meta_plugin::LeftOut> {
+        use meta_plugin::display::escape;
+        let (_, own_path, prefix, _) = self.projects.iter().find(|(d, ..)| *d == dir)?;
+        // a name or capability, or a path from the dependent's config or the root
+        let names = |(_, path, _, info): &&(&Path, String, String, &config::ProjectInfo)| {
+            info.name == dep
+                || info.provides.iter().any(|p| p == dep)
+                || *path == format!("{prefix}{dep}")
+                || path == dep
+        };
+        let own: Vec<_> = self
+            .projects
+            .iter()
+            .filter(|p| p.2 == *prefix && p.0 != dir)
+            .filter(names)
+            .collect();
+        let found = match own.as_slice() {
+            [] => self
+                .projects
+                .iter()
+                .filter(|p| p.0 != dir)
+                .filter(names)
+                .collect(),
+            _ => own,
+        };
+        let [(found_dir, path, ..)] = found.as_slice() else {
+            return None;
+        };
+        let r_follows = self
+            .recursive
+            .get_dependencies(own_path)
+            .contains(&path.as_str());
+        let shown = escape(path);
+        // what `--repo` takes from where the command starts: a repo of its
+        // tree by its path from there, any other with -A from the root
+        let inside = self.reached.iter().any(|d| d == found_dir);
+        let named = escape(&repo_path(found_dir, &self.start)).into_owned();
+        let problem = match (flat && r_follows, inside) {
+            (true, _) => format!(
+                "depends on '{shown}', which only -r follows: add -r, or name it with --repo {named}"
+            ),
+            (false, true) => format!(
+                "depends on '{shown}' (written '{}'), which -r doesn't follow: name it with \
+                 --repo {named}",
+                escape(dep)
+            ),
+            // outside what -r reaches from here: -A names it from the root
+            (false, false) => format!(
+                "depends on '{shown}' (written '{}'), outside what -r reaches from here: add -A \
+                 and name it with --repo {shown}",
+                escape(dep)
+            ),
+        };
+        Some(meta_plugin::LeftOut {
+            repo: path.clone(),
+            problem,
+        })
     }
 }
 
@@ -259,7 +444,13 @@ fn target_with(
         false => Some(0),
     };
     Ok(Target {
-        workspace: Some(workspace(&reach.workspace, &root, &members, Some(&reach))),
+        workspace: Some(workspace(
+            &reach.workspace,
+            &root,
+            &members,
+            Some(&reach),
+            &members,
+        )),
         worktree: worktree::plugin_worktree(Some(&reach.workspace), start, None),
         repos,
         parallel,
@@ -372,12 +563,8 @@ fn in_set(
     )?;
     // a workspace of its own inside the set's folder (a clone, or a set
     // inside it) is the target, unless it is a member's
-    if let Some(found) = config::find_meta_config(start, cli.config.as_ref())? {
-        let dir = found.parent().unwrap_or(set_dir);
-        let member = |c: &Candidate| c.dir == dir;
-        if dir != set_dir && dir.starts_with(set_dir) && !all.iter().any(member) {
-            return Ok(None);
-        }
+    if worktree::own_workspace_in_set(start, set_dir, cli.config.as_ref(), &all)? {
+        return Ok(None);
     }
     // Inside a set, a command never falls back to the workspace's own
     // checkouts: they aren't the ones the caller is in
@@ -409,7 +596,7 @@ fn in_set(
         parallel: parallel(config.as_ref()),
         workspace: config.as_ref().map(|c| {
             let reach = Reach::of(c.clone(), cli.recursive, cli.all, cli.depth).ok();
-            workspace(c, set_dir, &all, reach.as_ref())
+            workspace(c, set_dir, &all, reach.as_ref(), &[])
         }),
         worktree: worktree::plugin_worktree(config.as_ref(), start, Some(set_dir)),
         set: Some(set),

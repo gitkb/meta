@@ -5,8 +5,11 @@ use meta_plugin::{errln, outln};
 use meta_plugin::{Ctx, ProjectResult, Request, Response};
 
 use crate::here::Here;
-use crate::worktree::git_ops::{git_worktree_add, worktree_start};
+use crate::worktree::git_ops::{
+    ensure_checkout_config_is_not_bare, git_worktree_add, worktree_start, WorktreeStart,
+};
 use crate::worktree::helpers::*;
+use crate::worktree::origin::{branches_on_origin, Wanted};
 use crate::worktree::plan::{Index, PlannedRepo};
 use crate::worktree::scan::discover_worktree_repos;
 use crate::worktree::types::*;
@@ -164,12 +167,35 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
         planned.push((spec, source, place));
     }
 
+    let branches: Vec<String> = planned
+        .iter()
+        .map(|(spec, ..)| resolve_branch(name, None, spec.branch.as_deref()))
+        .collect();
+    let wanted: Vec<Wanted> = planned
+        .iter()
+        .zip(&branches)
+        .map(|((spec, source, _), branch)| Wanted {
+            project: &spec.alias,
+            source,
+            branch,
+        })
+        .collect();
+    let on_origin = branches_on_origin(&wanted, from_ref, ctx)?;
+
     if mode.is_preview() {
         let mut repos = Vec::new();
         for (spec, source, place) in &planned {
             // what the run checks before adding
             let branch = resolve_branch(name, None, spec.branch.as_deref());
-            let start = worktree_start(source, &branch, from_ref)?;
+            let start = match on_origin.get(source) {
+                Some(commit) => {
+                    ensure_checkout_config_is_not_bare(source)?;
+                    WorktreeStart::Remote {
+                        commit: commit.clone(),
+                    }
+                }
+                None => worktree_start(source, &branch, from_ref)?,
+            };
             repos.push(CreateRepoEntry {
                 alias: spec.alias.clone(),
                 path: wt_dir.join(place).display().to_string(),

@@ -35,6 +35,8 @@ Commit `.meta/skills/` and the links so everyone working in the repo gets the sk
 
 **What meta replaces.** `meta init claude --update` (or `--force`) overwrites meta's own files: `.meta/skills/<name>/SKILL.md` while it is byte for byte a version some meta wrote (an edited one is kept and named, so a change of yours is never lost; move it away to get meta's version), and its rule files `.claude/rules/meta-workspace-discipline.md` and `meta-destructive-commands.md`. In the agent skills folders (`.claude/skills/`, `.agents/skills/`, ...) it only replaces what meta wrote there: a marked copy, or a Git link placeholder holding exactly meta's link target. Other regular files, folders and links there are left alone and reported as skipped, in every mode. Older releases wrote each skill as a flat `.claude/skills/<name>.md` file, which Claude Code doesn't load: `--update` and `--force` delete such a file only while it is byte for byte one an older meta wrote, and name one that was changed since, leaving it. Links on the way are followed and kept: a linked `.claude/rules` folder or rule file gets the rules where it leads, a linked `.claude/settings.json` is merged atomically at its target and stays a link (`--update` still leaves settings alone), and a linked agent skills folder (say `.claude/skills` stowed from dotfiles) gets meta's links, made to point back at the workspace's skills. A linked folder that leads nowhere is an error naming it, as for `mkdir -p`.
 
+**The one place.** Everything an agent needs to use meta is in these skills and the two rules, so every workspace gets the same guidance from `meta init claude`. A repo's own AGENTS.md or skills hold only that repo's policy (which repos, which build commands), never how meta works.
+
 **Editing the skills.** Each skill has one source, `claude-plugin/skills/<name>/SKILL.md`, which is embedded in the `meta` binary and is also what the Claude Code plugin ships. In this repo, `.claude/skills/meta-*` and `.agents/skills/meta-*` are committed links to `../../claude-plugin/skills/<name>`, so agents working on meta load the text you edit (`tests/init.bats` checks the links and that `meta init claude` installs that text). On Windows, a contributor needs Developer Mode and `git config core.symlinks true` before checking out, or those links arrive as small files holding their target path. When skill text changes, add the new text's line to `meta_cli/src/shipped-skills.txt` (a unit test fails and names the line): that list is how `--update` tells a file meta wrote from one you edited.
 
 ## Available Skills
@@ -42,10 +44,10 @@ Commit `.meta/skills/` and the links so everyone working in the repo gets the sk
 | Skill | What it teaches |
 |-------|-----------------|
 | `meta-workspace` | The `.meta.yaml` format, tags, nested meta repos, and why `meta git` beats `git` in a workspace; for a first look at a meta repo |
-| `meta-git` | `meta git clone` and `update`, committing or stashing before batch changes, recovering with `git reflog` |
+| `meta-git` | `meta git clone` and `update`, committing before batch changes, recovering with `git reflog`, undoing a commit |
 | `meta-exec` | `meta exec -- <cmd>` (as typed, no shell), parallel and sequential runs, `--include`/`--exclude`/`--tag`, `--dry-run`, JSON output |
 | `meta-plugins` | Plugin discovery, how commands are routed to plugins, the built-in git, project and cargo plugins, installing plugins |
-| `meta-worktree` | Creating, using and removing multi-repo worktree sets with `meta git worktree`; for any change, a PR, or testing a tag or SHA |
+| `meta-worktree` | Creating, using and removing multi-repo worktree sets with `meta git worktree`; for any change, a PR, adding a repo, or testing a tag or SHA |
 | `meta-safety` | Session start, precise filtering, dependency order (the MCP tool `meta_execution_order`), `--strict` |
 
 ## Creating Custom Skills

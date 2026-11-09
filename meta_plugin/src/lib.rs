@@ -93,7 +93,7 @@ pub use event::Event;
 pub use listed::{ListedProject, ListedWorktree};
 pub use mode::ExecutionMode;
 pub use repo_url::RepoUrl;
-pub use request::{Meta, Project, Request, Scope, Set, Workspace, Worktree};
+pub use request::{LeftOut, Meta, Project, Request, Scope, Set, Workspace, Worktree};
 pub use response::{Answer, Plan, Response, Results, Step, Text};
 pub use serve::{run_plugin, usage, Ctx, PluginDefinition, REQUEST_VAR, RESPONSE_VAR};
 
@@ -431,6 +431,7 @@ mod tests {
             tags: vec!["rust".to_string()],
             depends_on: vec!["core".to_string()],
             dependency_problems: vec![],
+            left_out: Vec::new(),
             meta: false,
             level: None,
             present: true,

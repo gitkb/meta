@@ -222,6 +222,110 @@ pub fn set_members(
     .select_repos(filters)
 }
 
+/// Whether a workspace of its own is around `start` in the set at `set_dir`
+/// (a clone, or a set inside it), one that is none of the set's members
+/// (`members`): commands started there run in it, not in the set.
+pub fn own_workspace_in_set(
+    start: &Path,
+    set_dir: &Path,
+    config_name: Option<&PathBuf>,
+    members: &[crate::repo_filter::Candidate],
+) -> Result<bool> {
+    let Some(found) = crate::config::find_meta_config(start, config_name)? else {
+        return Ok(false);
+    };
+    let dir = found.parent().unwrap_or(set_dir);
+    Ok(dir != set_dir && dir.starts_with(set_dir) && !members.iter().any(|c| c.dir == dir))
+}
+
+/// What `meta -r` reaches from a directory, for readers that aren't the
+/// command line: the members of the set it is in, else the nearest
+/// workspace's root and every project nested under it.
+pub struct Recursive {
+    /// The config whose projects these are
+    pub config: crate::config::Workspace,
+    /// Where they are checked out: the set's folder, or the config's
+    pub dir: PathBuf,
+    /// The folder repos are named from
+    pub root: PathBuf,
+    /// The set they are members of
+    in_set: bool,
+}
+
+impl Recursive {
+    /// From `start`; `None` when no workspace is around it. A set with no
+    /// members is an error, as for meta: it never falls back to the
+    /// workspace's own checkouts.
+    pub fn from(start: &Path) -> Result<Option<Self>> {
+        use crate::config::Workspace;
+        use crate::repo_filter::Filters;
+        if let Some((name, set_dir)) = detect_worktree_location(start)? {
+            let config = set_config(&set_dir, None)?
+                .map(|path| Workspace::load(&path))
+                .transpose()?;
+            let members = set_members(&set_dir, config.as_ref(), &Filters::default())?;
+            if !own_workspace_in_set(start, &set_dir, None, &members)? {
+                let config = config.filter(|_| !members.is_empty()).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "No checkouts of worktree set '{}' found in {}",
+                        meta_plugin::display::escape(&name),
+                        escape_path(&set_dir)
+                    )
+                })?;
+                return Ok(Some(Self {
+                    config,
+                    dir: set_dir.clone(),
+                    root: set_dir,
+                    in_set: true,
+                }));
+            }
+        }
+        let Some(config) = Workspace::find(start, None)? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            root: crate::config::listed_root(&config.dir),
+            dir: config.dir.clone(),
+            config,
+            in_set: false,
+        }))
+    }
+
+    /// Whether it is a set's members.
+    pub fn in_set(&self) -> bool {
+        self.in_set
+    }
+
+    /// The repos of it that `filters` select, the root included when it is
+    /// a checkout, each once.
+    pub fn select(
+        &self,
+        filters: &crate::repo_filter::Filters,
+    ) -> Result<Vec<crate::repo_filter::Candidate>> {
+        use crate::repo_filter::Reach;
+        if self.in_set {
+            return set_members(&self.dir, Some(&self.config), filters);
+        }
+        Reach::of(self.config.clone(), true, false, None)?
+            .scope()
+            .select_repos(filters)
+    }
+
+    /// What `repo` is called, as `meta -r project dependents` names it: `.`
+    /// for the root, its name when this config lists it, else its path from
+    /// the config's folder (two nested repos may share a name).
+    pub fn name_of(&self, repo: &crate::repo_filter::Candidate) -> String {
+        let Some(info) = &repo.info else {
+            return ".".to_string();
+        };
+        let path = crate::repo_filter::repo_path(&repo.dir, &self.dir);
+        match path == info.path {
+            true => info.name.clone(),
+            false => path,
+        }
+    }
+}
+
 /// Whether the folder `dir` holds nothing but the way to other members'
 /// folders (`held`): the folder a nested project's checkout sits in, not a
 /// checkout itself. A folder that can't be read counts as a member.

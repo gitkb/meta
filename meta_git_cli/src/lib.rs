@@ -25,7 +25,11 @@ use meta_plugin::{
 /// `meta git`: the git commands meta adapts; any other runs as typed.
 #[derive(clap::Parser)]
 // `meta git help log` is git's
-#[command(name = "meta git", disable_help_subcommand = true)]
+#[command(
+    name = "meta git",
+    disable_help_subcommand = true,
+    override_usage = "meta [OPTIONS] git <COMMAND>"
+)]
 struct GitCli {
     #[command(subcommand)]
     command: Option<GitCommand>,
@@ -59,7 +63,7 @@ pub fn plugin_info() -> PluginInfo {
         commands: routed("git", &cli),
         description: Some("Git operations for meta repositories".to_string()),
         help: Some(PluginHelp {
-            usage: "Usage: meta git <COMMAND> [OPTIONS]".to_string(),
+            usage: cli.clone().render_usage().to_string(),
             commands: cli
                 .get_subcommands()
                 .map(|c| (c.get_name().to_string(), summary(c)))

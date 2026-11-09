@@ -178,6 +178,12 @@ impl<'a> Index<'a> {
         self.nodes().into_iter().find(|n| self.key(n) == key)
     }
 
+    /// The node `key` names, whether or not this index keys it: what a
+    /// nested repo asked for without `--recursive` needs is said, not added.
+    pub fn listed(&self, key: &str) -> Option<&Node<'a>> {
+        self.node(key).or_else(|| self.tree.at(key))
+    }
+
     /// The keys of the projects `key` depends on, as meta resolved them,
     /// and theirs, each once: those this index keys.
     pub fn dependencies(&self, key: &str) -> Vec<String> {

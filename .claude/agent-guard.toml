@@ -32,7 +32,6 @@ message = """
 git push --force in a multi-repo workspace can overwrite history across \
 multiple repos. Safer alternatives:
 - git push --force-with-lease (checks for upstream changes)
-- meta --include <repo> exec -- git push --force (target one repo)
 - git fetch, then git branch backup/<name> origin/<branch> to keep the remote tip
 """
 
@@ -46,7 +45,7 @@ git reset --hard destroys uncommitted work. In a multi-repo workspace, \
 this can silently discard changes across repos. Safer alternatives:
 - Commit, or git stash push -u -m <msg>, to keep the work first
 - git reflog to find and go back to an earlier commit (commits only)
-- Target a specific repo: cd <repo> && git reset --hard
+- git reset --soft HEAD~1 to undo a commit and keep its changes staged
 """
 
 [[patterns]]
@@ -59,7 +58,6 @@ message = """
 git clean -fd removes untracked files and directories permanently. \
 In a multi-repo workspace, this affects all repos. Safer alternatives:
 - git clean -nd (dry run — preview what would be removed)
-- meta --include <repo> exec -- git clean -fd (target specific repos)
 - git stash push -u -m <msg> to keep untracked files instead
 """
 
@@ -73,7 +71,6 @@ message = """
 git checkout . reverts all modified files. In a multi-repo workspace, \
 ensure you are in the correct repo directory. Safer alternatives:
 - git checkout -- <specific-file> (target specific files)
-- meta --include <repo> exec -- git checkout . (target one repo)
 - git stash push -m <msg> to keep the changes instead
 """
 
@@ -88,7 +85,6 @@ In a multi-repo workspace, this can affect coordination between repos. Safer alt
 - git branch -d <branch> (safe delete — only works if merged)
 - git branch -v to check merge status first
 - git branch backup/<name> <branch> first to keep its commits
-- meta --include <repo> exec -- git branch -D <branch> (target specific repos)
 """
 
 [[patterns]]
@@ -113,8 +109,7 @@ message = """
 git stash clear removes ALL stash entries permanently. \
 In a multi-repo workspace, this could discard important work across repos. Safer alternatives:
 - git stash list to review what will be cleared
-- git stash drop <stash> to remove specific entries one at a time
-- meta --include <repo> exec -- git stash clear (target specific repos)
+- git stash show -p -u <stash> to inspect contents first, untracked files too
 """
 
 [[patterns]]

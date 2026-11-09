@@ -315,25 +315,41 @@ fn a_symlinked_owner_folder_is_refused_in_every_spelling() {
     let moved = table.sandbox.work().join("owners");
     fs::rename(&owners, &moved).unwrap();
     std::os::unix::fs::symlink(&moved, &owners).unwrap();
-    for (a, b) in [
-        ("git worktree add g --repo b", "git worktree add --repo b g"),
-        (
-            "git worktree exec g --repo b -- touch ran",
-            "git worktree exec --repo b g -- touch ran",
-        ),
-    ] {
-        let (first, second) = (table.meta(&table.ws, a, &[]), table.meta(&table.ws, b, &[]));
-        let said = format!("{a}: {}\n{b}: {}", text(&first), text(&second));
-        assert!(
-            !first.status.success() && !second.status.success(),
-            "{said}"
-        );
-        assert_eq!(first.status.code(), second.status.code(), "{said}");
-        assert!(!table.ws.join(".worktrees/g/b").exists(), "{said}");
-        assert!(!table.ws.join(".worktrees/g/a/ran").exists(), "{said}");
-    }
+    // exec has one spelling: its selection is meta's own
+    let out = table.meta(
+        &table.ws,
+        "--include a git worktree exec g -- touch ran",
+        &[],
+    );
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("is a symlink"), "{}", text(&out));
+    assert!(!table.ws.join(".worktrees/g/a/ran").exists());
+    let (a, b) = ("git worktree add g --repo b", "git worktree add --repo b g");
+    let (first, second) = (table.meta(&table.ws, a, &[]), table.meta(&table.ws, b, &[]));
+    let said = format!("{a}: {}\n{b}: {}", text(&first), text(&second));
+    assert!(
+        !first.status.success() && !second.status.success(),
+        "{said}"
+    );
+    assert_eq!(first.status.code(), second.status.code(), "{said}");
+    assert!(!table.ws.join(".worktrees/g/b").exists(), "{said}");
     let out = table.meta(&table.ws, "git worktree add --repo b g", &[]);
     assert!(text(&out).contains("is a symlink"), "{}", text(&out));
+}
+
+/// `--include` chooses among the checkouts of an intact set: the one not
+/// selected runs nothing.
+#[test]
+fn a_selected_exec_runs_only_in_the_selected_checkout() {
+    let table = Table::new();
+    let out = table.meta(
+        &table.ws,
+        "--include a git worktree exec s -- touch ran",
+        &[],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(table.ws.join(".worktrees/s/a/ran").exists());
+    assert!(!table.ws.join(".worktrees/s/b/ran").exists());
 }
 
 /// Outside any workspace, `exec` finds the set where sets go

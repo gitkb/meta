@@ -509,32 +509,89 @@ fn r_names_a_dependency_written_as_a_name_whose_path_differs() {
     }
 }
 
-/// The repo a warning names is data beside it, never read back from the
-/// text: an apostrophe in what the dependency is written as (config refuses
-/// one in a project's name or path, not in a capability) changes nothing.
+/// `meta --json <words>` in `dir`, with the binaries built beside the tests.
+fn meta_in(f: &Fixture, dir: &Path, words: &[&str]) -> Value {
+    let built = Path::new(env!("CARGO_BIN_EXE_meta")).with_file_name("");
+    let out = f
+        .sandbox
+        .command(env!("CARGO_BIN_EXE_meta"))
+        .arg("--json")
+        .args(words)
+        .current_dir(dir)
+        .env("PATH", format!("{}:/usr/bin:/bin", built.display()))
+        .output()
+        .unwrap();
+    envelope(&out)
+}
+
+/// What a warning's advice adds, taken literally: meta's options (`add -r`,
+/// `add -A`) and the create's (the `--repo` it ends with; `add -r` is the
+/// first choice, so then none).
+fn advice(warning: &str) -> (Vec<String>, Vec<String>) {
+    if warning.contains("only -r follows: add -r") {
+        return (vec!["-r".to_string()], Vec::new());
+    }
+    let options = match warning.contains("add -A") {
+        true => vec!["-A".to_string()],
+        false => Vec::new(),
+    };
+    let repo = warning.rsplit_once("--repo ").unwrap().1.trim().to_string();
+    (options, vec!["--repo".to_string(), repo])
+}
+
+/// Each warning's advice, followed literally, gives the set the repo with
+/// no warning: from inside a nested meta repo (where `-r` doesn't reach the
+/// parent level, so the advice is `-A`), and from the root (`add -r`). On
+/// the PR's fourth head the advice from inside said `add -r` or a bare
+/// `--repo`, neither of which works there.
 #[test]
-fn a_held_dependency_with_an_apostrophe_is_not_warned_about() {
-    let f = fixture();
-    f.config("platform", "core", json!({"provides": ["co're-cap"]}));
-    f.config("platform", "api", json!({"depends_on": ["co're-cap"]}));
-    let line = [
-        "--strict",
-        "git",
-        "worktree",
-        "create",
-        "s",
-        "--repo",
-        "platform/api",
-    ];
-    let out = f.meta(&line);
-    assert!(!out.status.success(), "{}", text(&out));
-    assert!(
-        text(&out).contains("--repo platform/core"),
-        "{}",
-        text(&out)
-    );
-    let out = ok(f.meta(&[&line[..], &["--repo", "platform/core"]].concat()));
-    assert!(!text(&out).contains("warning"), "{}", text(&out));
+fn following_a_warning_literally_adds_the_repo() {
+    for (core, from, asked, wanted) in [
+        (json!({"depends_on": ["b"]}), "platform", "core", "b"),
+        (json!({"depends_on": ["b-cap"]}), "platform", "core", "b"),
+        (
+            json!({"depends_on": ["core"]}),
+            ".",
+            "platform/api",
+            "platform/core",
+        ),
+    ] {
+        let f = fixture();
+        f.config(".", "b", json!({"provides": ["b-cap"]}));
+        f.config("platform", "core", core.clone());
+        let dir = f.ws.join(from);
+        let create = |(options, more): (Vec<String>, Vec<String>)| {
+            let line = ["git", "worktree", "create", "s", "--repo", asked];
+            let words: Vec<&str> = options
+                .iter()
+                .map(String::as_str)
+                .chain(line)
+                .chain(more.iter().map(String::as_str))
+                .collect();
+            meta_in(&f, &dir, &words)
+        };
+        let first = create((Vec::new(), Vec::new()));
+        let warnings = first["warnings"].as_array().unwrap();
+        let [warning] = warnings.as_slice() else {
+            panic!("{core}: {first}");
+        };
+        let warning = warning["message"].as_str().unwrap();
+        meta_in(&f, &dir, &["git", "worktree", "remove", "s"]);
+        let followed = create(advice(warning));
+        assert_eq!(
+            followed["warnings"],
+            json!([]),
+            "{core} {warning}: {followed}"
+        );
+        let repos = followed["results"][0]["data"]["repos"].as_array().unwrap();
+        let root = followed["results"][0]["data"]["root"].as_str().unwrap();
+        assert!(
+            repos
+                .iter()
+                .any(|r| r["path"] == json!(Path::new(root).join(wanted).display().to_string())),
+            "{core} {warning}: {followed}"
+        );
+    }
 }
 
 /// What the guidance says `-r` does follow: a path from the workspace root,

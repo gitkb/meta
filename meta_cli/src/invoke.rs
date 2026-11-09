@@ -178,7 +178,11 @@ fn resolve_dependencies(
             .find(|(_, k, _)| k == key)
             .map(|(dir, _, _)| repo_path(dir, root))
     };
-    let elsewhere = Elsewhere::of(whole_tree, root);
+    // what -r reaches from the config the command starts at
+    let here = Reach::of(reach.workspace.clone(), true, false, None)
+        .ok()
+        .map(|reach| reach.scope().repos);
+    let elsewhere = Elsewhere::of(whole_tree, here.as_deref(), root);
     for member in members.iter_mut() {
         let Some((_, key, info)) = keyed.iter().find(|(dir, _, _)| *dir == member.abs) else {
             // outside the reach (a nested repo without -r): only what
@@ -237,30 +241,44 @@ struct Elsewhere<'a> {
     /// Each project's folder, its path from the root, the place of the meta
     /// repo that lists it (`platform/`, empty at the top), its info
     projects: Vec<(&'a Path, String, String, &'a config::ProjectInfo)>,
-    /// The whole tree's graph as `-r` resolves it (by path, an entry
-    /// qualified with its meta repo's place)
+    /// The graph of what `-r` reaches from where the command starts, as `-r`
+    /// resolves it (by path, an entry qualified with its meta repo's place)
     recursive: meta_core::dependency_graph::DependencyGraph,
+    /// The folders `-r` reaches from there
+    reached: Vec<PathBuf>,
+}
+
+/// Each project of `repos`: its folder, its path from `root`, the place of
+/// the meta repo that lists it, its info.
+fn placed<'a>(
+    repos: &'a [Candidate],
+    root: &Path,
+) -> Vec<(&'a Path, String, String, &'a config::ProjectInfo)> {
+    repos
+        .iter()
+        .filter_map(|repo| {
+            let info = repo.info.as_ref()?;
+            let path = repo_path(&repo.dir, root);
+            let prefix = path
+                .strip_suffix(info.path.as_str())
+                .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
+                .unwrap_or("")
+                .to_string();
+            Some((repo.dir.as_path(), path, prefix, info))
+        })
+        .collect()
 }
 
 impl<'a> Elsewhere<'a> {
-    fn of(whole_tree: &'a [Candidate], root: &Path) -> Self {
+    /// The projects of `whole_tree`, and `-r`'s graph of `here` (what it
+    /// reaches from where the command starts; the whole tree if unknown).
+    fn of(whole_tree: &'a [Candidate], here: Option<&[Candidate]>, root: &Path) -> Self {
         use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
-        let projects: Vec<_> = whole_tree
-            .iter()
-            .filter_map(|repo| {
-                let info = repo.info.as_ref()?;
-                let path = repo_path(&repo.dir, root);
-                let prefix = path
-                    .strip_suffix(info.path.as_str())
-                    .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
-                    .unwrap_or("")
-                    .to_string();
-                Some((repo.dir.as_path(), path, prefix, info))
-            })
-            .collect();
+        let projects = placed(whole_tree, root);
+        let reach = placed(here.unwrap_or(whole_tree), root);
         let keys: std::collections::HashSet<&str> =
-            projects.iter().map(|(_, path, ..)| path.as_str()).collect();
-        let mut nodes: Vec<ProjectDependencies> = projects
+            reach.iter().map(|(_, path, ..)| path.as_str()).collect();
+        let mut nodes: Vec<ProjectDependencies> = reach
             .iter()
             .map(|(_, path, prefix, info)| {
                 let qualify = |name: &String| match keys.contains(name.as_str()) || name == "." {
@@ -280,6 +298,7 @@ impl<'a> Elsewhere<'a> {
         nodes.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
             recursive: DependencyGraph::build(nodes),
+            reached: reach.iter().map(|(dir, ..)| dir.to_path_buf()).collect(),
             projects,
         }
     }
@@ -313,7 +332,7 @@ impl<'a> Elsewhere<'a> {
                 .collect(),
             _ => own,
         };
-        let [(_, path, ..)] = found.as_slice() else {
+        let [(found_dir, path, ..)] = found.as_slice() else {
             return None;
         };
         let r_follows = self
@@ -321,13 +340,19 @@ impl<'a> Elsewhere<'a> {
             .get_dependencies(own_path)
             .contains(&path.as_str());
         let shown = escape(path);
-        let problem = match flat && r_follows {
-            true => format!(
+        let problem = match (flat && r_follows, self.reached.iter().any(|d| d == found_dir)) {
+            (true, _) => format!(
                 "depends on '{shown}', which only -r follows: add -r, or name it with --repo {shown}"
             ),
-            false => format!(
+            (false, true) => format!(
                 "depends on '{shown}' (written '{}'), which -r doesn't follow: name it with \
                  --repo {shown}",
+                escape(dep)
+            ),
+            // outside what -r reaches from here: -A names it from the root
+            (false, false) => format!(
+                "depends on '{shown}' (written '{}'), outside what -r reaches from here: add -A \
+                 and name it with --repo {shown}",
                 escape(dep)
             ),
         };

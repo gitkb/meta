@@ -43,11 +43,14 @@ nesting level than the folder you are in: without them a set holds only this
 level's repos. `-r` follows a dependency written as a repo's path from the
 workspace root, across nesting levels too, and one written as a path or a
 capability (`provides`) of the dependent's own `.meta.yaml`. **It doesn't resolve
-a capability or a name from another nesting level, or a project name whose
-`path:` differs from it.** Each dependency the set won't hold is named in a
-warning that ends with the `--repo` that adds it: follow it (with `--strict`
-the warning is an error, and nothing is made). `--no-deps` leaves dependencies
-out without a word.
+a capability or a name from another nesting level (unless that name is also the
+repo's path from the root), or a project name whose `path:` differs from it.**
+Started inside a nested meta repo, `-r` reaches only that repo's tree. Each
+dependency the set won't hold that meta can name (one repo is or provides it) is
+named in a warning that ends with the `--repo` that adds it, and says to add
+`-r` or `-A` where that is what it takes: follow it (with `--strict` the warning
+is an error, and nothing is made). A dependency nothing or several repos provide
+keeps its own warning. `--no-deps` leaves dependencies out without a word.
 
 ```bash
 # Specific repos (the root repo and their dependencies are added automatically)

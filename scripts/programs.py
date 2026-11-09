@@ -108,13 +108,16 @@ def members(asset):
 
 
 def zip_member(info):
-    """What is wrong with a zip entry as a program: by its Unix mode, when the
-    zip has one (a Windows zip has none)."""
-    mode = info.external_attr >> 16
-    if info.is_dir() or stat.S_ISDIR(mode):
+    """What is wrong with a zip entry as a program: by the file type in its
+    Unix mode, when the zip records one (a Windows zip, or Python's
+    writestr, records none)."""
+    kind = stat.S_IFMT(info.external_attr >> 16)
+    if info.is_dir() or kind == stat.S_IFDIR:
         return "a folder"
-    if mode and not stat.S_ISREG(mode):
-        return "a link" if stat.S_ISLNK(mode) else "not a regular file"
+    if kind == stat.S_IFLNK:
+        return "a link"
+    if kind not in (0, stat.S_IFREG):
+        return "not a regular file"
     return None
 
 

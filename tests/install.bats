@@ -434,6 +434,12 @@ with zipfile.ZipFile(sys.argv[1], "w") as z:
     run programs check "$SCRATCH/link.zip"
     [ "$status" -ne 0 ]
     [[ "$output" == *"b.exe: a link, not a program file"* ]]
+    # a zip that records permissions but no file type (Python's writestr) is fine
+    python3 -c 'import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    for name in ("meta.exe", "alpha.exe", "b.exe"): z.writestr(name, "x")' "$SCRATCH/typeless.zip"
+    run programs check "$SCRATCH/typeless.zip"
+    [ "$status" -eq 0 ]
 
     chmod -x "$SCRATCH/built/b"
     tar -czf "$SCRATCH/plain.tar.gz" -C "$SCRATCH/built" meta alpha b

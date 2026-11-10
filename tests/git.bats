@@ -636,18 +636,34 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     # a tag no remote has, on a pushed commit: its message is only here
     git clone --quiet remotes/frontend.git tagged
     git -C tagged tag -a v9 -m "release notes only here"
-    run "$META_BIN" --dry-run git update --prune-only
+    # and one whose remote is over ssh: an ssh that shows it was run
+    git clone --quiet remotes/frontend.git far
+    git -C far tag v1
+    git -C far remote set-url origin git@nohost.invalid:org/far.git
+    mkdir -p "$TEST_DIR/bin"
+    printf '#!/bin/sh\ntouch "%s/ssh-ran"\nexit 255\n' "$TEST_DIR" > "$TEST_DIR/bin/ssh"
+    chmod +x "$TEST_DIR/bin/ssh"
+    # update's warnings contact no remote: tags are named as unasked
+    PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"far isn't in .meta.yaml; it holds 1 tag no remote was asked about"* ]]
+    [ ! -e "$TEST_DIR/ssh-ran" ]
+    rm -rf shared
+    PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" --dry-run git update --prune-only
     [ "$status" -eq 0 ]
     [[ "$output" == *"Would remove clean (nothing unpushed)"* ]]
     [[ "$output" == *"Would keep unpushed: it holds 1 commit on no remote: "*"unpushed work"* ]]
     [[ "$output" != *"Would run"* && "$output" != *"Nothing to clone"* ]]
     [ -d clean/.git ]
-    run "$META_BIN" git update --prune-only
+    PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" git update --prune-only
     [ "$status" -eq 0 ]
     [[ "$output" == *"Removed clean (nothing unpushed)"* ]]
     [[ "$output" == *"Kept unpushed: it holds 1 commit on no remote: "*"unpushed work"* ]]
     [[ "$output" == *"Kept tagged: it holds 1 tag on no remote: v9"* ]]
-    [[ "$output" == *"Update completed (1 removed, 2 kept)"* ]]
+    # pruning asks: a remote that can't be asked keeps the repo
+    [[ "$output" == *"Kept far: what it holds can't be told (remote origin can't be asked which tags it has: "* ]]
+    [[ "$output" == *"Update completed (1 removed, 3 kept)"* ]]
+    [ -d far/.git ]
     [ -d tagged/.git ]
     [ ! -e clean ]
     [ -d unpushed/.git ]
@@ -657,6 +673,11 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     [ "$status" -eq 2 ]
     [[ "$output" == *"--prune-only"*"--prune"* ]]
     [ -d unpushed/.git ]
+    # a listed folder that holds something else is no failure: nothing is cloned
+    mkdir shared && echo mine > shared/notes.txt
+    run "$META_BIN" --json git update --prune-only
+    [ "$status" -eq 0 ]
+    jq -e '[.results[] | select(.data.action == "failed")] == []' <<<"$output"
 }
 
 @test "meta --json git update names a failed clone and a refused folder by their paths" {

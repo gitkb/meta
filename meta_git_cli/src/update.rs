@@ -160,18 +160,21 @@ pub(crate) fn execute(
                 .map(|path| record(path, "cloned", None)),
         );
     }
-    // each with git's stderr, as `meta --json exec` gives a failed step's
-    records.extend(outcome.failures.iter().map(|failure| ProjectResult {
-        stderr: Some(failure.error.clone()),
-        ..record(&failure.path, "failed", Some(failure.error.clone()))
-    }));
-    records.extend(outcome.refused.iter().map(|(_, path, why)| {
-        record(
-            path,
-            "failed",
-            Some(format!("not a git repository ({why})")),
-        )
-    }));
+    // each with git's stderr, as `meta --json exec` gives a failed step's;
+    // none when it clones nothing
+    if clones {
+        records.extend(outcome.failures.iter().map(|failure| ProjectResult {
+            stderr: Some(failure.error.clone()),
+            ..record(&failure.path, "failed", Some(failure.error.clone()))
+        }));
+        records.extend(outcome.refused.iter().map(|(_, path, why)| {
+            record(
+                path,
+                "failed",
+                Some(format!("not a git repository ({why})")),
+            )
+        }));
+    }
 
     if !prunes {
         report_unlisted(ctx, &queue, root, cwd, meta_depth != Some(0));
@@ -180,7 +183,7 @@ pub(crate) fn execute(
     if prunes {
         for path in &outcome.unlisted {
             let shown = shown(path, cwd);
-            let leftover = match Leftover::of(path, root) {
+            let leftover = match Leftover::of(path, root, true) {
                 Leftover::Removable(ignored) => Ok(ignored),
                 Leftover::Holds(why) => Err(why),
             };
@@ -397,8 +400,10 @@ pub(crate) enum Leftover {
 }
 
 impl Leftover {
-    /// The repository at `path`, a leftover in the workspace at `root`.
-    pub(crate) fn of(path: &Path, root: &Path) -> Self {
+    /// The repository at `path`, a leftover in the workspace at `root`;
+    /// `ask`: whether its remotes are asked which of its tags they have
+    /// (with false, its tags count as held).
+    pub(crate) fn of(path: &Path, root: &Path, ask: bool) -> Self {
         let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         let inside = real(path);
         if path
@@ -433,7 +438,7 @@ impl Leftover {
             Ok(None) => {}
             Err(e) => return Self::Holds(format!("it can't be searched ({e})")),
         }
-        let held = crate::worktree::safety::repo_holds(path)
+        let held = crate::worktree::safety::repo_holds(path, ask)
             .and_then(|held| Ok((held, crate::worktree::safety::repo_ignored(path)?)));
         match held {
             Ok((held, ignored)) if held.is_empty() => Self::Removable(ignored),
@@ -497,7 +502,8 @@ pub(crate) fn report_unlisted(
     };
     for path in queue.outcome().unlisted {
         let shown = shown(&path, cwd);
-        let warning = match Leftover::of(&path, root) {
+        // a warning contacts no remote: --prune asks them about tags
+        let warning = match Leftover::of(&path, root, false) {
             Leftover::Removable(None) => {
                 format!("{shown} isn't in .meta.yaml (nothing unpushed; {prune} removes it)")
             }

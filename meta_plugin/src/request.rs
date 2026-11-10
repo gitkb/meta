@@ -236,6 +236,10 @@ pub struct Project {
     /// `.meta.yaml` of its own listing projects
     #[serde(default)]
     pub meta: bool,
+    /// The branch it starts from, as its config's `branch:` names it; none
+    /// for its remote's default branch
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     /// Its dependency level, when the selection was ordered by dependency
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<usize>,

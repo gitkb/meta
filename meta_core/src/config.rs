@@ -107,8 +107,8 @@ impl<'de> Deserialize<'de> for ProjectEntry {
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 formatter.write_str(
-                    "a repo URL, or a mapping of repo, path, tags (a list), provides (a list), \
-                     depends_on (a list) and meta (true or false)",
+                    "a repo URL, or a mapping of repo, path, branch, tags (a list), provides \
+                     (a list), depends_on (a list) and meta (true or false)",
                 )
             }
 
@@ -171,9 +171,25 @@ pub struct ProjectInfo {
     /// If true, this directory contains a nested .meta.yaml
     #[serde(default)]
     pub meta: bool,
+    /// The branch it starts from: the one a clone checks out and a worktree
+    /// set's new branch starts from. None: its remote's default branch. No
+    /// command moves a checkout to it. [`ProjectInfo::start_branch`] reads it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "some_string"
+    )]
+    pub branch: Option<String>,
 }
 
 impl ProjectInfo {
+    /// The branch this project starts from, if its config names one; none
+    /// means its remote's default branch. The one rule every command that
+    /// picks a project's branch follows.
+    pub fn start_branch(&self) -> Option<&str> {
+        self.branch.as_deref()
+    }
+
     /// Where this project's checkout sits in a worktree set, from the set's
     /// root: its path when that stays below the config's directory, else
     /// (absolute, or leading out with `..`) its name.
@@ -603,11 +619,30 @@ impl Workspace {
     }
 }
 
+/// Whether `branch` is a name git takes for a branch (`git check-ref-format
+/// --branch`), read in no repository, so `@{-1}` names nothing.
+fn branch_problem(branch: &str) -> Result<(), String> {
+    let mut check = crate::git::git(Path::new("."));
+    check
+        .args(["check-ref-format", "--branch", branch])
+        .env("GIT_DIR", "/nonexistent/meta-check-ref-format")
+        .stdin(std::process::Stdio::null());
+    match meta_plugin::process::output(&mut check) {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(_) => Err(format!(
+            "branch '{branch}' is not a name git takes for a branch"
+        )),
+        Err(e) => Err(format!(
+            "branch '{branch}' can't be checked: git can't run ({e})"
+        )),
+    }
+}
+
 /// Check one project entry and normalize its path, or say what is wrong.
 ///
 /// These rules are checked once, when a config is parsed, so every caller can
 /// join `path` onto the directory of the `.meta.yaml` without checking again:
-/// - No value (name, path, repo, tags, provides, depends_on) is empty or holds
+/// - No value (name, path, repo, branch, tags, provides, depends_on) is empty or holds
 ///   a control or bidirectional-control character ([`is_unsafe_char`]).
 /// - `name` is a relative path in normal form (usually one component; a
 ///   nested alias like `vendor/lib` names a nested repo), held to
@@ -638,6 +673,7 @@ fn validate_project(
     for (what, value) in [("name", info.name.as_str()), ("path", &info.path)]
         .into_iter()
         .chain(info.repo.iter().map(|r| ("repo", r.raw())))
+        .chain(info.branch.iter().map(|b| ("branch", b.as_str())))
         .chain(
             lists
                 .into_iter()
@@ -654,6 +690,9 @@ fn validate_project(
                 RepoUrl::from(value)
             ));
         }
+    }
+    if let Some(branch) = &info.branch {
+        branch_problem(branch)?;
     }
     // A name may be a relative path, such as `vendor/lib` for a nested
     // repo, and names a project in commands. So it follows the path rules,
@@ -1386,6 +1425,42 @@ mod tests {
     }
 
     #[test]
+    fn branch_is_the_start_branch_and_one_git_takes() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".meta.yaml");
+        let load = |yaml: &str| {
+            std::fs::write(&config, yaml).unwrap();
+            Workspace::load(&config)
+        };
+        let loaded =
+            load("projects:\n  a:\n    repo: x\n    branch: release/1.x\n  b: y\n").unwrap();
+        let start: Vec<_> = loaded.projects.iter().map(|p| p.start_branch()).collect();
+        assert_eq!(start, [Some("release/1.x"), None]);
+        for bad in [
+            "\"a..b\"",
+            "-x",
+            "\"@{-1}\"",
+            "HEAD",
+            "\"\"",
+            "x.lock",
+            "3",
+            "[main]",
+        ] {
+            let err = load(&format!(
+                "projects:\n  a:\n    repo: x\n    branch: {bad}\n"
+            ))
+            .map(|_| ())
+            .unwrap_err();
+            let err = format!("{err:#}");
+            assert!(err.contains("branch"), "{bad}: {err}");
+            assert!(
+                err.contains("projects.a") || err.contains("project 'a'"),
+                "{bad}: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn defaults_and_unknown_keys() {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join(".meta.yaml");
@@ -1430,7 +1505,7 @@ mod tests {
             "{err}"
         );
         // keys other tools put on a project are theirs
-        assert!(load("projects:\n  a:\n    repo: x\n    branch: main\n").is_ok());
+        assert!(load("projects:\n  a:\n    repo: x\n    owner: team-a\n").is_ok());
         assert!(load("projects:\n  a:\n    path: \"123\"\n    tags: [\"1\"]\n").is_ok());
         // a project of the wrong shape is named, with the shape it needs
         for (yaml, says) in [

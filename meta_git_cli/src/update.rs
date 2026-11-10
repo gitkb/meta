@@ -24,7 +24,9 @@ use std::sync::Arc;
     after_help = "Git options: none; git has no command of this name.",
     about = "Clone each project in .meta.yaml that isn't cloned; never pull (meta git pull --ff-only does)",
     long_about = "Clone each project in .meta.yaml that isn't cloned, and name each repo in the \
-                  workspace's folder that none lists, with what deleting it would lose.\n\n\
+                  workspace's folder that none lists, with what deleting it would lose. A \
+                  project whose entry has `branch: <name>` is cloned on that branch (git clone \
+                  --branch); the others on their remote's default branch.\n\n\
                   No repo that is cloned is pulled, fetched or checked out, the workspace repo \
                   included: `meta git pull --ff-only` brings them up to date. With -r the same \
                   goes for the meta repos nested in it (those cloned, and those it clones). \

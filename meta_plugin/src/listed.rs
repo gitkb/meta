@@ -19,6 +19,10 @@ pub struct ListedProject {
     pub is_meta: bool,
     /// Whether its config says it is a meta repo (`meta: true`), cloned or not
     pub meta: bool,
+    /// The branch it starts from, as its config's `branch:` names it; absent
+    /// for its remote's default branch (and for the first row)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     /// Why its folder couldn't be looked into (its own projects may be
     /// missing from the list); absent when it could.
     #[serde(default, skip_serializing_if = "Option::is_none")]

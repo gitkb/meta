@@ -339,6 +339,51 @@ state() {
     [ ! -e "$TEST_DIR/shared" ]
 }
 
+@test "meta git update and clone check out a project's branch:, the others their remote's default" {
+    with_remotes
+    # shared's remote gets a release branch ahead of main
+    git clone --quiet remotes/shared.git remotes/mate-shared
+    git -C remotes/mate-shared switch --quiet -c release
+    git -C remotes/mate-shared -c user.name=Mate -c user.email=mate@test.com \
+        commit --quiet --allow-empty -m "release work"
+    git -C remotes/mate-shared push --quiet origin release
+    jq '.projects.shared = {"repo": .projects.shared, "branch": "release"}' .meta.yaml > meta.json
+    mv meta.json .meta.yaml
+    git commit --quiet -am "shared starts from release"
+    git push --quiet
+    rm -rf shared frontend
+    run "$META_BIN" --dry-run git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"git clone --branch release -- file://$TEST_DIR/remotes/shared.git $TEST_DIR/shared"* ]]
+    [[ "$output" == *"git clone -- file://$TEST_DIR/remotes/frontend.git $TEST_DIR/frontend"* ]]
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [ "$(git -C shared branch --show-current)" = release ]
+    [ "$(git -C shared rev-parse HEAD)" = "$(git -C remotes/shared.git rev-parse release)" ]
+    [ "$(git -C frontend branch --show-current)" = main ]
+    # a clone of the workspace does the same
+    run "$META_BIN" git clone "file://$TEST_DIR/remotes/ws.git" "$TEST_DIR/fresh"
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_DIR/fresh/shared" branch --show-current)" = release ]
+    [ "$(git -C "$TEST_DIR/fresh/frontend" branch --show-current)" = main ]
+    # nothing moves a cloned repo to it
+    git -C shared switch --quiet main
+    run "$META_BIN" git update
+    [ "$(git -C shared branch --show-current)" = main ]
+    # a branch the remote doesn't have fails that clone, naming project and
+    # branch with git's error; the other clones still happen
+    jq '.projects.frontend = {"repo": .projects.frontend, "branch": "nope"}' .meta.yaml > meta.json
+    mv meta.json .meta.yaml
+    rm -rf frontend backend
+    run "$META_BIN" git update
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Failed to clone frontend (file://$TEST_DIR/remotes/frontend.git, branch nope)"* ]]
+    [[ "$output" == *"nope"*"not found"* ]]
+    [[ "$output" == *"1 of 2 repositories failed to clone: frontend (branch nope): "* ]]
+    [ ! -e frontend ]
+    [ -d backend/.git ]
+}
+
 @test "meta git update doesn't stall on git's stdout, and git asks for no credentials" {
     with_remotes
     rm -rf "$TEST_DIR/shared"

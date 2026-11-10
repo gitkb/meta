@@ -37,6 +37,9 @@ pub struct CloneTask {
     pub target_path: PathBuf,
     /// The URL `.meta.yaml` gives for it, cloned from
     pub url: RepoUrl,
+    /// The branch it starts from (`branch:`), checked out by the clone;
+    /// none: its remote's default branch
+    pub branch: Option<String>,
     /// The level of the `.meta.yaml` inside it (the root's is 0)
     pub level: usize,
     /// Whether this project is itself a meta-repo (declared with `meta: true` in config)
@@ -52,6 +55,8 @@ pub struct CloneFailure {
     /// The project's folder
     pub path: PathBuf,
     pub url: RepoUrl,
+    /// The branch it was to check out (`branch:`)
+    pub branch: Option<String>,
     pub error: String,
 }
 
@@ -314,6 +319,7 @@ impl CloneQueue {
                     name: project.name.clone(),
                     target_path,
                     url,
+                    branch: project.branch.clone(),
                     level: level + 1,
                     is_meta: project.meta,
                     above: Arc::clone(above),
@@ -474,6 +480,7 @@ impl CloneQueue {
                 name: task.name.clone(),
                 path: task.target_path.clone(),
                 url: task.url.clone(),
+                branch: task.branch.clone(),
                 error,
             })
         });

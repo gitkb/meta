@@ -12,6 +12,9 @@ use std::sync::Arc;
 /// Clone a meta repository, then the repos its .meta.yaml lists.
 #[derive(clap::Parser)]
 #[command(
+    long_about = "Clone a meta repository, then the repos its .meta.yaml lists. A listed \
+                  project with `branch: <name>` is cloned on that branch, the others on their \
+                  remote's default branch.",
     after_help = "Git options: of git clone's own, only --depth, given to each clone. \
                          meta's options go before the command: -r also clones the repos of the \
                          meta repos nested in it, --depth N (before) follows N levels of them."

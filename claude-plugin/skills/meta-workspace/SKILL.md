@@ -57,7 +57,7 @@ projects:
 ```
 
 **Simple format**: `name: git-url` - clones to `./name`
-**Extended format**: a mapping; every key is optional (`repo`, `path`, `tags`, `provides`, `depends_on`, `meta: true` for a nested meta repo)
+**Extended format**: a mapping; every key is optional (`repo`, `path`, `branch`, `tags`, `provides`, `depends_on`, `meta: true` for a nested meta repo). `branch` is the branch the project starts from: clones check it out and worktree sets start new branches from it; without it, the remote's default branch. It never moves a repo that is already cloned.
 
 ## Discovering What's Here
 

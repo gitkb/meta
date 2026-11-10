@@ -18,6 +18,16 @@ pub struct PlannedRepo {
     pub branch: String,
 }
 
+/// The branch the project checked out at `source` starts from, as meta's
+/// `members` say its config's `branch:` names it; none: its remote's
+/// default branch.
+pub fn start_branch<'m>(members: &'m [meta_plugin::Project], source: &Path) -> Option<&'m str> {
+    members
+        .iter()
+        .find(|m| m.abs == source)
+        .and_then(|m| m.branch.as_deref())
+}
+
 /// A project the index found: its key and its checkout.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Found {
@@ -257,6 +267,7 @@ mod tests {
                     path: path.to_string(),
                     abs: root.join(path),
                     meta: *meta,
+                    branch: None,
                     present: true,
                     ..Project::default()
                 })

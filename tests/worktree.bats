@@ -515,6 +515,40 @@ EOF
     [[ "$output" == *"backend -> fourth-set (new from HEAD (feature))"* ]]
 }
 
+@test "worktree create and add start a new branch from the project's branch: when its config names one" {
+    for repo in backend frontend; do
+        git -C "$repo" branch release
+        git -C "$repo" switch --quiet release
+        git -C "$repo" commit --quiet --allow-empty -m "release work"
+        git -C "$repo" switch --quiet main
+        git clone --quiet --bare "$repo" "$TEST_DIR/$repo.git"
+        git -C "$repo" remote add origin "$TEST_DIR/$repo.git"
+        git -C "$repo" fetch --quiet origin
+        git -C "$repo" remote set-head origin main
+    done
+    printf '%s\n' '{"projects": {"backend": {"repo": "git@github.com:org/backend.git", "branch": "release"},' \
+        '"frontend": "git@github.com:org/frontend.git"}}' > .meta.yaml
+    run "$META_BIN" --dry-run git worktree create rel --repo backend --repo frontend --no-deps
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"origin/release"* ]]
+    run "$META_BIN" git worktree create rel --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"backend -> rel (new from origin/release)"* ]]
+    [ "$(git -C .worktrees/rel/backend rev-parse HEAD)" = "$(git -C backend rev-parse origin/release)" ]
+    # one without branch: starts from the remote's default branch, as before
+    run "$META_BIN" git worktree add rel --repo frontend
+    [ "$status" -eq 0 ]
+    [ "$(git -C .worktrees/rel/frontend rev-parse HEAD)" = "$(git -C frontend rev-parse origin/main)" ]
+    # nothing moves the checkouts themselves
+    [ "$(git -C backend branch --show-current)" = main ]
+    # a branch: origin doesn't have is named, with how to fetch it
+    git -C backend update-ref -d refs/remotes/origin/release
+    run "$META_BIN" git worktree create gone --repo backend --no-deps
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"its .meta.yaml names branch 'release', and there is no origin/release to start 'gone' from; fetch it with: git -C "*"fetch origin release"* ]]
+    [ ! -e .worktrees/gone ]
+}
+
 @test "worktree create with a commit-ish and a branch that exists says what to do" {
     git -C backend branch keepme
     run "$META_BIN" git worktree create keepme main --repo backend --no-deps

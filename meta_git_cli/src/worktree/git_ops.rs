@@ -148,8 +148,9 @@ pub enum WorktreeStart {
     Existing,
     /// A new branch tracking `origin/<branch>`, at this commit
     Remote { commit: String },
-    /// A new branch, tracking nothing, at the remote's default branch
-    /// (`origin/HEAD`, named here as `origin/main`)
+    /// A new branch, tracking nothing, at the project's own branch
+    /// (`branch:`) or else the remote's default branch (`origin/HEAD`),
+    /// named here as `origin/main`
     Default { name: String, commit: String },
     /// A new branch at HEAD's commit, in a repo whose remote names no
     /// default branch; `branch`: the one HEAD is on, if any
@@ -194,13 +195,15 @@ impl WorktreeStart {
 /// How a worktree of `repo_path` on `branch` would start, from `from_ref`
 /// if given: every check meta makes before running `git worktree add`, so
 /// a preview makes them too. A new branch without `from_ref` starts from
-/// the remote's default branch, never from whatever the checkout has
-/// checked out; only a repo whose remote names none (no `origin/HEAD`)
-/// starts from its HEAD, with a warning when it has a remote.
+/// the project's own branch (`start`: its `branch:` in .meta.yaml) if it
+/// names one, else from the remote's default branch, never from whatever
+/// the checkout has checked out; only a repo whose remote names none (no
+/// `origin/HEAD`) starts from its HEAD, with a warning when it has a remote.
 pub fn worktree_start(
     repo_path: &Path,
     branch: &str,
     from_ref: Option<&str>,
+    start: Option<&str>,
 ) -> Result<WorktreeStart> {
     ensure_checkout_config_is_not_bare(repo_path)?;
     if let Some(ref_name) = from_ref {
@@ -233,6 +236,25 @@ pub fn worktree_start(
     }
     if let Some(commit) = git_rev_parse(repo_path, &format!("refs/remotes/origin/{branch}"))? {
         return Ok(WorktreeStart::Remote { commit });
+    }
+    if let Some(start) = start {
+        let name = format!("origin/{start}");
+        let commit = git_rev_parse(repo_path, &format!("refs/remotes/{name}^{{commit}}"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}: its .meta.yaml names branch '{}', and there is no {} to start '{}' \
+                     from; fetch it with: git -C {} fetch origin {}",
+                    escape_path(repo_path),
+                    escape(start),
+                    escape(&name),
+                    escape(branch),
+                    escape(&meta_plugin::display::shell_quote(
+                        &repo_path.to_string_lossy()
+                    )),
+                    escape(&meta_plugin::display::shell_quote(start))
+                )
+            })?;
+        return Ok(WorktreeStart::Default { name, commit });
     }
     let default = lookup(
         repo_path,
@@ -283,8 +305,9 @@ pub fn git_worktree_add(
     worktree_dest: &Path,
     branch: &str,
     from_ref: Option<&str>,
+    start_branch: Option<&str>,
 ) -> Result<WorktreeStart> {
-    let start = worktree_start(repo_path, branch, from_ref)?;
+    let start = worktree_start(repo_path, branch, from_ref, start_branch)?;
     leftover_entry(repo_path, worktree_dest)?;
     change(
         repo_path,
@@ -649,7 +672,7 @@ mod tests {
         let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.repo(&sandbox.work());
         let dest = tmp.join(std::ffi::OsStr::from_bytes(b"wt-\xff"));
-        git_worktree_add(&tmp, &dest, "topic", None).unwrap();
+        git_worktree_add(&tmp, &dest, "topic", None, None).unwrap();
         assert!(dest.join(".git").is_file());
         assert!(!tmp.join("wt-\u{fffd}").exists());
     }

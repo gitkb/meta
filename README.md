@@ -252,6 +252,7 @@ projects:
 |-------|----------|-------------|
 | `repo` | No | Git repository URL (without one the project is local-only: `meta git update` doesn't clone it) |
 | `path` | No | Custom clone path (defaults to project name) |
+| `branch` | No | The branch the project starts from: `meta git clone` and `meta git update` clone it on this branch (`git clone --branch`), and `meta git worktree create` starts a set's new branch from `origin/<branch>`. Without it, the remote's default branch. Nothing moves a repo that is already cloned to it: no pull, no checkout. `meta --json project list` gives it as `branch` (absent for the remote's default) |
 | `tags` | No | Array of tags for filtering |
 | `meta` | No | Set `true` if this project contains a nested `.meta.yaml` |
 | `provides` | No | Array of capabilities this project provides |
@@ -265,7 +266,8 @@ A token in a `repo` URL (`https://user:token@host/org/repo.git`) works, and meta
 - A project name is usually one word; a nested alias such as `vendor/lib` is fine. It must be a plain relative path in normal form.
 - Names use only ASCII letters, digits, space and `._-+@`, so one config names the same projects on every platform (no Unicode that macOS or Windows would treat as another name, no `C:`, `<>:"|?*` or short names like `PROGRA~1`). They have no trailing dot or space, are not Windows device names (`CON`, `NUL`, `COM1`, ...) or `.git`, and do not start with `.worktrees` or lie under the configured `worktrees_dir`.
 - No two projects share a path, and no project's path lies inside another's. Paths are compared after following existing symlinks, and without regard to case (some filesystems ignore it). Project names may not be equal or nested either, also without regard to case. A repo inside another repo goes in a nested meta config (`meta: true`).
-- No name, path, repo, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline), a bidirectional-text control, or an invisible format character (such as a zero-width space).
+- `branch` is a name `git check-ref-format --branch` takes (no `..`, spaces, `@{-1}`, leading `-`, ...).
+- No name, path, repo, branch, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline), a bidirectional-text control, or an invisible format character (such as a zero-width space).
 - `repo` does not start with `-`.
 - Tags contain no whitespace and no `,`.
 - `worktrees_dir`, if set, may be anywhere (relative, `..`, absolute, or `.worktrees` a symlink to another disk), but not the config's directory itself, not inside a project and not in `.git`. `META_WORKTREES` overrides it.

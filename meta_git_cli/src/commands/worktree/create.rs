@@ -12,7 +12,7 @@ use crate::worktree::git_ops::*;
 use crate::worktree::helpers::*;
 use crate::worktree::hooks::fire_post_create;
 use crate::worktree::origin::{branches_on_origin, Wanted};
-use crate::worktree::plan::{Found, Index, PlannedRepo};
+use crate::worktree::plan::{start_branch, Found, Index, PlannedRepo};
 use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
 use crate::worktree::types::{CreateOutput, CreatePlan, CreatePlanRepo, CreateRepoEntry};
 use crate::worktree::RepoSpec;
@@ -211,7 +211,12 @@ pub(crate) fn handle_create(
                         commit: commit.unwrap_or_default(),
                     }
                 } else {
-                    worktree_start(&repo.source, &repo.branch, from_ref)?
+                    worktree_start(
+                        &repo.source,
+                        &repo.branch,
+                        from_ref,
+                        start_branch(&here.workspace.members, &repo.source),
+                    )?
                 },
             );
         }
@@ -366,7 +371,13 @@ pub(crate) fn handle_create(
             let mut started_from = None;
             let created_branch =
                 journal_new_branch(&repo.source, &repo.branch, &mut new_branches, || {
-                    let start = git_worktree_add(&repo.source, &dest, &repo.branch, from_ref)?;
+                    let start = git_worktree_add(
+                        &repo.source,
+                        &dest,
+                        &repo.branch,
+                        from_ref,
+                        start_branch(&here.workspace.members, &repo.source),
+                    )?;
                     started_from = start.base(&repo.branch);
                     Ok(start.new_branch_at())
                 })?;

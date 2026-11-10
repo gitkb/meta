@@ -66,6 +66,7 @@ fn projects(repos: &[Candidate], root: &Path) -> Vec<Project> {
                 dependency_problems: Vec::new(),
                 left_out: Vec::new(),
                 meta: info.is_some_and(|i| i.meta),
+                branch: info.and_then(|i| i.start_branch()).map(str::to_string),
                 level: None,
                 present: repo.dir.exists(),
                 nested: Vec::new(),

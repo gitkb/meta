@@ -203,6 +203,7 @@ impl<'a> Tree<'a> {
                     path: node.own.clone(),
                     repo: node.repo(),
                     meta: node.project.meta,
+                    branch: node.project.branch.clone(),
                 })
                 .collect(),
         }
@@ -218,6 +219,8 @@ pub(crate) struct Listed {
     pub repo: Option<RepoUrl>,
     /// Declared `meta: true`
     pub meta: bool,
+    /// The branch it starts from (`branch:`); none: its remote's default
+    pub branch: Option<String>,
 }
 
 /// What a meta repo's config lists.
@@ -249,6 +252,7 @@ impl Listing {
                 repo: row.listed.repo.clone(),
                 // declared `meta: true` (a meta repo not cloned yet too)
                 meta: row.listed.meta,
+                branch: row.listed.branch.clone(),
             })
             .collect();
         Ok(Some(Listing {
@@ -430,6 +434,7 @@ pub(crate) mod tests {
                         tags: Vec::new(),
                         is_meta: true,
                         meta: false,
+                        branch: None,
                         error: None,
                         cwd: None,
                         worktree: None,
@@ -444,6 +449,7 @@ pub(crate) mod tests {
                         tags: vec!["a".into(), "b".into()],
                         is_meta: false,
                         meta: true,
+                        branch: None,
                         error: Some(error),
                         cwd: None,
                         worktree: None,

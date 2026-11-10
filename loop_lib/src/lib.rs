@@ -263,8 +263,8 @@ impl CommandResult {
         }
     }
 
-    /// Why it failed, for the end of a line (`: why`): the last line of
-    /// its stderr that has anything on it, or that it wrote none. Nothing for
+    /// The end of its line in the summary (`: why`) when its stderr can't
+    /// say: that it wrote none, or that it wrote too much to keep. Nothing for
     /// a command that ran live: its stderr was the user's, shown and not kept.
     fn why(&self) -> String {
         if self.live {
@@ -273,17 +273,42 @@ impl CommandResult {
         if self.too_much_output.is_some() {
             return ": no more of one command's output is kept".to_string();
         }
-        String::from_utf8_lossy(&self.stderr)
+        match self.stderr_lines().is_empty() {
+            true => ": no stderr".to_string(),
+            false => String::new(),
+        }
+    }
+
+    /// The lines under its line in the summary: those of its stderr that
+    /// have anything on them, escaped, at most [`SUMMARY_LINES`], then how
+    /// many more there are. None for a command that ran live or wrote too
+    /// much: [`Self::why`] says so.
+    fn stderr_lines(&self) -> Vec<String> {
+        if self.live || self.too_much_output.is_some() {
+            return Vec::new();
+        }
+        let stderr = String::from_utf8_lossy(&self.stderr);
+        let lines: Vec<&str> = stderr
             .lines()
-            .rev()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map_or_else(
-                || ": no stderr".to_string(),
-                |line| format!(": {}", escape(line)),
-            )
+            .map(str::trim_end)
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        let mut shown: Vec<String> = lines
+            .iter()
+            .take(SUMMARY_LINES)
+            .map(|line| escape(line).into_owned())
+            .collect();
+        match lines.len().saturating_sub(SUMMARY_LINES) {
+            0 => {}
+            1 => shown.push("… 1 more line".to_string()),
+            more => shown.push(format!("… {more} more lines")),
+        }
+        shown
     }
 }
+
+/// How many lines of a failed command's stderr the summary shows under it.
+const SUMMARY_LINES: usize = 10;
 
 /// Whether a command that ended so succeeded: no signal, and an exit code
 /// among `ok_codes`.
@@ -1227,6 +1252,9 @@ fn print_summary(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
                 first.ending(),
                 first.why()
             )?;
+            for line in first.stderr_lines() {
+                outln!("    {line}")?;
+            }
         }
         outln!()?;
     }

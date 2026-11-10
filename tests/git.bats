@@ -1738,6 +1738,38 @@ YAML
     [ ! -e dest ]
 }
 
+@test "the summary shows a failed command's stderr under its line, not only the last line" {
+    with_remotes
+    # git as it fails to reach a remote it has no access to, in frontend
+    mkdir -p "$TEST_DIR/shim"
+    real_git="$(command -v git)"
+    cat > "$TEST_DIR/shim/git" <<EOF
+#!/bin/sh
+case "\$PWD \$* " in *frontend*" pull "*)
+    printf '%s\n' 'ERROR: Repository not found.' 'fatal: Could not read from remote repository.' '' \
+        'Please make sure you have the correct access rights' 'and the repository exists.' >&2
+    exit 1;;
+esac
+exec "$real_git" "\$@"
+EOF
+    chmod +x "$TEST_DIR/shim/git"
+    # captured, as a run over several repos is (one alone runs live, its
+    # stderr shown and not kept)
+    PATH="$TEST_DIR/shim:$PATH" run "$META_BIN" --parallel git pull
+    [ "$status" -eq 1 ]
+    local summary=${output#*Summary:}
+    [[ "$summary" == *"✗ ./frontend: git pull (exit code 1)"$'\n'"    ERROR: Repository not found."$'\n'"    fatal: Could not read from remote repository."$'\n'"    Please make sure you have the correct access rights"$'\n'"    and the repository exists."* ]]
+    # a long stderr: ten lines, then how many more
+    run "$META_BIN" --parallel --include frontend,backend exec -- sh -c '[ "${PWD##*/}" = backend ] && exit 0; for i in $(seq 15); do echo "line $i" >&2; done; exit 2'
+    [ "$status" -eq 1 ]
+    summary=${output#*Summary:}
+    [[ "$summary" == *"    line 10"$'\n'"    … 5 more lines"* ]]
+    [[ "$summary" != *"line 11"* ]]
+    # one that wrote none says so on its line
+    run "$META_BIN" --parallel --include frontend,backend exec -- sh -c '[ "${PWD##*/}" = backend ] || exit 2'
+    [[ "$output" == *"✗ ./frontend: sh -c "*" (exit code 2): no stderr"* ]]
+}
+
 @test "a failed clone ends with the last stderr line" {
     with_remotes
     rm -rf "$TEST_DIR/shared"

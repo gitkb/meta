@@ -167,7 +167,7 @@ impl Warning {
         Warning::about(
             project,
             format!(
-                "{} is not cloned; `meta git clone-missing` clones it",
+                "{} is not cloned; `meta git update` clones it",
                 crate::display::escape(project)
             ),
         )

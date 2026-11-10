@@ -428,12 +428,13 @@ fn scan(
 
 /// What deleting the repository at `repo`, a checkout of its own, would
 /// lose: uncommitted, untracked and hidden files, an operation in progress,
-/// commits on no remote, stashes, and its linked worktrees. Empty when git
-/// shows nothing that isn't on a remote (ignored files aside). Like `git
-/// worktree remove` and `git branch -d`, it counts only what git keeps:
-/// commits only a reflog holds are ones git counts discarded, and ignored
-/// files are disposable.
-pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
+/// commits and tags on no remote, stashes, and its linked worktrees. Empty
+/// when git shows nothing that isn't on a remote (ignored files aside).
+/// Like `git worktree remove` and `git branch -d`, it counts only what git
+/// keeps: commits only a reflog holds are ones git counts discarded, and
+/// ignored files are disposable. Which tags a remote has only the remote
+/// can say: with `ask` false none is asked, and its tags count as held.
+pub fn repo_holds(repo: &Path, ask: bool) -> Result<Vec<String>> {
     let born = meta_core::git::lookup(repo, ["rev-parse", "--verify", "--quiet", "HEAD"])?;
     let mut found = match born {
         Some(_) => unsaved_work(repo, &[])?.0,
@@ -463,6 +464,21 @@ pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
             sample(&unpushed, |line| escape(line).into_owned())
         ));
     }
+    let format = "--format=%(objectname)\t%(refname)";
+    let tags = meta_core::git::run(repo, ["for-each-ref", format, "refs/tags"])?;
+    if !tags.is_empty() && !ask {
+        let n = tags.lines().count();
+        found.push(format!("{} no remote was asked about", plural(n, "tag")));
+    } else if !tags.is_empty() {
+        let tags = unpushed_tags(repo, &tags)?;
+        if !tags.is_empty() {
+            found.push(format!(
+                "{} on no remote: {}",
+                plural(tags.len(), "tag"),
+                sample(&tags, |name| escape(name).into_owned())
+            ));
+        }
+    }
     match meta_core::git::run(repo, ["stash", "list"])?
         .lines()
         .count()
@@ -486,6 +502,94 @@ pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
         ));
     }
     Ok(found)
+}
+
+/// How long a remote has to say which tags it has.
+const TAGS_SECONDS: u64 = 10;
+
+/// The tags of `local` (`for-each-ref` lines of the repo at `repo`: object,
+/// tab, ref) that no remote has, by name: a tag no remote has under its
+/// name, pointing at the same object (an annotated tag's own object, with
+/// its message and signature). Nothing here records a remote's tags, as
+/// `refs/remotes` does its branches, so each remote is asked, with no
+/// prompt and for at most [`TAGS_SECONDS`]; one that can't be asked is an
+/// error.
+fn unpushed_tags(repo: &Path, local: &str) -> Result<Vec<String>> {
+    let mut remote_has = std::collections::HashSet::new();
+    for remote in meta_core::git::run(repo, ["remote"])?.lines() {
+        let said = remote_tags(repo, remote).map_err(|why| {
+            anyhow::anyhow!(
+                "remote {} can't be asked which tags it has: {}",
+                escape(remote),
+                escape(&why)
+            )
+        })?;
+        remote_has.extend(said.lines().map(str::to_string));
+    }
+    Ok(local
+        .lines()
+        .filter(|line| !remote_has.contains(*line))
+        .map(|line| {
+            let name = line.split_once('\t').map_or(line, |(_, name)| name);
+            name.strip_prefix("refs/tags/").unwrap_or(name).to_string()
+        })
+        .collect())
+}
+
+/// What `git ls-remote --tags` says of `remote`, or why it can't be told:
+/// git's last line of error output, or that it didn't answer in time.
+fn remote_tags(repo: &Path, remote: &str) -> std::result::Result<String, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut command = git(repo);
+    command
+        .args(["ls-remote", "--tags", "--", remote])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    super::origin::no_prompts(&mut command, repo);
+    let mut child = meta_plugin::process::spawn_group(&mut command)
+        .map_err(|e| format!("git can't start ({e})"))?;
+    // read while it runs: a long list would fill the pipe and stall git
+    let read = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_string(&mut text);
+            }
+            text
+        })
+    };
+    let out = read(child.stdout().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let err = read(child.stderr().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let limit = std::time::Instant::now() + std::time::Duration::from_secs(TAGS_SECONDS);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < limit => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
+            _ => {
+                child.stop(true);
+                let _ = child.wait();
+                return Err(format!("it didn't answer within {TAGS_SECONDS} seconds"));
+            }
+        }
+    };
+    let (out, err) = (
+        out.join().unwrap_or_default(),
+        err.join().unwrap_or_default(),
+    );
+    if status.success() {
+        return Ok(out);
+    }
+    Err(err
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("no stderr")
+        .to_string())
 }
 
 /// The files and folders git ignores in the checkout at `repo` (`.env`,
@@ -757,7 +861,7 @@ mod tests {
         sandbox.git(&repo, &["init", "-q"]);
         std::fs::write(repo.join("a.txt"), "a").unwrap();
         assert_eq!(
-            repo_holds(&repo).unwrap(),
+            repo_holds(&repo, true).unwrap(),
             ["a branch with no commits yet, and 1 file"]
         );
 
@@ -769,7 +873,7 @@ mod tests {
             &["remote", "add", "origin", remote.to_str().unwrap()],
         );
         sandbox.git(&repo, &["fetch", "-q", "origin"]);
-        assert!(repo_holds(&repo).unwrap().is_empty());
+        assert!(repo_holds(&repo, true).unwrap().is_empty());
 
         // a commit on a local branch only, a stash and a worktree
         sandbox.git(&repo, &["switch", "-q", "-c", "holds-topic"]);
@@ -781,12 +885,37 @@ mod tests {
         // and one on no branch at all, counted once
         sandbox.git(&repo, &["switch", "-q", "--detach"]);
         sandbox.git(&repo, &["commit", "-q", "--allow-empty", "-m", "loose"]);
-        let held = repo_holds(&repo).unwrap().join("; ");
+        let held = repo_holds(&repo, true).unwrap().join("; ");
         assert!(held.contains("2 commits on no remote: "), "{held}");
         assert!(held.contains("mine") && held.contains("loose"), "{held}");
         assert!(held.contains("1 stash"), "{held}");
         assert!(held.contains("1 linked worktree: "), "{held}");
         assert!(!held.contains(STRANDED), "{held}");
+    }
+
+    #[test]
+    fn repo_holds_names_a_tag_no_remote_has() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let tmp = sandbox.work();
+        let remote = tmp.join("remote.git");
+        sandbox.git(&tmp, &["init", "-q", "--bare", "remote.git"]);
+        sandbox.git(&tmp, &["clone", "-q", remote.to_str().unwrap(), "repo"]);
+        let repo = tmp.join("repo");
+        sandbox.git(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        sandbox.git(&repo, &["push", "-q", "origin", "HEAD"]);
+        sandbox.git(&repo, &["tag", "-a", "v1", "-m", "pushed"]);
+        sandbox.git(&repo, &["push", "-q", "origin", "v1"]);
+        assert!(repo_holds(&repo, true).unwrap().is_empty());
+        // on a pushed commit, its own object is on no remote
+        sandbox.git(&repo, &["tag", "-a", "v2", "-m", "only here"]);
+        assert_eq!(repo_holds(&repo, true).unwrap(), ["1 tag on no remote: v2"]);
+        // one the remote has under the same name, but another object
+        sandbox.git(&repo, &["tag", "-f", "-a", "v1", "-m", "moved"]);
+        let held = repo_holds(&repo, true).unwrap().join("; ");
+        assert!(held.contains("2 tags on no remote: "), "{held}");
+        // a remote that can't be asked: nothing is taken for pushed
+        std::fs::remove_dir_all(&remote).unwrap();
+        assert!(repo_holds(&repo, true).is_err());
     }
 
     #[test]

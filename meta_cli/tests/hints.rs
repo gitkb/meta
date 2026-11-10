@@ -301,7 +301,6 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
     // --depth is git's)
     for typed in [
         &["project", "list", "--include", "api"][..],
-        &["git", "update", "--include", "api"],
         &["git", "worktree", "create", "t", "--tag", "backend"],
         &["git", "clone", url, "d", "--exclude", "api"],
         &["exec", "--parallel", "8", "--", "pwd"],
@@ -330,7 +329,7 @@ fn a_meta_option_after_any_command_gets_the_line_with_it_before() {
     assert_eq!(out.status.code(), Some(2), "{}", text(&out));
     let error: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(error["success"], false, "{}", text(&out));
-    let out = workspace.meta(&["git", "update", "--include", "api"]);
+    let out = workspace.meta(&["git", "worktree", "list", "--include", "api"]);
     assert!(
         text(&out)
             .contains("--include is an option of meta itself, and this command doesn't take it"),
@@ -366,8 +365,8 @@ fn meta_owned_commands_take_no_copy_of_meta_options() {
         ),
         (&["git", "update", "-r"], &["-r", "git", "update"]),
         (
-            &["git", "clone-missing", "-r"],
-            &["-r", "git", "clone-missing"],
+            &["git", "update", "--prune", "-r"],
+            &["-r", "git", "update", "--prune"],
         ),
         (&["context", "--json"], &["--json", "context"]),
         (&["plugin", "list", "--json"], &["--json", "plugin", "list"]),

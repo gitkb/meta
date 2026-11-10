@@ -1,4 +1,4 @@
-use crate::clone_queue::{CloneQueue, MetaRepo, Work};
+use crate::clone_queue::{CloneQueue, MetaRepo};
 use crate::clone_worker::clone_with_queue;
 use crate::ssh;
 use anyhow::Context;
@@ -112,8 +112,8 @@ pub(crate) fn execute_git_clone(
             "{} already exists{}",
             meta_plugin::display::escape_path(&clone_dir_path),
             if workspace {
-                "; to clone the projects its .meta.yaml lists that aren't cloned yet (and \
-                 fast-forward the others), run 'meta git update' in it"
+                "; to clone the projects its .meta.yaml lists that aren't cloned yet, run \
+                 'meta git update' in it"
             } else {
                 " and is not an empty directory; clone somewhere else, or name another \
                  directory"
@@ -185,7 +185,7 @@ pub(crate) fn execute_git_clone(
     };
 
     // For non-recursive mode, read only the cloned repo's own .meta.yaml
-    let queue = CloneQueue::new(depth.clone(), meta_depth, false);
+    let queue = CloneQueue::new(depth.clone(), meta_depth);
     let name = clone_dir_path
         .file_name()
         .map_or_else(|| clone_dir.clone(), |n| n.to_string_lossy().into_owned());
@@ -195,7 +195,7 @@ pub(crate) fn execute_git_clone(
     let initial_count = tasks.len();
 
     if initial_count == 0 {
-        if let Some(error) = crate::clone_worker::report_failures(&queue, "git clone-missing") {
+        if let Some(error) = crate::clone_worker::report_failures(&queue, "git update") {
             anyhow::bail!("{error}");
         }
         // only ones whose URL holds credentials: through meta, as configured
@@ -206,13 +206,7 @@ pub(crate) fn execute_git_clone(
     }
 
     // Establish SSH masters for any additional hosts in the queue
-    let queue_urls: Vec<_> = tasks
-        .iter()
-        .filter_map(|t| match &t.work {
-            Work::Clone(url) => Some(url.clone()),
-            Work::Pull => None,
-        })
-        .collect();
+    let queue_urls: Vec<_> = tasks.iter().map(|t| t.url.clone()).collect();
     if !queue_urls.is_empty() {
         match ssh::establish_ssh_masters(&queue_urls) {
             ssh::SshMasters::OurSockets(sockets_dir) => {
@@ -238,7 +232,7 @@ pub(crate) fn execute_git_clone(
     let mp = MultiProgress::new();
 
     clone_with_queue(&queue, tasks, parallel, &mp, ssh_cmd.as_deref())?;
-    if let Some(error) = crate::clone_worker::report_failures(&queue, "git clone-missing") {
+    if let Some(error) = crate::clone_worker::report_failures(&queue, "git update") {
         let rows = crate::clone_worker::failure_rows(&queue, &clone_dir_path);
         return crate::printed(ctx, rows, Some(anyhow::anyhow!("{error}")));
     }

@@ -163,7 +163,7 @@ impl Checkout {
     /// repository.
     pub fn problem(&self) -> Option<String> {
         match self {
-            Self::Missing => Some("not cloned (run 'meta git clone-missing')".into()),
+            Self::Missing => Some("not cloned (run 'meta git update')".into()),
             Self::NotARepo(why) => Some(format!("not a git repository ({why})")),
             Self::Repo { .. } => None,
         }

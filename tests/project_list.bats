@@ -388,7 +388,7 @@ J
     rm -rf "$TEST_DIR/shared"
     run "$META_BIN" project check
     [ "$status" -ne 0 ]
-    [[ "$output" == *"shared: not cloned (run 'meta git clone-missing')"* ]]
+    [[ "$output" == *"shared: not cloned (run 'meta git update')"* ]]
     [[ "$output" != *"meta project update"* ]]
 }
 
@@ -498,13 +498,17 @@ paths() { jq -r '[.results[].project] | join(" ")'; }
     [ "$status" -eq 0 ]
     [[ "$output" == *"api"* ]]
     [[ "$output" != *"tf"* && "$output" != *"frontend"* ]]
+    mv infra/tf "$BATS_TEST_TMPDIR/tf"
+    mv ../backend "$BATS_TEST_TMPDIR/backend"
     run "$META_BIN" -A --dry-run git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"frontend"* ]]
+    [[ "$output" == *"org/backend.git"* && "$output" == *"org/tf.git"* ]]
     run "$META_BIN" -r --dry-run git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"(tf not pulled"* ]]
-    [[ "$output" != *"frontend"* ]]
+    [[ "$output" == *"org/tf.git"* ]]
+    [[ "$output" != *"backend"* ]]
+    mv "$BATS_TEST_TMPDIR/tf" infra/tf
+    mv "$BATS_TEST_TMPDIR/backend" ../backend
     # worktree create: --repo across the meta repos -r or -A reaches
     run "$META_BIN" -r --dry-run git worktree create t --repo infra/tf --no-deps
     [ "$status" -eq 0 ]

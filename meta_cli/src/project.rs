@@ -30,7 +30,7 @@ Examples:
   meta project check
   meta project dependents meta_core
 
-To clone missing projects, use: meta git clone-missing"
+To clone missing projects, use: meta git update"
 )]
 pub struct ProjectArgs {
     #[command(subcommand)]
@@ -59,7 +59,7 @@ Examples:
     /// Verify configured projects are cloned (meta --recursive checks nested meta repos as well)
     #[command(after_help = "Agent hints:
   Run this when commands fail because a child checkout is missing.
-  Missing repos can usually be cloned with `meta git clone-missing`.
+  Missing repos can usually be cloned with `meta git update`.
 
 Examples:
   meta project check
@@ -317,7 +317,7 @@ fn check(cli: &Cli, start: &Path, report: &mut Report) -> Result<()> {
         "{} project(s) are not clones of their configured repository{}",
         problems.len(),
         if missing {
-            "; run 'meta git clone-missing' to clone the missing ones"
+            "; run 'meta git update' to clone the missing ones"
         } else {
             ""
         }

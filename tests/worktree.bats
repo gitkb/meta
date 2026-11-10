@@ -264,7 +264,7 @@ EOF
     [ "$status" -ne 0 ]
     [[ "$output" == *"'web' at $TEST_DIR/web: not a git repository"* ]]
     [[ "$output" == *"Move $TEST_DIR/web aside (or delete it, if nothing in it is needed), then run this create again: it clones what isn't there."* ]]
-    [[ "$output" != *"clone-missing"* ]]
+    [[ "$output" != *"git update"* ]]
     [ ! -e api ] && [ ! -e .worktrees/blocked ]
     mv web web.aside
     run "$META_BIN" git worktree create blocked --repo api
@@ -374,7 +374,7 @@ EOF
     [[ "$output" == *"'web' at $TEST_DIR/web: not cloned"* ]]
     [[ "$output" == *"'db' at $TEST_DIR/db: not cloned"* ]]
     [[ "$output" != *"'api' at"* ]]
-    [[ "$output" == *"meta --include 'web,db' git clone-missing"* ]]
+    [[ "$output" == *"meta --include 'web,db' git update"* ]]
     [[ "$output" == *"Cloning failed"* ]]
     [ ! -e ".worktrees/denied" ]
 }

@@ -102,7 +102,7 @@ pub(crate) fn handle_create(
     // until that meta repo is, and so is one on the way to a project they
     // depend on (open-source for open-source/atc), which only that meta
     // repo's .meta.yaml lists: it is cloned first. The repos the set needs
-    // that aren't cloned are cloned too, as clone-missing would. A clone may
+    // that aren't cloned are cloned too, as update would. A clone may
     // list more (a nested meta repo's projects): then the command runs
     // again, planning from the configs as they are now.
     let mut wanted: Vec<String> = args.repos.iter().map(|r| r.alias.clone()).collect();
@@ -1004,7 +1004,7 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
         places.join(", ")
     );
     let dirs: Vec<_> = missing.iter().map(|r| r.source.clone()).collect();
-    let cloned = crate::clone_missing::clone_dirs(
+    let cloned = crate::update::clone_dirs(
         &index.listing(),
         index.members,
         &dirs,
@@ -1079,8 +1079,8 @@ fn not_cloned_error(repos: &[PlannedRepo], root: Option<std::path::PathBuf>) -> 
             escape(&why)
         ));
     }
-    // a folder that holds something else is the user's: clone-missing
-    // refuses it too, so the way on is to move it aside, and create clones
+    // a folder that holds something else is the user's: update refuses
+    // it too, so the way on is to move it aside, and create clones
     // the project there
     if !blocked.is_empty() {
         message.push_str(&format!(
@@ -1093,7 +1093,7 @@ fn not_cloned_error(repos: &[PlannedRepo], root: Option<std::path::PathBuf>) -> 
     } else if !missing.is_empty() {
         let include = meta_plugin::display::shell_quote(&missing.join(","));
         message.push_str(&format!(
-            "\nTo clone just the missing ones, then run this create again:\n  meta {}--include {} git clone-missing",
+            "\nTo clone just the missing ones, then run this create again:\n  meta {}--include {} git update",
             if root.is_some() { "-A " } else { "" },
             escape(&include)
         ));
@@ -1101,8 +1101,8 @@ fn not_cloned_error(repos: &[PlannedRepo], root: Option<std::path::PathBuf>) -> 
     message
 }
 
-/// Where a recursive index names its places from, for the clone-missing
-/// line (`-A`): none for a shallow one.
+/// Where a recursive index names its places from, for the update line
+/// (`-A`): none for a shallow one.
 fn root_of(index: &Index) -> Option<std::path::PathBuf> {
     index.is_recursive().then(|| index.listed_root.clone())
 }

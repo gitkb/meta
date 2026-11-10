@@ -249,92 +249,93 @@ within() {
     ' "$@"
 }
 
-@test "meta git update fast-forwards each repo, and clones what the pulled .meta.yaml adds" {
+# state REPO: what a repo's checkout is: HEAD, branch, every ref (the
+# remote-tracking ones show a fetch), FETCH_HEAD, and the working tree (in
+# the workspace repo, what it tracks: the clones are untracked in it)
+state() {
+    printf '%s %s\n' "$(git -C "$1" rev-parse HEAD)" "$(git -C "$1" branch --show-current)"
+    git -C "$1" for-each-ref
+    cat "$(git -C "$1" rev-parse --git-path FETCH_HEAD)" 2>/dev/null || echo "no FETCH_HEAD"
+    if [ "$1" = . ]; then
+        git -C "$1" status --porcelain --untracked-files=no
+    else
+        git -C "$1" status --porcelain --untracked-files=all
+    fi
+}
+
+@test "meta git update clones what is missing and leaves every cloned repo as it is" {
     with_remotes
+    # every remote moves ahead, the workspace's adding a project
     teammate frontend
-    # the teammate adds a project to the workspace's .meta.yaml
+    teammate backend
     git clone --quiet --bare "$TEST_DIR/shared" "$TEST_DIR/remotes/extra.git"
     local added
     added=$(sed "s|\"shared\": \(.*\)|\"shared\": \1, \"extra\": \"file://$TEST_DIR/remotes/extra.git\"|" .meta.yaml)
     teammate ws .meta.yaml "$added"
+    # work in progress, a detached HEAD, and a missing project
+    echo mine >> backend/README.md
+    echo new > backend/new.txt
+    git -C . switch --quiet --detach
+    rm -rf shared
+    local before
+    before=$(for repo in . frontend backend; do state "$repo"; done)
     run "$META_BIN" git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Update completed (4 pulled, 1 cloned)"* ]]
-    [ "$(head_of frontend)" = "$(head_of remotes/frontend.git)" ]
-    [ "$(head_of .)" = "$(head_of remotes/ws.git)" ]
-    [ -d "$TEST_DIR/extra/.git" ]
-}
-
-@test "meta git update names each repo it can't fast-forward, updates the rest, and exits 1" {
-    with_remotes
-    teammate frontend
-    teammate backend
-    teammate ws
-    # backend and the workspace repo have a commit of their own: diverged
-    local repo
-    for repo in backend .; do
-        echo mine >> "$TEST_DIR/$repo/mine.txt"
-        git -C "$TEST_DIR/$repo" add mine.txt
-        git -C "$TEST_DIR/$repo" commit --quiet -m mine
+    [ "$(for repo in . frontend backend; do state "$repo"; done)" = "$before" ]
+    [ -d shared/.git ]
+    [[ "$output" == *"Update completed (1 cloned)"* ]]
+    # the .meta.yaml on disk is what is read: what the remote's adds isn't cloned
+    [ ! -e extra ]
+    # nor with -r, --prune or --prune-only, which only remove what no
+    # .meta.yaml lists
+    rm -rf shared
+    for options in "-r git update" "git update --prune" "-r git update --prune-only"; do
+        # shellcheck disable=SC2086
+        run "$META_BIN" $options
+        [ "$status" -eq 0 ]
+        [ "$(for repo in . frontend backend; do state "$repo"; done)" = "$before" ]
     done
-    local backend_head
-    backend_head=$(head_of backend)
-    rm -rf "$TEST_DIR/shared"
-    run "$META_BIN" git update
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"Could not pull backend"*"fast-forward"* ]]
-    [[ "$output" == *"2 repositories could not be pulled (fast-forward only): "* ]]
-    # nothing merged or rebased
-    [ "$(head_of backend)" = "$backend_head" ]
-    # the workspace's .meta.yaml as it is is still read
-    [ "$(head_of frontend)" = "$(head_of remotes/frontend.git)" ]
-    [ -d "$TEST_DIR/shared/.git" ]
+    [ -d shared/.git ]
 }
 
-@test "meta git update leaves alone a branch deleted on the remote, after asking the remote" {
-    with_remotes
-    git -C frontend switch --quiet -c merged
-    git -C frontend push --quiet -u origin merged
-    # its pull request merged: the branch is deleted on the remote
-    git -C remotes/frontend.git branch --quiet -D merged
-    run "$META_BIN" git update
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Not pulled frontend: its upstream branch isn't on the remote"* ]]
-}
-
-@test "meta git update reads a nested .meta.yaml only with -r, after pulling its meta repo" {
+@test "meta git update reads a nested .meta.yaml only with -r, and changes no nested repo" {
     with_remotes
     git clone --quiet --bare "$TEST_DIR/frontend" "$TEST_DIR/remotes/inner.git"
-    teammate shared .meta.yaml "{\"projects\": {\"inner\": \"file://$TEST_DIR/remotes/inner.git\"}}"
+    printf '{"projects": {"inner": "file://%s/remotes/inner.git"}}\n' "$TEST_DIR" > shared/.meta.yaml
+    git -C shared add .meta.yaml
+    git -C shared commit --quiet -m "nested"
+    git -C shared push --quiet
     run "$META_BIN" git update
     [ "$status" -eq 0 ]
-    [[ "$output" != *"recursive"* ]]
-    [ -f "$TEST_DIR/shared/.meta.yaml" ]
-    [ ! -e "$TEST_DIR/shared/inner" ]
-    # what the pull of shared brings is read in the same run
-    git -C "$TEST_DIR/shared" reset --quiet --hard HEAD~1
+    [ ! -e shared/inner ]
     run "$META_BIN" -r git update
     [ "$status" -eq 0 ]
-    [ -d "$TEST_DIR/shared/inner/.git" ]
-    rm -rf "$TEST_DIR/shared/inner"
+    [ -d shared/inner/.git ]
+    # the nested meta repo and its project move ahead on their remotes
+    teammate shared
+    teammate inner
+    local before
+    before=$(for repo in . shared shared/inner; do state "$repo"; done)
     run "$META_BIN" --recursive git update
     [ "$status" -eq 0 ]
-    [ -d "$TEST_DIR/shared/inner/.git" ]
+    [ "$(for repo in . shared shared/inner; do state "$repo"; done)" = "$before" ]
+    [[ "$output" == *"Update completed (0 cloned)"* ]]
+    run "$META_BIN" -r git update --prune
+    [ "$status" -eq 0 ]
+    [ "$(for repo in . shared shared/inner; do state "$repo"; done)" = "$before" ]
 }
 
-@test "meta --dry-run git update lists the pulls and clones and changes nothing" {
+@test "meta --dry-run git update lists the clones, no pulls, and changes nothing" {
     with_remotes
     teammate frontend
     rm -rf "$TEST_DIR/shared"
-    git -C "$TEST_DIR/backend" switch --quiet --detach
-    local frontend_head
-    frontend_head=$(head_of frontend)
+    local before
+    before=$(state frontend)
     run "$META_BIN" --dry-run git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"git -C $TEST_DIR/frontend pull --ff-only --no-rebase"* ]]
-    [[ "$output" == *"(backend not pulled: HEAD is not on a branch)"* ]]
     [[ "$output" == *"git clone -- file://$TEST_DIR/remotes/shared.git $TEST_DIR/shared"* ]]
-    [ "$(head_of frontend)" = "$frontend_head" ]
+    [[ "$output" != *"pull"* ]]
+    [ "$(state frontend)" = "$before" ]
     [ ! -e "$TEST_DIR/shared" ]
 }
 
@@ -346,19 +347,18 @@ within() {
     local real_git
     real_git="$(git --exec-path)/git"
     mkdir "$TEST_DIR/bin"
-    printf '#!/bin/sh\ncase " $* " in *" clone "*|*" pull "*)\n  head -c 262144 /dev/zero\n  echo "$GIT_TERMINAL_PROMPT" >> "%s/prompts";;\nesac\nexec "%s" "$@"\n' \
+    printf '#!/bin/sh\ncase " $* " in *" clone "*)\n  head -c 262144 /dev/zero\n  echo "$GIT_TERMINAL_PROMPT" >> "%s/prompts";;\nesac\nexec "%s" "$@"\n' \
         "$TEST_DIR" "$real_git" > "$TEST_DIR/bin/git"
     chmod +x "$TEST_DIR/bin/git"
     PATH="$TEST_DIR/bin:$PATH" run within 60 "$META_BIN" git update
     [ "$status" -eq 0 ]
     [ -d "$TEST_DIR/shared/.git" ]
-    # the clone and the three pulls
-    [[ "$output" == *"Update completed (3 pulled, 1 cloned)"* ]]
-    [ "$(grep -c '^0$' "$TEST_DIR/prompts")" -eq 4 ]
+    [[ "$output" == *"Update completed (1 cloned)"* ]]
+    [ "$(grep -c '^0$' "$TEST_DIR/prompts")" -eq 1 ]
 }
 
 @test "meta git update opens no ssh to remotes it won't contact" {
-    # cloned repos with no upstream, listed with ssh URLs: nothing to pull
+    # cloned repos listed with ssh URLs: nothing to clone
     printf '#!/bin/sh\ntouch "%s/ssh-ran"\nexit 255\n' "$TEST_DIR" > "$TEST_DIR/ssh"
     chmod +x "$TEST_DIR/ssh"
     PATH="$TEST_DIR:$PATH" run "$META_BIN" git update
@@ -383,42 +383,11 @@ within() {
     # no .meta/plugins here: this build's plugin, not one installed
     PATH="$(dirname "$META_GIT_BIN"):$PATH" run "$META_BIN" git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Not pulled x: its branch x has no upstream"* ]]
+    [[ "$output" == *"Update completed (3 cloned)"* ]]
     [ -d "$TEST_DIR/.worktrees/x/frontend/.git" ]
 }
 
-@test "meta git update pulls a repo it cloned empty once its remote has commits" {
-    with_remotes
-    git init --quiet --bare "$TEST_DIR/remotes/empty.git"
-    local added
-    added=$(sed "s|\"shared\": \(.*\)|\"shared\": \1, \"empty\": \"file://$TEST_DIR/remotes/empty.git\"|" .meta.yaml)
-    printf '%s\n' "$added" > .meta.yaml
-    git commit --quiet -am empty
-    git push --quiet
-    run "$META_BIN" git update
-    [ "$status" -eq 0 ]
-    [ -d "$TEST_DIR/empty/.git" ]
-    # while the remote is still empty, there is nothing to pull from
-    run "$META_BIN" git update
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Not pulled empty: its upstream branch isn't on the remote"* ]]
-    # a remote that can't be reached is a failure, with git's error
-    mv "$TEST_DIR/remotes/empty.git" "$TEST_DIR/remotes/away.git"
-    run "$META_BIN" git update
-    [ "$status" -eq 1 ]
-    [[ "$output" == *"Could not pull empty"* ]]
-    mv "$TEST_DIR/remotes/away.git" "$TEST_DIR/remotes/empty.git"
-    # a teammate pushes the first commit
-    git clone --quiet "$TEST_DIR/remotes/empty.git" "$TEST_DIR/remotes/mate-empty" 2>/dev/null
-    git -C "$TEST_DIR/remotes/mate-empty" -c user.name=Mate -c user.email=mate@test.com \
-        commit --quiet --allow-empty -m first
-    git -C "$TEST_DIR/remotes/mate-empty" push --quiet origin HEAD
-    run "$META_BIN" git update
-    [ "$status" -eq 0 ]
-    [ "$(head_of empty)" = "$(head_of remotes/empty.git)" ]
-}
-
-@test "meta git update -r pulls a second checkout of the workspace repo, which is no cycle" {
+@test "meta git update -r takes a second checkout of the workspace repo for no cycle" {
     with_remotes
     git clone --quiet "$TEST_DIR/remotes/ws.git" "$TEST_DIR/pages"
     git -C "$TEST_DIR/pages" rm --quiet .meta.yaml
@@ -434,7 +403,7 @@ within() {
     run "$META_BIN" -r git update
     [ "$status" -eq 0 ]
     [[ "$output" != *"list each other"* ]]
-    [[ "$output" == *"Update completed (5 pulled, 0 cloned)"* ]]
+    [[ "$output" == *"Update completed (0 cloned)"* ]]
 }
 
 @test "meta git clone -r and update -r of meta repos that list each other stop, naming the cycle" {
@@ -466,14 +435,18 @@ within() {
 
 
 @test "meta git update detects missing repos" {
-    rm -rf "$TEST_DIR/shared"
+    with_remotes
+    rm -rf "$TEST_DIR/shared" "$TEST_DIR/frontend"
     # a remote that doesn't exist: the clone fails without the network
-    sed -i.bak "s|git@github.com:org/shared.git|file://$TEST_DIR/nowhere.git|" "$TEST_DIR/.meta.yaml"
+    sed -i.bak "s|file://$TEST_DIR/remotes/shared.git|file://$TEST_DIR/nowhere.git|" "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git update
     # it tries to clone shared from there, and says it failed
     [ "$status" -ne 0 ]
     [[ "$output" == *"shared"*"nowhere.git"* || "$output" == *"nowhere.git"*"shared"* ]]
+    [[ "$output" == *"1 of 2 repositories failed to clone: shared"* ]]
     [ ! -e "$TEST_DIR/shared" ]
+    # the other clone still happens
+    [ -d "$TEST_DIR/frontend/.git" ]
 }
 
 @test "meta git update says what an unlisted repository holds, and never how to delete it" {
@@ -500,56 +473,31 @@ within() {
     [ -d "$TEST_DIR/web/.git" ]
 }
 
-@test "meta git update calls a leftover that holds nothing one clone-prune removes" {
+@test "meta git update calls a leftover that holds nothing one update --prune removes" {
     with_remotes
     git clone --quiet remotes/shared.git old
     run "$META_BIN" git update
     [ "$status" -eq 0 ]
-    [[ "$output" == *"old isn't in .meta.yaml (nothing unpushed; meta git clone-prune removes it)"* ]]
+    [[ "$output" == *"old isn't in .meta.yaml (nothing unpushed; meta git update --prune removes it)"* ]]
     [ -d "$TEST_DIR/old/.git" ]
 }
 
-# ============ meta git clone-missing, clone-prune, clone-sync ============
+# ============ meta git update: selection, --prune ============
 
-@test "meta git clone-missing clones what is missing and changes no repo that is cloned" {
-    with_remotes
-    teammate frontend
-    teammate ws
-    echo mine >> backend/README.md
-    rm -rf shared
-    local frontend_head ws_head frontend_origin
-    frontend_head=$(head_of frontend)
-    ws_head=$(head_of .)
-    frontend_origin=$(git -C frontend rev-parse origin/main)
-    run "$META_BIN" --dry-run git clone-missing
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"git clone -- file://$TEST_DIR/remotes/shared.git $TEST_DIR/shared"* ]]
-    [ ! -e shared ]
-    run "$META_BIN" git clone-missing
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Clone completed (1 cloned)"* ]]
-    [ -d shared/.git ]
-    # nothing pulled, fetched or checked out
-    [ "$(head_of frontend)" = "$frontend_head" ]
-    [ "$(head_of .)" = "$ws_head" ]
-    [ "$(git -C frontend rev-parse origin/main)" = "$frontend_origin" ]
-    [ "$(git -C backend status --porcelain)" = " M README.md" ]
-}
-
-@test "meta git clone-missing clones only the selected projects" {
+@test "meta git update clones only the selected projects" {
     with_remotes
     rm -rf frontend shared
-    run "$META_BIN" --include shared git clone-missing
+    run "$META_BIN" --include shared git update
     [ "$status" -eq 0 ]
     [ -d shared/.git ]
     [ ! -e frontend ]
     # with meta's -r, the selection reaches the nested projects too
-    run "$META_BIN" --include frontend -r git clone-missing
+    run "$META_BIN" --include frontend -r git update
     [ "$status" -eq 0 ]
     [ -d frontend/.git ]
 }
 
-@test "meta git clone-prune keeps each leftover that holds work, and removes a clean one" {
+@test "meta git update --prune keeps each leftover that holds work, and removes a clean one" {
     with_remotes
     local name
     for name in clean untracked modified stashed unpushed worktree nested; do
@@ -573,11 +521,11 @@ within() {
     mkdir plain
     git clone --quiet remotes/shared.git remotes/elsewhere
     ln -s "$TEST_DIR/remotes/elsewhere" link
-    run "$META_BIN" --dry-run git clone-prune
+    run "$META_BIN" --dry-run git update --prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"Would remove clean (nothing unpushed)"* ]]
     [ -d clean/.git ]
-    run "$META_BIN" git clone-prune
+    run "$META_BIN" git update --prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"Removed clean (nothing unpushed)"* ]]
     [[ "$output" == *"Kept untracked: it holds 1 file untracked: new.txt"* ]]
@@ -588,36 +536,36 @@ within() {
     [[ "$output" == *"Kept nested: it holds another git repository: inner"* ]]
     [[ "$output" == *"Kept bare: it holds another git repository: bare.git"* ]]
     [[ "$output" == *"Kept link: it is a symbolic link"* ]]
-    [[ "$output" == *"Prune completed (1 removed, 8 kept)"* ]]
+    [[ "$output" == *"Update completed (0 cloned, 1 removed, 8 kept)"* ]]
     [ ! -e clean ]
     for name in untracked modified stashed unpushed worktree nested bare plain link remotes/elsewhere frontend backend shared; do
         [ -e "$name" ]
     done
 }
 
-@test "meta git clone-prune with --config keeps the repos .meta.yaml lists" {
+@test "meta git update --prune with --config keeps the repos .meta.yaml lists" {
     with_remotes
     printf '.env\n' > frontend/.git/info/exclude
     echo SECRET=1 > frontend/.env
     printf 'projects:\n  shared: file://%s/remotes/shared.git\n' "$TEST_DIR" > other.yaml
     git add other.yaml && git commit --quiet -m other
-    run "$META_BIN" --config other.yaml --dry-run git clone-prune
+    run "$META_BIN" --config other.yaml --dry-run git update --prune
     [ "$status" -eq 0 ]
     [[ "$output" != *"remove frontend"* ]]
-    run "$META_BIN" --config other.yaml git clone-prune
+    run "$META_BIN" --config other.yaml git update --prune
     [ "$status" -eq 0 ]
-    run "$META_BIN" --config other.yaml git clone-sync
+    run "$META_BIN" --config other.yaml git update --prune-only
     [ "$status" -eq 0 ]
     [ -f frontend/.env ]
     [ -d backend/.git ]
     # a leftover neither lists is still one
     git clone --quiet remotes/shared.git leftover
-    run "$META_BIN" --config other.yaml git clone-prune
+    run "$META_BIN" --config other.yaml git update --prune
     [[ "$output" == *"Removed leftover"* ]]
     [ ! -e leftover ]
 }
 
-@test "meta git clone-prune removes a leftover holding only ignored files, naming them" {
+@test "meta git update --prune removes a leftover holding only ignored files, naming them" {
     with_remotes
     git clone --quiet remotes/shared.git local-data
     printf '.env\ndata/\n' > local-data/.git/info/exclude
@@ -628,72 +576,127 @@ within() {
     git -C local-data commit --quiet --allow-empty -m "left on a detached HEAD"
     git -C local-data switch --quiet main
     run "$META_BIN" git update
-    [[ "$output" == *"local-data isn't in .meta.yaml (nothing unpushed; meta git clone-prune removes it, and its ignored files: .env, data/)"* ]]
-    run "$META_BIN" --dry-run git clone-prune
+    [[ "$output" == *"local-data isn't in .meta.yaml (nothing unpushed; meta git update --prune removes it, and its ignored files: .env, data/)"* ]]
+    run "$META_BIN" --dry-run git update --prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"Would remove local-data (nothing unpushed; ignored files: .env, data/ deleted with it)"* ]]
-    # --json names them too, in the preview and the run, for both commands
+    # --json names them too, in the preview and the run
     local json_check='
 import json, sys
 [r] = [r["data"] for r in json.load(sys.stdin)["results"] if r["project"] == "local-data"]
 assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored files: .env, data/ deleted with it", r
 '
-    run "$META_BIN" --json --dry-run git clone-prune
+    run "$META_BIN" --json --dry-run git update --prune
     [ "$status" -eq 0 ]
     python3 -c "$json_check" <<<"$output"
     [ -f local-data/.env ]
-    run "$META_BIN" --json git clone-sync
+    run "$META_BIN" --json git update --prune
     [ "$status" -eq 0 ]
     python3 -c "$json_check" <<<"$output"
     [ ! -e local-data ]
     git clone --quiet remotes/shared.git local-data
     echo SECRET=1 > local-data/.env
     printf '.env\ndata/\n' > local-data/.git/info/exclude
-    run "$META_BIN" git clone-prune
+    run "$META_BIN" git update --prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"Removed local-data (nothing unpushed; ignored files: .env deleted with it)"* ]]
     [ ! -e local-data ]
-    run "$META_BIN" git clone-prune --delete-ignored
+    run "$META_BIN" git update --prune --delete-ignored
     [ "$status" -ne 0 ]
 }
 
-@test "meta git clone-sync clones what is missing and prunes what no .meta.yaml lists" {
+@test "meta git update --prune clones what is missing and prunes what no .meta.yaml lists" {
     with_remotes
     rm -rf shared
     git clone --quiet remotes/frontend.git old
-    run "$META_BIN" --dry-run git clone-missing
+    run "$META_BIN" --dry-run git update
     [ "$status" -eq 0 ]
     [[ "$output" == *"git clone"* ]]
-    run "$META_BIN" --json git clone-sync
+    run "$META_BIN" --json git update --prune
     [ "$status" -eq 0 ]
     jq -e '[.results[] | select(.project == "shared") | .data.action] == ["cloned"]' <<<"$output"
     jq -e '[.results[] | select(.project == "old") | .data.action] == ["removed"]' <<<"$output"
     [ -d shared/.git ]
     [ ! -e old ]
     # with everything cloned, the preview says so, not an empty list
-    run "$META_BIN" --dry-run git clone-sync
+    run "$META_BIN" --dry-run git update --prune
     [ "$status" -eq 0 ]
     [[ "$output" == *"[DRY RUN] Nothing to clone: every project the .meta.yaml files list is cloned"* ]]
     [[ "$output" != *"Would run"* ]]
 }
 
-@test "meta --json git clone-missing names a failed clone and a refused folder by their paths" {
+@test "meta git update --prune-only removes what no .meta.yaml lists and clones nothing" {
+    with_remotes
+    rm -rf shared
+    git clone --quiet remotes/frontend.git clean
+    git clone --quiet remotes/frontend.git unpushed
+    echo wip > unpushed/wip.md
+    git -C unpushed add wip.md
+    git -C unpushed commit --quiet -m "unpushed work"
+    # a tag no remote has, on a pushed commit: its message is only here
+    git clone --quiet remotes/frontend.git tagged
+    git -C tagged tag -a v9 -m "release notes only here"
+    # and one whose remote is over ssh: an ssh that shows it was run
+    git clone --quiet remotes/frontend.git far
+    git -C far tag v1
+    git -C far remote set-url origin git@nohost.invalid:org/far.git
+    mkdir -p "$TEST_DIR/bin"
+    printf '#!/bin/sh\ntouch "%s/ssh-ran"\nexit 255\n' "$TEST_DIR" > "$TEST_DIR/bin/ssh"
+    chmod +x "$TEST_DIR/bin/ssh"
+    # update's warnings contact no remote: tags are named as unasked
+    PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"far isn't in .meta.yaml; it holds 1 tag no remote was asked about"* ]]
+    [ ! -e "$TEST_DIR/ssh-ran" ]
+    rm -rf shared
+    PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" --dry-run git update --prune-only
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Would remove clean (nothing unpushed)"* ]]
+    [[ "$output" == *"Would keep unpushed: it holds 1 commit on no remote: "*"unpushed work"* ]]
+    [[ "$output" != *"Would run"* && "$output" != *"Nothing to clone"* ]]
+    [ -d clean/.git ]
+    PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" git update --prune-only
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Removed clean (nothing unpushed)"* ]]
+    [[ "$output" == *"Kept unpushed: it holds 1 commit on no remote: "*"unpushed work"* ]]
+    [[ "$output" == *"Kept tagged: it holds 1 tag on no remote: v9"* ]]
+    # pruning asks: a remote that can't be asked keeps the repo
+    [[ "$output" == *"Kept far: what it holds can't be told (remote origin can't be asked which tags it has: "* ]]
+    [[ "$output" == *"Update completed (1 removed, 3 kept)"* ]]
+    [ -d far/.git ]
+    [ -d tagged/.git ]
+    [ ! -e clean ]
+    [ -d unpushed/.git ]
+    [ ! -e shared ]
+    # one or the other
+    run "$META_BIN" git update --prune --prune-only
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--prune-only"*"--prune"* ]]
+    [ -d unpushed/.git ]
+    # a listed folder that holds something else is no failure: nothing is cloned
+    mkdir shared && echo mine > shared/notes.txt
+    run "$META_BIN" --json git update --prune-only
+    [ "$status" -eq 0 ]
+    jq -e '[.results[] | select(.data.action == "failed")] == []' <<<"$output"
+}
+
+@test "meta --json git update names a failed clone and a refused folder by their paths" {
     rm -rf shared
     mkdir -p frontend-notes && echo mine > frontend-notes/notes.txt
     echo '{"projects": {"api": {"repo": "file://'"$TEST_DIR"'/nowhere.git", "path": "services/api"}, "notes": {"repo": "u", "path": "frontend-notes"}}}' > .meta.yaml
     bats_require_minimum_version 1.5.0
-    run --separate-stderr "$META_BIN" --json git clone-missing
+    run --separate-stderr "$META_BIN" --json git update
     [ "$status" -eq 1 ]
     jq -e '.results[] | select(.project == "services/api") | .data.action == "failed" and (.error | type) == "object"' <<<"$output"
     jq -e '.results[] | select(.project == "frontend-notes") | .data == {"action": "failed", "reason": "not a git repository (folder exists, no .git)"} and .error.message == .data.reason' <<<"$output"
 }
 
-@test "meta git clone-missing in a worktree set refuses instead of cloning into the workspace" {
+@test "meta git update --prune in a worktree set refuses instead of cloning into the workspace" {
     with_remotes
     "$META_BIN" git worktree create review --repo frontend --no-deps >/dev/null
     rm -rf "$TEST_DIR/shared"
     cd "$TEST_DIR/.worktrees/review/frontend"
-    run "$META_BIN" git clone-sync
+    run "$META_BIN" git update --prune
     [ "$status" -ne 0 ]
     [[ "$output" == *"not worktree set 'review'"* ]]
     [ ! -e "$TEST_DIR/shared" ]
@@ -738,7 +741,7 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     run "$META_BIN" git pull
     [ "$status" -eq 0 ]
     [ "$(grep -c 'shared is not cloned' <<< "$output")" -eq 1 ]
-    [[ "$output" == *"warning: shared is not cloned; \`meta git clone-missing\` clones it"* ]]
+    [[ "$output" == *"warning: shared is not cloned; \`meta git update\` clones it"* ]]
     [[ "$output" == *"3 commands complete"* ]]
     [ "$(head_of frontend)" = "$(head_of remotes/frontend.git)" ]
     run "$META_BIN" --strict git status
@@ -753,7 +756,7 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     [ "$(jq '.results | length' <<<"$output")" -eq 0 ]
     run "$META_BIN" exec -- git status
     [ "$status" -eq 1 ]
-    [[ "$output" == *"not cloned (run 'meta git clone-missing')"* ]]
+    [[ "$output" == *"not cloned (run 'meta git update')"* ]]
 }
 
 @test "meta git update compares no origin for a project that is not cloned" {
@@ -1348,25 +1351,6 @@ EOF
     [ "$(git -C "$TEST_DIR/frontend" diff --cached --name-only)" = "my file.txt; touch PWNED4" ]
 }
 
-@test "meta git update refuses --include and --tag instead of cloning every missing repo" {
-    run "$META_BIN" --include frontend git update
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"does not take --include/--exclude"* ]]
-    # shared can really be cloned, so "nothing cloned" means something
-    git clone --quiet --bare "$TEST_DIR/shared" "$TEST_DIR/shared.git"
-    rm -rf "$TEST_DIR/shared"
-    echo '{"projects": {"frontend": {"repo": "git@github.com:org/frontend.git", "tags": ["ui"]}, "backend": {"repo": "git@github.com:org/backend.git", "tags": ["api"]}, "shared": "file://'"$TEST_DIR"'/shared.git"}}' > "$TEST_DIR/.meta.yaml"
-    run "$META_BIN" --tag api git update
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"does not take --include/--exclude/--tag"* ]]
-    [ ! -e "$TEST_DIR/shared" ]
-    # frontend and backend have nothing to pull from
-    run "$META_BIN" git update
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Not pulled frontend: its branch "*" has no upstream"* ]]
-    [ -d "$TEST_DIR/shared/.git" ]
-}
-
 @test "arguments after -- that look like meta flags reach git" {
     echo x > "$TEST_DIR/frontend/--json"
     run "$META_BIN" --include frontend git add -- --json
@@ -1632,12 +1616,13 @@ YAML
     [ ! -e dest ]
 }
 
-@test "a failed pull ends with the last stderr line" {
+@test "a failed clone ends with the last stderr line" {
     with_remotes
-    # git that fails every pull, saying why on its last line
+    rm -rf "$TEST_DIR/shared"
+    # git that fails every clone, saying why on its last line
     mkdir -p "$TEST_DIR/shim"
     real_git="$(command -v git)"
-    printf '#!/bin/sh\ncase " $* " in *" pull "*) printf "FIRST diagnostic\\nLAST diagnostic\\n" >&2; exit 1;; esac\nexec "%s" "$@"\n' "$real_git" > "$TEST_DIR/shim/git"
+    printf '#!/bin/sh\ncase " $* " in *" clone "*) printf "FIRST diagnostic\\nLAST diagnostic\\n" >&2; exit 1;; esac\nexec "%s" "$@"\n' "$real_git" > "$TEST_DIR/shim/git"
     chmod +x "$TEST_DIR/shim/git"
     for mode in "" "--silent"; do
         # shellcheck disable=SC2086

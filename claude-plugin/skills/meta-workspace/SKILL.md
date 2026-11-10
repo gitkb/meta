@@ -11,7 +11,7 @@ In the commands below, `<repo>` is a repo's `.meta.yaml` name or its path from t
 
 ## Working in a Meta Repo
 
-1. **The primary checkout is pull-only** (`meta -r git update`): every change goes in a worktree set (the `meta-worktree` skill).
+1. **The primary checkout is pull-only** (`meta -r git pull --ff-only`, then `meta -r git update` to clone what is missing): every change goes in a worktree set (the `meta-worktree` skill).
 2. **Use `meta git` for cross-repo git**, not raw `git`: `meta git status` shows every repo at once; `meta git commit -m "msg"` commits what is staged, in each repo that has staged changes.
 3. **Use `meta exec` for cross-repo commands**, not `cd <repo> && <command>`: `meta exec -- npm install` runs in every repo; `meta --include <repo>,<repo> exec -- <command>` in the ones named.
 4. **Check scope before committing**: `meta git status` shows which repos have changes; commit only where you mean to.

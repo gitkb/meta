@@ -25,8 +25,9 @@ the nearest `.meta.yaml`) or `-A` (its path from the workspace root).
 
 **Every change gets its own worktree set**, even a one-line fix in one repo.
 The primary checkout is pull-only: it stays on the default branch and only
-`meta -r git update` changes it (it fast-forwards every repo and clones the
-missing ones, after a PR lands or at the start of a task). Never commit, switch
+`meta -r git pull --ff-only` (which fast-forwards every repo) and
+`meta -r git update` (which clones the missing ones) change it, after a PR lands
+or at the start of a task. Never commit, switch
 branches or leave edits there.
 
 Read-only work (reading code, searching, answering questions) may stay in the
@@ -115,7 +116,7 @@ at naming the clones, and `--from-pr` shows a placeholder for the PR's branch.
 
 A repo the set needs that isn't cloned (one asked for, a dependency, or a
 parent on the way to a nested repo) is cloned first, as
-`meta git clone-missing` would, and named: `Cloning 2 repos the set needs: web, db`.
+`meta git update` would, and named: `Cloning 2 repos the set needs: web, db`.
 `add` does the same for the repos it adds. Nothing else is cloned. When a clone
 fails (no access, say), no set is made (the repos it did clone stay cloned), and
 the error names every repo the set needs that still isn't there. `--every-repo` skips the projects that aren't cloned instead.
@@ -171,14 +172,15 @@ git commit -m "chore: add svc to the workspace"
 git push -u origin HEAD          # then land it, as a PR or however the repo takes changes
 cd ../..
 meta git worktree remove add-svc
-meta -r git update               # once it is on the default branch: pulls the config, clones svc
+meta -r git pull --ff-only       # once it is on the default branch: pulls the config
+meta -r git update               # clones svc
 ```
 
 For a repo nested in a meta repo, do the same in that meta repo's set
 (`meta -r git worktree create add-svc --repo platform`, then edit
 `platform/.meta.yaml` and `platform/.gitignore`, and use `git -C platform` for the
 add, commit and push). `provides` and `depends_on`
-are lists of names. `meta project` has no command that adds one. `meta git clone-missing`
+are lists of names. `meta project` has no command that adds one. `meta git update`
 refuses to run inside a set, and `meta git worktree add` knows only the
 projects of the primary checkout's config, so a repo can't join a set before its
 config has landed.

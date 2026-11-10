@@ -56,7 +56,7 @@ meta git update           # Clone the missing ones; pulls nothing
 | `meta git update --prune` | The same, then remove the repos no `.meta.yaml` lists that hold nothing unpushed; keep and name the others |
 | `meta git update --prune-only` | Only remove them; clone nothing |
 
-`update` reads the `.meta.yaml` files on disk and pulls nothing, the workspace repo included. `--prune` and `--prune-only` keep any repo that holds uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it, and says what it holds. Files git ignores (`.env`) are deleted with a removed repo, and named first; preview with `meta --dry-run git update --prune`. A project that isn't cloned yet is a warning in `meta git pull` and the other per-repo commands, not a failure.
+`update` reads the `.meta.yaml` files on disk and pulls nothing, the workspace repo included. `--prune` and `--prune-only` keep any repo that holds uncommitted or untracked files, stashes, commits or tags on no remote, linked worktrees or repos inside it, and says what it holds. Files git ignores (`.env`) are deleted with a removed repo, and named first; preview with `meta --dry-run git update --prune`. A project that isn't cloned yet is a warning in `meta git pull` and the other per-repo commands, not a failure.
 
 To bring a workspace up to date, pull first, then clone what the pulled `.meta.yaml` files add: `meta -r git pull --ff-only`, then `meta -r git update`. A repo git can't fast-forward fails the pull; nothing is merged or rebased.
 

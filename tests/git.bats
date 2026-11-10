@@ -249,10 +249,13 @@ within() {
     ' "$@"
 }
 
-# state REPO: what a repo's checkout is: HEAD, branch, working tree (in
+# state REPO: what a repo's checkout is: HEAD, branch, every ref (the
+# remote-tracking ones show a fetch), FETCH_HEAD, and the working tree (in
 # the workspace repo, what it tracks: the clones are untracked in it)
 state() {
     printf '%s %s\n' "$(git -C "$1" rev-parse HEAD)" "$(git -C "$1" branch --show-current)"
+    git -C "$1" for-each-ref
+    cat "$(git -C "$1" rev-parse --git-path FETCH_HEAD)" 2>/dev/null || echo "no FETCH_HEAD"
     if [ "$1" = . ]; then
         git -C "$1" status --porcelain --untracked-files=no
     else
@@ -269,7 +272,6 @@ state() {
     local added
     added=$(sed "s|\"shared\": \(.*\)|\"shared\": \1, \"extra\": \"file://$TEST_DIR/remotes/extra.git\"|" .meta.yaml)
     teammate ws .meta.yaml "$added"
-    git -C frontend fetch --quiet
     # work in progress, a detached HEAD, and a missing project
     echo mine >> backend/README.md
     echo new > backend/new.txt
@@ -284,6 +286,16 @@ state() {
     [[ "$output" == *"Update completed (1 cloned)"* ]]
     # the .meta.yaml on disk is what is read: what the remote's adds isn't cloned
     [ ! -e extra ]
+    # nor with -r, --prune or --prune-only, which only remove what no
+    # .meta.yaml lists
+    rm -rf shared
+    for options in "-r git update" "git update --prune" "-r git update --prune-only"; do
+        # shellcheck disable=SC2086
+        run "$META_BIN" $options
+        [ "$status" -eq 0 ]
+        [ "$(for repo in . frontend backend; do state "$repo"; done)" = "$before" ]
+    done
+    [ -d shared/.git ]
 }
 
 @test "meta git update reads a nested .meta.yaml only with -r, and changes no nested repo" {
@@ -302,13 +314,15 @@ state() {
     # the nested meta repo and its project move ahead on their remotes
     teammate shared
     teammate inner
-    git -C shared/inner fetch --quiet
     local before
     before=$(for repo in . shared shared/inner; do state "$repo"; done)
     run "$META_BIN" --recursive git update
     [ "$status" -eq 0 ]
     [ "$(for repo in . shared shared/inner; do state "$repo"; done)" = "$before" ]
     [[ "$output" == *"Update completed (0 cloned)"* ]]
+    run "$META_BIN" -r git update --prune
+    [ "$status" -eq 0 ]
+    [ "$(for repo in . shared shared/inner; do state "$repo"; done)" = "$before" ]
 }
 
 @test "meta --dry-run git update lists the clones, no pulls, and changes nothing" {
@@ -421,15 +435,18 @@ state() {
 
 
 @test "meta git update detects missing repos" {
-    rm -rf "$TEST_DIR/shared"
+    with_remotes
+    rm -rf "$TEST_DIR/shared" "$TEST_DIR/frontend"
     # a remote that doesn't exist: the clone fails without the network
-    sed -i.bak "s|git@github.com:org/shared.git|file://$TEST_DIR/nowhere.git|" "$TEST_DIR/.meta.yaml"
+    sed -i.bak "s|file://$TEST_DIR/remotes/shared.git|file://$TEST_DIR/nowhere.git|" "$TEST_DIR/.meta.yaml"
     run "$META_BIN" git update
     # it tries to clone shared from there, and says it failed
     [ "$status" -ne 0 ]
     [[ "$output" == *"shared"*"nowhere.git"* || "$output" == *"nowhere.git"*"shared"* ]]
-    [[ "$output" == *"1 of 1 repositories failed to clone: shared"* ]]
+    [[ "$output" == *"1 of 2 repositories failed to clone: shared"* ]]
     [ ! -e "$TEST_DIR/shared" ]
+    # the other clone still happens
+    [ -d "$TEST_DIR/frontend/.git" ]
 }
 
 @test "meta git update says what an unlisted repository holds, and never how to delete it" {
@@ -537,6 +554,8 @@ state() {
     [[ "$output" != *"remove frontend"* ]]
     run "$META_BIN" --config other.yaml git update --prune
     [ "$status" -eq 0 ]
+    run "$META_BIN" --config other.yaml git update --prune-only
+    [ "$status" -eq 0 ]
     [ -f frontend/.env ]
     [ -d backend/.git ]
     # a leftover neither lists is still one
@@ -614,6 +633,9 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     echo wip > unpushed/wip.md
     git -C unpushed add wip.md
     git -C unpushed commit --quiet -m "unpushed work"
+    # a tag no remote has, on a pushed commit: its message is only here
+    git clone --quiet remotes/frontend.git tagged
+    git -C tagged tag -a v9 -m "release notes only here"
     run "$META_BIN" --dry-run git update --prune-only
     [ "$status" -eq 0 ]
     [[ "$output" == *"Would remove clean (nothing unpushed)"* ]]
@@ -624,7 +646,9 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     [ "$status" -eq 0 ]
     [[ "$output" == *"Removed clean (nothing unpushed)"* ]]
     [[ "$output" == *"Kept unpushed: it holds 1 commit on no remote: "*"unpushed work"* ]]
-    [[ "$output" == *"Update completed (1 removed, 1 kept)"* ]]
+    [[ "$output" == *"Kept tagged: it holds 1 tag on no remote: v9"* ]]
+    [[ "$output" == *"Update completed (1 removed, 2 kept)"* ]]
+    [ -d tagged/.git ]
     [ ! -e clean ]
     [ -d unpushed/.git ]
     [ ! -e shared ]

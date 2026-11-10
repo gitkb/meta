@@ -463,6 +463,14 @@ pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
             sample(&unpushed, |line| escape(line).into_owned())
         ));
     }
+    let tags = unpushed_tags(repo)?;
+    if !tags.is_empty() {
+        found.push(format!(
+            "{} on no remote: {}",
+            plural(tags.len(), "tag"),
+            sample(&tags, |name| escape(name).into_owned())
+        ));
+    }
     match meta_core::git::run(repo, ["stash", "list"])?
         .lines()
         .count()
@@ -486,6 +494,49 @@ pub fn repo_holds(repo: &Path) -> Result<Vec<String>> {
         ));
     }
     Ok(found)
+}
+
+/// The tags of the repo at `repo` that no remote has, by name: a tag no
+/// remote has under its name, pointing at the same object (an annotated
+/// tag's own object, with its message and signature). Nothing here records
+/// a remote's tags, as `refs/remotes` does its branches, so each remote is
+/// asked, and only when there are tags; one that can't be asked is an error.
+fn unpushed_tags(repo: &Path) -> Result<Vec<String>> {
+    let format = "--format=%(objectname)\t%(refname)";
+    let local = meta_core::git::run(repo, ["for-each-ref", format, "refs/tags"])?;
+    if local.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut remote_has = std::collections::HashSet::new();
+    for remote in meta_core::git::run(repo, ["remote"])?.lines() {
+        let mut ask = git(repo);
+        ask.args(["ls-remote", "--tags", "--", remote])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(std::process::Stdio::null());
+        let out = meta_plugin::process::output(&mut ask)
+            .with_context(|| format!("cannot run git ls-remote for remote {}", escape(remote)))?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let last = stderr.lines().rev().map(str::trim).find(|l| !l.is_empty());
+        anyhow::ensure!(
+            out.status.success(),
+            "remote {} can't be asked which tags it has: {}",
+            escape(remote),
+            escape(last.unwrap_or("no stderr"))
+        );
+        remote_has.extend(
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::to_string),
+        );
+    }
+    Ok(local
+        .lines()
+        .filter(|line| !remote_has.contains(*line))
+        .map(|line| {
+            let name = line.split_once('\t').map_or(line, |(_, name)| name);
+            name.strip_prefix("refs/tags/").unwrap_or(name).to_string()
+        })
+        .collect())
 }
 
 /// The files and folders git ignores in the checkout at `repo` (`.env`,
@@ -787,6 +838,31 @@ mod tests {
         assert!(held.contains("1 stash"), "{held}");
         assert!(held.contains("1 linked worktree: "), "{held}");
         assert!(!held.contains(STRANDED), "{held}");
+    }
+
+    #[test]
+    fn repo_holds_names_a_tag_no_remote_has() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let tmp = sandbox.work();
+        let remote = tmp.join("remote.git");
+        sandbox.git(&tmp, &["init", "-q", "--bare", "remote.git"]);
+        sandbox.git(&tmp, &["clone", "-q", remote.to_str().unwrap(), "repo"]);
+        let repo = tmp.join("repo");
+        sandbox.git(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        sandbox.git(&repo, &["push", "-q", "origin", "HEAD"]);
+        sandbox.git(&repo, &["tag", "-a", "v1", "-m", "pushed"]);
+        sandbox.git(&repo, &["push", "-q", "origin", "v1"]);
+        assert!(repo_holds(&repo).unwrap().is_empty());
+        // on a pushed commit, its own object is on no remote
+        sandbox.git(&repo, &["tag", "-a", "v2", "-m", "only here"]);
+        assert_eq!(repo_holds(&repo).unwrap(), ["1 tag on no remote: v2"]);
+        // one the remote has under the same name, but another object
+        sandbox.git(&repo, &["tag", "-f", "-a", "v1", "-m", "moved"]);
+        let held = repo_holds(&repo).unwrap().join("; ");
+        assert!(held.contains("2 tags on no remote: "), "{held}");
+        // a remote that can't be asked: nothing is taken for pushed
+        std::fs::remove_dir_all(&remote).unwrap();
+        assert!(repo_holds(&repo).is_err());
     }
 
     #[test]

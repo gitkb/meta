@@ -34,7 +34,8 @@ use std::sync::Arc;
                   With --prune, then, or --prune-only, instead of cloning, a repo no .meta.yaml \
                   lists is removed only when git shows \
                   nothing in it that isn't on a remote: no uncommitted or untracked files, \
-                  stashes, commits on a branch or tag that no remote has, or linked worktrees, \
+                  stashes, commits on a branch or tag that no remote has, tags no remote has \
+                  (it asks each remote, and keeps the repo when one can't be asked), or linked worktrees, \
                   and no git repo inside it. A repo that holds anything is kept and named with \
                   what it holds. Files git ignores (.env, target/) are deleted with it, and \
                   named first; commits only a reflog holds are not kept, as git counts them \
@@ -77,10 +78,7 @@ pub(crate) fn execute(
     // nested ones are: in a plain git worktree of the workspace, meta's
     // members are the root alone
     let config = request.workspace()?.config.clone();
-    // (with -A, the config is the nearest one, not the outermost's)
-    let own = config.parent() == Some(workspace.dir.as_path());
-    let workspace =
-        Listing::of(&workspace.dir, own.then_some(config.as_path()))?.unwrap_or(workspace);
+    let workspace = Listing::of(&workspace.dir, Some(&config))?.unwrap_or(workspace);
     let root = workspace.dir.as_path();
     if let Some(mismatches) = ssh::remote_mismatches(&workspace) {
         ctx.warn(mismatches);

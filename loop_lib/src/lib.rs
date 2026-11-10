@@ -281,35 +281,63 @@ impl CommandResult {
     }
 
     /// The lines under its line in the summary: those of its stderr that
-    /// have anything on them, escaped, at most [`SUMMARY_LINES`], then how
-    /// many more there are. None for a command that ran live or wrote too
-    /// much: [`Self::why`] says so.
+    /// have anything on them, escaped; past [`SUMMARY_LINES`] of them, the
+    /// first [`SUMMARY_HEAD`], how many are left out, and the last
+    /// [`SUMMARY_TAIL`], where tools put the reason (git's `fatal:` after
+    /// its hints). None for a command that ran live or wrote too much:
+    /// [`Self::why`] says so.
     fn stderr_lines(&self) -> Vec<String> {
         if self.live || self.too_much_output.is_some() {
             return Vec::new();
         }
         let stderr = String::from_utf8_lossy(&self.stderr);
-        // the rest are counted, not kept: up to 16 MiB of them
         let mut lines = stderr
             .lines()
             .map(str::trim_end)
             .filter(|line| !line.trim().is_empty());
-        let mut shown: Vec<String> = lines
-            .by_ref()
-            .take(SUMMARY_LINES)
-            .map(|line| escape(line).into_owned())
-            .collect();
-        match lines.count() {
-            0 => {}
-            1 => shown.push("… 1 more line".to_string()),
-            more => shown.push(format!("… {more} more lines")),
+        let head: Vec<&str> = lines.by_ref().take(SUMMARY_LINES).collect();
+        // the ones past the cap are counted, not kept (up to 16 MiB of them),
+        // but for the last few
+        let mut tail = std::collections::VecDeque::with_capacity(SUMMARY_TAIL);
+        let mut rest = 0;
+        for line in lines {
+            if tail.len() == SUMMARY_TAIL {
+                tail.pop_front();
+            }
+            tail.push_back(line);
+            rest += 1;
         }
-        shown
+        let escaped = |line: &&str| escape(line).into_owned();
+        if rest == 0 {
+            return head.iter().map(escaped).collect();
+        }
+        // the last ones may start among the first ten
+        let from_head = SUMMARY_TAIL.saturating_sub(tail.len());
+        let last: Vec<&str> = head
+            .iter()
+            .skip(head.len().saturating_sub(from_head))
+            .copied()
+            .chain(tail)
+            .collect();
+        let left_out = (head.len() + rest).saturating_sub(SUMMARY_HEAD + last.len());
+        head.iter()
+            .take(SUMMARY_HEAD)
+            .map(escaped)
+            .chain(std::iter::once(match left_out {
+                1 => "… 1 more line".to_string(),
+                more => format!("… {more} more lines"),
+            }))
+            .chain(last.iter().map(escaped))
+            .collect()
     }
 }
 
-/// How many lines of a failed command's stderr the summary shows under it.
+/// How many lines of a failed command's stderr the summary shows under it
+/// in full; past that, the first [`SUMMARY_HEAD`] and the last
+/// [`SUMMARY_TAIL`].
 const SUMMARY_LINES: usize = 10;
+const SUMMARY_HEAD: usize = 5;
+const SUMMARY_TAIL: usize = 4;
 
 /// Whether a command that ended so succeeded: no signal, and an exit code
 /// among `ok_codes`.

@@ -1759,15 +1759,23 @@ EOF
     [ "$status" -eq 1 ]
     local summary=${output#*Summary:}
     [[ "$summary" == *"✗ ./frontend: git pull (exit code 1)"$'\n'"    ERROR: Repository not found."$'\n'"    fatal: Could not read from remote repository."$'\n'"    Please make sure you have the correct access rights"$'\n'"    and the repository exists."* ]]
-    # a long stderr: ten lines, then how many more
+    # a long stderr: its first lines, how many are left out, and its last
     run "$META_BIN" --parallel --include frontend,backend exec -- sh -c '[ "${PWD##*/}" = backend ] && exit 0; for i in $(seq 15); do echo "line $i" >&2; done; exit 2'
     [ "$status" -eq 1 ]
     summary=${output#*Summary:}
-    [[ "$summary" == *"    line 10"$'\n'"    … 5 more lines"* ]]
-    [[ "$summary" != *"line 11"* ]]
+    [[ "$summary" == *"    line 5"$'\n'"    … 6 more lines"$'\n'"    line 12"$'\n'"    line 13"$'\n'"    line 14"$'\n'"    line 15"* ]]
+    [[ "$summary" != *"line 6"* && "$summary" != *"line 11"* ]]
     # one that wrote none says so on its line
     run "$META_BIN" --parallel --include frontend,backend exec -- sh -c '[ "${PWD##*/}" = backend ] || exit 2'
     [[ "$output" == *"✗ ./frontend: sh -c "*" (exit code 2): no stderr"* ]]
+    # git's real reason comes after its hints: a pull of a branch that has
+    # diverged from its remote, as git words it
+    teammate frontend
+    git -C frontend commit --quiet --allow-empty -m "mine"
+    run "$META_BIN" --parallel git pull
+    [ "$status" -eq 1 ]
+    summary=${output#*Summary:}
+    [[ "$summary" == *"✗ ./frontend: git pull (exit code 128)"*"hint: "*" more lines"*"fatal: Need to specify how to reconcile divergent branches."* ]]
 }
 
 @test "a failed clone ends with the last stderr line" {

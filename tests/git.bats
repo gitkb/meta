@@ -398,8 +398,11 @@ state() {
     bats_require_minimum_version 1.5.0
     run --separate-stderr "$META_BIN" -r --json project list
     [ "$status" -eq 0 ]
-    jq -e --arg said "$said" '.success and ([.warnings[] | select(.project == "shared/inner") | .message] == [$said])' <<<"$output"
+    # its row says why; the listing is complete, so no Envelope warning
+    # (atc reads one as missing members)
+    jq -e --arg said "$said" '.success and .warnings == [] and ([.results[].data | select(.name == "inner") | .branch_problem] == [$said])' <<<"$output"
     jq -e '[.results[].data | select(.name == "inner") | has("branch")] == [false]' <<<"$output"
+    [ -z "$stderr" ]
     run "$META_BIN" -r git status
     [ "$status" -eq 0 ]
     # update: that clone alone fails, with why; the other is cloned

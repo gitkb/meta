@@ -107,14 +107,16 @@ pub fn run(cli: &Cli, command: &ProjectCommands, report: &mut Report) -> Result<
             dependents(&workspace_target(cli, &start, "dependents")?, project)?
         }
     };
+    // a project whose branch: names no branch is listed all the same: the
+    // listing is complete (a reader such as atc takes the Envelope's
+    // warnings to say it isn't), and under --json its row says why
     if !cli.json {
         outln!("{}", found.text)?;
         for warning in &found.warnings {
-            meta_plugin::out::warn(&warning.message);
+            meta_plugin::out::warn(warning);
         }
     }
     report.results.extend(found.records);
-    report.warnings.extend(found.warnings);
     Ok(())
 }
 
@@ -247,12 +249,12 @@ fn workspace_target(cli: &Cli, start: &Path, name: &str) -> Result<Target> {
         })
 }
 
-/// What a command found: its text, its records for `--json`, and what it
-/// warns of.
+/// What a command found: its text, its records for `--json`, and what its
+/// text warns of.
 struct Found {
     text: String,
     records: Vec<ProjectResult>,
-    warnings: Vec<meta_plugin::Warning>,
+    warnings: Vec<String>,
 }
 
 /// One project that is not a clone of what its config lists.
@@ -459,7 +461,7 @@ fn list(target: &Target, start: &Path) -> Result<Found> {
     .at(&dir)];
     list_records(&tree, &dir, &workspace.root, &mut records);
     let mut warnings = Vec::new();
-    branch_problems(&tree, &dir, &workspace.root, &mut warnings);
+    branch_problems(&tree, &mut warnings);
     Ok(Found {
         text,
         records,
@@ -467,24 +469,13 @@ fn list(target: &Target, start: &Path) -> Result<Found> {
     })
 }
 
-/// A warning for each of `nodes` (listed in `dir`, and the nodes under it)
-/// whose `branch:` names no branch: listed all the same, as the commands
-/// that would use that branch are the ones that refuse it.
-fn branch_problems(
-    nodes: &[MetaTreeNode],
-    dir: &Path,
-    root: &Path,
-    out: &mut Vec<meta_plugin::Warning>,
-) {
+/// A warning for each of `nodes` (and the nodes under it) whose `branch:`
+/// names no branch: listed all the same, as the commands that would use
+/// that branch are the ones that refuse it.
+fn branch_problems(nodes: &[MetaTreeNode], out: &mut Vec<String>) {
     for node in nodes {
-        let abs = dir.join(&node.info.path);
-        if let Some(problem) = &node.info.branch_problem {
-            out.push(meta_plugin::Warning {
-                project: Some(repo_path(&abs, root)),
-                ..meta_plugin::Warning::new(problem.clone())
-            });
-        }
-        branch_problems(&node.children, &abs, root, out);
+        out.extend(node.info.branch_problem.clone());
+        branch_problems(&node.children, out);
     }
 }
 

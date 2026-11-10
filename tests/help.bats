@@ -190,8 +190,33 @@ setup() {
     [[ "$output" == *"invalid UTF-8"* ]]
 }
 
+@test "a command's help lists the meta options that apply there, read from their headings" {
+    for line in "exec --help" "git log --help" "help exec"; do
+        run "$META_BIN" $line
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"Meta options (before \`"* ]]
+        for option in --recursive --include --tag --dry-run --strict --json --fields --silent --verbose --no-parent; do
+            [[ "$output" == *" $option"* ]] || { echo "$line: no $option"; false; }
+        done
+        [[ "$output" != *"--version"* ]]
+    done
+    # these find their repos, or act on a whole set: no filters
+    for line in "project list --help" "git worktree remove --help" "git worktree add --help" \
+        "git worktree create --help"; do
+        run "$META_BIN" $line
+        [ "$status" -eq 0 ]
+        for option in --recursive --json --fields --silent --strict --no-parent; do
+            [[ "$output" == *" $option"* ]] || { echo "$line: no $option"; false; }
+        done
+        [[ "$output" != *"--include"* && "$output" != *"--tag"* && "$output" != *"--version"* ]]
+    done
+    # worktree list shows nested repos either way: neither -r nor -A
+    run "$META_BIN" git worktree list --help
+    [[ "$output" == *" --json"* && "$output" != *"--recursive"* ]]
+}
+
 @test "meta help <command> prints a built-in's own help" {
-    for words in "exec" "context" "init" "init claude" "plugin" "plugin search" "help"; do
+    for words in "exec" "context" "init" "init skills" "plugin" "plugin search" "help"; do
         run "$META_BIN" help $words
         [ "$status" -eq 0 ]
         [[ "$output" == *"Usage: meta $words"* ]]

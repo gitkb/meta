@@ -198,16 +198,27 @@ impl Calls {
     /// cancelled call starts nothing more. Each stream is kept as
     /// [`read_capped`] keeps it.
     pub(crate) fn output(&self, command: &mut Command) -> std::io::Result<Output> {
-        Ok(self.output_lines(command, usize::MAX)?.0)
+        Ok(self.capture(command, usize::MAX, true)?.0)
     }
 
-    /// Like [`Calls::output`], but stdout holds at most `max_lines` lines:
-    /// then the program's stdout is closed, which stops it. The flag says
-    /// whether there was more.
+    /// Like [`Calls::output`], but stdout holds at most `max_lines` lines
+    /// (then the program's stdout is closed, which stops it), and no line
+    /// in it says where it was cut: the flag says whether there was more.
     pub(crate) fn output_lines(
         &self,
         command: &mut Command,
         max_lines: usize,
+    ) -> std::io::Result<(Output, bool)> {
+        self.capture(command, max_lines, false)
+    }
+
+    /// [`Calls::output`] with stdout cut at `max_lines`, a cut said in it
+    /// when `said`, and whether it was cut.
+    fn capture(
+        &self,
+        command: &mut Command,
+        max_lines: usize,
+        said: bool,
     ) -> std::io::Result<(Output, bool)> {
         if self.cancelled.load(Ordering::SeqCst) {
             return Err(std::io::Error::other("the tool call was cancelled"));
@@ -223,8 +234,9 @@ impl Calls {
             child.stop(true);
             return Err(std::io::Error::other("no pipe to the program"));
         };
-        let stdout = std::thread::spawn(move || read_capped(stdout, max_lines, "stdout"));
-        let stderr = std::thread::spawn(move || read_capped(stderr, usize::MAX, "stderr"));
+        let named = said.then_some("stdout");
+        let stdout = std::thread::spawn(move || read_capped(stdout, max_lines, named));
+        let stderr = std::thread::spawn(move || read_capped(stderr, usize::MAX, Some("stderr")));
         // Until it has ended and its pipes are closed: something it started
         // in the background may still hold them. Once cancelled, until its
         // whole process group is gone, even what closed its pipes; then
@@ -296,16 +308,16 @@ fn not_started(id: &str) {
     );
 }
 
-/// What a program wrote to `pipe` (its `stream`, stdout or stderr), as
-/// every captured stream is kept: its first `max_lines` lines, then its pipe
-/// is closed, which stops it, and the flag says whether there was more; but
+/// What a program wrote to `pipe`, as every captured stream is kept: its
+/// first `max_lines` lines, then its pipe is closed, which stops it; but
 /// never more than [`CAPTURE_LIMIT`] bytes. Past those, the rest is read
-/// and dropped, so the program never blocks on a full pipe, and a last line
-/// says how much was.
+/// and dropped, so the program never blocks on a full pipe, and with its
+/// `stream` named (stdout or stderr) a last line says how much was. The
+/// flag says whether anything was left out.
 fn read_capped(
     pipe: impl Read,
     max_lines: usize,
-    stream: &str,
+    stream: Option<&str>,
 ) -> std::io::Result<(Vec<u8>, bool)> {
     let mut reader = BufReader::new(pipe);
     let mut bytes = Vec::new();
@@ -317,17 +329,26 @@ fn read_capped(
         }
         lines += 1;
     }
-    if lines >= max_lines {
+    // the cap on lines came first, unless the last line is cut short
+    if lines >= max_lines && bytes.ends_with(b"\n") {
         return Ok((bytes, !reader.fill_buf()?.is_empty()));
     }
     let dropped = std::io::copy(&mut reader, &mut std::io::sink())?;
-    if dropped > 0 {
+    // unsaid, a cut keeps whole lines only
+    if stream.is_none() && dropped > 0 {
+        let whole = bytes
+            .iter()
+            .rposition(|b| *b == b'\n')
+            .map_or(0, |at| at + 1);
+        bytes.truncate(whole);
+    }
+    if let Some(stream) = stream.filter(|_| dropped > 0) {
         let cut = format!(
             "\n[meta-mcp: {stream} cut at {CAPTURE_LIMIT} bytes; {dropped} more were dropped]\n"
         );
         bytes.extend_from_slice(cut.as_bytes());
     }
-    Ok((bytes, false))
+    Ok((bytes, dropped > 0))
 }
 
 #[cfg(test)]
@@ -374,6 +395,19 @@ mod tests {
             .unwrap();
         assert_eq!(out.stdout, b"1\n2\n3\n");
         assert!(!truncated && out.status.success());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_last_line_the_byte_cap_cuts_is_left_out() {
+        let sandbox = Sandbox::new();
+        let script = format!("echo a; head -c {CAPTURE_LIMIT} /dev/zero | tr '\\0' x; echo");
+        let mut sh = sandbox.command("sh");
+        let (out, truncated) = Calls::default()
+            .output_lines(sh.args(["-c", &script]), 2)
+            .unwrap();
+        assert_eq!(out.stdout, b"a\n");
+        assert!(truncated);
     }
 
     /// Cancelling the running call stops its program and what that started,

@@ -197,12 +197,8 @@ pub struct Cli {
     )]
     strict: bool,
 
-    #[arg(
-        short = 'V',
-        long,
-        help_heading = OUTPUT,
-        help = "Print version (with --json: as JSON)"
-    )]
+    // no heading: no option of a command, so no command's help lists it
+    #[arg(short = 'V', long, help = "Print version (with --json: as JSON)")]
     version: bool,
 
     #[command(subcommand)]
@@ -300,20 +296,22 @@ struct InitArgs {
 
 #[derive(Subcommand)]
 enum InitCommands {
-    /// Install Claude Code skills, rules, and hooks for this meta repo
+    /// Install meta's skills for every coding agent, and Claude Code's context hooks
     #[command(
-        after_help = "Examples:\n  meta init claude\n  meta init claude --update\n  \
-                            meta --dry-run init claude --force"
+        after_help = "Examples:\n  meta init skills\n  meta init skills --update\n  \
+                            meta --dry-run init skills --force"
     )]
-    Claude {
-        /// Refresh skills and rules, merge meta hooks into settings
+    Skills {
+        /// Refresh the skills, merge meta hooks into Claude Code's settings
         #[arg(short, long)]
         force: bool,
 
-        /// Update skills and rules only, preserve settings
+        /// Update the skills only, preserve settings
         #[arg(short, long)]
         update: bool,
     },
+    #[command(external_subcommand)]
+    Other(Vec<String>),
 }
 
 /// The two kinds of extension meta runs, told apart
@@ -583,6 +581,10 @@ fn run_cli() -> Result<()> {
             ) {
                 meta_plugin::out::set_json(typed_json());
             }
+            if e.kind() == ErrorKind::DisplayHelp {
+                let words: Vec<String> = typed_command().split(' ').map(str::to_string).collect();
+                return Ok(out!("{}", builtin_help(&words, e.render().to_string()))?);
+            }
             match project::usage_error(&e) {
                 Some(error) => return Err(error),
                 None => meta_plugin::args::parse()?,
@@ -639,8 +641,18 @@ fn run_cli() -> Result<()> {
             )?
         }
         Some(Commands::Init(InitArgs {
-            command: InitCommands::Claude { force, update },
-        })) => init::init_claude(*force, *update, cli.mode(), cli.verbose)?,
+            command: InitCommands::Skills { force, update },
+        })) => init::init_skills(*force, *update, cli.mode(), cli.verbose)?,
+        Some(Commands::Init(InitArgs {
+            command: InitCommands::Other(words),
+        })) => {
+            return Err(meta_plugin::exit::Usage(format!(
+                "unrecognized command 'init {}': `meta init skills` installs meta's skills \
+                 for every agent",
+                escape(words.first().map(String::as_str).unwrap_or_default())
+            ))
+            .into())
+        }
         Some(Commands::Plugin(args)) => handle_plugin_command(
             &args.command,
             cli.mode(),
@@ -722,7 +734,15 @@ fn help(
                 }
             };
         }
-        return help_message(cli, &found.render_help().to_string(), report);
+        // the command's own name, not an alias typed (`project ls`)
+        let names: Vec<String> = words
+            .iter()
+            .take(words.len().saturating_sub(1))
+            .cloned()
+            .chain([found.get_name().to_string()])
+            .collect();
+        let help = found.render_help().to_string();
+        return help_message(cli, &builtin_help(&names, help), report);
     }
     let Some(plugin) = plugins.find(first)? else {
         return Err(unrecognized_command_error(words, plugins, false));
@@ -865,29 +885,28 @@ fn as_typed_help(cli: &Cli, args: &[String], plugin: &SubprocessPlugin, tool: &s
         "`meta {typed}` runs as typed (`{run}`) in each selected repo it applies to.\n\n\
          Usage: meta [META_OPTIONS] {typed} [{}_ARGS...]\n\n\
          Selected: {scope}\n\n\
-         Meta options (before `{word}`):\n{}\n\n\
+         {}\n\n\
          Examples:\n  meta {typed}\n  meta --dry-run {typed}\n  meta --recursive --dry-run {typed}\n\n\
          For {tool}'s own options: {run} --help\n{note}",
         tool.to_uppercase(),
-        selection_options_help().trim_end()
+        meta_options().help(&word)
     )
 }
 
-/// The help of meta's options that choose the repos a command runs in, and
-/// how: from meta's own definitions, so it says what meta takes.
-fn selection_options_help() -> String {
-    let options: Vec<clap::Arg> = Cli::command()
-        .get_arguments()
-        .filter(|arg| arg.get_help_heading() != Some(OUTPUT))
-        .cloned()
-        .collect();
-    clap::Command::new("meta")
-        .disable_help_flag(true)
-        .disable_version_flag(true)
-        .help_template("{all-args}")
-        .args(options)
-        .render_help()
-        .to_string()
+/// `help`, the help of meta's own command `words` (`project list`), then
+/// for one that runs in repos (`exec`, `project …`) meta's options it takes.
+fn builtin_help(words: &[String], help: String) -> String {
+    let meta = meta_plugin::args::MetaOptions::of(&Cli::command(), &[]);
+    let meta = match words {
+        [exec] if exec == "exec" => meta,
+        [project, name] if project == "project" && project::finds_its_repos(name) => {
+            meta.refusing_filters()
+        }
+        [project, _] if project == "project" => meta,
+        _ => return help,
+    };
+    let word = words.first().map(String::as_str).unwrap_or_default();
+    format!("{}\n\n{}\n", help.trim_end(), meta.help(word))
 }
 
 // === Command Dispatch ===
@@ -1519,7 +1538,7 @@ mod tests {
 
     #[test]
     fn each_option_of_meta_is_listed_under_its_heading() {
-        let mut expected = [
+        let expected = [
             ("config", SCOPE),
             ("recursive", SCOPE),
             ("all", SCOPE),
@@ -1538,9 +1557,11 @@ mod tests {
             ("fields", OUTPUT),
             ("silent", OUTPUT),
             ("verbose", OUTPUT),
-            ("version", OUTPUT),
         ]
         .map(|(id, heading)| (id.to_string(), Some(heading.to_string())));
+        // no heading: no command takes it, so no command's help lists it
+        let mut expected = expected.to_vec();
+        expected.push(("version".to_string(), None));
         let mut found: Vec<_> = Cli::command()
             .get_arguments()
             .filter(|arg| !arg.is_positional())
@@ -1571,7 +1592,7 @@ mod tests {
             ("context", "context"),
             ("--json exec -- ls", "exec"),
             ("help git log", "help"),
-            ("init claude", "init claude"),
+            ("init skills", "init skills"),
             ("plugin search x", "plugin search"),
             ("plugin install x", "plugin install"),
             ("-v plugin list", "plugin list"),

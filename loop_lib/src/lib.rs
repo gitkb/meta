@@ -252,7 +252,11 @@ impl CommandResult {
     /// `killed by signal 9`.
     fn ending(&self) -> String {
         match (self.too_much_output, self.signal, self.exit_code) {
-            (Some(over), _, _) => format!("stopped at {} MiB of output", over.limit >> 20),
+            (Some(over), _, _) => format!(
+                "stopped at {} MiB of output, writing to {}",
+                over.limit >> 20,
+                over.stream
+            ),
             (None, Some(signal), _) => format!("killed by signal {signal}"),
             (None, None, Some(code)) => format!("exit code {code}"),
             (None, None, None) => "no exit code".to_string(),

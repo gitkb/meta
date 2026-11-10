@@ -248,7 +248,7 @@ impl Owned {
     /// shows part of it as if it were all.
     pub fn exchange(mut self, input: &[u8]) -> io::Result<Output> {
         use std::io::{Read, Write};
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
         use std::sync::mpsc::{channel, Sender};
         use std::thread::{Builder, ScopedJoinHandle};
         /// Tells the waiting thread a reader ended, however it ended.
@@ -275,14 +275,15 @@ impl Owned {
                 .map(|p| Box::new(p) as Box<dyn Read + Send>),
         ];
         let kept = AtomicUsize::new(0);
-        let over = AtomicBool::new(false);
+        // which stream took the output past the limit: 1 stdout, 2 stderr
+        let over = AtomicU8::new(0);
         let (ended, readers_ended) = channel();
         // Read `pipe` to its end, or until the child's output passed the
         // limit (then the pipe is let go: a child still writing to it ends)
-        let read = |mut pipe: Box<dyn Read + Send>, _ended: Ended| -> io::Result<Vec<u8>> {
+        let read = |mut pipe: Box<dyn Read + Send>, stream: u8, _ended: Ended| {
             let mut bytes = Vec::new();
             let mut chunk = vec![0u8; 64 * 1024];
-            while !over.load(Ordering::Acquire) {
+            while over.load(Ordering::Acquire) == 0 {
                 let n = match pipe.read(&mut chunk) {
                     Ok(0) => break,
                     Ok(n) => n,
@@ -290,20 +291,20 @@ impl Owned {
                     Err(e) => return Err(e),
                 };
                 if kept.fetch_add(n, Ordering::AcqRel) + n > CAPTURE_LIMIT {
-                    over.store(true, Ordering::Release);
+                    let _ = over.compare_exchange(0, stream, Ordering::AcqRel, Ordering::Acquire);
                     break;
                 }
                 bytes.extend_from_slice(chunk.get(..n).unwrap_or_default());
             }
-            Ok(bytes)
+            io::Result::Ok(bytes)
         };
         let served: io::Result<_> = std::thread::scope(|scope| {
             let mut started = Vec::new();
-            for pipe in pipes {
+            for (stream, pipe) in (1..).zip(pipes) {
                 let thread = pipe
                     .map(|pipe| {
                         let ended = Ended(ended.clone());
-                        Builder::new().spawn_scoped(scope, move || read(pipe, ended))
+                        Builder::new().spawn_scoped(scope, move || read(pipe, stream, ended))
                     })
                     .transpose();
                 match thread {
@@ -336,7 +337,7 @@ impl Owned {
             // each reader says when it ends; one past the limit has the
             // child stopped, so the other's pipe ends too
             while readers_ended.recv().is_ok() {
-                if over.load(Ordering::Acquire) {
+                if over.load(Ordering::Acquire) != 0 {
                     self.stop(true);
                 }
             }
@@ -354,9 +355,15 @@ impl Owned {
             Ok((stdout.unwrap_or_default(), stderr.unwrap_or_default()))
         });
         let status = self.wait()?;
-        if over.load(Ordering::Acquire) {
+        let stream = match over.load(Ordering::Acquire) {
+            0 => None,
+            1 => Some("stdout"),
+            _ => Some("stderr"),
+        };
+        if let Some(stream) = stream {
             return Err(io::Error::other(TooMuchOutput {
                 limit: CAPTURE_LIMIT,
+                stream,
             }));
         }
         let (stdout, stderr) = served?;
@@ -389,6 +396,8 @@ pub const CAPTURE_LIMIT: usize = 16 << 20;
 pub struct TooMuchOutput {
     /// The limit it passed, in bytes
     pub limit: usize,
+    /// The stream it was writing to when it did: `stdout` or `stderr`
+    pub stream: &'static str,
 }
 
 impl TooMuchOutput {
@@ -402,8 +411,10 @@ impl std::fmt::Display for TooMuchOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "its output passed {} MiB, the most meta keeps of one program's, so meta stopped it",
-            self.limit >> 20
+            "its output passed {} MiB (stdout and stderr together, the most meta keeps of \
+             one program's) as it wrote to {}, so meta stopped it",
+            self.limit >> 20,
+            self.stream
         )
     }
 }

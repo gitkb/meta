@@ -1,8 +1,10 @@
-# Every skill file a release or branch of meta wrote, by its path under a skills
-# folder and git blob id (from the history of gitkb/meta and gitkb/meta_cli).
-# `meta init claude --update` and `--force` replace or remove a skill file
-# only while it is exactly one of these. When a skill's text changes, add the
-# new version's line (the init tests say which).
+# Every skill and rule file a release or branch of meta wrote, by its path
+# under a skills folder (or under .claude/, for the rules older releases
+# installed) and git blob id (from the history of gitkb/meta and
+# gitkb/meta_cli; the destructive-commands rule with and without its
+# `agent guard` section). `meta init skills --update` and `--force` replace
+# or remove such a file only while it is exactly one of these. When a
+# skill's text changes, add the new version's line (the init tests say which).
 meta-build.md 0aabc8b10d896c601425ee43409ce704acd238e6
 meta-build.md 1363979118fb2618294058080bd82e2c6f5808f6
 meta-core.md 9015bc7937fad5ec437f5e6fee8e8fce1a9553b8
@@ -217,8 +219,39 @@ meta-worktree/SKILL.md bba48735228866103bfa6ae73f3aad4ebeb29331
 meta-worktree/SKILL.md 1cf643a303494e49c6f92544b3fd3d5f60379adf
 meta-safety/SKILL.md 1153bac335d94cb5c98b9d65e7547d8537cc3df8
 meta-worktree/SKILL.md de3059b0e005eb77f7a4e25e8ffa4c421d3563f7
+meta-worktree/SKILL.md 00fbc141a55bd629047ba65385f898b39d3e9561
+meta-worktree/SKILL.md 40ffa8e4ecf691a08c4150bbd65d5656178d6808
+meta-worktree/SKILL.md 08fa249ab351ea66d682f61f1bbd5c108d456af7
 meta-git/SKILL.md a0ad8cac3d331a3e5bc5970dd2f9e82718b07f21
+meta-git/SKILL.md 4c1e9e0e83dd2d5d9f6638e64ee9809dacd36998
 meta-workspace/SKILL.md 9af1c54cf7f6499ffd70617883b404eb302e05d8
+meta-workspace/SKILL.md 8f02acdc5701d1df2c9fa8ca86b3f81e7797f1dc
 meta-safety/SKILL.md ed4a894abe9799ad3f39218e674a4dfc04d0130f
+meta-safety/SKILL.md 21305bd54631389dfa7131868c3503d422ef39c1
 meta-exec/SKILL.md 4c7ec0457959405af75c80e9f95d3350beec2a93
+meta-exec/SKILL.md ff7f389b40d47f529a9c25db24ecba45dab87017
 meta-plugins/SKILL.md f1c1107d60e288dccda5c62892162100d8b9c34a
+meta-plugins/SKILL.md 61f24eb2ff9f9641303d2333b5531a1463171568
+rules/meta-destructive-commands.md 10b3bd3428822776cc8895852bd7279e443a4bc3
+rules/meta-destructive-commands.md 27685f3cf22cf9d5d427c2cf379fae638ede382b
+rules/meta-destructive-commands.md 283a5816fd9354903770a5f700292efd4b9d382d
+rules/meta-destructive-commands.md 3d6735deb38f9f6a6bceb5d614ad1f5deb434535
+rules/meta-destructive-commands.md 3dec3a7a2b80f4f2264ee4eb2b735affafb1a6b2
+rules/meta-destructive-commands.md 3f0ac2fbaf53d22455bbd28019866ecb6bd68374
+rules/meta-destructive-commands.md 6f0d883e4c9fbdd418201878e548822ef9d3ef0d
+rules/meta-destructive-commands.md 7b82be7ac9dcea9788ffa48632724006c484ef98
+rules/meta-destructive-commands.md 8fa9d4397cae6ba8d680c3a8bfac4a3752c90cbd
+rules/meta-destructive-commands.md a19c00fbcb20897d8d32c828b6750b7d81e8863e
+rules/meta-destructive-commands.md a326934d0e5766d6d4862990e9e049c57920b6a0
+rules/meta-destructive-commands.md a8202cfb8a41876e29a4bf67513ba76b30ddc5ca
+rules/meta-destructive-commands.md b06f5341c003c0a8b491c078c5fb7b9ae726ce5e
+rules/meta-destructive-commands.md b234f63b7936b0edc9fccb1d3a2dc28771e1056f
+rules/meta-destructive-commands.md b6cb8cf500f6a597c5bba667b25a35b72e2b27c1
+rules/meta-destructive-commands.md c5a94594d7b02d91707b4d8de0b3e0e5b85fccfc
+rules/meta-destructive-commands.md cf9e5b3063f4aebffd7bb07fe63f8f7908a4c213
+rules/meta-destructive-commands.md ebd19486b43577d82107cf70da71b76d3da40a70
+rules/meta-workspace-discipline.md 0b9777387967e2a7d207bdf24afd617fa90c0e61
+rules/meta-workspace-discipline.md 2e9b559b47a063fcc49bc0f9855236eb4cc02db0
+rules/meta-workspace-discipline.md 59d476349f18406cedb1b18a54dff32fd87b41dc
+rules/meta-workspace-discipline.md d8cb2cdb0c64da02eff381fbe5e459b60387ea3d
+rules/meta-workspace-discipline.md eb4aae31c6fb4f00c477faa12dcf37432265e49e

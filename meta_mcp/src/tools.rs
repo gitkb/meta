@@ -257,7 +257,7 @@ pub(crate) static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
         // Discovery tools
         tool(
             "meta_search_code",
-            "Search for patterns across all repositories (nested ones too) with git grep: tracked files, and untracked files .gitignore doesn't ignore. At most 50 matches per repository; an entry with more says \"truncated\": true",
+            "Search for patterns across all repositories (nested ones too) with git grep: tracked files, and untracked files .gitignore doesn't ignore. At most 50 matches, and 16 MiB of them, per repository; an entry with more says \"truncated\": true",
             McpServer::search_code,
         ),
         tool(
@@ -1418,7 +1418,7 @@ impl McpServer {
                 (stderr, _) => Some(stderr.to_string()),
             };
             answered |= error.is_none() || !matches.is_empty();
-            if matches.is_empty() && error.is_none() {
+            if matches.is_empty() && error.is_none() && !truncated {
                 continue;
             }
             let mut entry = serde_json::Map::new();

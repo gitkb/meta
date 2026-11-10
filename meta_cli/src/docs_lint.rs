@@ -56,11 +56,7 @@ fn documents(root: &Path) -> Vec<PathBuf> {
         root.join("loop_cli/README.md"),
         root.join("claude-plugin/hooks/hooks.json"),
     ];
-    for (dir, file) in [
-        ("docs", None),
-        ("claude-plugin/skills", Some("SKILL.md")),
-        ("meta_cli/.claude/rules", None),
-    ] {
+    for (dir, file) in [("docs", None), ("claude-plugin/skills", Some("SKILL.md"))] {
         let mut found: Vec<PathBuf> = fs::read_dir(root.join(dir))
             .unwrap()
             .map(|entry| entry.unwrap().path())

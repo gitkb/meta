@@ -89,8 +89,13 @@ pub fn plugin_info() -> PluginInfo {
 /// [`GitCli`] parses them: what the host resolves for the call.
 pub fn targeting(words: &[String]) -> Targeting {
     use clap::Parser;
+    targeting_of(GitCli::try_parse_from(words))
+}
+
+/// What a parse of [`GitCli`] acts on (see [`targeting`]).
+fn targeting_of(parsed: Result<GitCli, clap::Error>) -> Targeting {
     use commands::worktree::cli_types::WorktreeCommands as W;
-    match GitCli::try_parse_from(words).map(|cli| cli.command) {
+    match parsed.map(|cli| cli.command) {
         Ok(Some(GitCommand::Clone(_))) => Targeting::None,
         Ok(Some(GitCommand::Update(_))) => Targeting::Workspace,
         Ok(Some(GitCommand::Worktree(worktree))) => match worktree.command {
@@ -143,7 +148,12 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
     let bare: Vec<String> = std::iter::once("git".to_string())
         .chain(request.meta_options.without(&words))
         .collect();
-    let meta = match targeting(&bare).refuses_filters() {
+    let help_requested = has_help_token(command, args);
+    let wanted = match help_requested {
+        true => help_targeting(&bare),
+        false => targeting(&bare),
+    };
+    let meta = match wanted.refuses_filters() {
         true => request.meta_options.refusing_filters(),
         false => request.meta_options.clone(),
     };
@@ -158,7 +168,6 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
         Ok(cli) => cli,
         Err(response) => return Ok(*response),
     };
-    let help_requested = has_help_token(command, args);
     match cli.command {
         Some(GitCommand::Clone(args)) => clone::execute_git_clone(args, ctx, request),
         Some(GitCommand::Update(args)) => update::execute_git_update(args, ctx, request),
@@ -180,6 +189,39 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
         // Every other git command runs as typed in each repo
         None => execute_raw_git_command(ctx, request),
     }
+}
+
+/// What the command `words` (`git worktree add --help`) ask help for acts
+/// on, as a use of it would: the line without its help flags, its required
+/// arguments given as their names when they are missing (`git worktree add
+/// NAME`), and its required options left out, as clap does once it ignores
+/// errors. Its help lists the options that use takes.
+fn help_targeting(words: &[String]) -> Targeting {
+    use clap::{CommandFactory, FromArgMatches};
+    let mut line: Vec<String> = words
+        .iter()
+        .take_while(|word| *word != "--")
+        .filter(|word| !matches!(word.as_str(), "--help" | "-h"))
+        .cloned()
+        .collect();
+    if targeting(&line) == Targeting::Unparsed {
+        let mut cmd = GitCli::command();
+        for word in line.iter().skip(1) {
+            match cmd.find_subcommand(word) {
+                Some(sub) => cmd = sub.clone(),
+                None => break,
+            }
+        }
+        line.extend(
+            cmd.get_positionals()
+                .filter(|arg| arg.is_required_set())
+                .map(|arg| arg.get_id().to_string().to_uppercase()),
+        );
+    }
+    let matches = GitCli::command()
+        .ignore_errors(true)
+        .try_get_matches_from(&line);
+    targeting_of(matches.and_then(|matches| GitCli::from_arg_matches(&matches)))
 }
 
 /// The command of [`GitCli`] that `words` name: each word that names a

@@ -890,7 +890,16 @@ fn captured_output_is_whole_under_the_limit_and_refused_past_it() {
     let error = over.row().error.unwrap();
     assert_eq!(error.code, meta_plugin::ErrorCode::TooMuchOutput);
     assert!(
-        error.message.starts_with("a: ") && error.message.contains("16 MiB"),
+        error.message.starts_with("a: ")
+            && error.message.contains("16 MiB")
+            && error.message.contains("as it wrote to stderr"),
+        "{}",
+        error.message
+    );
+    let flood = capture(format!("head -c {} /dev/zero", CAPTURE_LIMIT + 1));
+    let error = flood.row().error.unwrap();
+    assert!(
+        error.message.contains("as it wrote to stdout"),
         "{}",
         error.message
     );

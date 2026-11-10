@@ -9,8 +9,9 @@ A worktree set is a named group of git worktrees, one per repo, on one branch
 by default. It lets a change span several repos without touching the primary
 checkout, and lets several tasks run side by side.
 
-The repo names below (`backend`, `frontend`, `api`) are examples: `meta -A --json
-project list` lists yours. A repo of a nested meta repo needs `-r` (its path from
+The repo names below (`backend`, `frontend`, `api`) are examples; `<repo>`,
+`<branch>` and `<tag>` stand for a repo, branch and tag of yours. `meta -A --json
+project list` lists your repos and their tags. A repo of a nested meta repo needs `-r` (its path from
 the nearest `.meta.yaml`) or `-A` (its path from the workspace root).
 
 ```
@@ -192,7 +193,7 @@ meta git worktree create ci-check --every-repo --ttl 1h
 meta git worktree create ci-check --every-repo --ephemeral --meta agent=review-bot --meta run_id=abc123
 
 # Run a command in a set of its own
-meta git worktree create tmp --repo a --branch b
+meta git worktree create tmp --repo <repo> --branch <branch>
 meta git worktree exec tmp -- cargo test
 meta git worktree remove tmp
 ```
@@ -258,7 +259,7 @@ that set's repos (`meta project list` and `meta context` still list the workspac
 cd .worktrees/auth-fix/backend
 meta exec -- cargo test       # runs in auth-fix's repos, not the primary checkout
 meta git status
-meta --tag cli exec -- pwd
+meta --tag <tag> exec -- pwd
 ```
 
 A set is a folder meta knows by its place: one in the worktrees folder that has

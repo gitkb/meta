@@ -65,5 +65,5 @@ target
 
 .env
 
-# what `meta init claude` installs when run in this repo
+# what `meta init skills` installs when run in this repo
 /.meta/skills/

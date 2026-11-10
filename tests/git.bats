@@ -384,6 +384,47 @@ state() {
     [ -d backend/.git ]
 }
 
+@test "a branch: that names no branch fails only the commands acting on that project" {
+    with_remotes
+    # shared becomes a meta repo whose .meta.yaml gives inner a bad branch:
+    printf '{"projects": {"inner": {"repo": "file://%s/remotes/frontend.git", "branch": "HEAD"}, "ok": "file://%s/remotes/frontend.git"}}\n' \
+        "$TEST_DIR" "$TEST_DIR" > shared/.meta.yaml
+    printf 'inner/\nok/\n' > shared/.gitignore
+    local said="Invalid branch of project 'inner' in $TEST_DIR/shared/.meta.yaml: branch 'HEAD' is not a name git takes for a branch"
+    # listing and other commands go on, and say so
+    run "$META_BIN" -r project list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"inner"* && "$output" == *"warning: $said"* ]]
+    bats_require_minimum_version 1.5.0
+    run --separate-stderr "$META_BIN" -r --json project list
+    [ "$status" -eq 0 ]
+    jq -e --arg said "$said" '.success and ([.warnings[] | select(.project == "shared/inner") | .message] == [$said])' <<<"$output"
+    jq -e '[.results[].data | select(.name == "inner") | has("branch")] == [false]' <<<"$output"
+    run "$META_BIN" -r git status
+    [ "$status" -eq 0 ]
+    # update: that clone alone fails, with why; the other is cloned
+    run "$META_BIN" -r git update
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"1 of 2 repositories failed to clone: inner: $said"* ]]
+    [ ! -e shared/inner ]
+    [ -d shared/ok/.git ]
+    # a worktree set: that project alone is refused, with why
+    git clone --quiet remotes/frontend.git shared/inner
+    run "$META_BIN" -r git worktree create t --repo shared/inner --no-deps
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$said"* ]]
+    [ ! -e .worktrees/t ]
+    run "$META_BIN" -r git worktree create t --repo shared/ok --no-deps
+    [ "$status" -eq 0 ]
+    # in the root .meta.yaml too: the commands that don't clone it still run
+    jq '.projects.backend = {"repo": .projects.backend, "branch": "a..b"}' .meta.yaml > meta.json
+    mv meta.json .meta.yaml
+    run "$META_BIN" git status
+    [ "$status" -eq 0 ]
+    run "$META_BIN" exec -- true
+    [ "$status" -eq 0 ]
+}
+
 @test "meta git update doesn't stall on git's stdout, and git asks for no credentials" {
     with_remotes
     rm -rf "$TEST_DIR/shared"

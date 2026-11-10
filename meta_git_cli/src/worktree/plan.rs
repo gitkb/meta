@@ -20,12 +20,18 @@ pub struct PlannedRepo {
 
 /// The branch the project checked out at `source` starts from, as meta's
 /// `members` say its config's `branch:` names it; none: its remote's
-/// default branch.
-pub fn start_branch<'m>(members: &'m [meta_plugin::Project], source: &Path) -> Option<&'m str> {
-    members
-        .iter()
-        .find(|m| m.abs == source)
-        .and_then(|m| m.branch.as_deref())
+/// default branch; an error when that `branch:` names no branch.
+pub fn start_branch<'m>(
+    members: &'m [meta_plugin::Project],
+    source: &Path,
+) -> anyhow::Result<Option<&'m str>> {
+    let Some(member) = members.iter().find(|m| m.abs == source) else {
+        return Ok(None);
+    };
+    if let Some(problem) = &member.branch_problem {
+        anyhow::bail!("{}", meta_plugin::display::escape_lines(problem));
+    }
+    Ok(member.branch.as_deref())
 }
 
 /// A project the index found: its key and its checkout.
@@ -268,6 +274,7 @@ mod tests {
                     abs: root.join(path),
                     meta: *meta,
                     branch: None,
+                    branch_problem: None,
                     present: true,
                     ..Project::default()
                 })

@@ -545,8 +545,36 @@ EOF
     git -C backend update-ref -d refs/remotes/origin/release
     run "$META_BIN" git worktree create gone --repo backend --no-deps
     [ "$status" -ne 0 ]
-    [[ "$output" == *"its .meta.yaml names branch 'release', and there is no origin/release to start 'gone' from; fetch it with: git -C "*"fetch origin release"* ]]
+    [[ "$output" == *"its .meta.yaml names branch 'release', and there is no origin/release to start 'gone' from; fetch it with: git -C "*"fetch origin "*"refs/heads/release:refs/remotes/origin/release"* ]]
     [ ! -e .worktrees/gone ]
+}
+
+@test "worktree create says how to fetch a branch: a single-branch or shallow clone lacks, and that works" {
+    git -C backend branch release
+    git -C backend switch --quiet release
+    git -C backend commit --quiet --allow-empty -m "release work"
+    git -C backend switch --quiet main
+    git clone --quiet --bare backend "$TEST_DIR/backend.git"
+    printf '%s\n' '{"projects": {"backend": {"repo": "git@github.com:org/backend.git", "branch": "release"},' \
+        '"frontend": "git@github.com:org/frontend.git"}}' > .meta.yaml
+    local shape advice
+    for shape in "--single-branch --branch main" "--depth 1"; do
+        rm -rf backend .worktrees/one
+        # shellcheck disable=SC2086
+        git clone --quiet $shape "file://$TEST_DIR/backend.git" backend
+        run "$META_BIN" git worktree create one --repo backend --no-deps
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"its .meta.yaml names branch 'release', and there is no origin/release to start 'one' from; fetch it with: git -C "* ]]
+        [ ! -e .worktrees/one ]
+        # what it says to run, run as said
+        advice=$(sed -n 's/.*fetch it with: //p' <<<"$output" | head -1)
+        eval "$advice"
+        run "$META_BIN" git worktree create one --repo backend --no-deps
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"backend -> one (new from origin/release)"* ]]
+        [ "$(git -C .worktrees/one/backend rev-parse HEAD)" = "$(git -C "$TEST_DIR/backend.git" rev-parse release)" ]
+        "$META_BIN" git worktree remove one --force >/dev/null
+    done
 }
 
 @test "worktree create with a commit-ish and a branch that exists says what to do" {

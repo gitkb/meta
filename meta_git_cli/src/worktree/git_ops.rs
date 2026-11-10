@@ -251,7 +251,11 @@ pub fn worktree_start(
                     escape(&meta_plugin::display::shell_quote(
                         &repo_path.to_string_lossy()
                     )),
-                    escape(&meta_plugin::display::shell_quote(start))
+                    // named in full: a single-branch or shallow clone's
+                    // fetch refspec doesn't cover it
+                    escape(&meta_plugin::display::shell_quote(&format!(
+                        "+refs/heads/{start}:refs/remotes/origin/{start}"
+                    )))
                 )
             })?;
         return Ok(WorktreeStart::Default { name, commit });

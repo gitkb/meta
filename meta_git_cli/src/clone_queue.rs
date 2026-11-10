@@ -296,6 +296,21 @@ impl CloneQueue {
                     continue;
                 }
                 Checkout::Missing | Checkout::NotARepo(_) => match &project.repo {
+                    // a branch: that names no branch: this clone alone fails
+                    Some(url) if project.branch_problem.is_some() => {
+                        if self.claim(&target_path) {
+                            self.record(|o| {
+                                o.failures.push(CloneFailure {
+                                    name: project.name.clone(),
+                                    path: target_path.clone(),
+                                    url: url.clone(),
+                                    branch: None,
+                                    error: project.branch_problem.clone().unwrap_or_default(),
+                                })
+                            });
+                        }
+                        continue;
+                    }
                     Some(url) => url.clone(),
                     // Skip projects without a repo URL (cannot clone)
                     None => continue,

@@ -215,7 +215,7 @@ pub(crate) fn handle_create(
                         &repo.source,
                         &repo.branch,
                         from_ref,
-                        start_branch(&here.workspace.members, &repo.source),
+                        start_branch(&here.workspace.members, &repo.source)?,
                     )?
                 },
             );
@@ -376,7 +376,7 @@ pub(crate) fn handle_create(
                         &dest,
                         &repo.branch,
                         from_ref,
-                        start_branch(&here.workspace.members, &repo.source),
+                        start_branch(&here.workspace.members, &repo.source)?,
                     )?;
                     started_from = start.base(&repo.branch);
                     Ok(start.new_branch_at())

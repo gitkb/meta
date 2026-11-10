@@ -109,8 +109,12 @@ pub fn run(cli: &Cli, command: &ProjectCommands, report: &mut Report) -> Result<
     };
     if !cli.json {
         outln!("{}", found.text)?;
+        for warning in &found.warnings {
+            meta_plugin::out::warn(&warning.message);
+        }
     }
     report.results.extend(found.records);
+    report.warnings.extend(found.warnings);
     Ok(())
 }
 
@@ -243,10 +247,12 @@ fn workspace_target(cli: &Cli, start: &Path, name: &str) -> Result<Target> {
         })
 }
 
-/// What a command found: its text, and its records for `--json`.
+/// What a command found: its text, its records for `--json`, and what it
+/// warns of.
 struct Found {
     text: String,
     records: Vec<ProjectResult>,
+    warnings: Vec<meta_plugin::Warning>,
 }
 
 /// One project that is not a clone of what its config lists.
@@ -444,6 +450,7 @@ fn list(target: &Target, start: &Path) -> Result<Found> {
             is_meta: true,
             meta: true,
             branch: None,
+            branch_problem: None,
             error: None,
             cwd: Some(cwd.to_string_lossy().into_owned()),
             worktree,
@@ -451,7 +458,34 @@ fn list(target: &Target, start: &Path) -> Result<Found> {
     )
     .at(&dir)];
     list_records(&tree, &dir, &workspace.root, &mut records);
-    Ok(Found { text, records })
+    let mut warnings = Vec::new();
+    branch_problems(&tree, &dir, &workspace.root, &mut warnings);
+    Ok(Found {
+        text,
+        records,
+        warnings,
+    })
+}
+
+/// A warning for each of `nodes` (listed in `dir`, and the nodes under it)
+/// whose `branch:` names no branch: listed all the same, as the commands
+/// that would use that branch are the ones that refuse it.
+fn branch_problems(
+    nodes: &[MetaTreeNode],
+    dir: &Path,
+    root: &Path,
+    out: &mut Vec<meta_plugin::Warning>,
+) {
+    for node in nodes {
+        let abs = dir.join(&node.info.path);
+        if let Some(problem) = &node.info.branch_problem {
+            out.push(meta_plugin::Warning {
+                project: Some(repo_path(&abs, root)),
+                ..meta_plugin::Warning::new(problem.clone())
+            });
+        }
+        branch_problems(&node.children, &abs, root, out);
+    }
 }
 
 /// Where the projects of `config` are checked out: in a worktree set, the
@@ -480,7 +514,8 @@ fn list_records(nodes: &[MetaTreeNode], dir: &Path, root: &Path, out: &mut Vec<P
                     tags: node.info.tags.clone(),
                     is_meta: node.is_meta,
                     meta: node.info.meta,
-                    branch: node.info.start_branch().map(str::to_string),
+                    branch: node.info.start_branch().ok().flatten().map(str::to_string),
+                    branch_problem: node.info.branch_problem.clone(),
                     error: node.error.clone(),
                     cwd: None,
                     worktree: None,
@@ -584,7 +619,11 @@ fn dependents(target: &Target, project_name: &str) -> Result<Found> {
             None => ProjectResult::record(*name, Dependent { name }),
         })
         .collect();
-    Ok(Found { text, records })
+    Ok(Found {
+        text,
+        records,
+        warnings: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -794,6 +833,7 @@ mod tests {
                 depends_on: Vec::new(),
                 meta: false,
                 branch: None,
+                branch_problem: None,
             },
             is_meta: false,
             error: error.map(str::to_string),

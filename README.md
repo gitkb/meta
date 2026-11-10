@@ -266,12 +266,12 @@ A token in a `repo` URL (`https://user:token@host/org/repo.git`) works, and meta
 - A project name is usually one word; a nested alias such as `vendor/lib` is fine. It must be a plain relative path in normal form.
 - Names use only ASCII letters, digits, space and `._-+@`, so one config names the same projects on every platform (no Unicode that macOS or Windows would treat as another name, no `C:`, `<>:"|?*` or short names like `PROGRA~1`). They have no trailing dot or space, are not Windows device names (`CON`, `NUL`, `COM1`, ...) or `.git`, and do not start with `.worktrees` or lie under the configured `worktrees_dir`.
 - No two projects share a path, and no project's path lies inside another's. Paths are compared after following existing symlinks, and without regard to case (some filesystems ignore it). Project names may not be equal or nested either, also without regard to case. A repo inside another repo goes in a nested meta config (`meta: true`).
-- `branch` is a name `git check-ref-format --branch` takes (no `..`, spaces, `@{-1}`, leading `-`, ...).
-- No name, path, repo, branch, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline), a bidirectional-text control, or an invisible format character (such as a zero-width space).
+- No name, path, repo, tag, `provides` or `depends_on` value is empty or contains a control character (such as an escape or a newline), a bidirectional-text control, or an invisible format character (such as a zero-width space).
 - `repo` does not start with `-`.
 - Tags contain no whitespace and no `,`.
 - `worktrees_dir`, if set, may be anywhere (relative, `..`, absolute, or `.worktrees` a symlink to another disk), but not the config's directory itself, not inside a project and not in `.git`. `META_WORKTREES` overrides it.
 - A key meta doesn't know at the top level, under `defaults` or under `worktree` is an error, so a misspelling isn't ignored. Project entries may carry keys of their own for other tools.
+- A `branch` that isn't a name `git check-ref-format --branch` takes (a list, `..`, spaces, `@{-1}`, a leading `-`, ...) doesn't stop meta reading the config: `meta project list` warns about it (`--json`: in `warnings`, naming the project), and only the commands that would use it refuse that project: cloning it (`meta git clone`, `meta git update`) and starting a worktree set's branch for it.
 - `worktree.hooks` names only `post-create`, `post-destroy` and `post-prune`, and each value is a command string (`false` or `123` is refused, not run).
 
 The same rules apply to every meta config that a recursive command reads, including one inside a cloned project: a refused nested config stops the command rather than silently leaving out that part of the tree.

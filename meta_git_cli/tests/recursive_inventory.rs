@@ -90,6 +90,7 @@ fn as_meta_sends(found: meta_core::config::Workspace) -> meta_plugin::Workspace 
                 depends_on: info.map(|i| i.depends_on.clone()).unwrap_or_default(),
                 meta: info.is_some_and(|i| i.meta),
                 branch: None,
+                branch_problem: None,
                 present: repo.dir.exists(),
                 ..meta_plugin::Project::default()
             }

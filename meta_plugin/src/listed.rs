@@ -23,6 +23,10 @@ pub struct ListedProject {
     /// for its remote's default branch (and for the first row)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// Why its config's `branch:` names no branch: the commands that would
+    /// clone it or start a set's branch for it refuse it; absent when fine
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_problem: Option<String>,
     /// Why its folder couldn't be looked into (its own projects may be
     /// missing from the list); absent when it could.
     #[serde(default, skip_serializing_if = "Option::is_none")]

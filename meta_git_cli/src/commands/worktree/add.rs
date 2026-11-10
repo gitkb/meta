@@ -198,7 +198,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
                     source,
                     &branch,
                     from_ref,
-                    start_branch(&here.workspace.members, source),
+                    start_branch(&here.workspace.members, source)?,
                 )?,
             };
             repos.push(CreateRepoEntry {
@@ -264,13 +264,9 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
         }
 
         // A failed add stops here; what was added is reported
-        let (created_branch, started_from) = match git_worktree_add(
-            &source,
-            &dest,
-            &branch,
-            from_ref,
-            start_branch(&here.workspace.members, &source),
-        ) {
+        let made = start_branch(&here.workspace.members, &source)
+            .and_then(|start| git_worktree_add(&source, &dest, &branch, from_ref, start));
+        let (created_branch, started_from) = match made {
             Ok(start) => {
                 let base = start.base(&branch);
                 (start.new_branch_at().is_some(), base)

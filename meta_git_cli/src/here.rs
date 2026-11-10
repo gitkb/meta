@@ -204,6 +204,7 @@ impl<'a> Tree<'a> {
                     repo: node.repo(),
                     meta: node.project.meta,
                     branch: node.project.branch.clone(),
+                    branch_problem: node.project.branch_problem.clone(),
                 })
                 .collect(),
         }
@@ -221,6 +222,8 @@ pub(crate) struct Listed {
     pub meta: bool,
     /// The branch it starts from (`branch:`); none: its remote's default
     pub branch: Option<String>,
+    /// Why its `branch:` names no branch: it isn't cloned
+    pub branch_problem: Option<String>,
 }
 
 /// What a meta repo's config lists.
@@ -253,6 +256,7 @@ impl Listing {
                 // declared `meta: true` (a meta repo not cloned yet too)
                 meta: row.listed.meta,
                 branch: row.listed.branch.clone(),
+                branch_problem: row.listed.branch_problem.clone(),
             })
             .collect();
         Ok(Some(Listing {
@@ -435,6 +439,7 @@ pub(crate) mod tests {
                         is_meta: true,
                         meta: false,
                         branch: None,
+                        branch_problem: None,
                         error: None,
                         cwd: None,
                         worktree: None,
@@ -450,6 +455,7 @@ pub(crate) mod tests {
                         is_meta: false,
                         meta: true,
                         branch: None,
+                        branch_problem: None,
                         error: Some(error),
                         cwd: None,
                         worktree: None,

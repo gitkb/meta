@@ -67,11 +67,11 @@ assert 'shared' in names, f'shared not in {names}'
     jq -e '[.results[].data | select(.name == "frontend") | has("branch")] == [false]' <<<"$output"
 }
 
-@test "a branch: git doesn't take for a branch name is an error naming the project" {
+@test "a branch: git doesn't take for a branch name is a warning naming the project" {
     printf '%s\n' '{"projects": {"backend": {"repo": "git@github.com:org/backend.git", "branch": "a..b"}}}' > .meta.yaml
     run "$META_BIN" project list
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"Invalid project 'backend'"*"branch 'a..b' is not a name git takes for a branch"* ]]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: Invalid branch of project 'backend' in "*"branch 'a..b' is not a name git takes for a branch"* ]]
 }
 
 @test "meta project list --json includes repo URLs" {

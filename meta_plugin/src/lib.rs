@@ -440,8 +440,6 @@ mod tests {
             dependency_problems: vec![],
             left_out: Vec::new(),
             meta: false,
-            branch: None,
-            branch_problem: None,
             level: None,
             present: true,
             nested: vec![],

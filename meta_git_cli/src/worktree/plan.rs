@@ -18,20 +18,63 @@ pub struct PlannedRepo {
     pub branch: String,
 }
 
-/// The branch the project checked out at `source` starts from, as meta's
-/// `members` say its config's `branch:` names it; none: its remote's
-/// default branch; an error when that `branch:` names no branch.
-pub fn start_branch<'m>(
-    members: &'m [meta_plugin::Project],
-    source: &Path,
-) -> anyhow::Result<Option<&'m str>> {
-    let Some(member) = members.iter().find(|m| m.abs == source) else {
-        return Ok(None);
-    };
-    if let Some(problem) = &member.branch_problem {
-        anyhow::bail!("{}", meta_plugin::display::escape_lines(problem));
+/// Each project's `branch:`, as `meta project list` gives it for the config
+/// that lists the project, asked only when a new branch first starts from
+/// one, once per config (a plugin's request doesn't carry it, so plugins
+/// built on an older SDK still read theirs).
+pub struct StartBranches {
+    /// The workspace's config folder: what lists a project the folders
+    /// above its checkout don't
+    dir: PathBuf,
+    /// The workspace root: no config above it is asked
+    root: PathBuf,
+    read: std::cell::RefCell<
+        std::collections::HashMap<
+            PathBuf,
+            std::result::Result<Vec<crate::here::ListedBranch>, String>,
+        >,
+    >,
+}
+
+impl StartBranches {
+    pub fn new(dir: &Path, root: &Path) -> Self {
+        let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        StartBranches {
+            dir: dir.to_path_buf(),
+            root: real(root),
+            read: std::cell::RefCell::new(std::collections::HashMap::new()),
+        }
     }
-    Ok(member.branch.as_deref())
+
+    /// The branch the project checked out at `source` starts from: its
+    /// `branch:`; none, its remote's default branch; an error when that
+    /// `branch:` names no branch, or meta can't say.
+    pub fn of(&self, source: &Path) -> anyhow::Result<Option<String>> {
+        let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let source = real(source);
+        // the nearest config above the checkout lists it, else the
+        // workspace's: meta lists none for a folder without one
+        let configs = source
+            .ancestors()
+            .skip(1)
+            .take_while(|dir| dir.starts_with(&self.root))
+            .map(Path::to_path_buf)
+            .chain([self.dir.clone()]);
+        for dir in configs {
+            let mut read = self.read.borrow_mut();
+            let listed = read
+                .entry(dir.clone())
+                .or_insert_with(|| crate::here::branches(&dir).map_err(|e| format!("{e:#}")));
+            let listed = listed.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
+            if let Some(project) = listed.iter().find(|p| real(&p.abs) == source) {
+                if let Some(problem) = &project.problem {
+                    anyhow::bail!("{}", meta_plugin::display::escape_lines(problem));
+                }
+                return Ok(project.branch.clone());
+            }
+        }
+        Ok(None)
+    }
 }
 
 /// A project the index found: its key and its checkout.
@@ -273,8 +316,6 @@ mod tests {
                     path: path.to_string(),
                     abs: root.join(path),
                     meta: *meta,
-                    branch: None,
-                    branch_problem: None,
                     present: true,
                     ..Project::default()
                 })

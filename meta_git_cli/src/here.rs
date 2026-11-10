@@ -203,8 +203,9 @@ impl<'a> Tree<'a> {
                     path: node.own.clone(),
                     repo: node.repo(),
                     meta: node.project.meta,
-                    branch: node.project.branch.clone(),
-                    branch_problem: node.project.branch_problem.clone(),
+                    // a request's members don't carry it: Listing::of does
+                    branch: None,
+                    branch_problem: None,
                 })
                 .collect(),
         }
@@ -265,6 +266,27 @@ impl Listing {
             projects,
         }))
     }
+}
+
+/// A project's `branch:` as meta lists it, by its folder.
+pub(crate) struct ListedBranch {
+    pub abs: PathBuf,
+    pub branch: Option<String>,
+    pub problem: Option<String>,
+}
+
+/// Each project's `branch:` that the config in `dir` lists (`meta project
+/// list` there, nested configs unread).
+pub(crate) fn branches(dir: &Path) -> Result<Vec<ListedBranch>> {
+    let rows = project_list(dir, None, false)?.unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .map(|row| ListedBranch {
+            abs: row.abs,
+            branch: row.listed.branch,
+            problem: row.listed.branch_problem,
+        })
+        .collect())
 }
 
 /// Every folder of the whole workspace `dir` belongs to (`meta -A project

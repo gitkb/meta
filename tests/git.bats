@@ -417,6 +417,18 @@ state() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"$said"* ]]
     [ ! -e .worktrees/t ]
+    # unless the set's branch never starts there: an explicit base, or a
+    # branch the checkout has, in the preview and the run, create and add
+    run "$META_BIN" -r --dry-run git worktree create based main --repo shared/inner --no-deps
+    [ "$status" -eq 0 ]
+    run "$META_BIN" -r git worktree create based main --repo shared/inner --no-deps
+    [ "$status" -eq 0 ]
+    git -C shared/inner branch mine
+    run "$META_BIN" -r git worktree create mine --repo shared/inner --no-deps
+    [ "$status" -eq 0 ]
+    "$META_BIN" -r git worktree create other --repo shared/ok --no-deps >/dev/null
+    run "$META_BIN" -r git worktree add other main --repo shared/inner
+    [ "$status" -eq 0 ]
     run "$META_BIN" -r git worktree create t --repo shared/ok --no-deps
     [ "$status" -eq 0 ]
     # in the root .meta.yaml too: the commands that don't clone it still run
@@ -426,6 +438,27 @@ state() {
     [ "$status" -eq 0 ]
     run "$META_BIN" exec -- true
     [ "$status" -eq 0 ]
+}
+
+@test "a project's branch: adds nothing to a plugin's request, so a plugin on an older SDK still reads it" {
+    with_remotes
+    jq '.projects.shared = {"repo": .projects.shared, "branch": "release"}' .meta.yaml > meta.json
+    mv meta.json .meta.yaml
+    # meta-git as installed, logging each request it gets
+    local real="$TEST_DIR/meta-git-real"
+    mv "$TEST_DIR/.meta/plugins/meta-git" "$real"
+    printf '#!/bin/sh\n[ "$1" = --meta-plugin-exec ] && { cat "$META_REQUEST"; echo; } >> "%s/requests"\nexec "%s" "$@"\n' \
+        "$TEST_DIR" "$real" > "$TEST_DIR/.meta/plugins/meta-git"
+    chmod +x "$TEST_DIR/.meta/plugins/meta-git"
+    run "$META_BIN" git status
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree create t main --repo shared --no-deps
+    [ "$status" -eq 0 ]
+    # each project carries only the fields an older SDK's request has: its
+    # members refuse a field they don't know
+    jq -se '[.[] | (.workspace.members // [])[], (.projects // [])[] | keys[]] | unique
+        | . - ["name", "path", "abs", "repo", "tags", "depends_on", "dependency_problems",
+               "left_out", "meta", "level", "present", "nested"] == []' "$TEST_DIR/requests"
 }
 
 @test "meta git update doesn't stall on git's stdout, and git asks for no credentials" {

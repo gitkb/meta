@@ -195,15 +195,16 @@ impl WorktreeStart {
 /// How a worktree of `repo_path` on `branch` would start, from `from_ref`
 /// if given: every check meta makes before running `git worktree add`, so
 /// a preview makes them too. A new branch without `from_ref` starts from
-/// the project's own branch (`start`: its `branch:` in .meta.yaml) if it
-/// names one, else from the remote's default branch, never from whatever
+/// the project's own branch (`start` reads its `branch:` in .meta.yaml,
+/// only then, so a bad one stops only a branch that would start there) if
+/// it names one, else from the remote's default branch, never from whatever
 /// the checkout has checked out; only a repo whose remote names none (no
 /// `origin/HEAD`) starts from its HEAD, with a warning when it has a remote.
 pub fn worktree_start(
     repo_path: &Path,
     branch: &str,
     from_ref: Option<&str>,
-    start: Option<&str>,
+    start: &dyn Fn() -> Result<Option<String>>,
 ) -> Result<WorktreeStart> {
     ensure_checkout_config_is_not_bare(repo_path)?;
     if let Some(ref_name) = from_ref {
@@ -237,7 +238,8 @@ pub fn worktree_start(
     if let Some(commit) = git_rev_parse(repo_path, &format!("refs/remotes/origin/{branch}"))? {
         return Ok(WorktreeStart::Remote { commit });
     }
-    if let Some(start) = start {
+    if let Some(start) = start()? {
+        let start = start.as_str();
         let name = format!("origin/{start}");
         let commit = git_rev_parse(repo_path, &format!("refs/remotes/{name}^{{commit}}"))?
             .ok_or_else(|| {
@@ -309,7 +311,7 @@ pub fn git_worktree_add(
     worktree_dest: &Path,
     branch: &str,
     from_ref: Option<&str>,
-    start_branch: Option<&str>,
+    start_branch: &dyn Fn() -> Result<Option<String>>,
 ) -> Result<WorktreeStart> {
     let start = worktree_start(repo_path, branch, from_ref, start_branch)?;
     leftover_entry(repo_path, worktree_dest)?;
@@ -676,7 +678,7 @@ mod tests {
         let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.repo(&sandbox.work());
         let dest = tmp.join(std::ffi::OsStr::from_bytes(b"wt-\xff"));
-        git_worktree_add(&tmp, &dest, "topic", None, None).unwrap();
+        git_worktree_add(&tmp, &dest, "topic", None, &|| Ok(None)).unwrap();
         assert!(dest.join(".git").is_file());
         assert!(!tmp.join("wt-\u{fffd}").exists());
     }

@@ -12,7 +12,7 @@ use crate::worktree::git_ops::*;
 use crate::worktree::helpers::*;
 use crate::worktree::hooks::fire_post_create;
 use crate::worktree::origin::{branches_on_origin, Wanted};
-use crate::worktree::plan::{start_branch, Found, Index, PlannedRepo};
+use crate::worktree::plan::{Found, Index, PlannedRepo, StartBranches};
 use crate::worktree::safety::{check_worktree_removal, delete_checked_set};
 use crate::worktree::types::{CreateOutput, CreatePlan, CreatePlanRepo, CreateRepoEntry};
 use crate::worktree::RepoSpec;
@@ -74,6 +74,8 @@ pub(crate) fn handle_create(
     let recursive = request.recursive;
 
     let here = Here::need(request)?;
+    // each project's branch:, read only when a new branch starts from one
+    let start_branches = StartBranches::new(&here.dir, &here.workspace.root);
     let worktree_root = crate::here::worktree_root(request)?;
     meta_plugin::sets::owners_dir(&worktree_root)?;
 
@@ -211,12 +213,9 @@ pub(crate) fn handle_create(
                         commit: commit.unwrap_or_default(),
                     }
                 } else {
-                    worktree_start(
-                        &repo.source,
-                        &repo.branch,
-                        from_ref,
-                        start_branch(&here.workspace.members, &repo.source)?,
-                    )?
+                    worktree_start(&repo.source, &repo.branch, from_ref, &|| {
+                        start_branches.of(&repo.source)
+                    })?
                 },
             );
         }
@@ -371,13 +370,10 @@ pub(crate) fn handle_create(
             let mut started_from = None;
             let created_branch =
                 journal_new_branch(&repo.source, &repo.branch, &mut new_branches, || {
-                    let start = git_worktree_add(
-                        &repo.source,
-                        &dest,
-                        &repo.branch,
-                        from_ref,
-                        start_branch(&here.workspace.members, &repo.source)?,
-                    )?;
+                    let start =
+                        git_worktree_add(&repo.source, &dest, &repo.branch, from_ref, &|| {
+                            start_branches.of(&repo.source)
+                        })?;
                     started_from = start.base(&repo.branch);
                     Ok(start.new_branch_at())
                 })?;
@@ -1015,12 +1011,9 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
         places.join(", ")
     );
     let dirs: Vec<_> = missing.iter().map(|r| r.source.clone()).collect();
-    let cloned = crate::update::clone_dirs(
-        &index.listing(),
-        index.members,
-        &dirs,
-        "git worktree create",
-    )?;
+    // the projects as meta lists them, with each one's branch:
+    let listing = crate::here::Listing::of(&index.dir, None)?.unwrap_or_else(|| index.listing());
+    let cloned = crate::update::clone_dirs(&listing, index.members, &dirs, "git worktree create")?;
     // the ones still not there, for the error: those cloned are fine now
     let still: Vec<PlannedRepo> = missing
         .iter()

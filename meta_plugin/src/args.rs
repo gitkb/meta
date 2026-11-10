@@ -414,6 +414,15 @@ impl MetaOptions {
         false
     }
 
+    /// Whether one of meta's filters (`--include`) was typed before the
+    /// command: then the selection is the user's choice, not all there is.
+    pub fn typed_filter(&self) -> bool {
+        self.options
+            .iter()
+            .filter(|o| o.filter)
+            .any(|o| o.spellings.first().is_some_and(|s| self.typed_has(s)))
+    }
+
     /// `words` (typed after the command) split into meta's options among
     /// them, with their values, and the rest: the ones to move before the
     /// command. `None` when moving them makes a line that fails again: one

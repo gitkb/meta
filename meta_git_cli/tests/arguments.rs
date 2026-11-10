@@ -30,7 +30,7 @@ fn request(
     request.args = args.iter().map(|a| a.to_string()).collect();
     request.scope = match command.split_whitespace().nth(1) {
         Some("clone") => Scope::None,
-        Some("update" | "worktree") => Scope::Workspace,
+        Some("worktree") => Scope::Workspace,
         _ => Scope::Selection,
     };
     // with -r or -A, how deep (none: no limit); without, none of the nested

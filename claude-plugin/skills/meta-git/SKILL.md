@@ -9,7 +9,7 @@ Git operations across multiple repositories. One command operates on the root re
 
 In the commands below, `<repo>` is a repo's `.meta.yaml` name or its path from the nearest `.meta.yaml` (with `-r` or `-A`, from the workspace root: a repo of a nested meta repo needs one of them), and `<tag>` one of its tags; `meta -A --json project list` lists both. Other repo and tag names (`api`, `backend`) are examples.
 
-**The primary checkout is pull-only.** Commit, stage, push and batch-edit inside a worktree set (the `meta-worktree` skill), where these commands act on the set's repos only. In the primary checkout, read or run `meta -r git update`.
+**The primary checkout is pull-only.** Commit, stage, push and batch-edit inside a worktree set (the `meta-worktree` skill), where these commands act on the set's repos only. In the primary checkout, read, or run `meta -r git pull --ff-only` and `meta -r git update`.
 
 ## The Core Insight
 
@@ -46,20 +46,19 @@ meta git clone <url> --depth 1
 ## Updating All Repos
 
 ```bash
-meta git pull      # Pull every existing repo
-meta git update    # Fast-forward cloned repos, clone the missing ones
+meta git pull --ff-only   # Fast-forward every cloned repo
+meta git update           # Clone the missing ones; pulls nothing
 ```
 
 | Command | What it does |
 |---------|--------------|
-| `meta git update` | Pull the workspace repo, fast-forward every cloned repo (`git pull --ff-only`), clone the missing ones |
-| `meta git clone-missing` | Clone the projects the `.meta.yaml` files on disk list that aren't cloned; change no repo that is |
-| `meta git clone-prune` | Remove the repos no `.meta.yaml` lists that hold nothing unpushed; keep and name the others |
-| `meta git clone-sync` | `clone-missing`, then `clone-prune` |
+| `meta git update` | Clone the projects the `.meta.yaml` files on disk list that aren't cloned; change no repo that is, and pull nothing |
+| `meta git update --prune` | The same, then remove the repos no `.meta.yaml` lists that hold nothing unpushed; keep and name the others |
+| `meta git update --prune-only` | Only remove them; clone nothing |
 
-`clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files on disk and pull nothing. `clone-prune` keeps any repo that holds uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it, and says what it holds. Files git ignores (`.env`) are deleted with a removed repo, and named first; preview with `meta --dry-run git clone-prune`. A project that isn't cloned yet is a warning in `meta git pull` and the other per-repo commands, not a failure.
+`update` reads the `.meta.yaml` files on disk and pulls nothing, the workspace repo included. `--prune` and `--prune-only` keep any repo that holds uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it, and says what it holds. Files git ignores (`.env`) are deleted with a removed repo, and named first; preview with `meta --dry-run git update --prune`. A project that isn't cloned yet is a warning in `meta git pull` and the other per-repo commands, not a failure.
 
-`meta git update` pulls the workspace repo first, then runs `git pull --ff-only` in each cloned repo and clones each missing one, so projects added upstream are cloned in one run. A repo git can't fast-forward is named and the command exits 1; nothing is merged or rebased. A repo on no branch, or on a branch without an upstream, is named and left alone. `meta -r git update` does the same in nested meta repos, each pulled before its `.meta.yaml` is read.
+To bring a workspace up to date, pull first, then clone what the pulled `.meta.yaml` files add: `meta -r git pull --ff-only`, then `meta -r git update`. A repo git can't fast-forward fails the pull; nothing is merged or rebased.
 
 ## Before Batch Operations (Critical)
 
@@ -121,7 +120,7 @@ meta --exclude <repo> git pull
 
 ### Starting Work
 ```bash
-meta -r git update                              # In the primary checkout: get latest
+meta -r git pull --ff-only && meta -r git update  # In the primary checkout: get latest
 meta git worktree create my-task --repo <repo>  # A set for this task (-r or -A for nested repos)
 cd .worktrees/my-task
 meta git status                                 # What's the current state?

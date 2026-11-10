@@ -94,7 +94,7 @@ fn stderr(out: &Ran) -> String {
 /// the rest are `request.meta`.
 ///
 /// A config meta refuses fails the command as meta fails it, except for a
-/// command that finds its repos itself (`git update`, `git worktree list`),
+/// command that finds its repos itself (`git worktree list`),
 /// which meta then sends no workspace.
 fn request(
     cwd: &Path,
@@ -116,7 +116,7 @@ fn request(
         {
             Scope::NamedSet
         }
-        Some("update" | "worktree") => Scope::Workspace,
+        Some("worktree") => Scope::Workspace,
         _ => Scope::Selection,
     };
     // with -r or -A, how deep (none: no limit); without, none of the nested
@@ -1096,30 +1096,6 @@ fn from_pr_applies_only_to_the_exact_repo() {
         stderr(&out)
     );
     assert!(!ws.join(".worktrees/pr2").exists());
-}
-
-#[test]
-fn update_reports_failed_clones_and_exits_nonzero() {
-    let sandbox = Sandbox::new();
-    let root = &sandbox.work();
-    let ws = root.join("ws");
-    fs::create_dir_all(&ws).unwrap();
-    sandbox.bare(&root.join("good.git"));
-    let config = json!({"projects": {
-        "good": root.join("good.git"),
-        "missing": root.join("does-not-exist.git"),
-    }});
-    fs::write(ws.join(".meta.yaml"), config.to_string()).unwrap();
-
-    let out = meta_git(&sandbox, &ws, "git update", &[], json!({}));
-    assert!(!out.status.success());
-    let message = stderr(&out);
-    assert!(
-        message.contains("1 of 2 repositories failed to clone: missing"),
-        "{message}"
-    );
-    assert!(message.contains("does-not-exist.git"), "{message}");
-    assert!(ws.join("good/README").exists());
 }
 
 #[test]

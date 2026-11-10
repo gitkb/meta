@@ -113,9 +113,6 @@ EOF
     git -C "$WS" remote add origin "https://alice:$TOKEN@example.invalid/org/ws.git"
     git clone -q "$TEST_DIR/remotes/other.git" lib
     git -C lib remote set-url origin "https://$TOKEN@example.invalid/org/other.git"
-    # which update pulls from, locally
-    git config --global "url.$TEST_DIR/remotes/other.git.insteadOf" \
-        "https://$TOKEN@example.invalid/org/other.git"
     printf 'projects:\n  lib: %s\n' "$TEST_DIR/remotes/lib.git" > .meta.yaml
     meta_without_token project list
     [ "$status" -eq 0 ]

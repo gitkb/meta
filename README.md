@@ -95,7 +95,7 @@ projects:
   web: git@github.com:org/web.git
 EOF
 printf 'api/\nweb/\n' > .gitignore   # the child repos keep their own history
-meta git clone-missing               # clones api and web
+meta git update                     # clones api and web
 ```
 
 Commit `.meta.yaml` and `.gitignore` and push the workspace repo; others then get everything with `meta git clone <url>`.
@@ -276,7 +276,7 @@ The same rules apply to every meta config that a recursive command reads, includ
 
 YAML anchors and merge keys (`<<: *defaults`) work as YAML defines them.
 
-**A project is acted on only if its folder is its own repository.** `meta exec` and the per-repo `meta git` commands run in each selected project that is a git repository of its own, and name the others. `meta exec` then exits 1: `web: not cloned (run 'meta git clone-missing')`, or `r1: not a git repository (folder exists, no .git)`. The per-repo `meta git` commands (`meta git pull`, `meta git status`, …) name a project that isn't cloned yet as a warning ("web is not cloned; `meta git clone-missing` clones it"), which fails the command only with `--strict`, and exit 1 for a folder that is not a repository. git started for a project never looks above the project's folder, so it can't reach the workspace repository around it: meta sets `GIT_CEILING_DIRECTORIES` (added to any you set) for every command it runs in a project, the root included. `meta git update` clones a missing project, or into an empty folder, and names a folder that holds something else. `meta project check` names every project that is missing, not a repository, or cloned from another remote, and exits 1. Under `--json` each problem is a row whose `data` is `{"name", "path", "state", "reason", "repo"?, "actual"?}`, `state` being `missing`, `not_a_repo` or `wrong_remote` (`actual`: the checkout's origin, `null` without one).
+**A project is acted on only if its folder is its own repository.** `meta exec` and the per-repo `meta git` commands run in each selected project that is a git repository of its own, and name the others. `meta exec` then exits 1: `web: not cloned (run 'meta git update')`, or `r1: not a git repository (folder exists, no .git)`. The per-repo `meta git` commands (`meta git pull`, `meta git status`, …) name a project that isn't cloned yet as a warning ("web is not cloned; `meta git update` clones it"), which fails the command only with `--strict`, and exit 1 for a folder that is not a repository. git started for a project never looks above the project's folder, so it can't reach the workspace repository around it: meta sets `GIT_CEILING_DIRECTORIES` (added to any you set) for every command it runs in a project, the root included. `meta git update` clones a missing project, or into an empty folder, and names a folder that holds something else. `meta project check` names every project that is missing, not a repository, or cloned from another remote, and exits 1. Under `--json` each problem is a row whose `data` is `{"name", "path", "state", "reason", "repo"?, "actual"?}`, `state` being `missing`, `not_a_repo` or `wrong_remote` (`actual`: the checkout's origin, `null` without one).
 
 You can mix simple and extended formats in the same file.
 
@@ -321,7 +321,8 @@ At the workspace root, `-r` and `-A` reach the same repos; from a nested meta re
 # Clone everything, including nested meta repos
 meta -r git clone https://github.com/org/top-level.git
 
-# Pull what's cloned and clone what's missing, nested meta repos included
+# Bring what's cloned up to date, then clone what's missing, nested meta repos included
+meta -r git pull --ff-only
 meta -r git update
 ```
 
@@ -330,7 +331,7 @@ What `-r` and `-A` do, by command (`-r` from the nearest `.meta.yaml` down, `-A`
 | Command | With `meta -r` or `meta -A` |
 |---------|----------------|
 | loop commands (`meta -r git status`, `meta -A exec -- …`) and `project` | the projects of nested meta repos too (`--depth N` limits how deep) |
-| `git update`, `clone-missing`, `clone-prune`, `clone-sync` | pull, clone or prune in nested meta repos too (`--depth N` before the command: how many levels) |
+| `git update` | clone (and with `--prune` or `--prune-only`, prune) in nested meta repos too (`--depth N` before the command: how many levels) |
 | `git clone` | clone the nested meta repos too; the new workspace is its own root, so `-r` and `-A` are the same (`git clone --depth N` after the command is git's history depth) |
 | `git worktree create` | find `--repo` across the nested meta repos, and resolve dependencies there (`--every-repo`: every repo reached) |
 | `context` | rows for the projects of nested meta repos |
@@ -341,12 +342,11 @@ Keeping the clones to what the `.meta.yaml` files list:
 
 | Command | What it does |
 |---------|--------------|
-| `meta git update` | Pull the workspace repo, fast-forward every cloned repo (`git pull --ff-only`), clone the missing ones |
-| `meta git clone-missing` | Clone the projects the `.meta.yaml` files on disk list that aren't cloned; change no repo that is |
-| `meta git clone-prune` | Remove the repos no `.meta.yaml` lists that hold nothing unpushed; keep and name the others |
-| `meta git clone-sync` | `clone-missing`, then `clone-prune` |
+| `meta git update` | Clone the projects the `.meta.yaml` files on disk list that aren't cloned; change no repo that is, and pull nothing |
+| `meta git update --prune` | The same, then remove the repos no `.meta.yaml` lists that hold nothing unpushed; keep and name the others |
+| `meta git update --prune-only` | Only remove them; clone nothing (not with `--prune`) |
 
-Each takes meta's `-r` for nested meta repos and `--dry-run`, before the command (`meta -r --dry-run git clone-sync`). `clone-missing`, `clone-prune` and `clone-sync` read the `.meta.yaml` files as they are on disk and pull nothing; they take meta's `--include`, `--exclude` and `--tag` (the projects cloned, the meta repos searched for leftovers) and `--json` (one row per repo, its `data` `{"path", "action", "reason"?}`, `action` being `cloned`, `removed`, `kept` or `failed`; a removed repo's `reason` names the ignored files deleted with it). `clone-prune` removes a repo only when git shows nothing in it that isn't on a remote: no uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it (bare ones too). Files git ignores (`.env`, `target/`) are deleted with it and named first, as `git worktree remove` deletes them; commits only a reflog holds are not kept.
+It takes meta's `-r` for nested meta repos and `--dry-run`, before the command (`meta -r --dry-run git update --prune`). It reads the `.meta.yaml` files as they are on disk and pulls nothing, the workspace repo included: `meta git pull --ff-only` brings the cloned repos up to date, and a `.meta.yaml` it brings is read by the next `update`. Without `--prune` or `--prune-only`, `update` names each repo in a meta repo's folder that no `.meta.yaml` lists, with what deleting it would lose. It takes meta's `--include`, `--exclude` and `--tag` (the projects cloned, the meta repos searched for leftovers) and `--json` (one row per repo, its `data` `{"path", "action", "reason"?}`, `action` being `cloned`, `removed`, `kept` or `failed`; a removed repo's `reason` names the ignored files deleted with it). `--prune` and `--prune-only` remove a repo only when git shows nothing in it that isn't on a remote: no uncommitted or untracked files, stashes, commits on no remote, linked worktrees or repos inside it (bare ones too). Files git ignores (`.env`, `target/`) are deleted with it and named first, as `git worktree remove` deletes them; commits only a reflog holds are not kept.
 
 ```bash
 # List entire tree
@@ -442,7 +442,7 @@ For git's own options: git pull --help
 
 | Plugin | Description |
 |--------|-------------|
-| `git` | `clone`, `clone-missing`, `clone-prune`, `clone-sync`, `update`, `commit` and `worktree` sets; any other `meta git <command>` runs git in each repo |
+| `git` | `clone`, `update`, `commit` and `worktree` sets; any other `meta git <command>` runs git in each repo |
 | `project` | `list`, `check` (is every project cloned from its remote?), `dependents` |
 | `cargo` | `meta cargo <cargo args>`: any cargo command in each repo that has a `Cargo.toml` |
 

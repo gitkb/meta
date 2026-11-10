@@ -1,4 +1,10 @@
-use crate::clone_queue::{CloneQueue, CloneTask, MetaRepo, Work};
+//! `meta git update`: clone the projects the `.meta.yaml` files list that
+//! aren't there and, with `--prune` (or instead, `--prune-only`), remove the
+//! repos there that none lists,
+//! with the `.meta.yaml` files as they are on disk. It never pulls. And what
+//! `meta git clone` and `worktree create` share with it.
+
+use crate::clone_queue::{CloneQueue, CloneTask, MetaRepo};
 use crate::clone_worker::clone_with_queue;
 use crate::here::{Here, Listing};
 use crate::ssh;
@@ -6,30 +12,277 @@ use colored::Colorize;
 use indicatif::MultiProgress;
 use meta_core::gitdir::Checkout;
 use meta_plugin::display::{escape, escape_path};
+use meta_plugin::outln;
 use meta_plugin::RepoUrl;
-use meta_plugin::{errln, outln};
-use meta_plugin::{Ctx, Request, Response};
-use std::collections::VecDeque;
+use meta_plugin::{Ctx, ErrorCode, ErrorInfo, ProjectResult, Request, Response};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// `meta git update`
 #[derive(clap::Parser)]
 #[command(
-    about = "Bring the workspace up to date: fast-forward each repo that is cloned (git pull --ff-only) and clone each project in .meta.yaml that isn't",
-    long_about = "Bring the workspace up to date: fast-forward each repo that is cloned \
-                  (git pull --ff-only) and clone each project in .meta.yaml that isn't.\n\n\
-                  The workspace repo is pulled first, so projects added to its .meta.yaml \
-                  upstream are cloned in the same run. A repo that can't be pulled \
-                  (fast-forward only) is named with git's error and the command exits 1; \
-                  nothing is merged or rebased. A repo on no branch, or whose branch has no \
-                  upstream, is named and left alone. With meta's -r (`meta -r git update`) the same goes for the meta repos \
-                  nested in it, each pulled before its .meta.yaml is read.\n\n\
-                  To clone the missing projects and touch nothing else, run \
-                  `meta git clone-missing`.",
-    after_help = "Git options: none of git pull's; each repo is pulled with `git pull --ff-only`."
+    after_help = "Git options: none; git has no command of this name.",
+    about = "Clone each project in .meta.yaml that isn't cloned; never pull (meta git pull --ff-only does)",
+    long_about = "Clone each project in .meta.yaml that isn't cloned, and name each repo in the \
+                  workspace's folder that none lists, with what deleting it would lose.\n\n\
+                  No repo that is cloned is pulled, fetched or checked out, the workspace repo \
+                  included: `meta git pull --ff-only` brings them up to date. With -r the same \
+                  goes for the meta repos nested in it (those cloned, and those it clones). \
+                  --include, --exclude and --tag choose the projects it clones, and the meta \
+                  repos --prune and --prune-only search; projects the new clones list are cloned only without \
+                  them.\n\n\
+                  With --prune, then, or --prune-only, instead of cloning, a repo no .meta.yaml \
+                  lists is removed only when git shows \
+                  nothing in it that isn't on a remote: no uncommitted or untracked files, \
+                  stashes, commits on a branch or tag that no remote has, or linked worktrees, \
+                  and no git repo inside it. A repo that holds anything is kept and named with \
+                  what it holds. Files git ignores (.env, target/) are deleted with it, and \
+                  named first; commits only a reflog holds are not kept, as git counts them \
+                  discarded. Folders that are no git repo of their own, links, and the projects \
+                  a .meta.yaml lists are never removed."
 )]
-pub(crate) struct UpdateArgs {}
+pub(crate) struct UpdateArgs {
+    /// Then remove each repo no .meta.yaml lists that holds nothing unpushed
+    #[arg(long)]
+    prune: bool,
+    /// Only remove them: clone nothing
+    #[arg(long, conflicts_with = "prune")]
+    prune_only: bool,
+}
+
+/// What became of one repo, for `--json`: the record of the repo at its
+/// path from the workspace root.
+#[derive(serde::Serialize)]
+struct Record {
+    /// cloned, removed, kept or failed (with --dry-run: what would be)
+    action: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+/// `meta git update` (meta's `-r`: nested meta repos too) in the workspace
+/// `request` runs in, on the selected projects when meta's options filter
+/// them.
+pub(crate) fn execute(
+    UpdateArgs { prune, prune_only }: UpdateArgs,
+    ctx: &Ctx,
+    request: &Request,
+) -> anyhow::Result<Response> {
+    let cwd = request.cwd.as_path();
+    // Without -r only the workspace's own .meta.yaml is read
+    let meta_depth = request.depth;
+    let workspace = workspace(request, "git update", "")?;
+    // the workspace's own projects as --config lists them, and those its
+    // default config lists counted as listed too. Read from disk, as the
+    // nested ones are: in a plain git worktree of the workspace, meta's
+    // members are the root alone
+    let config = request.workspace()?.config.clone();
+    // (with -A, the config is the nearest one, not the outermost's)
+    let own = config.parent() == Some(workspace.dir.as_path());
+    let workspace =
+        Listing::of(&workspace.dir, own.then_some(config.as_path()))?.unwrap_or(workspace);
+    let root = workspace.dir.as_path();
+    if let Some(mismatches) = ssh::remote_mismatches(&workspace) {
+        ctx.warn(mismatches);
+    }
+    let mut queue = CloneQueue::new(None, meta_depth)
+        .config(root, &config)
+        .raw(&request.workspace()?.members);
+    // a selection the user chose with meta's filters: only those, and none
+    // the new clones list (the selection alone can't say: in a plain git
+    // worktree of the workspace it holds the root alone)
+    if request.meta_options.typed_filter() {
+        queue = queue.only(request.projects.iter().map(|p| p.abs.clone()));
+    }
+    let top = Arc::from([MetaRepo::at(&root_name(root), root, None)]);
+    // The whole tree on disk is read here; only clones add to it
+    let tasks = queue.discover_in(&workspace, 0, &top)?;
+    let (clones, prunes) = (!prune_only, prune || prune_only);
+    let tasks = if clones { tasks } else { Vec::new() };
+    let preview = ctx.dry_run();
+    let json = ctx.meta().json;
+    let say = |line: String| -> anyhow::Result<()> {
+        if !json {
+            outln!("{line}")?;
+        }
+        Ok(())
+    };
+    // records name each repo by its path from the workspace root, as meta does
+    let named = named(request, root);
+    let project = |path: &Path| match path.strip_prefix(named) {
+        Ok(inside) if inside.as_os_str().is_empty() => ".".to_string(),
+        Ok(inside) => inside.to_string_lossy().into_owned(),
+        Err(_) => path.to_string_lossy().into_owned(),
+    };
+    let record = |path: &Path, action: &'static str, reason: Option<String>| {
+        let data = Record { action, reason };
+        match action {
+            "failed" => ProjectResult {
+                error: Some(ErrorInfo::new(
+                    ErrorCode::Failed,
+                    data.reason.clone().unwrap_or_default(),
+                )),
+                ..ProjectResult::record(project(path), data)
+            },
+            _ => ProjectResult::record(project(path), data),
+        }
+        .at(path)
+    };
+    let mut records = Vec::new();
+
+    if preview && clones && tasks.is_empty() {
+        say(format!(
+            "{} Nothing to clone: every project the .meta.yaml files list is cloned",
+            "[DRY RUN]".cyan()
+        ))?;
+    } else if preview && clones {
+        say(format!(
+            "{} Would run (from the .meta.yaml files as they are now; the clones may add projects):",
+            "[DRY RUN]".cyan()
+        ))?;
+        for task in &tasks {
+            let argv = crate::clone_worker::git_argv(task, None, |url| url.to_string().into());
+            let argv: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into()).collect();
+            say(format!(
+                "  {}",
+                escape(&meta_plugin::display::display_command(&argv))
+            ))?;
+            records.push(record(&task.target_path, "cloned", None));
+        }
+    } else if !tasks.is_empty() {
+        let urls: Vec<_> = tasks.iter().map(|task| task.url.clone()).collect();
+        run(&queue, tasks, &urls)?;
+    }
+    let outcome = queue.outcome();
+    if !preview {
+        records.extend(
+            outcome
+                .cloned
+                .iter()
+                .map(|path| record(path, "cloned", None)),
+        );
+    }
+    // each with git's stderr, as `meta --json exec` gives a failed step's
+    records.extend(outcome.failures.iter().map(|failure| ProjectResult {
+        stderr: Some(failure.error.clone()),
+        ..record(&failure.path, "failed", Some(failure.error.clone()))
+    }));
+    records.extend(outcome.refused.iter().map(|(_, path, why)| {
+        record(
+            path,
+            "failed",
+            Some(format!("not a git repository ({why})")),
+        )
+    }));
+
+    if !prunes {
+        report_unlisted(ctx, &queue, root, cwd, meta_depth != Some(0));
+    }
+    let (mut removed, mut kept, mut failed_removals) = (0, 0, 0);
+    if prunes {
+        for path in &outcome.unlisted {
+            let shown = shown(path, cwd);
+            let leftover = match Leftover::of(path, root) {
+                Leftover::Removable(ignored) => Ok(ignored),
+                Leftover::Holds(why) => Err(why),
+            };
+            // what is deleted along with it is said, in the preview too
+            let note = |ignored: &Option<String>| match ignored {
+                Some(ignored) => format!("nothing unpushed; {ignored} deleted with it"),
+                None => "nothing unpushed".to_string(),
+            };
+            let (action, reason) = match leftover {
+                Ok(ignored) if preview => {
+                    say(format!("Would remove {shown} ({})", note(&ignored)))?;
+                    ("removed", ignored.as_ref().map(|_| note(&ignored)))
+                }
+                Ok(ignored) => match std::fs::remove_dir_all(path) {
+                    Ok(()) => {
+                        say(format!(
+                            "{} {shown} ({})",
+                            "Removed".green(),
+                            note(&ignored)
+                        ))?;
+                        ("removed", ignored.as_ref().map(|_| note(&ignored)))
+                    }
+                    // what was removed before the error is gone
+                    Err(e) => {
+                        let why = format!("it was removed only in part ({e})");
+                        say(format!("{} {shown}: {why}", "Not removed".red()))?;
+                        ("failed", Some(why))
+                    }
+                },
+                Err(why) => {
+                    let verb = if preview { "Would keep" } else { "Kept" };
+                    say(format!("{} {shown}: {why}", verb.yellow()))?;
+                    ("kept", Some(why))
+                }
+            };
+            match action {
+                "removed" => removed += 1,
+                "kept" => kept += 1,
+                _ => failed_removals += 1,
+            }
+            records.push(record(path, action, reason));
+        }
+    }
+
+    let failed = clones
+        .then(|| crate::clone_worker::report_failures(&queue, "git update"))
+        .flatten();
+    if let Some(error) = failed {
+        return crate::printed(ctx, records, Some(anyhow::anyhow!("{error}")));
+    }
+    if failed_removals > 0 {
+        let error = anyhow::anyhow!("{failed_removals} repositories could not be removed");
+        return crate::printed(ctx, records, Some(error));
+    }
+    if !preview && clones {
+        if let Some(rest) = deferred(ctx, request, cwd, &queue, false)? {
+            records.extend(match rest.answer {
+                meta_plugin::Answer::Results(results) => results.records,
+                _ => Vec::new(),
+            });
+        }
+    }
+    if !preview {
+        let cloned = outcome.cloned.len();
+        say(match (clones, prunes) {
+            (true, false) => format!("Update completed ({cloned} cloned)"),
+            (true, true) => {
+                format!("Update completed ({cloned} cloned, {removed} removed, {kept} kept)")
+            }
+            (false, _) => format!("Update completed ({removed} removed, {kept} kept)"),
+        })?;
+    }
+    Ok(Response::printed(records))
+}
+
+/// Clone the projects at `dirs` that the `.meta.yaml` files of `workspace`
+/// (and of the meta repos nested in it) list and that aren't cloned, the way
+/// `update` does, for `command` (`git worktree create`). The folders
+/// it cloned, or the error naming each clone that failed.
+pub(crate) fn clone_dirs(
+    workspace: &crate::here::Listing,
+    members: &[meta_plugin::Project],
+    dirs: &[PathBuf],
+    command: &str,
+) -> anyhow::Result<Result<Vec<PathBuf>, String>> {
+    let root = workspace.dir.as_path();
+    let queue = CloneQueue::new(None, None)
+        .only(dirs.iter().cloned())
+        .raw(members);
+    let top = Arc::from([MetaRepo::at(&root_name(root), root, None)]);
+    let tasks = queue.discover_in(workspace, 0, &top)?;
+    let urls: Vec<_> = tasks.iter().map(|task| task.url.clone()).collect();
+    if !tasks.is_empty() {
+        run(&queue, tasks, &urls)?;
+    }
+    if let Some(error) = crate::clone_worker::report_failures(&queue, command) {
+        return Ok(Err(error));
+    }
+    Ok(Ok(queue.outcome().cloned))
+}
 
 /// The workspace `request` runs in that `meta <command>` acts on (with
 /// `-A`, the outermost): its config's folder and the projects it lists.
@@ -59,7 +312,7 @@ pub(crate) fn workspace(request: &Request, command: &str, in_set: &str) -> anyho
 }
 
 /// Clone the projects `queue` left for another run (their URL holds
-/// credentials meta hides in what it reads back): `meta git clone-missing`
+/// credentials meta hides in what it reads back): `meta git update`
 /// from `cwd` with meta's options as typed, whose request has each URL as
 /// configured. `None` when there are none. One whose config didn't change
 /// in this run (`fresh`: or all of them, for a run whose configs are none
@@ -82,11 +335,11 @@ pub(crate) fn deferred(
             .collect();
         anyhow::bail!(
             "Not cloned: {}; meta's view of the workspace doesn't give their URLs, which hold \
-             credentials. Run 'meta git clone-missing' in the meta repo that lists them.",
+             credentials. Run 'meta git update' in the meta repo that lists them.",
             names.join(", ")
         );
     }
-    let words = ["git".to_string(), "clone-missing".to_string()];
+    let words = ["git".to_string(), "update".to_string()];
     crate::through_meta(ctx, request, cwd, &words).map(Some)
 }
 
@@ -105,7 +358,7 @@ pub(crate) fn root_name(root: &Path) -> String {
         .map_or_else(|| ".".to_string(), |n| n.to_string_lossy().into_owned())
 }
 
-/// Clone and pull `tasks`, and the tasks their `.meta.yaml` files add, four
+/// Clone `tasks`, and the tasks their `.meta.yaml` files add, four
 /// at a time, over SSH masters set up for `urls` (the remotes the run
 /// contacts first).
 pub(crate) fn run(
@@ -132,124 +385,6 @@ pub(crate) fn run(
         &MultiProgress::new(),
         ssh_cmd.as_deref(),
     )
-}
-
-pub(crate) fn execute_git_update(
-    UpdateArgs {}: UpdateArgs,
-    ctx: &Ctx,
-    request: &Request,
-) -> anyhow::Result<Response> {
-    let cwd = request.cwd.as_path();
-    // Without -r or -A only the workspace's own .meta.yaml is read
-    let meta_depth = request.depth;
-    let recursive = meta_depth != Some(0);
-    // A worktree set's checkouts are pulled with `meta git pull`
-    let workspace = workspace(request, "git update", ", or 'meta git pull' in the set")?;
-    if let Some(mismatches) = ssh::remote_mismatches(&workspace) {
-        ctx.warn(mismatches);
-    }
-
-    // No git depth for update; the workspace's projects as --config lists them
-    let config = request.workspace()?.config.clone();
-    let queue = CloneQueue::new(None, meta_depth, true)
-        .config(&workspace.dir, &config)
-        .raw(&request.workspace()?.members);
-    let root = workspace.dir.as_path();
-    let name = root_name(root);
-    let top = || Arc::from([MetaRepo::at(&name, root, None)]);
-    // The workspace repo first: its .meta.yaml is read once it is pulled
-    let tasks = match Checkout::of(root) {
-        Checkout::Repo { .. } => {
-            let url = meta_core::git::remote_url(root)?;
-            vec![queue.root(&name, root, url, Work::Pull)]
-        }
-        _ => queue.discover_in(&workspace, 0, &top())?,
-    };
-
-    if ctx.dry_run() {
-        // The .meta.yaml files as they are now: nothing is pulled, so what
-        // the pulls would add isn't known
-        outln!(
-            "{} Would run (from the .meta.yaml files as they are now; the pulls may add projects):",
-            "[DRY RUN]".cyan()
-        )?;
-        let mut tasks = VecDeque::from(tasks);
-        while let Some(task) = tasks.pop_front() {
-            let argv = crate::clone_worker::git_argv(&task, None, |url| url.to_string().into());
-            let argv: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into()).collect();
-            let shown = escape(&meta_plugin::display::display_command(&argv)).into_owned();
-            match task.work {
-                Work::Clone(_) => outln!("  {shown}")?,
-                Work::Pull => match crate::clone_worker::nothing_to_pull(&task.target_path) {
-                    Some(why) => {
-                        outln!("  ({} not pulled: {why})", escape(&task.name))?;
-                        tasks.extend(queue.mark_not_pulled(&task, why));
-                    }
-                    None => {
-                        outln!("  {shown}")?;
-                        tasks.extend(queue.mark_completed(&task));
-                    }
-                },
-            }
-        }
-        report_unlisted(ctx, &queue, root, cwd, recursive);
-        if let Some(error) = crate::clone_worker::report_failures(&queue, "git update") {
-            let rows = crate::clone_worker::failure_rows(&queue, named(request, root));
-            return crate::printed(ctx, rows, Some(anyhow::anyhow!("{error}")));
-        }
-        return Ok(Response::done());
-    }
-
-    // Progress counts to the repos the .meta.yaml files on disk list, the
-    // workspace's own first; pulls that add projects add to it
-    let on_disk = CloneQueue::new(None, meta_depth, false)
-        .config(&workspace.dir, &config)
-        .raw(&request.workspace()?.members);
-    if on_disk.discover_in(&workspace, 0, &top()).is_ok() {
-        let own = usize::from(matches!(Checkout::of(root), Checkout::Repo { .. }));
-        queue.expect(on_disk.found() + own);
-    }
-
-    // Establish SSH multiplexing before parallel clones and pulls, for the
-    // remotes this run contacts: a checkout's own origin (what it pulls
-    // from, if it has something to pull from), the listed URL of a missing
-    // project
-    let contacted = |dir: &Path, listed: Option<&RepoUrl>| match Checkout::of(dir) {
-        Checkout::Repo { .. } if crate::clone_worker::nothing_to_pull(dir).is_none() => {
-            meta_core::git::remote_url(dir).ok().flatten()
-        }
-        Checkout::Repo { .. } => None,
-        // git clones into an empty folder too
-        Checkout::Missing => listed.cloned(),
-        Checkout::NotARepo(_) if crate::clone_queue::is_empty_dir(dir) => listed.cloned(),
-        Checkout::NotARepo(_) => None,
-    };
-    let projects = workspace.projects.iter();
-    let urls: Vec<_> = std::iter::once(contacted(root, None))
-        .chain(projects.map(|p| contacted(&root.join(&p.path), p.repo.as_ref())))
-        .flatten()
-        .collect();
-    run(&queue, tasks, &urls)?;
-    report_unlisted(ctx, &queue, root, cwd, recursive);
-    let outcome = queue.outcome();
-    for (name, why) in &outcome.not_pulled {
-        errln!("{} {}: {why}", "Not pulled".yellow(), escape(name));
-    }
-    if let Some(error) = crate::clone_worker::report_failures(&queue, "git update") {
-        let rows = crate::clone_worker::failure_rows(&queue, named(request, root));
-        return crate::printed(ctx, rows, Some(anyhow::anyhow!("{error}")));
-    }
-    let (pulled, cloned) = (outcome.pulled, outcome.cloned.len());
-    if let Some(response) = deferred(ctx, request, cwd, &queue, false)? {
-        outln!("Update completed ({pulled} pulled, {cloned} cloned); cloning the rest")?;
-        return Ok(response);
-    }
-    let not_pulled = match outcome.not_pulled.len() {
-        0 => String::new(),
-        n => format!(", {n} with nothing to pull from"),
-    };
-    outln!("Update completed ({pulled} pulled, {cloned} cloned{not_pulled})")?;
-    Ok(Response::done())
 }
 
 /// What deleting a repository no `.meta.yaml` lists would lose.
@@ -350,11 +485,17 @@ pub(crate) fn shown(path: &Path, cwd: &Path) -> String {
 /// Name each repository in a meta repo's folder that no `.meta.yaml` lists,
 /// with what deleting it would lose (`root`: the workspace's folder; `-r`:
 /// whether nested meta repos were read).
-fn report_unlisted(ctx: &Ctx, queue: &CloneQueue, root: &Path, cwd: &Path, recursive: bool) {
+pub(crate) fn report_unlisted(
+    ctx: &Ctx,
+    queue: &CloneQueue,
+    root: &Path,
+    cwd: &Path,
+    recursive: bool,
+) {
     let prune = if recursive {
-        "meta -r git clone-prune"
+        "meta -r git update --prune"
     } else {
-        "meta git clone-prune"
+        "meta git update --prune"
     };
     for path in queue.outcome().unlisted {
         let shown = shown(&path, cwd);

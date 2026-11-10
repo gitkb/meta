@@ -154,7 +154,6 @@ fn each_spelling_of_a_command_acts_on_what_clap_says_it_names() {
         ("--include a git worktree remove --force s", Refused(filters)),
         ("--include a git worktree remove s --force", Refused(filters)),
         ("--tag x git worktree add --repo a s", Refused(filters)),
-        ("--include a git update", Refused(filters)),
         ("--include a git worktree list", Refused(filters)),
         ("--include a git clone u", Refused(filters)),
         // a set another provider made: refused by name, in either spelling
@@ -167,7 +166,8 @@ fn each_spelling_of_a_command_acts_on_what_clap_says_it_names() {
         ("git worktree remove nope", Fails("not found")),
         // worktree commands of the workspace, and raw git
         ("git worktree list", Sent("workspace", None, Some(&[]))),
-        ("git update", Sent("workspace", None, Some(&[]))),
+        ("git update", Sent("selection", None, None)),
+        ("--include a git update", Sent("selection", None, Some(&["a"]))),
         ("git -c x=y status", Sent("selection", None, None)),
         ("git --no-pager log -1", Sent("selection", None, None)),
         ("git help log", Sent("selection", None, None)),

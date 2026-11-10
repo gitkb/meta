@@ -255,3 +255,7 @@ rules/meta-workspace-discipline.md 2e9b559b47a063fcc49bc0f9855236eb4cc02db0
 rules/meta-workspace-discipline.md 59d476349f18406cedb1b18a54dff32fd87b41dc
 rules/meta-workspace-discipline.md d8cb2cdb0c64da02eff381fbe5e459b60387ea3d
 rules/meta-workspace-discipline.md eb4aae31c6fb4f00c477faa12dcf37432265e49e
+meta-git/SKILL.md a212e06de518cf6dfa2d8a0ff0300c75c56cf65f
+meta-worktree/SKILL.md 0b7faac9b0427f14ca49c1b493d0d26f37d630e4
+meta-plugins/SKILL.md b36ea51cddc7aa87f194fe621fd8a67b618f0491
+meta-workspace/SKILL.md b226f0ba05f90ada21cbc0d9e357bfadb2b5efe9

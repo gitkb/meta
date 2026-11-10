@@ -30,10 +30,9 @@ Handles all `meta git *` commands with special cases:
 | Command | Behavior |
 |---------|----------|
 | `meta git clone <url>` | Clone parent, read `.meta.yaml`, clone its children (`meta -r git clone <url>`: nested meta repos' too) |
-| `meta git update` | Fast-forward cloned repos (`git pull --ff-only`) and clone missing ones; `meta -r git update` for nested meta repos |
-| `meta git clone-missing` | Clone the missing projects; change no repo that is cloned |
-| `meta git clone-prune` | Remove the repos no `.meta.yaml` lists that hold nothing unpushed |
-| `meta git clone-sync` | `clone-missing`, then `clone-prune` |
+| `meta git update` | Clone the missing projects; change no repo that is cloned, and pull nothing (`meta git pull --ff-only` does); `meta -r git update` for nested meta repos |
+| `meta git update --prune` | The same, then remove the repos no `.meta.yaml` lists that hold nothing unpushed |
+| `meta git update --prune-only` | Only remove them; clone nothing |
 | `meta git worktree *` | Isolated multi-repo worktree sets (see the `meta-worktree` skill) |
 | `meta git <other>` | Pass through to every repo at this meta level |
 

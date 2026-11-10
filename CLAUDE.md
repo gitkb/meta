@@ -23,7 +23,8 @@ projects:
 
 This enables recursive operations:
 ```bash
-meta -r git update       # Pulls and clones nested meta repos too
+meta -r git update       # Clones missing repos, nested meta repos' too; pulls nothing
+meta -r git pull --ff-only  # Brings every cloned repo up to date
 meta -r project list     # Shows full tree
 meta -r exec -- cargo test  # Runs across all nested repos
 ```

@@ -3,7 +3,6 @@
 //! Provides git operations optimized for meta repositories.
 
 mod clone;
-mod clone_missing;
 mod clone_queue;
 mod clone_worker;
 mod commit;
@@ -42,9 +41,6 @@ struct GitCli {
 #[derive(clap::Subcommand)]
 enum GitCommand {
     Clone(clone::CloneArgs),
-    CloneMissing(clone_missing::CloneMissingArgs),
-    ClonePrune(clone_missing::ClonePruneArgs),
-    CloneSync(clone_missing::CloneSyncArgs),
     Commit(commit::CommitArgs),
     Update(update::UpdateArgs),
     Worktree(commands::worktree::WorktreeParser),
@@ -97,7 +93,6 @@ fn targeting_of(parsed: Result<GitCli, clap::Error>) -> Targeting {
     use commands::worktree::cli_types::WorktreeCommands as W;
     match parsed.map(|cli| cli.command) {
         Ok(Some(GitCommand::Clone(_))) => Targeting::None,
-        Ok(Some(GitCommand::Update(_))) => Targeting::Workspace,
         Ok(Some(GitCommand::Worktree(worktree))) => match worktree.command {
             W::Create(_) | W::List(_) | W::Prune | W::Help { .. } => Targeting::Workspace,
             W::Add(args) => Targeting::WholeSet(args.name),
@@ -106,7 +101,7 @@ fn targeting_of(parsed: Result<GitCli, clap::Error>) -> Targeting {
             W::Diff(args) => Targeting::WholeSet(args.name),
             W::Exec(args) => Targeting::SelectedSet(args.name),
         },
-        // commit, clone-*, and git as typed
+        // commit, update, and git as typed
         Ok(_) => Targeting::Selection,
         // clap's error or help: the call prints it and runs nothing
         Err(_) => Targeting::Unparsed,
@@ -170,10 +165,7 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
     };
     match cli.command {
         Some(GitCommand::Clone(args)) => clone::execute_git_clone(args, ctx, request),
-        Some(GitCommand::Update(args)) => update::execute_git_update(args, ctx, request),
-        Some(GitCommand::CloneMissing(args)) => clone_missing::execute(args.into(), ctx, request),
-        Some(GitCommand::ClonePrune(args)) => clone_missing::execute(args.into(), ctx, request),
-        Some(GitCommand::CloneSync(args)) => clone_missing::execute(args.into(), ctx, request),
+        Some(GitCommand::Update(args)) => update::execute(args, ctx, request),
         // meta sends a help request without its repos: whatever clap made
         // of the arguments, it never commits
         Some(GitCommand::Commit(_)) if help_requested => Ok(help(["commit".to_string()], request)),
@@ -375,7 +367,7 @@ fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<
         git_env::git_env().into_iter().collect();
 
     // A listed project that isn't cloned yet is named, not counted as a
-    // failure: cloning it is `meta git clone-missing`'s (with --strict, an
+    // failure: cloning it is `meta git update`'s (with --strict, an
     // error)
     let mut steps = Vec::new();
     for project in &request.projects {

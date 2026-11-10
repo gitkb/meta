@@ -237,11 +237,6 @@ impl<'a> Index<'a> {
         }
     }
 
-    /// What the config lists, for cloning what of it isn't cloned.
-    pub fn listing(&self) -> crate::here::Listing {
-        self.tree.listing()
-    }
-
     /// The node `key` (as [`Index::find`] keys it) names.
     pub fn node(&self, key: &str) -> Option<&Node<'a>> {
         self.nodes().into_iter().find(|n| self.key(n) == key)

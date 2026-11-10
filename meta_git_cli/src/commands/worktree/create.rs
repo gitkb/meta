@@ -1013,8 +1013,14 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
     );
     let dirs: Vec<_> = missing.iter().map(|r| r.source.clone()).collect();
     // the projects as meta lists them, with each one's branch:
-    let listing = crate::here::Listing::of(&index.dir, Some(&index.config))?
-        .unwrap_or_else(|| index.listing());
+    // (a config gone since the command began clones nothing: its branch:
+    // can't be read)
+    let listing = crate::here::Listing::of(&index.dir, Some(&index.config))?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} can't be read now, so no repo was cloned",
+            escape_path(&index.config)
+        )
+    })?;
     let cloned = crate::update::clone_dirs(&listing, index.members, &dirs, "git worktree create")?;
     // the ones still not there, for the error: those cloned are fine now
     let still: Vec<PlannedRepo> = missing

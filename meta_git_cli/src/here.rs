@@ -275,10 +275,11 @@ pub(crate) struct ListedBranch {
     pub problem: Option<String>,
 }
 
-/// Each project's `branch:` that the config in `dir` lists (`meta project
-/// list` there, nested configs unread).
-pub(crate) fn branches(dir: &Path) -> Result<Vec<ListedBranch>> {
-    let rows = project_list(dir, None, false)?.unwrap_or_default();
+/// Each project's `branch:` that the config in `dir` lists (`config`, absolute:
+/// that one instead of the default; `meta project list` there, nested
+/// configs unread).
+pub(crate) fn branches(dir: &Path, config: Option<&Path>) -> Result<Vec<ListedBranch>> {
+    let rows = project_list(dir, config, false)?.unwrap_or_default();
     Ok(rows
         .into_iter()
         .map(|row| ListedBranch {

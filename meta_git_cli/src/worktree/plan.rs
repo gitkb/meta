@@ -28,6 +28,9 @@ pub struct StartBranches {
     dir: PathBuf,
     /// The workspace root: no config above it is asked
     root: PathBuf,
+    /// The config the command reads for `dir` (meta's `--config`, else its
+    /// .meta.yaml): asked there in its place
+    config: PathBuf,
     read: std::cell::RefCell<
         std::collections::HashMap<
             PathBuf,
@@ -37,11 +40,12 @@ pub struct StartBranches {
 }
 
 impl StartBranches {
-    pub fn new(dir: &Path, root: &Path) -> Self {
+    pub fn new(dir: &Path, root: &Path, config: &Path) -> Self {
         let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         StartBranches {
-            dir: dir.to_path_buf(),
+            dir: real(dir),
             root: real(root),
+            config: config.to_path_buf(),
             read: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
@@ -62,9 +66,11 @@ impl StartBranches {
             .chain([self.dir.clone()]);
         for dir in configs {
             let mut read = self.read.borrow_mut();
-            let listed = read
-                .entry(dir.clone())
-                .or_insert_with(|| crate::here::branches(&dir).map_err(|e| format!("{e:#}")));
+            let listed = read.entry(dir.clone()).or_insert_with(|| {
+                // the workspace's folder through the config the command reads
+                let config = (dir == self.dir).then_some(self.config.as_path());
+                crate::here::branches(&dir, config).map_err(|e| format!("{e:#}"))
+            });
             let listed = listed.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
             if let Some(project) = listed.iter().find(|p| real(&p.abs) == source) {
                 if let Some(problem) = &project.problem {
@@ -101,6 +107,9 @@ pub struct Index<'a> {
     tree: Tree<'a>,
     /// meta's members of the workspace, each URL as configured
     pub members: &'a [meta_plugin::Project],
+    /// The config the command reads for `dir`: meta's `--config`, else its
+    /// .meta.yaml
+    pub config: PathBuf,
     /// With `--recursive`: how deep (none: no limit)
     depth: Option<Option<usize>>,
 }
@@ -115,6 +124,7 @@ impl<'a> Index<'a> {
                 .unwrap_or_default(),
             tree: here.tree(),
             members: &here.workspace.members,
+            config: here.workspace.config.clone(),
             depth: None,
         }
     }

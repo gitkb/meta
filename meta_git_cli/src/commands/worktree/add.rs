@@ -37,7 +37,8 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
 
     let here = Here::need(request)?;
     // each project's branch:, read only when a new branch starts from one
-    let start_branches = StartBranches::new(&here.dir, &here.workspace.root);
+    let start_branches =
+        StartBranches::new(&here.dir, &here.workspace.root, &here.workspace.config);
     let meta_dir = &here.dir;
     let wt_dir = crate::here::worktree_root(request)?.join(name);
 

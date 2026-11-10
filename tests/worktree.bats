@@ -577,6 +577,45 @@ EOF
     done
 }
 
+@test "worktree create and add read branch: from the config --config names, as the rest of the command does" {
+    for repo in backend frontend; do
+        git -C "$repo" branch release
+        git -C "$repo" switch --quiet release
+        git -C "$repo" commit --quiet --allow-empty -m "release work"
+        git -C "$repo" switch --quiet main
+        git clone --quiet --bare "$repo" "$TEST_DIR/$repo.git"
+        git -C "$repo" remote add origin "$TEST_DIR/$repo.git"
+        git -C "$repo" fetch --quiet origin
+        git -C "$repo" remote set-head origin main
+    done
+    # .meta.yaml names no branch; other.yaml names release
+    printf '{"projects": {"backend": "file://%s/backend.git", "frontend": "file://%s/frontend.git"}}\n' \
+        "$TEST_DIR" "$TEST_DIR" > .meta.yaml
+    printf '{"projects": {"backend": {"repo": "file://%s/backend.git", "branch": "release"}, "frontend": {"repo": "file://%s/frontend.git", "branch": "release"}}}\n' \
+        "$TEST_DIR" "$TEST_DIR" > other.yaml
+    run "$META_BIN" --config other.yaml --dry-run git worktree create rel --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"origin/release"* ]]
+    run "$META_BIN" --config other.yaml git worktree create rel --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"backend -> rel (new from origin/release)"* ]]
+    [ "$(git -C .worktrees/rel/backend rev-parse HEAD)" = "$(git -C backend rev-parse origin/release)" ]
+    run "$META_BIN" --config other.yaml git worktree add rel --repo frontend
+    [ "$status" -eq 0 ]
+    [ "$(git -C .worktrees/rel/frontend rev-parse HEAD)" = "$(git -C frontend rev-parse origin/release)" ]
+    # without it, .meta.yaml's: the remote's default
+    run "$META_BIN" git worktree create plain --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"backend -> plain (new from origin/main)"* ]]
+    # a project create clones for the set is cloned on other.yaml's branch
+    "$META_BIN" git worktree remove plain --force >/dev/null
+    "$META_BIN" git worktree remove rel --force >/dev/null
+    rm -rf frontend
+    run "$META_BIN" --config other.yaml git worktree create fresh --repo frontend --no-deps
+    [ "$status" -eq 0 ]
+    [ "$(git -C frontend branch --show-current)" = release ]
+}
+
 @test "worktree create with a commit-ish and a branch that exists says what to do" {
     git -C backend branch keepme
     run "$META_BIN" git worktree create keepme main --repo backend --no-deps

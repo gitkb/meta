@@ -75,7 +75,8 @@ pub(crate) fn handle_create(
 
     let here = Here::need(request)?;
     // each project's branch:, read only when a new branch starts from one
-    let start_branches = StartBranches::new(&here.dir, &here.workspace.root);
+    let start_branches =
+        StartBranches::new(&here.dir, &here.workspace.root, &here.workspace.config);
     let worktree_root = crate::here::worktree_root(request)?;
     meta_plugin::sets::owners_dir(&worktree_root)?;
 
@@ -1012,7 +1013,8 @@ pub(super) fn clone_missing(index: &Index, missing: &[PlannedRepo]) -> Result<()
     );
     let dirs: Vec<_> = missing.iter().map(|r| r.source.clone()).collect();
     // the projects as meta lists them, with each one's branch:
-    let listing = crate::here::Listing::of(&index.dir, None)?.unwrap_or_else(|| index.listing());
+    let listing = crate::here::Listing::of(&index.dir, Some(&index.config))?
+        .unwrap_or_else(|| index.listing());
     let cloned = crate::update::clone_dirs(&listing, index.members, &dirs, "git worktree create")?;
     // the ones still not there, for the error: those cloned are fine now
     let still: Vec<PlannedRepo> = missing

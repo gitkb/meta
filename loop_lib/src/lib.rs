@@ -273,9 +273,10 @@ impl CommandResult {
         if self.too_much_output.is_some() {
             return ": no more of one command's output is kept".to_string();
         }
-        match self.stderr_lines().is_empty() {
-            true => ": no stderr".to_string(),
-            false => String::new(),
+        let stderr = String::from_utf8_lossy(&self.stderr);
+        match stderr.lines().any(|line| !line.trim().is_empty()) {
+            true => String::new(),
+            false => ": no stderr".to_string(),
         }
     }
 
@@ -288,17 +289,17 @@ impl CommandResult {
             return Vec::new();
         }
         let stderr = String::from_utf8_lossy(&self.stderr);
-        let lines: Vec<&str> = stderr
+        // the rest are counted, not kept: up to 16 MiB of them
+        let mut lines = stderr
             .lines()
             .map(str::trim_end)
-            .filter(|line| !line.trim().is_empty())
-            .collect();
+            .filter(|line| !line.trim().is_empty());
         let mut shown: Vec<String> = lines
-            .iter()
+            .by_ref()
             .take(SUMMARY_LINES)
             .map(|line| escape(line).into_owned())
             .collect();
-        match lines.len().saturating_sub(SUMMARY_LINES) {
+        match lines.count() {
             0 => {}
             1 => shown.push("… 1 more line".to_string()),
             more => shown.push(format!("… {more} more lines")),

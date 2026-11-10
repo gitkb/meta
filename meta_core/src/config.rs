@@ -107,8 +107,8 @@ impl<'de> Deserialize<'de> for ProjectEntry {
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 formatter.write_str(
-                    "a repo URL, or a mapping of repo, path, tags (a list), provides (a list), \
-                     depends_on (a list) and meta (true or false)",
+                    "a repo URL, or a mapping of repo, path, branch, tags (a list), provides \
+                     (a list), depends_on (a list) and meta (true or false)",
                 )
             }
 
@@ -171,9 +171,100 @@ pub struct ProjectInfo {
     /// If true, this directory contains a nested .meta.yaml
     #[serde(default)]
     pub meta: bool,
+    /// The branch it starts from, as written: the one a clone checks out
+    /// and a worktree set's new branch starts from. None: its remote's
+    /// default branch. No command moves a checkout to it.
+    /// [`ProjectInfo::start_branch`] reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<BranchWritten>,
+    /// Why `branch` names no branch (not a string, or a name git refuses),
+    /// set by [`Workspace::load`]: the commands that would use it refuse
+    /// this project alone; the rest of the config still loads.
+    #[serde(skip)]
+    pub branch_problem: Option<String>,
+}
+
+/// A project's `branch:` as its config wrote it: the string, or what the
+/// value was instead (`a list`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchWritten(Result<String, String>);
+
+impl<'de> Deserialize<'de> for BranchWritten {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Any;
+        impl<'de> serde::de::Visitor<'de> for Any {
+            type Value = Result<String, String>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a branch name")
+            }
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<Self::Value, E> {
+                Ok(Ok(s.to_string()))
+            }
+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Self::Value, E> {
+                Ok(Err(format!("{v}, not a string")))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
+                Ok(Err(format!("{v}, not a string")))
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                Ok(Err(format!("{v}, not a string")))
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<Self::Value, E> {
+                Ok(Err(format!("{v}, not a string")))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+                Ok(Err("a list, not a string".to_string()))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                while map
+                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(Err("a mapping, not a string".to_string()))
+            }
+        }
+        deserializer.deserialize_any(Any).map(BranchWritten)
+    }
+}
+
+impl Serialize for BranchWritten {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.0 {
+            Ok(name) => serializer.serialize_str(name),
+            Err(_) => serializer.serialize_none(),
+        }
+    }
+}
+
+impl From<&str> for BranchWritten {
+    fn from(name: &str) -> Self {
+        Self(Ok(name.to_string()))
+    }
 }
 
 impl ProjectInfo {
+    /// The branch this project starts from, if its config names one; none
+    /// means its remote's default branch; an error, why its `branch:` names
+    /// none. The one rule every command that picks a project's branch
+    /// follows.
+    pub fn start_branch(&self) -> Result<Option<&str>, &str> {
+        if let Some(problem) = &self.branch_problem {
+            return Err(problem);
+        }
+        Ok(match &self.branch {
+            Some(BranchWritten(Ok(name))) => Some(name),
+            _ => None,
+        })
+    }
+
     /// Where this project's checkout sits in a worktree set, from the set's
     /// root: its path when that stays below the config's directory, else
     /// (absolute, or leading out with `..`) its name.
@@ -564,6 +655,15 @@ impl Workspace {
             .map(|(name, ProjectEntry { mut info, path })| {
                 info.path = path.unwrap_or_else(|| name.clone());
                 info.name = name;
+                // a branch: no command can use fails only the commands that
+                // act on this project, never the whole config
+                info.branch_problem = info.branch.as_ref().and_then(written_problem).map(|why| {
+                    format!(
+                        "Invalid branch of project '{}' in {}: {why}",
+                        escape(&info.name),
+                        escape_path(meta_path)
+                    )
+                });
                 let location =
                     validate_project(base_dir, &worktrees, worktrees_at.as_deref(), &mut info)
                         .map_err(|reason| {
@@ -600,6 +700,46 @@ impl Workspace {
             worktrees_dir: config.worktrees_dir.map(|_| worktrees),
             worktree: config.worktree,
         })
+    }
+}
+
+/// Why a project's `branch:` names no branch: not a string, empty, holding
+/// control characters, or a name git refuses for a branch.
+fn written_problem(written: &BranchWritten) -> Option<String> {
+    let branch = match &written.0 {
+        Err(what) => return Some(format!("branch is {what}")),
+        Ok(branch) => branch,
+    };
+    if branch.is_empty() {
+        return Some("branch is empty".to_string());
+    }
+    if branch.chars().any(is_unsafe_char) {
+        return Some(format!(
+            "branch '{}' contains control characters",
+            escape(branch)
+        ));
+    }
+    branch_problem(branch).err()
+}
+
+/// Whether `branch` is a name git takes for a branch (`git check-ref-format
+/// --branch`), read in no repository, so `@{-1}` names nothing.
+fn branch_problem(branch: &str) -> Result<(), String> {
+    let mut check = crate::git::git(Path::new("."));
+    check
+        .args(["check-ref-format", "--branch", branch])
+        .env("GIT_DIR", "/nonexistent/meta-check-ref-format")
+        .stdin(std::process::Stdio::null());
+    match meta_plugin::process::output(&mut check) {
+        Ok(out) if out.status.success() => Ok(()),
+        Ok(_) => Err(format!(
+            "branch '{}' is not a name git takes for a branch",
+            escape(branch)
+        )),
+        Err(e) => Err(format!(
+            "branch '{}' can't be checked: git can't run ({e})",
+            escape(branch)
+        )),
     }
 }
 
@@ -1386,6 +1526,47 @@ mod tests {
     }
 
     #[test]
+    fn branch_is_the_start_branch_and_a_bad_one_fails_only_its_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".meta.yaml");
+        let load = |yaml: &str| {
+            std::fs::write(&config, yaml).unwrap();
+            Workspace::load(&config)
+        };
+        let loaded =
+            load("projects:\n  a:\n    repo: x\n    branch: release/1.x\n  b: y\n").unwrap();
+        let start: Vec<_> = loaded.projects.iter().map(|p| p.start_branch()).collect();
+        assert_eq!(start, [Ok(Some("release/1.x")), Ok(None)]);
+        // a bad one fails only what would use it: the config still loads,
+        // and the project says why
+        for bad in [
+            "\"a..b\"",
+            "-x",
+            "\"@{-1}\"",
+            "HEAD",
+            "\"\"",
+            "x.lock",
+            "3",
+            "[main]",
+            "{x: 1}",
+        ] {
+            let loaded = load(&format!(
+                "projects:\n  a:\n    repo: x\n    branch: {bad}\n  b: y\n"
+            ))
+            .unwrap();
+            let why = loaded.projects[0].start_branch().unwrap_err();
+            assert!(
+                why.contains("Invalid branch of project 'a'"),
+                "{bad}: {why}"
+            );
+            assert_eq!(loaded.projects[1].start_branch(), Ok(None), "{bad}");
+        }
+        // null is no branch: the remote's default
+        let loaded = load("projects:\n  a:\n    repo: x\n    branch: ~\n").unwrap();
+        assert_eq!(loaded.projects[0].start_branch(), Ok(None));
+    }
+
+    #[test]
     fn defaults_and_unknown_keys() {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join(".meta.yaml");
@@ -1430,7 +1611,7 @@ mod tests {
             "{err}"
         );
         // keys other tools put on a project are theirs
-        assert!(load("projects:\n  a:\n    repo: x\n    branch: main\n").is_ok());
+        assert!(load("projects:\n  a:\n    repo: x\n    owner: team-a\n").is_ok());
         assert!(load("projects:\n  a:\n    path: \"123\"\n    tags: [\"1\"]\n").is_ok());
         // a project of the wrong shape is named, with the shape it needs
         for (yaml, says) in [

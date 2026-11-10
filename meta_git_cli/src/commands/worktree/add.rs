@@ -10,7 +10,7 @@ use crate::worktree::git_ops::{
 };
 use crate::worktree::helpers::*;
 use crate::worktree::origin::{branches_on_origin, Wanted};
-use crate::worktree::plan::{Index, PlannedRepo};
+use crate::worktree::plan::{Index, PlannedRepo, StartBranches};
 use crate::worktree::scan::discover_worktree_repos;
 use crate::worktree::types::*;
 use meta_core::set_record as record;
@@ -36,6 +36,9 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
     }
 
     let here = Here::need(request)?;
+    // each project's branch:, read only when a new branch starts from one
+    let start_branches =
+        StartBranches::new(&here.dir, &here.workspace.root, &here.workspace.config);
     let meta_dir = &here.dir;
     let wt_dir = crate::here::worktree_root(request)?.join(name);
 
@@ -194,7 +197,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
                         commit: commit.clone(),
                     }
                 }
-                None => worktree_start(source, &branch, from_ref)?,
+                None => worktree_start(source, &branch, from_ref, &|| start_branches.of(source))?,
             };
             repos.push(CreateRepoEntry {
                 alias: spec.alias.clone(),
@@ -259,17 +262,19 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
         }
 
         // A failed add stops here; what was added is reported
-        let (created_branch, started_from) =
-            match git_worktree_add(&source, &dest, &branch, from_ref) {
-                Ok(start) => {
-                    let base = start.base(&branch);
-                    (start.new_branch_at().is_some(), base)
-                }
-                Err(e) => {
-                    failed = Some(e);
-                    break;
-                }
-            };
+        let made = git_worktree_add(&source, &dest, &branch, from_ref, &|| {
+            start_branches.of(&source)
+        });
+        let (created_branch, started_from) = match made {
+            Ok(start) => {
+                let base = start.base(&branch);
+                (start.new_branch_at().is_some(), base)
+            }
+            Err(e) => {
+                failed = Some(e);
+                break;
+            }
+        };
         // A worktree that can't be recorded is reported as failed, not added
         if let Some(set_record) = &set_record {
             if let Err(e) = meta_core::gitdir::linked(&dest).and_then(|linked| {

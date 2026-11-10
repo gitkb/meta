@@ -508,6 +508,8 @@ mod tests {
             provides: vec![],
             depends_on: vec![],
             meta: false,
+            branch: None,
+            branch_problem: None,
         }
     }
 

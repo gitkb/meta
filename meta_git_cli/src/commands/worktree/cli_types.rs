@@ -71,7 +71,8 @@ pub struct CreateArgs {
     pub name: String,
 
     /// Start new branches from this commit-ish (tag, SHA, branch); without
-    /// it, each from its remote's default branch (origin/HEAD)
+    /// it, each from its project's branch: in .meta.yaml (origin/<branch>),
+    /// else its remote's default branch (origin/HEAD)
     pub commit_ish: Option<String>,
 
     /// Override default branch name
@@ -126,7 +127,8 @@ pub struct AddArgs {
     pub name: String,
 
     /// Start a new branch from this commit-ish (tag, SHA, branch); without
-    /// it, from the remote's default branch (origin/HEAD)
+    /// it, from its project's branch: in .meta.yaml (origin/<branch>), else
+    /// the remote's default branch (origin/HEAD)
     pub commit_ish: Option<String>,
 
     /// Repo(s) to add (alias or alias:branch)

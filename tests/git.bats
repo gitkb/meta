@@ -339,6 +339,128 @@ state() {
     [ ! -e "$TEST_DIR/shared" ]
 }
 
+@test "meta git update and clone check out a project's branch:, the others their remote's default" {
+    with_remotes
+    # shared's remote gets a release branch ahead of main
+    git clone --quiet remotes/shared.git remotes/mate-shared
+    git -C remotes/mate-shared switch --quiet -c release
+    git -C remotes/mate-shared -c user.name=Mate -c user.email=mate@test.com \
+        commit --quiet --allow-empty -m "release work"
+    git -C remotes/mate-shared push --quiet origin release
+    jq '.projects.shared = {"repo": .projects.shared, "branch": "release"}' .meta.yaml > meta.json
+    mv meta.json .meta.yaml
+    git commit --quiet -am "shared starts from release"
+    git push --quiet
+    rm -rf shared frontend
+    run "$META_BIN" --dry-run git update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"git clone --branch release -- file://$TEST_DIR/remotes/shared.git $TEST_DIR/shared"* ]]
+    [[ "$output" == *"git clone -- file://$TEST_DIR/remotes/frontend.git $TEST_DIR/frontend"* ]]
+    run "$META_BIN" git update
+    [ "$status" -eq 0 ]
+    [ "$(git -C shared branch --show-current)" = release ]
+    [ "$(git -C shared rev-parse HEAD)" = "$(git -C remotes/shared.git rev-parse release)" ]
+    [ "$(git -C frontend branch --show-current)" = main ]
+    # a clone of the workspace does the same
+    run "$META_BIN" git clone "file://$TEST_DIR/remotes/ws.git" "$TEST_DIR/fresh"
+    [ "$status" -eq 0 ]
+    [ "$(git -C "$TEST_DIR/fresh/shared" branch --show-current)" = release ]
+    [ "$(git -C "$TEST_DIR/fresh/frontend" branch --show-current)" = main ]
+    # nothing moves a cloned repo to it
+    git -C shared switch --quiet main
+    run "$META_BIN" git update
+    [ "$(git -C shared branch --show-current)" = main ]
+    # a branch the remote doesn't have fails that clone, naming project and
+    # branch with git's error; the other clones still happen
+    jq '.projects.frontend = {"repo": .projects.frontend, "branch": "nope"}' .meta.yaml > meta.json
+    mv meta.json .meta.yaml
+    rm -rf frontend backend
+    run "$META_BIN" git update
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Failed to clone frontend (file://$TEST_DIR/remotes/frontend.git, branch nope)"* ]]
+    [[ "$output" == *"nope"*"not found"* ]]
+    [[ "$output" == *"1 of 2 repositories failed to clone: frontend (branch nope): "* ]]
+    [ ! -e frontend ]
+    [ -d backend/.git ]
+}
+
+@test "a branch: that names no branch fails only the commands acting on that project" {
+    with_remotes
+    # shared becomes a meta repo whose .meta.yaml gives inner a bad branch:
+    printf '{"projects": {"inner": {"repo": "file://%s/remotes/frontend.git", "branch": "HEAD"}, "ok": "file://%s/remotes/frontend.git"}}\n' \
+        "$TEST_DIR" "$TEST_DIR" > shared/.meta.yaml
+    printf 'inner/\nok/\n' > shared/.gitignore
+    local said="Invalid branch of project 'inner' in $TEST_DIR/shared/.meta.yaml: branch 'HEAD' is not a name git takes for a branch"
+    # listing and other commands go on, and say so
+    run "$META_BIN" -r project list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"inner"* && "$output" == *"warning: $said"* ]]
+    bats_require_minimum_version 1.5.0
+    run --separate-stderr "$META_BIN" -r --json project list
+    [ "$status" -eq 0 ]
+    # its row says why; the listing is complete, so no Envelope warning
+    # (atc reads one as missing members)
+    jq -e --arg said "$said" '.success and .warnings == [] and ([.results[].data | select(.name == "inner") | .branch_problem] == [$said])' <<<"$output"
+    jq -e '[.results[].data | select(.name == "inner") | has("branch")] == [false]' <<<"$output"
+    [ -z "$stderr" ]
+    run "$META_BIN" -r git status
+    [ "$status" -eq 0 ]
+    # update: that clone alone fails, with why; the other is cloned
+    run "$META_BIN" -r git update
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"1 of 2 repositories failed to clone: inner: $said"* ]]
+    [ ! -e shared/inner ]
+    [ -d shared/ok/.git ]
+    # a worktree set: that project alone is refused, with why
+    git clone --quiet remotes/frontend.git shared/inner
+    run "$META_BIN" -r git worktree create t --repo shared/inner --no-deps
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"$said"* ]]
+    [ ! -e .worktrees/t ]
+    # unless the set's branch never starts there: an explicit base, or a
+    # branch the checkout has, in the preview and the run, create and add
+    run "$META_BIN" -r --dry-run git worktree create based main --repo shared/inner --no-deps
+    [ "$status" -eq 0 ]
+    run "$META_BIN" -r git worktree create based main --repo shared/inner --no-deps
+    [ "$status" -eq 0 ]
+    git -C shared/inner branch mine
+    run "$META_BIN" -r git worktree create mine --repo shared/inner --no-deps
+    [ "$status" -eq 0 ]
+    "$META_BIN" -r git worktree create other --repo shared/ok --no-deps >/dev/null
+    run "$META_BIN" -r git worktree add other main --repo shared/inner
+    [ "$status" -eq 0 ]
+    run "$META_BIN" -r git worktree create t --repo shared/ok --no-deps
+    [ "$status" -eq 0 ]
+    # in the root .meta.yaml too: the commands that don't clone it still run
+    jq '.projects.backend = {"repo": .projects.backend, "branch": "a..b"}' .meta.yaml > meta.json
+    mv meta.json .meta.yaml
+    run "$META_BIN" git status
+    [ "$status" -eq 0 ]
+    run "$META_BIN" exec -- true
+    [ "$status" -eq 0 ]
+}
+
+@test "a project's branch: adds nothing to a plugin's request, so a plugin on an older SDK still reads it" {
+    with_remotes
+    jq '.projects.shared = {"repo": .projects.shared, "branch": "release"}' .meta.yaml > meta.json
+    mv meta.json .meta.yaml
+    # meta-git as installed, logging each request it gets
+    local real="$TEST_DIR/meta-git-real"
+    mv "$TEST_DIR/.meta/plugins/meta-git" "$real"
+    printf '#!/bin/sh\n[ "$1" = --meta-plugin-exec ] && { cat "$META_REQUEST"; echo; } >> "%s/requests"\nexec "%s" "$@"\n' \
+        "$TEST_DIR" "$real" > "$TEST_DIR/.meta/plugins/meta-git"
+    chmod +x "$TEST_DIR/.meta/plugins/meta-git"
+    run "$META_BIN" git status
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree create t main --repo shared --no-deps
+    [ "$status" -eq 0 ]
+    # each project carries only the fields an older SDK's request has: its
+    # members refuse a field they don't know
+    jq -se '[.[] | (.workspace.members // [])[], (.projects // [])[] | keys[]] | unique
+        | . - ["name", "path", "abs", "repo", "tags", "depends_on", "dependency_problems",
+               "left_out", "meta", "level", "present", "nested"] == []' "$TEST_DIR/requests"
+}
+
 @test "meta git update doesn't stall on git's stdout, and git asks for no credentials" {
     with_remotes
     rm -rf "$TEST_DIR/shared"

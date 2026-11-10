@@ -37,6 +37,9 @@ pub struct CloneTask {
     pub target_path: PathBuf,
     /// The URL `.meta.yaml` gives for it, cloned from
     pub url: RepoUrl,
+    /// The branch it starts from (`branch:`), checked out by the clone;
+    /// none: its remote's default branch
+    pub branch: Option<String>,
     /// The level of the `.meta.yaml` inside it (the root's is 0)
     pub level: usize,
     /// Whether this project is itself a meta-repo (declared with `meta: true` in config)
@@ -52,6 +55,8 @@ pub struct CloneFailure {
     /// The project's folder
     pub path: PathBuf,
     pub url: RepoUrl,
+    /// The branch it was to check out (`branch:`)
+    pub branch: Option<String>,
     pub error: String,
 }
 
@@ -291,6 +296,21 @@ impl CloneQueue {
                     continue;
                 }
                 Checkout::Missing | Checkout::NotARepo(_) => match &project.repo {
+                    // a branch: that names no branch: this clone alone fails
+                    Some(url) if project.branch_problem.is_some() => {
+                        if self.claim(&target_path) {
+                            self.record(|o| {
+                                o.failures.push(CloneFailure {
+                                    name: project.name.clone(),
+                                    path: target_path.clone(),
+                                    url: url.clone(),
+                                    branch: None,
+                                    error: project.branch_problem.clone().unwrap_or_default(),
+                                })
+                            });
+                        }
+                        continue;
+                    }
                     Some(url) => url.clone(),
                     // Skip projects without a repo URL (cannot clone)
                     None => continue,
@@ -314,6 +334,7 @@ impl CloneQueue {
                     name: project.name.clone(),
                     target_path,
                     url,
+                    branch: project.branch.clone(),
                     level: level + 1,
                     is_meta: project.meta,
                     above: Arc::clone(above),
@@ -474,6 +495,7 @@ impl CloneQueue {
                 name: task.name.clone(),
                 path: task.target_path.clone(),
                 url: task.url.clone(),
+                branch: task.branch.clone(),
                 error,
             })
         });

@@ -127,7 +127,7 @@ pub(crate) fn failure_rows(queue: &CloneQueue, root: &Path) -> Vec<meta_plugin::
                         meta_plugin::ErrorCode::ToolFailed,
                         format!(
                             "{} could not be cloned: {}",
-                            meta_plugin::display::escape(&failure.name),
+                            meta_plugin::display::escape(&failed(failure)),
                             meta_plugin::display::escape(last)
                         ),
                     ),
@@ -136,6 +136,15 @@ pub(crate) fn failure_rows(queue: &CloneQueue, root: &Path) -> Vec<meta_plugin::
             }
         })
         .collect()
+}
+
+/// A failed clone's project as its errors name it: with the branch it was
+/// to check out, when its config names one ("api (branch release)").
+fn failed(failure: &crate::clone_queue::CloneFailure) -> String {
+    match &failure.branch {
+        Some(branch) => format!("{} (branch {branch})", failure.name),
+        None => failure.name.clone(),
+    }
 }
 
 /// Print each failed clone with git's error, each project left
@@ -157,10 +166,15 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
     }
     for failure in &failures {
         errln!(
-            "{} {} ({})",
+            "{} {} ({}{})",
             "Failed to clone".red().bold(),
             meta_plugin::display::escape(&failure.name),
             failure.url,
+            failure
+                .branch
+                .as_ref()
+                .map(|b| format!(", branch {}", meta_plugin::display::escape(b)))
+                .unwrap_or_default(),
         );
         // git's error names paths from the filesystem
         for line in failure.error.lines() {
@@ -202,7 +216,11 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
                 .map(str::trim)
                 .find(|line| !line.is_empty())
                 .unwrap_or("no stderr");
-            format!("{}: {}", f.name, meta_plugin::display::escape(last))
+            format!(
+                "{}: {}",
+                meta_plugin::display::escape(&failed(f)),
+                meta_plugin::display::escape(last)
+            )
         })
         .collect();
     Some(
@@ -261,6 +279,11 @@ pub(crate) fn git_argv(
             git_depth
                 .into_iter()
                 .flat_map(|d| ["--depth", d].map(OsString::from)),
+        )
+        .chain(
+            task.branch
+                .iter()
+                .flat_map(|b| [OsString::from("--branch"), OsString::from(b)]),
         )
         .chain(["--".into(), url(&task.url), path])
         .collect()

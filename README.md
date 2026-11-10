@@ -252,6 +252,7 @@ projects:
 |-------|----------|-------------|
 | `repo` | No | Git repository URL (without one the project is local-only: `meta git update` doesn't clone it) |
 | `path` | No | Custom clone path (defaults to project name) |
+| `branch` | No | The branch the project starts from: `meta git clone` and `meta git update` clone it on this branch (`git clone --branch`), and `meta git worktree create` starts a set's new branch from `origin/<branch>`. Without it, the remote's default branch. Nothing moves a repo that is already cloned to it: no pull, no checkout. `meta --json project list` gives it as `branch` (absent for the remote's default) |
 | `tags` | No | Array of tags for filtering |
 | `meta` | No | Set `true` if this project contains a nested `.meta.yaml` |
 | `provides` | No | Array of capabilities this project provides |
@@ -270,6 +271,7 @@ A token in a `repo` URL (`https://user:token@host/org/repo.git`) works, and meta
 - Tags contain no whitespace and no `,`.
 - `worktrees_dir`, if set, may be anywhere (relative, `..`, absolute, or `.worktrees` a symlink to another disk), but not the config's directory itself, not inside a project and not in `.git`. `META_WORKTREES` overrides it.
 - A key meta doesn't know at the top level, under `defaults` or under `worktree` is an error, so a misspelling isn't ignored. Project entries may carry keys of their own for other tools.
+- A `branch` that isn't a name `git check-ref-format --branch` takes (a list, `..`, spaces, `@{-1}`, a leading `-`, ...) doesn't stop meta reading the config: `meta project list` warns about it (`--json`: that project's row has it as `branch_problem`; the listing is still complete, so it is no Envelope warning), and only the commands that would use it refuse that project: cloning it (`meta git clone`, `meta git update`) and starting a worktree set's branch for it.
 - `worktree.hooks` names only `post-create`, `post-destroy` and `post-prune`, and each value is a command string (`false` or `123` is refused, not run).
 
 The same rules apply to every meta config that a recursive command reads, including one inside a cloned project: a refused nested config stops the command rather than silently leaving out that part of the tree.

@@ -56,6 +56,24 @@ assert 'shared' in names, f'shared not in {names}'
 "
 }
 
+@test "meta -r --json project list gives a project's branch: and none for the remote's default" {
+    printf '%s\n' '{"projects": {"frontend": "git@github.com:org/frontend.git",' \
+        '"backend": {"repo": "git@github.com:org/backend.git", "branch": "release/1.x"},' \
+        '"shared": "git@github.com:org/shared.git"}}' > .meta.yaml
+    run "$META_BIN" -r --json project list
+    [ "$status" -eq 0 ]
+    jq -e '[.results[].data | {(.name): .branch}] | add == {".": null, "frontend": null, "backend": "release/1.x", "shared": null}' <<<"$output"
+    # absent, not null, for the remote's default
+    jq -e '[.results[].data | select(.name == "frontend") | has("branch")] == [false]' <<<"$output"
+}
+
+@test "a branch: git doesn't take for a branch name is a warning naming the project" {
+    printf '%s\n' '{"projects": {"backend": {"repo": "git@github.com:org/backend.git", "branch": "a..b"}}}' > .meta.yaml
+    run "$META_BIN" project list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"warning: Invalid branch of project 'backend' in "*"branch 'a..b' is not a name git takes for a branch"* ]]
+}
+
 @test "meta project list --json includes repo URLs" {
     run "$META_BIN" --json project list
     [ "$status" -eq 0 ]

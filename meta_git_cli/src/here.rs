@@ -203,6 +203,9 @@ impl<'a> Tree<'a> {
                     path: node.own.clone(),
                     repo: node.repo(),
                     meta: node.project.meta,
+                    // a request's members don't carry it: Listing::of does
+                    branch: None,
+                    branch_problem: None,
                 })
                 .collect(),
         }
@@ -218,6 +221,10 @@ pub(crate) struct Listed {
     pub repo: Option<RepoUrl>,
     /// Declared `meta: true`
     pub meta: bool,
+    /// The branch it starts from (`branch:`); none: its remote's default
+    pub branch: Option<String>,
+    /// Why its `branch:` names no branch: it isn't cloned
+    pub branch_problem: Option<String>,
 }
 
 /// What a meta repo's config lists.
@@ -249,6 +256,8 @@ impl Listing {
                 repo: row.listed.repo.clone(),
                 // declared `meta: true` (a meta repo not cloned yet too)
                 meta: row.listed.meta,
+                branch: row.listed.branch.clone(),
+                branch_problem: row.listed.branch_problem.clone(),
             })
             .collect();
         Ok(Some(Listing {
@@ -257,6 +266,28 @@ impl Listing {
             projects,
         }))
     }
+}
+
+/// A project's `branch:` as meta lists it, by its folder.
+pub(crate) struct ListedBranch {
+    pub abs: PathBuf,
+    pub branch: Option<String>,
+    pub problem: Option<String>,
+}
+
+/// Each project's `branch:` that the config in `dir` lists (`config`, absolute:
+/// that one instead of the default; `meta project list` there, nested
+/// configs unread).
+pub(crate) fn branches(dir: &Path, config: Option<&Path>) -> Result<Vec<ListedBranch>> {
+    let rows = project_list(dir, config, false)?.unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .map(|row| ListedBranch {
+            abs: row.abs,
+            branch: row.listed.branch,
+            problem: row.listed.branch_problem,
+        })
+        .collect())
 }
 
 /// Every folder of the whole workspace `dir` belongs to (`meta -A project
@@ -430,6 +461,8 @@ pub(crate) mod tests {
                         tags: Vec::new(),
                         is_meta: true,
                         meta: false,
+                        branch: None,
+                        branch_problem: None,
                         error: None,
                         cwd: None,
                         worktree: None,
@@ -444,6 +477,8 @@ pub(crate) mod tests {
                         tags: vec!["a".into(), "b".into()],
                         is_meta: false,
                         meta: true,
+                        branch: None,
+                        branch_problem: None,
                         error: Some(error),
                         cwd: None,
                         worktree: None,

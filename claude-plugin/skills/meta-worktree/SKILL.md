@@ -106,9 +106,10 @@ that ref. Otherwise meta asks origin (once per repo, up to 5 seconds, with no
 prompts): a branch origin has is fetched and tracked, with its commits. If origin
 can't answer, a warning names the repo and branch and the branch starts as new
 (with `--strict`, an error before anything is made); a repo with no `origin` is
-not asked. A new branch starts from the remote's default branch (`origin/HEAD`,
-tracking nothing), never from whatever the workspace's checkout has checked
-out; only a repo whose remote names no default branch starts from its HEAD,
+not asked. A new branch starts from the project's `branch:` in `.meta.yaml`
+(`origin/<branch>`) if it names one, else from the remote's default branch
+(`origin/HEAD`), tracking nothing, never from whatever the workspace's checkout
+has checked out; only a repo whose remote names no default branch starts from its HEAD,
 with a warning. The output names the start of each new branch:
 `backend -> auth-fix (new from origin/main)`. `--dry-run` asks origin too, says
 the same start, and writes nothing; when a repo the set needs isn't cloned it stops

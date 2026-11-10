@@ -18,6 +18,71 @@ pub struct PlannedRepo {
     pub branch: String,
 }
 
+/// Each project's `branch:`, as `meta project list` gives it for the config
+/// that lists the project, asked only when a new branch first starts from
+/// one, once per config (a plugin's request doesn't carry it, so plugins
+/// built on an older SDK still read theirs).
+pub struct StartBranches {
+    /// The workspace's config folder: what lists a project the folders
+    /// above its checkout don't
+    dir: PathBuf,
+    /// The workspace root: no config above it is asked
+    root: PathBuf,
+    /// The config the command reads for `dir` (meta's `--config`, else its
+    /// .meta.yaml): asked there in its place
+    config: PathBuf,
+    read: std::cell::RefCell<
+        std::collections::HashMap<
+            PathBuf,
+            std::result::Result<Vec<crate::here::ListedBranch>, String>,
+        >,
+    >,
+}
+
+impl StartBranches {
+    pub fn new(dir: &Path, root: &Path, config: &Path) -> Self {
+        let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        StartBranches {
+            dir: real(dir),
+            root: real(root),
+            config: config.to_path_buf(),
+            read: std::cell::RefCell::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// The branch the project checked out at `source` starts from: its
+    /// `branch:`; none, its remote's default branch; an error when that
+    /// `branch:` names no branch, or meta can't say.
+    pub fn of(&self, source: &Path) -> anyhow::Result<Option<String>> {
+        let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let source = real(source);
+        // the nearest config above the checkout lists it, else the
+        // workspace's: meta lists none for a folder without one
+        let configs = source
+            .ancestors()
+            .skip(1)
+            .take_while(|dir| dir.starts_with(&self.root))
+            .map(Path::to_path_buf)
+            .chain([self.dir.clone()]);
+        for dir in configs {
+            let mut read = self.read.borrow_mut();
+            let listed = read.entry(dir.clone()).or_insert_with(|| {
+                // the workspace's folder through the config the command reads
+                let config = (dir == self.dir).then_some(self.config.as_path());
+                crate::here::branches(&dir, config).map_err(|e| format!("{e:#}"))
+            });
+            let listed = listed.as_ref().map_err(|e| anyhow::anyhow!("{e}"))?;
+            if let Some(project) = listed.iter().find(|p| real(&p.abs) == source) {
+                if let Some(problem) = &project.problem {
+                    anyhow::bail!("{}", meta_plugin::display::escape_lines(problem));
+                }
+                return Ok(project.branch.clone());
+            }
+        }
+        Ok(None)
+    }
+}
+
 /// A project the index found: its key and its checkout.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Found {
@@ -42,6 +107,9 @@ pub struct Index<'a> {
     tree: Tree<'a>,
     /// meta's members of the workspace, each URL as configured
     pub members: &'a [meta_plugin::Project],
+    /// The config the command reads for `dir`: meta's `--config`, else its
+    /// .meta.yaml
+    pub config: PathBuf,
     /// With `--recursive`: how deep (none: no limit)
     depth: Option<Option<usize>>,
 }
@@ -56,6 +124,7 @@ impl<'a> Index<'a> {
                 .unwrap_or_default(),
             tree: here.tree(),
             members: &here.workspace.members,
+            config: here.workspace.config.clone(),
             depth: None,
         }
     }
@@ -166,11 +235,6 @@ impl<'a> Index<'a> {
             }),
             None => Err(self.unknown(place)),
         }
-    }
-
-    /// What the config lists, for cloning what of it isn't cloned.
-    pub fn listing(&self) -> crate::here::Listing {
-        self.tree.listing()
     }
 
     /// The node `key` (as [`Index::find`] keys it) names.

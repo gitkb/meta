@@ -261,3 +261,15 @@ jobs:
           else
             echo "Formula unchanged, skipping commit"
           fi
+
+  # Dependents that pin meta's releases (listed with a release-pin entry in
+  # gitkb/workflows' dependents.yml) get dep-update with this version once the
+  # release's assets are uploaded. Only this repo, and not for prereleases.
+  notify-release-pins:
+    needs: release
+    if: github.repository == 'gitkb/meta' && !contains(needs.release.outputs.tag, '-')
+    uses: gitkb/workflows/.github/workflows/notify-dependents.yml@main
+    with:
+      version: ${{ needs.release.outputs.tag }}
+    secrets:
+      dispatch-token: ${{ secrets.PARENT_REPO_PAT }}

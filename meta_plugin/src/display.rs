@@ -150,8 +150,8 @@ fn shown_lines(output: &[u8], full: bool) -> Vec<String> {
         .map(strip_sgr)
         .filter(|line| full || visible(line))
         .map(|line| match full {
-            true => escape_lines(line.trim_end()).into_owned(),
-            false => escape_lines(&shortened(line.trim_end())).into_owned(),
+            true => escape(line.trim_end()).into_owned(),
+            false => escape(&shortened(line.trim_end())).into_owned(),
         })
         .collect()
 }
@@ -226,6 +226,10 @@ mod tests {
         // nothing visible is no line; colour goes, other controls are shown
         let said = shown("\u{1b}[31m\u{1b}[0m\n \u{200b}\n\u{1b}[1mbold\u{1b}[0m\u{1b}]0;t\u{7}\n");
         assert_eq!(said, "\n  bold\\u{1b}]0;t\\u{7}");
+        // a tab is escaped, as everywhere else in the summary
+        for full in [false, true] {
+            assert_eq!(failure_excerpt(b"L\tR\n", b"", full), "\n  L\\tR");
+        }
         assert_eq!(failure_excerpt(b"\n \n", b"\x1b[0m\n", true), "");
 
         // 300 characters stay whole; past that the middle goes

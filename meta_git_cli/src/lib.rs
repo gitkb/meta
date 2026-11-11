@@ -423,9 +423,8 @@ fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<
             Some(SSH_MAX_SESSIONS),
             Some(SSH_SPAWN_STAGGER_MS),
         ),
-        // SSH setup failed: one at a time. The user didn't ask for live
-        // output, so it stays captured and the summary can say why
-        false => plan(steps, Some(true), Some(1), None),
+        // SSH setup failed — fall back to sequential
+        false => plan(steps, Some(false), None, None),
     }
 }
 

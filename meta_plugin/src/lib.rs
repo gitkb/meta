@@ -83,6 +83,8 @@ pub mod response;
 mod serve;
 #[cfg(feature = "sets")]
 pub mod sets;
+#[cfg(feature = "process")]
+pub mod terminal;
 #[cfg(feature = "testing")]
 pub mod testing;
 

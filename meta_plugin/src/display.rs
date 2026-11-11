@@ -100,7 +100,9 @@ pub fn program_output(output: &[u8]) -> String {
 /// how many are left out, and the last [`EXCERPT_TAIL`], where programs put
 /// the reason (git's `fatal:` after its hints). What it holds is bounded,
 /// however much the program writes. A full one ([`Excerpt::new`],
-/// `--full-errors`) keeps every line whole, up to [`FULL_LIMIT`] bytes.
+/// `--full-errors`) keeps every line whole, up to [`FULL_LIMIT`] bytes of
+/// them: past that, its first lines, how many are left out, and its last
+/// (where the reason is), each half of it.
 #[derive(Debug, Default, Clone)]
 pub struct Excerpt {
     /// The first lines, up to [`EXCERPT_LINES`] (all, when full), ready to show
@@ -113,9 +115,15 @@ pub struct Excerpt {
     open: [Partial; 2],
     /// Every line whole (`--full-errors`)
     full: bool,
-    /// The bytes of the lines a full one holds
-    held: usize,
-    /// The lines a full one counted past [`FULL_LIMIT`], not kept
+    /// A full one's first lines, each ended by `\n`, up to half of
+    /// [`FULL_LIMIT`]
+    full_head: String,
+    /// A full one's last lines after those, each ended by `\n`, up to half
+    /// of [`FULL_LIMIT`]
+    full_tail: std::collections::VecDeque<u8>,
+    /// Lines went to `full_tail`: no more go to `full_head`
+    tail_started: bool,
+    /// The lines a full one left out between `full_head` and `full_tail`
     not_kept: usize,
 }
 
@@ -179,8 +187,12 @@ pub const EXCERPT_LINE_TAIL: usize = 100;
 const EXCERPT_KEEP: usize = EXCERPT_WIDTH * 8;
 const EXCERPT_KEEP_LAST: usize = EXCERPT_LINE_TAIL * 16;
 /// The most a full excerpt keeps of one program's lines, in bytes: as much
-/// as meta captures of it ([`crate::process::CAPTURE_LIMIT`]'s 16 MiB).
+/// as meta captures of it (16 MiB), its first half from the start, its
+/// second from the end.
 pub const FULL_LIMIT: usize = 16 << 20;
+/// The most a full excerpt keeps of one line: its start, and its last
+/// [`EXCERPT_LINE_TAIL`] characters past that.
+const FULL_LINE: usize = 4 << 20;
 
 /// Which of a program's streams bytes came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,7 +225,7 @@ impl Excerpt {
             Stream::Stderr => 1,
         };
         let keep = match self.full {
-            true => FULL_LIMIT.saturating_sub(self.held),
+            true => FULL_LINE,
             false => EXCERPT_KEEP,
         };
         let mut lines = bytes.split(|&b| b == b'\n').peekable();
@@ -263,12 +275,24 @@ impl Excerpt {
 
     fn add_shown(&mut self, line: String) {
         if self.full {
-            match self.held < FULL_LIMIT {
-                true => {
-                    self.held += line.len();
-                    self.head.push(line);
+            let half = FULL_LIMIT / 2;
+            if !self.tail_started && self.full_head.len() + line.len() < half {
+                self.full_head.push_str(&line);
+                self.full_head.push('\n');
+                return;
+            }
+            self.tail_started = true;
+            self.full_tail.extend(line.as_bytes());
+            self.full_tail.push_back(b'\n');
+            // the oldest lines go, whole, until it fits
+            while self.full_tail.len() > half {
+                match self.full_tail.iter().position(|&b| b == b'\n') {
+                    Some(end) => {
+                        self.full_tail.drain(..=end);
+                        self.not_kept += 1;
+                    }
+                    None => break,
                 }
-                false => self.not_kept += 1,
             }
             return;
         }
@@ -289,7 +313,15 @@ impl Excerpt {
     pub fn chain(self, later: Excerpt) -> Excerpt {
         let mut out = Excerpt::new(self.full);
         for part in [self, later] {
-            out.not_kept += part.not_kept;
+            if part.full {
+                out.not_kept += part.not_kept;
+                part.each_line(|line| {
+                    out.add_shown(line.to_string());
+                    Ok::<(), std::convert::Infallible>(())
+                })
+                .unwrap_or_else(|never| match never {});
+                continue;
+            }
             // the lines between its first and its last aren't known
             let hidden = part.rest.saturating_sub(part.tail.len());
             for line in part.head {
@@ -306,17 +338,48 @@ impl Excerpt {
         out
     }
 
+    /// Each line to show, in turn (a full one's without collecting them),
+    /// until `f` fails.
+    pub fn each_line<E>(&self, mut f: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
+        if !self.full {
+            return self.lines().iter().try_for_each(|line| f(line));
+        }
+        for line in self.full_head.lines() {
+            f(line)?;
+        }
+        if self.not_kept > 0 {
+            f(&format!(
+                "… {} more lines (past {} MiB, not kept)",
+                self.not_kept,
+                FULL_LIMIT >> 20
+            ))?;
+        }
+        let (front, back) = self.full_tail.as_slices();
+        let tail = String::from_utf8_lossy(&[front, back].concat()).into_owned();
+        for line in tail.lines() {
+            f(line)?;
+        }
+        Ok(())
+    }
+
+    /// The last line to show, if any.
+    pub fn last_line(&self) -> Option<String> {
+        let mut last = None;
+        let _ = self.each_line(|line| {
+            last = Some(line.to_string());
+            Ok::<(), ()>(())
+        });
+        last
+    }
+
     /// The lines to show, ended ones only (see [`Excerpt::finish`]).
     pub fn lines(&self) -> Vec<String> {
         if self.full {
-            let mut lines = self.head.clone();
-            match self.not_kept {
-                0 => {}
-                n => lines.push(format!(
-                    "… {n} more lines (past {} MiB, not kept)",
-                    FULL_LIMIT >> 20
-                )),
-            }
+            let mut lines = Vec::new();
+            let _ = self.each_line(|line| {
+                lines.push(line.to_string());
+                Ok::<(), ()>(())
+            });
             return lines;
         }
         if self.rest == 0 {
@@ -342,7 +405,7 @@ impl Excerpt {
 
     /// Whether the program wrote any line with something on it.
     pub fn is_empty(&self) -> bool {
-        self.head.is_empty() && self.not_kept == 0
+        self.head.is_empty() && self.full_head.is_empty() && self.full_tail.is_empty()
     }
 }
 
@@ -372,7 +435,16 @@ fn shown(line: &Partial, full: bool) -> Option<String> {
     let chars: Vec<char> = start.text.chars().collect();
     let (head, tail, total): (String, String, usize) = match line.after {
         0 if full || chars.len() <= EXCERPT_WIDTH => return Some(escape(&start.text).into_owned()),
-        after if full => (start.text.clone(), String::new(), chars.len() + after),
+        after if full => {
+            let end: Vec<char> = end.text.chars().collect();
+            (
+                start.text.clone(),
+                end.iter()
+                    .skip(end.len().saturating_sub(EXCERPT_LINE_TAIL))
+                    .collect(),
+                chars.len() + after,
+            )
+        }
         0 => (
             chars.iter().take(EXCERPT_LINE_HEAD).collect(),
             chars
@@ -655,6 +727,43 @@ mod tests {
         let capped = Excerpt::of(output.as_bytes(), false).lines();
         assert_eq!(capped.len(), 10);
         assert!(capped.iter().all(|line| line.len() < 400), "{capped:?}");
+    }
+
+    #[test]
+    fn a_full_excerpt_past_its_limit_keeps_the_start_and_the_end() {
+        // 32 MiB of short lines, then the reason
+        let mut excerpt = Excerpt::new(true);
+        let lines: String = (1..=100_000).map(|i| format!("{i:0>9}\n")).collect();
+        for _ in 0..34 {
+            excerpt.push(Stream::Stdout, lines.as_bytes());
+        }
+        excerpt.push(Stream::Stderr, b"fatal: the real reason\n");
+        excerpt.finish();
+        let shown = excerpt.lines();
+        assert_eq!(shown.first().map(String::as_str), Some("000000001"));
+        assert_eq!(
+            shown.last().map(String::as_str),
+            Some("fatal: the real reason")
+        );
+        assert!(
+            shown
+                .iter()
+                .any(|line| line.ends_with("more lines (past 16 MiB, not kept)")),
+            "no marker"
+        );
+        // and it holds about its limit, not a String per line
+        let held: usize = shown.iter().map(|line| line.len() + 1).sum();
+        assert!(held <= FULL_LIMIT + 100, "{held}");
+        // one 20 MB line keeps its end too
+        let mut long = vec![b'x'; 20 << 20];
+        long.extend_from_slice(b"fatal: at the end\n");
+        let line = Excerpt::of(&long, true).lines();
+        assert_eq!(line.len(), 1);
+        assert!(
+            line.iter().all(|l| l.ends_with("fatal: at the end")),
+            "{}",
+            line.len()
+        );
     }
 
     #[test]

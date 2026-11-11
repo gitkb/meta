@@ -278,6 +278,8 @@ impl Owned {
                 .unwrap_or_else(|_| Err(io::Error::other("a pipe's thread panicked")))
         }
         let stdin = self.child.stdin.take();
+        // one pipe took both: the limit's message names both
+        let one_pipe = merged.is_some();
         let pipes = [
             match merged {
                 Some(pipe) => Some(Box::new(pipe) as Box<dyn Read + Send>),
@@ -383,6 +385,7 @@ impl Owned {
         let status = self.wait()?;
         let stream = match over.load(Ordering::Acquire) {
             0 => None,
+            1 if one_pipe => Some("stdout and stderr"),
             1 => Some("stdout"),
             _ => Some("stderr"),
         };
@@ -478,36 +481,21 @@ fn stopped() -> bool {
     }
 }
 
-/// A pseudo-terminal like the terminal `like` (its settings and size), for
-/// a child to write to as it would to that terminal: meta's end, then the
-/// child's. The child's end is no one's controlling terminal: its stdin,
-/// `/dev/tty`, Ctrl-C and job control stay with the real one.
-#[cfg(unix)]
-pub fn terminal_like(like: impl std::os::fd::AsFd) -> io::Result<(std::fs::File, std::fs::File)> {
-    use rustix::fs::{Mode, OFlags};
-    use rustix::pty::OpenptFlags;
-    let ours = rustix::pty::openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
-    rustix::pty::grantpt(&ours)?;
-    rustix::pty::unlockpt(&ours)?;
-    let name = rustix::pty::ptsname(&ours, Vec::new())?;
-    let theirs = rustix::fs::open(
-        name.as_c_str(),
-        OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )?;
-    if let Ok(mut settings) = rustix::termios::tcgetattr(&like) {
-        // what the child writes passes through as it wrote it: the real
-        // terminal does its own output processing (`\n` to `\r\n`), once
-        settings
-            .output_modes
-            .remove(rustix::termios::OutputModes::OPOST);
-        let _ =
-            rustix::termios::tcsetattr(&theirs, rustix::termios::OptionalActions::Now, &settings);
-    }
-    if let Ok(size) = rustix::termios::tcgetwinsize(&like) {
-        let _ = rustix::termios::tcsetwinsize(&theirs, size);
-    }
-    Ok((std::fs::File::from(ours), std::fs::File::from(theirs)))
+/// Whether a signal is stopping this program (see [`own`]).
+pub fn stopping() -> bool {
+    #[cfg(unix)]
+    return imp::stopping();
+    #[cfg(not(unix))]
+    false
+}
+
+/// A command meta ran in the user's terminal's foreground ended by SIGINT:
+/// the user pressed Ctrl-C at it, so the run is interrupted as if meta had
+/// been (its summary of what finished), when this program owns SIGINT and
+/// isn't stopping already. Never returns then: the stop ends the program.
+pub fn interrupted() {
+    #[cfg(unix)]
+    imp::interrupted();
 }
 
 /// Make this program the owner of its children's signals (see the module
@@ -755,6 +743,26 @@ mod imp {
         u64::from_str_radix(hex.trim(), 16).ok()
     }
 
+    /// This program owns SIGINT (it didn't start out ignoring it).
+    static OWNS_INT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    pub(super) fn stopping() -> bool {
+        lock().stopping
+    }
+
+    pub(super) fn interrupted() {
+        if !OWNS_INT.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        if !lock().stopping {
+            // from this program: taken as the terminal's (see `own`)
+            let _ = rustix::process::kill_process(rustix::process::getpid(), Signal::INT);
+        }
+        loop {
+            std::thread::park();
+        }
+    }
+
     pub(super) fn own() -> io::Result<()> {
         use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
         use signal_hook::iterator::exfiltrator::WithOrigin;
@@ -770,6 +778,10 @@ mod imp {
             // as it was. A terminal's hangup reaches the children anyway.
             None => vec![SIGINT, SIGTERM],
         };
+        OWNS_INT.store(
+            listened.contains(&SIGINT),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         // decided once: a job moved between foreground and background
         // keeps its children's groups
         shared();
@@ -782,6 +794,7 @@ mod imp {
                 // ignored it), for at most a second
                 if stopping {
                     kill_all();
+                    crate::terminal::restore();
                     // what finished is still told when the first stop
                     // hasn't (it waits on children that ignored it), for at
                     // most a second; one already telling is not waited for
@@ -795,7 +808,11 @@ mod imp {
                     crate::exit::now(crate::exit::signalled(origin.signal));
                 }
                 stopping = true;
-                std::thread::spawn(move || stop(origin.signal, origin.process.is_some()));
+                // one this program sent itself stands for the terminal's
+                // (the Ctrl-C it read for a command on a terminal of its own)
+                let me = rustix::process::getpid().as_raw_nonzero().get();
+                let sent = origin.process.is_some_and(|from| from.pid != me);
+                std::thread::spawn(move || stop(origin.signal, sent));
             }
         });
         Ok(())
@@ -851,6 +868,8 @@ mod imp {
                 .unwrap_or_else(|poisoned| poisoned.into_inner().0);
         }
         drop(children);
+        // the summary goes to the user's terminal as it was
+        crate::terminal::restore();
         let _ = super::stopped();
         let _ = signal_hook::low_level::emulate_default_handler(signal);
         // SIGHUP, SIGINT and SIGTERM all end a program by default

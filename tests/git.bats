@@ -1834,3 +1834,19 @@ EOF
         [[ "$output" == *"failed to clone: shared:"$'\n'"    FIRST diagnostic"$'\n'"    LAST diagnostic" ]]
     done
 }
+
+@test "--full-errors: a failed clone ends with all of git's error, not its last 20 lines" {
+    with_remotes
+    rm -rf "$TEST_DIR/shared"
+    mkdir -p "$TEST_DIR/shim"
+    real_git="$(command -v git)"
+    printf '#!/bin/sh\ncase " $* " in *" clone "*) for i in $(seq 50); do echo "detail $i" >&2; done; echo "fatal: the clone failed" >&2; exit 128;; esac\nexec "%s" "$@"\n' "$real_git" > "$TEST_DIR/shim/git"
+    chmod +x "$TEST_DIR/shim/git"
+    PATH="$TEST_DIR/shim:$PATH" run "$META_BIN" --full-errors git update
+    [ "$status" -ne 0 ]
+    local error=${output#*failed to clone: }
+    for i in 1 2 31 50; do
+        [[ "$error" == *"    detail $i"$'\n'* ]]
+    done
+    [[ "$error" == *"    fatal: the clone failed" && "$error" != *"more lines"* ]]
+}

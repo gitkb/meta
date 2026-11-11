@@ -261,7 +261,7 @@ pub struct CommandResult {
     /// What the summary shows of its output (stdout and stderr, live ones
     /// too), or why it didn't start; None when meta saw none of it (a live
     /// run on a Windows console)
-    pub excerpt: Option<Excerpt>,
+    pub excerpt: Option<std::sync::Arc<Excerpt>>,
 }
 
 impl CommandResult {
@@ -558,7 +558,7 @@ fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
         directory: dir.to_path_buf(),
         command,
         stdout: Vec::new(),
-        excerpt: Some(Excerpt::of(stderr.as_bytes(), false)),
+        excerpt: Some(std::sync::Arc::new(Excerpt::of(stderr.as_bytes(), false))),
         stderr: stderr.into_bytes(),
         ..CommandResult::default()
     }
@@ -661,14 +661,15 @@ fn execute_in_directory(
 
     // Live: shown as it writes it, through meta ([`run_live`]), its
     // excerpt kept for the summary. Silenced, it goes nowhere.
-    let ran = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
-        match config.silent {
-            true => meta_plugin::process::status(cmd.stdout(Stdio::null()).stderr(Stdio::null()))
-                .map(|status| (status, Some(Excerpt::default()), None)),
-            false => run_live(&mut cmd, config.full_errors),
-        }
-        .map_err(|e| anyhow::anyhow!(not_started(&argv, &e)))
-    });
+    let ran = match config.silent {
+        true => build_command(&argv, dir, extra_env).and_then(|mut cmd| {
+            meta_plugin::process::status(cmd.stdout(Stdio::null()).stderr(Stdio::null()))
+                .map(|status| (status, Some(std::sync::Arc::default()), None))
+                .map_err(|e| anyhow::anyhow!(not_started(&argv, &e)))
+        }),
+        false => run_live(&argv, dir, extra_env, config.full_errors)
+            .map_err(|e| anyhow::anyhow!(not_started(&argv, &e))),
+    };
     let (ran, excerpt) = match ran {
         Ok((_, _, Some(closed))) => return Err(closed.into()),
         Ok((status, excerpt, None)) => (Ok(status), excerpt),
@@ -707,37 +708,53 @@ fn execute_in_directory(
     Ok(result)
 }
 
+/// The signal Ctrl-C sends.
+const SIGINT: i32 = 2;
+
 /// How long meta goes on showing what a program a live command left
 /// running writes, once the command has ended, before it moves on.
 const LINGER: Duration = Duration::from_secs(2);
 
-/// Run `cmd` live: what it writes is shown as it comes, on meta's stdout
-/// and stderr, and kept in its excerpt (`full`: whole), which is None when
-/// meta saw none of it. Its stdin stays the user's (for a prompt).
+/// Run `argv` in `dir` live: what it writes is shown as it comes, on
+/// meta's stdout and stderr, and kept in its excerpt (`full`: whole), which
+/// is None when meta saw none of it.
 ///
-/// It writes where it would have without meta in between, as far as it can
-/// tell: on Unix, a stream meta has on a terminal goes to a pseudo-terminal
-/// like it (both streams to one, when both are on that terminal), so the
-/// command still sees a terminal there (colour, progress, line buffering, an
-/// `ls` in columns) and writes in order; a stream that isn't goes through a
-/// pipe, one for both when they go to one file. On Windows, a command whose
-/// output would reach a console writes to it as before, and meta sees none
-/// of it (there, a summary of a live run has no excerpt).
+/// It runs as it would without meta in between, as far as it can tell. On
+/// Unix, a stream meta has on a terminal goes to a pseudo-terminal like it
+/// (both streams to one, when both are on that terminal), so the command
+/// still sees a terminal there (colour, progress, line buffering, an `ls` in
+/// columns) and writes in order. When the user types at that terminal
+/// (meta's stdin is one too), the command gets the pseudo-terminal for its
+/// stdin and as its own terminal (`/dev/tty`), through
+/// [`meta_plugin::terminal::shim`], and meta relays: the user's terminal is
+/// raw meanwhile, what they type and the window's size go to the command
+/// ([`meta_plugin::terminal::Relay`]), so a pager, an editor or a password
+/// prompt works as it does on their terminal. Otherwise its stdin stays
+/// meta's. A stream that isn't on a terminal goes through a pipe, one for
+/// both when they go to one file. On Windows, a command whose output would
+/// reach a console writes to it as before, and meta sees none of it.
 ///
 /// A stdout that closed (`| head`) stops the showing, so the command's next
 /// write fails as it would have; it is the error returned with its end.
 /// What it leaves running is shown for up to [`LINGER`] after it ends.
 fn run_live(
-    cmd: &mut Command,
+    argv: &[String],
+    dir: &Path,
+    extra_env: Option<&HashMap<String, String>>,
     full: bool,
-) -> io::Result<(ExitStatus, Option<Excerpt>, Option<StdoutError>)> {
+) -> io::Result<(
+    ExitStatus,
+    Option<std::sync::Arc<Excerpt>>,
+    Option<StdoutError>,
+)> {
     use std::io::Read;
     use std::sync::Arc;
+    let built = |argv: &[String]| build_command(argv, dir, extra_env).map_err(io::Error::other);
+    let mut cmd = built(argv)?;
     let terminal = [io::stdout().is_terminal(), io::stderr().is_terminal()];
     if cfg!(windows) && terminal.contains(&true) {
-        return meta_plugin::process::status(cmd).map(|status| (status, None, None));
+        return meta_plugin::process::status(&mut cmd).map(|status| (status, None, None));
     }
-    meta_plugin::out::pass_color(cmd);
     let one_place = meta_plugin::out::stdout_is_stderr();
     // what meta reads, and which of its streams that goes to
     let mut sources: Vec<(Box<dyn Read + Send>, Stream)> = Vec::new();
@@ -755,13 +772,29 @@ fn run_live(
     };
     #[cfg(not(unix))]
     let tty: Option<Stream> = None;
+    // the user types at the terminal the command shows on
+    let typed = tty == Some(Stream::Stdout) && io::stdin().is_terminal();
+    #[cfg(unix)]
+    let mut pty: Option<(std::fs::File, bool)> = None;
     match tty {
         #[cfg(unix)]
         Some(to) => {
+            // started through the shim, it takes the pseudo-terminal as its
+            // own; a program that can't be found starts as it is, to say so
+            let shim = typed
+                .then(|| meta_plugin::terminal::shimmed(argv))
+                .flatten()
+                .filter(|_| argv.first().is_some_and(|program| findable(program, dir)));
+            let relayed = shim.is_some();
             let (ours, theirs) = match to {
-                Stream::Stdout => meta_plugin::process::terminal_like(io::stdout())?,
-                Stream::Stderr => meta_plugin::process::terminal_like(io::stderr())?,
+                Stream::Stdout => meta_plugin::terminal::terminal_like(io::stdout(), !relayed)?,
+                Stream::Stderr => meta_plugin::terminal::terminal_like(io::stderr(), !relayed)?,
             };
+            if let Some(shim) = shim {
+                cmd = built(&shim)?;
+                cmd.stdin(theirs.try_clone()?);
+            }
+            pty = Some((ours.try_clone()?, relayed));
             sources.push((Box::new(ours), to));
             match (to, one_place) {
                 (Stream::Stdout, true) => {
@@ -787,10 +820,19 @@ fn run_live(
             cmd.stdout(out).stderr(err);
         }
     }
-    let spawned = meta_plugin::process::spawn(cmd);
-    // meta keeps no write end: its pipes end with what the command started
-    cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    let spawned = meta_plugin::process::spawn(&mut cmd);
+    // meta keeps no end the command has: its pipes and terminal end with
+    // what the command started
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     let mut child = spawned?;
+    // its terminal follows the window, and with the user typing, gets
+    // what they type; their terminal is theirs again once dropped
+    #[cfg(unix)]
+    let relay = pty.and_then(|(ours, typed)| {
+        meta_plugin::terminal::Relay::start(&ours, child.id(), typed).ok()
+    });
     let excerpts = Arc::new(Mutex::new([Excerpt::new(full), Excerpt::new(full)]));
     let closed: Arc<Mutex<Option<StdoutError>>> = Arc::new(Mutex::new(None));
     let (ended, all_ended) = std::sync::mpsc::channel::<()>();
@@ -830,12 +872,26 @@ fn run_live(
         }
     }
     drop(ended);
-    let status = child.wait()?;
+    let status = child.wait();
     // nothing is sent: it returns once every relay has ended, or at LINGER
     let _ = all_ended.recv_timeout(LINGER);
+    #[cfg(unix)]
+    drop(relay);
+    let status = status?;
     let excerpt = joined(lock(&excerpts).clone());
     let closed = lock(&closed).take();
-    Ok((status, Some(excerpt), closed))
+    Ok((status, Some(Arc::new(excerpt)), closed))
+}
+
+/// Whether `program` names one there is, from `dir`: a path, or a name on
+/// `PATH`.
+#[cfg(unix)]
+fn findable(program: &str, dir: &Path) -> bool {
+    if program.contains('/') {
+        return dir.join(program).is_file();
+    }
+    env::var_os("PATH")
+        .is_some_and(|path| env::split_paths(&path).any(|place| place.join(program).is_file()))
 }
 
 /// Add `bytes` written to `stream` to its excerpt.
@@ -956,14 +1012,14 @@ fn capture_in_directory(
                 argv,
                 stdout: output.stdout,
                 stderr: output.stderr,
-                excerpt: Some(excerpt),
+                excerpt: Some(std::sync::Arc::new(excerpt)),
                 ..CommandResult::default()
             }
         }
         Err(e) => match TooMuchOutput::of(&e) {
             // what it wrote up to the limit is still in its excerpt
             Some(over) => CommandResult {
-                excerpt: Some(excerpt),
+                excerpt: Some(std::sync::Arc::new(excerpt)),
                 ..too_much(dir, command, argv, over)
             },
             None => failed_result(dir, command, format!("{}\n", not_started(&argv, &e))),
@@ -1305,6 +1361,11 @@ fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Co
             started(config, &job.dir);
             let result = run_one(config, job)?;
             ended(config, &result);
+            // Ctrl-C at a live command interrupts the run, as it would have
+            // reached meta too: one summary, of what finished
+            if result.live && result.signal == Some(SIGINT) {
+                meta_plugin::process::interrupted();
+            }
             config.on_done.tell(&result)?;
             Ok(result)
         })
@@ -1453,8 +1514,8 @@ struct Failure {
     names: Vec<String>,
     command: String,
     ending: String,
-    /// Its excerpt's lines; None when meta saw none of its output
-    lines: Option<Vec<String>>,
+    /// Its excerpt; None when meta saw none of its output
+    excerpt: Option<std::sync::Arc<Excerpt>>,
 }
 
 impl Failure {
@@ -1463,7 +1524,7 @@ impl Failure {
             names: vec![summary_name(config, result)],
             command: escape(&result.command).into_owned(),
             ending: result.ending(),
-            lines: result.excerpt.as_ref().map(Excerpt::lines),
+            excerpt: result.excerpt.clone(),
         }
     }
 }
@@ -1485,19 +1546,17 @@ fn print_failures(failures: &[Failure], full: bool) -> Result<()> {
             failure.command,
             failure.ending
         );
-        let Some(lines) = &failure.lines else {
+        let Some(excerpt) = &failure.excerpt else {
             // shown as it ran, and not seen by meta
             outln!("{line}")?;
             continue;
         };
-        match lines.last() {
+        match excerpt.last_line() {
             None => outln!("{line}: no output")?,
             Some(last) if i >= SUMMARY_FULL && !full => outln!("{line}: {last}")?,
             Some(_) => {
                 outln!("{line}")?;
-                for excerpt in lines {
-                    outln!("    {excerpt}")?;
-                }
+                excerpt.each_line(|shown| outln!("    {shown}"))?;
             }
         }
     }

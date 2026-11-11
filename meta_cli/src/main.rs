@@ -483,6 +483,8 @@ pub fn running(name: &str) {
 static STREAM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn main() -> std::process::ExitCode {
+    // run again to start a live command on a terminal of its own
+    meta_plugin::terminal::shim();
     meta_plugin::exit::run(|| {
         if let Err(e) = meta_plugin::process::own() {
             meta_plugin::out::warn(format!(

@@ -39,7 +39,7 @@ strsim = { version = "0.11", optional = true }
 tempfile = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["fs", "process", "pty", "termios"], optional = true }
+rustix = { workspace = true, features = ["event", "fs", "process", "pty", "termios"], optional = true }
 signal-hook = { workspace = true, features = ["extended-siginfo"], optional = true }
 
 [target.'cfg(windows)'.dependencies]

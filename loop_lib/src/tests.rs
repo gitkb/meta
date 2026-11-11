@@ -904,3 +904,23 @@ fn captured_output_is_whole_under_the_limit_and_refused_past_it() {
         error.message
     );
 }
+
+#[test]
+fn with_one_pipe_for_both_streams_the_limit_names_both() {
+    use meta_plugin::process::CAPTURE_LIMIT;
+    let dir = TempDir::new().unwrap();
+    let config = LoopConfig {
+        one_stream: true,
+        ..LoopConfig::default()
+    };
+    let over = execute_command_in_directory_capturing(
+        dir.path(),
+        &sh(&format!("head -c {} /dev/zero >&2", CAPTURE_LIMIT + 1)),
+        &config,
+        None,
+    );
+    assert_eq!(
+        over.ending(),
+        "stopped at 16 MiB of output, writing to stdout and stderr"
+    );
+}

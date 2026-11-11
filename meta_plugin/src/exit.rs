@@ -159,6 +159,9 @@ pub fn code(result: anyhow::Result<()>) -> i32 {
 /// End the program now with `code`. Only for where no `main` can return
 /// it: a plugin's harness and a signal that ends the program.
 pub fn now(code: i32) -> ! {
+    // a terminal a live command had raw is the user's again
+    #[cfg(feature = "process")]
+    crate::terminal::restore();
     #[expect(
         clippy::exit,
         reason = "the one place a program ends without returning from main"

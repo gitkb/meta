@@ -53,6 +53,8 @@ struct Cli {
 }
 
 fn main() -> std::process::ExitCode {
+    // run again to start a live command on a terminal of its own
+    meta_plugin::terminal::shim();
     meta_plugin::exit::run(|| {
         let result = run_loop();
         // a .looprc's JSON output reports a failure in the one envelope too

@@ -1140,3 +1140,56 @@ PY
         [ "$(grep -c '^    line [0-9]*$' "$TEST_DIR/summary")" -eq 8 ]
     done
 }
+
+# A live command at a terminal runs on one of its own, with what the user
+# types and the window's size relayed to it, as on their terminal
+drive() { TERM=xterm python3 "${BATS_TEST_DIRNAME}/helpers/pty_drive.py" "$@"; }
+
+@test "a pager in a live run quits on q, and the terminal is as it was" {
+    run drive 10 80 'wait:2;type:q;exit:10' "$META_BIN" --sequential -i api exec -- sh -c 'seq 1 200 | less'
+    [[ "$output" == *"[exit 0]"* ]]
+    [[ "$output" == *"[tty canonical echo]"* ]]
+}
+
+@test "a live command's window follows a resize (asked on its stdout, where it draws)" {
+    run drive 30 100 'wait:0.7;resize:50x132;exit:10' "$META_BIN" --sequential -i api exec -- sh -c 'sleep 1.5; stty size <&1'
+    [[ "$output" == *"50 132"* ]]
+    [[ "$output" == *"[exit 0]"* ]]
+}
+
+@test "a live command's prompts read what the user types: a password unechoed, an editor's line" {
+    run drive 24 80 'wait:1;type:s3cret\r;exit:10' "$META_BIN" --sequential -i api exec -- sh -c 'printf "Password: "; stty -echo; read p; stty echo; echo; echo "got $p"'
+    [[ "$output" == *"got s3cret"* ]]
+    # typed without echo: the word shows once, in what the command said
+    [ "$(grep -o s3cret <<<"$output" | wc -l)" -eq 1 ]
+    # git commit with no -m: the editor asks on its terminal
+    local editor='sh -c "printf \"message? \" > /dev/tty; read m < /dev/tty; echo \"\$m\" > \"\$1\"" editor'
+    GIT_EDITOR="$editor" run drive 24 80 'wait:1.5;type:from the editor\r;exit:10' "$META_BIN" --sequential -i api exec -- git commit --quiet --allow-empty
+    [[ "$output" == *"[exit 0]"* ]]
+    [ "$(git -C api log -1 --format=%s)" = "from the editor" ]
+}
+
+@test "a live command killed outright leaves the terminal as it was" {
+    run drive 24 80 "until:$TEST_DIR/child;kill9:$TEST_DIR/child;exit:10" "$META_BIN" --sequential -i api exec -- sh -c "echo \$\$ > '$TEST_DIR/child'; exec sleep 30"
+    [[ "$output" == *"[exit 1]"* ]]
+    [[ "$output" == *"killed by signal 9"* ]]
+    [[ "$output" == *"[tty canonical echo]"* ]]
+}
+
+@test "Ctrl-C at the last live command prints the interrupted summary, every time" {
+    for _ in 1 2 3; do
+        run drive 24 80 'wait:1.5;type:^C;exit:10' "$META_BIN" --sequential -i api,worker exec -- sh -c '[ "${PWD##*/}" = api ] && { echo "fatal: api broke" >&2; exit 1; }; exec sleep 30'
+        [[ "$output" == *"Interrupted: 1 of 2 commands finished, 1 failed"* ]]
+        [[ "$output" == *"fatal: api broke"* && "$output" == *"Stopped while running: ./worker"* ]]
+        [[ "$output" != *"Summary:"* ]]
+        # ended by the signal (a shell shows 130)
+        [[ "$output" == *"[exit -2]"* || "$output" == *"[exit 130]"* ]]
+        [[ "$output" == *"[tty canonical echo]"* ]]
+    done
+}
+
+@test "a live command on a terminal gets no forced colour and no stray descriptor" {
+    run drive 24 80 'exit:10' "$META_BIN" --sequential -i api exec -- sh -c 'echo "force=${FORCE_COLOR:-unset},${CLICOLOR_FORCE:-unset}"; [ -d /proc/self/fd ] && ls -l /proc/self/fd/ | grep -c ptmx || echo 0'
+    [[ "$output" == *"force=unset,unset"* ]]
+    [[ "$output" == *$'\n0'* ]]
+}

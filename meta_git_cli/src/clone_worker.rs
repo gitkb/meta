@@ -363,19 +363,23 @@ struct StderrTail {
 impl StderrTail {
     const KEPT_LINES: usize = 20;
     const LINE_BYTES: u64 = 4096;
+    /// With `--full-errors`, every line is kept, up to this many bytes
+    const FULL_BYTES: usize = 16 << 20;
 
     fn spawn(
         stderr: Option<impl std::io::Read + Send + 'static>,
         on_line: impl Fn(&str) + Send + 'static,
     ) -> Self {
-        let lines = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        let lines = Arc::new(Mutex::new(std::collections::VecDeque::<String>::new()));
         let (done_tx, done) = std::sync::mpsc::channel();
+        let full = FULL_ERRORS.load(Ordering::Relaxed);
         if let Some(stderr) = stderr {
             let kept = Arc::clone(&lines);
             std::thread::spawn(move || {
                 use std::io::{BufRead, BufReader, Read};
                 let mut reader = BufReader::new(stderr);
                 let mut buf = Vec::new();
+                let mut held = 0usize;
                 // Reads at most LINE_BYTES at a time, so one huge line can't
                 // grow memory; a longer line is kept in pieces.
                 while (&mut reader)
@@ -387,8 +391,20 @@ impl StderrTail {
                     buf.clear();
                     on_line(&line);
                     let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());
-                    if kept.len() == Self::KEPT_LINES {
-                        kept.pop_front();
+                    match full {
+                        true => {
+                            held += line.len();
+                            while held > Self::FULL_BYTES {
+                                match kept.pop_front() {
+                                    Some(first) => held -= first.len(),
+                                    None => break,
+                                }
+                            }
+                        }
+                        false if kept.len() == Self::KEPT_LINES => {
+                            kept.pop_front();
+                        }
+                        false => {}
                     }
                     kept.push_back(line);
                 }

@@ -77,6 +77,99 @@ fn tied(text: &str, why: &str, repo: &str) -> bool {
     seen
 }
 
+/// What a run printed from its summary on.
+fn summary(text: &str) -> &str {
+    text.split_once("Summary:").map_or("", |(_, rest)| rest)
+}
+
+/// A captured failure's summary says what went wrong, not only the last
+/// line git wrote; `--full-errors` cuts nothing. A live one's output is the
+/// user's, already on screen.
+#[test]
+fn the_summary_says_why_a_captured_command_failed() {
+    let sandbox = Sandbox::new();
+    let root = workspace(&sandbox);
+    let run = |options: &[&str], script: &str| {
+        let mut args = options.to_vec();
+        args.extend(["-i", "a", "exec", "--", "sh", "-c", script]);
+        combined(&sandbox, &root, &args)
+    };
+
+    let hints = "echo 'fatal: the real reason' >&2; echo >&2; echo 'and the repository exists.' >&2; echo 'CONFLICT (content)'; exit 1";
+    let text = run(&["--parallel"], hints);
+    let said = summary(&text);
+    for line in [
+        "\n    fatal: the real reason\n    and the repository exists.\n",
+        "\n  stdout:\n    CONFLICT (content)\n",
+    ] {
+        assert!(said.contains(line), "{line:?} in {said}");
+    }
+
+    let long = r#"i=1; while [ $i -le 30 ]; do echo "line-$i." >&2; i=$((i+1)); done; printf '\033[31mred\033[0m\n' >&2; printf '%0400d\n' 7 >&2; exit 1"#;
+    let text = run(&["--parallel"], long);
+    let said = summary(&text);
+    assert!(
+        said.contains("line-5.") && !said.contains("line-6."),
+        "{said}"
+    );
+    assert!(said.contains("… 23 more lines"), "{said}");
+    assert!(said.contains("\n  red\n"), "{said}");
+    assert!(said.contains("… 100 more characters …"), "{said}");
+    let text = run(&["--parallel", "--full-errors"], long);
+    let said = summary(&text);
+    assert!(
+        (1..=30).all(|i| said.contains(&format!("line-{i}."))),
+        "{said}"
+    );
+    assert!(
+        !said.contains("more lines") && !said.contains("more characters"),
+        "{said}"
+    );
+    assert!(said.contains(&format!("{}7", "0".repeat(399))), "{said}");
+
+    let text = run(&["--sequential"], hints);
+    let said = summary(&text);
+    assert!(said.contains("(exit code 1): output is above"), "{said}");
+    assert!(!said.contains("\n    fatal"), "{said}");
+}
+
+/// Past five failures, one line names every repo that failed.
+#[test]
+fn many_failures_end_with_one_line_naming_them() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.work().join("ws");
+    let names = ["a", "b", "c", "d", "e", "f"];
+    names
+        .iter()
+        .fold(sandbox.workspace(&root), |ws, name| ws.repo(name))
+        .build();
+    let script = r#"echo "why-$(basename "$PWD")" >&2; exit 1"#;
+    let args = [
+        "--parallel",
+        "-i",
+        "a,b,c,d,e,f",
+        "exec",
+        "--",
+        "sh",
+        "-c",
+        script,
+    ];
+    let text = combined(&sandbox, &root, &args);
+    let line = "✗ Failed (6): ./a, ./b, ./c, ./d, ./e, ./f";
+    assert!(summary(&text).contains(line), "{text}");
+    let five = [
+        "--parallel",
+        "-i",
+        "a,b,c,d,e",
+        "exec",
+        "--",
+        "sh",
+        "-c",
+        script,
+    ];
+    assert!(!combined(&sandbox, &root, &five).contains("Failed ("));
+}
+
 #[test]
 fn a_failed_commands_stderr_is_shown_with_its_repo_unless_silenced() {
     let sandbox = Sandbox::new();

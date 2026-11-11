@@ -912,6 +912,7 @@ pub fn run_plan(
         aliases: loop_lib::aliases()?,
         root_dir,
         outer: Some(crate::outer(&[])),
+        full_errors: cli.full_errors,
         ..LoopConfig::default()
     };
     let outcome = loop_lib::run_commands(&config, &commands)?;
@@ -954,6 +955,7 @@ pub fn exec(cli: &Cli, argv: &[String], report: &mut Report) -> Result<()> {
         aliases: loop_lib::aliases()?,
         root_dir: Some(target.root.clone()),
         outer: Some(crate::outer(&["exec", "--"])),
+        full_errors: cli.full_errors,
         ..Default::default()
     };
     let outcome = loop_lib::run_commands(&config, &commands)

@@ -126,6 +126,9 @@ pub struct Cli {
     #[arg(help_heading = OUTPUT, short, long, help = "Discard the output of the programs meta runs (commands that answer for themselves still print)")]
     silent: bool,
 
+    #[arg(help_heading = OUTPUT, long, help = "In the summary, show all a failed command's captured output, not an excerpt")]
+    full_errors: bool,
+
     #[arg(help_heading = OUTPUT, short, long, action, help = "Enable verbose output")]
     verbose: bool,
 
@@ -1556,6 +1559,7 @@ mod tests {
             ("json_stream", OUTPUT),
             ("fields", OUTPUT),
             ("silent", OUTPUT),
+            ("full_errors", OUTPUT),
             ("verbose", OUTPUT),
         ]
         .map(|(id, heading)| (id.to_string(), Some(heading.to_string())));

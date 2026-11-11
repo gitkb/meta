@@ -92,6 +92,115 @@ pub fn program_output(output: &[u8]) -> String {
     text.lines().map(|line| format!("\n  {line}")).collect()
 }
 
+/// Whether `output` has a line with something a reader could see on it.
+pub fn has_visible_line(output: &[u8]) -> bool {
+    String::from_utf8_lossy(output)
+        .lines()
+        .any(|line| visible(&strip_sgr(line)))
+}
+
+fn visible(line: &str) -> bool {
+    line.chars()
+        .any(|c| !c.is_whitespace() && !is_unsafe_char(c))
+}
+
+/// `line` without its complete SGR colour sequences (`ESC [ … m`). Other
+/// escape sequences stay, for [`escape`] to make visible.
+fn strip_sgr(line: &str) -> Cow<'_, str> {
+    if !line.contains("\u{1b}[") {
+        return Cow::Borrowed(line);
+    }
+    let mut plain = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some((before, after)) = rest.split_once("\u{1b}[") {
+        plain.push_str(before);
+        let end = after.trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, ';' | ':'));
+        rest = match end.strip_prefix('m') {
+            Some(tail) => tail,
+            None => {
+                plain.push_str("\u{1b}[");
+                after
+            }
+        };
+    }
+    plain.push_str(rest);
+    Cow::Owned(plain)
+}
+
+/// `line`, its middle cut when it is over 300 characters.
+fn shortened(line: &str) -> String {
+    let count = line.chars().count();
+    if count <= 300 {
+        return line.to_string();
+    }
+    let first: String = line.chars().take(200).collect();
+    let last: String = line.chars().skip(count.saturating_sub(100)).collect();
+    format!(
+        "{first}… {} more characters …{last}",
+        count.saturating_sub(300)
+    )
+}
+
+/// The lines of `output` to show, colours stripped and escaped: with `full`
+/// all of them as written. Otherwise only those with something visible on
+/// them, each at most about 300 characters: all when there are at most
+/// `whole`, else the first `head`, how many were left out (when `head` is
+/// not 0) and the last `tail`. Only the lines shown are formatted.
+fn shown_lines(
+    output: &[u8],
+    full: bool,
+    (whole, head, tail): (usize, usize, usize),
+) -> Vec<String> {
+    if !has_visible_line(output) {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(output);
+    let kept = || {
+        text.lines()
+            .filter(move |line| full || visible(&strip_sgr(line)))
+    };
+    let count = kept().count();
+    let cut = !full && count > whole;
+    let shown = |line: &str| {
+        let line = strip_sgr(line);
+        let line = line.trim_end();
+        match full {
+            true => escape(line).into_owned(),
+            false => escape(&shortened(line)).into_owned(),
+        }
+    };
+    let mut lines: Vec<String> = kept()
+        .enumerate()
+        .filter(|(i, _)| !cut || *i < head || *i >= count.saturating_sub(tail))
+        .map(|(_, line)| shown(line))
+        .collect();
+    if cut && head > 0 {
+        let hidden = count.saturating_sub(head + tail);
+        lines.insert(head.min(lines.len()), format!("… {hidden} more lines"));
+    }
+    lines
+}
+
+/// What a failed command wrote, to follow its line in a summary, each line
+/// on its own, indented: stderr up to 11 lines, past that its first 5 and
+/// last 4; the last 4 lines of stdout, where some errors are (a merge
+/// conflict's, a test runner's). With `full`, all of both.
+pub fn failure_excerpt(stderr: &[u8], stdout: &[u8], full: bool) -> String {
+    let errors = shown_lines(stderr, full, (11, 5, 4));
+    let output = shown_lines(stdout, full, (4, 0, 4));
+    if output.is_empty() {
+        return errors.iter().map(|l| format!("\n  {l}")).collect();
+    }
+    [("stderr", errors), ("stdout", output)]
+        .iter()
+        .filter(|(_, lines)| !lines.is_empty())
+        .map(|(label, lines)| {
+            let lines: String = lines.iter().map(|l| format!("\n    {l}")).collect();
+            format!("\n  {label}:{lines}")
+        })
+        .collect()
+}
+
 /// [`escape`] for a path, which may also hold bytes that are not UTF-8.
 pub fn escape_path(path: &std::path::Path) -> String {
     escape(&path.to_string_lossy()).into_owned()
@@ -114,6 +223,47 @@ pub fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failure_excerpt_keeps_the_ends_and_says_what_it_cut() {
+        let numbered = |n: usize| -> String { (1..=n).map(|i| format!("l{i}\n")).collect() };
+        let shown = |text: &str| failure_excerpt(text.as_bytes(), b"", false);
+        assert_eq!(shown(&numbered(11)).lines().count(), 12);
+        let cut = shown(&numbered(12));
+        assert!(cut.contains("l5\n  … 3 more lines\n  l9\n"), "{cut}");
+        assert!(cut.ends_with("l12") && !cut.contains("l6"), "{cut}");
+
+        // nothing visible is no line; colour goes, other controls are shown
+        let said = shown("\u{1b}[31m\u{1b}[0m\n \u{200b}\n\u{1b}[1mbold\u{1b}[0m\u{1b}]0;t\u{7}\n");
+        assert_eq!(said, "\n  bold\\u{1b}]0;t\\u{7}");
+        // a tab is escaped, as everywhere else in the summary
+        for full in [false, true] {
+            assert_eq!(failure_excerpt(b"L\tR\n", b"", full), "\n  L\\tR");
+        }
+        assert_eq!(failure_excerpt(b"\n \n", b"\x1b[0m\n", true), "");
+
+        // 300 characters stay whole; past that the middle goes
+        assert_eq!(shortened(&"x".repeat(300)), "x".repeat(300));
+        let line = format!("{}{}{}", "a".repeat(200), "é".repeat(101), "z".repeat(100));
+        let want = format!(
+            "{}… 101 more characters …{}",
+            "a".repeat(200),
+            "z".repeat(100)
+        );
+        assert_eq!(shortened(&line), want);
+
+        // stdout's end, labelled; all of both with `full`, blank lines too
+        let both = failure_excerpt(b"e\n", numbered(6).as_bytes(), false);
+        assert_eq!(
+            both,
+            "\n  stderr:\n    e\n  stdout:\n    l3\n    l4\n    l5\n    l6"
+        );
+        let full = failure_excerpt(numbered(40).as_bytes(), b"a\n\nb\n", true);
+        assert!(
+            full.contains("l20") && full.contains("    a\n    \n    b"),
+            "{full}"
+        );
+    }
 
     #[test]
     fn clean_text_is_borrowed() {

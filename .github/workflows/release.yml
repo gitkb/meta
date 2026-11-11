@@ -261,3 +261,40 @@ jobs:
           else
             echo "Formula unchanged, skipping commit"
           fi
+
+
+  # Dependents that pin meta's releases get dep-update with this version once
+  # the release's assets are uploaded. meta is public and can't call the
+  # private gitkb/workflows, so this sends the dispatch itself: one per
+  # dependent that gitkb/workflows' dependents.yml lists with a release-pin
+  # entry for meta. Keep the two in step; its daily check fails when a listed
+  # one is missing here. Only this repo, and only a published release.
+  notify-release-pins:
+    name: Notify release pins
+    needs: release
+    if: github.repository == 'gitkb/meta'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Send dep-update with the version
+        env:
+          GH_TOKEN: ${{ secrets.PARENT_REPO_PAT }}
+          TAG: ${{ needs.release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::notice::${TAG} isn't vMAJOR.MINOR.PATCH; release pins take only those, so nothing is sent."
+            exit 0
+          fi
+          # The release's real state, not its tag's shape: a v1.2.3 can be a draft or marked prerelease.
+          state="$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq 'if .draft then "draft" elif .prerelease then "prerelease" else "published" end')"
+          if [[ "$state" != published ]]; then
+            echo "::notice::${TAG} is a ${state} release; release pins move only to published ones, so nothing is sent."
+            exit 0
+          fi
+          sha="$(gh api "repos/${REPO}/commits/${TAG}" --jq .sha)"
+          payload="$(jq -n --arg repo "$REPO" --arg sha "$sha" --arg version "${TAG#v}" \
+            '{event_type: "dep-update", client_payload: {repo: $repo, sha: $sha, version: $version}}')"
+          gh api --method POST repos/gitkb/atc-sandbox/dispatches --input - <<<"$payload" >/dev/null
+          echo "Sent dep-update ${REPO} ${TAG} to gitkb/atc-sandbox"

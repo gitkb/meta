@@ -10,6 +10,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// meta's `--full-errors`, for the request this plugin serves: clone
+/// failures end with git's whole error.
+pub(crate) static FULL_ERRORS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Clone `tasks` on a pool of `parallelism` threads, and each task
 /// the `.meta.yaml` of a finished one adds, until none is left.
 ///
@@ -151,8 +156,10 @@ fn failed(failure: &crate::clone_queue::CloneFailure) -> String {
 /// uncloned because its folder holds something else, each meta repo that
 /// lists one above it, and each nested `.meta.yaml` that can't be read, to
 /// stderr; return the command's error, or `None` when nothing failed.
-/// `command` (`git update`) is the one to run again.
+/// `command` (`git update`) is the one to run again. With
+/// `--full-errors` ([`FULL_ERRORS`]), git's errors are uncut.
 pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<String> {
+    let full = FULL_ERRORS.load(Ordering::Relaxed);
     let Outcome {
         cloned,
         failures,
@@ -210,7 +217,7 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
         .iter()
         .map(|f| {
             let name = meta_plugin::display::escape(&failed(f)).into_owned();
-            match meta_plugin::display::Excerpt::of(f.error.as_bytes())
+            match meta_plugin::display::Excerpt::of(f.error.as_bytes(), full)
                 .lines()
                 .as_slice()
             {

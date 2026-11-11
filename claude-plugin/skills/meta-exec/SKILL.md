@@ -131,6 +131,14 @@ Discard the output of the programs meta runs for `exec`, raw git commands (`meta
 meta --silent exec -- npm install
 ```
 
+## Why a Command Failed
+
+After the commands, the summary names each repo where one failed, how it ended, and why: an excerpt of what it wrote (stdout and stderr, in order), at most 11 lines and 300 characters a line. To see each failure's whole output there, uncut:
+
+```bash
+meta --full-errors exec -- cargo test
+```
+
 Every global option: `meta --help`.
 
 ## Practical Examples

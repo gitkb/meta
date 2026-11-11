@@ -93,16 +93,17 @@ pub fn program_output(output: &[u8]) -> String {
 }
 
 /// The lines of another program's output a summary shows under its failure,
-/// fed as the program writes, both streams into one in the order they were
-/// read: those with something on them, escaped (colour codes dropped first,
-/// tabs as spaces), each cut at [`EXCERPT_WIDTH`] characters; past
-/// [`EXCERPT_LINES`] of them, the first [`EXCERPT_HEAD`], how many are left
-/// out, and the last [`EXCERPT_TAIL`], where programs put the reason (git's
-/// `fatal:` after its hints). What it holds is bounded, however much the
-/// program writes.
+/// fed as the program writes it (one stream, or each of two: see
+/// [`Excerpt::chain`]): those with something on them, escaped (colour codes
+/// dropped first, tabs as spaces), each cut past [`EXCERPT_WIDTH`]
+/// characters; past [`EXCERPT_LINES`] of them, the first [`EXCERPT_HEAD`],
+/// how many are left out, and the last [`EXCERPT_TAIL`], where programs put
+/// the reason (git's `fatal:` after its hints). What it holds is bounded,
+/// however much the program writes. A full one ([`Excerpt::new`],
+/// `--full-errors`) keeps every line whole, up to [`FULL_LIMIT`] bytes.
 #[derive(Debug, Default, Clone)]
 pub struct Excerpt {
-    /// The first lines, up to [`EXCERPT_LINES`], ready to show
+    /// The first lines, up to [`EXCERPT_LINES`] (all, when full), ready to show
     head: Vec<String>,
     /// The last lines after those, up to [`EXCERPT_TAIL`]
     tail: std::collections::VecDeque<String>,
@@ -110,15 +111,53 @@ pub struct Excerpt {
     rest: usize,
     /// Each stream's line not ended yet (stdout, stderr)
     open: [Partial; 2],
+    /// Every line whole (`--full-errors`)
+    full: bool,
+    /// The bytes of the lines a full one holds
+    held: usize,
+    /// The lines a full one counted past [`FULL_LIMIT`], not kept
+    not_kept: usize,
 }
 
 /// A line being read: its first bytes, the last ones after those, and how
-/// many characters came after the first.
+/// many characters came after the first (colour codes don't count).
 #[derive(Debug, Default, Clone)]
 struct Partial {
     kept: Vec<u8>,
     last: std::collections::VecDeque<u8>,
     after: usize,
+    /// Where the bytes read so far left off: in a terminal code or not
+    scan: Scan,
+}
+
+/// Where a line's bytes left off, to count its characters as the excerpt
+/// shows them: colour codes (SGR) are none; any other code's bytes are
+/// shown, escaped.
+#[derive(Debug, Default, Clone, Copy)]
+enum Scan {
+    #[default]
+    Text,
+    /// After an ESC; how many of the code's characters are to count
+    Esc(usize),
+    /// In a CSI (`ESC [ …`)
+    Csi(usize),
+}
+
+impl Scan {
+    /// The state after byte `b`, and how many characters it ends up as
+    /// (`counted`: whether `b` is among those counted at all).
+    fn step(self, b: u8, counted: bool) -> (Scan, usize) {
+        let starts = usize::from(counted && b & 0xC0 != 0x80);
+        match self {
+            Scan::Text if b == 0x1b => (Scan::Esc(starts), 0),
+            Scan::Text => (Scan::Text, starts),
+            Scan::Esc(n) if b == b'[' => (Scan::Csi(n + starts), 0),
+            Scan::Esc(n) => (Scan::Text, n + starts),
+            Scan::Csi(n) if (0x20..=0x3f).contains(&b) => (Scan::Csi(n + starts), 0),
+            Scan::Csi(_) if b == b'm' => (Scan::Text, 0),
+            Scan::Csi(n) => (Scan::Text, n + starts),
+        }
+    }
 }
 
 /// How many lines of a program's output an [`Excerpt`] shows in full; past
@@ -138,7 +177,10 @@ pub const EXCERPT_LINE_TAIL: usize = 100;
 /// The bytes kept of a line's start and of its end, to show their
 /// characters with colour codes among them.
 const EXCERPT_KEEP: usize = EXCERPT_WIDTH * 8;
-const EXCERPT_KEEP_LAST: usize = EXCERPT_LINE_TAIL * 8;
+const EXCERPT_KEEP_LAST: usize = EXCERPT_LINE_TAIL * 16;
+/// The most a full excerpt keeps of one program's lines, in bytes: as much
+/// as meta captures of it ([`crate::process::CAPTURE_LIMIT`]'s 16 MiB).
+pub const FULL_LIMIT: usize = 16 << 20;
 
 /// Which of a program's streams bytes came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,9 +190,17 @@ pub enum Stream {
 }
 
 impl Excerpt {
+    /// An empty excerpt; with `full`, one that keeps every line whole.
+    pub fn new(full: bool) -> Self {
+        Excerpt {
+            full,
+            ..Excerpt::default()
+        }
+    }
+
     /// The excerpt of `output`, all of it written to one stream.
-    pub fn of(output: &[u8]) -> Self {
-        let mut excerpt = Excerpt::default();
+    pub fn of(output: &[u8], full: bool) -> Self {
+        let mut excerpt = Excerpt::new(full);
         excerpt.push(Stream::Stderr, output);
         excerpt.finish();
         excerpt
@@ -162,16 +212,26 @@ impl Excerpt {
             Stream::Stdout => 0,
             Stream::Stderr => 1,
         };
+        let keep = match self.full {
+            true => FULL_LIMIT.saturating_sub(self.held),
+            false => EXCERPT_KEEP,
+        };
         let mut lines = bytes.split(|&b| b == b'\n').peekable();
         while let Some(piece) = lines.next() {
             let Some(open) = self.open.get_mut(index) else {
                 return;
             };
-            let room = EXCERPT_KEEP.saturating_sub(open.kept.len());
+            let room = keep.saturating_sub(open.kept.len());
             let (kept, over) = piece.split_at(room.min(piece.len()));
             open.kept.extend_from_slice(kept);
-            // characters, as UTF-8 counts them: each byte that starts one
-            open.after += over.iter().filter(|&&b| b & 0xC0 != 0x80).count();
+            for &b in kept {
+                open.scan = open.scan.step(b, false).0;
+            }
+            for &b in over {
+                let (scan, chars) = open.scan.step(b, true);
+                open.scan = scan;
+                open.after += chars;
+            }
             open.last.extend(over);
             let extra = open.last.len().saturating_sub(EXCERPT_KEEP_LAST);
             open.last.drain(..extra);
@@ -196,9 +256,22 @@ impl Excerpt {
     }
 
     fn add(&mut self, line: Partial) {
-        let Some(line) = shown(&line) else {
+        if let Some(line) = shown(&line, self.full) {
+            self.add_shown(line);
+        }
+    }
+
+    fn add_shown(&mut self, line: String) {
+        if self.full {
+            match self.held < FULL_LIMIT {
+                true => {
+                    self.held += line.len();
+                    self.head.push(line);
+                }
+                false => self.not_kept += 1,
+            }
             return;
-        };
+        }
         if self.head.len() < EXCERPT_LINES {
             self.head.push(line);
             return;
@@ -210,8 +283,42 @@ impl Excerpt {
         self.rest += 1;
     }
 
+    /// This excerpt's lines, then `later`'s, as one: the output of two
+    /// streams meta read apart (stdout, then stderr, where the reason goes).
+    /// Both must be finished.
+    pub fn chain(self, later: Excerpt) -> Excerpt {
+        let mut out = Excerpt::new(self.full);
+        for part in [self, later] {
+            out.not_kept += part.not_kept;
+            // the lines between its first and its last aren't known
+            let hidden = part.rest.saturating_sub(part.tail.len());
+            for line in part.head {
+                out.add_shown(line);
+            }
+            if hidden > 0 {
+                out.tail.clear();
+                out.rest += hidden;
+            }
+            for line in part.tail {
+                out.add_shown(line);
+            }
+        }
+        out
+    }
+
     /// The lines to show, ended ones only (see [`Excerpt::finish`]).
     pub fn lines(&self) -> Vec<String> {
+        if self.full {
+            let mut lines = self.head.clone();
+            match self.not_kept {
+                0 => {}
+                n => lines.push(format!(
+                    "… {n} more lines (past {} MiB, not kept)",
+                    FULL_LIMIT >> 20
+                )),
+            }
+            return lines;
+        }
         if self.rest == 0 {
             return self.head.clone();
         }
@@ -235,30 +342,37 @@ impl Excerpt {
 
     /// Whether the program wrote any line with something on it.
     pub fn is_empty(&self) -> bool {
-        self.head.is_empty()
+        self.head.is_empty() && self.not_kept == 0
     }
 }
 
 /// `line` as an excerpt shows it, None when nothing would show of it (blank,
 /// or only terminal codes): colour codes dropped, tabs as spaces, a CRLF's
 /// CR dropped, every other control escaped; past [`EXCERPT_WIDTH`]
-/// characters, its start, how many are left out, and its end.
-fn shown(line: &Partial) -> Option<String> {
+/// characters, its start, how many are left out, and its end (`full`: all
+/// of it, up to [`FULL_LIMIT`]).
+fn shown(line: &Partial, full: bool) -> Option<String> {
     let start = plain(&line.kept);
-    // the end kept may start inside a character
+    // the end kept may start inside a character, or inside a colour code
+    // (`1m` left of `ESC [ 3 1 m`)
     let last: Vec<u8> = line
         .last
         .iter()
         .copied()
         .skip_while(|b| b & 0xC0 == 0x80)
         .collect();
-    let end = plain(&last);
+    let last = match line.after > 0 {
+        true => without_cut_code(&last),
+        false => &last[..],
+    };
+    let end = plain(last);
     if start.visible.trim().is_empty() && end.visible.trim().is_empty() {
         return None;
     }
     let chars: Vec<char> = start.text.chars().collect();
     let (head, tail, total): (String, String, usize) = match line.after {
-        0 if chars.len() <= EXCERPT_WIDTH => return Some(escape(&start.text).into_owned()),
+        0 if full || chars.len() <= EXCERPT_WIDTH => return Some(escape(&start.text).into_owned()),
+        after if full => (start.text.clone(), String::new(), chars.len() + after),
         0 => (
             chars.iter().take(EXCERPT_LINE_HEAD).collect(),
             chars
@@ -279,11 +393,30 @@ fn shown(line: &Partial) -> Option<String> {
         }
     };
     let left_out = total.saturating_sub(head.chars().count() + tail.chars().count());
-    Some(format!(
-        "{} … {left_out} more characters … {}",
-        escape(&head),
-        escape(&tail)
-    ))
+    Some(match tail.is_empty() {
+        true => format!("{} … {left_out} more characters", escape(&head)),
+        false => format!(
+            "{} … {left_out} more characters … {}",
+            escape(&head),
+            escape(&tail)
+        ),
+    })
+}
+
+/// `bytes` without the end of a terminal code cut off at their start: the
+/// parameters and final byte of a CSI whose `ESC [` (or `ESC`) went.
+fn without_cut_code(bytes: &[u8]) -> &[u8] {
+    let rest = bytes.strip_prefix(b"[").unwrap_or(bytes);
+    let params = rest
+        .iter()
+        .take_while(|b| (0x30..=0x3f).contains(*b))
+        .count();
+    match rest.get(params) {
+        Some(end) if (0x40..=0x7e).contains(end) && params < 16 => {
+            rest.get(params + 1..).unwrap_or_default()
+        }
+        _ => bytes,
+    }
 }
 
 /// A piece of a line, cleaned for an excerpt.
@@ -440,7 +573,7 @@ mod tests {
     fn an_excerpt_keeps_the_first_and_the_last_lines_of_a_long_output() {
         let with = |n: usize| {
             let output: String = (1..=n).map(|i| format!("line {i}\n\n")).collect();
-            Excerpt::of(output.as_bytes()).lines()
+            Excerpt::of(output.as_bytes(), false).lines()
         };
         let lines = |range: std::ops::RangeInclusive<usize>| -> Vec<String> {
             range.map(|i| format!("line {i}")).collect()
@@ -481,6 +614,7 @@ mod tests {
         // row; tabs line up as a terminal shows them; a CRLF's CR goes
         let codes = Excerpt::of(
             b"\x1b[31merror:\x1b[0m red\n\x1b[0m\n\x1b[K\n\t\nfatal: real\r\n\x1b]0;T\x07x\nab\terr\n",
+            false,
         );
         assert_eq!(
             codes.lines(),
@@ -489,6 +623,63 @@ mod tests {
                 "fatal: real",
                 "\\u{1b}]0;T\\u{7}x",
                 "ab      err"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_long_coloured_line_counts_the_characters_it_shows() {
+        // 400 red R's (10 bytes each with their codes), then END: 403 shown
+        let line = format!("{}END\n", "\x1b[31mR\x1b[0m".repeat(400));
+        let lines = Excerpt::of(line.as_bytes(), false).lines();
+        assert_eq!(
+            lines,
+            [format!(
+                "{} … 103 more characters … {}END",
+                "R".repeat(200),
+                "R".repeat(97)
+            )]
+        );
+    }
+
+    #[test]
+    fn a_full_excerpt_keeps_every_line_whole() {
+        let mut output: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        output.push_str(&"x".repeat(1 << 20));
+        output.push('\n');
+        let lines = Excerpt::of(output.as_bytes(), true).lines();
+        assert_eq!(lines.len(), 31);
+        assert_eq!(lines.first().map(String::as_str), Some("line 1"));
+        assert_eq!(lines.last().map(String::len), Some(1 << 20));
+        // capped: 5, the count, 4; the long line cut
+        let capped = Excerpt::of(output.as_bytes(), false).lines();
+        assert_eq!(capped.len(), 10);
+        assert!(capped.iter().all(|line| line.len() < 400), "{capped:?}");
+    }
+
+    #[test]
+    fn two_streams_read_apart_chain_with_the_later_one_last() {
+        let out = Excerpt::of(
+            (1..=20)
+                .map(|i| format!("out {i}\n"))
+                .collect::<String>()
+                .as_bytes(),
+            false,
+        );
+        let err = Excerpt::of(b"error: the reason\n", false);
+        assert_eq!(
+            out.chain(err).lines(),
+            [
+                "out 1",
+                "out 2",
+                "out 3",
+                "out 4",
+                "out 5",
+                "… 12 more lines",
+                "out 18",
+                "out 19",
+                "out 20",
+                "error: the reason"
             ]
         );
     }

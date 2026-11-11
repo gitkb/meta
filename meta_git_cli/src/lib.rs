@@ -122,6 +122,10 @@ fn routed(words: &str, cli: &clap::Command) -> Vec<String> {
 /// Answer `request`: a command meta-git adapts, or any other git command,
 /// as typed, in each selected repo.
 pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Response> {
+    clone_worker::FULL_ERRORS.store(
+        request.meta.full_errors,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let command = request.command.as_str();
     let args = &request.args;
     debug!("[meta_git_cli] Plugin invoked with command: '{command}'");

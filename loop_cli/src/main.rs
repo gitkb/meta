@@ -42,6 +42,12 @@ struct Cli {
     #[arg(short, long, help = "Suppress command output")]
     silent: bool,
 
+    #[arg(
+        long,
+        help = "In the summary, show each failed command's whole output, uncut"
+    )]
+    full_errors: bool,
+
     #[arg(short, long, help = "Enable verbose output")]
     verbose: bool,
 }
@@ -123,6 +129,7 @@ fn run_loop() -> Result<()> {
     }
     config.verbose |= cli.verbose;
     config.silent |= cli.silent;
+    config.full_errors |= cli.full_errors;
     config.aliases = with_global_aliases(config.aliases)?;
 
     // If no directories specified, use current and all child directories;

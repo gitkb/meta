@@ -38,6 +38,7 @@ loop cargo test
 | `-e, --exclude <DIR>` | Skip these directories, by name or path end (comma list, or repeat) |
 | `-v, --verbose` | Enable verbose output |
 | `-s, --silent` | Suppress command output |
+| `--full-errors` | In the summary, show each failed command's whole output, uncut |
 | `--add-aliases-to-global-looprc` | Import your shell's aliases into `~/.looprc` (runs no command) |
 
 A flag only turns a setting on: `"silent": true` in the file stays without `-s`.

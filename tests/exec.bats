@@ -1038,3 +1038,105 @@ YAML
     [[ "$summary" != *"first of r6"* ]]
     [ "$(grep -v '^[[:space:]]*$' <<<"$summary" | tail -1)" = "✗ Failed (7): ./r1, ./r2, ./r3, ./r4, ./r5, ./r6, ./r7" ]
 }
+
+@test "a live command on a terminal still sees one, and its output keeps its order" {
+    load "${BATS_TEST_DIRNAME}/helpers/terminal.bash"
+    # the words are made as it runs: the summary's line shows the command
+    local probe='[ -t 1 ] && printf "%s-on-a-terminal\n" out; [ -t 2 ] && printf "%s-on-a-terminal\n" err >&2; echo one; echo two >&2; echo three; exit 3'
+    run with_terminal "$META_BIN" --sequential -i api exec -- sh -c "$probe"
+    [[ "$output" == *"out-on-a-terminal"* && "$output" == *"err-on-a-terminal"* ]]
+    # and the summary still has its reason, in the order it was written
+    local summary=${output#*Summary:}
+    [[ "$summary" == *"    out-on-a-terminal"*"    err-on-a-terminal"*"    one"*"    two"*"    three"* ]]
+    # not on a terminal, it sees none (as without meta)
+    run "$META_BIN" --sequential -i api exec -- sh -c "$probe"
+    [[ "$output" != *"out-on-a-terminal"* && "$output" != *"err-on-a-terminal"* ]]
+}
+
+@test "a parallel failure's excerpt ends with what it wrote last, after a long stdout" {
+    for _ in 1 2 3 4 5; do
+        run "$META_BIN" --parallel -i api,worker exec -- sh -c 'seq 1 50000; echo "error: build failed in ${PWD##*/}" >&2; exit 2'
+        [ "$status" -eq 1 ]
+        local summary=${output#*Summary:}
+        for repo in api worker; do
+            [[ "$summary" == *"    49999"$'\n'"    50000"$'\n'"    error: build failed in $repo"* ]]
+        done
+    done
+}
+
+@test "a second Ctrl-C kills what the commands started too, and still prints the summary" {
+    # what a command started is found in /proc
+    [ "$(uname)" = Linux ] || skip "Linux only"
+    # frontend fails at once; api and worker ignore Ctrl-C, as does the
+    # sleep each leaves behind
+    cat > "$TEST_DIR/ctrlc.py" <<'PY'
+import os, pty, sys, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+out = b""
+import select
+def wait_for(path_names, seconds):
+    end = time.time() + seconds
+    while time.time() < end:
+        if all(os.path.exists(p) for p in path_names):
+            return
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if r:
+            try:
+                out_chunk = os.read(fd, 65536)
+            except OSError:
+                return
+            globals()["out"] += out_chunk
+wait_for([os.environ["TEST_DIR"] + "/sleep-" + n for n in ("api", "worker")], 20)
+os.write(fd, b"\x03")
+time.sleep(1)
+os.write(fd, b"\x03")
+end = time.time() + 10
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if not r:
+        continue
+    try:
+        chunk = os.read(fd, 65536)
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+os.waitpid(pid, 0)
+sys.stdout.buffer.write(out)
+PY
+    local script='[ "${PWD##*/}" = frontend ] && { echo "fatal: frontend broke" >&2; exit 1; }; trap "" INT; sleep 60 & echo $! > "$TEST_DIR/sleep-${PWD##*/}"; wait; wait'
+    TEST_DIR="$TEST_DIR" run python3 "$TEST_DIR/ctrlc.py" "$META_BIN" --parallel -i api,worker,frontend exec -- sh -c "$script"
+    [[ "$output" == *"Interrupted: 1 of 3 commands finished, 1 failed"* ]]
+    [[ "$output" == *"fatal: frontend broke"* ]]
+    [[ "$output" == *"Stopped while running: ./api, ./worker"* || "$output" == *"Stopped while running: ./worker, ./api"* ]]
+    # what they left behind is gone too
+    sleep 0.5
+    for repo in api worker; do
+        ! kill -0 "$(cat "$TEST_DIR/sleep-$repo")" 2>/dev/null
+    done
+}
+
+@test "--full-errors shows each failure's whole output; without it the summary caps it" {
+    local long='for i in $(seq 30); do echo "line $i" >&2; done; head -c 1048576 /dev/zero | tr "\0" x >&2; echo END >&2; exit 2'
+    for mode in --parallel --sequential; do
+        run "$META_BIN" $mode --full-errors -i api exec -- sh -c "$long"
+        [ "$status" -eq 1 ]
+        # (cut with sed: a pattern on 2 MB is slow in bash)
+        printf '%s\n' "$output" | sed -n '/Summary:/,$p' > "$TEST_DIR/summary"
+        [ "$(grep -c '^    line [0-9]*$' "$TEST_DIR/summary")" -eq 30 ]
+        ! grep -q 'more lines\|more characters' "$TEST_DIR/summary"
+        # the megabyte line, whole
+        [ "$(grep -c '^    x*END$' "$TEST_DIR/summary")" -eq 1 ]
+        [ "$(grep '^    x*END$' "$TEST_DIR/summary" | wc -c)" -eq $((4 + 1048576 + 3 + 1)) ]
+        run "$META_BIN" $mode -i api exec -- sh -c "$long"
+        # (cut with sed: a pattern on 2 MB is slow in bash)
+        printf '%s\n' "$output" | sed -n '/Summary:/,$p' > "$TEST_DIR/summary"
+        grep -q '^    … 22 more lines$' "$TEST_DIR/summary"
+        grep -q '… 1048279 more characters …' "$TEST_DIR/summary"
+        # the first 5 and the last 3, with the long line after them
+        [ "$(grep -c '^    line [0-9]*$' "$TEST_DIR/summary")" -eq 8 ]
+    done
+}

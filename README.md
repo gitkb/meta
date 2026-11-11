@@ -65,6 +65,8 @@ Most multi-repo tools solve the *cloning* problem. Meta solves the *working* pro
    meta exec -- cargo test
    ```
 
+   The summary after them names each repo where a command failed, with an excerpt of why; `meta --full-errors exec -- cargo test` shows each failure's whole output there.
+
 3. **Filter by tags** (meta's options go before the command):
 
    ```bash

@@ -732,6 +732,7 @@ pub fn request(
         strict: cli.strict,
         verbose: cli.verbose,
         silent: cli.silent,
+        full_errors: cli.full_errors,
         color: meta_plugin::out::color(),
         interactive: std::io::IsTerminal::is_terminal(&std::io::stdin()),
         jobs: match target.map_or(cli.parallel, |t| t.parallel) {
@@ -901,6 +902,7 @@ pub fn run_plan(
     let config = LoopConfig {
         verbose: cli.verbose,
         silent: cli.silent,
+        full_errors: cli.full_errors,
         parallel: plan
             .parallel
             .unwrap_or_else(|| target.map_or(cli.parallel, |t| t.parallel)),
@@ -947,6 +949,7 @@ pub fn exec(cli: &Cli, argv: &[String], report: &mut Report) -> Result<()> {
     let config = loop_lib::LoopConfig {
         verbose: cli.verbose,
         silent: cli.silent,
+        full_errors: cli.full_errors,
         parallel: target.parallel,
         dry_run: cli.dry_run,
         json_output: cli.json,

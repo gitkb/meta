@@ -230,6 +230,7 @@ meta-safety/SKILL.md ed4a894abe9799ad3f39218e674a4dfc04d0130f
 meta-safety/SKILL.md 21305bd54631389dfa7131868c3503d422ef39c1
 meta-exec/SKILL.md 4c7ec0457959405af75c80e9f95d3350beec2a93
 meta-exec/SKILL.md ff7f389b40d47f529a9c25db24ecba45dab87017
+meta-exec/SKILL.md bbb9f7baad17f4cd7c67334f80bedb799d98701d
 meta-plugins/SKILL.md f1c1107d60e288dccda5c62892162100d8b9c34a
 meta-plugins/SKILL.md 61f24eb2ff9f9641303d2333b5531a1463171568
 rules/meta-destructive-commands.md 10b3bd3428822776cc8895852bd7279e443a4bc3

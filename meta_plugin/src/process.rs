@@ -248,14 +248,17 @@ impl Owned {
     /// [`TooMuchOutput`] error: nothing of its output is kept, so no caller
     /// shows part of it as if it were all.
     pub fn exchange(self, input: &[u8]) -> io::Result<Output> {
-        self.exchange_with(input, &|_, _| {})
+        self.exchange_with(input, None, &|_, _| {})
     }
 
     /// [`Owned::exchange`], telling `watch` of each piece of output as it
-    /// is read, from the thread reading that stream.
+    /// is read, from the thread reading that stream. `merged`: the one pipe
+    /// the child's stdout and stderr both write to, read as its stdout (so
+    /// what it wrote keeps its order), when neither was piped on its own.
     pub fn exchange_with(
         mut self,
         input: &[u8],
+        merged: Option<io::PipeReader>,
         watch: &(dyn Fn(crate::display::Stream, &[u8]) + Sync),
     ) -> io::Result<Output> {
         use std::io::{Read, Write};
@@ -276,10 +279,14 @@ impl Owned {
         }
         let stdin = self.child.stdin.take();
         let pipes = [
-            self.child
-                .stdout
-                .take()
-                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+            match merged {
+                Some(pipe) => Some(Box::new(pipe) as Box<dyn Read + Send>),
+                None => self
+                    .child
+                    .stdout
+                    .take()
+                    .map(|p| Box::new(p) as Box<dyn Read + Send>),
+            },
             self.child
                 .stderr
                 .take()
@@ -457,13 +464,50 @@ pub fn on_stop(then: Option<Box<dyn Fn() + Send + Sync>>) {
     *hook() = then.map(std::sync::Arc::from);
 }
 
-/// Run what [`on_stop`] set, at most once.
+/// Run what [`on_stop`] set, at most once; false when it had been taken
+/// (it runs, or ran, elsewhere).
 #[cfg(unix)]
-fn stopped() {
+fn stopped() -> bool {
     let then = hook().take();
-    if let Some(then) = then {
-        then();
+    match then {
+        Some(then) => {
+            then();
+            true
+        }
+        None => false,
     }
+}
+
+/// A pseudo-terminal like the terminal `like` (its settings and size), for
+/// a child to write to as it would to that terminal: meta's end, then the
+/// child's. The child's end is no one's controlling terminal: its stdin,
+/// `/dev/tty`, Ctrl-C and job control stay with the real one.
+#[cfg(unix)]
+pub fn terminal_like(like: impl std::os::fd::AsFd) -> io::Result<(std::fs::File, std::fs::File)> {
+    use rustix::fs::{Mode, OFlags};
+    use rustix::pty::OpenptFlags;
+    let ours = rustix::pty::openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
+    rustix::pty::grantpt(&ours)?;
+    rustix::pty::unlockpt(&ours)?;
+    let name = rustix::pty::ptsname(&ours, Vec::new())?;
+    let theirs = rustix::fs::open(
+        name.as_c_str(),
+        OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    if let Ok(mut settings) = rustix::termios::tcgetattr(&like) {
+        // what the child writes passes through as it wrote it: the real
+        // terminal does its own output processing (`\n` to `\r\n`), once
+        settings
+            .output_modes
+            .remove(rustix::termios::OutputModes::OPOST);
+        let _ =
+            rustix::termios::tcsetattr(&theirs, rustix::termios::OptionalActions::Now, &settings);
+    }
+    if let Ok(size) = rustix::termios::tcgetwinsize(&like) {
+        let _ = rustix::termios::tcsetwinsize(&theirs, size);
+    }
+    Ok((std::fs::File::from(ours), std::fs::File::from(theirs)))
 }
 
 /// Make this program the owner of its children's signals (see the module
@@ -733,8 +777,21 @@ mod imp {
         std::thread::spawn(move || {
             let mut stopping = false;
             for origin in signals.forever() {
+                // a second signal: everything is killed, and what finished
+                // is still told (the first stop may wait on children that
+                // ignored it), for at most a second
                 if stopping {
                     kill_all();
+                    // what finished is still told when the first stop
+                    // hasn't (it waits on children that ignored it), for at
+                    // most a second; one already telling is not waited for
+                    let (told, wait) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        if super::stopped() {
+                            let _ = told.send(());
+                        }
+                    });
+                    let _ = wait.recv_timeout(std::time::Duration::from_secs(1));
                     crate::exit::now(crate::exit::signalled(origin.signal));
                 }
                 stopping = true;
@@ -794,10 +851,52 @@ mod imp {
                 .unwrap_or_else(|poisoned| poisoned.into_inner().0);
         }
         drop(children);
-        super::stopped();
+        let _ = super::stopped();
         let _ = signal_hook::low_level::emulate_default_handler(signal);
         // SIGHUP, SIGINT and SIGTERM all end a program by default
         crate::exit::now(crate::exit::signalled(signal));
+    }
+
+    /// The processes `of` started that still run, and theirs in turn.
+    fn descendants(of: &[Pid]) -> Vec<Pid> {
+        #[cfg(target_os = "linux")]
+        {
+            let Ok(procs) = std::fs::read_dir("/proc") else {
+                return Vec::new();
+            };
+            // (pid, parent) of each process: the parent is the field after
+            // the name in parentheses, which can hold anything
+            let parents: Vec<(i32, i32)> = procs
+                .flatten()
+                .filter_map(|entry| {
+                    let pid = entry.file_name().to_str()?.parse().ok()?;
+                    let stat = std::fs::read_to_string(entry.path().join("stat")).ok()?;
+                    let (_, fields) = stat.rsplit_once(')')?;
+                    let parent = fields.split_whitespace().nth(1)?.parse().ok()?;
+                    Some((pid, parent))
+                })
+                .collect();
+            let mut found: Vec<i32> = of.iter().map(|pid| pid.as_raw_nonzero().get()).collect();
+            let mut new = Vec::new();
+            loop {
+                let more: Vec<i32> = parents
+                    .iter()
+                    .filter(|(pid, parent)| found.contains(parent) && !found.contains(pid))
+                    .map(|(pid, _)| *pid)
+                    .collect();
+                if more.is_empty() {
+                    break;
+                }
+                found.extend(&more);
+                new.extend(more);
+            }
+            new.into_iter().filter_map(Pid::from_raw).collect()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = of;
+            Vec::new()
+        }
     }
 
     /// Kill every child and every group this program made.
@@ -805,11 +904,19 @@ mod imp {
         kill(&lock());
     }
 
+    /// Kill every child and what it started: a group of its own whole; one
+    /// in this program's group with what it started that still runs (found
+    /// on Linux; elsewhere the child alone).
     fn kill(children: &Children) {
-        for (pid, own_group) in &children.running {
-            if !own_group {
-                let _ = rustix::process::kill_process(*pid, Signal::KILL);
-            }
+        let shared: Vec<Pid> = children
+            .running
+            .iter()
+            .filter(|(_, own_group)| !own_group)
+            .map(|(pid, _)| *pid)
+            .collect();
+        // found before the children die, as theirs go to init then
+        for pid in shared.iter().chain(&descendants(&shared)) {
+            let _ = rustix::process::kill_process(*pid, Signal::KILL);
         }
         for group in &children.groups {
             let _ = rustix::process::kill_process_group(*group, Signal::KILL);

@@ -34,6 +34,14 @@ pub struct LoopConfig {
     pub parallel: bool,
     pub dry_run: bool,
     pub json_output: bool,
+    /// The summary shows every failed command's whole output, no line or
+    /// width cut (`--full-errors`)
+    pub full_errors: bool,
+    /// Capture a command's stdout and stderr through one pipe, so they keep
+    /// the order it wrote them in: [`run_commands`] sets it when meta's own
+    /// are one place, outside `--json` (whose rows keep them apart)
+    #[serde(skip)]
+    pub one_stream: bool,
     /// Milliseconds between two command starts in parallel mode (0: none),
     /// to spread out connections
     pub spawn_stagger_ms: u64,
@@ -121,22 +129,25 @@ impl Outer {
         };
         let rejected = |spelling: &str, result: &CommandResult| {
             let name = spelling.trim_start_matches('-');
-            String::from_utf8_lossy(&result.stderr).lines().any(|line| {
-                let lower = line.to_lowercase();
-                [
-                    "unknown option",
-                    "unknown switch",
-                    "unrecognized option",
-                    "unrecognized argument",
-                    "unexpected argument",
-                ]
-                .iter()
-                .any(|says| lower.contains(says))
-                    && (line.contains(&format!("`{name}'"))
-                        || line.contains(&format!("`{name}="))
-                        || line.contains(&format!("'{spelling}'"))
-                        || line.contains(&format!("'{spelling}="))
-                        || line.trim_end().ends_with(&format!(": {spelling}")))
+            // one pipe may have held both
+            [&result.stderr, &result.stdout].iter().any(|output| {
+                String::from_utf8_lossy(output).lines().any(|line| {
+                    let lower = line.to_lowercase();
+                    [
+                        "unknown option",
+                        "unknown switch",
+                        "unrecognized option",
+                        "unrecognized argument",
+                        "unexpected argument",
+                    ]
+                    .iter()
+                    .any(|says| lower.contains(says))
+                        && (line.contains(&format!("`{name}'"))
+                            || line.contains(&format!("`{name}="))
+                            || line.contains(&format!("'{spelling}'"))
+                            || line.contains(&format!("'{spelling}="))
+                            || line.trim_end().ends_with(&format!(": {spelling}")))
+                })
             })
         };
         let word = self
@@ -209,6 +220,8 @@ impl Default for LoopConfig {
             parallel: false,
             dry_run: false,
             json_output: false,
+            full_errors: false,
+            one_stream: false,
             spawn_stagger_ms: 0,
             env: None,
             max_parallel: None,
@@ -246,8 +259,9 @@ pub struct CommandResult {
     /// its output dropped
     pub too_much_output: Option<TooMuchOutput>,
     /// What the summary shows of its output (stdout and stderr, live ones
-    /// too), or why it didn't start
-    pub excerpt: Excerpt,
+    /// too), or why it didn't start; None when meta saw none of it (a live
+    /// run on a Windows console)
+    pub excerpt: Option<Excerpt>,
 }
 
 impl CommandResult {
@@ -544,7 +558,7 @@ fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
         directory: dir.to_path_buf(),
         command,
         stdout: Vec::new(),
-        excerpt: Excerpt::of(stderr.as_bytes()),
+        excerpt: Some(Excerpt::of(stderr.as_bytes(), false)),
         stderr: stderr.into_bytes(),
         ..CommandResult::default()
     }
@@ -650,15 +664,15 @@ fn execute_in_directory(
     let ran = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
         match config.silent {
             true => meta_plugin::process::status(cmd.stdout(Stdio::null()).stderr(Stdio::null()))
-                .map(|status| (status, Excerpt::default(), None)),
-            false => run_live(&mut cmd),
+                .map(|status| (status, Some(Excerpt::default()), None)),
+            false => run_live(&mut cmd, config.full_errors),
         }
         .map_err(|e| anyhow::anyhow!(not_started(&argv, &e)))
     });
     let (ran, excerpt) = match ran {
         Ok((_, _, Some(closed))) => return Err(closed.into()),
         Ok((status, excerpt, None)) => (Ok(status), excerpt),
-        Err(e) => (Err(e), Excerpt::default()),
+        Err(e) => (Err(e), None),
     };
     let result = match ran {
         Ok(status) => {
@@ -698,56 +712,109 @@ fn execute_in_directory(
 const LINGER: Duration = Duration::from_secs(2);
 
 /// Run `cmd` live: what it writes is shown as it comes, on meta's stdout
-/// and stderr, through pipes, and kept in its excerpt. It colours as meta
-/// does, and its stdin stays the user's (for a prompt). When stdout and
-/// stderr are one file or terminal, one pipe takes both, so they keep the
-/// order it wrote them in. A stdout that closed (`| head`) stops the
-/// showing, so the command's next write fails as it would have; it is the
-/// error returned with its end. What it leaves running is shown for up to
-/// [`LINGER`] after it ends.
-fn run_live(cmd: &mut Command) -> io::Result<(ExitStatus, Excerpt, Option<StdoutError>)> {
+/// and stderr, and kept in its excerpt (`full`: whole), which is None when
+/// meta saw none of it. Its stdin stays the user's (for a prompt).
+///
+/// It writes where it would have without meta in between, as far as it can
+/// tell: on Unix, a stream meta has on a terminal goes to a pseudo-terminal
+/// like it (both streams to one, when both are on that terminal), so the
+/// command still sees a terminal there (colour, progress, line buffering, an
+/// `ls` in columns) and writes in order; a stream that isn't goes through a
+/// pipe, one for both when they go to one file. On Windows, a command whose
+/// output would reach a console writes to it as before, and meta sees none
+/// of it (there, a summary of a live run has no excerpt).
+///
+/// A stdout that closed (`| head`) stops the showing, so the command's next
+/// write fails as it would have; it is the error returned with its end.
+/// What it leaves running is shown for up to [`LINGER`] after it ends.
+fn run_live(
+    cmd: &mut Command,
+    full: bool,
+) -> io::Result<(ExitStatus, Option<Excerpt>, Option<StdoutError>)> {
+    use std::io::Read;
     use std::sync::Arc;
+    let terminal = [io::stdout().is_terminal(), io::stderr().is_terminal()];
+    if cfg!(windows) && terminal.contains(&true) {
+        return meta_plugin::process::status(cmd).map(|status| (status, None, None));
+    }
     meta_plugin::out::pass_color(cmd);
-    let (out, out_end) = io::pipe()?;
-    let pipes = match meta_plugin::out::stdout_is_stderr() {
-        true => {
-            cmd.stdout(out_end.try_clone()?).stderr(out_end);
-            vec![(out, Stream::Stdout)]
-        }
-        false => {
-            let (err, err_end) = io::pipe()?;
-            cmd.stdout(out_end).stderr(err_end);
-            vec![(out, Stream::Stdout), (err, Stream::Stderr)]
-        }
+    let one_place = meta_plugin::out::stdout_is_stderr();
+    // what meta reads, and which of its streams that goes to
+    let mut sources: Vec<(Box<dyn Read + Send>, Stream)> = Vec::new();
+    let pipe =
+        |sources: &mut Vec<(Box<dyn Read + Send>, Stream)>, to| -> io::Result<io::PipeWriter> {
+            let (read, write) = io::pipe()?;
+            sources.push((Box::new(read), to));
+            Ok(write)
+        };
+    #[cfg(unix)]
+    let tty = match terminal {
+        [true, _] => Some(Stream::Stdout),
+        [false, true] => Some(Stream::Stderr),
+        [false, false] => None,
     };
+    #[cfg(not(unix))]
+    let tty: Option<Stream> = None;
+    match tty {
+        #[cfg(unix)]
+        Some(to) => {
+            let (ours, theirs) = match to {
+                Stream::Stdout => meta_plugin::process::terminal_like(io::stdout())?,
+                Stream::Stderr => meta_plugin::process::terminal_like(io::stderr())?,
+            };
+            sources.push((Box::new(ours), to));
+            match (to, one_place) {
+                (Stream::Stdout, true) => {
+                    cmd.stdout(theirs.try_clone()?).stderr(theirs);
+                }
+                (Stream::Stdout, false) => {
+                    let err = pipe(&mut sources, Stream::Stderr)?;
+                    cmd.stdout(theirs).stderr(err);
+                }
+                (Stream::Stderr, _) => {
+                    let out = pipe(&mut sources, Stream::Stdout)?;
+                    cmd.stdout(out).stderr(theirs);
+                }
+            }
+        }
+        _ if one_place => {
+            let both = pipe(&mut sources, Stream::Stdout)?;
+            cmd.stdout(both.try_clone()?).stderr(both);
+        }
+        _ => {
+            let out = pipe(&mut sources, Stream::Stdout)?;
+            let err = pipe(&mut sources, Stream::Stderr)?;
+            cmd.stdout(out).stderr(err);
+        }
+    }
     let spawned = meta_plugin::process::spawn(cmd);
-    // meta keeps no write end: the pipes end with what the command started
+    // meta keeps no write end: its pipes end with what the command started
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
     let mut child = spawned?;
-    let excerpt = Arc::new(Mutex::new(Excerpt::default()));
+    let excerpts = Arc::new(Mutex::new([Excerpt::new(full), Excerpt::new(full)]));
     let closed: Arc<Mutex<Option<StdoutError>>> = Arc::new(Mutex::new(None));
     let (ended, all_ended) = std::sync::mpsc::channel::<()>();
-    for (mut pipe, stream) in pipes {
-        let (excerpt, closed, ended) = (excerpt.clone(), closed.clone(), ended.clone());
+    for (mut source, to) in sources {
+        let (excerpts, closed, ended) = (excerpts.clone(), closed.clone(), ended.clone());
         let relay = move || {
-            use std::io::Read;
             let _ended = ended;
             let mut chunk = vec![0u8; 64 * 1024];
             loop {
-                let bytes = match pipe.read(&mut chunk) {
+                let bytes = match source.read(&mut chunk) {
                     Ok(0) => return,
                     Ok(n) => chunk.get(..n).unwrap_or_default(),
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    // a pseudo-terminal whose last writer has gone (EIO)
                     Err(_) => return,
                 };
-                lock(&excerpt).push(stream, bytes);
-                let shown = match stream {
+                pushed(&excerpts, to, bytes);
+                let shown = match to {
                     Stream::Stdout => meta_plugin::out::stdout_bytes(bytes)
                         .and_then(|()| meta_plugin::out::flush())
                         .map_err(Some),
                     Stream::Stderr => meta_plugin::out::try_stderr_bytes(bytes).map_err(|_| None),
                 };
-                // the pipe is let go: the command's next write to it fails
+                // let go: the command's next write to it fails
                 if let Err(e) = shown {
                     if let Some(e) = e {
                         lock(&closed).get_or_insert(e);
@@ -766,10 +833,28 @@ fn run_live(cmd: &mut Command) -> io::Result<(ExitStatus, Excerpt, Option<Stdout
     let status = child.wait()?;
     // nothing is sent: it returns once every relay has ended, or at LINGER
     let _ = all_ended.recv_timeout(LINGER);
-    let mut excerpt = lock(&excerpt).clone();
-    excerpt.finish();
+    let excerpt = joined(lock(&excerpts).clone());
     let closed = lock(&closed).take();
-    Ok((status, excerpt, closed))
+    Ok((status, Some(excerpt), closed))
+}
+
+/// Add `bytes` written to `stream` to its excerpt.
+fn pushed(excerpts: &Mutex<[Excerpt; 2]>, stream: Stream, bytes: &[u8]) {
+    let index = match stream {
+        Stream::Stdout => 0,
+        Stream::Stderr => 1,
+    };
+    if let Some(excerpt) = lock(excerpts).get_mut(index) {
+        excerpt.push(stream, bytes);
+    }
+}
+
+/// The excerpts of stdout and stderr as one, stderr last (where a reason
+/// goes); with both in one stream, stderr's is empty.
+fn joined([mut out, mut err]: [Excerpt; 2]) -> Excerpt {
+    out.finish();
+    err.finish();
+    out.chain(err)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -833,7 +918,10 @@ fn capture_in_directory(
     meta_plugin::out::pass_color(&mut cmd_builder);
 
     // Silenced, under --json too: it goes nowhere, nothing held
-    let excerpt = Mutex::new(Excerpt::default());
+    let excerpts = Mutex::new([
+        Excerpt::new(config.full_errors),
+        Excerpt::new(config.full_errors),
+    ]);
     let output = match config.silent {
         true => meta_plugin::process::status(
             cmd_builder
@@ -846,18 +934,13 @@ fn capture_in_directory(
             stdout: Vec::new(),
             stderr: Vec::new(),
         }),
-        false => {
-            cmd_builder
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            meta_plugin::process::spawn(&mut cmd_builder).and_then(|child| {
-                child.exchange_with(&[], &|stream, bytes| lock(&excerpt).push(stream, bytes))
-            })
-        }
+        false => capture(&mut cmd_builder, config.one_stream, &excerpts),
     };
-    let mut excerpt = excerpt.into_inner().unwrap_or_else(PoisonError::into_inner);
-    excerpt.finish();
+    let excerpt = joined(
+        excerpts
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner),
+    );
 
     match output {
         Ok(output) => {
@@ -873,19 +956,49 @@ fn capture_in_directory(
                 argv,
                 stdout: output.stdout,
                 stderr: output.stderr,
-                excerpt,
+                excerpt: Some(excerpt),
                 ..CommandResult::default()
             }
         }
         Err(e) => match TooMuchOutput::of(&e) {
             // what it wrote up to the limit is still in its excerpt
             Some(over) => CommandResult {
-                excerpt,
+                excerpt: Some(excerpt),
                 ..too_much(dir, command, argv, over)
             },
             None => failed_result(dir, command, format!("{}\n", not_started(&argv, &e))),
         },
     }
+}
+
+/// Run `cmd` with its output captured, told to `excerpts` as it comes.
+/// With `one_stream` ([`LoopConfig::one_stream`]), one pipe takes both
+/// stdout and stderr, so what it wrote keeps its order: its stdout holds
+/// all of it, shown there (meta's stdout and stderr are one place). Else
+/// each has its own.
+fn capture(
+    cmd: &mut Command,
+    one_stream: bool,
+    excerpts: &Mutex<[Excerpt; 2]>,
+) -> io::Result<std::process::Output> {
+    cmd.stdin(Stdio::null());
+    let merged = match one_stream {
+        true => {
+            let (read, write) = io::pipe()?;
+            cmd.stdout(write.try_clone()?).stderr(write);
+            Some(read)
+        }
+        false => {
+            cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+            None
+        }
+    };
+    let spawned = meta_plugin::process::spawn(cmd);
+    // meta keeps no write end: the pipe ends with what the command started
+    cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    spawned?.exchange_with(&[], merged, &|stream, bytes| {
+        pushed(excerpts, stream, bytes)
+    })
 }
 
 /// The result of a command that wrote more than meta keeps of one: it ran,
@@ -1225,6 +1338,10 @@ fn run_one(config: &LoopConfig, job: &DirCommand) -> Result<CommandResult> {
 /// [`Outcome`]). A failed command is part of the outcome, not an error.
 /// This is the execution engine for meta and its plugins.
 pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<Outcome> {
+    let config = &LoopConfig {
+        one_stream: !config.json_output && meta_plugin::out::stdout_is_stderr(),
+        ..config.clone()
+    };
     let text = !config.json_output;
     // on stderr, unless the caller's report lists them
     if text {
@@ -1241,7 +1358,7 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<Outc
     if commands.is_empty() {
         return Ok(outcome(Vec::new(), None));
     }
-    let watch = text.then(|| Watch::start(commands.len()));
+    let watch = text.then(|| Watch::start(commands.len(), config.full_errors));
     let results = if config.parallel {
         run_parallel(config, commands)?
     } else {
@@ -1324,7 +1441,7 @@ fn print_summary(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
                 .map(|r| Failure::of(config, r))
                 .collect(),
         };
-        print_failures(&failures)?;
+        print_failures(&failures, config.full_errors)?;
         outln!()?;
     }
     Ok(())
@@ -1336,7 +1453,8 @@ struct Failure {
     names: Vec<String>,
     command: String,
     ending: String,
-    lines: Vec<String>,
+    /// Its excerpt's lines; None when meta saw none of its output
+    lines: Option<Vec<String>>,
 }
 
 impl Failure {
@@ -1345,19 +1463,20 @@ impl Failure {
             names: vec![summary_name(config, result)],
             command: escape(&result.command).into_owned(),
             ending: result.ending(),
-            lines: result.excerpt.lines(),
+            lines: result.excerpt.as_ref().map(Excerpt::lines),
         }
     }
 }
 
 /// How many failures the summary shows with their excerpts; each one after
-/// gets a line, ending with the last line of its excerpt.
+/// gets a line, ending with the last line of its excerpt (all of them, with
+/// `--full-errors`).
 const SUMMARY_FULL: usize = 5;
 
 /// `failures`, each on its line with its excerpt under it (see
-/// [`SUMMARY_FULL`]); when there are several, the names of every repo that
-/// failed come last, where the eye lands.
-fn print_failures(failures: &[Failure]) -> Result<()> {
+/// [`SUMMARY_FULL`]; `full`: every one); when there are several, the names
+/// of every repo that failed come last, where the eye lands.
+fn print_failures(failures: &[Failure], full: bool) -> Result<()> {
     for (i, failure) in failures.iter().enumerate() {
         let line = format!(
             "\n{} {}: {} ({})",
@@ -1366,12 +1485,17 @@ fn print_failures(failures: &[Failure]) -> Result<()> {
             failure.command,
             failure.ending
         );
-        match failure.lines.last() {
+        let Some(lines) = &failure.lines else {
+            // shown as it ran, and not seen by meta
+            outln!("{line}")?;
+            continue;
+        };
+        match lines.last() {
             None => outln!("{line}: no output")?,
-            Some(last) if i >= SUMMARY_FULL => outln!("{line}: {last}")?,
+            Some(last) if i >= SUMMARY_FULL && !full => outln!("{line}: {last}")?,
             Some(_) => {
                 outln!("{line}")?;
-                for excerpt in &failure.lines {
+                for excerpt in lines {
                     outln!("    {excerpt}")?;
                 }
             }
@@ -1417,6 +1541,8 @@ struct SoFar {
     /// Where commands run now, in the order they started
     running: Vec<(PathBuf, String)>,
     progress: Option<MultiProgress>,
+    /// `--full-errors`
+    full: bool,
 }
 
 static SO_FAR: Mutex<Option<SoFar>> = Mutex::new(None);
@@ -1431,7 +1557,7 @@ static STOPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 struct Watch(u64);
 
 impl Watch {
-    fn start(total: usize) -> Watch {
+    fn start(total: usize, full: bool) -> Watch {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         *lock(&SO_FAR) = Some(SoFar {
@@ -1441,6 +1567,7 @@ impl Watch {
             failures: Vec::new(),
             running: Vec::new(),
             progress: None,
+            full,
         });
         meta_plugin::process::on_stop(Some(Box::new(print_interrupted)));
         Watch(id)
@@ -1517,7 +1644,10 @@ fn print_interrupted() {
             so_far.total,
             so_far.failures.len()
         )?;
-        print_failures(&so_far.failures)?;
+        // by name, as the run's own summary lists them
+        let mut failures = so_far.failures;
+        failures.sort_by(|a, b| a.names.cmp(&b.names));
+        print_failures(&failures, so_far.full)?;
         let running: Vec<&str> = so_far.running.iter().map(|(_, n)| n.as_str()).collect();
         if !running.is_empty() {
             outln!(

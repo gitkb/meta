@@ -90,6 +90,11 @@ pub struct Meta {
     /// command that answers for itself still prints.
     #[serde(default)]
     pub silent: bool,
+    /// `--full-errors`: a summary shows each failed command's whole output.
+    /// Sent only when set, so a plugin built before it reads every other
+    /// request.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub full_errors: bool,
     /// Whether output is coloured.
     #[serde(default)]
     pub color: bool,

@@ -195,7 +195,7 @@ setup() {
         run "$META_BIN" $line
         [ "$status" -eq 0 ]
         [[ "$output" == *"Meta options (before \`"* ]]
-        for option in --recursive --include --tag --dry-run --strict --json --fields --silent --verbose --no-parent; do
+        for option in --recursive --include --tag --dry-run --strict --json --fields --silent --full-errors --verbose --no-parent; do
             [[ "$output" == *" $option"* ]] || { echo "$line: no $option"; false; }
         done
         [[ "$output" != *"--version"* ]]

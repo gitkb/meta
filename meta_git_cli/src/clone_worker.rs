@@ -205,22 +205,24 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
             meta_plugin::display::escape_lines(line)
         );
     }
-    // each named with why, git's last line, as every summary says it
+    // each named with why: the excerpt of git's error every summary shows
     let clones: Vec<String> = failures
         .iter()
         .map(|f| {
-            let last = f
-                .error
+            let name = meta_plugin::display::escape(&failed(f)).into_owned();
+            match meta_plugin::display::Excerpt::of(f.error.as_bytes())
                 .lines()
-                .rev()
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .unwrap_or("no stderr");
-            format!(
-                "{}: {}",
-                meta_plugin::display::escape(&failed(f)),
-                meta_plugin::display::escape(last)
-            )
+                .as_slice()
+            {
+                [] => format!("{name}: no output"),
+                [one] => format!("{name}: {one}"),
+                many => format!(
+                    "{name}:{}",
+                    many.iter()
+                        .map(|line| format!("\n    {line}"))
+                        .collect::<String>()
+                ),
+            }
         })
         .collect();
     Some(
@@ -230,7 +232,10 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
                     "{} of {} repositories failed to clone: {}",
                     clones.len(),
                     cloned.len() + clones.len(),
-                    clones.join("; ")
+                    match clones.as_slice() {
+                        [one] => one.clone(),
+                        many => many.iter().map(|c| format!("\n  {c}")).collect(),
+                    }
                 )
             }),
             (!refused.is_empty()).then(|| {

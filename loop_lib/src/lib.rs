@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use colored::*;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 pub use meta_plugin::display::display_command;
-use meta_plugin::display::{escape, escape_path, program_output};
+use meta_plugin::display::{escape, escape_path, program_output, Excerpt, Stream};
 use meta_plugin::process::TooMuchOutput;
 use meta_plugin::{errln, out, outln};
 use rayon::prelude::*;
@@ -245,11 +245,14 @@ pub struct CommandResult {
     /// It wrote more than meta keeps of one command, so it was stopped and
     /// its output dropped
     pub too_much_output: Option<TooMuchOutput>,
+    /// What the summary shows of its output (stdout and stderr, live ones
+    /// too), or why it didn't start
+    pub excerpt: Excerpt,
 }
 
 impl CommandResult {
     /// How the command ended, for a failure line: `exit code 1`,
-    /// `killed by signal 9`.
+    /// `killed by signal 9`, `didn't start`.
     fn ending(&self) -> String {
         match (self.too_much_output, self.signal, self.exit_code) {
             (Some(over), _, _) => format!(
@@ -258,86 +261,12 @@ impl CommandResult {
                 over.stream
             ),
             (None, Some(signal), _) => format!("killed by signal {signal}"),
+            (None, None, Some(-1)) if !self.ran => "didn't start".to_string(),
             (None, None, Some(code)) => format!("exit code {code}"),
             (None, None, None) => "no exit code".to_string(),
         }
     }
-
-    /// The end of its line in the summary (`: why`) when its stderr can't
-    /// say: that it wrote none, or that it wrote too much to keep. Nothing for
-    /// a command that ran live: its stderr was the user's, shown and not kept.
-    fn why(&self) -> String {
-        if self.live {
-            return String::new();
-        }
-        if self.too_much_output.is_some() {
-            return ": no more of one command's output is kept".to_string();
-        }
-        let stderr = String::from_utf8_lossy(&self.stderr);
-        match stderr.lines().any(|line| !line.trim().is_empty()) {
-            true => String::new(),
-            false => ": no stderr".to_string(),
-        }
-    }
-
-    /// The lines under its line in the summary: those of its stderr that
-    /// have anything on them, escaped; past [`SUMMARY_LINES`] of them, the
-    /// first [`SUMMARY_HEAD`], how many are left out, and the last
-    /// [`SUMMARY_TAIL`], where tools put the reason (git's `fatal:` after
-    /// its hints). None for a command that ran live or wrote too much:
-    /// [`Self::why`] says so.
-    fn stderr_lines(&self) -> Vec<String> {
-        if self.live || self.too_much_output.is_some() {
-            return Vec::new();
-        }
-        let stderr = String::from_utf8_lossy(&self.stderr);
-        let mut lines = stderr
-            .lines()
-            .map(str::trim_end)
-            .filter(|line| !line.trim().is_empty());
-        let head: Vec<&str> = lines.by_ref().take(SUMMARY_LINES).collect();
-        // the ones past the cap are counted, not kept (up to 16 MiB of them),
-        // but for the last few
-        let mut tail = std::collections::VecDeque::with_capacity(SUMMARY_TAIL);
-        let mut rest = 0;
-        for line in lines {
-            if tail.len() == SUMMARY_TAIL {
-                tail.pop_front();
-            }
-            tail.push_back(line);
-            rest += 1;
-        }
-        let escaped = |line: &&str| escape(line).into_owned();
-        if rest == 0 {
-            return head.iter().map(escaped).collect();
-        }
-        // the last ones may start among the first ten
-        let from_head = SUMMARY_TAIL.saturating_sub(tail.len());
-        let last: Vec<&str> = head
-            .iter()
-            .skip(head.len().saturating_sub(from_head))
-            .copied()
-            .chain(tail)
-            .collect();
-        let left_out = (head.len() + rest).saturating_sub(SUMMARY_HEAD + last.len());
-        head.iter()
-            .take(SUMMARY_HEAD)
-            .map(escaped)
-            .chain(std::iter::once(match left_out {
-                1 => "… 1 more line".to_string(),
-                more => format!("… {more} more lines"),
-            }))
-            .chain(last.iter().map(escaped))
-            .collect()
-    }
 }
-
-/// How many lines of a failed command's stderr the summary shows under it
-/// in full; past that, the first [`SUMMARY_HEAD`] and the last
-/// [`SUMMARY_TAIL`].
-const SUMMARY_LINES: usize = 10;
-const SUMMARY_HEAD: usize = 5;
-const SUMMARY_TAIL: usize = 4;
 
 /// Whether a command that ended so succeeded: no signal, and an exit code
 /// among `ok_codes`.
@@ -615,6 +544,7 @@ fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
         directory: dir.to_path_buf(),
         command,
         stdout: Vec::new(),
+        excerpt: Excerpt::of(stderr.as_bytes()),
         stderr: stderr.into_bytes(),
         ..CommandResult::default()
     }
@@ -715,13 +645,21 @@ fn execute_in_directory(
         meta_plugin::out::flush()?;
     }
 
-    // Live, its output the user's own, unless silenced: then it goes nowhere
+    // Live: shown as it writes it, through meta ([`run_live`]), its
+    // excerpt kept for the summary. Silenced, it goes nowhere.
     let ran = build_command(&argv, dir, extra_env).and_then(|mut cmd| {
-        if config.silent {
-            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        match config.silent {
+            true => meta_plugin::process::status(cmd.stdout(Stdio::null()).stderr(Stdio::null()))
+                .map(|status| (status, Excerpt::default(), None)),
+            false => run_live(&mut cmd),
         }
-        meta_plugin::process::status(&mut cmd).map_err(|e| anyhow::anyhow!(not_started(&argv, &e)))
+        .map_err(|e| anyhow::anyhow!(not_started(&argv, &e)))
     });
+    let (ran, excerpt) = match ran {
+        Ok((_, _, Some(closed))) => return Err(closed.into()),
+        Ok((status, excerpt, None)) => (Ok(status), excerpt),
+        Err(e) => (Err(e), Excerpt::default()),
+    };
     let result = match ran {
         Ok(status) => {
             let (exit_code, signal) = exit_of(status);
@@ -734,6 +672,7 @@ fn execute_in_directory(
                 command,
                 argv,
                 live: true,
+                excerpt,
                 ..Default::default()
             }
         }
@@ -752,6 +691,89 @@ fn execute_in_directory(
     }
 
     Ok(result)
+}
+
+/// How long meta goes on showing what a program a live command left
+/// running writes, once the command has ended, before it moves on.
+const LINGER: Duration = Duration::from_secs(2);
+
+/// Run `cmd` live: what it writes is shown as it comes, on meta's stdout
+/// and stderr, through pipes, and kept in its excerpt. It colours as meta
+/// does, and its stdin stays the user's (for a prompt). When stdout and
+/// stderr are one file or terminal, one pipe takes both, so they keep the
+/// order it wrote them in. A stdout that closed (`| head`) stops the
+/// showing, so the command's next write fails as it would have; it is the
+/// error returned with its end. What it leaves running is shown for up to
+/// [`LINGER`] after it ends.
+fn run_live(cmd: &mut Command) -> io::Result<(ExitStatus, Excerpt, Option<StdoutError>)> {
+    use std::sync::Arc;
+    meta_plugin::out::pass_color(cmd);
+    let (out, out_end) = io::pipe()?;
+    let pipes = match meta_plugin::out::stdout_is_stderr() {
+        true => {
+            cmd.stdout(out_end.try_clone()?).stderr(out_end);
+            vec![(out, Stream::Stdout)]
+        }
+        false => {
+            let (err, err_end) = io::pipe()?;
+            cmd.stdout(out_end).stderr(err_end);
+            vec![(out, Stream::Stdout), (err, Stream::Stderr)]
+        }
+    };
+    let spawned = meta_plugin::process::spawn(cmd);
+    // meta keeps no write end: the pipes end with what the command started
+    cmd.stdout(Stdio::null()).stderr(Stdio::null());
+    let mut child = spawned?;
+    let excerpt = Arc::new(Mutex::new(Excerpt::default()));
+    let closed: Arc<Mutex<Option<StdoutError>>> = Arc::new(Mutex::new(None));
+    let (ended, all_ended) = std::sync::mpsc::channel::<()>();
+    for (mut pipe, stream) in pipes {
+        let (excerpt, closed, ended) = (excerpt.clone(), closed.clone(), ended.clone());
+        let relay = move || {
+            use std::io::Read;
+            let _ended = ended;
+            let mut chunk = vec![0u8; 64 * 1024];
+            loop {
+                let bytes = match pipe.read(&mut chunk) {
+                    Ok(0) => return,
+                    Ok(n) => chunk.get(..n).unwrap_or_default(),
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => return,
+                };
+                lock(&excerpt).push(stream, bytes);
+                let shown = match stream {
+                    Stream::Stdout => meta_plugin::out::stdout_bytes(bytes)
+                        .and_then(|()| meta_plugin::out::flush())
+                        .map_err(Some),
+                    Stream::Stderr => meta_plugin::out::try_stderr_bytes(bytes).map_err(|_| None),
+                };
+                // the pipe is let go: the command's next write to it fails
+                if let Err(e) = shown {
+                    if let Some(e) = e {
+                        lock(&closed).get_or_insert(e);
+                    }
+                    return;
+                }
+            }
+        };
+        if let Err(e) = std::thread::Builder::new().spawn(relay) {
+            child.stop(true);
+            let _ = child.wait();
+            return Err(e);
+        }
+    }
+    drop(ended);
+    let status = child.wait()?;
+    // nothing is sent: it returns once every relay has ended, or at LINGER
+    let _ = all_ended.recv_timeout(LINGER);
+    let mut excerpt = lock(&excerpt).clone();
+    excerpt.finish();
+    let closed = lock(&closed).take();
+    Ok((status, excerpt, closed))
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Capturing version for parallel execution - captures stdout/stderr for display after completion
@@ -811,6 +833,7 @@ fn capture_in_directory(
     meta_plugin::out::pass_color(&mut cmd_builder);
 
     // Silenced, under --json too: it goes nowhere, nothing held
+    let excerpt = Mutex::new(Excerpt::default());
     let output = match config.silent {
         true => meta_plugin::process::status(
             cmd_builder
@@ -823,8 +846,18 @@ fn capture_in_directory(
             stdout: Vec::new(),
             stderr: Vec::new(),
         }),
-        false => meta_plugin::process::output(&mut cmd_builder),
+        false => {
+            cmd_builder
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            meta_plugin::process::spawn(&mut cmd_builder).and_then(|child| {
+                child.exchange_with(&[], &|stream, bytes| lock(&excerpt).push(stream, bytes))
+            })
+        }
     };
+    let mut excerpt = excerpt.into_inner().unwrap_or_else(PoisonError::into_inner);
+    excerpt.finish();
 
     match output {
         Ok(output) => {
@@ -840,18 +873,23 @@ fn capture_in_directory(
                 argv,
                 stdout: output.stdout,
                 stderr: output.stderr,
+                excerpt,
                 ..CommandResult::default()
             }
         }
         Err(e) => match TooMuchOutput::of(&e) {
-            Some(over) => too_much(dir, command, argv, over),
+            // what it wrote up to the limit is still in its excerpt
+            Some(over) => CommandResult {
+                excerpt,
+                ..too_much(dir, command, argv, over)
+            },
             None => failed_result(dir, command, format!("{}\n", not_started(&argv, &e))),
         },
     }
 }
 
 /// The result of a command that wrote more than meta keeps of one: it ran,
-/// was stopped, and nothing of its output is kept.
+/// was stopped, and nothing of its output is kept (its excerpt is added after).
 fn too_much(dir: &Path, command: String, argv: Vec<String>, over: TooMuchOutput) -> CommandResult {
     CommandResult {
         ran: true,
@@ -1062,6 +1100,7 @@ impl Stagger {
 fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<CommandResult>> {
     let root = config.root_dir.as_deref();
     let progress = (io::stdout().is_terminal() && !config.json_output).then(MultiProgress::new);
+    so_far(|s| s.progress = progress.clone());
     let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
         .unwrap_or_else(|_| ProgressStyle::default_spinner())
         .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
@@ -1100,6 +1139,7 @@ fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Comm
                     return failed_result(&job.dir, display_command(&job.argv), String::new());
                 }
                 stagger.wait();
+                started(config, &job.dir);
                 if let Some(pb) = spinner {
                     pb.set_message(format!("{}: running...", display_name(&job.dir, root)));
                 }
@@ -1107,6 +1147,7 @@ fn run_parallel(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Comm
                     Some(why) => refused_result(job, why),
                     None => execute_command_in_directory_capturing(job, config),
                 };
+                ended(config, &result);
                 if let Err(e) = config.on_done.tell(&result) {
                     closed
                         .lock()
@@ -1148,7 +1189,9 @@ fn run_sequential(config: &LoopConfig, commands: &[DirCommand]) -> Result<Vec<Co
     commands
         .iter()
         .map(|job| -> Result<CommandResult> {
+            started(config, &job.dir);
             let result = run_one(config, job)?;
+            ended(config, &result);
             config.on_done.tell(&result)?;
             Ok(result)
         })
@@ -1198,14 +1241,25 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<Outc
     if commands.is_empty() {
         return Ok(outcome(Vec::new(), None));
     }
+    let watch = text.then(|| Watch::start(commands.len()));
     let results = if config.parallel {
-        let results = run_parallel(config, commands)?;
+        run_parallel(config, commands)?
+    } else {
+        run_sequential(config, commands)?
+    };
+    // a stop that came meanwhile printed its summary, and ends meta
+    if watch.is_some_and(|watch| !watch.finish()) {
+        loop {
+            std::thread::park();
+        }
+    }
+    let results = if config.parallel {
         if !config.silent && text {
             print_captured(config, &results)?;
         }
         results
     } else {
-        run_sequential(config, commands)?
+        results
     };
 
     let total = results.len();
@@ -1255,39 +1309,231 @@ fn print_summary(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
             failed_count.to_string().red(),
             total
         )?;
-        // Without a root the basename is ambiguous, so keep the full path
-        let name = |result: &CommandResult| match config.root_dir.as_deref() {
-            Some(root) => result_name(&result.directory, Some(root)),
-            None => escape_path(&result.directory),
-        };
-        let failures: Vec<&[CommandResult]> = match same_failure(results) {
-            true => vec![results],
+        let failures: Vec<Failure> = match same_failure(results) {
+            true => results
+                .first()
+                .map(|first| Failure {
+                    names: results.iter().map(|r| summary_name(config, r)).collect(),
+                    ..Failure::of(config, first)
+                })
+                .into_iter()
+                .collect(),
             false => results
                 .iter()
                 .filter(|r| !r.success)
-                .map(std::slice::from_ref)
+                .map(|r| Failure::of(config, r))
                 .collect(),
         };
-        for failed in failures {
-            let Some(first) = failed.first() else {
-                continue;
-            };
-            let names: Vec<String> = failed.iter().map(name).collect();
-            outln!(
-                "\n{} {}: {} ({}){}",
-                "✗".red(),
-                names.join(", "),
-                escape(&first.command),
-                first.ending(),
-                first.why()
-            )?;
-            for line in first.stderr_lines() {
-                outln!("    {line}")?;
-            }
-        }
+        print_failures(&failures)?;
         outln!()?;
     }
     Ok(())
+}
+
+/// A failed command as the summary shows it.
+struct Failure {
+    /// Where it failed (more than one when they all failed the same way)
+    names: Vec<String>,
+    command: String,
+    ending: String,
+    lines: Vec<String>,
+}
+
+impl Failure {
+    fn of(config: &LoopConfig, result: &CommandResult) -> Self {
+        Failure {
+            names: vec![summary_name(config, result)],
+            command: escape(&result.command).into_owned(),
+            ending: result.ending(),
+            lines: result.excerpt.lines(),
+        }
+    }
+}
+
+/// How many failures the summary shows with their excerpts; each one after
+/// gets a line, ending with the last line of its excerpt.
+const SUMMARY_FULL: usize = 5;
+
+/// `failures`, each on its line with its excerpt under it (see
+/// [`SUMMARY_FULL`]); when there are several, the names of every repo that
+/// failed come last, where the eye lands.
+fn print_failures(failures: &[Failure]) -> Result<()> {
+    for (i, failure) in failures.iter().enumerate() {
+        let line = format!(
+            "\n{} {}: {} ({})",
+            "✗".red(),
+            failure.names.join(", "),
+            failure.command,
+            failure.ending
+        );
+        match failure.lines.last() {
+            None => outln!("{line}: no output")?,
+            Some(last) if i >= SUMMARY_FULL => outln!("{line}: {last}")?,
+            Some(_) => {
+                outln!("{line}")?;
+                for excerpt in &failure.lines {
+                    outln!("    {excerpt}")?;
+                }
+            }
+        }
+    }
+    if failures.len() > 1 {
+        let names: Vec<&str> = failures
+            .iter()
+            .flat_map(|f| &f.names)
+            .map(String::as_str)
+            .collect();
+        outln!(
+            "\n{} Failed ({}): {}",
+            "✗".red(),
+            names.len(),
+            names.join(", ")
+        )?;
+    }
+    Ok(())
+}
+
+/// How the summary names where `result` ran: without a root the basename is
+/// ambiguous, so the full path.
+fn summary_name(config: &LoopConfig, result: &CommandResult) -> String {
+    summary_dir_name(config, &result.directory)
+}
+
+fn summary_dir_name(config: &LoopConfig, dir: &Path) -> String {
+    match config.root_dir.as_deref() {
+        Some(root) => result_name(dir, Some(root)),
+        None => escape_path(dir),
+    }
+}
+
+/// What a run shown in text has done so far, for the summary a signal that
+/// stops meta prints instead of the run's own (see [`Watch`]).
+struct SoFar {
+    /// The [`Watch`] it is for
+    watch: u64,
+    total: usize,
+    finished: usize,
+    failures: Vec<Failure>,
+    /// Where commands run now, in the order they started
+    running: Vec<(PathBuf, String)>,
+    progress: Option<MultiProgress>,
+}
+
+static SO_FAR: Mutex<Option<SoFar>> = Mutex::new(None);
+/// A stop printed its summary: meta is ending.
+static STOPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// While a run shown in text goes on, the first signal that stops meta
+/// (Ctrl-C) prints a summary of the commands that finished and names those
+/// still running, once they have gone, before meta ends as the signal ends
+/// it ([`meta_plugin::process::on_stop`]). Of runs at once (tests), the
+/// last one started is watched.
+struct Watch(u64);
+
+impl Watch {
+    fn start(total: usize) -> Watch {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *lock(&SO_FAR) = Some(SoFar {
+            watch: id,
+            total,
+            finished: 0,
+            failures: Vec::new(),
+            running: Vec::new(),
+            progress: None,
+        });
+        meta_plugin::process::on_stop(Some(Box::new(print_interrupted)));
+        Watch(id)
+    }
+
+    /// Whether the run's own summary is to be printed: false when a stop's
+    /// has been.
+    fn finish(self) -> bool {
+        drop(self);
+        !STOPPED.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        let ours = {
+            let mut so_far = lock(&SO_FAR);
+            let ours = so_far.as_ref().is_some_and(|s| s.watch == self.0);
+            if ours {
+                *so_far = None;
+            }
+            ours
+        };
+        if ours {
+            meta_plugin::process::on_stop(None);
+        }
+    }
+}
+
+/// With a [`Watch`] on, `f` on what the run has done so far.
+fn so_far(f: impl FnOnce(&mut SoFar)) {
+    if let Some(so_far) = lock(&SO_FAR).as_mut() {
+        f(so_far);
+    }
+}
+
+fn started(config: &LoopConfig, dir: &Path) {
+    so_far(|s| {
+        s.running
+            .push((dir.to_path_buf(), summary_dir_name(config, dir)))
+    });
+}
+
+fn ended(config: &LoopConfig, result: &CommandResult) {
+    so_far(|s| {
+        if let Some(at) = s
+            .running
+            .iter()
+            .position(|(dir, _)| *dir == result.directory)
+        {
+            s.running.remove(at);
+        }
+        s.finished += 1;
+        if !result.success {
+            s.failures.push(Failure::of(config, result));
+        }
+    });
+}
+
+/// The summary of a run a signal stopped (see [`Watch`]).
+fn print_interrupted() {
+    let Some(so_far) = lock(&SO_FAR).take() else {
+        return;
+    };
+    STOPPED.store(true, std::sync::atomic::Ordering::Release);
+    if let Some(progress) = &so_far.progress {
+        let _ = progress.clear();
+        progress.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+    }
+    let printed = (|| -> Result<()> {
+        outln!(
+            "\n\nInterrupted: {} of {} commands finished, {} failed",
+            so_far.finished,
+            so_far.total,
+            so_far.failures.len()
+        )?;
+        print_failures(&so_far.failures)?;
+        let running: Vec<&str> = so_far.running.iter().map(|(_, n)| n.as_str()).collect();
+        if !running.is_empty() {
+            outln!(
+                "\n{} Stopped while running: {}",
+                "✗".red(),
+                running.join(", ")
+            )?;
+        }
+        let not_started = so_far.total.saturating_sub(so_far.finished + running.len());
+        if not_started > 0 {
+            outln!("  {not_started} not started")?;
+        }
+        outln!()?;
+        Ok(meta_plugin::out::flush()?)
+    })();
+    drop(printed);
 }
 
 /// The output parallel commands captured, each under its directory's name:

@@ -904,24 +904,3 @@ fn captured_output_is_whole_under_the_limit_and_refused_past_it() {
         error.message
     );
 }
-
-#[test]
-fn the_summary_keeps_the_first_and_the_last_lines_of_a_long_stderr() {
-    let with = |n: usize| {
-        let stderr: String = (1..=n).map(|i| format!("line {i}\n\n")).collect();
-        failed_result(Path::new("d"), "c".to_string(), stderr).stderr_lines()
-    };
-    let lines = |range: std::ops::RangeInclusive<usize>| -> Vec<String> {
-        range.map(|i| format!("line {i}")).collect()
-    };
-    // up to ten, all of them; blank ones never count
-    assert_eq!(with(10), lines(1..=10));
-    // past ten: the first five, how many are left out, the last four
-    let cut = |n: usize, left_out: &str| -> Vec<String> {
-        [lines(1..=5), vec![left_out.to_string()], lines(n - 3..=n)].concat()
-    };
-    assert_eq!(with(11), cut(11, "… 2 more lines"));
-    assert_eq!(with(15), cut(15, "… 6 more lines"));
-    assert_eq!(with(100_000), cut(100_000, "… 99991 more lines"));
-    assert_eq!(with(0), Vec::<String>::new());
-}

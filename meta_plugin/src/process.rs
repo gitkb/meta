@@ -9,8 +9,9 @@
 //! child starts, the signal is passed on to the
 //! children, and once they are gone the program ends the way the signal ends
 //! it, so a shell running it sees it was interrupted. Threads waiting on a
-//! child then never resume: nothing is printed or done after the signal. A
-//! second signal kills every child at once and ends the program.
+//! child then never resume: nothing is printed or done after the signal but
+//! what [`on_stop`] set (a summary of what had finished). A second signal
+//! kills every child at once and ends the program.
 //!
 //! Where the program is the foreground job of a terminal, its children stay
 //! in its process group, as before: they can prompt on the terminal, and the
@@ -246,7 +247,17 @@ impl Owned {
     /// process group when it leads one) and the result is a
     /// [`TooMuchOutput`] error: nothing of its output is kept, so no caller
     /// shows part of it as if it were all.
-    pub fn exchange(mut self, input: &[u8]) -> io::Result<Output> {
+    pub fn exchange(self, input: &[u8]) -> io::Result<Output> {
+        self.exchange_with(input, &|_, _| {})
+    }
+
+    /// [`Owned::exchange`], telling `watch` of each piece of output as it
+    /// is read, from the thread reading that stream.
+    pub fn exchange_with(
+        mut self,
+        input: &[u8],
+        watch: &(dyn Fn(crate::display::Stream, &[u8]) + Sync),
+    ) -> io::Result<Output> {
         use std::io::{Read, Write};
         use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
         use std::sync::mpsc::{channel, Sender};
@@ -290,11 +301,19 @@ impl Owned {
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                     Err(e) => return Err(e),
                 };
+                let read = chunk.get(..n).unwrap_or_default();
+                watch(
+                    match stream {
+                        1 => crate::display::Stream::Stdout,
+                        _ => crate::display::Stream::Stderr,
+                    },
+                    read,
+                );
                 if kept.fetch_add(n, Ordering::AcqRel) + n > CAPTURE_LIMIT {
                     let _ = over.compare_exchange(0, stream, Ordering::AcqRel, Ordering::Acquire);
                     break;
                 }
-                bytes.extend_from_slice(chunk.get(..n).unwrap_or_default());
+                bytes.extend_from_slice(read);
             }
             io::Result::Ok(bytes)
         };
@@ -420,6 +439,32 @@ impl std::fmt::Display for TooMuchOutput {
 }
 
 impl std::error::Error for TooMuchOutput {}
+
+/// What a program does when it is told to stop, once the children have
+/// gone, before it ends (see [`on_stop`]).
+type Hook = std::sync::Arc<dyn Fn() + Send + Sync>;
+
+fn hook() -> std::sync::MutexGuard<'static, Option<Hook>> {
+    static HOOK: std::sync::Mutex<Option<Hook>> = std::sync::Mutex::new(None);
+    HOOK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Have `then` run when the first signal that stops this program (see
+/// [`own`]) comes, once every child has gone and before the program ends
+/// (a summary of what finished, say); `None` clears it. A second signal
+/// ends the program without it. Only on Unix, where signals are owned.
+pub fn on_stop(then: Option<Box<dyn Fn() + Send + Sync>>) {
+    *hook() = then.map(std::sync::Arc::from);
+}
+
+/// Run what [`on_stop`] set, at most once.
+#[cfg(unix)]
+fn stopped() {
+    let then = hook().take();
+    if let Some(then) = then {
+        then();
+    }
+}
 
 /// Make this program the owner of its children's signals (see the module
 /// documentation). Call it once, first thing in `main`.
@@ -749,6 +794,7 @@ mod imp {
                 .unwrap_or_else(|poisoned| poisoned.into_inner().0);
         }
         drop(children);
+        super::stopped();
         let _ = signal_hook::low_level::emulate_default_handler(signal);
         // SIGHUP, SIGINT and SIGTERM all end a program by default
         crate::exit::now(crate::exit::signalled(signal));

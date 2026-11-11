@@ -379,7 +379,7 @@ state() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"Failed to clone frontend (file://$TEST_DIR/remotes/frontend.git, branch nope)"* ]]
     [[ "$output" == *"nope"*"not found"* ]]
-    [[ "$output" == *"1 of 2 repositories failed to clone: frontend (branch nope): "* ]]
+    [[ "$output" == *"1 of 2 repositories failed to clone: frontend (branch nope):"*"not found"* ]]
     [ ! -e frontend ]
     [ -d backend/.git ]
 }
@@ -1738,7 +1738,7 @@ YAML
     [ ! -e dest ]
 }
 
-@test "the summary shows a failed command's stderr under its line, not only the last line" {
+@test "the summary shows why each command failed, from its stdout and stderr, in every mode" {
     with_remotes
     # git as it fails to reach a remote it has no access to, in frontend
     mkdir -p "$TEST_DIR/shim"
@@ -1753,32 +1753,72 @@ esac
 exec "$real_git" "\$@"
 EOF
     chmod +x "$TEST_DIR/shim/git"
-    # captured, as a run over several repos is (one alone runs live, its
-    # stderr shown and not kept)
-    PATH="$TEST_DIR/shim:$PATH" run "$META_BIN" --parallel git pull
-    [ "$status" -eq 1 ]
-    local summary=${output#*Summary:}
-    [[ "$summary" == *"✗ ./frontend: git pull (exit code 1)"$'\n'"    ERROR: Repository not found."$'\n'"    fatal: Could not read from remote repository."$'\n'"    Please make sure you have the correct access rights"$'\n'"    and the repository exists."* ]]
-    # a long stderr: its first lines, how many are left out, and its last
+    local said="✗ ./frontend: git pull (exit code 1)"$'\n'"    ERROR: Repository not found."$'\n'"    fatal: Could not read from remote repository."$'\n'"    Please make sure you have the correct access rights"$'\n'"    and the repository exists."
+    # captured (several repos at once), and live: one after another, one
+    # repo alone; live, git's lines are shown as they come too
+    for mode in --parallel --sequential "--sequential --include frontend" "--include frontend"; do
+        # shellcheck disable=SC2086
+        PATH="$TEST_DIR/shim:$PATH" run "$META_BIN" $mode git pull
+        [ "$status" -eq 1 ]
+        [[ "${output#*Summary:}" == *"$said"* ]]
+        [[ "${output%%Summary:*}" == *"Please make sure"* ]]
+    done
+    # a long output: its first lines, how many are left out, and its last;
+    # eleven are all shown (a marker would hide two)
     run "$META_BIN" --parallel --include frontend,backend exec -- sh -c '[ "${PWD##*/}" = backend ] && exit 0; for i in $(seq 15); do echo "line $i" >&2; done; exit 2'
     [ "$status" -eq 1 ]
-    summary=${output#*Summary:}
+    local summary=${output#*Summary:}
     [[ "$summary" == *"    line 5"$'\n'"    … 6 more lines"$'\n'"    line 12"$'\n'"    line 13"$'\n'"    line 14"$'\n'"    line 15"* ]]
     [[ "$summary" != *"line 6"* && "$summary" != *"line 11"* ]]
-    # one that wrote none says so on its line
+    run "$META_BIN" --sequential --include frontend exec -- sh -c 'for i in $(seq 11); do echo "line $i"; done; exit 2'
+    summary=${output#*Summary:}
+    [[ "$summary" == *"    line 1"$'\n'*"    line 11"* && "$summary" != *"more lines"* ]]
+    # a line is cut, colour codes go, and a line of codes alone takes no row
+    run "$META_BIN" --parallel --include frontend,backend exec -- sh -c '[ "${PWD##*/}" = backend ] && exit 0; printf "\033[31merror:\033[0m red\n\033[0m\n"; head -c 1000 /dev/zero | tr "\0" x >&2; echo >&2; exit 2'
+    summary=${output#*Summary:}
+    [[ "$summary" == *"(exit code 2)"$'\n'"    error: red"$'\n'"    $(printf 'x%.0s' $(seq 300))… 700 more characters"* ]]
+    # one that wrote nothing says so on its line; one that didn't start, why
     run "$META_BIN" --parallel --include frontend,backend exec -- sh -c '[ "${PWD##*/}" = backend ] || exit 2'
-    [[ "$output" == *"✗ ./frontend: sh -c "*" (exit code 2): no stderr"* ]]
+    [[ "$output" == *"✗ ./frontend: sh -c "*" (exit code 2): no output"* ]]
+    run "$META_BIN" --sequential --include frontend exec -- ./no-such-program
+    [[ "${output#*Summary:}" == *"✗ ./frontend: ./no-such-program (didn't start)"$'\n'"    Failed to run ./no-such-program: "* ]]
+    # a merge conflict says why on stdout
+    git -C frontend config pull.rebase false
+    teammate frontend README.md theirs
+    echo mine > frontend/README.md
+    git -C frontend add README.md
+    git -C frontend commit --quiet -m "mine"
+    run "$META_BIN" --parallel git pull
+    [ "$status" -eq 1 ]
+    [[ "${output#*Summary:}" == *"✗ ./frontend: git pull (exit code 1)"*"    CONFLICT ("*"Merge conflict in README.md"* ]]
+    git -C frontend merge --abort
     # git's real reason comes after its hints: a pull of a branch that has
     # diverged from its remote, as git words it
-    teammate frontend
-    git -C frontend commit --quiet --allow-empty -m "mine"
+    git -C frontend config --unset pull.rebase
     run "$META_BIN" --parallel git pull
     [ "$status" -eq 1 ]
     summary=${output#*Summary:}
     [[ "$summary" == *"✗ ./frontend: git pull (exit code 128)"*"hint: "*" more lines"*"fatal: Need to specify how to reconcile divergent branches."* ]]
 }
 
-@test "a failed clone ends with the last stderr line" {
+@test "a stopped run prints what finished and names what still ran" {
+    with_remotes
+    # SIGTERM: a background job starts with SIGINT ignored, so meta leaves
+    # that alone; the same stop serves both
+    "$META_BIN" --parallel --include frontend,backend exec -- sh -c '[ "${PWD##*/}" = backend ] || { echo "fatal: frontend broke" >&2; exit 1; }; exec sleep 30' > out.txt 2>&1 &
+    local meta=$!
+    sleep 2
+    kill -TERM "$meta"
+    local ended=0
+    wait "$meta" || ended=$?
+    [ "$ended" -eq 143 ]
+    run cat out.txt
+    [[ "$output" == *"Interrupted: 1 of 2 commands finished, 1 failed"* ]]
+    [[ "$output" == *"✗ ./frontend: sh -c "*" (exit code 1)"$'\n'"    fatal: frontend broke"* ]]
+    [[ "$output" == *"✗ Stopped while running: ./backend"* ]]
+}
+
+@test "a failed clone ends with git's error, as the summary shows a command's" {
     with_remotes
     rm -rf "$TEST_DIR/shared"
     # git that fails every clone, saying why on its last line
@@ -1790,6 +1830,6 @@ EOF
         # shellcheck disable=SC2086
         PATH="$TEST_DIR/shim:$PATH" run "$META_BIN" $mode git update
         [ "$status" -ne 0 ]
-        [[ "$(grep -v '^[[:space:]]*$' <<<"$output" | tail -1)" == *": LAST diagnostic" ]]
+        [[ "$output" == *"failed to clone: shared:"$'\n'"    FIRST diagnostic"$'\n'"    LAST diagnostic" ]]
     done
 }

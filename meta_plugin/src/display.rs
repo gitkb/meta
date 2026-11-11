@@ -92,6 +92,228 @@ pub fn program_output(output: &[u8]) -> String {
     text.lines().map(|line| format!("\n  {line}")).collect()
 }
 
+/// The lines of another program's output a summary shows under its failure,
+/// fed as the program writes, both streams into one in the order they were
+/// read: those with something on them, escaped (colour codes dropped first,
+/// tabs as spaces), each cut at [`EXCERPT_WIDTH`] characters; past
+/// [`EXCERPT_LINES`] of them, the first [`EXCERPT_HEAD`], how many are left
+/// out, and the last [`EXCERPT_TAIL`], where programs put the reason (git's
+/// `fatal:` after its hints). What it holds is bounded, however much the
+/// program writes.
+#[derive(Debug, Default, Clone)]
+pub struct Excerpt {
+    /// The first lines, up to [`EXCERPT_LINES`], ready to show
+    head: Vec<String>,
+    /// The last lines after those, up to [`EXCERPT_TAIL`]
+    tail: std::collections::VecDeque<String>,
+    /// How many lines came after the first [`EXCERPT_LINES`]
+    rest: usize,
+    /// Each stream's line not ended yet (stdout, stderr)
+    open: [Partial; 2],
+}
+
+/// A line being read: its first bytes, and how many characters after them
+/// weren't kept.
+#[derive(Debug, Default, Clone)]
+struct Partial {
+    kept: Vec<u8>,
+    cut: usize,
+}
+
+/// How many lines of a program's output an [`Excerpt`] shows in full; past
+/// that, the first [`EXCERPT_HEAD`], a line saying how many are left out, and
+/// the last [`EXCERPT_TAIL`] (a marker that would hide fewer than three lines
+/// isn't worth its row).
+pub const EXCERPT_LINES: usize = EXCERPT_HEAD + 2 + EXCERPT_TAIL;
+pub const EXCERPT_HEAD: usize = 5;
+pub const EXCERPT_TAIL: usize = 4;
+/// The most characters of one line an [`Excerpt`] shows (a megabyte of
+/// minified JavaScript is one line).
+pub const EXCERPT_WIDTH: usize = 300;
+/// The bytes of a line kept to show [`EXCERPT_WIDTH`] characters of it, with
+/// colour codes among them.
+const EXCERPT_KEEP: usize = EXCERPT_WIDTH * 8;
+
+/// Which of a program's streams bytes came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stream {
+    Stdout,
+    Stderr,
+}
+
+impl Excerpt {
+    /// The excerpt of `output`, all of it written to one stream.
+    pub fn of(output: &[u8]) -> Self {
+        let mut excerpt = Excerpt::default();
+        excerpt.push(Stream::Stderr, output);
+        excerpt.finish();
+        excerpt
+    }
+
+    /// Add what the program wrote next to `stream`.
+    pub fn push(&mut self, stream: Stream, bytes: &[u8]) {
+        let index = match stream {
+            Stream::Stdout => 0,
+            Stream::Stderr => 1,
+        };
+        let mut lines = bytes.split(|&b| b == b'\n').peekable();
+        while let Some(piece) = lines.next() {
+            let Some(open) = self.open.get_mut(index) else {
+                return;
+            };
+            let room = EXCERPT_KEEP.saturating_sub(open.kept.len());
+            let (kept, over) = piece.split_at(room.min(piece.len()));
+            open.kept.extend_from_slice(kept);
+            // characters, as UTF-8 counts them: each byte that starts one
+            open.cut += over.iter().filter(|&&b| b & 0xC0 != 0x80).count();
+            // the last piece is a line not ended yet
+            if lines.peek().is_some() {
+                let line = std::mem::take(open);
+                self.add(line);
+            }
+        }
+    }
+
+    /// End the lines the program left open (output with no final newline).
+    pub fn finish(&mut self) {
+        for index in 0..self.open.len() {
+            if let Some(open) = self.open.get_mut(index) {
+                let line = std::mem::take(open);
+                if !line.kept.is_empty() {
+                    self.add(line);
+                }
+            }
+        }
+    }
+
+    fn add(&mut self, line: Partial) {
+        let Some(line) = shown(&line) else {
+            return;
+        };
+        if self.head.len() < EXCERPT_LINES {
+            self.head.push(line);
+            return;
+        }
+        if self.tail.len() == EXCERPT_TAIL {
+            self.tail.pop_front();
+        }
+        self.tail.push_back(line);
+        self.rest += 1;
+    }
+
+    /// The lines to show, ended ones only (see [`Excerpt::finish`]).
+    pub fn lines(&self) -> Vec<String> {
+        if self.rest == 0 {
+            return self.head.clone();
+        }
+        // the last ones may start among the first
+        let from_head = EXCERPT_TAIL.saturating_sub(self.tail.len());
+        let last: Vec<&String> = self
+            .head
+            .iter()
+            .skip(self.head.len().saturating_sub(from_head))
+            .chain(&self.tail)
+            .collect();
+        let left_out = (self.head.len() + self.rest).saturating_sub(EXCERPT_HEAD + last.len());
+        self.head
+            .iter()
+            .take(EXCERPT_HEAD)
+            .cloned()
+            .chain(std::iter::once(format!("… {left_out} more lines")))
+            .chain(last.into_iter().cloned())
+            .collect()
+    }
+
+    /// Whether the program wrote any line with something on it.
+    pub fn is_empty(&self) -> bool {
+        self.head.is_empty()
+    }
+}
+
+/// `line` as an excerpt shows it, None when nothing would show of it (blank,
+/// or only terminal codes): colour codes dropped, tabs as spaces, a CRLF's
+/// CR dropped, every other control escaped, cut at [`EXCERPT_WIDTH`]
+/// characters with how many were cut.
+fn shown(line: &Partial) -> Option<String> {
+    let text = String::from_utf8_lossy(&line.kept);
+    let text = text.strip_suffix('\r').unwrap_or(&text);
+    if without_codes(text, true).trim().is_empty() {
+        return None;
+    }
+    let mut plain = String::with_capacity(text.len());
+    let mut column = 0;
+    for c in without_codes(text, false).trim_end().chars() {
+        match c {
+            '\t' => {
+                let to = (column / 8 + 1) * 8;
+                plain.extend(std::iter::repeat_n(' ', to - column));
+                column = to;
+            }
+            c => {
+                plain.push(c);
+                column += 1;
+            }
+        }
+    }
+    let cut = column.saturating_sub(EXCERPT_WIDTH) + line.cut;
+    let kept: String = plain.chars().take(EXCERPT_WIDTH).collect();
+    let kept = escape(&kept).into_owned();
+    Some(match cut {
+        0 => kept,
+        1 => format!("{kept}… 1 more character"),
+        cut => format!("{kept}… {cut} more characters"),
+    })
+}
+
+/// `text` without its colour codes (SGR: `ESC [ … m`), or with `all`,
+/// without any terminal code (`ESC [ … X`, `ESC ] … BEL`, `ESC X`).
+fn without_codes(text: &str, all: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some((before, body)) = rest.split_once('\u{1b}') {
+        out.push_str(before);
+        // the code's length after its ESC, and whether it sets colour
+        let (len, colour) = match body.chars().next() {
+            // CSI: parameters and intermediates, then a final byte
+            Some('[') => {
+                let end = body
+                    .char_indices()
+                    .skip(1)
+                    .find(|(_, c)| !matches!(c, '\u{20}'..='\u{3f}'))
+                    .map(|(i, c)| (i + c.len_utf8(), c));
+                match end {
+                    Some((i, c)) if ('\u{40}'..='\u{7e}').contains(&c) => (i, c == 'm'),
+                    _ => (0, false),
+                }
+            }
+            // OSC: up to BEL or ST
+            Some(']') => match body.find(['\u{7}', '\u{9c}']) {
+                Some(i) => (
+                    i + body
+                        .get(i..)
+                        .and_then(|t| t.chars().next())
+                        .map_or(1, char::len_utf8),
+                    false,
+                ),
+                None => match body.find("\u{1b}\\") {
+                    Some(i) => (i + 2, false),
+                    None => (0, false),
+                },
+            },
+            Some(c) if ('\u{40}'..='\u{7e}').contains(&c) => (c.len_utf8(), false),
+            _ => (0, false),
+        };
+        // a lone ESC stays, escaped later
+        if len == 0 || !(all || colour) {
+            out.push('\u{1b}');
+            out.push_str(body.get(..len).unwrap_or_default());
+        }
+        rest = body.get(len..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
+}
+
 /// [`escape`] for a path, which may also hold bytes that are not UTF-8.
 pub fn escape_path(path: &std::path::Path) -> String {
     escape(&path.to_string_lossy()).into_owned()
@@ -157,6 +379,79 @@ mod tests {
         assert_eq!(
             program_output("Preparing\nfatal: '\u{1b}x\nFORGED' used\n".as_bytes()),
             "\n  Preparing\n  fatal: '\\u{1b}x\n  FORGED' used"
+        );
+    }
+
+    #[test]
+    fn an_excerpt_keeps_the_first_and_the_last_lines_of_a_long_output() {
+        let with = |n: usize| {
+            let output: String = (1..=n).map(|i| format!("line {i}\n\n")).collect();
+            Excerpt::of(output.as_bytes()).lines()
+        };
+        let lines = |range: std::ops::RangeInclusive<usize>| -> Vec<String> {
+            range.map(|i| format!("line {i}")).collect()
+        };
+        // up to eleven, all of them (a marker would hide only two); blank
+        // ones never count
+        assert_eq!(with(11), lines(1..=11));
+        // past that: the first five, how many are left out, the last four
+        let cut = |n: usize, left_out: &str| -> Vec<String> {
+            [lines(1..=5), vec![left_out.to_string()], lines(n - 3..=n)].concat()
+        };
+        assert_eq!(with(12), cut(12, "… 3 more lines"));
+        assert_eq!(with(15), cut(15, "… 6 more lines"));
+        assert_eq!(with(100_000), cut(100_000, "… 99991 more lines"));
+        assert!(with(0).is_empty());
+    }
+
+    #[test]
+    fn an_excerpt_cuts_a_long_line_and_drops_colour_codes() {
+        // a megabyte on one line, fed in pieces as a pipe gives it
+        let mut excerpt = Excerpt::default();
+        for _ in 0..1024 {
+            excerpt.push(Stream::Stderr, &[b'x'; 1024]);
+        }
+        excerpt.push(Stream::Stderr, b"\nfatal: after it\n");
+        excerpt.finish();
+        let expected = format!("{}… {} more characters", "x".repeat(300), 1024 * 1024 - 300);
+        assert_eq!(
+            excerpt.lines(),
+            vec![expected, "fatal: after it".to_string()]
+        );
+        // colour goes, other codes are shown; a line of codes alone takes no
+        // row; tabs line up as a terminal shows them; a CRLF's CR goes
+        let codes = Excerpt::of(
+            b"\x1b[31merror:\x1b[0m red\n\x1b[0m\n\x1b[K\n\t\nfatal: real\r\n\x1b]0;T\x07x\nab\terr\n",
+        );
+        assert_eq!(
+            codes.lines(),
+            [
+                "error: red",
+                "fatal: real",
+                "\\u{1b}]0;T\\u{7}x",
+                "ab      err"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_excerpt_takes_both_streams_in_the_order_they_came() {
+        let mut excerpt = Excerpt::default();
+        excerpt.push(Stream::Stderr, b"From remote\n   a..b main\n");
+        excerpt.push(Stream::Stdout, b"CONFLICT (content): Merge ");
+        // a line of each stream may be open at once
+        excerpt.push(Stream::Stderr, b"error: half");
+        excerpt.push(Stream::Stdout, b"conflict in f\nAutomatic merge failed\n");
+        excerpt.finish();
+        assert_eq!(
+            excerpt.lines(),
+            [
+                "From remote",
+                "   a..b main",
+                "CONFLICT (content): Merge conflict in f",
+                "Automatic merge failed",
+                "error: half"
+            ]
         );
     }
 

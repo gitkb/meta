@@ -935,7 +935,7 @@ YAML
     run "$META_BIN" exec -- -no-such-program
     [ "$status" -eq 1 ]
     [[ "$output" != *"option of meta itself"* ]]
-    [[ "$output" == *"-no-such-program"*"exit code"* ]]
+    [[ "$output" == *"-no-such-program (didn't start)"* ]]
 }
 
 @test "json usage errors are one JSON document" {
@@ -983,8 +983,8 @@ YAML
     [[ "$(jq -r .error.hint <<<"$output")" == *"as in meta --json --include api -r git status" ]]
 }
 
-# Live output is the command's own: meta puts no pipe between it and the
-# user's stderr, whether that is a terminal, a file or a pipe
+# Live output reaches the user's terminal, file or pipe as the command
+# writes it, through meta (which keeps an excerpt for the summary)
 
 @test "a closed pipe ends a live run at once" {
     # at most 20 seconds, on macOS too (it has no timeout)
@@ -1023,4 +1023,18 @@ YAML
         "$META_BIN" --silent $order -i api exec -- sh -c "$late" "$TEST_DIR/silent$order-pipe" 2>&1 | cat > /dev/null
         wait_for "$TEST_DIR/silent$order-pipe"
     done
+}
+
+@test "many failures: the first few with their output, one line each after, then every name" {
+    printf 'projects:\n' > .meta.yaml
+    for i in 1 2 3 4 5 6 7; do printf '  r%s: git@github.com:org/r%s.git\n' "$i" "$i" >> .meta.yaml; done
+    make_workspace --init-only --plugins git r1 r2 r3 r4 r5 r6 r7
+    cd "$TEST_DIR"
+    run "$META_BIN" --parallel exec -- sh -c '[ -d .meta ] && exit 0; echo "first of ${PWD##*/}" >&2; echo "fatal: ${PWD##*/} broke" >&2; exit 3'
+    [ "$status" -eq 1 ]
+    local summary=${output#*Summary:}
+    [[ "$summary" == *"✗ ./r5: sh -c "*" (exit code 3)"$'\n'"    first of r5"$'\n'"    fatal: r5 broke"* ]]
+    [[ "$summary" == *"✗ ./r6: sh -c "*" (exit code 3): fatal: r6 broke"$'\n'* ]]
+    [[ "$summary" != *"first of r6"* ]]
+    [ "$(grep -v '^[[:space:]]*$' <<<"$summary" | tail -1)" = "✗ Failed (7): ./r1, ./r2, ./r3, ./r4, ./r5, ./r6, ./r7" ]
 }

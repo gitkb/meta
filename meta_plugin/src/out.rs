@@ -109,13 +109,39 @@ pub fn stderr(args: fmt::Arguments<'_>) {
 
 /// Write `bytes` to stderr as they are.
 pub fn stderr_bytes(bytes: &[u8]) {
+    let _ = try_stderr_bytes(bytes);
+}
+
+/// [`stderr_bytes`], saying whether the write failed (stderr is a closed
+/// pipe, say).
+pub fn try_stderr_bytes(bytes: &[u8]) -> io::Result<()> {
     let mut stderr = io::stderr().lock();
     // a Windows console takes UTF-8 only: what isn't shows as �
-    let _ = if cfg!(windows) && stderr.is_terminal() {
+    if cfg!(windows) && stderr.is_terminal() {
         write!(stderr, "{}", String::from_utf8_lossy(bytes))
     } else {
         stderr.write_all(bytes)
-    };
+    }
+}
+
+/// Whether stdout and stderr are one file, terminal or pipe (`2>&1`, or
+/// both on the terminal): what a program writes to the two then shows in
+/// one place, in the order it wrote it. Unknown (not Unix): false.
+pub fn stdout_is_stderr() -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsFd;
+        use std::os::unix::fs::MetadataExt;
+        let id = |fd: std::os::fd::BorrowedFd<'_>| {
+            let file = std::fs::File::from(fd.try_clone_to_owned().ok()?);
+            let meta = file.metadata().ok()?;
+            Some((meta.dev(), meta.ino()))
+        };
+        let out = id(io::stdout().as_fd());
+        out.is_some() && out == id(io::stderr().as_fd())
+    }
+    #[cfg(not(unix))]
+    false
 }
 
 /// Tell the user about a problem the command goes on despite. The message

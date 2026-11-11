@@ -479,6 +479,21 @@ state() {
     [ "$(grep -c '^0$' "$TEST_DIR/prompts")" -eq 1 ]
 }
 
+@test "a remote command whose SSH can't be shared still says why in the summary" {
+    mkdir -p "$TEST_DIR/bin"
+    printf '#!/bin/sh\necho reason-from-ssh >&2\nexit 255\n' > "$TEST_DIR/bin/ssh"
+    chmod +x "$TEST_DIR/bin/ssh"
+    for repo in frontend backend; do
+        git -C "$repo" remote remove origin 2>/dev/null || true
+        git -C "$repo" remote add origin "git@nohost.invalid:org/$repo.git"
+    done
+    PATH="$TEST_DIR/bin:$PATH" run "$META_BIN" --include frontend,backend git fetch
+    [ "$status" -eq 1 ]
+    summary="${output#*Summary:}"
+    [[ "$summary" == *"reason-from-ssh"* ]]
+    [[ "$summary" != *"output is above"* ]]
+}
+
 @test "meta git update opens no ssh to remotes it won't contact" {
     # cloned repos listed with ssh URLs: nothing to clone
     printf '#!/bin/sh\ntouch "%s/ssh-ran"\nexit 255\n' "$TEST_DIR" > "$TEST_DIR/ssh"

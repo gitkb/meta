@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use colored::*;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 pub use meta_plugin::display::display_command;
-use meta_plugin::display::{escape, escape_path, program_output};
+use meta_plugin::display::{
+    escape, escape_path, failure_excerpt, has_visible_line, program_output,
+};
 use meta_plugin::process::TooMuchOutput;
 use meta_plugin::{errln, out, outln};
 use rayon::prelude::*;
@@ -61,6 +63,10 @@ pub struct LoopConfig {
     /// Told of each command as it ends (in parallel, from its thread)
     #[serde(skip)]
     pub on_done: OnDone,
+    /// The summary shows all a failed command's captured output, not an
+    /// excerpt
+    #[serde(skip)]
+    pub full_errors: bool,
 }
 
 /// A function told of each command as it ends; a closed stdout it found
@@ -217,6 +223,7 @@ impl Default for LoopConfig {
             outer: None,
             warnings: vec![],
             on_done: OnDone::default(),
+            full_errors: false,
         }
     }
 }
@@ -263,15 +270,24 @@ impl CommandResult {
         }
     }
 
-    /// Why it failed, for the end of a line (`: why`): the last line of
-    /// its stderr that has anything on it, or that it wrote none. Nothing for
-    /// a command that ran live: its stderr was the user's, shown and not kept.
-    fn why(&self) -> String {
+    /// Why it failed, for the end of its summary line. A command that ran
+    /// live wrote to the user, so nothing is kept. Captured output is shown
+    /// on lines under it; one that never started says why on the line.
+    fn why(&self, config: &LoopConfig) -> String {
         if self.live {
-            return String::new();
+            return ": output is above".to_string();
         }
         if self.too_much_output.is_some() {
             return ": no more of one command's output is kept".to_string();
+        }
+        if config.parallel {
+            let none = if has_visible_line(&self.stderr) {
+                ""
+            } else {
+                ": no stderr"
+            };
+            let excerpt = failure_excerpt(&self.stderr, &self.stdout, config.full_errors);
+            return format!("{none}{excerpt}");
         }
         String::from_utf8_lossy(&self.stderr)
             .lines()
@@ -1225,7 +1241,15 @@ fn print_summary(config: &LoopConfig, results: &[CommandResult]) -> Result<()> {
                 names.join(", "),
                 escape(&first.command),
                 first.ending(),
-                first.why()
+                first.why(config)
+            )?;
+        }
+        if failed_count > 5 {
+            let names: Vec<String> = results.iter().filter(|r| !r.success).map(name).collect();
+            outln!(
+                "\n{} Failed ({failed_count}): {}",
+                "✗".red(),
+                names.join(", ")
             )?;
         }
         outln!()?;

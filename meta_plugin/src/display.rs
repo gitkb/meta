@@ -112,12 +112,13 @@ pub struct Excerpt {
     open: [Partial; 2],
 }
 
-/// A line being read: its first bytes, and how many characters after them
-/// weren't kept.
+/// A line being read: its first bytes, the last ones after those, and how
+/// many characters came after the first.
 #[derive(Debug, Default, Clone)]
 struct Partial {
     kept: Vec<u8>,
-    cut: usize,
+    last: std::collections::VecDeque<u8>,
+    after: usize,
 }
 
 /// How many lines of a program's output an [`Excerpt`] shows in full; past
@@ -128,11 +129,16 @@ pub const EXCERPT_LINES: usize = EXCERPT_HEAD + 2 + EXCERPT_TAIL;
 pub const EXCERPT_HEAD: usize = 5;
 pub const EXCERPT_TAIL: usize = 4;
 /// The most characters of one line an [`Excerpt`] shows (a megabyte of
-/// minified JavaScript is one line).
-pub const EXCERPT_WIDTH: usize = 300;
-/// The bytes of a line kept to show [`EXCERPT_WIDTH`] characters of it, with
-/// colour codes among them.
+/// minified JavaScript is one line): past that, its first
+/// [`EXCERPT_LINE_HEAD`], how many are left out, and its last
+/// [`EXCERPT_LINE_TAIL`], where a reason may end it.
+pub const EXCERPT_WIDTH: usize = EXCERPT_LINE_HEAD + EXCERPT_LINE_TAIL;
+pub const EXCERPT_LINE_HEAD: usize = 200;
+pub const EXCERPT_LINE_TAIL: usize = 100;
+/// The bytes kept of a line's start and of its end, to show their
+/// characters with colour codes among them.
 const EXCERPT_KEEP: usize = EXCERPT_WIDTH * 8;
+const EXCERPT_KEEP_LAST: usize = EXCERPT_LINE_TAIL * 8;
 
 /// Which of a program's streams bytes came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,7 +171,10 @@ impl Excerpt {
             let (kept, over) = piece.split_at(room.min(piece.len()));
             open.kept.extend_from_slice(kept);
             // characters, as UTF-8 counts them: each byte that starts one
-            open.cut += over.iter().filter(|&&b| b & 0xC0 != 0x80).count();
+            open.after += over.iter().filter(|&&b| b & 0xC0 != 0x80).count();
+            open.last.extend(over);
+            let extra = open.last.len().saturating_sub(EXCERPT_KEEP_LAST);
+            open.last.drain(..extra);
             // the last piece is a line not ended yet
             if lines.peek().is_some() {
                 let line = std::mem::take(open);
@@ -232,14 +241,63 @@ impl Excerpt {
 
 /// `line` as an excerpt shows it, None when nothing would show of it (blank,
 /// or only terminal codes): colour codes dropped, tabs as spaces, a CRLF's
-/// CR dropped, every other control escaped, cut at [`EXCERPT_WIDTH`]
-/// characters with how many were cut.
+/// CR dropped, every other control escaped; past [`EXCERPT_WIDTH`]
+/// characters, its start, how many are left out, and its end.
 fn shown(line: &Partial) -> Option<String> {
-    let text = String::from_utf8_lossy(&line.kept);
-    let text = text.strip_suffix('\r').unwrap_or(&text);
-    if without_codes(text, true).trim().is_empty() {
+    let start = plain(&line.kept);
+    // the end kept may start inside a character
+    let last: Vec<u8> = line
+        .last
+        .iter()
+        .copied()
+        .skip_while(|b| b & 0xC0 == 0x80)
+        .collect();
+    let end = plain(&last);
+    if start.visible.trim().is_empty() && end.visible.trim().is_empty() {
         return None;
     }
+    let chars: Vec<char> = start.text.chars().collect();
+    let (head, tail, total): (String, String, usize) = match line.after {
+        0 if chars.len() <= EXCERPT_WIDTH => return Some(escape(&start.text).into_owned()),
+        0 => (
+            chars.iter().take(EXCERPT_LINE_HEAD).collect(),
+            chars
+                .iter()
+                .skip(chars.len().saturating_sub(EXCERPT_LINE_TAIL))
+                .collect(),
+            chars.len(),
+        ),
+        after => {
+            let end: Vec<char> = end.text.chars().collect();
+            (
+                chars.iter().take(EXCERPT_LINE_HEAD).collect(),
+                end.iter()
+                    .skip(end.len().saturating_sub(EXCERPT_LINE_TAIL))
+                    .collect(),
+                chars.len() + after,
+            )
+        }
+    };
+    let left_out = total.saturating_sub(head.chars().count() + tail.chars().count());
+    Some(format!(
+        "{} … {left_out} more characters … {}",
+        escape(&head),
+        escape(&tail)
+    ))
+}
+
+/// A piece of a line, cleaned for an excerpt.
+struct Plain {
+    /// Colour codes dropped, tabs as spaces, trailing spaces and a CRLF's
+    /// CR dropped
+    text: String,
+    /// What a terminal would show of it: every code dropped
+    visible: String,
+}
+
+fn plain(bytes: &[u8]) -> Plain {
+    let text = String::from_utf8_lossy(bytes);
+    let text = text.strip_suffix('\r').unwrap_or(&text);
     let mut plain = String::with_capacity(text.len());
     let mut column = 0;
     for c in without_codes(text, false).trim_end().chars() {
@@ -255,14 +313,10 @@ fn shown(line: &Partial) -> Option<String> {
             }
         }
     }
-    let cut = column.saturating_sub(EXCERPT_WIDTH) + line.cut;
-    let kept: String = plain.chars().take(EXCERPT_WIDTH).collect();
-    let kept = escape(&kept).into_owned();
-    Some(match cut {
-        0 => kept,
-        1 => format!("{kept}… 1 more character"),
-        cut => format!("{kept}… {cut} more characters"),
-    })
+    Plain {
+        text: plain,
+        visible: without_codes(text, true),
+    }
 }
 
 /// `text` without its colour codes (SGR: `ESC [ … m`), or with `all`,
@@ -413,7 +467,12 @@ mod tests {
         }
         excerpt.push(Stream::Stderr, b"\nfatal: after it\n");
         excerpt.finish();
-        let expected = format!("{}… {} more characters", "x".repeat(300), 1024 * 1024 - 300);
+        let expected = format!(
+            "{} … {} more characters … {}",
+            "x".repeat(200),
+            1024 * 1024 - 300,
+            "x".repeat(100)
+        );
         assert_eq!(
             excerpt.lines(),
             vec![expected, "fatal: after it".to_string()]

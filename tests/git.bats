@@ -1773,10 +1773,11 @@ EOF
     run "$META_BIN" --sequential --include frontend exec -- sh -c 'for i in $(seq 11); do echo "line $i"; done; exit 2'
     summary=${output#*Summary:}
     [[ "$summary" == *"    line 1"$'\n'*"    line 11"* && "$summary" != *"more lines"* ]]
-    # a line is cut, colour codes go, and a line of codes alone takes no row
-    run "$META_BIN" --parallel --include frontend,backend exec -- sh -c '[ "${PWD##*/}" = backend ] && exit 0; printf "\033[31merror:\033[0m red\n\033[0m\n"; head -c 1000 /dev/zero | tr "\0" x >&2; echo >&2; exit 2'
+    # a long line keeps its start and its end, colour codes go, and a line
+    # of codes alone takes no row
+    run "$META_BIN" --parallel --include frontend,backend exec -- sh -c '[ "${PWD##*/}" = backend ] && exit 0; printf "\033[31merror:\033[0m red\n\033[0m\n"; head -c 1000 /dev/zero | tr "\0" x >&2; echo END >&2; exit 2'
     summary=${output#*Summary:}
-    [[ "$summary" == *"(exit code 2)"$'\n'"    error: red"$'\n'"    $(printf 'x%.0s' $(seq 300))… 700 more characters"* ]]
+    [[ "$summary" == *"(exit code 2)"$'\n'"    error: red"$'\n'"    $(printf 'x%.0s' $(seq 200)) … 703 more characters … $(printf 'x%.0s' $(seq 97))END"* ]]
     # one that wrote nothing says so on its line; one that didn't start, why
     run "$META_BIN" --parallel --include frontend,backend exec -- sh -c '[ "${PWD##*/}" = backend ] || exit 2'
     [[ "$output" == *"✗ ./frontend: sh -c "*" (exit code 2): no output"* ]]

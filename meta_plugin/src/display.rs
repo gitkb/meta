@@ -106,7 +106,10 @@ fn visible(line: &str) -> bool {
 
 /// `line` without its complete SGR colour sequences (`ESC [ … m`). Other
 /// escape sequences stay, for [`escape`] to make visible.
-fn strip_sgr(line: &str) -> String {
+fn strip_sgr(line: &str) -> Cow<'_, str> {
+    if !line.contains("\u{1b}[") {
+        return Cow::Borrowed(line);
+    }
     let mut plain = String::with_capacity(line.len());
     let mut rest = line;
     while let Some((before, after)) = rest.split_once("\u{1b}[") {
@@ -121,7 +124,7 @@ fn strip_sgr(line: &str) -> String {
         };
     }
     plain.push_str(rest);
-    plain
+    Cow::Owned(plain)
 }
 
 /// `line`, its middle cut when it is over 300 characters.
@@ -139,26 +142,43 @@ fn shortened(line: &str) -> String {
 }
 
 /// The lines of `output` to show, colours stripped and escaped: with `full`
-/// all of them as written, else those with something visible on them, each
-/// at most about 300 characters.
-fn shown_lines(output: &[u8], full: bool) -> Vec<String> {
+/// all of them as written. Otherwise only those with something visible on
+/// them, each at most about 300 characters: all when there are at most
+/// `whole`, else the first `head`, how many were left out (when `head` is
+/// not 0) and the last `tail`. Only the lines shown are formatted.
+fn shown_lines(
+    output: &[u8],
+    full: bool,
+    (whole, head, tail): (usize, usize, usize),
+) -> Vec<String> {
     if !has_visible_line(output) {
         return Vec::new();
     }
-    String::from_utf8_lossy(output)
-        .lines()
-        .map(strip_sgr)
-        .filter(|line| full || visible(line))
-        .map(|line| match full {
-            true => escape(line.trim_end()).into_owned(),
-            false => escape(&shortened(line.trim_end())).into_owned(),
-        })
-        .collect()
-}
-
-fn last_four(lines: &[String]) -> Vec<String> {
-    let skipped = lines.len().saturating_sub(4);
-    lines.iter().skip(skipped).cloned().collect()
+    let text = String::from_utf8_lossy(output);
+    let kept = || {
+        text.lines()
+            .filter(move |line| full || visible(&strip_sgr(line)))
+    };
+    let count = kept().count();
+    let cut = !full && count > whole;
+    let shown = |line: &str| {
+        let line = strip_sgr(line);
+        let line = line.trim_end();
+        match full {
+            true => escape(line).into_owned(),
+            false => escape(&shortened(line)).into_owned(),
+        }
+    };
+    let mut lines: Vec<String> = kept()
+        .enumerate()
+        .filter(|(i, _)| !cut || *i < head || *i >= count.saturating_sub(tail))
+        .map(|(_, line)| shown(line))
+        .collect();
+    if cut && head > 0 {
+        let hidden = count.saturating_sub(head + tail);
+        lines.insert(head.min(lines.len()), format!("… {hidden} more lines"));
+    }
+    lines
 }
 
 /// What a failed command wrote, to follow its line in a summary, each line
@@ -166,18 +186,8 @@ fn last_four(lines: &[String]) -> Vec<String> {
 /// last 4; the last 4 lines of stdout, where some errors are (a merge
 /// conflict's, a test runner's). With `full`, all of both.
 pub fn failure_excerpt(stderr: &[u8], stdout: &[u8], full: bool) -> String {
-    let mut errors = shown_lines(stderr, full);
-    let mut output = shown_lines(stdout, full);
-    if !full {
-        if errors.len() > 11 {
-            let hidden = errors.len().saturating_sub(9);
-            let tail = last_four(&errors);
-            errors.truncate(5);
-            errors.push(format!("… {hidden} more lines"));
-            errors.extend(tail);
-        }
-        output = last_four(&output);
-    }
+    let errors = shown_lines(stderr, full, (11, 5, 4));
+    let output = shown_lines(stdout, full, (4, 0, 4));
     if output.is_empty() {
         return errors.iter().map(|l| format!("\n  {l}")).collect();
     }

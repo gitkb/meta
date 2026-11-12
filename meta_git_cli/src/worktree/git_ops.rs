@@ -233,6 +233,7 @@ pub fn worktree_start(
         });
     }
     if git_rev_parse(repo_path, &format!("refs/heads/{branch}"))?.is_some() {
+        worktree_branch_is_free(repo_path, branch)?;
         return Ok(WorktreeStart::Existing);
     }
     if let Some(commit) = git_rev_parse(repo_path, &format!("refs/remotes/origin/{branch}"))? {
@@ -533,8 +534,29 @@ pub fn git_rev_parse(repo_path: &Path, rev: &str) -> Result<Option<String>> {
 /// `rebase-merge/update-refs`, `BISECT_START`). Changes nothing; anything it
 /// can't read is an error, not "free".
 pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
+    branch_is_free(repo_path, branch, false)
+}
+
+/// The create/add branch check: the same reservations as branch deletion,
+/// with a typed conflict naming the holding set and a branch-choice hint.
+pub fn worktree_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
+    branch_is_free(repo_path, branch, true)
+}
+
+fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Result<()> {
     let full = format!("refs/heads/{branch}");
-    let in_use = |by: &str| anyhow::anyhow!("'{}' is {by}", escape(branch));
+    let in_use = |by: &str| {
+        if !describe_holder {
+            return anyhow::anyhow!("'{}' is {by}", escape(branch));
+        }
+        anyhow::Error::from(
+            meta_plugin::ErrorInfo::new(
+                meta_plugin::ErrorCode::Conflict,
+                format!("'{}' is {by}", escape(branch)),
+            )
+            .hint("Use another branch with --branch <name> (create) or --repo <repo>:<name>."),
+        )
+    };
 
     // A symbolic branch would carry a ref transaction to the branch it points
     // at, which this check never looked at.
@@ -543,18 +565,53 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
         return Err(in_use("a symbolic ref; meta only moves plain branches"));
     }
 
-    let list = run(repo_path, ["worktree", "list", "--porcelain"])?;
-    let wanted = format!("branch {full}");
-    if list.lines().any(|line| line == wanted) {
-        return Err(in_use("checked out in a worktree"));
-    }
-
     let common = common_dir(repo_path)?.with_context(|| {
         format!(
             "Cannot find the git directory of {}",
             escape_path(repo_path)
         )
     })?;
+
+    // NUL-delimited fields keep spaces, quotes and newlines in paths literal.
+    let list = run(repo_path, ["worktree", "list", "--porcelain", "-z"])?;
+    let wanted = format!("branch {full}");
+    let mut checkout = None;
+    for field in list.split('\0') {
+        if let Some(path) = field.strip_prefix("worktree ") {
+            checkout = Some(Path::new(path));
+        } else if field == wanted {
+            if !describe_holder {
+                return Err(in_use("checked out in a worktree"));
+            }
+            let path = checkout.context("git listed a branch without a worktree path")?;
+            let record = match meta_core::gitdir::linked(path) {
+                Ok(linked) => meta_core::set_record::read(&linked.admin)?,
+                Err(_) => meta_core::set_record::in_repo(&common)
+                    .into_iter()
+                    .find_map(|(admin, record)| {
+                        (meta_core::set_record::checkout(&admin).as_deref() == Some(path))
+                            .then_some(record)
+                    })
+                    .transpose()?, // metadata also identifies a missing checkout
+            };
+            let mut holder = match record {
+                Some(record) => format!(
+                    "held by worktree set '{}' at {} (checkout {})",
+                    escape(&record.name()),
+                    escape_path(&record.set),
+                    escape_path(path)
+                ),
+                None => format!("checked out in worktree {}", escape_path(path)),
+            };
+            // A missing checkout may still hold staged work or a reflog:
+            // retain the existing warning and exact recovery command.
+            if let Err(leftover) = leftover_entry(repo_path, path) {
+                holder.push_str(&format!("; {leftover:#}"));
+            }
+            return Err(in_use(&holder));
+        }
+    }
+
     let mut admin_dirs = vec![common.clone()];
     match std::fs::read_dir(common.join("worktrees")) {
         Ok(entries) => {
@@ -575,6 +632,22 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
             }
         }
     };
+    let reserved = |kind: &str, admin: &Path| -> Result<anyhow::Error> {
+        let holder = if !describe_holder {
+            format!("the worktree whose git dir is {}", escape_path(admin))
+        } else if let Some(record) = meta_core::set_record::read(admin)? {
+            format!(
+                "worktree set '{}' at {}",
+                escape(&record.name()),
+                escape_path(&record.set)
+            )
+        } else {
+            let path =
+                meta_core::set_record::checkout(admin).unwrap_or_else(|| repo_path.to_path_buf());
+            format!("worktree {}", escape_path(&path))
+        };
+        Ok(in_use(&format!("{kind} by {holder}")))
+    };
     for dir in admin_dirs {
         let rebasing = [
             read(dir.join("rebase-merge/head-name"))?,
@@ -584,17 +657,11 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
         if rebasing.iter().any(|name| name.trim() == full)
             || updating.lines().any(|line| line.trim() == full)
         {
-            return Err(in_use(&format!(
-                "being rebased by the worktree whose git dir is {}",
-                escape_path(&dir)
-            )));
+            return Err(reserved("being rebased", &dir)?);
         }
         let bisect = read(dir.join("BISECT_START"))?;
         if [branch, full.as_str()].contains(&bisect.trim()) {
-            return Err(in_use(&format!(
-                "being bisected by the worktree whose git dir is {}",
-                escape_path(&dir)
-            )));
+            return Err(reserved("being bisected", &dir)?);
         }
     }
     Ok(())
@@ -834,13 +901,58 @@ mod tests {
             &tmp,
             &["worktree", "add", "-q", other.to_str().unwrap(), "t"],
         );
-        assert!(git_branch_is_free(&tmp, "t").is_err());
+        // Removal/pruning keep their original error code and text.
+        let error = git_branch_is_free(&tmp, "t").unwrap_err();
+        assert_eq!(format!("{error:#}"), "'t' is checked out in a worktree");
+        assert_eq!(
+            meta_plugin::envelope::code_of(&error),
+            meta_plugin::ErrorCode::Failed
+        );
+        assert_eq!(meta_plugin::envelope::info_of(&error).hint, None);
+        let conflict = worktree_branch_is_free(&tmp, "t").unwrap_err();
+        assert_eq!(
+            meta_plugin::envelope::code_of(&conflict),
+            meta_plugin::ErrorCode::Conflict
+        );
         // Bisected there instead: HEAD detached, branch still reserved.
         sandbox.git(&other, &["checkout", "-q", "--detach"]);
         git_branch_is_free(&tmp, "t").unwrap();
         let admin = tmp.join(".git/worktrees/other");
         std::fs::write(admin.join("BISECT_START"), "t\n").unwrap();
         assert!(git_branch_is_free(&tmp, "t").is_err());
+        let plain = worktree_branch_is_free(&tmp, "t").unwrap_err();
+        assert!(plain
+            .to_string()
+            .contains(&format!("worktree {}", escape_path(&other))));
+        let record = meta_core::set_record::SetRecord {
+            set: tmp.join("holding-set"),
+            project: tmp.clone(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            ephemeral: false,
+            ttl_seconds: None,
+            custom: Default::default(),
+        };
+        meta_core::set_record::write(&admin, &record).unwrap();
+        for state in ["bisect", "rebase"] {
+            if state == "rebase" {
+                std::fs::remove_file(admin.join("BISECT_START")).unwrap();
+                std::fs::create_dir(admin.join("rebase-merge")).unwrap();
+                std::fs::write(admin.join("rebase-merge/head-name"), "refs/heads/t\n").unwrap();
+            }
+            let error = worktree_branch_is_free(&tmp, "t").unwrap_err();
+            assert_eq!(
+                meta_plugin::envelope::code_of(&error),
+                meta_plugin::ErrorCode::Conflict
+            );
+            assert!(error.to_string().contains("worktree set 'holding-set'"));
+            assert!(error.to_string().contains(&escape_path(&record.set)));
+            let removal = git_branch_is_free(&tmp, "t").unwrap_err();
+            assert!(!removal.to_string().contains("holding-set"));
+            assert_eq!(
+                meta_plugin::envelope::code_of(&removal),
+                meta_plugin::ErrorCode::Failed
+            );
+        }
     }
 
     #[test]

@@ -99,6 +99,10 @@ depends on a repo before you change it: `meta -r project dependents <repo>`.
 
 Add a repo to an existing set with `meta git worktree add auth-fix --repo another-service`
 (`meta git worktree add auth-fix v2.3.1 --repo another-service` starts it from a commit-ish).
+Like create, add includes the listed intermediate parents of a nested repo;
+parents already checked out in the set are reused. If a legacy set already
+holds children beneath a missing parent, add refuses to overwrite that
+occupied directory.
 
 A commit-ish starts a new branch. Without one, each repo's branch is checked out
 if it exists locally, else made tracking `origin/<branch>` if this clone has
@@ -233,9 +237,12 @@ meta git worktree diff auth-fix --stat        # the summary only
 worktree repos too (`-r` and `-A` change nothing there and are refused);
 `meta --strict git worktree list` fails on what it can't read instead of
 skipping it. Run `list` from the workspace root: a nested folder can't see a set
-made with `-A`. Inside a set, `meta project list` and `meta context` show the whole workspace's
-projects, not the set's members; `meta git status` or `meta git worktree list`
-shows those.
+made with `-A`. Inside a set, `meta project list` shows the configured projects
+at their places in the set, including projects with no checkout there. With
+`-r` or `-A`, it includes nested projects, using the source workspace's configs
+where the set lacks a parent config. The set's own config entries win.
+`meta context` reads the set's checked-out configs; `meta git status` or
+`meta git worktree list` shows its members.
 
 ## Running Commands
 
@@ -256,7 +263,9 @@ when you want one.
 ## Context Detection
 
 Inside `.worktrees/<name>/`, meta commands that run in repos scope themselves to
-that set's repos (`meta project list` and `meta context` still list the workspace):
+that set's repos. `meta project list` describes configured projects at their
+set paths, with `-r` or `-A` including nested projects through source configs
+when needed; `meta context` reads the set's checked-out configs:
 
 ```bash
 cd .worktrees/auth-fix/backend

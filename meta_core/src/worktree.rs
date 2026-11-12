@@ -165,7 +165,7 @@ pub fn set_members(
         .collect();
     // without a filter, a nested config that can't be read only costs its
     // projects: the command runs in the others, as in the workspace
-    let tree = match set_tree(set_dir, &projects) {
+    let tree = match set_tree(set_dir, &projects, None) {
         Ok(tree) => tree,
         Err(_) if filters.is_empty() => projects
             .iter()
@@ -352,6 +352,44 @@ fn only_leads_on(dir: &Path, held: &[PathBuf]) -> bool {
     any
 }
 
+/// The configured projects visible from a set, at the same depth as
+/// `walk_projects`: source configs fill gaps in the set's checked-out
+/// configs, whose entries win at each place. Each place is listed once.
+pub fn set_project_tree(
+    set_dir: &Path,
+    workspace: &crate::config::Workspace,
+    depth: Option<usize>,
+) -> Result<Vec<crate::config::MetaTreeNode>> {
+    use crate::config::{MetaTreeNode, ProjectInfo};
+    fn merge(out: &mut Vec<MetaTreeNode>, nodes: Vec<MetaTreeNode>) {
+        for mut node in nodes {
+            if let Some(old) = out.iter_mut().find(|old| old.info.path == node.info.path) {
+                let mut children = std::mem::take(&mut old.children);
+                merge(&mut children, node.children);
+                node.children = children;
+                node.is_meta |= old.is_meta;
+                *old = node;
+            } else {
+                let children = std::mem::take(&mut node.children);
+                merge(&mut node.children, children);
+                out.push(node);
+            }
+        }
+        out.sort_by(|a, b| a.info.name.cmp(&b.info.name));
+    }
+    let projects: Vec<_> = workspace
+        .projects
+        .iter()
+        .map(|project| ProjectInfo {
+            path: project.set_place().to_string(),
+            ..project.clone()
+        })
+        .collect();
+    let mut tree = Vec::new();
+    merge(&mut tree, set_tree(set_dir, &projects, depth)?);
+    Ok(tree)
+}
+
 /// The meta tree that describes the checkouts of the set at `set_dir`, whose
 /// config lists `projects`: the tree of the workspace the set was made from
 /// (its owner file says which; what `create` planned from, the projects its
@@ -362,9 +400,10 @@ fn only_leads_on(dir: &Path, held: &[PathBuf]) -> bool {
 fn set_tree(
     set_dir: &Path,
     projects: &[crate::config::ProjectInfo],
+    depth: Option<usize>,
 ) -> Result<Vec<crate::config::MetaTreeNode>> {
     use crate::config;
-    let own = config::walk_projects(set_dir, projects, None)?;
+    let own = config::walk_projects(set_dir, projects, depth)?;
     let mut tree: Vec<_> = set_origin(set_dir)?
         .map(|dir| {
             // where each project of the workspace sits in the set
@@ -382,7 +421,7 @@ fn set_tree(
                 })
                 .unwrap_or_else(|| projects.to_vec());
             let mut visited = std::collections::HashSet::new();
-            readable_tree(&dir, set_dir, &origin, &mut visited)
+            readable_tree(&dir, set_dir, &origin, depth, &mut visited)
         })
         .unwrap_or_default();
     tree.extend(own);
@@ -399,6 +438,7 @@ fn readable_tree(
     dir: &Path,
     set: &Path,
     projects: &[crate::config::ProjectInfo],
+    depth: Option<usize>,
     visited: &mut std::collections::HashSet<PathBuf>,
 ) -> Vec<crate::config::MetaTreeNode> {
     use crate::config;
@@ -431,7 +471,10 @@ fn readable_tree(
                 info: project.clone(),
                 is_meta,
                 error: None,
-                children: readable_tree(&path, &place, &nested, visited),
+                children: match depth {
+                    Some(0) => Vec::new(),
+                    _ => readable_tree(&path, &place, &nested, depth.map(|n| n - 1), visited),
+                },
             }
         })
         .collect()
@@ -589,6 +632,7 @@ mod tests {
                 &workspace,
                 set,
                 &projects,
+                None,
                 &mut std::collections::HashSet::new(),
             )
         };

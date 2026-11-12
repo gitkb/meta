@@ -6,7 +6,8 @@ use meta_plugin::{Ctx, ProjectResult, Request, Response};
 
 use crate::here::Here;
 use crate::worktree::git_ops::{
-    ensure_checkout_config_is_not_bare, git_worktree_add, worktree_start, WorktreeStart,
+    ensure_checkout_config_is_not_bare, git_worktree_add, worktree_branch_is_free, worktree_start,
+    WorktreeStart,
 };
 use crate::worktree::helpers::*;
 use crate::worktree::origin::{branches_on_origin, Wanted};
@@ -25,7 +26,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
     meta_plugin::sets::validate_name(name)?;
     let from_ref = args.commit_ish.as_deref();
 
-    let repo_specs = &args.repos;
+    let mut repo_specs = args.repos.clone();
 
     // Check for "." alias
     if repo_specs.iter().any(|r| r.alias == ".") {
@@ -79,8 +80,44 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
         super::create::clone_missing(&index, &parents)?;
         return crate::again(ctx, request);
     }
+    let nested = repo_specs
+        .iter()
+        .map(|spec| {
+            let found = index.find(&spec.alias)?;
+            Ok((
+                place_in_set(meta_dir, &spec.alias, &found.source),
+                found.key,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (parent, _) in crate::worktree::plan::intermediate_parents(&index, nested, ctx)? {
+        let place = place_in_set(meta_dir, &parent.key, &parent.source);
+        if !existing.iter().any(|r| same_place(&r.alias, &place))
+            && !repo_specs.iter().any(|spec| {
+                index
+                    .find(&spec.alias)
+                    .is_ok_and(|r| r.source == parent.source)
+            })
+        {
+            let checkout = meta_core::gitdir::Checkout::of(&parent.source);
+            if checkout != meta_core::gitdir::Checkout::Missing {
+                if let Some(problem) = checkout.problem() {
+                    ctx.warn_or_bail(format!(
+                        "Intermediate parent '{}' for nested repo: {}",
+                        escape(&parent.key),
+                        escape(&problem)
+                    ))?;
+                    continue;
+                }
+            }
+            repo_specs.push(RepoSpec {
+                alias: parent.key,
+                branch: None,
+            });
+        }
+    }
     let mut missing: Vec<PlannedRepo> = Vec::new();
-    for spec in repo_specs {
+    for spec in &repo_specs {
         let found = index.find(&spec.alias)?;
         if meta_core::gitdir::Checkout::of(&found.source) == meta_core::gitdir::Checkout::Missing
             && !missing.iter().any(|r| r.source == found.source)
@@ -107,7 +144,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
         super::create::clone_missing(&index, &missing)?;
     }
     let mut planned: Vec<(&RepoSpec, std::path::PathBuf, String)> = Vec::new();
-    for spec in repo_specs {
+    for spec in &repo_specs {
         // by name, else by place, as in create
         let source = index.find(&spec.alias)?.source;
         // as in create: no worktree of a project not cloned, nor of the
@@ -170,6 +207,9 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
         planned.push((spec, source, place));
     }
 
+    // Parents must be checked out before their children, as in create.
+    planned.sort_by_key(|(_, _, place)| place.split('/').count());
+
     let branches: Vec<String> = planned
         .iter()
         .map(|(spec, ..)| resolve_branch(name, None, spec.branch.as_deref()))
@@ -183,6 +223,11 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
             branch,
         })
         .collect();
+    if from_ref.is_none() {
+        for repo in &wanted {
+            worktree_branch_is_free(repo.source, repo.branch)?;
+        }
+    }
     let on_origin = branches_on_origin(&wanted, from_ref, ctx)?;
 
     if mode.is_preview() {

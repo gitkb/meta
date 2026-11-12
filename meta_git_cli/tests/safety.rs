@@ -1358,7 +1358,6 @@ fn rollback_keeps_a_branch_a_checkout_hook_committed_on() {
     use std::os::unix::fs::PermissionsExt;
 
     let sandbox = Sandbox::new();
-    let root = &sandbox.work();
     let ws = workspace(&sandbox, &["a", "b"]);
     fs::create_dir_all(ws.join("a/.git/hooks")).unwrap();
     let hook = ws.join("a/.git/hooks/post-checkout");
@@ -1368,12 +1367,12 @@ fn rollback_keeps_a_branch_a_checkout_hook_committed_on() {
     )
     .unwrap();
     fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
-    sandbox.git(&ws.join("b"), &["branch", "t"]);
-    let elsewhere = root.join("elsewhere");
-    sandbox.git(
-        &ws.join("b"),
-        &["worktree", "add", "-q", elsewhere.to_str().unwrap(), "t"],
-    );
+    // A late checkout-hook failure still exercises rollback after a's
+    // hook moved its new branch. A branch collision is now caught before
+    // any checkout or hook runs.
+    let failing = ws.join("b/.git/hooks/post-checkout");
+    fs::write(&failing, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&failing, fs::Permissions::from_mode(0o755)).unwrap();
 
     let args = ["create", "t", "--repo", "a", "--repo", "b", "--no-deps"];
     let out = worktree(&sandbox, &ws, &args);

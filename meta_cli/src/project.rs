@@ -406,7 +406,10 @@ fn workspace(target: &Target) -> Result<(&meta_plugin::Workspace, config::Worksp
 fn list(target: &Target, start: &Path) -> Result<Found> {
     let (workspace, config) = workspace(target)?;
     let dir = listed_in(target, &config);
-    let tree = config::walk_projects(&dir, &config.projects, target.depth)?;
+    let tree = match &target.set {
+        Some(_) => meta_core::worktree::set_project_tree(&dir, &config, target.depth)?,
+        None => config::walk_projects(&dir, &config.projects, target.depth)?,
+    };
 
     // The remote of the workspace whose projects these are, not of the
     // repository the command runs in (a project's, from inside it); none

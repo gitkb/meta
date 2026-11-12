@@ -632,14 +632,17 @@ EOF
     printf '{"projects": {"deep/lib": "git@github.com:org/lib.git"}}' > "$TEST_DIR/group/.meta.yaml"
     git -C "$TEST_DIR/group/deep/lib" init --quiet --initial-branch=main
     git -C "$TEST_DIR/group/deep/lib" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    git -C "$TEST_DIR/group" add .meta.yaml
+    git -C "$TEST_DIR/group" -c user.email=t@t -c user.name=t commit --quiet -m config
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {"projects": {"backend": "git@github.com:org/backend.git",
               "frontend": "git@github.com:org/frontend.git",
               "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
 EOF
-    run "$META_BIN" git worktree create partial --repo backend --no-deps
+    run "$META_BIN" git worktree create partial --repo backend --repo group --no-deps
     [ "$status" -eq 0 ]
-    mkdir "$TEST_DIR/.worktrees/partial/group"
+    # The parent is already a member: fail while creating its child's directory.
+    [ -f "$TEST_DIR/.worktrees/partial/group/.git" ]
     chmod 555 "$TEST_DIR/.worktrees/partial/group"
     run "$META_BIN" git worktree add partial --repo frontend --repo group/deep/lib
     chmod 755 "$TEST_DIR/.worktrees/partial/group"

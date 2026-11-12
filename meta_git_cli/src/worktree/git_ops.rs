@@ -1363,6 +1363,14 @@ exec "$META_TEST_REAL_GIT" "$@"
         git_worktree_add(&repo, &other, "reserved", None, &|| Ok(None)).unwrap();
         let admin = meta_core::gitdir::linked(&other).unwrap().admin;
         let record = admin.join(meta_core::set_record::RECORD_FILE);
+        #[cfg(unix)]
+        let caller = {
+            let alias = sandbox.work().join("caller");
+            std::os::unix::fs::symlink(&repo, &alias).unwrap();
+            alias
+        };
+        #[cfg(not(unix))]
+        let caller = repo.clone();
         for damage in ["malformed", "unreadable"] {
             if damage == "malformed" {
                 std::fs::write(&record, "{broken").unwrap();
@@ -1385,7 +1393,7 @@ exec "$META_TEST_REAL_GIT" "$@"
                         std::fs::write(admin.join("BISECT_START"), "reserved\n").unwrap();
                     }
                 }
-                let error = worktree_branch_is_free(&repo, "reserved").unwrap_err();
+                let error = worktree_branch_is_free(&caller, "reserved").unwrap_err();
                 assert_eq!(
                     meta_plugin::envelope::code_of(&error),
                     meta_plugin::ErrorCode::Conflict,
@@ -1394,17 +1402,24 @@ exec "$META_TEST_REAL_GIT" "$@"
                 let message = format!("{error:#}");
                 let checkout = holder_checkout(&admin).unwrap().unwrap();
                 assert!(message.contains(&holder_path(&checkout)), "{message}");
-                assert!(message.contains(&holder_path(&record)), "{message}");
-                assert!(
-                    message.contains(if damage == "malformed" {
-                        "Cannot parse"
-                    } else {
-                        "Cannot read"
-                    }),
-                    "{message}"
+                let prefix = if damage == "malformed" {
+                    "; Cannot parse "
+                } else {
+                    "; Cannot read "
+                };
+                let shown = message
+                    .split_once(prefix)
+                    .and_then(|(_, note)| note.split_once(": "))
+                    .map(|(path, _)| Path::new(path));
+                assert!(shown.is_some(), "expected record {record:?} in {message:?}");
+                let shown = shown.unwrap();
+                assert_eq!(
+                    shown.canonicalize().unwrap(),
+                    record.canonicalize().unwrap(),
+                    "note path={shown:?}; expected={record:?}; message={message:?}"
                 );
                 assert!(meta_plugin::envelope::info_of(&error).hint.is_some());
-                let cleanup = git_branch_is_free(&repo, "reserved").unwrap_err();
+                let cleanup = git_branch_is_free(&caller, "reserved").unwrap_err();
                 assert_eq!(
                     meta_plugin::envelope::code_of(&cleanup),
                     meta_plugin::ErrorCode::Failed

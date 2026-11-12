@@ -587,9 +587,10 @@ fn readable_tree(
             let (path, place) = (dir.join(&project.path), set.join(destination));
             let full_place = config::nested_path(prefix, destination);
             // each meta repo once, as `walk_projects` does: links can loop
-            let first = read
-                .visited
-                .insert(path.canonicalize().unwrap_or_else(|_| path.clone()));
+            let first = depth != Some(0)
+                && read
+                    .visited
+                    .insert(path.canonicalize().unwrap_or_else(|_| path.clone()));
             // Check every configured place for errors, but retain the normal
             // walker's once-per-canonical-meta recursion policy.
             let own = read.listed(&place, depth);
@@ -913,6 +914,29 @@ mod tests {
     #[test]
     fn fallback_checked_out_nested_metadata_wins_over_flat_source_metadata() {
         fallback_own_metadata_wins_across_shapes(false);
+    }
+
+    #[test]
+    fn fallback_depth_limit_keeps_later_roots_eligible_for_expansion() {
+        let sandbox = Sandbox::new();
+        let workspace = sandbox.work().join("ws");
+        let set = workspace.join(".worktrees/set");
+        let roots = r#""a": {"repo": "x", "meta": true}, "b": {"repo": "x", "meta": true}"#;
+        let source = config(&workspace, roots);
+        config(
+            &workspace.join("a"),
+            r#""b": {"repo": "x", "path": "../b", "meta": true}"#,
+        );
+        config(&workspace.join("b"), r#""leaf": "source""#);
+        let own = config(&set, roots);
+        std::fs::create_dir_all(set.join("b/leaf")).unwrap();
+        let tree = set_project_tree(&set, &own, Some(1), false).unwrap();
+        let places = crate::config::flatten_meta_tree(&tree);
+        let normal = crate::config::flatten_meta_tree(
+            &crate::config::walk_projects(&workspace, &source.projects, Some(1)).unwrap(),
+        );
+        assert_eq!(places, normal);
+        assert!(places.iter().any(|place| place == "b/leaf"));
     }
 
     #[test]

@@ -1593,6 +1593,50 @@ set_projects() {
     [[ "$output" != *"/s/web"* ]]
 }
 
+@test "project list in a root checkout keeps an explicitly selected root graph" {
+    commit_repo "$TEST_DIR/api"
+    commit_repo "$TEST_DIR/web"
+    set_projects '{"api":"git@x:o/api.git","web":"git@x:o/web.git"}'
+    printf '{"projects":{"api":"git@x:o/api.git"}}\n' > selected.json
+    git add selected.json
+    git commit --quiet -m selected
+    "$META_BIN" git worktree create selected-root --every-repo
+    cd .worktrees/selected-root
+    for flag in shallow recursive; do
+        if [ "$flag" = shallow ]; then
+            run "$META_BIN" --config selected.json --json project list
+        else
+            run "$META_BIN" -r --config selected.json --json project list
+        fi
+        [ "$status" -eq 0 ]
+        [ "$(jq '[.results[] | select(.project == "api")] | length' <<<"$output")" = 1 ]
+        [ "$(jq '[.results[] | select(.project == "web")] | length' <<<"$output")" = 0 ]
+    done
+    run "$META_BIN" --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq '[.results[] | select(.project == "web")] | length' <<<"$output")" = 1 ]
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/selected-root/web"* ]]
+}
+
+@test "project list selected roots retain nested source fallback without default siblings" {
+    mkdir group
+    printf '{"projects":{"leaf":"git@x:o/leaf.git"}}\n' > group/.meta.yaml
+    commit_repo "$TEST_DIR/group/leaf"
+    set_projects '{"backend":"git@x:o/backend.git","frontend":"git@x:o/frontend.git","group":{"repo":"git@x:o/group.git","meta":true}}'
+    "$META_BIN" git worktree create selected-child --repo backend --no-deps
+    cd .worktrees/selected-child
+    printf '{"projects":{"group":{"repo":"git@x:o/group.git","meta":true}}}\n' > selected.json
+    run "$META_BIN" -r --config selected.json --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq '[.results[] | select(.project == "group/leaf")] | length' <<<"$output")" = 1 ]
+    [ "$(jq '[.results[] | select(.project == "frontend")] | length' <<<"$output")" = 0 ]
+    run "$META_BIN" --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq '[.results[] | select(.project == "frontend")] | length' <<<"$output")" = 1 ]
+}
+
 @test "a project under .claude does not make an agent's worktree beside it a member" {
     commit_repo "$TEST_DIR/.claude/skills/shared"
     set_projects '{"shared": {"repo": "git@x:o/s.git", "path": ".claude/skills/shared"}}'

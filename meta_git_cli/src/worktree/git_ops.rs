@@ -586,18 +586,16 @@ fn holder_path(path: &Path) -> String {
 }
 
 fn configured_worktree(repo_path: &Path, common: &Path) -> Result<Option<std::path::PathBuf>> {
-    let output = meta_core::git::git(repo_path)
-        .args([
-            OsStr::new("--git-dir"),
-            common.as_os_str(),
-            OsStr::new("config"),
-            OsStr::new("--null"),
-            OsStr::new("--path"),
-            OsStr::new("--get"),
-            OsStr::new("core.worktree"),
-        ])
-        .output()
-        .context("Cannot read the primary core.worktree")?;
+    let output = meta_plugin::process::output(meta_core::git::git(repo_path).args([
+        OsStr::new("--git-dir"),
+        common.as_os_str(),
+        OsStr::new("config"),
+        OsStr::new("--null"),
+        OsStr::new("--path"),
+        OsStr::new("--get"),
+        OsStr::new("core.worktree"),
+    ]))
+    .context("Cannot read the primary core.worktree")?;
     if output.status.code() == Some(1) {
         return Ok(None);
     }
@@ -688,7 +686,7 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
                 .unwrap_or(dot_git.clone())
                 .canonicalize()
                 .ok();
-            if let Some(path) = configured_worktree(repo_path, &real)? {
+            if let Some(path) = configured_worktree(repo_path, &common)? {
                 (Some(path), false)
             } else if dot_git.symlink_metadata().is_ok() && caller_admin.as_ref() == Some(&real) {
                 // A primary caller is known, including --separate-git-dir.
@@ -1204,6 +1202,116 @@ mod tests {
             error
                 .to_string()
                 .contains(&holder_path(&repo.canonicalize().unwrap())),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_worktree_keeps_the_git_supplied_common_directory_spelling() {
+        use std::os::unix::fs::PermissionsExt;
+        let sandbox = meta_plugin::testing::isolated!();
+        let repo = sandbox.repo(&sandbox.work().join("repo"));
+        let metadata = sandbox.work().join("storage/.git");
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        sandbox.git(
+            &repo,
+            &[
+                "init",
+                "--quiet",
+                "--separate-git-dir",
+                metadata.to_str().unwrap(),
+            ],
+        );
+        let linked = sandbox.work().join("linked");
+        git_worktree_add(&repo, &linked, "linked", None, &|| Ok(None)).unwrap();
+        sandbox.git(&repo, &["config", "core.worktree", repo.to_str().unwrap()]);
+        let native = sandbox.work().join("git-native");
+        std::os::unix::fs::symlink(&metadata, &native).unwrap();
+        let real_git = sandbox
+            .command("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap();
+        assert!(real_git.status.success());
+        let real_git = String::from_utf8(real_git.stdout).unwrap();
+        let bin = sandbox.work().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let script = bin.join("git");
+        // Model Git accepting its own spelling but not a canonical OS spelling,
+        // as can happen with Windows verbatim paths. Record the rejected call.
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+if [ "$1" = rev-parse ] && [ "$2" = --show-prefix ] && [ "$3" = --git-common-dir ]; then
+    printf '\n%s\n' "$META_TEST_NATIVE_COMMON"
+    exit 0
+fi
+if [ "$1" = --git-dir ] && [ "$2" = "$META_TEST_CANONICAL_COMMON" ] && [ "$3" = config ]; then
+    touch "$META_TEST_REJECTED"
+    exit 1
+fi
+exec "$META_TEST_REAL_GIT" "$@"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let rejected = sandbox.work().join("rejected-canonical");
+        std::env::set_var("META_TEST_NATIVE_COMMON", &native);
+        std::env::set_var(
+            "META_TEST_CANONICAL_COMMON",
+            metadata.canonicalize().unwrap(),
+        );
+        std::env::set_var("META_TEST_REJECTED", &rejected);
+        std::env::set_var("META_TEST_REAL_GIT", real_git.trim());
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        std::env::set_var(
+            "PATH",
+            std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path))).unwrap(),
+        );
+        let error = worktree_branch_is_free(&linked, "main").unwrap_err();
+        assert!(
+            !rejected.exists(),
+            "Git was given the canonical OS path instead of its own spelling"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(&holder_path(&repo.canonicalize().unwrap())),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_worktree_bounds_the_git_output() {
+        use std::os::unix::fs::PermissionsExt;
+        let sandbox = meta_plugin::testing::isolated!();
+        let bin = sandbox.work().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let script = bin.join("git");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nhead -c {} /dev/zero\nprintf '\\0'\n",
+                meta_plugin::process::CAPTURE_LIMIT + 1
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        std::env::set_var(
+            "PATH",
+            std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path))).unwrap(),
+        );
+        let result = configured_worktree(&sandbox.work(), &sandbox.work());
+        assert!(
+            result.is_err(),
+            "Git output above the capture limit was accepted"
+        );
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("output passed 16 MiB"),
             "{error:#}"
         );
     }

@@ -241,6 +241,8 @@ made with `-A`. Inside a set, `meta project list` shows the configured projects
 at their places in the set, including projects with no checkout there. With
 `-r` or `-A`, it includes nested projects, using the source workspace's configs
 where the set lacks a parent config. The set's own config entries win.
+With `--config`, that file's root project graph is authoritative; nested
+source configs still fill gaps below those roots.
 Listing preserves configured path components and merges only identical
 configured places; it does not resolve path aliases. If configs name both
 `foo` and `parent/../foo`, both rows remain. Use one spelling for each

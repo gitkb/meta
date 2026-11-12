@@ -165,7 +165,7 @@ pub fn set_members(
         .collect();
     // without a filter, a nested config that can't be read only costs its
     // projects: the command runs in the others, as in the workspace
-    let tree = match set_tree(set_dir, &projects, None) {
+    let tree = match set_tree(set_dir, &projects, None, None) {
         Ok(tree) => tree,
         Err(_) if filters.is_empty() => projects
             .iter()
@@ -356,10 +356,13 @@ fn only_leads_on(dir: &Path, held: &[PathBuf]) -> bool {
 /// `walk_projects`: source configs fill gaps in the set's checked-out
 /// configs, whose entries win at each configured place. Each exact place
 /// is listed once; path aliases stay distinct to preserve symlink traversal.
+/// With an explicitly selected config, its roots are authoritative and
+/// only their nested projects use the source fallback.
 pub fn set_project_tree(
     set_dir: &Path,
     workspace: &crate::config::Workspace,
     depth: Option<usize>,
+    selected_config: bool,
 ) -> Result<Vec<crate::config::MetaTreeNode>> {
     use crate::config::{MetaTreeNode, ProjectInfo};
     use std::collections::BTreeMap;
@@ -396,7 +399,17 @@ pub fn set_project_tree(
         })
         .collect();
     let mut flat = BTreeMap::new();
-    flatten(set_tree(set_dir, &projects, depth)?, "", 0, &mut flat);
+    flatten(
+        set_tree(
+            set_dir,
+            &projects,
+            depth,
+            selected_config.then_some(workspace.projects.as_slice()),
+        )?,
+        "",
+        0,
+        &mut flat,
+    );
     let mut places: Vec<_> = flat.keys().cloned().collect();
     places.sort_by_key(|place| std::cmp::Reverse(place.split('/').count()));
     for place in places {
@@ -442,17 +455,21 @@ fn set_tree(
     set_dir: &Path,
     projects: &[crate::config::ProjectInfo],
     depth: Option<usize>,
+    selected_roots: Option<&[crate::config::ProjectInfo]>,
 ) -> Result<Vec<crate::config::MetaTreeNode>> {
     use crate::config;
     let own = config::walk_projects(set_dir, projects, depth)?;
     let mut tree: Vec<_> = set_origin(set_dir)?
         .map(|dir| {
             // where each project of the workspace sits in the set
-            let origin: Vec<config::ProjectInfo> = config::Workspace::in_dir(&dir)
-                .ok()
-                .flatten()
-                .map(|w| w.projects)
-                .unwrap_or_else(|| projects.to_vec());
+            let origin: Vec<config::ProjectInfo> = match selected_roots {
+                Some(roots) => roots.to_vec(),
+                None => config::Workspace::in_dir(&dir)
+                    .ok()
+                    .flatten()
+                    .map(|w| w.projects)
+                    .unwrap_or_else(|| projects.to_vec()),
+            };
             let mut visited = std::collections::HashSet::new();
             readable_tree(&dir, set_dir, &origin, depth, true, &mut visited)
         })
@@ -671,7 +688,7 @@ mod tests {
             r#""direct": {"repo": "x", "path": "vendor/sub"}"#,
         );
         let own = config(&set, r#""vendor": "x""#);
-        let tree = set_project_tree(&set, &own, Some(0)).unwrap();
+        let tree = set_project_tree(&set, &own, Some(0), false).unwrap();
         assert!(tree.iter().all(|node| node.children.is_empty()));
         assert_eq!(tree.len(), 2);
         assert!(tree.iter().any(|node| node.info.path == "vendor/sub"));
@@ -691,7 +708,7 @@ mod tests {
             r#""nested": {"repo": "nested", "path": "../foo"}"#,
         );
         let own = config(&set, r#""foo": "own""#);
-        let tree = set_project_tree(&set, &own, None).unwrap();
+        let tree = set_project_tree(&set, &own, None, false).unwrap();
         let places = crate::config::flatten_meta_tree(&tree);
         assert_eq!(places.len(), 3, "{places:?}");
         assert!(places.iter().any(|place| place == "parent/../foo"));
@@ -716,7 +733,7 @@ mod tests {
             &set.join("parent"),
             r#""linked": {"repo": "linked", "path": "hop/../lib"}, "local": {"repo": "local", "path": "lib"}"#,
         );
-        let tree = set_project_tree(&set, &own, None).unwrap();
+        let tree = set_project_tree(&set, &own, None, false).unwrap();
         let places = crate::config::flatten_meta_tree(&tree);
         assert!(
             places.iter().any(|place| place == "parent/hop/../lib"),
@@ -746,7 +763,7 @@ mod tests {
             &set.join("parent"),
             r#""own": {"repo": "own", "path": "lib"}"#,
         );
-        let tree = set_project_tree(&set, &own, None).unwrap();
+        let tree = set_project_tree(&set, &own, None, false).unwrap();
         let parent = tree.iter().find(|node| node.info.path == "parent").unwrap();
         let child = parent
             .children

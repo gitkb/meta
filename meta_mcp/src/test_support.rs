@@ -8,14 +8,10 @@ pub(crate) use meta_plugin::testing::{gone, wait_for};
 use std::path::PathBuf;
 
 /// Have the tools call the `meta` built beside the tests (in the target
-/// folder, above `deps/`). Each test that does runs in a process of its own
+/// profile folder). Each test that does runs in a process of its own
 /// (`isolated!`).
 pub(crate) fn use_built_meta() {
-    let exe = std::env::current_exe().unwrap();
-    let meta = exe
-        .ancestors()
-        .nth(2)
-        .unwrap()
+    let meta = meta_plugin::testing::built_program_dir()
         .join(format!("meta{}", std::env::consts::EXE_SUFFIX));
     assert!(
         meta.is_file(),

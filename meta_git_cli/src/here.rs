@@ -389,14 +389,10 @@ pub(crate) mod tests {
     use super::*;
 
     /// Have meta-git call the `meta` built beside the tests (in the target
-    /// folder, above `deps/`), as meta would set `META_EXE` for it. Each
+    /// profile folder), as meta would set `META_EXE` for it. Each
     /// test that reads a config runs in a process of its own (`isolated!`).
     pub(crate) fn use_built_meta() {
-        let exe = std::env::current_exe().unwrap();
-        let meta = exe
-            .ancestors()
-            .nth(2)
-            .unwrap()
+        let meta = meta_plugin::testing::built_program_dir()
             .join(format!("meta{}", std::env::consts::EXE_SUFFIX));
         assert!(
             meta.is_file(),

@@ -601,9 +601,7 @@ impl Sandbox {
 #[test]
 fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    // the test runs from target/<profile>/deps, next to the binaries
-    let exe = std::env::current_exe().unwrap();
-    let bin = exe.parent().and_then(Path::parent).unwrap();
+    let bin = meta_plugin::testing::built_program_dir();
     // meta's programs, and the plugin guide's example plugin (`meta hello`)
     for program in programs(root)
         .iter()
@@ -633,7 +631,7 @@ fn every_command_the_docs_and_the_code_name_is_one_meta_accepts() {
     );
 
     let (tags, names) = selected(&lines);
-    let sandbox = Sandbox::new(bin, &tags, &names);
+    let sandbox = Sandbox::new(&bin, &tags, &names);
     // the check rejects what it should, in this sandbox
     for bad in [
         &["git", "worktree", "no-such-command"][..],

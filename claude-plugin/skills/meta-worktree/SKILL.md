@@ -241,6 +241,10 @@ made with `-A`. Inside a set, `meta project list` shows the configured projects
 at their places in the set, including projects with no checkout there. With
 `-r` or `-A`, it includes nested projects, using the source workspace's configs
 where the set lacks a parent config. The set's own config entries win.
+Listing preserves configured path components and merges only identical
+configured places; it does not resolve path aliases. If configs name both
+`foo` and `parent/../foo`, both rows remain. Use one spelling for each
+location, since `..` after a symlink can lead somewhere else.
 `meta context` reads the set's checked-out configs; `meta git status` or
 `meta git worktree list` shows its members.
 

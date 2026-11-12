@@ -354,7 +354,8 @@ fn only_leads_on(dir: &Path, held: &[PathBuf]) -> bool {
 
 /// The configured projects visible from a set, at the same depth as
 /// `walk_projects`: source configs fill gaps in the set's checked-out
-/// configs, whose entries win at each place. Each place is listed once.
+/// configs, whose entries win at each configured place. Each exact place
+/// is listed once; path aliases stay distinct to preserve symlink traversal.
 pub fn set_project_tree(
     set_dir: &Path,
     workspace: &crate::config::Workspace,
@@ -362,28 +363,6 @@ pub fn set_project_tree(
 ) -> Result<Vec<crate::config::MetaTreeNode>> {
     use crate::config::{MetaTreeNode, ProjectInfo};
     use std::collections::BTreeMap;
-    fn location(place: &str) -> String {
-        use std::path::Component;
-        let mut path = PathBuf::new();
-        for part in Path::new(place).components() {
-            match part {
-                Component::CurDir => {}
-                Component::ParentDir
-                    if matches!(path.components().next_back(), Some(Component::Normal(_))) =>
-                {
-                    path.pop();
-                }
-                Component::ParentDir if path.has_root() => {}
-                part => path.push(part),
-            }
-        }
-        if path.as_os_str().is_empty() {
-            ".".to_string()
-        } else {
-            path.to_string_lossy()
-                .replace(std::path::MAIN_SEPARATOR, "/")
-        }
-    }
     fn flatten(
         nodes: Vec<MetaTreeNode>,
         prefix: &str,
@@ -391,7 +370,7 @@ pub fn set_project_tree(
         out: &mut BTreeMap<String, (MetaTreeNode, usize)>,
     ) {
         for mut node in nodes {
-            let place = location(&crate::config::nested_path(prefix, &node.info.path));
+            let place = crate::config::nested_path(prefix, &node.info.path);
             let children = std::mem::take(&mut node.children);
             if let Some((old, _)) = out.get(&place) {
                 node.is_meta |= old.is_meta;
@@ -699,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn review_set_project_tree_merges_equivalent_lexical_locations() {
+    fn review_set_project_tree_preserves_distinct_configured_spellings() {
         let sandbox = Sandbox::new();
         let workspace = sandbox.work().join("ws");
         let set = workspace.join(".worktrees/set");
@@ -714,9 +693,73 @@ mod tests {
         let own = config(&set, r#""foo": "own""#);
         let tree = set_project_tree(&set, &own, None).unwrap();
         let places = crate::config::flatten_meta_tree(&tree);
-        assert_eq!(places.len(), 2, "{places:?}");
+        assert_eq!(places.len(), 3, "{places:?}");
+        assert!(places.iter().any(|place| place == "parent/../foo"));
         let foo = tree.iter().find(|node| node.info.path == "foo").unwrap();
         assert_eq!(foo.info.repo.as_ref().unwrap().to_string(), "own");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn review_set_project_tree_preserves_symlink_sensitive_paths() {
+        let sandbox = Sandbox::new();
+        let workspace = sandbox.work().join("ws");
+        let set = workspace.join(".worktrees/set");
+        config(&workspace, r#""parent": {"repo": "x", "meta": true}"#);
+        let own = config(&set, r#""parent": {"repo": "x", "meta": true}"#);
+        std::fs::create_dir_all(set.join("parent")).unwrap();
+        std::fs::create_dir_all(set.join("shared/inner")).unwrap();
+        std::fs::create_dir_all(set.join("shared/lib")).unwrap();
+        std::fs::create_dir_all(set.join("parent/lib")).unwrap();
+        std::os::unix::fs::symlink("../shared/inner", set.join("parent/hop")).unwrap();
+        config(
+            &set.join("parent"),
+            r#""linked": {"repo": "linked", "path": "hop/../lib"}, "local": {"repo": "local", "path": "lib"}"#,
+        );
+        let tree = set_project_tree(&set, &own, None).unwrap();
+        let places = crate::config::flatten_meta_tree(&tree);
+        assert!(
+            places.iter().any(|place| place == "parent/hop/../lib"),
+            "{places:?}"
+        );
+        assert!(places.iter().any(|place| place == "parent/lib"));
+        assert_ne!(
+            set.join("parent/hop/../lib").canonicalize().unwrap(),
+            set.join("parent/lib").canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn review_set_project_tree_keeps_fallback_entries_at_their_configured_places() {
+        let sandbox = Sandbox::new();
+        let workspace = sandbox.work().join("ws");
+        let set = workspace.join(".worktrees/set");
+        config(&workspace, r#""parent": {"repo": "x", "meta": true}"#);
+        std::fs::create_dir_all(workspace.join("parent/a")).unwrap();
+        config(
+            &workspace.join("parent"),
+            r#""source": {"repo": "source", "path": "a/../lib"}"#,
+        );
+        let own = config(&set, r#""other": "x""#);
+        std::fs::create_dir_all(set.join("parent/a")).unwrap();
+        config(
+            &set.join("parent"),
+            r#""own": {"repo": "own", "path": "lib"}"#,
+        );
+        let tree = set_project_tree(&set, &own, None).unwrap();
+        let parent = tree.iter().find(|node| node.info.path == "parent").unwrap();
+        let child = parent
+            .children
+            .iter()
+            .find(|node| node.info.path == "lib")
+            .unwrap();
+        assert_eq!(child.info.repo.as_ref().unwrap().to_string(), "own");
+        let source = parent
+            .children
+            .iter()
+            .find(|node| node.info.path == "a/../lib")
+            .unwrap();
+        assert_eq!(source.info.repo.as_ref().unwrap().to_string(), "source");
     }
 
     #[test]

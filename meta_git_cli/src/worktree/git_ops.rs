@@ -585,6 +585,35 @@ fn holder_path(path: &Path) -> String {
     }
 }
 
+fn configured_worktree(repo_path: &Path, common: &Path) -> Result<Option<std::path::PathBuf>> {
+    let output = meta_core::git::git(repo_path)
+        .args([
+            OsStr::new("--git-dir"),
+            common.as_os_str(),
+            OsStr::new("config"),
+            OsStr::new("--null"),
+            OsStr::new("--path"),
+            OsStr::new("--get"),
+            OsStr::new("core.worktree"),
+        ])
+        .output()
+        .context("Cannot read the primary core.worktree")?;
+    if output.status.code() == Some(1) {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        output.status.success(),
+        "Cannot read the primary core.worktree: {}",
+        meta_plugin::display::program_output(&output.stderr)
+    );
+    let bytes = output
+        .stdout
+        .strip_suffix(b"\0")
+        .context("Invalid core.worktree output")?;
+    let path = common.join(checkout_path_bytes(bytes)?);
+    Ok(Some(path.canonicalize().unwrap_or(path)))
+}
+
 fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Result<()> {
     let full = format!("refs/heads/{branch}");
     let in_use = |by: &str| {
@@ -640,7 +669,7 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
         Err(e) => return Err(e.into()),
     }
 
-    let primary = if describe_holder {
+    let (primary, primary_is_metadata) = if describe_holder {
         let bare = lookup(
             repo_path,
             [
@@ -651,19 +680,35 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
             ],
         )?;
         if bare.as_deref() == Some("true") {
-            None
+            (None, false)
         } else {
-            // Git's main-worktree registration is the real common dir,
-            // with the trailing /.git removed (also for linked callers).
             let real = common.canonicalize()?;
-            Some(if real.file_name() == Some(std::ffi::OsStr::new(".git")) {
-                real.parent().unwrap_or(&real).to_path_buf()
+            let dot_git = repo_path.join(".git");
+            let caller_admin = meta_core::gitdir::gitfile_target(repo_path)?
+                .unwrap_or(dot_git.clone())
+                .canonicalize()
+                .ok();
+            if let Some(path) = configured_worktree(repo_path, &real)? {
+                (Some(path), false)
+            } else if dot_git.symlink_metadata().is_ok() && caller_admin.as_ref() == Some(&real) {
+                // A primary caller is known, including --separate-git-dir.
+                (Some(repo_path.canonicalize()?), false)
+            } else if real.file_name() == Some(std::ffi::OsStr::new(".git")) {
+                // Git's ordinary main-worktree registration, for linked callers.
+                (Some(real.parent().unwrap_or(&real).to_path_buf()), false)
             } else {
-                real
-            })
+                // A separate Git dir has no backlink to its primary checkout.
+                (Some(real), true)
+            }
         }
     } else {
-        None
+        (None, false)
+    };
+    let unknown_primary = |path: &Path| {
+        format!(
+            "Git directory {} (primary checkout location is unknown)",
+            holder_path(path)
+        )
     };
     if describe_holder {
         for admin in &admin_dirs {
@@ -688,17 +733,27 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
                 continue;
             }
             let record = meta_core::set_record::read(admin)?;
+            let unknown = admin == &common && primary_is_metadata;
             let mut holder = match record {
+                Some(record) if unknown => format!(
+                    "held by worktree set '{}' at {} ({})",
+                    escape(&record.name()),
+                    holder_path(&record.set),
+                    unknown_primary(&path)
+                ),
                 Some(record) => format!(
                     "held by worktree set '{}' at {} (checkout {})",
                     escape(&record.name()),
                     holder_path(&record.set),
                     holder_path(&path)
                 ),
+                None if unknown => format!("held by {}", unknown_primary(&path)),
                 None => format!("checked out in worktree {}", holder_path(&path)),
             };
-            if let Err(leftover) = leftover_entry(repo_path, &path) {
-                holder.push_str(&format!("; {leftover:#}"));
+            if !unknown {
+                if let Err(leftover) = leftover_entry(repo_path, &path) {
+                    holder.push_str(&format!("; {leftover:#}"));
+                }
             }
             return Err(in_use(&holder));
         }
@@ -729,7 +784,11 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
                 holder_checkout(admin)?
             }
             .unwrap_or_else(|| repo_path.to_path_buf());
-            format!("worktree {}", holder_path(&path))
+            if admin == common && primary_is_metadata {
+                unknown_primary(&path)
+            } else {
+                format!("worktree {}", holder_path(&path))
+            }
         };
         Ok(in_use(&format!("{kind} by {holder}")))
     };
@@ -1043,6 +1102,109 @@ mod tests {
                 .to_string()
                 .ends_with(&format!("worktree {}", escape_path(&primary))),
             "primary={primary:?}; caller={caller:?}; message={error:#}"
+        );
+    }
+
+    #[test]
+    fn review_separate_git_dir_names_the_checkout_or_says_it_is_unknown() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let repo = sandbox.repo(&sandbox.work().join("repo"));
+        let metadata = sandbox.work().join("storage/repo.git");
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        sandbox.git(
+            &repo,
+            &[
+                "init",
+                "--quiet",
+                "--separate-git-dir",
+                metadata.to_str().unwrap(),
+            ],
+        );
+        let primary = repo.canonicalize().unwrap();
+        let git_dir = metadata.canonicalize().unwrap();
+        let error = worktree_branch_is_free(&repo, "main").unwrap_err();
+        assert!(
+            error.to_string().contains(&holder_path(&primary)),
+            "{error:#}"
+        );
+        let linked = sandbox.work().join("linked");
+        git_worktree_add(&repo, &linked, "linked", None, &|| Ok(None)).unwrap();
+        let error = worktree_branch_is_free(&linked, "main").unwrap_err();
+        assert!(
+            error.to_string().contains("checkout location is unknown"),
+            "{error:#}"
+        );
+        assert!(
+            error.to_string().contains(&holder_path(&git_dir)),
+            "{error:#}"
+        );
+        sandbox.git(&repo, &["branch", "reserved"]);
+        sandbox.git(&repo, &["checkout", "--quiet", "--detach"]);
+        for (state, branch) in [
+            ("BISECT_START", "reserved\n"),
+            ("rebase-merge/head-name", "refs/heads/reserved\n"),
+            ("rebase-apply/head-name", "refs/heads/reserved\n"),
+        ] {
+            let file = metadata.join(state);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, branch).unwrap();
+            for caller in [&repo, &linked] {
+                let error = worktree_branch_is_free(caller, "reserved").unwrap_err();
+                let expected = if caller == &repo {
+                    holder_path(&primary)
+                } else {
+                    "checkout location is unknown".to_string()
+                };
+                assert!(error.to_string().contains(&expected), "{error:#}");
+            }
+            std::fs::remove_file(file).unwrap();
+        }
+    }
+
+    #[test]
+    fn review_primary_registration_uses_git_rule_or_configured_worktree() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let repo = sandbox.repo(&sandbox.work().join("repo"));
+        let metadata = sandbox.work().join("storage/.git");
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        sandbox.git(
+            &repo,
+            &[
+                "init",
+                "--quiet",
+                "--separate-git-dir",
+                metadata.to_str().unwrap(),
+            ],
+        );
+        let linked = sandbox.work().join("linked");
+        git_worktree_add(&repo, &linked, "linked", None, &|| Ok(None)).unwrap();
+        assert_eq!(
+            lookup(&repo, ["config", "--get", "core.worktree"]).unwrap(),
+            None
+        );
+        let listed = run(&repo, ["worktree", "list", "--porcelain"]).unwrap();
+        let registered = metadata.parent().unwrap().canonicalize().unwrap();
+        let git_registered = listed
+            .lines()
+            .find_map(|line| line.strip_prefix("worktree "))
+            .unwrap();
+        assert_eq!(
+            Path::new(git_registered).canonicalize().unwrap(),
+            registered
+        );
+        let error = worktree_branch_is_free(&linked, "main").unwrap_err();
+        assert!(
+            error.to_string().contains(&holder_path(&registered)),
+            "{error:#}"
+        );
+        // An explicit relative core.worktree is relative to the common dir.
+        sandbox.git(&repo, &["config", "core.worktree", "../../repo"]);
+        let error = worktree_branch_is_free(&linked, "main").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&holder_path(&repo.canonicalize().unwrap())),
+            "{error:#}"
         );
     }
 

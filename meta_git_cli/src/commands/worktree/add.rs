@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::*;
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::{errln, outln};
@@ -26,7 +26,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
     meta_plugin::sets::validate_name(name)?;
     let from_ref = args.commit_ish.as_deref();
 
-    let mut repo_specs = args.repos.clone();
+    let repo_specs = args.repos.clone();
 
     // Check for "." alias
     if repo_specs.iter().any(|r| r.alias == ".") {
@@ -80,52 +80,69 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
         super::create::clone_missing(&index, &parents)?;
         return crate::again(ctx, request);
     }
-    let nested = repo_specs
+    // Resolve each explicit spec once; synthetic parents already carry
+    // their source identity and must never be looked up by name again.
+    let mut resolved = repo_specs
         .iter()
-        .map(|spec| {
-            let found = index.find(&spec.alias)?;
-            Ok((
-                place_in_set(meta_dir, &spec.alias, &found.source),
-                found.key,
-            ))
-        })
+        .map(|spec| Ok((spec.clone(), index.find(&spec.alias)?.source)))
         .collect::<Result<Vec<_>>>()?;
+    let nested = resolved
+        .iter()
+        .map(|(spec, source)| {
+            (
+                place_in_set(meta_dir, &spec.alias, source),
+                spec.alias.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
     for (parent, _) in crate::worktree::plan::intermediate_parents(&index, nested, ctx)? {
         let place = place_in_set(meta_dir, &parent.key, &parent.source);
-        if !existing.iter().any(|r| same_place(&r.alias, &place))
-            && !repo_specs.iter().any(|spec| {
-                index
-                    .find(&spec.alias)
-                    .is_ok_and(|r| r.source == parent.source)
-            })
-        {
-            let checkout = meta_core::gitdir::Checkout::of(&parent.source);
-            if checkout != meta_core::gitdir::Checkout::Missing {
-                if let Some(problem) = checkout.problem() {
-                    ctx.warn_or_bail(format!(
-                        "Intermediate parent '{}' for nested repo: {}",
-                        escape(&parent.key),
-                        escape(&problem)
-                    ))?;
-                    continue;
-                }
+        if let Some(occupant) = existing.iter().find(|r| same_place(&r.alias, &place)) {
+            let identity = |path: &std::path::Path| -> Result<std::path::PathBuf> {
+                meta_core::gitdir::common_dir(path)?
+                    .with_context(|| format!("{} is not a repository", escape_path(path)))?
+                    .canonicalize()
+                    .map_err(Into::into)
+            };
+            anyhow::ensure!(
+                identity(&occupant.path)? == identity(&parent.source)?,
+                "Intermediate parent '{}' is occupied by a checkout of another repository at {}",
+                escape(&parent.key),
+                escape_path(&occupant.path)
+            );
+            continue;
+        }
+        if resolved.iter().any(|(_, source)| *source == parent.source) {
+            continue;
+        }
+        let checkout = meta_core::gitdir::Checkout::of(&parent.source);
+        if checkout != meta_core::gitdir::Checkout::Missing {
+            if let Some(problem) = checkout.problem() {
+                ctx.warn_or_bail(format!(
+                    "Intermediate parent '{}' for nested repo: {}",
+                    escape(&parent.key),
+                    escape(&problem)
+                ))?;
+                continue;
             }
-            repo_specs.push(RepoSpec {
+        }
+        resolved.push((
+            RepoSpec {
                 alias: parent.key,
                 branch: None,
-            });
-        }
+            },
+            parent.source,
+        ));
     }
     let mut missing: Vec<PlannedRepo> = Vec::new();
-    for spec in &repo_specs {
-        let found = index.find(&spec.alias)?;
-        if meta_core::gitdir::Checkout::of(&found.source) == meta_core::gitdir::Checkout::Missing
-            && !missing.iter().any(|r| r.source == found.source)
+    for (spec, source) in &resolved {
+        if meta_core::gitdir::Checkout::of(source) == meta_core::gitdir::Checkout::Missing
+            && !missing.iter().any(|r| r.source == *source)
         {
             missing.push(PlannedRepo {
-                place: place_in_set(meta_dir, &spec.alias, &found.source),
-                project: found.key,
-                source: found.source,
+                place: place_in_set(meta_dir, &spec.alias, source),
+                project: spec.alias.clone(),
+                source: source.clone(),
                 branch: resolve_branch(name, None, spec.branch.as_deref()),
             });
         }
@@ -144,9 +161,8 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
         super::create::clone_missing(&index, &missing)?;
     }
     let mut planned: Vec<(&RepoSpec, std::path::PathBuf, String)> = Vec::new();
-    for spec in &repo_specs {
-        // by name, else by place, as in create
-        let source = index.find(&spec.alias)?.source;
+    for (spec, source) in &resolved {
+        let source = source.clone();
         // as in create: no worktree of a project not cloned, nor of the
         // repository around a directory that is none
         if let Some(why) = super::not_a_repository(&spec.alias, &source) {

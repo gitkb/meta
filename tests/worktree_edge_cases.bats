@@ -2550,3 +2550,86 @@ stays_in_set_rows() {
     run "$META_BIN" --primary --include backend exec -- pwd
     [ "$status" -eq 0 ]
 }
+
+@test "review: add keeps a resolved parent when its place is another project's name" {
+    commit_repo "$TEST_DIR/vendor"
+    commit_repo "$TEST_DIR/vendor/nested"
+    commit_repo "$TEST_DIR/alternate"
+    printf '{"projects":{"nested":"git@x:o/nested.git"}}\n' > vendor/.meta.yaml
+    echo nested/ > vendor/.gitignore
+    git -C vendor add .meta.yaml .gitignore
+    git -C vendor commit --quiet -m config
+    set_projects '{"backend":"git@x:o/backend.git","vendor":{"repo":"git@x:o/alternate.git","path":"alternate"},"parent":{"repo":"git@x:o/parent.git","path":"vendor","meta":true}}'
+    "$META_BIN" git worktree create identity --repo backend --no-deps
+    run "$META_BIN" git worktree add identity --repo vendor/nested
+    [ "$status" -eq 0 ]
+    [ -f .worktrees/identity/vendor/.git ]
+    [ ! -e .worktrees/identity/alternate ]
+    [ "$(git -C .worktrees/identity/vendor rev-parse --git-common-dir)" = "$TEST_DIR/vendor/.git" ]
+}
+
+@test "review: add refuses an existing parent checkout of a different repository" {
+    commit_repo "$TEST_DIR/group"
+    commit_repo "$TEST_DIR/group/child"
+    printf '{"projects":{"child":"git@x:o/child.git"}}\n' > group/.meta.yaml
+    echo child/ > group/.gitignore
+    git -C group add .meta.yaml .gitignore
+    git -C group commit --quiet -m config
+    set_projects '{"backend":"git@x:o/backend.git","group":{"repo":"git@x:o/group.git","meta":true}}'
+    "$META_BIN" git worktree create wrong-parent --repo backend --no-deps
+    git -C frontend worktree add --quiet -b unrelated "$TEST_DIR/.worktrees/wrong-parent/group"
+    run "$META_BIN" git worktree add wrong-parent --repo group/child
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"another repository"* ]]
+    [ ! -e .worktrees/wrong-parent/group/child ]
+}
+
+@test "review: project list merges different tree shapes by the full set place" {
+    mkdir a
+    printf '{"projects":{"x":"git@x:o/source.git"}}\n' > a/.meta.yaml
+    set_projects '{"backend":"git@x:o/backend.git","a":{"repo":"git@x:o/a.git","meta":true}}'
+    "$META_BIN" git worktree create shapes --repo backend
+    cd .worktrees/shapes
+    printf '{"projects":{"backend":"git@x:o/backend.git","direct":{"path":"a/x","repo":"git@x:o/own.git"}}}\n' > .meta.yaml
+    run "$META_BIN" -r --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq '[.results[] | select(.project == "a/x")] | length' <<<"$output")" = 1 ]
+    [ "$(jq -r '.results[] | select(.project == "a/x") | .data.repo' <<<"$output")" = git@x:o/own.git ]
+}
+
+@test "review: project list follows the original source of an outside parent" {
+    mkdir "$TEST_DIR/../external"
+    printf '{"projects":{"leaf":"git@x:o/leaf.git"}}\n' > "$TEST_DIR/../external/.meta.yaml"
+    set_projects '{"backend":"git@x:o/backend.git","parent":{"path":"../external","repo":"git@x:o/parent.git","meta":true}}'
+    "$META_BIN" git worktree create outside-parent --repo backend
+    cd .worktrees/outside-parent
+    run "$META_BIN" -r --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq '[.results[] | select(.project == "parent/leaf")] | length' <<<"$output")" = 1 ]
+}
+
+@test "review: branch reservations support git without worktree list -z" {
+    local real_git
+    real_git="$(command -v git)"
+    mkdir "$TEST_DIR/old-git"
+    cat > "$TEST_DIR/old-git/git" <<EOF2
+#!/bin/sh
+case "\$*" in
+    *"worktree list"*) for arg do
+        if [ "\$arg" = -z ]; then echo 'error: unknown switch z' >&2; exit 129; fi
+    done ;;
+esac
+exec "$real_git" "\$@"
+EOF2
+    chmod +x "$TEST_DIR/old-git/git"
+    export PATH="$TEST_DIR/old-git:$PATH"
+    run "$META_BIN" git worktree create compatible --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree add compatible --repo frontend
+    [ "$status" -eq 0 ]
+    run "$META_BIN" --json git worktree create conflict --repo backend:compatible --no-deps
+    [ "$status" -ne 0 ]
+    [ "$(jq -r '.error.code' <<<"$output")" = conflict ]
+    run "$META_BIN" git worktree remove compatible
+    [ "$status" -eq 0 ]
+}

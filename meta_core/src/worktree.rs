@@ -361,22 +361,25 @@ pub fn set_project_tree(
     depth: Option<usize>,
 ) -> Result<Vec<crate::config::MetaTreeNode>> {
     use crate::config::{MetaTreeNode, ProjectInfo};
-    fn merge(out: &mut Vec<MetaTreeNode>, nodes: Vec<MetaTreeNode>) {
+    use std::collections::BTreeMap;
+    fn flatten(nodes: Vec<MetaTreeNode>, prefix: &str, out: &mut BTreeMap<String, MetaTreeNode>) {
         for mut node in nodes {
-            if let Some(old) = out.iter_mut().find(|old| old.info.path == node.info.path) {
-                let mut children = std::mem::take(&mut old.children);
-                merge(&mut children, node.children);
-                node.children = children;
+            let place = crate::config::nested_path(prefix, &node.info.path);
+            let children = std::mem::take(&mut node.children);
+            if let Some(old) = out.get(&place) {
                 node.is_meta |= old.is_meta;
-                *old = node;
-            } else {
-                let children = std::mem::take(&mut node.children);
-                merge(&mut node.children, children);
-                out.push(node);
             }
+            out.insert(place.clone(), node);
+            flatten(children, &place, out);
         }
-        out.sort_by(|a, b| a.info.name.cmp(&b.info.name));
     }
+    fn sort(nodes: &mut [MetaTreeNode]) {
+        nodes.sort_by(|a, b| a.info.name.cmp(&b.info.name));
+        for node in nodes {
+            sort(&mut node.children);
+        }
+    }
+
     let projects: Vec<_> = workspace
         .projects
         .iter()
@@ -385,8 +388,33 @@ pub fn set_project_tree(
             ..project.clone()
         })
         .collect();
-    let mut tree = Vec::new();
-    merge(&mut tree, set_tree(set_dir, &projects, depth)?);
+    let mut flat = BTreeMap::new();
+    flatten(set_tree(set_dir, &projects, depth)?, "", &mut flat);
+    let mut places: Vec<_> = flat.keys().cloned().collect();
+    places.sort_by_key(|place| std::cmp::Reverse(place.split('/').count()));
+    for place in places {
+        let mut parent = place.as_str();
+        while let Some((prefix, _)) = parent.rsplit_once('/') {
+            parent = prefix;
+            if flat.contains_key(parent) {
+                break;
+            }
+        }
+        if parent == place || !flat.contains_key(parent) {
+            continue;
+        }
+        if let Some(mut node) = flat.remove(&place) {
+            node.info.path = place
+                .strip_prefix(&format!("{parent}/"))
+                .unwrap_or(&place)
+                .to_string();
+            if let Some(above) = flat.get_mut(parent) {
+                above.children.push(node);
+            }
+        }
+    }
+    let mut tree: Vec<_> = flat.into_values().collect();
+    sort(&mut tree);
     Ok(tree)
 }
 
@@ -410,18 +438,10 @@ fn set_tree(
             let origin: Vec<config::ProjectInfo> = config::Workspace::in_dir(&dir)
                 .ok()
                 .flatten()
-                .map(|w| {
-                    w.projects
-                        .iter()
-                        .map(|project| config::ProjectInfo {
-                            path: project.set_place().to_string(),
-                            ..project.clone()
-                        })
-                        .collect()
-                })
+                .map(|w| w.projects)
                 .unwrap_or_else(|| projects.to_vec());
             let mut visited = std::collections::HashSet::new();
-            readable_tree(&dir, set_dir, &origin, depth, &mut visited)
+            readable_tree(&dir, set_dir, &origin, depth, true, &mut visited)
         })
         .unwrap_or_default();
     tree.extend(own);
@@ -439,6 +459,7 @@ fn readable_tree(
     set: &Path,
     projects: &[crate::config::ProjectInfo],
     depth: Option<usize>,
+    top: bool,
     visited: &mut std::collections::HashSet<PathBuf>,
 ) -> Vec<crate::config::MetaTreeNode> {
     use crate::config;
@@ -452,7 +473,12 @@ fn readable_tree(
     projects
         .iter()
         .map(|project| {
-            let (path, place) = (dir.join(&project.path), set.join(&project.path));
+            let destination = if top {
+                project.set_place()
+            } else {
+                &project.path
+            };
+            let (path, place) = (dir.join(&project.path), set.join(destination));
             // each meta repo once, as `walk_projects` does: links can loop
             let first = visited.insert(path.canonicalize().unwrap_or_else(|_| path.clone()));
             let (own, theirs) = if first {
@@ -468,12 +494,17 @@ fn readable_tree(
                 }
             }
             config::MetaTreeNode {
-                info: project.clone(),
+                info: config::ProjectInfo {
+                    path: destination.to_string(),
+                    ..project.clone()
+                },
                 is_meta,
                 error: None,
                 children: match depth {
                     Some(0) => Vec::new(),
-                    _ => readable_tree(&path, &place, &nested, depth.map(|n| n - 1), visited),
+                    _ => {
+                        readable_tree(&path, &place, &nested, depth.map(|n| n - 1), false, visited)
+                    }
                 },
             }
         })
@@ -633,6 +664,7 @@ mod tests {
                 set,
                 &projects,
                 None,
+                true,
                 &mut std::collections::HashSet::new(),
             )
         };

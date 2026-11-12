@@ -1637,6 +1637,32 @@ set_projects() {
     [ "$(jq '[.results[] | select(.project == "frontend")] | length' <<<"$output")" = 1 ]
 }
 
+@test "recursive project list reports broken checked-out fallback while exec stays best effort" {
+    commit_repo "$TEST_DIR/parent"
+    printf '{"projects":{"child":"git@x:o/child.git"}}\n' > parent/.meta.yaml
+    echo child/ > parent/.gitignore
+    git -C parent add .meta.yaml .gitignore
+    git -C parent commit --quiet -m config
+    commit_repo "$TEST_DIR/parent/child"
+    set_projects '{"backend":"git@x:o/backend.git","parent":{"repo":"git@x:o/parent.git","meta":true}}'
+    "$META_BIN" git worktree create cfg-error --repo backend --no-deps
+    git -C parent worktree add --quiet -b cfg-parent "$TEST_DIR/.worktrees/cfg-error/parent"
+    git -C parent/child worktree add --quiet -b cfg-child "$TEST_DIR/.worktrees/cfg-error/parent/child"
+    cd .worktrees/cfg-error
+    printf '{"projects":{"backend":"git@x:o/backend.git"}}\n' > .meta.yaml
+    printf '{broken' > parent/.meta.yaml
+    run "$META_BIN" -r --json project list
+    [ "$status" -ne 0 ]
+    jq -e '.error != null' <<<"$output"
+    [[ "$output" == *"parent/.meta.yaml"* ]]
+    run "$META_BIN" --json project list
+    [ "$status" -eq 0 ]
+    run "$META_BIN" exec -- touch ran
+    [ "$status" -eq 0 ] || { printf '%s\n' "$output"; false; }
+    [ -f backend/ran ]
+    [ -f parent/child/ran ]
+}
+
 @test "a project under .claude does not make an agent's worktree beside it a member" {
     commit_repo "$TEST_DIR/.claude/skills/shared"
     set_projects '{"shared": {"repo": "git@x:o/s.git", "path": ".claude/skills/shared"}}'

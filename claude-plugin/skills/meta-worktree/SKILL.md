@@ -243,10 +243,16 @@ at their places in the set, including projects with no checkout there. With
 where the set lacks a parent config. The set's own config entries win.
 With `--config`, that file's root project graph is authoritative; nested
 source configs still fill gaps below those roots.
+Recursive listing fails on a checked-out or source config it cannot read or
+parse within the requested depth, naming the file. Member selection remains
+best-effort when a fallback config cannot be read.
 Listing preserves configured path components and merges only identical
 configured places; it does not resolve path aliases. If configs name both
 `foo` and `parent/../foo`, both rows remain. Use one spelling for each
 location, since `..` after a symlink can lead somewhere else.
+The fallback keeps the ordinary walker's cycle guard: it expands each
+canonical meta repository once, so its children can appear only under the
+first configured path that reaches it.
 `meta context` reads the set's checked-out configs; `meta git status` or
 `meta git worktree list` shows its members.
 

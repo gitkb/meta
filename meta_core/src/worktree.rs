@@ -3,7 +3,7 @@
 //! by the meta binary for worktree-scoped command dispatch; which checkouts
 //! a set holds is its provider's to say (meta-git scans its own).
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use meta_plugin::display::escape_path;
 use std::path::{Path, PathBuf};
 
@@ -406,13 +406,16 @@ pub fn set_project_tree(
         })
         .collect();
     let mut flat = BTreeMap::new();
-    let (tree, own) = set_tree(
+    let (tree, read) = set_tree(
         set_dir,
         &projects,
         depth,
         selected_config.then_some(workspace.projects.as_slice()),
     )?;
-    flatten(tree, "", 0, &mut flat, &own);
+    if let Some(error) = read.error {
+        return Err(error);
+    }
+    flatten(tree, "", 0, &mut flat, &read.own);
     let mut places: Vec<_> = flat.keys().cloned().collect();
     places.sort_by_key(|place| std::cmp::Reverse(place.split('/').count()));
     for place in places {
@@ -453,6 +456,39 @@ type OwnProjects = std::collections::HashMap<String, (crate::config::ProjectInfo
 struct TreeRead {
     visited: std::collections::HashSet<PathBuf>,
     own: OwnProjects,
+    error: Option<anyhow::Error>,
+}
+
+impl TreeRead {
+    fn listed(
+        &mut self,
+        folder: &Path,
+        depth: Option<usize>,
+    ) -> Option<Vec<crate::config::ProjectInfo>> {
+        use crate::config;
+        let result: Result<Option<Vec<config::ProjectInfo>>> = (|| {
+            let file = config::find_meta_config_in(folder).with_context(|| {
+                format!(
+                    "Cannot inspect config {}",
+                    escape_path(&folder.join(config::META_CONFIG_NAME))
+                )
+            })?;
+            match file {
+                Some(_) if depth == Some(0) => Ok(Some(Vec::new())),
+                Some(file) => config::Workspace::load(&file).map(|w| Some(w.projects)),
+                None => Ok(None),
+            }
+        })();
+        match result {
+            Ok(projects) => projects,
+            Err(error) => {
+                if depth != Some(0) && self.error.is_none() {
+                    self.error = Some(error);
+                }
+                None
+            }
+        }
+    }
 }
 
 /// The meta tree that describes the checkouts of the set at `set_dir`, whose
@@ -467,7 +503,7 @@ fn set_tree(
     projects: &[crate::config::ProjectInfo],
     depth: Option<usize>,
     selected_roots: Option<&[crate::config::ProjectInfo]>,
-) -> Result<(Vec<crate::config::MetaTreeNode>, OwnProjects)> {
+) -> Result<(Vec<crate::config::MetaTreeNode>, TreeRead)> {
     use crate::config;
     fn remember_own(
         nodes: &[config::MetaTreeNode],
@@ -488,11 +524,17 @@ fn set_tree(
             // where each project of the workspace sits in the set
             let origin: Vec<config::ProjectInfo> = match selected_roots {
                 Some(roots) => roots.to_vec(),
-                None => config::Workspace::in_dir(&dir)
-                    .ok()
-                    .flatten()
-                    .map(|w| w.projects)
-                    .unwrap_or_else(|| projects.to_vec()),
+                None => match config::Workspace::in_dir(&dir) {
+                    Ok(Some(workspace)) => workspace.projects,
+                    Ok(None) => projects.to_vec(),
+                    Err(error) => {
+                        read.error = Some(error.context(format!(
+                            "Cannot read source config {}",
+                            escape_path(&dir.join(config::META_CONFIG_NAME))
+                        )));
+                        projects.to_vec()
+                    }
+                },
             };
             readable_tree(&dir, set_dir, &origin, depth, "", 0, &mut read)
         })
@@ -500,7 +542,7 @@ fn set_tree(
     // The set root's graph takes precedence over configs reached by fallback.
     remember_own(&own, "", 0, &mut read.own);
     tree.extend(own);
-    Ok((tree, read.own))
+    Ok((tree, read))
 }
 
 /// The meta tree of `projects` listed in `dir` (the workspace a set was made
@@ -519,13 +561,6 @@ fn readable_tree(
     read: &mut TreeRead,
 ) -> Vec<crate::config::MetaTreeNode> {
     use crate::config;
-    let listed = |folder: &Path| {
-        config::find_meta_config_in(folder)
-            .ok()
-            .flatten()
-            .and_then(|path| config::Workspace::load(&path).ok())
-            .map(|w| w.projects)
-    };
     projects
         .iter()
         .map(|project| {
@@ -540,12 +575,12 @@ fn readable_tree(
             let first = read
                 .visited
                 .insert(path.canonicalize().unwrap_or_else(|_| path.clone()));
-            let (own, theirs) = if first {
-                (listed(&place), listed(&path))
-            } else {
-                (None, None)
-            };
+            // Check every configured place for errors, but retain the normal
+            // walker's once-per-canonical-meta recursion policy.
+            let own = read.listed(&place, depth);
+            let theirs = read.listed(&path, depth);
             let is_meta = own.is_some() || theirs.is_some();
+            let (own, theirs) = if first { (own, theirs) } else { (None, None) };
             if depth != Some(0) {
                 for project in own.iter().flatten() {
                     let place = config::nested_path(&full_place, &project.path);
@@ -863,6 +898,104 @@ mod tests {
     #[test]
     fn fallback_checked_out_nested_metadata_wins_over_flat_source_metadata() {
         fallback_own_metadata_wins_across_shapes(false);
+    }
+
+    #[test]
+    fn fallback_keeps_the_normal_walkers_once_per_canonical_meta_policy() {
+        let sandbox = Sandbox::new();
+        let workspace = sandbox.work().join("ws");
+        let set = workspace.join(".worktrees/set");
+        let roots = r#""a": {"repo": "x", "meta": true}, "b": {"repo": "x", "meta": true}"#;
+        let source = config(&workspace, roots);
+        config(
+            &workspace.join("a"),
+            r#""b": {"repo": "x", "path": "../b", "meta": true}"#,
+        );
+        config(&workspace.join("b"), r#""leaf": "source""#);
+        let own = config(&set, roots);
+        config(&set.join("b"), "");
+        std::fs::create_dir_all(set.join("b/leaf")).unwrap();
+        let tree = set_project_tree(&set, &own, None, false).unwrap();
+        let places = crate::config::flatten_meta_tree(&tree);
+        let normal = crate::config::flatten_meta_tree(
+            &crate::config::walk_projects(&workspace, &source.projects, None).unwrap(),
+        );
+        assert_eq!(places, normal);
+        assert!(places.iter().any(|place| place == "a/../b/leaf"));
+        assert!(!places.iter().any(|place| place == "b/leaf"));
+    }
+
+    #[test]
+    fn recursive_listing_reports_a_broken_checked_out_fallback_config() {
+        let sandbox = Sandbox::new();
+        let workspace = sandbox.work().join("ws");
+        let set = workspace.join(".worktrees/set");
+        config(&workspace, r#""parent": {"repo": "x", "meta": true}"#);
+        config(&workspace.join("parent"), r#""child": "source""#);
+        let own = config(&set, r#""backend": "x""#);
+        std::fs::create_dir_all(set.join("parent")).unwrap();
+        std::fs::write(set.join("parent/.meta.yaml"), "{broken").unwrap();
+        std::fs::create_dir_all(set.join("parent/child")).unwrap();
+        let members =
+            set_members(&set, Some(&own), &crate::repo_filter::Filters::default()).unwrap();
+        assert!(members
+            .iter()
+            .any(|member| member.dir == set.join("parent/child")));
+        assert!(set_project_tree(&set, &own, Some(0), false).is_ok());
+        let result = set_project_tree(&set, &own, None, false);
+        assert!(
+            result.is_err(),
+            "broken checked-out config was silently replaced by source metadata"
+        );
+        assert!(
+            format!("{:#}", result.unwrap_err())
+                .contains(&escape_path(&set.join("parent/.meta.yaml"))),
+            "error must name the file"
+        );
+    }
+
+    #[test]
+    fn recursive_listing_reports_a_broken_source_fallback_config() {
+        let sandbox = Sandbox::new();
+        let workspace = sandbox.work().join("ws");
+        let set = workspace.join(".worktrees/set");
+        config(&workspace, r#""parent": {"repo": "x", "meta": true}"#);
+        std::fs::create_dir_all(workspace.join("parent")).unwrap();
+        std::fs::write(workspace.join("parent/.meta.yaml"), "{broken").unwrap();
+        let own = config(&set, r#""backend": "x""#);
+        std::fs::create_dir_all(set.join("backend")).unwrap();
+        let members =
+            set_members(&set, Some(&own), &crate::repo_filter::Filters::default()).unwrap();
+        assert!(members
+            .iter()
+            .any(|member| member.dir == set.join("backend")));
+        assert!(set_project_tree(&set, &own, Some(0), false).is_ok());
+        let result = set_project_tree(&set, &own, None, false);
+        assert!(result.is_err(), "broken source config was silently ignored");
+        assert!(format!("{:#}", result.unwrap_err())
+            .contains(&escape_path(&workspace.join("parent/.meta.yaml"))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_listing_reports_an_unreadable_fallback_config_link() {
+        let sandbox = Sandbox::new();
+        let workspace = sandbox.work().join("ws");
+        let set = workspace.join(".worktrees/set");
+        config(&workspace, r#""parent": {"repo": "x", "meta": true}"#);
+        config(&workspace.join("parent"), r#""child": "source""#);
+        let own = config(&set, r#""backend": "x""#);
+        std::fs::create_dir_all(set.join("parent/child")).unwrap();
+        std::os::unix::fs::symlink("missing.yaml", set.join("parent/.meta.yaml")).unwrap();
+        assert!(set_members(&set, Some(&own), &crate::repo_filter::Filters::default()).is_ok());
+        assert!(set_project_tree(&set, &own, Some(0), false).is_ok());
+        let result = set_project_tree(&set, &own, None, false);
+        assert!(
+            result.is_err(),
+            "unreadable checked-out config was silently replaced"
+        );
+        assert!(format!("{:#}", result.unwrap_err())
+            .contains(&escape_path(&set.join("parent/.meta.yaml"))));
     }
 
     #[test]

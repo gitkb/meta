@@ -362,15 +362,43 @@ pub fn set_project_tree(
 ) -> Result<Vec<crate::config::MetaTreeNode>> {
     use crate::config::{MetaTreeNode, ProjectInfo};
     use std::collections::BTreeMap;
-    fn flatten(nodes: Vec<MetaTreeNode>, prefix: &str, out: &mut BTreeMap<String, MetaTreeNode>) {
+    fn location(place: &str) -> String {
+        use std::path::Component;
+        let mut path = PathBuf::new();
+        for part in Path::new(place).components() {
+            match part {
+                Component::CurDir => {}
+                Component::ParentDir
+                    if matches!(path.components().next_back(), Some(Component::Normal(_))) =>
+                {
+                    path.pop();
+                }
+                Component::ParentDir if path.has_root() => {}
+                part => path.push(part),
+            }
+        }
+        if path.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            path.to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+        }
+    }
+    fn flatten(
+        nodes: Vec<MetaTreeNode>,
+        prefix: &str,
+        level: usize,
+        out: &mut BTreeMap<String, (MetaTreeNode, usize)>,
+    ) {
         for mut node in nodes {
-            let place = crate::config::nested_path(prefix, &node.info.path);
+            let place = location(&crate::config::nested_path(prefix, &node.info.path));
             let children = std::mem::take(&mut node.children);
-            if let Some(old) = out.get(&place) {
+            if let Some((old, _)) = out.get(&place) {
                 node.is_meta |= old.is_meta;
             }
-            out.insert(place.clone(), node);
-            flatten(children, &place, out);
+            node.info.path = place.clone();
+            out.insert(place.clone(), (node, level));
+            flatten(children, &place, level + 1, out);
         }
     }
     fn sort(nodes: &mut [MetaTreeNode]) {
@@ -389,31 +417,37 @@ pub fn set_project_tree(
         })
         .collect();
     let mut flat = BTreeMap::new();
-    flatten(set_tree(set_dir, &projects, depth)?, "", &mut flat);
+    flatten(set_tree(set_dir, &projects, depth)?, "", 0, &mut flat);
     let mut places: Vec<_> = flat.keys().cloned().collect();
     places.sort_by_key(|place| std::cmp::Reverse(place.split('/').count()));
     for place in places {
+        let Some((_, level)) = flat.get(&place) else {
+            continue;
+        };
+        if *level == 0 {
+            continue;
+        }
         let mut parent = place.as_str();
         while let Some((prefix, _)) = parent.rsplit_once('/') {
             parent = prefix;
-            if flat.contains_key(parent) {
+            if flat.get(parent).is_some_and(|(_, above)| above < level) {
                 break;
             }
         }
-        if parent == place || !flat.contains_key(parent) {
+        if parent == place || !flat.get(parent).is_some_and(|(_, above)| above < level) {
             continue;
         }
-        if let Some(mut node) = flat.remove(&place) {
+        if let Some((mut node, _)) = flat.remove(&place) {
             node.info.path = place
                 .strip_prefix(&format!("{parent}/"))
                 .unwrap_or(&place)
                 .to_string();
-            if let Some(above) = flat.get_mut(parent) {
+            if let Some((above, _)) = flat.get_mut(parent) {
                 above.children.push(node);
             }
         }
     }
-    let mut tree: Vec<_> = flat.into_values().collect();
+    let mut tree: Vec<_> = flat.into_values().map(|(node, _)| node).collect();
     sort(&mut tree);
     Ok(tree)
 }
@@ -640,6 +674,50 @@ pub fn plugin_worktree(
 mod tests {
     use super::*;
     use meta_plugin::testing::Sandbox;
+
+    fn config(dir: &Path, projects: &str) -> crate::config::Workspace {
+        std::fs::create_dir_all(dir).unwrap();
+        let file = dir.join(".meta.yaml");
+        std::fs::write(&file, format!(r#"{{"projects": {{{projects}}}}}"#)).unwrap();
+        crate::config::Workspace::load(&file).unwrap()
+    }
+
+    #[test]
+    fn review_set_project_tree_keeps_depth_zero_entries_at_the_root() {
+        let sandbox = Sandbox::new();
+        let workspace = sandbox.work().join("ws");
+        let set = workspace.join(".worktrees/set");
+        config(
+            &workspace,
+            r#""direct": {"repo": "x", "path": "vendor/sub"}"#,
+        );
+        let own = config(&set, r#""vendor": "x""#);
+        let tree = set_project_tree(&set, &own, Some(0)).unwrap();
+        assert!(tree.iter().all(|node| node.children.is_empty()));
+        assert_eq!(tree.len(), 2);
+        assert!(tree.iter().any(|node| node.info.path == "vendor/sub"));
+    }
+
+    #[test]
+    fn review_set_project_tree_merges_equivalent_lexical_locations() {
+        let sandbox = Sandbox::new();
+        let workspace = sandbox.work().join("ws");
+        let set = workspace.join(".worktrees/set");
+        config(
+            &workspace,
+            r#""foo": "source", "parent": {"repo": "parent", "meta": true}"#,
+        );
+        config(
+            &workspace.join("parent"),
+            r#""nested": {"repo": "nested", "path": "../foo"}"#,
+        );
+        let own = config(&set, r#""foo": "own""#);
+        let tree = set_project_tree(&set, &own, None).unwrap();
+        let places = crate::config::flatten_meta_tree(&tree);
+        assert_eq!(places.len(), 2, "{places:?}");
+        let foo = tree.iter().find(|node| node.info.path == "foo").unwrap();
+        assert_eq!(foo.info.repo.as_ref().unwrap().to_string(), "own");
+    }
 
     #[test]
     fn a_nested_repos_projects_are_those_the_set_or_the_workspace_lists() {

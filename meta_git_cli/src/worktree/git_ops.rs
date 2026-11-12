@@ -565,6 +565,10 @@ fn holder_checkout(admin: &Path) -> Result<Option<std::path::PathBuf>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("Cannot read {}", escape_path(&file))),
     };
+    // Git rejects a zero-byte registration before trimming its path.
+    if bytes.is_empty() {
+        return Ok(None);
+    }
     let bytes = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
     let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
     Ok(admin
@@ -625,7 +629,11 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
     match std::fs::read_dir(common.join("worktrees")) {
         Ok(entries) => {
             for entry in entries {
-                admin_dirs.push(entry?.path());
+                let admin = entry?.path();
+                if describe_holder && holder_checkout(&admin)?.is_none() {
+                    continue;
+                }
+                admin_dirs.push(admin);
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -972,6 +980,50 @@ mod tests {
         std::fs::write(admin.join("commondir"), "../..\n").unwrap();
         // Git ignores an admin directory with no gitdir registration.
         git_branch_is_free(&tmp, "reserved").unwrap();
+        worktree_branch_is_free(&tmp, "reserved").unwrap();
+    }
+
+    #[test]
+    fn review_empty_admin_backlink_does_not_reserve_a_branch() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let tmp = sandbox.repo(&sandbox.work());
+        sandbox.git(&tmp, &["branch", "reserved"]);
+        let admin = tmp.join(".git/worktrees/orphan");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/reserved\n").unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::write(admin.join("gitdir"), "").unwrap();
+        // Git ignores this admin directory; no branch is held there.
+        git_branch_is_free(&tmp, "reserved").unwrap();
+        worktree_branch_is_free(&tmp, "reserved").unwrap();
+        // Git reads the registration before trimming, so these remain held.
+        for backlink in ["\n", "\r\n"] {
+            std::fs::write(admin.join("gitdir"), backlink).unwrap();
+            assert!(git_branch_is_free(&tmp, "reserved").is_err());
+            let error = worktree_branch_is_free(&tmp, "reserved").unwrap_err();
+            assert_eq!(
+                meta_plugin::envelope::code_of(&error),
+                meta_plugin::ErrorCode::Conflict
+            );
+        }
+    }
+
+    #[test]
+    fn review_unregistered_admin_rebase_does_not_reserve_a_branch() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let tmp = sandbox.repo(&sandbox.work());
+        sandbox.git(&tmp, &["branch", "reserved"]);
+        let admin = tmp.join(".git/worktrees/orphan");
+        std::fs::create_dir_all(admin.join("rebase-merge")).unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::write(
+            admin.join("rebase-merge/head-name"),
+            "refs/heads/reserved\n",
+        )
+        .unwrap();
+        // Cleanup retains its legacy state-file check, even for this orphan.
+        assert!(git_branch_is_free(&tmp, "reserved").is_err());
         worktree_branch_is_free(&tmp, "reserved").unwrap();
     }
 

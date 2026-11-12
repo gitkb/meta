@@ -2551,6 +2551,27 @@ stays_in_set_rows() {
     [ "$status" -eq 0 ]
 }
 
+@test "review: add refuses an occupied skipped parent whose source is invalid" {
+    mkdir -p vendor/.git
+    printf '{"projects":{"lib":"git@x:o/lib.git"}}\n' > vendor/.meta.yaml
+    commit_repo "$TEST_DIR/vendor/lib"
+    set_projects '{"backend":"git@x:o/backend.git","vendor":{"repo":"git@x:o/vendor.git","meta":true}}'
+    "$META_BIN" git worktree create occupied-parent --repo backend --no-deps
+    mkdir -p .worktrees/occupied-parent/vendor
+    echo keep > .worktrees/occupied-parent/vendor/unrelated
+    run "$META_BIN" git worktree add occupied-parent --repo vendor/lib
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already holds files"* ]]
+    [ ! -e .worktrees/occupied-parent/vendor/lib ]
+    [ "$(cat .worktrees/occupied-parent/vendor/unrelated)" = keep ]
+    # An empty parent destination still warns and skips the invalid source.
+    "$META_BIN" git worktree create empty-parent --repo backend --no-deps
+    run "$META_BIN" git worktree add empty-parent --repo vendor/lib
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not a git repository"* ]]
+    [ -e .worktrees/empty-parent/vendor/lib/.git ]
+}
+
 @test "review: add keeps a resolved parent when its place is another project's name" {
     commit_repo "$TEST_DIR/vendor"
     commit_repo "$TEST_DIR/vendor/nested"

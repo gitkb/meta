@@ -118,6 +118,18 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
         let checkout = meta_core::gitdir::Checkout::of(&parent.source);
         if checkout != meta_core::gitdir::Checkout::Missing {
             if let Some(problem) = checkout.problem() {
+                let dest = dest_in_set(&wt_dir, &place).map_err(anyhow::Error::msg)?;
+                let taken = std::fs::read_dir(&dest)
+                    .map_or(dest.symlink_metadata().is_ok(), |mut entries| {
+                        entries.next().is_some()
+                    });
+                anyhow::ensure!(
+                    !taken,
+                    "{} in worktree '{}' already holds files that aren't a checkout of '{}'; move them away first",
+                    escape_path(&dest),
+                    escape(name),
+                    escape(&parent.key)
+                );
                 ctx.warn_or_bail(format!(
                     "Intermediate parent '{}' for nested repo: {}",
                     escape(&parent.key),

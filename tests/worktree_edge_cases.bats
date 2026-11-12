@@ -2,6 +2,7 @@
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
+
 # Integration tests for meta git worktree edge cases (Phase 2 & 3)
 # Tests: strict mode, prune with orphan detection, ahead/behind
 
@@ -2723,4 +2724,34 @@ EOF2
     [ "$(jq -r '.error.code' <<<"$output")" = conflict ]
     run "$META_BIN" git worktree remove compatible
     [ "$status" -eq 0 ]
+}
+
+@test "damaged holder records keep create and add branch conflicts in JSON" {
+    bats_require_minimum_version 1.5.0
+    "$META_BIN" git worktree create holder --repo backend --no-deps
+    "$META_BIN" git worktree create destination --repo frontend --no-deps
+    local admin
+    admin=$(git -C .worktrees/holder/backend rev-parse --absolute-git-dir)
+    for damage in malformed unreadable; do
+        if [ "$damage" = malformed ]; then
+            printf '{broken' > "$admin/meta-worktree.json"
+        else
+            rm "$admin/meta-worktree.json"
+            mkdir "$admin/meta-worktree.json"
+        fi
+        for command in create add; do
+            local set=blocked
+            local extra=()
+            [ "$command" != create ] || extra=(--no-deps)
+            [ "$command" = create ] || set=destination
+            run --separate-stderr "$META_BIN" --json git worktree "$command" "$set" --repo backend:holder "${extra[@]}"
+            [ "$status" -ne 0 ]
+            [ "$(jq -r '.error.code' <<<"$output")" = conflict ]
+            [[ "$(jq -r '.error.message' <<<"$output")" == *"$TEST_DIR/.worktrees/holder/backend"*"$admin/meta-worktree.json"* ]]
+            [[ "$(jq -r '.error.message' <<<"$output")" == *"Cannot "* ]]
+            [ "$(jq -r '.error.hint' <<<"$output")" != null ]
+            [ ! -e .worktrees/blocked ]
+            [ ! -e .worktrees/destination/backend ]
+        done
+    done
 }

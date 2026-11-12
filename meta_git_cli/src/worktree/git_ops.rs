@@ -708,6 +708,12 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
             holder_path(path)
         )
     };
+    // Git already proved the reservation. A broken optional set record adds
+    // a diagnostic, but cannot weaken that conflict or supply a set identity.
+    let holder_record = |admin: &Path| match meta_core::set_record::read(admin) {
+        Ok(record) => (record, None),
+        Err(error) => (None, Some(error)),
+    };
     if describe_holder {
         for admin in &admin_dirs {
             let path = if admin == &common {
@@ -730,7 +736,7 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
             if on.as_deref() != Some(&full) {
                 continue;
             }
-            let record = meta_core::set_record::read(admin)?;
+            let (record, note) = holder_record(admin);
             let unknown = admin == &common && primary_is_metadata;
             let mut holder = match record {
                 Some(record) if unknown => format!(
@@ -748,6 +754,9 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
                 None if unknown => format!("held by {}", unknown_primary(&path)),
                 None => format!("checked out in worktree {}", holder_path(&path)),
             };
+            if let Some(error) = note {
+                holder.push_str(&format!("; {error:#}"));
+            }
             if !unknown {
                 if let Err(leftover) = leftover_entry(repo_path, &path) {
                     holder.push_str(&format!("; {leftover:#}"));
@@ -767,9 +776,14 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
         }
     };
     let reserved = |kind: &str, admin: &Path| -> Result<anyhow::Error> {
-        let holder = if !describe_holder {
-            format!("the worktree whose git dir is {}", escape_path(admin))
-        } else if let Some(record) = meta_core::set_record::read(admin)? {
+        if !describe_holder {
+            return Ok(in_use(&format!(
+                "{kind} by the worktree whose git dir is {}",
+                escape_path(admin)
+            )));
+        }
+        let (record, note) = holder_record(admin);
+        let mut holder = if let Some(record) = record {
             format!(
                 "worktree set '{}' at {}",
                 escape(&record.name()),
@@ -788,6 +802,9 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
                 format!("worktree {}", holder_path(&path))
             }
         };
+        if let Some(error) = note {
+            holder.push_str(&format!("; {error:#}"));
+        }
         Ok(in_use(&format!("{kind} by {holder}")))
     };
     for dir in admin_dirs {
@@ -1336,6 +1353,70 @@ exec "$META_TEST_REAL_GIT" "$@"
             "{error:#}"
         );
         assert!(!error.to_string().contains('\u{fffd}'), "{error:#}");
+    }
+
+    #[test]
+    fn a_damaged_set_record_keeps_the_known_branch_conflict() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let repo = sandbox.repo(&sandbox.work());
+        let other = sandbox.work().join("holder");
+        git_worktree_add(&repo, &other, "reserved", None, &|| Ok(None)).unwrap();
+        let admin = meta_core::gitdir::linked(&other).unwrap().admin;
+        let record = admin.join(meta_core::set_record::RECORD_FILE);
+        for damage in ["malformed", "unreadable"] {
+            if damage == "malformed" {
+                std::fs::write(&record, "{broken").unwrap();
+            } else {
+                std::fs::remove_file(&record).unwrap();
+                std::fs::create_dir(&record).unwrap();
+            }
+            for state in ["checkout", "rebase", "bisect"] {
+                sandbox.git(&other, &["checkout", "-q", "reserved"]);
+                if state != "checkout" {
+                    sandbox.git(&other, &["checkout", "-q", "--detach"]);
+                    if state == "rebase" {
+                        std::fs::create_dir(admin.join("rebase-merge")).unwrap();
+                        std::fs::write(
+                            admin.join("rebase-merge/head-name"),
+                            "refs/heads/reserved\n",
+                        )
+                        .unwrap();
+                    } else {
+                        std::fs::write(admin.join("BISECT_START"), "reserved\n").unwrap();
+                    }
+                }
+                let error = worktree_branch_is_free(&repo, "reserved").unwrap_err();
+                assert_eq!(
+                    meta_plugin::envelope::code_of(&error),
+                    meta_plugin::ErrorCode::Conflict,
+                    "{damage}/{state}: {error:#}"
+                );
+                let message = format!("{error:#}");
+                let checkout = holder_checkout(&admin).unwrap().unwrap();
+                assert!(message.contains(&holder_path(&checkout)), "{message}");
+                assert!(message.contains(&holder_path(&record)), "{message}");
+                assert!(
+                    message.contains(if damage == "malformed" {
+                        "Cannot parse"
+                    } else {
+                        "Cannot read"
+                    }),
+                    "{message}"
+                );
+                assert!(meta_plugin::envelope::info_of(&error).hint.is_some());
+                let cleanup = git_branch_is_free(&repo, "reserved").unwrap_err();
+                assert_eq!(
+                    meta_plugin::envelope::code_of(&cleanup),
+                    meta_plugin::ErrorCode::Failed
+                );
+                assert!(!cleanup.to_string().contains("meta-worktree.json"));
+                if state == "rebase" {
+                    std::fs::remove_dir_all(admin.join("rebase-merge")).unwrap();
+                } else if state == "bisect" {
+                    std::fs::remove_file(admin.join("BISECT_START")).unwrap();
+                }
+            }
+        }
     }
 
     #[test]

@@ -245,7 +245,9 @@ With `--config`, that file's root project graph is authoritative; nested
 source configs still fill gaps below those roots.
 Recursive listing fails on a checked-out or source config it cannot read or
 parse within the requested depth, naming the file. Member selection remains
-best-effort when a fallback config cannot be read.
+best-effort when a fallback config cannot be read. Recursive listing also
+reports a recorded source workspace it cannot inspect, naming its path;
+a missing source workspace is still allowed.
 Listing preserves configured path components and merges only identical
 configured places; it does not resolve path aliases. If configs name both
 `foo` and `parent/../foo`, both rows remain. Use one spelling for each

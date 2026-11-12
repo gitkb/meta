@@ -519,6 +519,21 @@ fn set_tree(
     }
     let own = config::walk_projects(set_dir, projects, depth)?;
     let mut read = TreeRead::default();
+    if depth != Some(0) {
+        if let Some(owner) = own_owner(set_dir)? {
+            if let Err(error) = owner.workspace.metadata() {
+                if !matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) {
+                    read.error = Some(anyhow::Error::from(error).context(format!(
+                        "Cannot inspect source workspace {}",
+                        escape_path(&owner.workspace)
+                    )));
+                }
+            }
+        }
+    }
     let mut tree: Vec<_> = set_origin(set_dir)?
         .map(|dir| {
             // where each project of the workspace sits in the set
@@ -947,10 +962,11 @@ mod tests {
             result.is_err(),
             "broken checked-out config was silently replaced by source metadata"
         );
+        let error = format!("{:#}", result.unwrap_err());
+        let expected = escape_path(&set.join("parent").join(crate::config::META_CONFIG_NAME));
         assert!(
-            format!("{:#}", result.unwrap_err())
-                .contains(&escape_path(&set.join("parent/.meta.yaml"))),
-            "error must name the file"
+            error.contains(&expected),
+            "expected {expected:?} in {error:?}"
         );
     }
 
@@ -972,8 +988,55 @@ mod tests {
         assert!(set_project_tree(&set, &own, Some(0), false).is_ok());
         let result = set_project_tree(&set, &own, None, false);
         assert!(result.is_err(), "broken source config was silently ignored");
-        assert!(format!("{:#}", result.unwrap_err())
-            .contains(&escape_path(&workspace.join("parent/.meta.yaml"))));
+        let error = format!("{:#}", result.unwrap_err());
+        let expected = escape_path(
+            &workspace
+                .join("parent")
+                .join(crate::config::META_CONFIG_NAME),
+        );
+        assert!(
+            error.contains(&expected),
+            "expected {expected:?} in {error:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_listing_reports_an_inaccessible_recorded_source() {
+        use std::os::unix::fs::PermissionsExt;
+        let sandbox = Sandbox::new();
+        let locked = sandbox.work().join("locked");
+        let workspace = locked.join("ws");
+        let set = sandbox.work().join("sets/set");
+        config(&workspace, r#""parent": {"repo": "x", "meta": true}"#);
+        config(&workspace.join("parent"), r#""child": "source""#);
+        let own = config(&set, r#""backend": "x""#);
+        std::fs::create_dir_all(set.join("backend")).unwrap();
+        meta_plugin::sets::create(&set, "git", &workspace).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let inaccessible = workspace.metadata().is_err();
+        let result = set_project_tree(&set, &own, None, false);
+        let shallow = set_project_tree(&set, &own, Some(0), false);
+        let members = set_members(&set, Some(&own), &crate::repo_filter::Filters::default());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if inaccessible {
+            assert!(
+                result.is_err(),
+                "inaccessible recorded source was silently omitted"
+            );
+            let error = format!("{:#}", result.unwrap_err());
+            let expected = escape_path(&workspace);
+            assert!(
+                error.contains(&expected),
+                "expected {expected:?} in {error:?}"
+            );
+            assert!(shallow.is_ok());
+            assert!(members.is_ok());
+        }
+        std::fs::remove_dir_all(&workspace).unwrap();
+        assert!(set_project_tree(&set, &own, None, false).is_ok());
+        std::fs::write(&workspace, "not a directory").unwrap();
+        assert!(set_project_tree(&set, &own, None, false).is_ok());
     }
 
     #[cfg(unix)]

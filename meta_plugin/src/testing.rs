@@ -29,6 +29,29 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The profile folder containing the host `meta` built for these tests.
+/// Cargo used `deps/` for test executables before 1.100 and now uses
+/// `build/<package>/<hash>/out/`. Search only executable ancestors, never
+/// PATH, so an installed meta cannot stand in for the workspace build.
+#[expect(
+    clippy::expect_used,
+    reason = "test setup needs the workspace binaries"
+)]
+pub fn built_program_dir() -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    built_program_dir_from(&exe).expect(
+        "No built meta above the test executable: build the workspace first (cargo build --workspace --bins --examples)"
+    )
+}
+
+fn built_program_dir_from(exe: &Path) -> Option<PathBuf> {
+    let program = format!("meta{}", std::env::consts::EXE_SUFFIX);
+    exe.ancestors()
+        .skip(1)
+        .find(|dir| dir.join(&program).is_file())
+        .map(Path::to_path_buf)
+}
+
 /// The identity commits in a sandbox are made as.
 const NAME: &str = "t";
 const EMAIL: &str = "t@example.com";
@@ -454,6 +477,35 @@ pub fn path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn built_program_dir_finds_the_deps_layout() {
+        let sandbox = super::Sandbox::new();
+        let profile = sandbox.work().join("target/debug");
+        let exe = profile.join("deps/unit-test");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(
+            profile.join(format!("meta{}", std::env::consts::EXE_SUFFIX)),
+            b"built",
+        )
+        .unwrap();
+        assert_eq!(super::built_program_dir_from(&exe), Some(profile));
+    }
+
+    #[test]
+    fn built_program_dir_finds_the_build_out_layout() {
+        let sandbox = super::Sandbox::new();
+        let profile = sandbox.work().join("target/debug");
+        let exe = profile.join("build/meta/unit-hash/out/unit-test");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(
+            profile.join(format!("meta{}", std::env::consts::EXE_SUFFIX)),
+            b"built",
+        )
+        .unwrap();
+        // The package directory named meta is not a built program.
+        assert_eq!(super::built_program_dir_from(&exe), Some(profile));
+    }
+
     use super::*;
 
     #[test]

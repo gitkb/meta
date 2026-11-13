@@ -233,6 +233,7 @@ pub fn worktree_start(
         });
     }
     if git_rev_parse(repo_path, &format!("refs/heads/{branch}"))?.is_some() {
+        worktree_branch_is_free(repo_path, branch)?;
         return Ok(WorktreeStart::Existing);
     }
     if let Some(commit) = git_rev_parse(repo_path, &format!("refs/remotes/origin/{branch}"))? {
@@ -533,8 +534,98 @@ pub fn git_rev_parse(repo_path: &Path, rev: &str) -> Result<Option<String>> {
 /// `rebase-merge/update-refs`, `BISECT_START`). Changes nothing; anything it
 /// can't read is an error, not "free".
 pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
+    branch_is_free(repo_path, branch, false)
+}
+
+/// The create/add branch check: the same reservations as branch deletion,
+/// with a typed conflict naming the holding set and a branch-choice hint.
+pub fn worktree_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
+    branch_is_free(repo_path, branch, true)
+}
+
+fn checkout_path_bytes(bytes: &[u8]) -> Result<std::path::PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(std::path::PathBuf::from(
+            std::str::from_utf8(bytes).context("Git checkout path is not UTF-8")?,
+        ))
+    }
+}
+
+// Git's backlink is raw path bytes followed by one line ending.
+fn holder_checkout(admin: &Path) -> Result<Option<std::path::PathBuf>> {
+    let file = admin.join("gitdir");
+    let bytes = match std::fs::read(&file) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("Cannot read {}", escape_path(&file))),
+    };
+    // Git rejects a zero-byte registration before trimming its path.
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let bytes = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
+    let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
+    Ok(admin
+        .join(checkout_path_bytes(bytes)?)
+        .parent()
+        .map(Path::to_path_buf))
+}
+
+// Worktree conflicts preserve undecodable path bytes; other commands retain escape_path.
+fn holder_path(path: &Path) -> String {
+    match path.to_str() {
+        Some(_) => escape_path(path),
+        None => escape(&format!("{:?}", path.as_os_str())).into_owned(),
+    }
+}
+
+fn configured_worktree(repo_path: &Path, common: &Path) -> Result<Option<std::path::PathBuf>> {
+    let output = meta_plugin::process::output(meta_core::git::git(repo_path).args([
+        OsStr::new("--git-dir"),
+        common.as_os_str(),
+        OsStr::new("config"),
+        OsStr::new("--null"),
+        OsStr::new("--path"),
+        OsStr::new("--get"),
+        OsStr::new("core.worktree"),
+    ]))
+    .context("Cannot read the primary core.worktree")?;
+    if output.status.code() == Some(1) {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        output.status.success(),
+        "Cannot read the primary core.worktree: {}",
+        meta_plugin::display::program_output(&output.stderr)
+    );
+    let bytes = output
+        .stdout
+        .strip_suffix(b"\0")
+        .context("Invalid core.worktree output")?;
+    let path = common.join(checkout_path_bytes(bytes)?);
+    Ok(Some(path.canonicalize().unwrap_or(path)))
+}
+
+fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Result<()> {
     let full = format!("refs/heads/{branch}");
-    let in_use = |by: &str| anyhow::anyhow!("'{}' is {by}", escape(branch));
+    let in_use = |by: &str| {
+        if !describe_holder {
+            return anyhow::anyhow!("'{}' is {by}", escape(branch));
+        }
+        anyhow::Error::from(
+            meta_plugin::ErrorInfo::new(
+                meta_plugin::ErrorCode::Conflict,
+                format!("'{}' is {by}", escape(branch)),
+            )
+            .hint("Use another branch with --branch <name> (create) or --repo <repo>:<name>."),
+        )
+    };
 
     // A symbolic branch would carry a ref transaction to the branch it points
     // at, which this check never looked at.
@@ -543,27 +634,148 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
         return Err(in_use("a symbolic ref; meta only moves plain branches"));
     }
 
-    let list = run(repo_path, ["worktree", "list", "--porcelain"])?;
-    let wanted = format!("branch {full}");
-    if list.lines().any(|line| line == wanted) {
-        return Err(in_use("checked out in a worktree"));
-    }
-
     let common = common_dir(repo_path)?.with_context(|| {
         format!(
             "Cannot find the git directory of {}",
             escape_path(repo_path)
         )
     })?;
+
+    // Cleanup keeps its existing check and message. Create/add identify
+    // the owner through Git's ref store and raw admin backlinks instead
+    // of parsing porcelain paths (which were raw before Git 2.36).
+    if !describe_holder {
+        let listed = run(repo_path, ["worktree", "list", "--porcelain"])?;
+        let wanted = format!("branch {full}");
+        if listed.lines().any(|line| line == wanted) {
+            return Err(in_use("checked out in a worktree"));
+        }
+    }
+
     let mut admin_dirs = vec![common.clone()];
     match std::fs::read_dir(common.join("worktrees")) {
         Ok(entries) => {
             for entry in entries {
-                admin_dirs.push(entry?.path());
+                let admin = entry?.path();
+                if describe_holder && holder_checkout(&admin)?.is_none() {
+                    continue;
+                }
+                admin_dirs.push(admin);
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.into()),
+    }
+
+    let (primary, primary_is_metadata) = if describe_holder {
+        let bare = lookup(
+            repo_path,
+            [
+                std::ffi::OsStr::new("--git-dir"),
+                common.as_os_str(),
+                std::ffi::OsStr::new("rev-parse"),
+                std::ffi::OsStr::new("--is-bare-repository"),
+            ],
+        )?;
+        if bare.as_deref() == Some("true") {
+            (None, false)
+        } else {
+            let real = common.canonicalize()?;
+            let dot_git = repo_path.join(".git");
+            let caller_admin = meta_core::gitdir::gitfile_target(repo_path)?
+                .unwrap_or(dot_git.clone())
+                .canonicalize()
+                .ok();
+            if let Some(path) = configured_worktree(repo_path, &common)? {
+                (Some(path), false)
+            } else if dot_git.symlink_metadata().is_ok() && caller_admin.as_ref() == Some(&real) {
+                // A primary caller is known, including --separate-git-dir.
+                (Some(repo_path.canonicalize()?), false)
+            } else if real.file_name() == Some(std::ffi::OsStr::new(".git")) {
+                // Git's ordinary main-worktree registration, for linked callers.
+                (Some(real.parent().unwrap_or(&real).to_path_buf()), false)
+            } else {
+                // A separate Git dir has no backlink to its primary checkout.
+                (Some(real), true)
+            }
+        }
+    } else {
+        (None, false)
+    };
+    let unknown_primary = |path: &Path| {
+        format!(
+            "Git directory {} (primary checkout location is unknown)",
+            holder_path(path)
+        )
+    };
+    // Git already proved the reservation. A broken optional set record adds
+    // a diagnostic, but cannot weaken that conflict or supply a set identity.
+    let holder_record = |admin: &Path| match meta_core::set_record::read(admin) {
+        Ok(record) => (record, None),
+        Err(error) => {
+            let operation = if error.is::<serde_json::Error>() {
+                "parse"
+            } else {
+                "read"
+            };
+            let note = format!(
+                "Cannot {operation} {}: {}",
+                holder_path(&admin.join(meta_core::set_record::RECORD_FILE)),
+                error.root_cause()
+            );
+            (None, Some(note))
+        }
+    };
+    if describe_holder {
+        for admin in &admin_dirs {
+            let path = if admin == &common {
+                primary.clone()
+            } else {
+                holder_checkout(admin)?
+            };
+            // As Git does, ignore directories without a worktree registration.
+            let Some(path) = path else { continue };
+            let on = lookup(
+                repo_path,
+                [
+                    std::ffi::OsStr::new("--git-dir"),
+                    admin.as_os_str(),
+                    std::ffi::OsStr::new("symbolic-ref"),
+                    std::ffi::OsStr::new("-q"),
+                    std::ffi::OsStr::new("HEAD"),
+                ],
+            )?;
+            if on.as_deref() != Some(&full) {
+                continue;
+            }
+            let (record, note) = holder_record(admin);
+            let unknown = admin == &common && primary_is_metadata;
+            let mut holder = match record {
+                Some(record) if unknown => format!(
+                    "held by worktree set '{}' at {} ({})",
+                    escape(&record.name()),
+                    holder_path(&record.set),
+                    unknown_primary(&path)
+                ),
+                Some(record) => format!(
+                    "held by worktree set '{}' at {} (checkout {})",
+                    escape(&record.name()),
+                    holder_path(&record.set),
+                    holder_path(&path)
+                ),
+                None if unknown => format!("held by {}", unknown_primary(&path)),
+                None => format!("checked out in worktree {}", holder_path(&path)),
+            };
+            if let Some(error) = note {
+                holder.push_str(&format!("; {error:#}"));
+            }
+            if !unknown {
+                if let Err(leftover) = leftover_entry(repo_path, &path) {
+                    holder.push_str(&format!("; {leftover:#}"));
+                }
+            }
+            return Err(in_use(&holder));
+        }
     }
 
     let read = |path: std::path::PathBuf| -> Result<String> {
@@ -575,6 +787,38 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
             }
         }
     };
+    let reserved = |kind: &str, admin: &Path| -> Result<anyhow::Error> {
+        if !describe_holder {
+            return Ok(in_use(&format!(
+                "{kind} by the worktree whose git dir is {}",
+                escape_path(admin)
+            )));
+        }
+        let (record, note) = holder_record(admin);
+        let mut holder = if let Some(record) = record {
+            format!(
+                "worktree set '{}' at {}",
+                escape(&record.name()),
+                holder_path(&record.set)
+            )
+        } else {
+            let path = if admin == common {
+                primary.clone()
+            } else {
+                holder_checkout(admin)?
+            }
+            .unwrap_or_else(|| repo_path.to_path_buf());
+            if admin == common && primary_is_metadata {
+                unknown_primary(&path)
+            } else {
+                format!("worktree {}", holder_path(&path))
+            }
+        };
+        if let Some(error) = note {
+            holder.push_str(&format!("; {error:#}"));
+        }
+        Ok(in_use(&format!("{kind} by {holder}")))
+    };
     for dir in admin_dirs {
         let rebasing = [
             read(dir.join("rebase-merge/head-name"))?,
@@ -584,17 +828,11 @@ pub fn git_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
         if rebasing.iter().any(|name| name.trim() == full)
             || updating.lines().any(|line| line.trim() == full)
         {
-            return Err(in_use(&format!(
-                "being rebased by the worktree whose git dir is {}",
-                escape_path(&dir)
-            )));
+            return Err(reserved("being rebased", &dir)?);
         }
         let bisect = read(dir.join("BISECT_START"))?;
         if [branch, full.as_str()].contains(&bisect.trim()) {
-            return Err(in_use(&format!(
-                "being bisected by the worktree whose git dir is {}",
-                escape_path(&dir)
-            )));
+            return Err(reserved("being bisected", &dir)?);
         }
     }
     Ok(())
@@ -818,6 +1056,444 @@ mod tests {
     }
 
     #[test]
+    fn unregistered_admin_head_does_not_reserve_a_branch() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let tmp = sandbox.repo(&sandbox.work());
+        sandbox.git(&tmp, &["branch", "reserved"]);
+        let admin = tmp.join(".git/worktrees/orphan");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/reserved\n").unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        // Git ignores an admin directory with no gitdir registration.
+        git_branch_is_free(&tmp, "reserved").unwrap();
+        worktree_branch_is_free(&tmp, "reserved").unwrap();
+    }
+
+    #[test]
+    fn review_empty_admin_backlink_does_not_reserve_a_branch() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let tmp = sandbox.repo(&sandbox.work());
+        sandbox.git(&tmp, &["branch", "reserved"]);
+        let admin = tmp.join(".git/worktrees/orphan");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/reserved\n").unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::write(admin.join("gitdir"), "").unwrap();
+        // Git ignores this admin directory; no branch is held there.
+        git_branch_is_free(&tmp, "reserved").unwrap();
+        worktree_branch_is_free(&tmp, "reserved").unwrap();
+        // Git reads the registration before trimming, so these remain held.
+        for backlink in ["\n", "\r\n"] {
+            std::fs::write(admin.join("gitdir"), backlink).unwrap();
+            assert!(git_branch_is_free(&tmp, "reserved").is_err());
+            let error = worktree_branch_is_free(&tmp, "reserved").unwrap_err();
+            assert_eq!(
+                meta_plugin::envelope::code_of(&error),
+                meta_plugin::ErrorCode::Conflict
+            );
+        }
+    }
+
+    #[test]
+    fn review_unregistered_admin_rebase_does_not_reserve_a_branch() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let tmp = sandbox.repo(&sandbox.work());
+        sandbox.git(&tmp, &["branch", "reserved"]);
+        let admin = tmp.join(".git/worktrees/orphan");
+        std::fs::create_dir_all(admin.join("rebase-merge")).unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::write(
+            admin.join("rebase-merge/head-name"),
+            "refs/heads/reserved\n",
+        )
+        .unwrap();
+        // Cleanup retains its legacy state-file check, even for this orphan.
+        assert!(git_branch_is_free(&tmp, "reserved").is_err());
+        worktree_branch_is_free(&tmp, "reserved").unwrap();
+    }
+
+    #[test]
+    fn review_primary_reservation_names_primary_from_a_linked_caller() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let tmp = sandbox.repo(&sandbox.work());
+        sandbox.git(&tmp, &["branch", "reserved"]);
+        let caller = tmp.join("caller");
+        git_worktree_add(&tmp, &caller, "caller", None, &|| Ok(None)).unwrap();
+        sandbox.git(&tmp, &["checkout", "-q", "--detach"]);
+        std::fs::write(tmp.join(".git/BISECT_START"), "reserved\n").unwrap();
+        let error = worktree_branch_is_free(&caller, "reserved").unwrap_err();
+        let primary = tmp.canonicalize().unwrap();
+        assert!(
+            error
+                .to_string()
+                .ends_with(&format!("worktree {}", escape_path(&primary))),
+            "primary={primary:?}; caller={caller:?}; message={error:#}"
+        );
+    }
+
+    #[test]
+    fn review_separate_git_dir_names_the_checkout_or_says_it_is_unknown() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let repo = sandbox.repo(&sandbox.work().join("repo"));
+        let metadata = sandbox.work().join("storage/repo.git");
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        sandbox.git(
+            &repo,
+            &[
+                "init",
+                "--quiet",
+                "--separate-git-dir",
+                metadata.to_str().unwrap(),
+            ],
+        );
+        let primary = repo.canonicalize().unwrap();
+        let git_dir = metadata.canonicalize().unwrap();
+        let error = worktree_branch_is_free(&repo, "main").unwrap_err();
+        assert!(
+            error.to_string().contains(&holder_path(&primary)),
+            "{error:#}"
+        );
+        let linked = sandbox.work().join("linked");
+        git_worktree_add(&repo, &linked, "linked", None, &|| Ok(None)).unwrap();
+        let error = worktree_branch_is_free(&linked, "main").unwrap_err();
+        assert!(
+            error.to_string().contains("checkout location is unknown"),
+            "{error:#}"
+        );
+        assert!(
+            error.to_string().contains(&holder_path(&git_dir)),
+            "{error:#}"
+        );
+        sandbox.git(&repo, &["branch", "reserved"]);
+        sandbox.git(&repo, &["checkout", "--quiet", "--detach"]);
+        for (state, branch) in [
+            ("BISECT_START", "reserved\n"),
+            ("rebase-merge/head-name", "refs/heads/reserved\n"),
+            ("rebase-apply/head-name", "refs/heads/reserved\n"),
+        ] {
+            let file = metadata.join(state);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, branch).unwrap();
+            for caller in [&repo, &linked] {
+                let error = worktree_branch_is_free(caller, "reserved").unwrap_err();
+                let expected = if caller == &repo {
+                    holder_path(&primary)
+                } else {
+                    "checkout location is unknown".to_string()
+                };
+                assert!(error.to_string().contains(&expected), "{error:#}");
+            }
+            std::fs::remove_file(file).unwrap();
+        }
+    }
+
+    #[test]
+    fn review_primary_registration_uses_git_rule_or_configured_worktree() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let repo = sandbox.repo(&sandbox.work().join("repo"));
+        let metadata = sandbox.work().join("storage/.git");
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        sandbox.git(
+            &repo,
+            &[
+                "init",
+                "--quiet",
+                "--separate-git-dir",
+                metadata.to_str().unwrap(),
+            ],
+        );
+        let linked = sandbox.work().join("linked");
+        git_worktree_add(&repo, &linked, "linked", None, &|| Ok(None)).unwrap();
+        assert_eq!(
+            lookup(&repo, ["config", "--get", "core.worktree"]).unwrap(),
+            None
+        );
+        let listed = run(&repo, ["worktree", "list", "--porcelain"]).unwrap();
+        let registered = metadata.parent().unwrap().canonicalize().unwrap();
+        let git_registered = listed
+            .lines()
+            .find_map(|line| line.strip_prefix("worktree "))
+            .unwrap();
+        assert_eq!(
+            Path::new(git_registered).canonicalize().unwrap(),
+            registered
+        );
+        let error = worktree_branch_is_free(&linked, "main").unwrap_err();
+        assert!(
+            error.to_string().contains(&holder_path(&registered)),
+            "{error:#}"
+        );
+        // An explicit relative core.worktree is relative to the common dir.
+        sandbox.git(&repo, &["config", "core.worktree", "../../repo"]);
+        let error = worktree_branch_is_free(&linked, "main").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&holder_path(&repo.canonicalize().unwrap())),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_worktree_keeps_the_git_supplied_common_directory_spelling() {
+        use std::os::unix::fs::PermissionsExt;
+        let sandbox = meta_plugin::testing::isolated!();
+        let repo = sandbox.repo(&sandbox.work().join("repo"));
+        let metadata = sandbox.work().join("storage/.git");
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        sandbox.git(
+            &repo,
+            &[
+                "init",
+                "--quiet",
+                "--separate-git-dir",
+                metadata.to_str().unwrap(),
+            ],
+        );
+        let linked = sandbox.work().join("linked");
+        git_worktree_add(&repo, &linked, "linked", None, &|| Ok(None)).unwrap();
+        sandbox.git(&repo, &["config", "core.worktree", repo.to_str().unwrap()]);
+        let native = sandbox.work().join("git-native");
+        std::os::unix::fs::symlink(&metadata, &native).unwrap();
+        let real_git = sandbox
+            .command("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap();
+        assert!(real_git.status.success());
+        let real_git = String::from_utf8(real_git.stdout).unwrap();
+        let bin = sandbox.work().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let script = bin.join("git");
+        // Model Git accepting its own spelling but not a canonical OS spelling,
+        // as can happen with Windows verbatim paths. Record the rejected call.
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+if [ "$1" = rev-parse ] && [ "$2" = --show-prefix ] && [ "$3" = --git-common-dir ]; then
+    printf '\n%s\n' "$META_TEST_NATIVE_COMMON"
+    exit 0
+fi
+if [ "$1" = --git-dir ] && [ "$2" = "$META_TEST_CANONICAL_COMMON" ] && [ "$3" = config ]; then
+    touch "$META_TEST_REJECTED"
+    exit 1
+fi
+exec "$META_TEST_REAL_GIT" "$@"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let rejected = sandbox.work().join("rejected-canonical");
+        std::env::set_var("META_TEST_NATIVE_COMMON", &native);
+        std::env::set_var(
+            "META_TEST_CANONICAL_COMMON",
+            metadata.canonicalize().unwrap(),
+        );
+        std::env::set_var("META_TEST_REJECTED", &rejected);
+        std::env::set_var("META_TEST_REAL_GIT", real_git.trim());
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        std::env::set_var(
+            "PATH",
+            std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path))).unwrap(),
+        );
+        let error = worktree_branch_is_free(&linked, "main").unwrap_err();
+        assert!(
+            !rejected.exists(),
+            "Git was given the canonical OS path instead of its own spelling"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(&holder_path(&repo.canonicalize().unwrap())),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_worktree_bounds_the_git_output() {
+        use std::os::unix::fs::PermissionsExt;
+        let sandbox = meta_plugin::testing::isolated!();
+        let bin = sandbox.work().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let script = bin.join("git");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nhead -c {} /dev/zero\nprintf '\\0'\n",
+                meta_plugin::process::CAPTURE_LIMIT + 1
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        std::env::set_var(
+            "PATH",
+            std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path))).unwrap(),
+        );
+        let result = configured_worktree(&sandbox.work(), &sandbox.work());
+        assert!(
+            result.is_err(),
+            "Git output above the capture limit was accepted"
+        );
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("output passed 16 MiB"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn review_non_utf8_holder_backlink_preserves_the_path_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let sandbox = meta_plugin::testing::isolated!();
+        let tmp = sandbox.repo(&sandbox.work());
+        let old = tmp.join("old");
+        git_worktree_add(&tmp, &old, "reserved", None, &|| Ok(None)).unwrap();
+        let admin = meta_core::gitdir::linked(&old).unwrap().admin;
+        std::fs::remove_dir_all(&old).unwrap();
+        let holder = tmp.join(std::ffi::OsStr::from_bytes(b"holder-\xff"));
+        let mut backlink = holder.join(".git").as_os_str().as_bytes().to_vec();
+        backlink.push(b'\n');
+        std::fs::write(admin.join("gitdir"), backlink).unwrap();
+        let error = worktree_branch_is_free(&tmp, "reserved").unwrap_err();
+        assert!(
+            error.to_string().contains(&format!("{holder:?}")),
+            "{error:#}"
+        );
+        assert!(!error.to_string().contains('\u{fffd}'), "{error:#}");
+    }
+
+    #[test]
+    fn a_damaged_set_record_keeps_the_known_branch_conflict() {
+        damaged_record_conflicts(false);
+    }
+
+    // macOS filesystems reject non-UTF-8 filenames before Git can register them.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_damaged_non_utf8_set_record_keeps_its_exact_path_in_conflicts() {
+        damaged_record_conflicts(true);
+    }
+
+    fn damaged_record_conflicts(non_utf8: bool) {
+        let sandbox = meta_plugin::testing::isolated!();
+        let repo_path = sandbox.work();
+        #[cfg(unix)]
+        let repo_path = if non_utf8 {
+            use std::os::unix::ffi::OsStrExt;
+            repo_path.join(std::ffi::OsStr::from_bytes(b"repo-\xff"))
+        } else {
+            repo_path
+        };
+        let repo = sandbox.repo(&repo_path);
+        let other = sandbox.work().join("holder");
+        git_worktree_add(&repo, &other, "reserved", None, &|| Ok(None)).unwrap();
+        let admin = if non_utf8 {
+            // This fresh repository has one worktree named holder. Avoid the
+            // UTF-8-only gitfile reader when locating its native Git record.
+            repo.join(".git/worktrees/holder")
+        } else {
+            meta_core::gitdir::linked(&other).unwrap().admin
+        };
+        assert!(admin.is_dir());
+        let record = admin.join(meta_core::set_record::RECORD_FILE);
+        #[cfg(unix)]
+        let caller = if non_utf8 {
+            repo.clone()
+        } else {
+            let alias = sandbox.work().join("caller");
+            std::os::unix::fs::symlink(&repo, &alias).unwrap();
+            alias
+        };
+        #[cfg(not(unix))]
+        let caller = repo.clone();
+        let mut path_errors = Vec::new();
+        for damage in ["malformed", "unreadable"] {
+            if damage == "malformed" {
+                std::fs::write(&record, "{broken").unwrap();
+            } else {
+                std::fs::remove_file(&record).unwrap();
+                std::fs::create_dir(&record).unwrap();
+            }
+            for state in ["checkout", "rebase", "bisect"] {
+                sandbox.git(&other, &["checkout", "-q", "reserved"]);
+                if state != "checkout" {
+                    sandbox.git(&other, &["checkout", "-q", "--detach"]);
+                    if state == "rebase" {
+                        std::fs::create_dir(admin.join("rebase-merge")).unwrap();
+                        std::fs::write(
+                            admin.join("rebase-merge/head-name"),
+                            "refs/heads/reserved\n",
+                        )
+                        .unwrap();
+                    } else {
+                        std::fs::write(admin.join("BISECT_START"), "reserved\n").unwrap();
+                    }
+                }
+                let error = worktree_branch_is_free(&caller, "reserved").unwrap_err();
+                assert_eq!(
+                    meta_plugin::envelope::code_of(&error),
+                    meta_plugin::ErrorCode::Conflict,
+                    "{damage}/{state}: {error:#}"
+                );
+                let message = format!("{error:#}");
+                let checkout = holder_checkout(&admin).unwrap().unwrap();
+                assert!(message.contains(&holder_path(&checkout)), "{message}");
+                let prefix = if damage == "malformed" {
+                    "; Cannot parse "
+                } else {
+                    "; Cannot read "
+                };
+                if non_utf8 {
+                    let exact = format!("{:?}", record.as_os_str());
+                    if !message.contains(&format!("{prefix}{exact}: "))
+                        || message.contains('\u{fffd}')
+                    {
+                        path_errors.push(format!("{damage}/{state}: {message}"));
+                    }
+                } else {
+                    let shown = message
+                        .split_once(prefix)
+                        .and_then(|(_, note)| note.split_once(": "))
+                        .map(|(path, _)| Path::new(path));
+                    assert!(shown.is_some(), "expected record {record:?} in {message:?}");
+                    let shown = shown.unwrap();
+                    assert_eq!(
+                        shown.canonicalize().unwrap(),
+                        record.canonicalize().unwrap(),
+                        "note path={shown:?}; expected={record:?}; message={message:?}"
+                    );
+                }
+                let cause = meta_core::set_record::read(&admin).unwrap_err();
+                assert!(
+                    message.contains(&cause.root_cause().to_string()),
+                    "{message}"
+                );
+                let info = meta_plugin::envelope::info_of(&error);
+                assert!(info.hint.is_some());
+                let json = serde_json::to_value(&info).unwrap();
+                assert_eq!(json["message"].as_str(), Some(message.as_str()));
+                let cleanup = git_branch_is_free(&caller, "reserved").unwrap_err();
+                assert_eq!(
+                    meta_plugin::envelope::code_of(&cleanup),
+                    meta_plugin::ErrorCode::Failed
+                );
+                assert!(!cleanup.to_string().contains("meta-worktree.json"));
+                if state == "rebase" {
+                    std::fs::remove_dir_all(admin.join("rebase-merge")).unwrap();
+                } else if state == "bisect" {
+                    std::fs::remove_file(admin.join("BISECT_START")).unwrap();
+                }
+            }
+        }
+        assert!(path_errors.is_empty(), "{}", path_errors.join("\n"));
+    }
+
+    #[test]
     fn branch_is_free_reads_reservations_and_changes_nothing() {
         let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.repo(&sandbox.work());
@@ -829,18 +1505,72 @@ mod tests {
         assert_eq!(remote.trim(), "origin");
 
         // Checked out in another worktree.
-        let other = tmp.join("other");
+        let other = tmp.join(".").join("other");
         sandbox.git(
             &tmp,
             &["worktree", "add", "-q", other.to_str().unwrap(), "t"],
         );
-        assert!(git_branch_is_free(&tmp, "t").is_err());
+        // Removal/pruning keep their original error code and text.
+        let error = git_branch_is_free(&tmp, "t").unwrap_err();
+        assert_eq!(format!("{error:#}"), "'t' is checked out in a worktree");
+        assert_eq!(
+            meta_plugin::envelope::code_of(&error),
+            meta_plugin::ErrorCode::Failed
+        );
+        assert_eq!(meta_plugin::envelope::info_of(&error).hint, None);
+        let conflict = worktree_branch_is_free(&tmp, "t").unwrap_err();
+        assert_eq!(
+            meta_plugin::envelope::code_of(&conflict),
+            meta_plugin::ErrorCode::Conflict
+        );
         // Bisected there instead: HEAD detached, branch still reserved.
         sandbox.git(&other, &["checkout", "-q", "--detach"]);
         git_branch_is_free(&tmp, "t").unwrap();
         let admin = tmp.join(".git/worktrees/other");
         std::fs::write(admin.join("BISECT_START"), "t\n").unwrap();
         assert!(git_branch_is_free(&tmp, "t").is_err());
+        let plain = worktree_branch_is_free(&tmp, "t").unwrap_err();
+        let registered = meta_core::set_record::checkout(&admin).unwrap();
+        meta_plugin::errln!("native={other:?}; registered={registered:?}; message={plain:#}");
+        assert_eq!(
+            registered.canonicalize().unwrap(),
+            other.canonicalize().unwrap()
+        );
+        assert!(
+            plain
+                .to_string()
+                .contains(&format!("worktree {}", escape_path(&registered))),
+            "native={other:?}; registered={registered:?}; message={plain:#}"
+        );
+        let record = meta_core::set_record::SetRecord {
+            set: tmp.join("holding-set"),
+            project: tmp.clone(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            ephemeral: false,
+            ttl_seconds: None,
+            custom: Default::default(),
+        };
+        meta_core::set_record::write(&admin, &record).unwrap();
+        for state in ["bisect", "rebase"] {
+            if state == "rebase" {
+                std::fs::remove_file(admin.join("BISECT_START")).unwrap();
+                std::fs::create_dir(admin.join("rebase-merge")).unwrap();
+                std::fs::write(admin.join("rebase-merge/head-name"), "refs/heads/t\n").unwrap();
+            }
+            let error = worktree_branch_is_free(&tmp, "t").unwrap_err();
+            assert_eq!(
+                meta_plugin::envelope::code_of(&error),
+                meta_plugin::ErrorCode::Conflict
+            );
+            assert!(error.to_string().contains("worktree set 'holding-set'"));
+            assert!(error.to_string().contains(&escape_path(&record.set)));
+            let removal = git_branch_is_free(&tmp, "t").unwrap_err();
+            assert!(!removal.to_string().contains("holding-set"));
+            assert_eq!(
+                meta_plugin::envelope::code_of(&removal),
+                meta_plugin::ErrorCode::Failed
+            );
+        }
     }
 
     #[test]
@@ -872,6 +1602,21 @@ mod tests {
             &["worktree", "add", "-q", other.to_str().unwrap(), "t"],
         );
         assert!(git_branch_is_free(&repo, "t").is_err());
+        let conflict = worktree_branch_is_free(&repo, "t").unwrap_err();
+        assert_eq!(
+            meta_plugin::envelope::code_of(&conflict),
+            meta_plugin::ErrorCode::Conflict
+        );
+        let admin = meta_core::gitdir::linked(&other).unwrap().admin;
+        let registered = meta_core::set_record::checkout(&admin).unwrap();
+        assert_eq!(
+            registered.canonicalize().unwrap(),
+            other.canonicalize().unwrap()
+        );
+        assert!(
+            conflict.to_string().contains(&escape_path(&registered)),
+            "native={other:?}; registered={registered:?}; message={conflict:#}"
+        );
     }
 
     #[test]

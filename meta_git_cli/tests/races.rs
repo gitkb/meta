@@ -239,7 +239,10 @@ fn a_late_create_leaves_a_half_set_removable() {
         &backend,
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
-    sb.holding(&sb.root.join("bin"), "gh", "main");
+    // The PR branch is free: this test must reach the lease race rather
+    // than stop at the branch-reservation preflight.
+    sb.sandbox.git(&origin, &["branch", "pr-head", "main"]);
+    sb.holding(&sb.root.join("bin"), "gh", "pr-head");
     let hooks = sb.root.join("hooks");
     fs::create_dir_all(&hooks).unwrap();
     sb.holding(&hooks, "post-checkout", "");

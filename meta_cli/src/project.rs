@@ -102,7 +102,11 @@ pub fn run(cli: &Cli, command: &ProjectCommands, report: &mut Report) -> Result<
     let found = match command {
         ProjectCommands::Other(words) => return Err(unrecognized(words, &crate::meta_options())),
         ProjectCommands::Check => return check(cli, &start, report),
-        ProjectCommands::List => list(&workspace_target(cli, &start, "list")?, &start)?,
+        ProjectCommands::List => list(
+            &workspace_target(cli, &start, "list")?,
+            &start,
+            cli.config.is_some(),
+        )?,
         ProjectCommands::Dependents { project } => {
             dependents(&workspace_target(cli, &start, "dependents")?, project)?
         }
@@ -403,10 +407,15 @@ fn workspace(target: &Target) -> Result<(&meta_plugin::Workspace, config::Worksp
 /// `meta project list`: the projects of the config the command runs from
 /// (`start`; with -A, the outermost one's), and with -r those of the meta
 /// repos nested in it, as a tree; each a record, in the tree's order.
-fn list(target: &Target, start: &Path) -> Result<Found> {
+fn list(target: &Target, start: &Path, selected_config: bool) -> Result<Found> {
     let (workspace, config) = workspace(target)?;
     let dir = listed_in(target, &config);
-    let tree = config::walk_projects(&dir, &config.projects, target.depth)?;
+    let tree = match &target.set {
+        Some(_) => {
+            meta_core::worktree::set_project_tree(&dir, &config, target.depth, selected_config)?
+        }
+        None => config::walk_projects(&dir, &config.projects, target.depth)?,
+    };
 
     // The remote of the workspace whose projects these are, not of the
     // repository the command runs in (a project's, from inside it); none
@@ -632,7 +641,7 @@ mod tests {
 
     /// The text `meta <options> project list` shows from `cwd`.
     fn listed(cwd: &Path, options: &[&str]) -> String {
-        list(&target(cwd, options), cwd).unwrap().text
+        list(&target(cwd, options), cwd, false).unwrap().text
     }
 
     /// The text `meta <options> project dependents <project>` shows from `cwd`.
@@ -798,7 +807,7 @@ mod tests {
         assert_eq!(envelope.error.map(|e| e.code), Some(ErrorCode::Conflict));
 
         // listed from inside the child, the root is still the workspace's
-        let rows = list(&target(&web, &[]), &web).unwrap().records;
+        let rows = list(&target(&web, &[]), &web, false).unwrap().records;
         assert_eq!(
             rows[0].data.as_ref().unwrap()["repo"],
             "https://example.invalid/ws.git"

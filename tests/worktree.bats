@@ -109,10 +109,14 @@ EOF
 }
 
 @test "git's error over several lines keeps its line breaks" {
-    git -C backend switch --quiet -c feature/login
-    run "$META_BIN" git worktree create login --repo backend --no-deps --branch feature/login
+    # A branch collision is caught before git now. A checkout hook still
+    # gives a native git failure with more than one stderr line.
+    printf '#!/bin/sh\nprintf "fatal: checkout hook failed\\nsecond line\\n" >&2\nexit 1\n' > backend/.git/hooks/post-checkout
+    chmod +x backend/.git/hooks/post-checkout
+    run "$META_BIN" git worktree create login --repo backend --no-deps
     [ "$status" -ne 0 ]
-    [[ "$output" == *$'\n  fatal: '*"already used by worktree"* ]]
+    [[ "$output" == *$'\n  fatal: '*"checkout hook failed"* ]]
+    [[ "$output" == *$'\n  second line'* ]]
     [[ "$output" != *'\nfatal'* ]]
 }
 
@@ -1254,6 +1258,111 @@ EOF
     [[ "$output" == *"'vendor' depends on 'missing'"*"(strict mode)"* ]]
 }
 
+@test "project list recovers nested projects through a missing parent in a legacy set" {
+    bats_require_minimum_version 1.5.0
+    setup_nested_meta
+    git -C vendor init --quiet -b main
+    printf '/nested-lib/\n' > vendor/.gitignore
+    git -C vendor add .meta.yaml .gitignore
+    git -C vendor commit --quiet -m vendor
+    "$META_BIN" git worktree create legacy --repo backend
+    # Reproduce sets made by older add: the child is recorded, its parent
+    # is only a directory, and the root checkout predates vendor's config.
+    git -C vendor/nested-lib worktree add --quiet -b legacy "$TEST_DIR/.worktrees/legacy/vendor/nested-lib"
+    local admin child
+    admin="$(git -C .worktrees/legacy/backend rev-parse --absolute-git-dir)"
+    child="$(git -C .worktrees/legacy/vendor/nested-lib rev-parse --absolute-git-dir)"
+    cp "$admin/meta-worktree.json" "$child/meta-worktree.json"
+    [ ! -e .worktrees/legacy/vendor/.git ]
+    [ ! -e .worktrees/legacy/vendor/.meta.yaml ]
+    cd .worktrees/legacy/vendor/nested-lib
+    for scope in -r -A; do
+        run --separate-stderr "$META_BIN" "$scope" --json project list
+        [ "$status" -eq 0 ]
+        [ "$(jq -r '.results[] | select(.project == "vendor/nested-lib") | "\(.path)=\(.data.repo)"' <<<"$output")" = "$TEST_DIR/.worktrees/legacy/vendor/nested-lib=git@github.com:org/nested-lib.git" ]
+        # Each place appears once even where both configs list it.
+        [ "$(jq '[.results[].project] | length == (unique | length)' <<<"$output")" = true ]
+    done
+    run --separate-stderr "$META_BIN" --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq '[.results[] | select(.project == "vendor/nested-lib")] | length' <<<"$output")" = 0 ]
+    cd "$TEST_DIR/.worktrees/legacy"
+    # Checked-out entries win, while the missing parent's children still
+    # come from the source config and mark it as a meta project.
+    jq '.projects.vendor = {repo: "git@github.com:org/local-vendor.git", meta: true}' .meta.yaml > new.json
+    mv new.json .meta.yaml
+    run --separate-stderr "$META_BIN" -r --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.results[] | select(.project == "vendor") | "\(.data.repo)=\(.data.is_meta)"' <<<"$output")" = "git@github.com:org/local-vendor.git=true" ]
+    [ "$(jq '[.results[] | select(.project == "vendor/nested-lib")] | length' <<<"$output")" = 1 ]
+    cd "$TEST_DIR"
+    run "$META_BIN" git worktree add legacy --repo vendor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already holds files"* ]]
+    [ -f .worktrees/legacy/vendor/nested-lib/.git ]
+}
+
+@test "worktree add adds intermediate parents and reuses parents already in the set" {
+    setup_nested_meta
+    git -C vendor init --quiet -b main
+    printf '/nested-lib/\n' > vendor/.gitignore
+    git -C vendor add .meta.yaml .gitignore
+    git -C vendor commit --quiet -m vendor
+    "$META_BIN" git worktree create spine --repo backend
+    run "$META_BIN" --json git worktree add spine --repo vendor/nested-lib
+    [ "$status" -eq 0 ]
+    [ -f .worktrees/spine/vendor/.git ]
+    [ -f .worktrees/spine/vendor/nested-lib/.git ]
+    [ "$(jq -c '[.results[].project]' <<<"$output")" = '["vendor","vendor/nested-lib"]' ]
+    "$META_BIN" git worktree create parent-present --repo vendor
+    run "$META_BIN" git worktree add parent-present --repo vendor/nested-lib
+    [ "$status" -eq 0 ]
+    [ -f .worktrees/parent-present/vendor/nested-lib/.git ]
+}
+
+@test "worktree create reports the set holding a branch before making a set" {
+    bats_require_minimum_version 1.5.0
+    "$META_BIN" git worktree create holder --repo backend
+    run --separate-stderr "$META_BIN" --json git worktree create blocked --branch holder --repo backend
+    [ "$status" -ne 0 ]
+    [ "$(jq -r '.error.code' <<<"$output")" = conflict ]
+    [[ "$(jq -r '.error.message' <<<"$output")" == *"holder"*"$TEST_DIR/.worktrees/holder"* ]]
+    [ "$(jq -r '.error.hint' <<<"$output")" != null ]
+    [ ! -e .worktrees/blocked ]
+    run --separate-stderr "$META_BIN" --dry-run --json git worktree create preview --branch holder --repo backend
+    [ "$status" -ne 0 ]
+    [ "$(jq -r '.error.code' <<<"$output")" = conflict ]
+    # A deleted checkout still reserves the branch until git forgets it.
+    # Its admin record must still identify the holding set.
+    rm -rf .worktrees/holder
+    run --separate-stderr "$META_BIN" --json git worktree create missing-holder --branch holder --repo backend
+    [ "$status" -ne 0 ]
+    [ "$(jq -r '.error.code' <<<"$output")" = conflict ]
+    [[ "$(jq -r '.error.message' <<<"$output")" == *"worktree set 'holder'"*"$TEST_DIR/.worktrees/holder"* ]]
+    [ ! -e .worktrees/missing-holder ]
+}
+
+@test "worktree add reports the set holding a branch before adding any repo" {
+    bats_require_minimum_version 1.5.0
+    "$META_BIN" git worktree create holder --repo frontend
+    "$META_BIN" git worktree create destination --repo backend --no-deps
+    # A free repo first verifies that the whole plan is checked before adding.
+    mkdir tool
+    git -C tool init --quiet -b main
+    echo tool > tool/README.md
+    git -C tool add README.md
+    git -C tool commit --quiet -m tool
+    jq '.projects.tool = "git@github.com:org/tool.git"' .meta.yaml > new.json
+    mv new.json .meta.yaml
+    run --separate-stderr "$META_BIN" --json git worktree add destination --repo tool:fresh --repo frontend:holder
+    [ "$status" -ne 0 ]
+    [ "$(jq -r '.error.code' <<<"$output")" = conflict ]
+    [[ "$(jq -r '.error.message' <<<"$output")" == *"holder"*"$TEST_DIR/.worktrees/holder"* ]]
+    [ ! -e .worktrees/destination/tool ]
+    [ ! -e .worktrees/destination/frontend ]
+    if git -C tool rev-parse --verify -q fresh; then false; fi
+}
+
 @test "inside a set, -r reaches the meta repos checked out in it, as outside one" {
     bats_require_minimum_version 1.5.0
     setup_nested_meta
@@ -1482,13 +1591,23 @@ EOF
 @test "worktree add with nested repo alias succeeds" {
     setup_nested_meta
 
+    git -C vendor init --quiet -b main
+    printf '/nested-lib/\n' > vendor/.gitignore
+    git -C vendor add .meta.yaml .gitignore
+    git -C vendor commit --quiet -m vendor
+
     # First create worktree with backend
     "$META_BIN" git worktree create add-nested --repo backend
 
     # Then add nested repo
     run "$META_BIN" git worktree add add-nested --repo vendor/nested-lib
     [ "$status" -eq 0 ]
-    [ -d ".worktrees/add-nested/vendor/nested-lib" ]
+    [ -f ".worktrees/add-nested/vendor/.git" ]
+    [ -f ".worktrees/add-nested/vendor/nested-lib/.git" ]
+    cd .worktrees/add-nested/vendor/nested-lib
+    run "$META_BIN" -r --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.results[] | select(.project == "vendor/nested-lib") | .path' <<<"$output")" = "$TEST_DIR/.worktrees/add-nested/vendor/nested-lib" ]
 }
 
 @test "worktree create with invalid nested repo path fails" {

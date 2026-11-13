@@ -163,6 +163,11 @@ pub(crate) fn handle_create(
             branch: &repo.branch,
         })
         .collect();
+    if from_ref.is_none() {
+        for repo in &wanted {
+            worktree_branch_is_free(repo.source, repo.branch)?;
+        }
+    }
     let on_origin = branches_on_origin(&wanted, from_ref, ctx)?;
 
     // A preview makes the checks a run makes (all but asking GitHub for a
@@ -269,6 +274,12 @@ pub(crate) fn handle_create(
             ))
         })?;
         repo.branch = pr_branch.clone();
+    }
+
+    if from_ref.is_none() {
+        for repo in &repos_to_create {
+            worktree_branch_is_free(&repo.source, &repo.branch)?;
+        }
     }
 
     // Before anything of the set exists, its lease: until this call is done,
@@ -816,37 +827,10 @@ fn plan_repos(index: &Index, args: &CreateArgs, ctx: &Ctx, verbose: bool) -> Res
         .map(|(r, _)| (r.place.clone(), r.project.clone()))
         .filter(|(place, _)| place.contains('/'))
         .collect();
-    for (place, project) in nested {
-        let parts: Vec<&str> = place.split('/').collect();
-        for end in 1..parts.len() {
-            let parent = parts
-                .iter()
-                .take(end)
-                .copied()
-                .collect::<Vec<_>>()
-                .join("/");
-            if plan.repos.iter().any(|(r, _)| r.place == parent) {
-                continue;
-            }
-            let Some(source) = index.at_place(&parent) else {
-                // A plain directory on the way is no parent; a repo that
-                // isn't a project is worth saying so
-                if meta_core::gitdir::common_dir(&meta_dir.join(&parent))?.is_some() {
-                    ctx.warn(format!(
-                        "Intermediate parent '{}' for nested repo '{}' is not a project of the \
-                         workspace, skipping",
-                        escape(&parent),
-                        escape(&project)
-                    ));
-                }
-                continue;
-            };
-            log::info!("Adding intermediate parent '{parent}' for nested repo '{project}'");
-            let found = Found {
-                key: parent,
-                source,
-            };
-            plan.add(found, branch(None), Why::Parent(project.clone()), false)?;
+    for (found, project) in crate::worktree::plan::intermediate_parents(index, nested, ctx)? {
+        let place = place_in_set(meta_dir, &found.key, &found.source);
+        if !plan.repos.iter().any(|(r, _)| r.place == place) {
+            plan.add(found, branch(None), Why::Parent(project), false)?;
         }
     }
 

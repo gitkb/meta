@@ -2,6 +2,7 @@
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 
+
 # Integration tests for meta git worktree edge cases (Phase 2 & 3)
 # Tests: strict mode, prune with orphan detection, ahead/behind
 
@@ -632,14 +633,17 @@ EOF
     printf '{"projects": {"deep/lib": "git@github.com:org/lib.git"}}' > "$TEST_DIR/group/.meta.yaml"
     git -C "$TEST_DIR/group/deep/lib" init --quiet --initial-branch=main
     git -C "$TEST_DIR/group/deep/lib" -c user.email=t@t -c user.name=t commit --quiet --allow-empty -m init
+    git -C "$TEST_DIR/group" add .meta.yaml
+    git -C "$TEST_DIR/group" -c user.email=t@t -c user.name=t commit --quiet -m config
     cat > "$TEST_DIR/.meta.yaml" <<'EOF'
 {"projects": {"backend": "git@github.com:org/backend.git",
               "frontend": "git@github.com:org/frontend.git",
               "group": {"repo": "git@github.com:org/group.git", "meta": true}}}
 EOF
-    run "$META_BIN" git worktree create partial --repo backend --no-deps
+    run "$META_BIN" git worktree create partial --repo backend --repo group --no-deps
     [ "$status" -eq 0 ]
-    mkdir "$TEST_DIR/.worktrees/partial/group"
+    # The parent is already a member: fail while creating its child's directory.
+    [ -f "$TEST_DIR/.worktrees/partial/group/.git" ]
     chmod 555 "$TEST_DIR/.worktrees/partial/group"
     run "$META_BIN" git worktree add partial --repo frontend --repo group/deep/lib
     chmod 755 "$TEST_DIR/.worktrees/partial/group"
@@ -1588,6 +1592,76 @@ set_projects() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"/s/api"* ]]
     [[ "$output" != *"/s/web"* ]]
+}
+
+@test "project list in a root checkout keeps an explicitly selected root graph" {
+    commit_repo "$TEST_DIR/api"
+    commit_repo "$TEST_DIR/web"
+    set_projects '{"api":"git@x:o/api.git","web":"git@x:o/web.git"}'
+    printf '{"projects":{"api":"git@x:o/api.git"}}\n' > selected.json
+    git add selected.json
+    git commit --quiet -m selected
+    "$META_BIN" git worktree create selected-root --every-repo
+    cd .worktrees/selected-root
+    for flag in shallow recursive; do
+        if [ "$flag" = shallow ]; then
+            run "$META_BIN" --config selected.json --json project list
+        else
+            run "$META_BIN" -r --config selected.json --json project list
+        fi
+        [ "$status" -eq 0 ]
+        [ "$(jq '[.results[] | select(.project == "api")] | length' <<<"$output")" = 1 ]
+        [ "$(jq '[.results[] | select(.project == "web")] | length' <<<"$output")" = 0 ]
+    done
+    run "$META_BIN" --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq '[.results[] | select(.project == "web")] | length' <<<"$output")" = 1 ]
+    run "$META_BIN" exec -- pwd
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/selected-root/web"* ]]
+}
+
+@test "project list selected roots retain nested source fallback without default siblings" {
+    mkdir group
+    printf '{"projects":{"leaf":"git@x:o/leaf.git"}}\n' > group/.meta.yaml
+    commit_repo "$TEST_DIR/group/leaf"
+    set_projects '{"backend":"git@x:o/backend.git","frontend":"git@x:o/frontend.git","group":{"repo":"git@x:o/group.git","meta":true}}'
+    "$META_BIN" git worktree create selected-child --repo backend --no-deps
+    cd .worktrees/selected-child
+    printf '{"projects":{"group":{"repo":"git@x:o/group.git","meta":true}}}\n' > selected.json
+    run "$META_BIN" -r --config selected.json --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq '[.results[] | select(.project == "group/leaf")] | length' <<<"$output")" = 1 ]
+    [ "$(jq '[.results[] | select(.project == "frontend")] | length' <<<"$output")" = 0 ]
+    run "$META_BIN" --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq '[.results[] | select(.project == "frontend")] | length' <<<"$output")" = 1 ]
+}
+
+@test "recursive project list reports broken checked-out fallback while exec stays best effort" {
+    commit_repo "$TEST_DIR/parent"
+    printf '{"projects":{"child":"git@x:o/child.git"}}\n' > parent/.meta.yaml
+    echo child/ > parent/.gitignore
+    git -C parent add .meta.yaml .gitignore
+    git -C parent commit --quiet -m config
+    commit_repo "$TEST_DIR/parent/child"
+    set_projects '{"backend":"git@x:o/backend.git","parent":{"repo":"git@x:o/parent.git","meta":true}}'
+    "$META_BIN" git worktree create cfg-error --repo backend --no-deps
+    git -C parent worktree add --quiet -b cfg-parent "$TEST_DIR/.worktrees/cfg-error/parent"
+    git -C parent/child worktree add --quiet -b cfg-child "$TEST_DIR/.worktrees/cfg-error/parent/child"
+    cd .worktrees/cfg-error
+    printf '{"projects":{"backend":"git@x:o/backend.git"}}\n' > .meta.yaml
+    printf '{broken' > parent/.meta.yaml
+    run "$META_BIN" -r --json project list
+    [ "$status" -ne 0 ]
+    jq -e '.error != null' <<<"$output"
+    [[ "$output" == *"parent/.meta.yaml"* ]]
+    run "$META_BIN" --json project list
+    [ "$status" -eq 0 ]
+    run "$META_BIN" exec -- touch ran
+    [ "$status" -eq 0 ] || { printf '%s\n' "$output"; false; }
+    [ -f backend/ran ]
+    [ -f parent/child/ran ]
 }
 
 @test "a project under .claude does not make an agent's worktree beside it a member" {
@@ -2546,4 +2620,138 @@ stays_in_set_rows() {
     [[ "$output" == *"in no set meta can name"* ]]
     run "$META_BIN" --primary --include backend exec -- pwd
     [ "$status" -eq 0 ]
+}
+
+@test "review: add refuses an occupied skipped parent whose source is invalid" {
+    mkdir -p vendor/.git
+    printf '{"projects":{"lib":"git@x:o/lib.git"}}\n' > vendor/.meta.yaml
+    commit_repo "$TEST_DIR/vendor/lib"
+    set_projects '{"backend":"git@x:o/backend.git","vendor":{"repo":"git@x:o/vendor.git","meta":true}}'
+    "$META_BIN" git worktree create occupied-parent --repo backend --no-deps
+    mkdir -p .worktrees/occupied-parent/vendor
+    echo keep > .worktrees/occupied-parent/vendor/unrelated
+    run "$META_BIN" git worktree add occupied-parent --repo vendor/lib
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"already holds files"* ]]
+    [ ! -e .worktrees/occupied-parent/vendor/lib ]
+    [ "$(cat .worktrees/occupied-parent/vendor/unrelated)" = keep ]
+    # An empty parent destination still warns and skips the invalid source.
+    "$META_BIN" git worktree create empty-parent --repo backend --no-deps
+    run "$META_BIN" git worktree add empty-parent --repo vendor/lib
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"not a git repository"* ]]
+    [ -e .worktrees/empty-parent/vendor/lib/.git ]
+}
+
+@test "review: add keeps a resolved parent when its place is another project's name" {
+    commit_repo "$TEST_DIR/vendor"
+    commit_repo "$TEST_DIR/vendor/nested"
+    commit_repo "$TEST_DIR/alternate"
+    printf '{"projects":{"nested":"git@x:o/nested.git"}}\n' > vendor/.meta.yaml
+    echo nested/ > vendor/.gitignore
+    git -C vendor add .meta.yaml .gitignore
+    git -C vendor commit --quiet -m config
+    set_projects '{"backend":"git@x:o/backend.git","vendor":{"repo":"git@x:o/alternate.git","path":"alternate"},"parent":{"repo":"git@x:o/parent.git","path":"vendor","meta":true}}'
+    "$META_BIN" git worktree create identity --repo backend --no-deps
+    run "$META_BIN" git worktree add identity --repo vendor/nested
+    [ "$status" -eq 0 ]
+    [ -f .worktrees/identity/vendor/.git ]
+    [ ! -e .worktrees/identity/alternate ]
+    [ "$(git -C .worktrees/identity/vendor rev-parse --git-common-dir)" = "$TEST_DIR/vendor/.git" ]
+}
+
+@test "review: add refuses an existing parent checkout of a different repository" {
+    commit_repo "$TEST_DIR/group"
+    commit_repo "$TEST_DIR/group/child"
+    printf '{"projects":{"child":"git@x:o/child.git"}}\n' > group/.meta.yaml
+    echo child/ > group/.gitignore
+    git -C group add .meta.yaml .gitignore
+    git -C group commit --quiet -m config
+    set_projects '{"backend":"git@x:o/backend.git","group":{"repo":"git@x:o/group.git","meta":true}}'
+    "$META_BIN" git worktree create wrong-parent --repo backend --no-deps
+    git -C frontend worktree add --quiet -b unrelated "$TEST_DIR/.worktrees/wrong-parent/group"
+    run "$META_BIN" git worktree add wrong-parent --repo group/child
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"another repository"* ]]
+    [ ! -e .worktrees/wrong-parent/group/child ]
+}
+
+@test "review: project list merges different tree shapes by the full set place" {
+    mkdir a
+    printf '{"projects":{"x":"git@x:o/source.git"}}\n' > a/.meta.yaml
+    set_projects '{"backend":"git@x:o/backend.git","a":{"repo":"git@x:o/a.git","meta":true}}'
+    "$META_BIN" git worktree create shapes --repo backend
+    cd .worktrees/shapes
+    printf '{"projects":{"backend":"git@x:o/backend.git","direct":{"path":"a/x","repo":"git@x:o/own.git"}}}\n' > .meta.yaml
+    run "$META_BIN" -r --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq '[.results[] | select(.project == "a/x")] | length' <<<"$output")" = 1 ]
+    [ "$(jq -r '.results[] | select(.project == "a/x") | .data.repo' <<<"$output")" = git@x:o/own.git ]
+}
+
+@test "review: project list follows the original source of an outside parent" {
+    mkdir "$TEST_DIR/../external"
+    printf '{"projects":{"leaf":"git@x:o/leaf.git"}}\n' > "$TEST_DIR/../external/.meta.yaml"
+    set_projects '{"backend":"git@x:o/backend.git","parent":{"path":"../external","repo":"git@x:o/parent.git","meta":true}}'
+    "$META_BIN" git worktree create outside-parent --repo backend
+    cd .worktrees/outside-parent
+    run "$META_BIN" -r --json project list
+    [ "$status" -eq 0 ]
+    [ "$(jq '[.results[] | select(.project == "parent/leaf")] | length' <<<"$output")" = 1 ]
+}
+
+@test "review: branch reservations support git without worktree list -z" {
+    local real_git
+    real_git="$(command -v git)"
+    mkdir "$TEST_DIR/old-git"
+    cat > "$TEST_DIR/old-git/git" <<EOF2
+#!/bin/sh
+case "\$*" in
+    *"worktree list"*) for arg do
+        if [ "\$arg" = -z ]; then echo 'error: unknown switch z' >&2; exit 129; fi
+    done ;;
+esac
+exec "$real_git" "\$@"
+EOF2
+    chmod +x "$TEST_DIR/old-git/git"
+    export PATH="$TEST_DIR/old-git:$PATH"
+    run "$META_BIN" git worktree create compatible --repo backend --no-deps
+    [ "$status" -eq 0 ]
+    run "$META_BIN" git worktree add compatible --repo frontend
+    [ "$status" -eq 0 ]
+    run "$META_BIN" --json git worktree create conflict --repo backend:compatible --no-deps
+    [ "$status" -ne 0 ]
+    [ "$(jq -r '.error.code' <<<"$output")" = conflict ]
+    run "$META_BIN" git worktree remove compatible
+    [ "$status" -eq 0 ]
+}
+
+@test "damaged holder records keep create and add branch conflicts in JSON" {
+    bats_require_minimum_version 1.5.0
+    "$META_BIN" git worktree create holder --repo backend --no-deps
+    "$META_BIN" git worktree create destination --repo frontend --no-deps
+    local admin
+    admin=$(git -C .worktrees/holder/backend rev-parse --absolute-git-dir)
+    for damage in malformed unreadable; do
+        if [ "$damage" = malformed ]; then
+            printf '{broken' > "$admin/meta-worktree.json"
+        else
+            rm "$admin/meta-worktree.json"
+            mkdir "$admin/meta-worktree.json"
+        fi
+        for command in create add; do
+            local set=blocked
+            local extra=()
+            [ "$command" != create ] || extra=(--no-deps)
+            [ "$command" = create ] || set=destination
+            run --separate-stderr "$META_BIN" --json git worktree "$command" "$set" --repo backend:holder "${extra[@]}"
+            [ "$status" -ne 0 ]
+            [ "$(jq -r '.error.code' <<<"$output")" = conflict ]
+            [[ "$(jq -r '.error.message' <<<"$output")" == *"$TEST_DIR/.worktrees/holder/backend"*"$admin/meta-worktree.json"* ]]
+            [[ "$(jq -r '.error.message' <<<"$output")" == *"Cannot "* ]]
+            [ "$(jq -r '.error.hint' <<<"$output")" != null ]
+            [ ! -e .worktrees/blocked ]
+            [ ! -e .worktrees/destination/backend ]
+        done
+    done
 }

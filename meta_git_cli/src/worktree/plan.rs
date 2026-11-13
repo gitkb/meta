@@ -302,6 +302,51 @@ impl<'a> Index<'a> {
     }
 }
 
+/// The listed intermediate projects needed to hold nested repos, once per
+/// place. A plain directory is no parent; an unlisted repo stays outside
+/// the set so removal never mistakes it for a member.
+pub fn intermediate_parents(
+    index: &Index,
+    repos: impl IntoIterator<Item = (String, String)>,
+    ctx: &meta_plugin::Ctx,
+) -> Result<Vec<(Found, String)>> {
+    let mut parents: Vec<(Found, String)> = Vec::new();
+    for (place, project) in repos {
+        let parts: Vec<_> = place.split('/').collect();
+        for end in 1..parts.len() {
+            let parent = parts
+                .iter()
+                .take(end)
+                .copied()
+                .collect::<Vec<_>>()
+                .join("/");
+            if parents.iter().any(|(found, _)| found.key == parent) {
+                continue;
+            }
+            let Some(source) = index.at_place(&parent) else {
+                if meta_core::gitdir::common_dir(&index.dir.join(&parent))?.is_some() {
+                    ctx.warn(format!(
+                        "Intermediate parent '{}' for nested repo '{}' is not a project of the \
+                         workspace, skipping",
+                        escape(&parent),
+                        escape(&project)
+                    ));
+                }
+                continue;
+            };
+            log::info!("Adding intermediate parent '{parent}' for nested repo '{project}'");
+            parents.push((
+                Found {
+                    key: parent,
+                    source,
+                },
+                project.clone(),
+            ));
+        }
+    }
+    Ok(parents)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

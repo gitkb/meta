@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.4.0](https://github.com/gitkb/meta/compare/v0.3.0...v0.4.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* 0.3.0's `meta git update` pulled; this release's doesn't. Use `meta git pull --ff-only` to bring repos up to date, then `meta git update` to clone what the pulled .meta.yaml files add. `meta git clone-missing` is `meta git update`, `clone-sync` is `update --prune`, and `clone-prune` is `update --prune-only`.
+* meta init skills installs meta's skills for every agent; help lists meta's options; MCP says what it cut ([#185](https://github.com/gitkb/meta/issues/185))
+
+### Features
+
+* a project's branch: in .meta.yaml is the branch it starts from ([980f226](https://github.com/gitkb/meta/commit/980f22660843ec9549c50b624ad49d1cfda9dda9))
+* a project's branch: in .meta.yaml is the branch it starts from ([#189](https://github.com/gitkb/meta/issues/189)) ([980f226](https://github.com/gitkb/meta/commit/980f22660843ec9549c50b624ad49d1cfda9dda9))
+* meta init skills installs meta's skills for every agent; help lists meta's options; MCP says what it cut ([#185](https://github.com/gitkb/meta/issues/185)) ([d00c6fb](https://github.com/gitkb/meta/commit/d00c6fba7fad7e34c4180b177e09cd1f729303ca))
+* the summary says why each captured command failed; --full-error… ([ec122a9](https://github.com/gitkb/meta/commit/ec122a93187a8436d6bf79c31dfbaedd82ee5748))
+* the summary says why each captured command failed; --full-errors shows it all ([#193](https://github.com/gitkb/meta/issues/193)) ([ec122a9](https://github.com/gitkb/meta/commit/ec122a93187a8436d6bf79c31dfbaedd82ee5748))
+
+
+### Bug Fixes
+
+* a bad branch: fails only the commands acting on that project; fe… ([980f226](https://github.com/gitkb/meta/commit/980f22660843ec9549c50b624ad49d1cfda9dda9))
+* a bad branch: is on the project's row, not an Envelope warning ([980f226](https://github.com/gitkb/meta/commit/980f22660843ec9549c50b624ad49d1cfda9dda9))
+* escape tabs in the excerpt; the SSH-setup fallback stays live as… ([ec122a9](https://github.com/gitkb/meta/commit/ec122a93187a8436d6bf79c31dfbaedd82ee5748))
+* meta git update clones what is missing and never pulls; --prune replaces clone-prune and clone-sync ([#188](https://github.com/gitkb/meta/issues/188)) ([6e14b6e](https://github.com/gitkb/meta/commit/6e14b6ee6d42cb1aa1c00b880c58f74f5e2dba7e))
+* plugin requests carry no branch; a bad branch: stops only a bran… ([980f226](https://github.com/gitkb/meta/commit/980f22660843ec9549c50b624ad49d1cfda9dda9))
+* preserve nested projects in worktree sets ([#194](https://github.com/gitkb/meta/issues/194)) ([03eab2e](https://github.com/gitkb/meta/commit/03eab2efbcd6c21cd5042d72830109c272a00562))
+* shipped.txt lists the meta-worktree skill's new version ([d00c6fb](https://github.com/gitkb/meta/commit/d00c6fba7fad7e34c4180b177e09cd1f729303ca))
+* update --prune keeps a repo holding a tag no remote has; tests s… ([6e14b6e](https://github.com/gitkb/meta/commit/6e14b6ee6d42cb1aa1c00b880c58f74f5e2dba7e))
+* update's warnings ask no remote; prune asks within 10 s and neve… ([6e14b6e](https://github.com/gitkb/meta/commit/6e14b6ee6d42cb1aa1c00b880c58f74f5e2dba7e))
+* worktree add/create help leaves out the filters they refuse; a s… ([d00c6fb](https://github.com/gitkb/meta/commit/d00c6fba7fad7e34c4180b177e09cd1f729303ca))
+* worktree create and add read branch: from the config --config names ([980f226](https://github.com/gitkb/meta/commit/980f22660843ec9549c50b624ad49d1cfda9dda9))
+* worktree create clones nothing when its config can't be read now ([980f226](https://github.com/gitkb/meta/commit/980f22660843ec9549c50b624ad49d1cfda9dda9))
+
+
+### Performance Improvements
+
+* format only the excerpt lines the summary shows ([ec122a9](https://github.com/gitkb/meta/commit/ec122a93187a8436d6bf79c31dfbaedd82ee5748))
+
 ## [0.3.0](https://github.com/gitkb/meta/compare/v0.2.22...v0.3.0) (2026-11-09)
 
 

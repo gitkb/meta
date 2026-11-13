@@ -712,7 +712,19 @@ fn branch_is_free(repo_path: &Path, branch: &str, describe_holder: bool) -> Resu
     // a diagnostic, but cannot weaken that conflict or supply a set identity.
     let holder_record = |admin: &Path| match meta_core::set_record::read(admin) {
         Ok(record) => (record, None),
-        Err(error) => (None, Some(error)),
+        Err(error) => {
+            let operation = if error.is::<serde_json::Error>() {
+                "parse"
+            } else {
+                "read"
+            };
+            let note = format!(
+                "Cannot {operation} {}: {}",
+                holder_path(&admin.join(meta_core::set_record::RECORD_FILE)),
+                error.root_cause()
+            );
+            (None, Some(note))
+        }
     };
     if describe_holder {
         for admin in &admin_dirs {
@@ -1357,20 +1369,49 @@ exec "$META_TEST_REAL_GIT" "$@"
 
     #[test]
     fn a_damaged_set_record_keeps_the_known_branch_conflict() {
+        damaged_record_conflicts(false);
+    }
+
+    // macOS filesystems reject non-UTF-8 filenames before Git can register them.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_damaged_non_utf8_set_record_keeps_its_exact_path_in_conflicts() {
+        damaged_record_conflicts(true);
+    }
+
+    fn damaged_record_conflicts(non_utf8: bool) {
         let sandbox = meta_plugin::testing::isolated!();
-        let repo = sandbox.repo(&sandbox.work());
+        let repo_path = sandbox.work();
+        #[cfg(unix)]
+        let repo_path = if non_utf8 {
+            use std::os::unix::ffi::OsStrExt;
+            repo_path.join(std::ffi::OsStr::from_bytes(b"repo-\xff"))
+        } else {
+            repo_path
+        };
+        let repo = sandbox.repo(&repo_path);
         let other = sandbox.work().join("holder");
         git_worktree_add(&repo, &other, "reserved", None, &|| Ok(None)).unwrap();
-        let admin = meta_core::gitdir::linked(&other).unwrap().admin;
+        let admin = if non_utf8 {
+            // This fresh repository has one worktree named holder. Avoid the
+            // UTF-8-only gitfile reader when locating its native Git record.
+            repo.join(".git/worktrees/holder")
+        } else {
+            meta_core::gitdir::linked(&other).unwrap().admin
+        };
+        assert!(admin.is_dir());
         let record = admin.join(meta_core::set_record::RECORD_FILE);
         #[cfg(unix)]
-        let caller = {
+        let caller = if non_utf8 {
+            repo.clone()
+        } else {
             let alias = sandbox.work().join("caller");
             std::os::unix::fs::symlink(&repo, &alias).unwrap();
             alias
         };
         #[cfg(not(unix))]
         let caller = repo.clone();
+        let mut path_errors = Vec::new();
         for damage in ["malformed", "unreadable"] {
             if damage == "malformed" {
                 std::fs::write(&record, "{broken").unwrap();
@@ -1407,18 +1448,35 @@ exec "$META_TEST_REAL_GIT" "$@"
                 } else {
                     "; Cannot read "
                 };
-                let shown = message
-                    .split_once(prefix)
-                    .and_then(|(_, note)| note.split_once(": "))
-                    .map(|(path, _)| Path::new(path));
-                assert!(shown.is_some(), "expected record {record:?} in {message:?}");
-                let shown = shown.unwrap();
-                assert_eq!(
-                    shown.canonicalize().unwrap(),
-                    record.canonicalize().unwrap(),
-                    "note path={shown:?}; expected={record:?}; message={message:?}"
+                if non_utf8 {
+                    let exact = format!("{:?}", record.as_os_str());
+                    if !message.contains(&format!("{prefix}{exact}: "))
+                        || message.contains('\u{fffd}')
+                    {
+                        path_errors.push(format!("{damage}/{state}: {message}"));
+                    }
+                } else {
+                    let shown = message
+                        .split_once(prefix)
+                        .and_then(|(_, note)| note.split_once(": "))
+                        .map(|(path, _)| Path::new(path));
+                    assert!(shown.is_some(), "expected record {record:?} in {message:?}");
+                    let shown = shown.unwrap();
+                    assert_eq!(
+                        shown.canonicalize().unwrap(),
+                        record.canonicalize().unwrap(),
+                        "note path={shown:?}; expected={record:?}; message={message:?}"
+                    );
+                }
+                let cause = meta_core::set_record::read(&admin).unwrap_err();
+                assert!(
+                    message.contains(&cause.root_cause().to_string()),
+                    "{message}"
                 );
-                assert!(meta_plugin::envelope::info_of(&error).hint.is_some());
+                let info = meta_plugin::envelope::info_of(&error);
+                assert!(info.hint.is_some());
+                let json = serde_json::to_value(&info).unwrap();
+                assert_eq!(json["message"].as_str(), Some(message.as_str()));
                 let cleanup = git_branch_is_free(&caller, "reserved").unwrap_err();
                 assert_eq!(
                     meta_plugin::envelope::code_of(&cleanup),
@@ -1432,6 +1490,7 @@ exec "$META_TEST_REAL_GIT" "$@"
                 }
             }
         }
+        assert!(path_errors.is_empty(), "{}", path_errors.join("\n"));
     }
 
     #[test]

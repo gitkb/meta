@@ -1,14 +1,35 @@
 name: CI
 
+# PRs run Linux only. On push to main, on-push-main.yml calls this before
+# release-please; release.yml calls it with the macOS and Windows runners, so
+# they test a release before its assets are uploaded.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
-  workflow_call:  # Allow this workflow to be called by other workflows
+  workflow_call:
+    inputs:
+      test_os:
+        description: JSON list of runners for Test
+        type: string
+        default: '["ubuntu-latest"]'
+      integration_os:
+        description: JSON list of runners for Integration Tests
+        type: string
+        default: '["ubuntu-latest"]'
+      tests_only:
+        description: Skip Clippy, Check Each Crate and Format
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+# A new push to a PR cancels its older run. A caller's runs are never
+# cancelled: github.workflow is the caller's name there, and the group is
+# keyed by commit.
+concurrency:
+  group: ${{ github.workflow }}-ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,7 +41,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # inputs is empty on pull_request, hence the fallback
+        os: ${{ fromJSON(inputs.test_os || '["ubuntu-latest"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -43,6 +65,7 @@ jobs:
 
   clippy:
     name: Clippy
+    if: ${{ !inputs.tests_only }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -63,6 +86,7 @@ jobs:
 
   crates:
     name: Check Each Crate
+    if: ${{ !inputs.tests_only }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -95,7 +119,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(inputs.integration_os || '["ubuntu-latest"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -133,6 +157,7 @@ jobs:
 
   format:
     name: Format
+    if: ${{ !inputs.tests_only }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

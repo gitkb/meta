@@ -1,8 +1,10 @@
 name: Release
 
 # release-please creates the tag with PARENT_REPO_PAT, so its push starts this
-# workflow, and every job checks out the tag. A PR that changes this file, or a
-# manual run, builds and checks the archives the same way and releases nothing.
+# workflow, and every job checks out the tag. The macOS and Windows tests run
+# here, and nothing is uploaded unless they pass. A PR that changes this file,
+# or a manual run, tests, builds and checks the archives the same way and
+# releases nothing.
 on:
   push:
     tags:
@@ -20,6 +22,15 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # macOS and Windows are tested only here, not on PRs or main
+  tests:
+    name: Tests
+    uses: ./.github/workflows/ci.yml
+    with:
+      test_os: '["macos-latest", "windows-latest"]'
+      integration_os: '["macos-latest"]'
+      tests_only: true
+
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -96,7 +107,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: build
+    needs: [tests, build]
     # A PR or manual run stops after the build; the jobs below need this one
     if: github.event_name == 'push'
     runs-on: ubuntu-latest

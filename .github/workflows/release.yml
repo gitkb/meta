@@ -11,6 +11,7 @@ on:
       - 'v*'
   pull_request:
     paths:
+      - .github/workflows/ci.yml
       - .github/workflows/release.yml
       - scripts/programs.py
   workflow_dispatch:

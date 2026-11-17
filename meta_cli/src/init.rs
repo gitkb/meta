@@ -338,9 +338,11 @@ fn install_claude_integration_to(
     }
 
     // Print summary
+    // as the user would type them: under `~` unless installed in the workspace
+    let at = if local { "" } else { "~/" };
     let home_agent_dirs = AGENT_SKILL_DIRS
         .iter()
-        .map(|dir| format!("~/{dir}"))
+        .map(|dir| format!("{at}{dir}"))
         .collect::<Vec<_>>()
         .join(", ");
     outln!()?;
@@ -380,8 +382,7 @@ fn install_claude_integration_to(
             false => outln!("Agents now get meta's skills in every project of yours:")?,
         }
         outln!(
-            "  Skills:  {} ({} skills), linked into {}",
-            escape_path(&home.join(".meta").join("skills")),
+            "  Skills:  {at}.meta/skills/ ({} skills), linked into {}",
             SKILLS.len(),
             home_agent_dirs
         )?;

@@ -304,6 +304,7 @@ enum InitCommands {
     #[command(
         after_help = "Examples:\n  meta init skills\n  meta init skills --update\n  \
                             meta init skills --local\n  \
+                            meta init skills --remove-local\n  \
                             meta --dry-run init skills --force"
     )]
     Skills {

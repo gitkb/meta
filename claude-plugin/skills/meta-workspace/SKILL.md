@@ -33,7 +33,7 @@ For what depends on what, read `depends_on` and `provides` in `.meta.yaml`, or a
 
 Run `meta git status` to see the current state of every repo at this level (`meta -r git status`: the meta repos nested below it too; `meta -A git status`: the whole workspace, from anywhere).
 
-`meta init skills` installs this guidance once, in your home folder, for every workspace and worktree set; rerun it with `--update` after upgrading meta.
+`meta init skills` installs this guidance in your home folder, for every workspace and worktree set (`--local`: in the workspace instead, to be committed); rerun it with `--update` after upgrading meta.
 
 ## Why This Matters
 

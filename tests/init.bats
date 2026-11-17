@@ -35,9 +35,9 @@ EOF
     cd "$TEST_DIR"
 }
 
-# The skills as an older meta installed them: in the workspace
+# The skills in the workspace, as --local and older metas install them
 old_install() {
-    HOME="$TEST_DIR" "$META_BIN" init skills > /dev/null
+    "$META_BIN" init skills --local > /dev/null
 }
 
 teardown() {
@@ -54,7 +54,9 @@ teardown() {
     [ -d "$HOME/.claude/skills" ]
     [ -d "$HOME/.agents/skills" ]
     # nothing of the skills in the workspace
-    [ ! -e .meta ] && [ ! -e .agents ] && [ ! -e .claude/skills ]
+    [ ! -e .meta ]
+    [ ! -e .agents ]
+    [ ! -e .claude/skills ]
 }
 
 @test "init skills writes six skills, links them into .agents and .claude only, and no rules" {
@@ -74,7 +76,7 @@ teardown() {
     [ ! -e .claude/rules ] && [ ! -e "$HOME/.claude/rules" ]
 }
 
-@test "init skills --update removes what an older meta installed for other agents, and only that" {
+@test "init skills --local --update removes what an older meta installed for other agents, and only that" {
     old_install
     # as an older meta left it: links in five more agent folders, two rules
     for dir in $OLD_AGENT_DIRS; do
@@ -93,7 +95,7 @@ teardown() {
     echo "my edit" >> .claude/rules/meta-workspace-discipline.md
     echo "my edit" >> .meta/skills/meta-exec/SKILL.md
 
-    run "$META_BIN" init skills --update
+    run "$META_BIN" init skills --local --update
     [ "$status" -eq 0 ]
     for dir in $OLD_AGENT_DIRS; do
         [ "$(ls "$dir/skills" | tr '\n' ' ')" = "$([ "$dir" = .grok ] && echo "meta-git mine " || echo "mine ")" ]
@@ -108,7 +110,7 @@ teardown() {
     # with no links left in it, a folder meta made goes
     rm -r .cursor/skills/mine
     for name in $SKILL_NAMES; do ln -s "../../.meta/skills/$name" ".cursor/skills/$name"; done
-    run "$META_BIN" init skills --force
+    run "$META_BIN" init skills --local --force
     [ "$status" -eq 0 ]
     [ ! -e .cursor/skills ] && [ -d .cursor ]
 }
@@ -449,26 +451,62 @@ EOF
     [[ "$output" == *"hooks are added when you run this inside a meta workspace"* ]]
 }
 
-@test "init skills --update takes an older meta's skills out of the workspace, keeping an edited one" {
+@test "init skills --local installs in the workspace, as older metas did, and nothing in the home folder" {
+    mkdir -p backend/src
+    cd backend/src
+    run "$META_BIN" init skills --local
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Installing in the workspace at $TEST_DIR (the nearest .meta.yaml)"* ]]
+    cd "$TEST_DIR"
+    for name in $SKILL_NAMES; do
+        [ -f ".meta/skills/$name/SKILL.md" ]
+        [ "$(readlink ".claude/skills/$name")" = "../../.meta/skills/$name" ]
+        [ "$(readlink ".agents/skills/$name")" = "../../.meta/skills/$name" ]
+    done
+    [ -f .claude/settings.json ]
+    [ -z "$(ls -A "$HOME")" ]
+    [ ! -e backend/.claude ]
+}
+
+@test "init skills --local and --remove-local refuse outside a meta workspace" {
+    rm .meta.yaml
+    for flag in --local --remove-local; do
+        run "$META_BIN" init skills $flag
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"No .meta.yaml in $TEST_DIR or any folder above it"* ]]
+        [ -z "$(ls -A .)" ]
+        [ -z "$(ls -A "$HOME")" ]
+    done
+    run "$META_BIN" init skills --remove-local --update
+    [ "$status" -eq 2 ]
+}
+
+@test "only init skills --remove-local takes meta's skills out of the workspace, keeping an edited one" {
     old_install
     echo "my edit" >> .meta/skills/meta-exec/SKILL.md
     mkdir -p .claude/skills/mine && echo mine > .claude/skills/mine/SKILL.md
     cp .claude/settings.json settings.before
+    find . | sort > tree.before
 
-    # without --update or --force it only says so
-    run "$META_BIN" init skills
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Skipped 15 skill file(s) and link(s) an older meta installed in $TEST_DIR"*"--update removes them"* ]]
-    [ -L .claude/skills/meta-git ] && [ -f .meta/skills/meta-git/SKILL.md ]
+    # a home install only says they are there, whatever the flag
+    for flag in '' --update --force; do
+        run "$META_BIN" init skills $flag
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"$TEST_DIR also holds 18 skill file(s) and link(s) of meta's"*"meta init skills --remove-local"* ]]
+        [ "$(find . | sort)" = "$(cat tree.before)" ]
+        [ "$(tail -1 .meta/skills/meta-exec/SKILL.md)" = "my edit" ]
+    done
+    for name in $SKILL_NAMES; do [ -f "$HOME/.claude/skills/$name/SKILL.md" ]; done
 
-    run "$META_BIN" --dry-run init skills --update
+    run "$META_BIN" --dry-run init skills --remove-local
     [ "$status" -eq 0 ]
     [[ "$output" == *"would remove $TEST_DIR/.meta/skills/meta-git/SKILL.md"* ]]
-    [ -L .claude/skills/meta-git ] && [ -f .meta/skills/meta-git/SKILL.md ]
+    [ "$(find . | sort)" = "$(cat tree.before)" ]
 
-    run "$META_BIN" init skills --update
+    run "$META_BIN" init skills --remove-local
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Kept $TEST_DIR/.meta/skills/meta-exec/SKILL.md (an older meta's skill, changed since"* ]]
+    [[ "$output" == *"Kept $TEST_DIR/.meta/skills/meta-exec/SKILL.md (changed since meta wrote it"* ]]
+    [[ "$output" == *"Removed 15 skill file(s) and link(s) of meta's from $TEST_DIR"* ]]
     [ "$(ls .meta/skills)" = meta-exec ]
     [ "$(ls .agents/skills)" = meta-exec ]
     [ "$(ls .claude/skills | tr '\n' ' ')" = "meta-exec mine " ]
@@ -477,13 +515,18 @@ EOF
     for name in $SKILL_NAMES; do [ -f "$HOME/.claude/skills/$name/SKILL.md" ]; done
 
     rm -r .meta/skills/meta-exec
-    run "$META_BIN" init skills --force
+    run "$META_BIN" init skills --remove-local
     [ "$status" -eq 0 ]
-    [ ! -e .meta ] && [ ! -e .agents/skills ]
+    [ ! -e .meta ]
+    [ ! -e .agents ]
     [ "$(ls .claude/skills)" = mine ]
+
+    run "$META_BIN" init skills --remove-local
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Nothing of meta's skills to remove in $TEST_DIR"* ]]
 }
 
-@test "init skills from a child repo installs once, in the workspace" {
+@test "init skills from a child repo adds the hooks once, in the workspace" {
     mkdir -p backend/src
     git -C backend init --quiet
     cd backend/src

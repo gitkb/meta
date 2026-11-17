@@ -1,6 +1,6 @@
 ---
 name: meta-exec
-description: Execute commands across all repos — parallel, filtered, dry-run modes.
+description: Execute commands across all repos — parallel, filtered, dry-run modes. Use only in a meta workspace (a .meta.yaml at or above the current folder).
 ---
 
 # Meta Exec Skill

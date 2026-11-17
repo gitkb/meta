@@ -1,6 +1,6 @@
 ---
 name: meta-safety
-description: Multi-repo safety discipline — precision operations, dependency checking, and efficiency tips.
+description: Multi-repo safety discipline — precision operations, dependency checking, and efficiency tips. Use only in a meta workspace (a .meta.yaml at or above the current folder).
 ---
 
 # Meta Safety Skill

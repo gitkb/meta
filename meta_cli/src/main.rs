@@ -300,19 +300,29 @@ struct InitArgs {
 #[derive(Subcommand)]
 enum InitCommands {
     /// Install meta's skills for every coding agent in your home folder, and Claude Code's
-    /// context hooks in this workspace
+    /// context hooks in the workspace you run it in
     #[command(
         after_help = "Examples:\n  meta init skills\n  meta init skills --update\n  \
+                            meta init skills --local\n  \
                             meta --dry-run init skills --force"
     )]
     Skills {
-        /// Refresh the skills, merge meta hooks into Claude Code's settings
+        /// Refresh the skills, merge meta hooks into the workspace's Claude Code settings
         #[arg(short, long)]
         force: bool,
 
-        /// Update the skills only, preserve settings
+        /// Refresh the skills; leave settings.json alone
         #[arg(short, long)]
         update: bool,
+
+        /// Install the skills in this workspace instead of your home folder, to be committed
+        #[arg(long, conflicts_with = "remove_local")]
+        local: bool,
+
+        /// Remove meta's skills from this workspace (an older meta's, or --local's); nothing
+        /// is installed
+        #[arg(long, conflicts_with_all = ["force", "update"])]
+        remove_local: bool,
     },
     #[command(external_subcommand)]
     Other(Vec<String>),
@@ -645,8 +655,21 @@ fn run_cli() -> Result<()> {
             )?
         }
         Some(Commands::Init(InitArgs {
-            command: InitCommands::Skills { force, update },
-        })) => init::init_skills(*force, *update, cli.mode(), cli.verbose)?,
+            command:
+                InitCommands::Skills {
+                    force,
+                    update,
+                    local,
+                    remove_local,
+                },
+        })) => {
+            let place = match (*local, *remove_local) {
+                (_, true) => init::Place::RemoveLocal,
+                (true, _) => init::Place::Local,
+                _ => init::Place::Home,
+            };
+            init::init_skills(*force, *update, place, cli.mode(), cli.verbose)?
+        }
         Some(Commands::Init(InitArgs {
             command: InitCommands::Other(words),
         })) => {

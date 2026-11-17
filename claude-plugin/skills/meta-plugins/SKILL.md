@@ -1,6 +1,6 @@
 ---
 name: meta-plugins
-description: How the meta plugin system intercepts and enhances commands.
+description: How the meta plugin system intercepts and enhances commands. Use only in a meta workspace (a .meta.yaml at or above the current folder).
 ---
 
 # Meta Plugins Skill

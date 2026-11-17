@@ -1,6 +1,6 @@
 ---
 name: meta-workspace
-description: Understanding and operating in meta repository workspaces with .meta.yaml configuration.
+description: Understanding and operating in meta repository workspaces with .meta.yaml configuration. Use only in a meta workspace (a .meta.yaml at or above the current folder).
 ---
 
 # Meta Workspace Skill
@@ -33,7 +33,7 @@ For what depends on what, read `depends_on` and `provides` in `.meta.yaml`, or a
 
 Run `meta git status` to see the current state of every repo at this level (`meta -r git status`: the meta repos nested below it too; `meta -A git status`: the whole workspace, from anywhere).
 
-Keep `.meta/skills`, `.agents` and `.claude` committed in the root repo (`meta init skills` writes them, untracked), or a worktree set made from `origin/main` won't have this guidance.
+`meta init skills` installs this guidance in your home folder, for every workspace and worktree set (`--local`: in the workspace instead, to be committed); rerun it with `--update` after upgrading meta.
 
 ## Why This Matters
 

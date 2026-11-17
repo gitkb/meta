@@ -1,6 +1,6 @@
 ---
 name: meta-git
-description: Git operations across multiple repositories — status, commit, push, pull, multi-commit.
+description: Git operations across multiple repositories — status, commit, push, pull, multi-commit. Use only in a meta workspace (a .meta.yaml at or above the current folder).
 ---
 
 # Meta Git Skill

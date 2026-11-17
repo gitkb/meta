@@ -1,6 +1,6 @@
 ---
 name: meta-worktree
-description: Create, use and remove isolated multi-repo git worktree sets with `meta git worktree`. Use before changing code in a meta workspace, to continue a PR, or to test a tag or SHA in isolation.
+description: Create, use and remove isolated multi-repo git worktree sets with `meta git worktree`. Use only in a meta workspace (a .meta.yaml at or above the current folder), before changing code, to continue a PR, or to test a tag or SHA in isolation.
 ---
 
 # Meta Worktree Skill

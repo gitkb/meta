@@ -40,3 +40,8 @@ pub fn meta_dir() -> anyhow::Result<PathBuf> {
     })?;
     Ok(home.join(META_DIR_NAME))
 }
+
+/// The user's home directory, where `meta init skills` installs.
+pub fn home_dir() -> anyhow::Result<PathBuf> {
+    dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot find your home directory"))
+}

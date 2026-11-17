@@ -491,7 +491,7 @@ See [docs/mcp_server.md](docs/mcp_server.md) for full documentation.
 meta init skills
 ```
 
-Installs purpose-built skills that teach coding agents how to work with multi-repo codebases — using `meta git` instead of `git`, committing before risky changes, filtering by tags, and understanding plugin interception. It writes only inside the workspace, in the folder with its `.meta.yaml`: the skills go in `.meta/skills/` and are linked into `.agents/skills/` (Codex, Cursor, OpenCode, Copilot, Gemini CLI and others) and `.claude/skills/` (Claude Code); `meta --dry-run init skills` shows what it would write. For Claude Code it also adds context hooks to `.claude/settings.json`, and prints the `claude plugin` commands that install the same skills for all your projects. See [docs/agent_skills.md](docs/agent_skills.md).
+Installs purpose-built skills that teach coding agents how to work with multi-repo codebases — using `meta git` instead of `git`, committing before risky changes, filtering by tags, and understanding plugin interception. The skills are installed once, in your home folder, for every project: they go in `~/.meta/skills/` and are linked into `~/.agents/skills/` (Codex and the other agents that read `.agents/skills`) and `~/.claude/skills/` (Claude Code); `meta --dry-run init skills` shows what it would write. Run inside a workspace, it also adds Claude Code's context hooks to that workspace's `.claude/settings.json`, and with `--update` removes the copies of the skills an older meta installed there. See [docs/agent_skills.md](docs/agent_skills.md).
 
 ### JSON Output
 

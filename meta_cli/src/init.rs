@@ -1,5 +1,5 @@
-//! `meta init skills`: meta's skills for every coding agent in a workspace,
-//! and Claude Code's context hooks.
+//! `meta init skills`: meta's skills for every coding agent, in the user's
+//! home folder, and Claude Code's context hooks in a workspace.
 
 use anyhow::{Context, Result};
 use colored::*;
@@ -176,54 +176,42 @@ impl Init {
     }
 }
 
-/// Install the skills and Claude Code's hooks at the root of the workspace the current directory is in: the nearest `.meta.yaml` at or
-/// above it.
+/// Install the skills in the user's home folder and, inside a meta workspace
+/// (the nearest `.meta.yaml` at or above the current directory), Claude
+/// Code's hooks in that workspace.
 fn install_claude_integration(force: bool, update: bool, init: &Init) -> Result<()> {
+    let home = meta_core::home_dir()?;
     let current_dir = std::env::current_dir()?;
-    let Some(config) = config::find_meta_config(&current_dir, None)? else {
-        anyhow::bail!(
-            "No .meta.yaml in {} or any folder above it. `meta init skills` sets up \
-             agents in a meta workspace; run it inside one.",
-            escape_path(&current_dir)
-        );
-    };
-    let root = config.parent().unwrap_or(&current_dir);
-    if root != current_dir {
-        outln!(
-            "Installing in the workspace at {} (the nearest .meta.yaml)",
-            escape_path(root)
-        )?;
-    }
-    install_claude_integration_to(root, force, update, init)
+    let workspace = config::find_meta_config(&current_dir, None)?
+        .map(|config| config.parent().unwrap_or(&current_dir).to_path_buf());
+    install_claude_integration_to(&home, workspace.as_deref(), force, update, init)
 }
 
-/// Install the skills and Claude Code's hooks into a specific directory
+/// Install the skills under `home` and Claude Code's hooks in `workspace`,
+/// and take out of `workspace` the skills an older meta installed there.
 fn install_claude_integration_to(
-    target_dir: &Path,
+    home: &Path,
+    workspace: Option<&Path>,
     force: bool,
     update: bool,
     init: &Init,
 ) -> Result<()> {
-    let claude_dir = target_dir.join(".claude");
     let preview = init.mode.is_preview();
     if preview {
-        outln!("[DRY RUN] In {}:", escape_path(target_dir))?;
+        outln!("[DRY RUN] In {}:", escape_path(home))?;
     }
 
     // Build and validate settings before writing any skills.
-    let settings_path = claude_dir.join("settings.json");
-    let settings_plan = if update {
-        None
-    } else {
-        Some(prepare_settings(&settings_path, init)?)
+    let settings_path = workspace.map(|dir| dir.join(".claude").join("settings.json"));
+    let settings_plan = match &settings_path {
+        Some(path) if !update => Some(prepare_settings(path, init)?),
+        _ => None,
     };
 
     // --force or --update: overwrite; default: skip existing
     let overwrite_content = force || update;
-    let mut skipped = remove_old_files(&claude_dir.join("skills"), "", overwrite_content, init)?;
-    skipped += remove_old_files(&claude_dir.join("rules"), "rules/", overwrite_content, init)?;
     let skills = install_skills(
-        target_dir,
+        home,
         "meta",
         SKILLS,
         AGENT_SKILL_DIRS,
@@ -231,35 +219,56 @@ fn install_claude_integration_to(
         init,
     )?;
     let mut installed = skills.written;
-    skipped += skills.skipped;
+    let mut skipped = skills.skipped;
+    if let Some(workspace) = workspace {
+        if preview {
+            outln!("[DRY RUN] In {}:", escape_path(workspace))?;
+        }
+        let claude_dir = workspace.join(".claude");
+        skipped += remove_old_files(&claude_dir.join("skills"), "", overwrite_content, init)?;
+        skipped += remove_old_files(&claude_dir.join("rules"), "rules/", overwrite_content, init)?;
+        remove_workspace_skills(home, workspace, "meta", SKILLS, overwrite_content, init)?;
+    }
 
     // --update leaves settings untouched; --force uses the same merge as default.
-    if update {
-        outln!("Skipped .claude/settings.json (--update preserves settings)")?;
-        let old_guard = fs::read_to_string(&settings_path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .is_some_and(|mut settings| upgrade_guard(&mut settings));
-        if old_guard {
-            outln!(
-                "{} Its PreToolUse hook runs any `agent` on PATH, and blocks every Bash call when \
-                 one fails: run `meta init skills` (without --update) to make it run only \
-                 gitkb's agent",
-                "•".yellow()
-            )?;
+    match &settings_path {
+        None if !update => outln!(
+            "No .meta.yaml here or above: Claude Code's hooks are added when you run this inside a meta workspace"
+        )?,
+        None => {}
+        Some(settings_path) if update => {
+            outln!("Skipped .claude/settings.json (--update preserves settings)")?;
+            let old_guard = fs::read_to_string(settings_path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                .is_some_and(|mut settings| upgrade_guard(&mut settings));
+            if old_guard {
+                outln!(
+                    "{} Its PreToolUse hook runs any `agent` on PATH, and blocks every Bash call when \
+                     one fails: run `meta init skills` (without --update) to make it run only \
+                     gitkb's agent",
+                    "•".yellow()
+                )?;
+            }
         }
-    } else if let Some(plan) = settings_plan {
-        if let Some(content) = plan.content {
-            init.write_settings(&settings_path, &content)?;
-            installed += 1;
+        Some(settings_path) => {
+            if let Some(plan) = settings_plan {
+                if let Some(content) = plan.content {
+                    init.create_dir_all(settings_path.parent().unwrap_or(settings_path))?;
+                    init.write_settings(settings_path, &content)?;
+                    installed += 1;
+                }
+                outln!("{} {}", plan.message, escape_path(settings_path))?;
+            }
         }
-        outln!("{} {}", plan.message, escape_path(&settings_path))?;
     }
-    let present_hooks = hooks_in(&settings_path);
+    let present_hooks = settings_path.as_deref().map(hooks_in).unwrap_or_default();
     // Without `agent`, Claude Code would run a hook that doesn't exist; one
     // already in the settings stays
-    let guard_skipped =
-        !init.guard && !update && !present_hooks.iter().any(|key| key == "PreToolUse");
+    let guard_skipped = settings_path.is_some()
+        && !init.guard
+        && !update
+        && !present_hooks.iter().any(|key| key == "PreToolUse");
     let guard_note = || -> Result<()> {
         outln!(
             "{} Skipped the PreToolUse hook `agent guard`: gitkb's agent CLI is not installed (an `agent` on PATH that isn't gitkb's doesn't count).",
@@ -284,6 +293,11 @@ fn install_claude_integration_to(
     }
 
     // Print summary
+    let home_agent_dirs = AGENT_SKILL_DIRS
+        .iter()
+        .map(|dir| format!("~/{dir}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     outln!()?;
     if installed > 0 {
         outln!("{} Installed {} file(s)", "✓".green(), installed)?;
@@ -293,7 +307,7 @@ fn install_claude_integration_to(
             "{} Linked {} skill folder(s) into {}",
             "✓".green(),
             skills.placed,
-            AGENT_SKILL_DIRS.join(", ")
+            home_agent_dirs
         )?;
     }
     if skills.copied > 0 {
@@ -316,11 +330,12 @@ fn install_claude_integration_to(
 
     if installed > 0 {
         outln!()?;
-        outln!("Agents now get meta's skills in this meta repository:")?;
+        outln!("Agents now get meta's skills in every project of yours:")?;
         outln!(
-            "  Skills:  .meta/skills/ ({} skills), linked into {}",
+            "  Skills:  {} ({} skills), linked into {}",
+            escape_path(&home.join(".meta").join("skills")),
             SKILLS.len(),
-            AGENT_SKILL_DIRS.join(", ")
+            home_agent_dirs
         )?;
         if !present_hooks.is_empty() {
             outln!(
@@ -333,11 +348,115 @@ fn install_claude_integration_to(
         guard_note()?;
     }
 
-    outln!()?;
-    outln!("For global Claude plugin access, run:")?;
-    outln!("  claude plugin marketplace add gitkb/claude-plugins")?;
-    outln!("  claude plugin install meta@gitkb")?;
+    Ok(())
+}
 
+/// Take out of `workspace` the skills an older meta installed there (it
+/// installed per workspace; the skills are now in `home`): with `overwrite`,
+/// its links in every agent folder, then each `.<tool>/skills/<name>/SKILL.md`
+/// that is byte for byte one meta wrote. A skill file changed since is kept
+/// with its links, and named; without `overwrite`, what it would remove is
+/// counted in one line.
+fn remove_workspace_skills(
+    home: &Path,
+    workspace: &Path,
+    tool: &str,
+    skills: &[(&str, &str)],
+    overwrite: bool,
+    init: &Init,
+) -> Result<()> {
+    let tool_dir = PathBuf::from(format!(".{tool}")).join("skills");
+    let marker = format!(".{tool}-skill-copy");
+    let real_root = fs::canonicalize(workspace)
+        .with_context(|| format!("Failed to resolve {}", escape_path(workspace)))?;
+    // a `.meta.yaml` in the home folder: what is there is what was just installed
+    let is_home = fs::canonicalize(home).is_ok_and(|home| home == real_root);
+    // (folder, whether agents still read it: an edited skill keeps its links there)
+    let agent_dirs = OLD_AGENT_SKILL_DIRS.iter().map(|dir| (dir, false)).chain(
+        AGENT_SKILL_DIRS
+            .iter()
+            .filter(|_| !is_home)
+            .map(|dir| (dir, true)),
+    );
+    let mut left = 0;
+    let mut kept = Vec::new();
+    for (name, _) in skills.iter().filter(|_| !is_home) {
+        let path = workspace.join(&tool_dir).join(name).join("SKILL.md");
+        if path.exists() && !shipped(&format!("{name}/SKILL.md"), &blob_id(workspace, &path)?) {
+            outln!(
+                "{} {} (an older meta's skill, changed since; meta's skills are now in {}: \
+                 delete it once its changes are kept elsewhere)",
+                "Kept".yellow(),
+                escape_path(&path),
+                escape_path(&home.join(&tool_dir))
+            )?;
+            kept.push(*name);
+        }
+    }
+    for (agent_dir, read) in agent_dirs {
+        let skills_dir = workspace.join(agent_dir);
+        if !skills_dir.is_dir() {
+            continue;
+        }
+        let target_dir = link_target(&skills_dir, agent_dir, &real_root, &tool_dir)?;
+        let mut removed = false;
+        for (name, _) in skills
+            .iter()
+            .filter(|(name, _)| !(read && kept.contains(name)))
+        {
+            let link = skills_dir.join(name);
+            let owned = match skill_entry(&link, &target_dir.join(name), &marker) {
+                SkillEntry::Linked => false,
+                SkillEntry::Owned if copy_is_meta_s(workspace, &tool_dir, name, &link)? => true,
+                _ => continue,
+            };
+            if !overwrite {
+                left += 1;
+                continue;
+            }
+            match owned {
+                true => init.remove_owned(&link, &marker)?,
+                false => init.remove_file(&link)?,
+            }
+            removed = true;
+        }
+        // the folder meta made for them, once empty
+        if removed && !init.mode.is_preview() {
+            let _ = fs::remove_dir(&skills_dir);
+        }
+    }
+    for (name, _) in skills
+        .iter()
+        .filter(|(name, _)| !is_home && !kept.contains(name))
+    {
+        let dir = workspace.join(&tool_dir).join(name);
+        let path = dir.join("SKILL.md");
+        if !path.exists() {
+            continue;
+        }
+        if !overwrite {
+            left += 1;
+            continue;
+        }
+        init.remove_file(&path)?;
+        if !init.mode.is_preview() {
+            let _ = fs::remove_dir(&dir);
+        }
+    }
+    if left > 0 {
+        outln!(
+            "{} {} skill file(s) and link(s) an older meta installed in {} (meta's skills are \
+             now in {}; --update removes them)",
+            "Skipped".yellow(),
+            left,
+            escape_path(workspace),
+            escape_path(&home.join(&tool_dir))
+        )?;
+    } else if overwrite && !is_home && !init.mode.is_preview() {
+        // the folders meta made, once empty
+        let _ = fs::remove_dir(workspace.join(&tool_dir));
+        let _ = fs::remove_dir(workspace.join(format!(".{tool}")));
+    }
     Ok(())
 }
 
@@ -456,8 +575,7 @@ enum SkillEntry {
 
 /// Install `skills` (name, `SKILL.md` content) as `.<tool>/skills/<name>/SKILL.md` under
 /// `root` and link each into the agent skills folders, as atc and git-kb do:
-/// `.claude/skills/<name> -> ../../.<tool>/skills/<name>`. With `overwrite`,
-/// the tool's own entries in [`OLD_AGENT_SKILL_DIRS`] are removed.
+/// `.claude/skills/<name> -> ../../.<tool>/skills/<name>`.
 ///
 /// Without `overwrite`, existing files and folders are kept. With it, the tool's files
 /// are rewritten and its own entries in agent folders are replaced by links.
@@ -527,31 +645,6 @@ fn install_skills_with(
         init.create_dir_all(&root.join(tool_dir.join(name)))?;
         init.write_file(&path, content)?;
         report.written += 1;
-    }
-
-    // what an older meta linked into other agents' folders
-    for agent_dir in OLD_AGENT_SKILL_DIRS.iter().filter(|_| overwrite) {
-        let skills_dir = root.join(agent_dir);
-        if !skills_dir.is_dir() {
-            continue;
-        }
-        let target_dir = link_target(&skills_dir, agent_dir, &real_root, &tool_dir)?;
-        let mut removed = false;
-        for (name, _) in skills {
-            let link = skills_dir.join(name);
-            match skill_entry(&link, &target_dir.join(name), &marker) {
-                SkillEntry::Linked => init.remove_file(&link)?,
-                SkillEntry::Owned if copy_is_meta_s(root, &tool_dir, name, &link)? => {
-                    init.remove_owned(&link, &marker)?
-                }
-                _ => continue,
-            }
-            removed = true;
-        }
-        // the folder meta made for them, once empty
-        if removed && !init.mode.is_preview() {
-            let _ = fs::remove_dir(&skills_dir);
-        }
     }
 
     for agent_dir in agent_dirs {
@@ -1084,7 +1177,8 @@ mod tests {
             let before = snapshot(dir.path());
             for force in [false, true] {
                 let err =
-                    install_claude_integration_to(dir.path(), force, false, &RUN).unwrap_err();
+                    install_claude_integration_to(dir.path(), Some(dir.path()), force, false, &RUN)
+                        .unwrap_err();
                 let message = format!("{err:#}");
                 assert!(message.contains(&escape_path(&settings)), "{message}");
                 assert!(message.contains(key), "{message}");
@@ -1104,9 +1198,9 @@ mod tests {
         fs::write(skills.join("meta-exec.md"), "# Meta Exec Skill\nmy notes\n").unwrap();
         fs::write(skills.join("my-skill.md"), old).unwrap();
         // without --update or --force, nothing of the user's is touched
-        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, false, &RUN).unwrap();
         assert!(skills.join("meta-discover.md").exists());
-        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, true, &RUN).unwrap();
         assert!(!skills.join("meta-discover.md").exists());
         // changed since, or not a name meta used: kept
         assert!(skills.join("meta-exec.md").exists());
@@ -1114,7 +1208,7 @@ mod tests {
         // as a Windows checkout writes it, with CRLF line endings: the same file
         let crlf = old.replace("\r\n", "\n").replace('\n', "\r\n");
         fs::write(skills.join("meta-discover.md"), crlf).unwrap();
-        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, true, &RUN).unwrap();
         assert!(!skills.join("meta-discover.md").exists());
     }
 
@@ -1133,12 +1227,13 @@ mod tests {
     #[test]
     fn update_keeps_a_skill_the_user_edited() {
         let dir = tempdir().unwrap();
-        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, false, &RUN).unwrap();
         let skill = dir.path().join(".meta/skills/meta-workspace/SKILL.md");
         let mine = format!("{}\nmy own note\n", fs::read_to_string(&skill).unwrap());
         fs::write(&skill, &mine).unwrap();
         for force in [false, true] {
-            install_claude_integration_to(dir.path(), force, !force, &RUN).unwrap();
+            install_claude_integration_to(dir.path(), Some(dir.path()), force, !force, &RUN)
+                .unwrap();
             assert_eq!(fs::read_to_string(&skill).unwrap(), mine);
         }
         // one meta wrote, of an older version, is replaced
@@ -1147,7 +1242,7 @@ mod tests {
             "meta-git/SKILL.md",
             &blob_id(dir.path(), &other).unwrap()
         ));
-        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, true, &RUN).unwrap();
         assert!(other.exists());
     }
 
@@ -1291,13 +1386,85 @@ mod tests {
     }
 
     #[test]
+    fn skills_go_in_the_home_folder_and_only_hooks_in_the_workspace() {
+        let (home, ws) = (tempdir().unwrap(), tempdir().unwrap());
+        install_claude_integration_to(home.path(), Some(ws.path()), false, false, &RUN).unwrap();
+        for (name, content) in SKILLS {
+            let installed = home.path().join(".meta/skills").join(name).join("SKILL.md");
+            assert_eq!(fs::read_to_string(installed).unwrap(), *content);
+            assert_linked(home.path(), ".claude/skills", name);
+            assert_linked(home.path(), ".agents/skills", name);
+        }
+        assert!(!home.path().join(".claude/settings.json").exists());
+        let entries: Vec<_> = fs::read_dir(ws.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, [".claude"], "only the hooks go in the workspace");
+        let settings = fs::read_to_string(ws.path().join(".claude/settings.json")).unwrap();
+        assert!(settings.contains(CONTEXT_COMMAND));
+        assert!(!ws.path().join(".claude/skills").exists());
+    }
+
+    #[test]
+    fn outside_a_workspace_only_the_skills_are_installed() {
+        let home = tempdir().unwrap();
+        for (force, update) in [(false, false), (true, false), (false, true)] {
+            install_claude_integration_to(home.path(), None, force, update, &RUN).unwrap();
+            assert_linked(home.path(), ".claude/skills", "meta-git");
+            assert!(!home.path().join(".claude/settings.json").exists());
+        }
+    }
+
+    #[test]
+    fn update_takes_an_older_meta_s_skills_out_of_the_workspace() {
+        let (home, ws) = (tempdir().unwrap(), tempdir().unwrap());
+        let ws = ws.path();
+        // as an older meta installed them: in the workspace
+        install_claude_integration_to(ws, Some(ws), false, false, &RUN).unwrap();
+        fs::write(ws.join(".meta/skills/meta-git/SKILL.md"), OLD_GIT_SKILL).unwrap();
+        let edited = ws.join(".meta/skills/meta-exec/SKILL.md");
+        fs::write(&edited, "my edit").unwrap();
+        let mine = ws.join(".claude/skills/mine/SKILL.md");
+        fs::create_dir_all(mine.parent().unwrap()).unwrap();
+        fs::write(&mine, "mine").unwrap();
+
+        // without --update or --force nothing in the workspace is removed
+        install_claude_integration_to(home.path(), Some(ws), false, false, &RUN).unwrap();
+        assert_linked(ws, ".claude/skills", "meta-git");
+        assert_linked(home.path(), ".claude/skills", "meta-git");
+
+        install_claude_integration_to(home.path(), Some(ws), false, true, &RUN).unwrap();
+        for (name, _) in SKILLS.iter().filter(|(name, _)| *name != "meta-exec") {
+            assert!(!ws.join(".meta/skills").join(name).exists(), "{name}");
+            for agent_dir in AGENT_SKILL_DIRS {
+                assert!(fs::symlink_metadata(ws.join(agent_dir).join(name)).is_err());
+            }
+        }
+        // an edited skill stays, loadable; so does the user's own
+        assert_eq!(fs::read_to_string(&edited).unwrap(), "my edit");
+        assert_linked(ws, ".claude/skills", "meta-exec");
+        assert_linked(ws, ".agents/skills", "meta-exec");
+        assert_eq!(fs::read_to_string(&mine).unwrap(), "mine");
+        assert!(ws.join(".claude/settings.json").exists());
+
+        // once the edit is moved away, the folders meta made go too
+        fs::remove_file(&edited).unwrap();
+        fs::remove_dir(edited.parent().unwrap()).unwrap();
+        install_claude_integration_to(home.path(), Some(ws), true, false, &RUN).unwrap();
+        assert!(!ws.join(".meta").exists());
+        assert!(!ws.join(".agents/skills").exists());
+        assert!(ws.join(".claude/skills/mine").exists());
+    }
+
+    #[test]
     fn test_install_creates_skills_and_settings() {
         let dir = tempdir().unwrap();
 
         // Create a .meta.yaml file so it looks like a meta repo
         fs::write(dir.path().join(".meta.yaml"), "projects: {}\n").unwrap();
 
-        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, false, &RUN).unwrap();
 
         let claude_dir = dir.path().join(".claude");
 
@@ -1345,7 +1512,7 @@ mod tests {
         let existing_settings = claude_dir.join("settings.json");
         fs::write(&existing_settings, r#"{"custom": true}"#).unwrap();
 
-        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, false, &RUN).unwrap();
 
         // Should not overwrite the skill
         let skill_content = fs::read_to_string(&existing_skill).unwrap();
@@ -1378,7 +1545,7 @@ mod tests {
         let existing_settings = claude_dir.join("settings.json");
         fs::write(&existing_settings, r#"{"custom": true}"#).unwrap();
 
-        install_claude_integration_to(dir.path(), true, false, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), true, false, &RUN).unwrap();
 
         // Should overwrite with embedded content
         let skill_content = fs::read_to_string(&existing_skill).unwrap();
@@ -1415,7 +1582,7 @@ mod tests {
         .unwrap();
 
         // Use --update flag
-        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, true, &RUN).unwrap();
 
         // Skills should be updated
         let skill_content = fs::read_to_string(&existing_skill).unwrap();
@@ -1467,13 +1634,13 @@ mod tests {
         fs::write(copy.join("SKILL.md"), OLD_GIT_SKILL).unwrap();
         fs::write(copy.join(".meta-skill-copy"), "").unwrap();
 
-        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, false, &RUN).unwrap();
         assert_eq!(
             fs::read_to_string(copy.join("SKILL.md")).unwrap(),
             OLD_GIT_SKILL
         );
 
-        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, true, &RUN).unwrap();
         assert_linked(dir.path(), ".claude/skills", "meta-git");
     }
 
@@ -1488,7 +1655,8 @@ mod tests {
         fs::write(skills_dir.join("meta-exec"), "mine").unwrap();
 
         for (force, update) in [(false, true), (true, false)] {
-            install_claude_integration_to(dir.path(), force, update, &RUN).unwrap();
+            install_claude_integration_to(dir.path(), Some(dir.path()), force, update, &RUN)
+                .unwrap();
             assert_eq!(
                 fs::read_to_string(skills_dir.join("meta-git/SKILL.md")).unwrap(),
                 "mine"
@@ -1521,7 +1689,8 @@ mod tests {
             fs::write(other.join("SKILL.md"), text).unwrap();
 
             for (force, update) in [(false, true), (true, false)] {
-                install_claude_integration_to(dir.path(), force, update, &RUN).unwrap();
+                install_claude_integration_to(dir.path(), Some(dir.path()), force, update, &RUN)
+                    .unwrap();
                 assert!(!fs::symlink_metadata(&other).unwrap().is_symlink());
                 assert_eq!(fs::read_to_string(other.join("SKILL.md")).unwrap(), text);
             }
@@ -1556,6 +1725,7 @@ mod tests {
                 let destination = fs::read_link(link).unwrap();
                 install_claude_integration_to(
                     dir.path(),
+                    Some(dir.path()),
                     force,
                     false,
                     &Init {
@@ -1566,9 +1736,11 @@ mod tests {
                 .unwrap();
                 assert_eq!(fs::read_to_string(&target).unwrap(), original);
                 assert_eq!(fs::read_link(link).unwrap(), destination);
-                install_claude_integration_to(dir.path(), force, true, &RUN).unwrap();
+                install_claude_integration_to(dir.path(), Some(dir.path()), force, true, &RUN)
+                    .unwrap();
                 assert_eq!(fs::read_to_string(&target).unwrap(), original);
-                install_claude_integration_to(dir.path(), force, false, &RUN).unwrap();
+                install_claude_integration_to(dir.path(), Some(dir.path()), force, false, &RUN)
+                    .unwrap();
                 let merged: Value =
                     serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
                 assert_eq!(installed_hooks(&merged).len(), 3);
@@ -1590,7 +1762,8 @@ mod tests {
                         Path::new("settings.json")
                     );
                 }
-                install_claude_integration_to(dir.path(), force, false, &RUN).unwrap();
+                install_claude_integration_to(dir.path(), Some(dir.path()), force, false, &RUN)
+                    .unwrap();
                 assert_eq!(
                     serde_json::from_str::<Value>(&fs::read_to_string(&target).unwrap()).unwrap(),
                     merged
@@ -1609,7 +1782,7 @@ mod tests {
         let other = dir.path().join(".agents/skills/meta-exec");
         fs::write(&other, "../../.other/meta-exec").unwrap();
 
-        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, true, &RUN).unwrap();
 
         assert_linked(dir.path(), ".agents/skills", "meta-git");
         assert_eq!(fs::read_to_string(other).unwrap(), "../../.other/meta-exec");
@@ -1654,7 +1827,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(report.copied, 0);
-        install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, true, &RUN).unwrap();
         assert_linked(dir.path(), ".claude/skills", "meta-git");
     }
 
@@ -1700,7 +1873,8 @@ mod tests {
             symlink_dir(&target, &link).unwrap();
         }
         for update in [false, true] {
-            install_claude_integration_to(dir.path(), false, update, &RUN).unwrap();
+            install_claude_integration_to(dir.path(), Some(dir.path()), false, update, &RUN)
+                .unwrap();
             for agent in AGENT_SKILL_DIRS {
                 let folder = dir.path().join(agent);
                 assert!(fs::symlink_metadata(&folder).unwrap().is_symlink());
@@ -1741,9 +1915,10 @@ mod tests {
             fs::write(&file, OLD_GIT_SKILL).unwrap();
             fs::create_dir_all(link.parent().unwrap()).unwrap();
             symlink_dir(&target, &link).unwrap();
-            install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
+            install_claude_integration_to(dir.path(), Some(dir.path()), false, false, &RUN)
+                .unwrap();
             assert_eq!(fs::read_to_string(&file).unwrap(), OLD_GIT_SKILL);
-            install_claude_integration_to(dir.path(), false, true, &RUN).unwrap();
+            install_claude_integration_to(dir.path(), Some(dir.path()), false, true, &RUN).unwrap();
             assert_eq!(fs::read_to_string(&file).unwrap(), skill("meta-git"));
             assert_eq!(fs::read_link(&link).unwrap(), target);
         }
@@ -1765,7 +1940,8 @@ mod tests {
             symlink_dir(&target, skills.join("meta-git")).unwrap();
         }
         for (force, update) in [(false, false), (true, false), (false, true)] {
-            install_claude_integration_to(dir.path(), force, update, &RUN).unwrap();
+            install_claude_integration_to(dir.path(), Some(dir.path()), force, update, &RUN)
+                .unwrap();
             for agent in AGENT_SKILL_DIRS {
                 let target = other.path().join(agent);
                 assert_eq!(
@@ -1791,7 +1967,9 @@ mod tests {
         let link = dir.path().join(".claude/settings.json");
         symlink_dir(&target, &link).unwrap();
         for force in [false, true] {
-            let err = install_claude_integration_to(dir.path(), force, false, &RUN).unwrap_err();
+            let err =
+                install_claude_integration_to(dir.path(), Some(dir.path()), force, false, &RUN)
+                    .unwrap_err();
             assert!(format!("{err:#}").contains("Invalid JSON"));
             assert_eq!(fs::read_to_string(&target).unwrap(), "{invalid json");
             assert_eq!(fs::read_link(&link).unwrap(), target);
@@ -1823,7 +2001,7 @@ mod tests {
             mode: ExecutionMode::Preview,
             ..RUN
         };
-        install_claude_integration_to(dir.path(), true, false, &preview).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), true, false, &preview).unwrap();
         assert_eq!(fs::read_to_string(&settings).unwrap(), "{}");
         assert_eq!(fs::read_dir(other.path()).unwrap().count(), 1);
         assert_eq!(
@@ -1834,7 +2012,8 @@ mod tests {
         );
         // a folder that leads nowhere is an error, as for `mkdir -p`, named;
         // the links stay as they are
-        let err = install_claude_integration_to(dir.path(), true, false, &RUN).unwrap_err();
+        let err = install_claude_integration_to(dir.path(), Some(dir.path()), true, false, &RUN)
+            .unwrap_err();
         assert!(format!("{err:#}").contains("Failed to create"), "{err:#}");
         for rel in [".claude/rules", ".claude/skills", ".agents/skills"] {
             assert_eq!(
@@ -1925,7 +2104,7 @@ mod tests {
         .unwrap();
 
         fs::write(dir.path().join(".meta.yaml"), "projects: {}\n").unwrap();
-        install_claude_integration_to(dir.path(), false, false, &RUN).unwrap();
+        install_claude_integration_to(dir.path(), Some(dir.path()), false, false, &RUN).unwrap();
 
         // settings.local.json should be untouched
         let local_content = fs::read_to_string(&local_settings).unwrap();

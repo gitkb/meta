@@ -299,7 +299,8 @@ struct InitArgs {
 
 #[derive(Subcommand)]
 enum InitCommands {
-    /// Install meta's skills for every coding agent, and Claude Code's context hooks
+    /// Install meta's skills for every coding agent in your home folder, and Claude Code's
+    /// context hooks in this workspace
     #[command(
         after_help = "Examples:\n  meta init skills\n  meta init skills --update\n  \
                             meta --dry-run init skills --force"

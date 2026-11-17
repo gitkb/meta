@@ -35,6 +35,11 @@ EOF
     cd "$TEST_DIR"
 }
 
+# The skills as an older meta installed them: in the workspace
+old_install() {
+    HOME="$TEST_DIR" "$META_BIN" init skills > /dev/null
+}
+
 teardown() {
     cd /
     rm -rf "$TEST_DIR" "$STUB_DIR"
@@ -45,9 +50,11 @@ teardown() {
 @test "init skills creates skills directories" {
     run "$META_BIN" init skills
     [ "$status" -eq 0 ]
-    [ -d ".meta/skills" ]
-    [ -d ".claude/skills" ]
-    [ -d ".agents/skills" ]
+    [ -d "$HOME/.meta/skills" ]
+    [ -d "$HOME/.claude/skills" ]
+    [ -d "$HOME/.agents/skills" ]
+    # nothing of the skills in the workspace
+    [ ! -e .meta ] && [ ! -e .agents ] && [ ! -e .claude/skills ]
 }
 
 @test "init skills writes six skills, links them into .agents and .claude only, and no rules" {
@@ -55,21 +62,20 @@ teardown() {
     run "$META_BIN" init skills
     [ "$status" -eq 0 ]
     for name in $SKILL_NAMES; do
-        [ -f ".meta/skills/$name/SKILL.md" ] && [ ! -L ".meta/skills/$name/SKILL.md" ]
-        [ "$(head -2 ".meta/skills/$name/SKILL.md")" = "$(printf -- '---\nname: %s' "$name")" ]
+        [ -f "$HOME/.meta/skills/$name/SKILL.md" ] && [ ! -L "$HOME/.meta/skills/$name/SKILL.md" ]
+        [ "$(head -2 "$HOME/.meta/skills/$name/SKILL.md")" = "$(printf -- '---\nname: %s' "$name")" ]
         for agent in .agents .claude; do
-            [ "$(readlink "$agent/skills/$name")" = "../../.meta/skills/$name" ]
-            [ -f "$agent/skills/$name/SKILL.md" ]
+            [ "$(readlink "$HOME/$agent/skills/$name")" = "../../.meta/skills/$name" ]
+            [ -f "$HOME/$agent/skills/$name/SKILL.md" ]
         done
-        [ ! -e ".claude/skills/$name.md" ]
+        [ ! -e "$HOME/.claude/skills/$name.md" ]
     done
-    for dir in $OLD_AGENT_DIRS; do [ -z "$(ls -A "$dir")" ]; done
-    [ ! -e .claude/rules ]
+    for dir in $OLD_AGENT_DIRS; do [ -z "$(ls -A "$dir")" ] && [ ! -e "$HOME/$dir" ]; done
+    [ ! -e .claude/rules ] && [ ! -e "$HOME/.claude/rules" ]
 }
 
 @test "init skills --update removes what an older meta installed for other agents, and only that" {
-    run "$META_BIN" init skills
-    [ "$status" -eq 0 ]
+    old_install
     # as an older meta left it: links in five more agent folders, two rules
     for dir in $OLD_AGENT_DIRS; do
         mkdir -p "$dir/skills"
@@ -108,13 +114,16 @@ teardown() {
 }
 
 @test "a skill of the user's in .agents/skills or .claude/skills survives install and update" {
-    for agent in .agents .claude; do
+    old_install
+    for agent in .agents .claude "$HOME/.agents" "$HOME/.claude"; do
         mkdir -p "$agent/skills/mine" && echo mine > "$agent/skills/mine/SKILL.md"
     done
     for flag in '' --update --force; do
         run "$META_BIN" init skills $flag
         [ "$status" -eq 0 ]
-        for agent in .agents .claude; do [ "$(cat "$agent/skills/mine/SKILL.md")" = mine ]; done
+        for agent in .agents .claude "$HOME/.agents" "$HOME/.claude"; do
+            [ "$(cat "$agent/skills/mine/SKILL.md")" = mine ]
+        done
     done
 }
 
@@ -122,16 +131,17 @@ teardown() {
     run "$META_BIN" init claude
     [ "$status" -eq 2 ]
     [[ "$output" == *"meta init skills"* ]]
-    [ ! -e .meta ] && [ ! -e .claude ]
+    [ ! -e .meta ] && [ ! -e .claude ] && [ ! -e "$HOME/.meta" ] && [ ! -e "$HOME/.claude" ]
 }
 
 @test "init skills stops on a .meta file where its folder goes, writing nothing" {
-    printf '{}' > .meta
+    printf '{}' > "$HOME/.meta"
     run "$META_BIN" init skills
     [ "$status" -ne 0 ]
-    [ -f .meta ]
+    [ -f "$HOME/.meta" ]
     [ ! -e .claude ]
-    [ ! -e .agents ]
+    [ ! -e "$HOME/.claude" ]
+    [ ! -e "$HOME/.agents" ]
 }
 
 @test "init skills --help installs nothing" {
@@ -150,14 +160,14 @@ teardown() {
     for src in "$root"/claude-plugin/skills/meta-*/SKILL.md; do
         local name
         name="$(basename "$(dirname "$src")")"
-        cmp "$src" ".meta/skills/$name/SKILL.md"
+        cmp "$src" "$HOME/.meta/skills/$name/SKILL.md"
         # this repo's own agents read the same files
         [ "$(readlink "$root/.claude/skills/$name")" = "../../claude-plugin/skills/$name" ]
         [ "$(readlink "$root/.agents/skills/$name")" = "../../claude-plugin/skills/$name" ]
         count=$((count + 1))
     done
     [ "$count" -eq 6 ]
-    [ "$(ls -d .meta/skills/meta-*/ | wc -l)" -eq 6 ]
+    [ "$(ls -d "$HOME"/.meta/skills/meta-*/ | wc -l)" -eq 6 ]
 }
 
 @test "init skills creates settings.json with hooks" {
@@ -224,15 +234,15 @@ PY
 # ============ Skip existing files ============
 
 @test "init skills skips existing skill files" {
-    mkdir -p .meta/skills/meta-workspace .claude/skills/meta-git
-    echo "custom content" > .meta/skills/meta-workspace/SKILL.md
-    echo "custom content" > .claude/skills/meta-git/SKILL.md
+    mkdir -p "$HOME"/.meta/skills/meta-workspace "$HOME"/.claude/skills/meta-git
+    echo "custom content" > "$HOME"/.meta/skills/meta-workspace/SKILL.md
+    echo "custom content" > "$HOME"/.claude/skills/meta-git/SKILL.md
 
     run "$META_BIN" init skills
     [ "$status" -eq 0 ]
 
-    [ "$(cat .claude/skills/meta-workspace/SKILL.md)" = "custom content" ]
-    [ "$(cat .claude/skills/meta-git/SKILL.md)" = "custom content" ]
+    [ "$(cat "$HOME"/.claude/skills/meta-workspace/SKILL.md)" = "custom content" ]
+    [ "$(cat "$HOME"/.claude/skills/meta-git/SKILL.md)" = "custom content" ]
 }
 
 # ============ Merge settings ============
@@ -295,39 +305,39 @@ EOF
 
 @test "init skills --update refreshes skill files meta wrote, and keeps one the user edited" {
     local root="$BATS_TEST_DIRNAME/.."
-    mkdir -p .meta/skills/meta-workspace .meta/skills/meta-git
+    mkdir -p "$HOME"/.meta/skills/meta-workspace "$HOME"/.meta/skills/meta-git
     # as an older meta wrote it
-    cp "$root/meta_cli/tests/fixtures/meta-workspace-SKILL.md" .meta/skills/meta-workspace/SKILL.md
-    echo "my own notes" > .meta/skills/meta-git/SKILL.md
+    cp "$root/meta_cli/tests/fixtures/meta-workspace-SKILL.md" "$HOME"/.meta/skills/meta-workspace/SKILL.md
+    echo "my own notes" > "$HOME"/.meta/skills/meta-git/SKILL.md
 
     run "$META_BIN" init skills --update
     [ "$status" -eq 0 ]
-    cmp "$root/claude-plugin/skills/meta-workspace/SKILL.md" .meta/skills/meta-workspace/SKILL.md
-    [ "$(cat .meta/skills/meta-git/SKILL.md)" = "my own notes" ]
-    [[ "$output" == *"Kept $TEST_DIR/.meta/skills/meta-git/SKILL.md (changed since meta wrote it"* ]]
+    cmp "$root/claude-plugin/skills/meta-workspace/SKILL.md" "$HOME"/.meta/skills/meta-workspace/SKILL.md
+    [ "$(cat "$HOME"/.meta/skills/meta-git/SKILL.md)" = "my own notes" ]
+    [[ "$output" == *"Kept $HOME/.meta/skills/meta-git/SKILL.md (changed since meta wrote it"* ]]
 }
 
 @test "init skills --update keeps a skill folder meta did not mark" {
-    mkdir -p .claude/skills/meta-git
-    echo "another tool" > .claude/skills/meta-git/SKILL.md
+    mkdir -p "$HOME"/.claude/skills/meta-git
+    echo "another tool" > "$HOME"/.claude/skills/meta-git/SKILL.md
 
     run "$META_BIN" init skills --update
     [ "$status" -eq 0 ]
 
-    [ "$(cat .claude/skills/meta-git/SKILL.md)" = "another tool" ]
+    [ "$(cat "$HOME"/.claude/skills/meta-git/SKILL.md)" = "another tool" ]
     [[ "$output" == *"not created by meta"* ]]
 }
 
 @test "init skills --update leaves other tools' links alone" {
-    mkdir -p .other/meta-git .claude/skills
-    echo "other tool" > .other/meta-git/SKILL.md
-    ln -s ../../.other/meta-git .claude/skills/meta-git
+    mkdir -p "$HOME"/.other/meta-git "$HOME"/.claude/skills
+    echo "other tool" > "$HOME"/.other/meta-git/SKILL.md
+    ln -s ../../.other/meta-git "$HOME"/.claude/skills/meta-git
 
     run "$META_BIN" init skills --update
     [ "$status" -eq 0 ]
 
-    [ "$(readlink .claude/skills/meta-git)" = "../../.other/meta-git" ]
-    [ "$(cat .other/meta-git/SKILL.md)" = "other tool" ]
+    [ "$(readlink "$HOME"/.claude/skills/meta-git)" = "../../.other/meta-git" ]
+    [ "$(cat "$HOME"/.other/meta-git/SKILL.md)" = "other tool" ]
     [[ "$output" == *"not created by meta"* ]]
 }
 
@@ -349,14 +359,14 @@ EOF
 
 @test "init skills --force overwrites skill files meta wrote, and keeps one the user edited" {
     local root="$BATS_TEST_DIRNAME/.."
-    mkdir -p .meta/skills/meta-workspace .meta/skills/meta-git
-    cp "$root/meta_cli/tests/fixtures/meta-workspace-SKILL.md" .meta/skills/meta-workspace/SKILL.md
-    echo "custom content" > .meta/skills/meta-git/SKILL.md
+    mkdir -p "$HOME"/.meta/skills/meta-workspace "$HOME"/.meta/skills/meta-git
+    cp "$root/meta_cli/tests/fixtures/meta-workspace-SKILL.md" "$HOME"/.meta/skills/meta-workspace/SKILL.md
+    echo "custom content" > "$HOME"/.meta/skills/meta-git/SKILL.md
 
     run "$META_BIN" init skills --force
     [ "$status" -eq 0 ]
-    cmp "$root/claude-plugin/skills/meta-workspace/SKILL.md" .meta/skills/meta-workspace/SKILL.md
-    [ "$(cat .meta/skills/meta-git/SKILL.md)" = "custom content" ]
+    cmp "$root/claude-plugin/skills/meta-workspace/SKILL.md" "$HOME"/.meta/skills/meta-workspace/SKILL.md
+    [ "$(cat "$HOME"/.meta/skills/meta-git/SKILL.md)" = "custom content" ]
 }
 
 @test "init skills --force merges settings.json" {
@@ -425,14 +435,52 @@ EOF
 
 # ============ Where it installs ============
 
-@test "init skills refuses outside a meta workspace" {
+@test "outside a meta workspace init skills installs the skills and no hooks" {
     rm .meta.yaml
 
+    for flag in '' --update --force; do
+        run "$META_BIN" init skills $flag
+        [ "$status" -eq 0 ]
+        [ -f "$HOME/.claude/skills/meta-git/SKILL.md" ]
+        [ -z "$(ls -A .)" ]
+        [ ! -e "$HOME/.claude/settings.json" ]
+    done
     run "$META_BIN" init skills
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"No .meta.yaml in $TEST_DIR or any folder above it"* ]]
-    [ ! -e .claude ]
-    [ ! -e .meta ]
+    [[ "$output" == *"hooks are added when you run this inside a meta workspace"* ]]
+}
+
+@test "init skills --update takes an older meta's skills out of the workspace, keeping an edited one" {
+    old_install
+    echo "my edit" >> .meta/skills/meta-exec/SKILL.md
+    mkdir -p .claude/skills/mine && echo mine > .claude/skills/mine/SKILL.md
+    cp .claude/settings.json settings.before
+
+    # without --update or --force it only says so
+    run "$META_BIN" init skills
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Skipped 15 skill file(s) and link(s) an older meta installed in $TEST_DIR"*"--update removes them"* ]]
+    [ -L .claude/skills/meta-git ] && [ -f .meta/skills/meta-git/SKILL.md ]
+
+    run "$META_BIN" --dry-run init skills --update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"would remove $TEST_DIR/.meta/skills/meta-git/SKILL.md"* ]]
+    [ -L .claude/skills/meta-git ] && [ -f .meta/skills/meta-git/SKILL.md ]
+
+    run "$META_BIN" init skills --update
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Kept $TEST_DIR/.meta/skills/meta-exec/SKILL.md (an older meta's skill, changed since"* ]]
+    [ "$(ls .meta/skills)" = meta-exec ]
+    [ "$(ls .agents/skills)" = meta-exec ]
+    [ "$(ls .claude/skills | tr '\n' ' ')" = "meta-exec mine " ]
+    [ "$(tail -1 .claude/skills/meta-exec/SKILL.md)" = "my edit" ]
+    cmp .claude/settings.json settings.before
+    for name in $SKILL_NAMES; do [ -f "$HOME/.claude/skills/$name/SKILL.md" ]; done
+
+    rm -r .meta/skills/meta-exec
+    run "$META_BIN" init skills --force
+    [ "$status" -eq 0 ]
+    [ ! -e .meta ] && [ ! -e .agents/skills ]
+    [ "$(ls .claude/skills)" = mine ]
 }
 
 @test "init skills from a child repo installs once, in the workspace" {
@@ -441,7 +489,7 @@ EOF
     cd backend/src
     run "$META_BIN" init skills
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Installing in the workspace at $TEST_DIR (the nearest .meta.yaml)"* ]]
+    [[ "$output" == *"$TEST_DIR/.claude/settings.json"* ]]
     [ -f "$TEST_DIR/.claude/settings.json" ]
     [ ! -e "$TEST_DIR/backend/.claude" ]
     [ ! -e "$TEST_DIR/backend/src/.claude" ]
@@ -575,13 +623,10 @@ assert os.stat('.claude/settings.json').st_mtime < 1000000000
 PY
 }
 
-@test "init prints marketplace hint without calling claude" {
+@test "init never calls claude" {
     run "$META_BIN" init skills
     [ "$status" -eq 0 ]
     [ ! -e "$STUB_DIR/claude-calls" ]
-    [[ "$output" == *"For global Claude plugin access, run:"* ]]
-    [[ "$output" == *"  claude plugin marketplace add gitkb/claude-plugins"* ]]
-    [[ "$output" == *"  claude plugin install meta@gitkb"* ]]
 }
 
 @test "init update leaves unsupported settings alone and does not claim hooks" {

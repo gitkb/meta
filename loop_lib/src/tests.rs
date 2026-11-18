@@ -125,16 +125,7 @@ fn test_run() {
 
     let config = LoopConfig {
         directories: vec![dir1.to_path_buf(), dir2.to_path_buf()],
-        ignore: vec![],
-        verbose: false,
         silent: true,
-        parallel: false,
-        dry_run: false,
-        json_output: false,
-        spawn_stagger_ms: 0,
-        env: None,
-        max_parallel: None,
-        root_dir: None,
         ..Default::default()
     };
 
@@ -149,7 +140,6 @@ fn test_run() {
 #[test]
 fn test_execute_command_in_directory() {
     let config = LoopConfig {
-        verbose: false,
         silent: true,
         ..Default::default()
     };
@@ -176,16 +166,8 @@ fn test_run_parallel() {
 
     let config = LoopConfig {
         directories: vec![dir1.to_path_buf(), dir2.to_path_buf(), dir3.to_path_buf()],
-        ignore: vec![],
-        verbose: false,
         silent: true,
         parallel: true,
-        dry_run: false,
-        json_output: false,
-        spawn_stagger_ms: 0,
-        env: None,
-        max_parallel: None,
-        root_dir: None,
         ..Default::default()
     };
 
@@ -201,7 +183,6 @@ fn test_run_parallel() {
 fn test_execute_command_in_directory_capturing() {
     // captured to be shown later (a silenced command's stdout goes nowhere)
     let config = LoopConfig {
-        verbose: false,
         silent: false,
         ..Default::default()
     };
@@ -222,7 +203,6 @@ fn test_execute_command_in_directory_capturing() {
 #[test]
 fn test_execute_command_in_directory_capturing_stderr() {
     let config = LoopConfig {
-        verbose: false,
         silent: false,
         ..Default::default()
     };
@@ -242,7 +222,6 @@ fn test_execute_command_in_directory_capturing_stderr() {
 #[test]
 fn test_execute_command_nonexistent_directory() {
     let config = LoopConfig {
-        verbose: false,
         silent: true,
         ..Default::default()
     };
@@ -420,12 +399,8 @@ fn test_run_commands_empty_list() {
 /// `script` with `WHO` set for it, in `dir`
 fn command_with_who(dir: &Path, who: &str, script: &str) -> DirCommand {
     DirCommand {
-        project: None,
-        ok_codes: vec![0],
-        dir: dir.to_path_buf(),
-        argv: sh(script),
         env: Some(HashMap::from([("WHO".to_string(), who.to_string())])),
-        refused: None,
+        ..DirCommand::new(dir.to_path_buf(), sh(script))
     }
 }
 
@@ -636,12 +611,8 @@ fn starts_are_one_interval_apart_however_long_commands_take() {
 fn a_refused_command_is_a_failed_result_and_never_runs() {
     let temp_dir = TempDir::new().unwrap();
     let command = |refused: Option<&str>| DirCommand {
-        project: None,
-        ok_codes: vec![0],
-        dir: temp_dir.path().to_path_buf(),
-        argv: sh("echo ran > ran"),
-        env: None,
         refused: refused.map(str::to_string),
+        ..DirCommand::new(temp_dir.path().to_path_buf(), sh("echo ran > ran"))
     };
     for parallel in [false, true] {
         let config = LoopConfig {

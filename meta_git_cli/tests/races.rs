@@ -11,7 +11,14 @@
 // Unix only: the commands held mid-way are shell scripts that block on a pipe
 #![cfg(unix)]
 
-use meta_plugin::testing::{mkfifo, Sandbox};
+#[expect(
+    dead_code,
+    reason = "races sends its own requests and uses only as_meta_sends"
+)]
+mod common;
+
+use common::as_meta_sends;
+use meta_plugin::testing::{mkfifo, wait_for, Sandbox};
 use meta_plugin::{Answer, Request, Response, Scope};
 use std::fs;
 use std::io::Write;
@@ -19,7 +26,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 struct Race {
     sandbox: Sandbox,
@@ -127,51 +134,11 @@ impl Race {
     }
 
     fn wait_for(&self, file: &str) {
-        let path = self.root.join(file);
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while !path.exists() {
-            assert!(Instant::now() < deadline, "{file} never appeared");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for(file, || self.root.join(file).exists());
     }
 
     fn release(&self, name: &str) {
         fs::write(self.root.join(format!("release-{name}")), "").unwrap();
-    }
-}
-
-/// The workspace `found` as meta sends it: its whole tree (from the
-/// outermost config) as members.
-fn as_meta_sends(found: meta_core::config::Workspace) -> meta_plugin::Workspace {
-    use meta_core::{config, repo_filter};
-    let (root, repos) = match repo_filter::Reach::of(found.clone(), true, true, None) {
-        Ok(reach) => (reach.root.clone(), reach.scope().repos),
-        Err(_) => (found.dir.clone(), Vec::new()),
-    };
-    let members = repos
-        .iter()
-        .map(|repo| {
-            let info = repo.info.as_ref();
-            meta_plugin::Project {
-                name: repo.name().unwrap_or(".").to_string(),
-                path: repo_filter::repo_path(&repo.dir, &root),
-                abs: repo.dir.clone(),
-                repo: info
-                    .and_then(|i| i.repo.as_ref())
-                    .map(|r| r.raw().to_string()),
-                tags: repo.tags().to_vec(),
-                depends_on: info.map(|i| i.depends_on.clone()).unwrap_or_default(),
-                meta: info.is_some_and(|i| i.meta),
-                present: repo.dir.exists(),
-                ..meta_plugin::Project::default()
-            }
-        })
-        .collect();
-    meta_plugin::Workspace {
-        root,
-        config: found.config_path.clone(),
-        listed_root: config::listed_root(&found.dir),
-        members,
     }
 }
 

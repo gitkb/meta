@@ -564,15 +564,11 @@ fn build_command(
 
 fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
     CommandResult {
-        project: None,
         success: false,
         ran: false,
-        argv: Vec::new(),
         exit_code: Some(-1),
-        signal: None,
         directory: dir.to_path_buf(),
         command,
-        stdout: Vec::new(),
         stderr: stderr.into_bytes(),
         ..CommandResult::default()
     }
@@ -788,7 +784,6 @@ fn capture_in_directory(
         Ok(output) => {
             let (exit_code, signal) = exit_of(output.status);
             CommandResult {
-                project: None,
                 success: accepted(exit_code, signal, ok_codes),
                 ran: true,
                 exit_code,

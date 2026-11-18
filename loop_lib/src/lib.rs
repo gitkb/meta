@@ -890,8 +890,6 @@ pub struct Outcome {
     /// The tip the text output ended with (an option of meta's typed
     /// after the command, when every command rejected it)
     pub tip: Option<String>,
-    /// Whether the commands were only shown (`--dry-run`)
-    pub dry_run: bool,
     /// The summary is a line of its own when output is silenced
     silent: bool,
 }
@@ -1150,7 +1148,6 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<Outc
     let outcome = |results, tip| Outcome {
         results,
         tip,
-        dry_run: config.dry_run,
         silent: config.silent,
     };
     if commands.is_empty() {

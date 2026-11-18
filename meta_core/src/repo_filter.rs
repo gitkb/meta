@@ -503,13 +503,8 @@ mod tests {
         ProjectInfo {
             name: name.to_string(),
             path: path.to_string(),
-            repo: None,
             tags: tags.iter().map(|t| t.to_string()).collect(),
-            provides: vec![],
-            depends_on: vec![],
-            meta: false,
-            branch: None,
-            branch_problem: None,
+            ..ProjectInfo::default()
         }
     }
 

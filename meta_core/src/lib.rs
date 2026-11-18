@@ -1,8 +1,5 @@
-//! `meta_core` — Shared infrastructure for `~/.meta/` directory management.
-//!
-//! Provides:
-//! - `data_dir` — Locate and create the `~/.meta/` data directory and namespaced files
-//! - `store` — Atomic JSON read/write
+//! `meta_core` — The workspace domain meta and its plugins share: config,
+//! repo selection, worktree sets and the dependency graph.
 //!
 //! Printing, exit codes, escaping and the processes meta starts are the
 //! plugin SDK's (`meta_plugin`), shared with every plugin.

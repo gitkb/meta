@@ -152,16 +152,7 @@ pub fn set_members(
         }
         return Ok(Vec::new());
     };
-    // where each project's checkout is in the set (an outside project's at
-    // its name)
-    let projects: Vec<_> = workspace
-        .projects
-        .iter()
-        .map(|project| crate::config::ProjectInfo {
-            path: project.set_place().to_string(),
-            ..project.clone()
-        })
-        .collect();
+    let projects = at_set_places(workspace);
     // without a filter, a nested config that can't be read only costs its
     // projects: the command runs in the others, as in the workspace
     let tree = match set_tree(set_dir, &projects, None, None).map(|(tree, _)| tree) {
@@ -363,7 +354,7 @@ pub fn set_project_tree(
     depth: Option<usize>,
     selected_config: bool,
 ) -> Result<Vec<crate::config::MetaTreeNode>> {
-    use crate::config::{MetaTreeNode, ProjectInfo};
+    use crate::config::MetaTreeNode;
     use std::collections::BTreeMap;
     fn flatten(
         nodes: Vec<MetaTreeNode>,
@@ -396,14 +387,7 @@ pub fn set_project_tree(
         }
     }
 
-    let projects: Vec<_> = workspace
-        .projects
-        .iter()
-        .map(|project| ProjectInfo {
-            path: project.set_place().to_string(),
-            ..project.clone()
-        })
-        .collect();
+    let projects = at_set_places(workspace);
     let mut flat = BTreeMap::new();
     let (tree, read) = set_tree(
         set_dir,
@@ -488,6 +472,19 @@ impl TreeRead {
             }
         }
     }
+}
+
+/// The workspace's projects, each at the place its checkout has in a set
+/// (an outside project's at its name).
+fn at_set_places(workspace: &crate::config::Workspace) -> Vec<crate::config::ProjectInfo> {
+    workspace
+        .projects
+        .iter()
+        .map(|project| crate::config::ProjectInfo {
+            path: project.set_place().to_string(),
+            ..project.clone()
+        })
+        .collect()
 }
 
 /// The meta tree that describes the checkouts of the set at `set_dir`, whose

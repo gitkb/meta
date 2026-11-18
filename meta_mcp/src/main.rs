@@ -47,8 +47,8 @@ fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<serde_json::
 
 #[derive(Debug, Serialize)]
 struct JsonRpcResponse {
-    jsonrpc: String,
-    id: Option<serde_json::Value>,
+    jsonrpc: &'static str,
+    id: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,8 +73,6 @@ fn valid_id(id: &serde_json::Value) -> bool {
 struct JsonRpcError {
     code: i32,
     message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -288,11 +286,9 @@ impl McpServer {
             }
             let answer = if line.len() as u64 > MAX_LINE_BYTES && !line.ends_with(b"\n") {
                 input.skip_until(b'\n')?;
-                Some(Answer::One(
-                    self.parse_error("Request too large".to_string()),
-                ))
+                Some(Answer::One(parse_error("Request too large".to_string())))
             } else {
-                match self.parse_line(&line) {
+                match parse_line(&line) {
                     Line::Message(message) if self.queue_calls(&message) => {
                         calls
                             .send(message)
@@ -300,7 +296,7 @@ impl McpServer {
                         None
                     }
                     Line::Message(message) => self.answer(message),
-                    Line::Bad(error) => Some(Answer::One(self.parse_error(error))),
+                    Line::Bad(error) => Some(Answer::One(parse_error(error))),
                     Line::Blank => None,
                 }
             };
@@ -310,18 +306,6 @@ impl McpServer {
                 write_answer(output, &answer).inspect_err(|_| self.calls.cancel_all())?;
             }
         }
-    }
-
-    /// One line's message.
-    fn parse_line(&self, line: &[u8]) -> Line {
-        let Ok(text) = std::str::from_utf8(line) else {
-            return Line::Bad("Request is not valid UTF-8".to_string());
-        };
-        // A blank line holds no message: it is framing, not a request.
-        if text.trim().is_empty() {
-            return Line::Blank;
-        }
-        serde_json::from_str(text).map_or_else(|e| Line::Bad(e.to_string()), Line::Message)
     }
 
     /// Whether `message` (or a message of its batch) calls a tool; the ids
@@ -376,8 +360,8 @@ impl McpServer {
     fn answer(&self, message: serde_json::Value) -> Option<Answer> {
         match message {
             serde_json::Value::Array(batch) if batch.is_empty() => {
-                Some(Answer::One(self.error_response(
-                    Some(serde_json::Value::Null),
+                Some(Answer::One(error_response(
+                    serde_json::Value::Null,
                     -32600,
                     "Invalid Request: empty batch".to_string(),
                 )))
@@ -401,8 +385,8 @@ impl McpServer {
             if let Some(id) = &id {
                 self.calls.forget(&id.to_string());
             }
-            Some(self.error_response(
-                Some(id.clone().unwrap_or(serde_json::Value::Null)),
+            Some(error_response(
+                id.clone().unwrap_or(serde_json::Value::Null),
                 -32600,
                 format!("Invalid Request: {reason}"),
             ))
@@ -426,14 +410,6 @@ impl McpServer {
             Ok(request) => self.handle_request(&request),
             Err(e) => invalid(&e.to_string()),
         }
-    }
-
-    fn parse_error(&self, message: String) -> JsonRpcResponse {
-        self.error_response(
-            Some(serde_json::Value::Null),
-            -32700,
-            format!("Parse error: {message}"),
-        )
     }
 
     /// Returns `None` for a notification (no `id`): JSON-RPC never answers
@@ -471,8 +447,8 @@ impl McpServer {
                 })?
             }
             _ => {
-                return Some(self.error_response(
-                    Some(id),
+                return Some(error_response(
+                    id,
                     -32601,
                     format!("Method not found: {}", request.method),
                 ))
@@ -480,40 +456,9 @@ impl McpServer {
         };
 
         Some(match result {
-            Ok(value) => self.ok_response(Some(id), value),
-            Err(e) => self.error_response(Some(id), -32603, format!("{e:#}")),
+            Ok(value) => ok_response(id, value),
+            Err(e) => error_response(id, -32603, format!("{e:#}")),
         })
-    }
-
-    fn ok_response(
-        &self,
-        id: Option<serde_json::Value>,
-        result: serde_json::Value,
-    ) -> JsonRpcResponse {
-        JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id,
-            result: Some(result),
-            error: None,
-        }
-    }
-
-    fn error_response(
-        &self,
-        id: Option<serde_json::Value>,
-        code: i32,
-        message: String,
-    ) -> JsonRpcResponse {
-        JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id,
-            result: None,
-            error: Some(JsonRpcError {
-                code,
-                message,
-                data: None,
-            }),
-        }
     }
 
     fn handle_initialize(&self) -> Result<serde_json::Value> {
@@ -576,6 +521,44 @@ impl McpServer {
     }
 }
 
+/// One line's message.
+fn parse_line(line: &[u8]) -> Line {
+    let Ok(text) = std::str::from_utf8(line) else {
+        return Line::Bad("Request is not valid UTF-8".to_string());
+    };
+    // A blank line holds no message: it is framing, not a request.
+    if text.trim().is_empty() {
+        return Line::Blank;
+    }
+    serde_json::from_str(text).map_or_else(|e| Line::Bad(e.to_string()), Line::Message)
+}
+
+fn ok_response(id: serde_json::Value, result: serde_json::Value) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: "2.0",
+        id,
+        result: Some(result),
+        error: None,
+    }
+}
+
+fn error_response(id: serde_json::Value, code: i32, message: String) -> JsonRpcResponse {
+    JsonRpcResponse {
+        jsonrpc: "2.0",
+        id,
+        result: None,
+        error: Some(JsonRpcError { code, message }),
+    }
+}
+
+fn parse_error(message: String) -> JsonRpcResponse {
+    error_response(
+        serde_json::Value::Null,
+        -32700,
+        format!("Parse error: {message}"),
+    )
+}
+
 /// Writes `answer` as one line of JSON, whole, whichever thread writes.
 fn write_answer(output: &Mutex<impl Write>, answer: &Answer) -> Result<()> {
     let mut output = output
@@ -630,7 +613,7 @@ mod tests {
                 r#"{"jsonrpc":"2.0","id":null,"method":"no/such/method"}"#,
             ))
             .unwrap();
-        assert_eq!(unknown.id, Some(serde_json::Value::Null));
+        assert_eq!(unknown.id, serde_json::Value::Null);
         assert_eq!(unknown.error.unwrap().code, -32601);
     }
 
@@ -855,11 +838,7 @@ mod tests {
 
     #[test]
     fn test_ok_response() {
-        let server = McpServer::new().unwrap();
-        let response = server.ok_response(
-            Some(serde_json::json!(1)),
-            serde_json::json!({"test": "value"}),
-        );
+        let response = ok_response(serde_json::json!(1), serde_json::json!({"test": "value"}));
 
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.result.is_some());
@@ -868,12 +847,7 @@ mod tests {
 
     #[test]
     fn test_error_response() {
-        let server = McpServer::new().unwrap();
-        let response = server.error_response(
-            Some(serde_json::json!(1)),
-            -32600,
-            "Invalid Request".to_string(),
-        );
+        let response = error_response(serde_json::json!(1), -32600, "Invalid Request".to_string());
 
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.result.is_none());

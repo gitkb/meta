@@ -9,10 +9,9 @@
 // Unix only: the plugins here are shell scripts
 #![cfg(unix)]
 
-use meta_plugin::testing::Sandbox;
+use meta_plugin::testing::{script, Sandbox};
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 /// A workspace with repos `a` and `b`, a plugin `meta-touchy` on PATH that
@@ -32,20 +31,16 @@ fn workspace(sandbox: &Sandbox, root: &Path) {
     let bin = root.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let plugin = bin.join("meta-touchy");
-    fs::write(
+    script(
         &plugin,
-        format!(
-            r#"#!/bin/sh
-case "$1" in
+        &format!(
+            r#"case "$1" in
   --meta-plugin-info) echo '{{"name":"touchy","version":"1.0.0","commands":["touch"]}}' ;;
   --meta-plugin-exec) cat "$META_REQUEST" >> "{}"; echo '{{"results":{{"records":[]}}}}' > "$META_RESPONSE" ;;
-esac
-"#,
+esac"#,
             root.join("plugin.log").display()
         ),
-    )
-    .unwrap();
-    fs::set_permissions(&plugin, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     script(
         &bin.join("meta-spy"),
         &format!(
@@ -55,11 +50,6 @@ exit 0"#,
             root.join("spy.log").display()
         ),
     );
-}
-
-fn script(path: &Path, body: &str) {
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 /// What meta-spy was started for, one line each
@@ -230,17 +220,13 @@ fn a_plan_meta_cannot_read_fails_and_names_the_plugin() {
     workspace(&sandbox, &root);
     // A plugin that plans `cmd` strings instead of steps
     let plugin = root.join("bin").join("meta-oldplan");
-    fs::write(
+    script(
         &plugin,
-        r#"#!/bin/sh
-case "$1" in
+        r#"case "$1" in
   --meta-plugin-info) echo '{"name":"oldplan","version":"1.0.0","commands":["oldplan"]}' ;;
   --meta-plugin-exec) echo '{"plan":{"commands":[{"dir":".","cmd":"touch ran"}]}}' > "$META_RESPONSE" ;;
-esac
-"#,
-    )
-    .unwrap();
-    fs::set_permissions(&plugin, fs::Permissions::from_mode(0o755)).unwrap();
+esac"#,
+    );
 
     let output = run_meta(&sandbox, &root, &["oldplan", "run"]);
 
@@ -260,17 +246,13 @@ fn a_plan_with_max_parallel_zero_is_refused_before_any_of_it_runs() {
     let root = sandbox.work();
     workspace(&sandbox, &root);
     let plugin = root.join("bin").join("meta-zero");
-    fs::write(
+    script(
         &plugin,
-        r#"#!/bin/sh
-case "$1" in
+        r#"case "$1" in
   --meta-plugin-info) echo '{"name":"zero","version":"1.0.0","commands":["zero"]}' ;;
   --meta-plugin-exec) echo '{"plan":{"steps":[{"dir":".","argv":["touch","first"]},{"dir":".","argv":["touch","ran"]}],"max_parallel":0}}' > "$META_RESPONSE" ;;
-esac
-"#,
-    )
-    .unwrap();
-    fs::set_permissions(&plugin, fs::Permissions::from_mode(0o755)).unwrap();
+esac"#,
+    );
 
     let output = run_meta(&sandbox, &root, &["zero", "run"]);
 

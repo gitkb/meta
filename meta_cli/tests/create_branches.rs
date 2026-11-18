@@ -10,7 +10,7 @@
 )]
 #![cfg(unix)]
 
-use meta_plugin::testing::Sandbox;
+use meta_plugin::testing::{text, Sandbox};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,14 +102,6 @@ impl Fixture {
             self.ws.join(".worktrees/p").exists(),
         )
     }
-}
-
-fn text(out: &Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    )
 }
 
 fn ok(out: Output) -> Output {

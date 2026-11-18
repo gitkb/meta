@@ -10,10 +10,9 @@
 // Unix only: signals and process groups
 #![cfg(unix)]
 
-use meta_plugin::testing::Sandbox;
+use meta_plugin::testing::{script, wait_for, Sandbox};
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -40,14 +39,12 @@ fn workspace(sandbox: &Sandbox, root: &Path) {
     let bin = root.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let plugin = bin.join("meta-slow");
-    fs::write(
+    script(
         &plugin,
-        format!(
-            "#!/bin/sh\ncase \"$1\" in\n  --meta-plugin-info) echo '{{\"name\":\"slow\",\"version\":\"1.0.0\",\"commands\":[\"slow\"]}}' ;;\n  --meta-plugin-exec) cat >/dev/null; {SLOW} ;;\nesac\n"
+        &format!(
+            "case \"$1\" in\n  --meta-plugin-info) echo '{{\"name\":\"slow\",\"version\":\"1.0.0\",\"commands\":[\"slow\"]}}' ;;\n  --meta-plugin-exec) cat >/dev/null; {SLOW} ;;\nesac"
         ),
-    )
-    .unwrap();
-    fs::set_permissions(&plugin, fs::Permissions::from_mode(0o755)).unwrap();
+    );
 }
 
 /// meta, started as a job of its own (never a terminal's foreground job).
@@ -75,16 +72,13 @@ fn start(sandbox: &Sandbox, root: &Path, program: &str, args: &[&str]) -> Child 
 
 /// Wait until `count` lines say a command started.
 fn started(root: &Path, count: usize) {
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while fs::read_to_string(root.join("started"))
-        .unwrap_or_default()
-        .lines()
-        .count()
-        < count
-    {
-        assert!(Instant::now() < deadline, "the commands didn't start");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_for("the commands to start", || {
+        fs::read_to_string(root.join("started"))
+            .unwrap_or_default()
+            .lines()
+            .count()
+            >= count
+    });
 }
 
 /// Whether `pid` has ended (gone, or a zombie no one has reaped yet).
@@ -224,21 +218,15 @@ fn terminating_meta_ends_a_stopped_command() {
     started(&root, 1);
     let pid = fs::read_to_string(root.join("started")).unwrap();
     let pid = pid.trim();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
+    wait_for("the command to stop", || {
         let out = Command::new("ps")
             .args(["-o", "stat=", "-p", pid])
             .output()
             .unwrap();
-        if String::from_utf8_lossy(&out.stdout)
+        String::from_utf8_lossy(&out.stdout)
             .trim_start()
             .starts_with('T')
-        {
-            break;
-        }
-        assert!(Instant::now() < deadline, "the command didn't stop");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    });
     rustix::process::kill_process(
         rustix::process::Pid::from_child(&meta),
         rustix::process::Signal::TERM,
@@ -246,10 +234,6 @@ fn terminating_meta_ends_a_stopped_command() {
     .unwrap();
     let status = exited(&mut meta, Duration::from_secs(10));
     assert_eq!(status.signal(), Some(15), "{status:?}");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !ended(pid) {
-        assert!(Instant::now() < deadline, "the stopped command still runs");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_for("the stopped command to end", || ended(pid));
     assert!(!root.join("late").exists());
 }

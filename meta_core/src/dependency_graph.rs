@@ -246,37 +246,6 @@ impl DependencyGraph {
             .unwrap_or_default()
     }
 
-    /// Get all transitive dependencies of a project
-    pub fn get_all_dependencies(&self, project: &str) -> Vec<&str> {
-        let mut visited = HashSet::new();
-        let mut result = Vec::new();
-        let mut queue = VecDeque::new();
-
-        if let Some(deps) = self.dependencies.get(project) {
-            for dep in deps {
-                queue.push_back(dep.as_str());
-            }
-        }
-
-        while let Some(current) = queue.pop_front() {
-            if visited.contains(current) {
-                continue;
-            }
-            visited.insert(current);
-            result.push(current);
-
-            if let Some(deps) = self.dependencies.get(current) {
-                for dep in deps {
-                    if !visited.contains(dep.as_str()) {
-                        queue.push_back(dep.as_str());
-                    }
-                }
-            }
-        }
-
-        result
-    }
-
     /// The projects that depend directly on `project` (a project's name, or
     /// else a capability one provides: the first such project by name),
     /// through its name or anything it provides, sorted; `None` when no
@@ -425,11 +394,6 @@ impl DependencyGraph {
     /// Get project info
     pub fn get_project(&self, name: &str) -> Option<&ProjectDependencies> {
         self.projects.get(name)
-    }
-
-    /// Get all projects
-    pub fn all_projects(&self) -> Vec<&ProjectDependencies> {
-        self.projects.values().collect()
     }
 }
 

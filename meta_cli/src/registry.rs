@@ -1276,6 +1276,28 @@ mod tests {
     }
 
     #[test]
+    fn test_plugin_metadata_serialization() {
+        let metadata = PluginMetadata {
+            name: "docker".to_string(),
+            description: "Docker commands for meta".to_string(),
+            version: "1.0.0".to_string(),
+            author: "testuser".to_string(),
+            repository: "github.com/testuser/meta-plugin-docker".to_string(),
+            releases: HashMap::new(),
+            checksum: Some("sha256:abc123".to_string()),
+        };
+
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains("\"name\":\"docker\""));
+        assert!(json.contains("\"version\":\"1.0.0\""));
+
+        // Deserialize
+        let parsed: PluginMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, "docker");
+        assert_eq!(parsed.author, "testuser");
+    }
+
+    #[test]
     fn test_platform_releases_serialization() {
         let releases = PlatformReleases {
             darwin_arm64: Some("https://example.com/darwin-arm64.tar.gz".to_string()),
@@ -2234,6 +2256,14 @@ mod tests {
         std::fs::write(&path, "custom\n").unwrap();
         installer.ensure_plugins_dir().unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "custom\n");
+    }
+
+    #[test]
+    fn test_default_registry_points_to_gitkb() {
+        assert_eq!(
+            DEFAULT_REGISTRY,
+            "https://raw.githubusercontent.com/gitkb/meta-plugins/main"
+        );
     }
 
     // === M7: Plugin updates tests ===

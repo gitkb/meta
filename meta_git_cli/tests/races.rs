@@ -18,7 +18,7 @@
 mod common;
 
 use common::as_meta_sends;
-use meta_plugin::testing::{mkfifo, Sandbox};
+use meta_plugin::testing::{mkfifo, wait_for, Sandbox};
 use meta_plugin::{Answer, Request, Response, Scope};
 use std::fs;
 use std::io::Write;
@@ -26,7 +26,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 struct Race {
     sandbox: Sandbox,
@@ -134,12 +134,7 @@ impl Race {
     }
 
     fn wait_for(&self, file: &str) {
-        let path = self.root.join(file);
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while !path.exists() {
-            assert!(Instant::now() < deadline, "{file} never appeared");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for(file, || self.root.join(file).exists());
     }
 
     fn release(&self, name: &str) {

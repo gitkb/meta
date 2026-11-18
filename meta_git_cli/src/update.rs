@@ -348,7 +348,7 @@ pub(crate) fn named<'a>(request: &'a Request, root: &'a Path) -> &'a Path {
 }
 
 /// The name the workspace at `root` goes by in progress and errors.
-pub(crate) fn root_name(root: &Path) -> String {
+fn root_name(root: &Path) -> String {
     root.file_name()
         .map_or_else(|| ".".to_string(), |n| n.to_string_lossy().into_owned())
 }
@@ -380,7 +380,7 @@ fn run(queue: &CloneQueue, tasks: Vec<CloneTask>) -> anyhow::Result<()> {
 }
 
 /// What deleting a repository no `.meta.yaml` lists would lose.
-pub(crate) enum Leftover {
+enum Leftover {
     /// Nothing git shows that isn't on a remote, maybe with files git
     /// ignores ("ignored files: .env, target/"). Those are deleted with it,
     /// as `git worktree remove` deletes them: ignoring a file says it isn't
@@ -394,7 +394,7 @@ impl Leftover {
     /// The repository at `path`, a leftover in the workspace at `root`;
     /// `ask`: whether its remotes are asked which of its tags they have
     /// (with false, its tags count as held).
-    pub(crate) fn of(path: &Path, root: &Path, ask: bool) -> Self {
+    fn of(path: &Path, root: &Path, ask: bool) -> Self {
         let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         let inside = real(path);
         if path
@@ -472,20 +472,14 @@ fn nested_repo(dir: &Path) -> std::io::Result<Option<PathBuf>> {
 }
 
 /// `path` as shown: from `cwd` where it is inside it.
-pub(crate) fn shown(path: &Path, cwd: &Path) -> String {
+fn shown(path: &Path, cwd: &Path) -> String {
     escape_path(path.strip_prefix(cwd).unwrap_or(path))
 }
 
 /// Name each repository in a meta repo's folder that no `.meta.yaml` lists,
 /// with what deleting it would lose (`root`: the workspace's folder; `-r`:
 /// whether nested meta repos were read).
-pub(crate) fn report_unlisted(
-    ctx: &Ctx,
-    queue: &CloneQueue,
-    root: &Path,
-    cwd: &Path,
-    recursive: bool,
-) {
+fn report_unlisted(ctx: &Ctx, queue: &CloneQueue, root: &Path, cwd: &Path, recursive: bool) {
     let prune = if recursive {
         "meta -r git update --prune"
     } else {

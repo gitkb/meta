@@ -268,7 +268,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
                 alias: spec.alias.clone(),
                 path: wt_dir.join(place).display().to_string(),
                 started_from: start.base(&branch),
-                created_branch: start.new_branch_at().is_some(),
+                created_branch: start.is_new_branch(),
                 branch,
             });
         }
@@ -331,10 +331,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
             start_branches.of(&source)
         });
         let (created_branch, started_from) = match made {
-            Ok(start) => {
-                let base = start.base(&branch);
-                (start.new_branch_at().is_some(), base)
-            }
+            Ok(start) => (start.is_new_branch(), start.base(&branch)),
             Err(e) => {
                 failed = Some(e);
                 break;

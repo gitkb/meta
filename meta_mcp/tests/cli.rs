@@ -588,9 +588,36 @@ fn stop_group(sandbox: &Sandbox, mut server: std::process::Child) -> String {
         status.is_some()
     });
     assert_eq!(status.unwrap().code(), Some(128 + 15), "{status:?}");
+    stderr_of(&mut server)
+}
+
+/// The rest of `child`'s stderr.
+#[cfg(unix)]
+fn stderr_of(child: &mut std::process::Child) -> String {
     let mut stderr = String::new();
-    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
+    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut stderr).unwrap();
     stderr
+}
+
+/// meta-mcp in `dir` with its stdout already closed, `stderr` as given;
+/// its stdin comes back too.
+#[cfg(unix)]
+fn server_with_no_output(
+    sandbox: &Sandbox,
+    dir: &Path,
+    stderr: Stdio,
+) -> (std::process::Child, std::process::ChildStdin) {
+    let mut server = sandbox
+        .command(env!("CARGO_BIN_EXE_meta-mcp"))
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(stderr)
+        .spawn()
+        .unwrap();
+    drop(server.stdout.take());
+    let stdin = server.stdin.take().unwrap();
+    (server, stdin)
 }
 
 /// An atomic or plain `meta_batch_execute` of `script` in `sh`.
@@ -677,16 +704,7 @@ fn a_server_whose_output_is_gone_ends() {
     let sandbox = Sandbox::new();
     let tmp = sandbox.work();
     std::fs::write(tmp.join(".meta.yaml"), "projects: {}\n").unwrap();
-    let mut server = sandbox
-        .command(env!("CARGO_BIN_EXE_meta-mcp"))
-        .current_dir(&tmp)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    drop(server.stdout.take());
-    let mut stdin = server.stdin.take().unwrap();
+    let (mut server, mut stdin) = server_with_no_output(&sandbox, &tmp, Stdio::piped());
     let call = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "meta_get_config"}});
     // again until it ends: a child another test forks may hold the read
@@ -700,8 +718,7 @@ fn a_server_whose_output_is_gone_ends() {
     assert_eq!(status.unwrap().code(), Some(141), "{status:?}");
     drop(stdin);
     // the reply it couldn't send is on record
-    let mut stderr = String::new();
-    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
+    let stderr = stderr_of(&mut server);
     assert!(
         stderr.contains("the reply was:") && stderr.contains(r#""id":1"#),
         "{stderr}"
@@ -718,16 +735,7 @@ fn a_server_whose_output_is_gone_stops_its_running_tool() {
     let ws = &tmp;
     std::fs::create_dir(ws.join("a")).unwrap();
     std::fs::write(ws.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
-    let mut server = sandbox
-        .command(env!("CARGO_BIN_EXE_meta-mcp"))
-        .current_dir(ws)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    drop(server.stdout.take());
-    let mut stdin = server.stdin.take().unwrap();
+    let (mut server, mut stdin) = server_with_no_output(&sandbox, ws, Stdio::null());
     let script = "sleep 60 & echo $! > ../pid.tmp && mv ../pid.tmp ../pid; wait";
     writeln!(stdin, "{}", batch(1, script, false)).unwrap();
     let pid = ws.join("pid");
@@ -755,16 +763,7 @@ fn a_server_whose_output_is_gone_drops_its_waiting_calls() {
     // a project for the first call to sleep in
     std::fs::create_dir(tmp.join("a")).unwrap();
     std::fs::write(tmp.join(".meta.yaml"), "projects:\n  a: {}\n").unwrap();
-    let mut server = sandbox
-        .command(env!("CARGO_BIN_EXE_meta-mcp"))
-        .current_dir(&tmp)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    drop(server.stdout.take());
-    let mut stdin = server.stdin.take().unwrap();
+    let (mut server, mut stdin) = server_with_no_output(&sandbox, &tmp, Stdio::piped());
     // the other calls wait while the first one sleeps; should a reply go
     // through (see `a_server_whose_output_is_gone_ends`), the next fails
     writeln!(stdin, "{}", batch(1, "sleep 1", false)).unwrap();
@@ -780,8 +779,7 @@ fn a_server_whose_output_is_gone_drops_its_waiting_calls() {
     });
     assert_eq!(status.unwrap().code(), Some(141), "{status:?}");
     drop(stdin);
-    let mut stderr = String::new();
-    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut stderr).unwrap();
+    let stderr = stderr_of(&mut server);
     assert!(stderr.contains("not started"), "{stderr}");
 }
 

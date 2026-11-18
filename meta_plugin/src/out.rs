@@ -45,10 +45,6 @@ macro_rules! errln {
     ($($arg:tt)*) => { $crate::out::stderr(format_args!("{}\n", format_args!($($arg)*))) };
 }
 
-/// Whether anything was written to stdout yet: with `--json`, an error
-/// after a report goes to stderr, so stdout holds one JSON document.
-static WROTE: AtomicBool = AtomicBool::new(false);
-
 /// Write `args` to stdout (see [`out!`]). Under `--json` ([`set_json`])
 /// stdout holds the one JSON document ([`document`]), so text goes to
 /// stderr.
@@ -60,13 +56,11 @@ pub fn stdout(args: fmt::Arguments<'_>) -> Result<(), StdoutError> {
         stderr(args);
         return Ok(());
     }
-    WROTE.store(true, Ordering::Relaxed);
     io::stdout().lock().write_fmt(args).map_err(StdoutError)
 }
 
 /// Write `text`, the program's one JSON document, to stdout.
 pub fn document(text: &str) -> Result<(), StdoutError> {
-    WROTE.store(true, Ordering::Relaxed);
     let mut stdout = io::stdout().lock();
     writeln!(stdout, "{text}")
         .and_then(|()| stdout.flush())
@@ -83,18 +77,12 @@ pub fn stdout_bytes(bytes: &[u8]) -> Result<(), StdoutError> {
         stderr_bytes(bytes);
         return Ok(());
     }
-    WROTE.store(true, Ordering::Relaxed);
     let mut stdout = io::stdout().lock();
     // a Windows console takes UTF-8 only: what isn't shows as �
     if cfg!(windows) && stdout.is_terminal() {
         return write!(stdout, "{}", String::from_utf8_lossy(bytes)).map_err(StdoutError);
     }
     stdout.write_all(bytes).map_err(StdoutError)
-}
-
-/// Whether this program wrote anything to stdout.
-pub fn wrote_stdout() -> bool {
-    WROTE.load(Ordering::Relaxed)
 }
 
 /// Flush stdout, before a child writes to it or a prompt waits.

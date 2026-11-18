@@ -139,10 +139,7 @@ pub fn usage_error(error: &clap::Error) -> Option<anyhow::Error> {
     ) {
         return None;
     }
-    let typed: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
+    let typed = crate::typed_args();
     let meta = crate::meta_options();
     let args = match typed.get(meta.typed.len()..)?.split_first()? {
         (word, args) if word == "project" => args,
@@ -229,10 +226,7 @@ fn unrecognized(words: &[String], meta: &meta_plugin::args::MetaOptions) -> anyh
 /// says so.
 fn workspace_target(cli: &Cli, start: &Path, name: &str) -> Result<Target> {
     // named as typed: `ls` too
-    let typed: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
+    let typed = crate::typed_args();
     let typed = typed
         .get(crate::meta_options().typed.len() + 1)
         .map_or(name, String::as_str);

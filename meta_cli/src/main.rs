@@ -1024,10 +1024,7 @@ fn outer(before: &[&str]) -> loop_lib::Outer {
 /// The line as typed with meta's `-r` in it as `-A`, which reaches the
 /// whole workspace (in a cluster too: `-rv` as `-Av`).
 fn with_all() -> String {
-    let args: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
+    let args = typed_args();
     let meta = meta_options();
     let valued = |c: char| {
         let short = format!("-{c}");
@@ -1468,10 +1465,7 @@ fn unrecognized_command_error(
         .flatten()
         .filter(|word| builtins.contains(word) || matches!(plugins.find(word), Ok(Some(_))));
     // the line as typed, whose words from the command word on are command_args
-    let typed: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
+    let typed = typed_args();
     let at = typed.len().saturating_sub(command_args.len());
     let edited = |command: &[&str]| -> String {
         let argv: Vec<String> = typed

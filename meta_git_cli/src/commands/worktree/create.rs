@@ -468,7 +468,7 @@ pub(crate) fn handle_create(
         ephemeral,
         ttl_seconds,
         &output.custom,
-        Some(here.worktree),
+        here.worktree,
     )
     .or_else(|e| ctx.warn_or_bail(format!("{e:#}")));
     records.push(ProjectResult::about_workspace(&output).at(&wt_dir));

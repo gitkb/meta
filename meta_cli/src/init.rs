@@ -15,6 +15,12 @@ use std::path::{Path, PathBuf};
 use std::os::unix::fs::symlink as symlink_dir;
 #[cfg(windows)]
 use std::os::windows::fs::symlink_dir;
+// A directory link is removed as a file on Unix and as a folder on Windows;
+// either way only the link goes, never what it leads to
+#[cfg(windows)]
+use std::fs::remove_dir as remove_dir_link;
+#[cfg(unix)]
+use std::fs::remove_file as remove_dir_link;
 
 /// Embeds `claude-plugin/skills/<name>/SKILL.md`, the skills' one source
 macro_rules! skill {
@@ -129,11 +135,20 @@ impl Init {
     }
 
     fn remove_file(&self, path: &Path) -> Result<()> {
+        self.remove(path, |path| fs::remove_file(path))
+    }
+
+    /// Remove the directory link meta made at `link`, not what it leads to.
+    fn remove_link(&self, link: &Path) -> Result<()> {
+        self.remove(link, |link| remove_dir_link(link))
+    }
+
+    fn remove(&self, path: &Path, remove: impl Fn(&Path) -> std::io::Result<()>) -> Result<()> {
         if self.mode.is_preview() {
             outln!("  would remove {}", escape_path(path))?;
             return Ok(());
         }
-        fs::remove_file(path).with_context(|| format!("Failed to remove {}", escape_path(path)))?;
+        remove(path).with_context(|| format!("Failed to remove {}", escape_path(path)))?;
         if self.verbose {
             outln!("{} {}", "Removed".yellow(), escape_path(path))?;
         }
@@ -559,7 +574,7 @@ fn workspace_skills(
             }
             match owned {
                 true => init.remove_owned(&link, &marker)?,
-                false => init.remove_file(&link)?,
+                false => init.remove_link(&link)?,
             }
             removed = true;
         }

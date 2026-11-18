@@ -410,16 +410,19 @@ pub struct ImpactAnalysis {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_resolver_records_what_each_depends_on_ran_into() {
-        let project = |name: &str, provides: &[&str], depends_on: &[&str]| ProjectDependencies {
+    fn project(name: &str, provides: &[&str], depends_on: &[&str]) -> ProjectDependencies {
+        ProjectDependencies {
             name: name.to_string(),
             path: name.to_string(),
             repo: None,
             tags: vec![],
             provides: provides.iter().map(|s| s.to_string()).collect(),
             depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
-        };
+        }
+    }
+
+    #[test]
+    fn the_resolver_records_what_each_depends_on_ran_into() {
         let graph = DependencyGraph::build(vec![
             project("app", &[], &["db", "lib", "nosuch"]),
             project("lib", &["lib"], &[]),
@@ -446,38 +449,15 @@ mod tests {
 
     fn create_test_projects() -> Vec<ProjectDependencies> {
         vec![
-            ProjectDependencies {
-                name: "shared-utils".to_string(),
-                path: "shared-utils".to_string(),
-                repo: Some("git@github.com:org/shared-utils.git".into()),
-                tags: vec!["lib".to_string()],
-                provides: vec!["utils".to_string()],
-                depends_on: vec![],
-            },
-            ProjectDependencies {
-                name: "auth-service".to_string(),
-                path: "auth-service".to_string(),
-                repo: Some("git@github.com:org/auth-service.git".into()),
-                tags: vec!["backend".to_string()],
-                provides: vec!["auth-api".to_string()],
-                depends_on: vec!["shared-utils".to_string()],
-            },
-            ProjectDependencies {
-                name: "api-service".to_string(),
-                path: "api-service".to_string(),
-                repo: Some("git@github.com:org/api-service.git".into()),
-                tags: vec!["backend".to_string()],
-                provides: vec!["api-v2".to_string()],
-                depends_on: vec!["auth-service".to_string(), "shared-utils".to_string()],
-            },
-            ProjectDependencies {
-                name: "web-app".to_string(),
-                path: "web-app".to_string(),
-                repo: Some("git@github.com:org/web-app.git".into()),
-                tags: vec!["frontend".to_string()],
-                provides: vec![],
-                depends_on: vec!["api-v2".to_string()], // Depends on provided item
-            },
+            project("shared-utils", &["utils"], &[]),
+            project("auth-service", &["auth-api"], &["shared-utils"]),
+            project(
+                "api-service",
+                &["api-v2"],
+                &["auth-service", "shared-utils"],
+            ),
+            // depends on a provided item
+            project("web-app", &[], &["api-v2"]),
         ]
     }
 
@@ -553,14 +533,6 @@ mod tests {
 
     #[test]
     fn dependents_of_a_name_or_a_capability() {
-        let project = |name: &str, provides: &[&str], depends_on: &[&str]| ProjectDependencies {
-            name: name.to_string(),
-            path: name.to_string(),
-            repo: None,
-            tags: vec![],
-            provides: provides.iter().map(|s| s.to_string()).collect(),
-            depends_on: depends_on.iter().map(|s| s.to_string()).collect(),
-        };
         let graph = DependencyGraph::build(vec![
             project("loop_lib", &["loop-lib"], &[]),
             project("util", &[], &[]),

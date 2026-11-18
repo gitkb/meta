@@ -55,15 +55,6 @@ struct JsonRpcResponse {
     error: Option<JsonRpcError>,
 }
 
-/// Writes `response` as one line of JSON.
-fn write_line(output: &mut impl Write, response: &JsonRpcResponse) -> Result<()> {
-    serde_json::to_writer(&mut *output, response)
-        .map_err(std::io::Error::from)
-        .and_then(|()| output.write_all(b"\n"))
-        .map_err(StdoutError)?;
-    Ok(())
-}
-
 /// JSON-RPC 2.0 ids are strings, numbers or null.
 fn valid_id(id: &serde_json::Value) -> bool {
     id.is_null() || id.is_string() || id.is_number()
@@ -94,6 +85,8 @@ struct McpServer {
 }
 
 /// What one line gets back: one reply, or a batch's replies.
+#[derive(Serialize)]
+#[serde(untagged)]
 enum Answer {
     One(JsonRpcResponse),
     Batch(Vec<JsonRpcResponse>),
@@ -511,14 +504,11 @@ fn write_answer(output: &Mutex<impl Write>, answer: &Answer) -> Result<()> {
     let mut output = output
         .lock()
         .map_err(|_| anyhow::anyhow!("Output failed"))?;
-    match answer {
-        Answer::One(response) => write_line(&mut *output, response)?,
-        Answer::Batch(responses) => serde_json::to_writer(&mut *output, responses)
-            .map_err(std::io::Error::from)
-            .and_then(|()| output.write_all(b"\n"))
-            .map_err(StdoutError)?,
-    }
-    Ok(output.flush().map_err(StdoutError)?)
+    Ok(serde_json::to_writer(&mut *output, answer)
+        .map_err(std::io::Error::from)
+        .and_then(|()| output.write_all(b"\n"))
+        .and_then(|()| output.flush())
+        .map_err(StdoutError)?)
 }
 
 /// MCP server for meta: serves the Model Context Protocol on stdin and

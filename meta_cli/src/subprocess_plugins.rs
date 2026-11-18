@@ -543,12 +543,8 @@ pub fn extensions_on_path(tool: &str) -> std::collections::BTreeSet<String> {
 #[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    if let Ok(metadata) = path.metadata() {
-        let mode = metadata.permissions().mode();
-        mode & 0o111 != 0 && metadata.is_file()
-    } else {
-        false
-    }
+    path.metadata()
+        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(not(unix))]

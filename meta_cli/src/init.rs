@@ -73,12 +73,14 @@ const OLD_AGENT_SKILL_DIRS: &[&str] = &[
 /// only while it is exactly one of these, so no file anyone changed is lost.
 const SHIPPED: &str = include_str!("shipped.txt");
 
+/// Each (path, git blob id) of [`SHIPPED`].
+fn shipped_files() -> impl Iterator<Item = (&'static str, &'static str)> {
+    SHIPPED.lines().filter_map(|line| line.split_once(' '))
+}
+
 /// Whether meta wrote `blob` (a git blob id) at `path` ([`SHIPPED`]).
 fn shipped(path: &str, blob: &str) -> bool {
-    SHIPPED
-        .lines()
-        .filter_map(|line| line.split_once(' '))
-        .any(|(at, id)| at == path && id == blob)
+    shipped_files().any(|(at, id)| at == path && id == blob)
 }
 
 /// Where `meta init skills` acts.
@@ -429,10 +431,7 @@ fn install_claude_integration_to(
 
 /// Whether `a` and `b` are one existing folder.
 fn same_dir(a: &Path, b: &Path) -> bool {
-    match (fs::canonicalize(a), fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
-    }
+    matches!((fs::canonicalize(a), fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }
 
 /// `meta init skills --remove-local`: take meta's skills out of `workspace`,
@@ -442,7 +441,7 @@ fn remove_local_skills(home: &Path, workspace: &Path, init: &Init) -> Result<()>
         outln!("[DRY RUN] In {}:", escape_path(workspace))?;
     }
     let claude_dir = workspace.join(".claude");
-    let before = removals(workspace)?;
+    let before = removals(workspace);
     remove_old_files(&claude_dir.join("skills"), "", true, init)?;
     remove_old_files(&claude_dir.join("rules"), "rules/", true, init)?;
     workspace_skills(home, workspace, true, init)?;
@@ -450,7 +449,7 @@ fn remove_local_skills(home: &Path, workspace: &Path, init: &Init) -> Result<()>
         outln!("[DRY RUN] Nothing was removed.")?;
         return Ok(());
     }
-    let removed = before.saturating_sub(removals(workspace)?);
+    let removed = before.saturating_sub(removals(workspace));
     match removed {
         0 => outln!(
             "Nothing of meta's skills to remove in {}",
@@ -470,7 +469,7 @@ fn remove_local_skills(home: &Path, workspace: &Path, init: &Init) -> Result<()>
 /// How many of the paths meta ever wrote skills, links or rules at exist in
 /// `workspace`, whoever wrote them: the difference across a removal is what
 /// it removed.
-fn removals(workspace: &Path) -> Result<usize> {
+fn removals(workspace: &Path) -> usize {
     let mut paths: Vec<PathBuf> = Vec::new();
     for (name, _) in SKILLS {
         paths.push(workspace.join(".meta/skills").join(name).join("SKILL.md"));
@@ -478,11 +477,7 @@ fn removals(workspace: &Path) -> Result<usize> {
             paths.push(workspace.join(dir).join(name));
         }
     }
-    for at in SHIPPED
-        .lines()
-        .filter_map(|line| line.split_once(' '))
-        .map(|(at, _)| at)
-    {
+    for (at, _) in shipped_files() {
         if !at.contains("/SKILL.md") {
             let dir = if at.starts_with("rules/") {
                 ".claude"
@@ -494,10 +489,10 @@ fn removals(workspace: &Path) -> Result<usize> {
     }
     paths.sort();
     paths.dedup();
-    Ok(paths
+    paths
         .iter()
         .filter(|path| fs::symlink_metadata(path).is_ok())
-        .count())
+        .count()
 }
 
 /// Meta's skills in `workspace`, where `--local` or an older meta installed
@@ -621,7 +616,7 @@ fn hooks_in(path: &Path) -> Vec<String> {
 
 /// The git blob id of the file at `path` with its line endings as git
 /// stores them (`\r\n` read as `\n`, as a Windows checkout writes them):
-/// what [`SHIPPED_SKILLS`] lists.
+/// what [`SHIPPED`] lists.
 fn blob_id(dir: &Path, path: &Path) -> Result<String> {
     let text = fs::read(path).with_context(|| format!("Failed to read {}", escape_path(path)))?;
     blob_of(dir, &String::from_utf8_lossy(&text))
@@ -657,9 +652,7 @@ fn blob_of(dir: &Path, text: &str) -> Result<String> {
 /// `overwrite` would remove.
 fn remove_old_files(dir: &Path, prefix: &str, overwrite: bool, init: &Init) -> Result<usize> {
     let mut left = 0;
-    let mut names: Vec<&str> = SHIPPED
-        .lines()
-        .filter_map(|line| line.split_once(' '))
+    let mut names: Vec<&str> = shipped_files()
         .filter_map(|(at, _)| at.strip_prefix(prefix))
         .filter(|at| !at.contains('/') && at.ends_with(".md"))
         .collect();

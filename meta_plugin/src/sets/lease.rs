@@ -287,10 +287,18 @@ pub fn take(lease: &Lease) -> Result<Held> {
         }
         super::remove_file(&path)?;
     }
-    serde_json::to_vec_pretty(lease)
+    // Written whole, then put in place: a reader sees all of it or none
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp.{}", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    let written = serde_json::to_vec_pretty(lease)
         .map_err(std::io::Error::other)
-        .and_then(|json| super::write_whole(&path, &json))
-        .with_context(|| format!("Cannot write {}", escape_path(&path)))?;
+        .and_then(|json| std::fs::write(&tmp, json))
+        .and_then(|()| std::fs::rename(&tmp, &path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written.with_context(|| format!("Cannot write {}", escape_path(&path)))?;
     Ok(Held {
         path,
         _lock: lock,

@@ -116,19 +116,6 @@ fn owner_path(set: &Path) -> Result<PathBuf> {
     Ok(owners_dir(dir)?.join(file))
 }
 
-/// Write `bytes` to `path` whole, then put it in place: a reader sees all
-/// of it or none.
-pub(crate) fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".tmp.{}", std::process::id()));
-    let tmp = PathBuf::from(tmp);
-    let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    written
-}
-
 /// Delete the file at `path`; one already gone is fine.
 pub(crate) fn remove_file(path: &Path) -> Result<()> {
     match std::fs::remove_file(path) {
@@ -150,12 +137,15 @@ pub fn create(set: &Path, provider: &str, workspace: &Path) -> Result<()> {
             .canonicalize()
             .with_context(|| format!("Cannot resolve {}", escape_path(set)))?,
     };
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp.{}", std::process::id()));
+    let tmp = PathBuf::from(tmp);
     let json = serde_json::to_vec_pretty(&owner)?;
     let write = || {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        write_whole(&path, &json)
+        std::fs::write(&tmp, &json).and_then(|()| std::fs::rename(&tmp, &path))
     };
     // the folder goes with the last owner file another command forgets:
     // made again once if it went in between
@@ -163,6 +153,9 @@ pub fn create(set: &Path, provider: &str, workspace: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => write(),
         written => written,
     };
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
     written.with_context(|| format!("Cannot write {}", escape_path(&path)))
 }
 

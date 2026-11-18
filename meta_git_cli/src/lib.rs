@@ -132,12 +132,7 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
     );
 
     // The words after `git`, as typed
-    let words: Vec<String> = command
-        .split_whitespace()
-        .skip(1)
-        .map(str::to_string)
-        .chain(args.iter().cloned())
-        .collect();
+    let words: Vec<String> = typed(request).into_iter().skip(1).collect();
     // meta's filters typed after a command that takes none: the tip says
     // it doesn't take them, not where they go
     let bare: Vec<String> = std::iter::once("git".to_string())
@@ -271,13 +266,18 @@ pub(crate) fn printed(
 /// anew. In text it shows as it runs; under `--json` its rows are this
 /// call's.
 pub(crate) fn again(ctx: &Ctx, request: &Request) -> anyhow::Result<Response> {
-    let words: Vec<String> = request
+    through_meta(ctx, request, &request.cwd, &typed(request))
+}
+
+/// The command `request` is, as typed: its command words (`git` or `git
+/// add`), then its args exactly as given.
+fn typed(request: &Request) -> Vec<String> {
+    request
         .command
         .split_whitespace()
         .map(str::to_string)
         .chain(request.args.iter().cloned())
-        .collect();
-    through_meta(ctx, request, &request.cwd, &words)
+        .collect()
 }
 
 /// Run meta with its options as typed, then `words`, from `cwd`, as [`again`]
@@ -351,14 +351,7 @@ fn is_remote_command(argv: &[String]) -> bool {
 /// Plan a raw git command in each selected repo (any git command meta-git
 /// doesn't adapt)
 fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Response> {
-    // The git argv: the command words (e.g. "git" or "git add") and the
-    // user's args exactly as given
-    let argv: Vec<String> = request
-        .command
-        .split_whitespace()
-        .map(str::to_string)
-        .chain(request.args.iter().cloned())
-        .collect();
+    let argv = typed(request);
     // Set git-specific environment variables (pager, colors, prompts)
     let git_env = git_env::git_env();
 

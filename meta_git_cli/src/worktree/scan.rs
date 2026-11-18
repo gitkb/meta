@@ -89,12 +89,7 @@ pub fn discover_worktree_members(
     let mut repos = Vec::new();
 
     // Check if the task dir itself is a worktree (the "." alias)
-    let dot_git = task_dir.join(".git");
-    if dot_git
-        .symlink_metadata()
-        .map(|m| m.is_file())
-        .unwrap_or(false)
-    {
+    if is_checkout(task_dir) {
         let source = source_repo(task_dir)?;
         repos.push(WorktreeMemberInfo {
             alias: ".".to_string(),
@@ -143,12 +138,9 @@ fn discover_repos_recursive(
         }
     };
     for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
+        let Ok(entry) = entry else { continue };
         let sub_path = entry.path();
-        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+        if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
             continue;
         }
         if !ScannedDirs::searched(&sub_path) {

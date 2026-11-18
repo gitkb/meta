@@ -1149,24 +1149,13 @@ pub struct OrphanWarning {
     pub suggested_key: String,
 }
 
-/// Find a parent .meta.yaml (if any) above the given meta directory.
-///
-/// Starts searching from the parent of `meta_dir` and walks up.
-/// Returns None if this is the root meta repo (no parent .meta.yaml found).
-pub fn find_parent_meta_config(meta_dir: &Path) -> anyhow::Result<Option<PathBuf>> {
-    match meta_dir.parent() {
-        Some(parent) => find_meta_config(parent, None),
-        None => Ok(None),
-    }
-}
-
 /// Check if a meta directory is tracked by its parent meta config.
 ///
 /// Returns `Some(OrphanWarning)` if there's a parent .meta.yaml that doesn't include
 /// this directory in its project list (directly or transitively).
 /// Returns `None` if tracked or if there's no parent meta.
 pub fn check_orphan_status(meta_dir: &Path) -> Option<OrphanWarning> {
-    let parent_config = find_parent_meta_config(meta_dir).ok()??;
+    let parent_config = find_meta_config(meta_dir.parent()?, None).ok()??;
     let parent_meta_dir = parent_config.parent()?;
 
     // Walk the parent's project tree to see what's tracked
@@ -1840,33 +1829,6 @@ mod tests {
     // ============================================================================
     // Orphan detection tests
     // ============================================================================
-
-    #[test]
-    fn test_find_parent_meta_config_none_at_root() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
-
-        // No parent above this directory
-        let result = find_parent_meta_config(dir.path()).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_find_parent_meta_config_finds_parent() {
-        let dir = tempfile::tempdir().unwrap();
-        let nested = dir.path().join("vendor");
-        std::fs::create_dir(&nested).unwrap();
-
-        // Parent .meta.yaml
-        std::fs::write(dir.path().join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
-        // Nested .meta.yaml
-        std::fs::write(nested.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
-
-        let result = find_parent_meta_config(&nested).unwrap();
-        assert!(result.is_some());
-        let path = result.unwrap();
-        assert_eq!(path, dir.path().join(".meta.yaml"));
-    }
 
     #[test]
     fn test_check_orphan_status_not_orphan_when_tracked() {

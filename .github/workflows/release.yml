@@ -23,7 +23,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # macOS and Windows are tested only here, not on PRs or main
+  # macOS and Windows are tested on every PR and main too; macOS integration
+  # only here
   tests:
     name: Tests
     uses: ./.github/workflows/ci.yml

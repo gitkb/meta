@@ -314,45 +314,27 @@ impl Terminal {
     }
 }
 
-/// Parse the multi-commit file content
+/// Parse the multi-commit file content: each section's repo and message,
+/// in order, for the sections whose message isn't empty
 pub(crate) fn parse_multi_commit_file(content: &str) -> Vec<(String, String)> {
-    let mut commits = Vec::new();
-    let mut current_repo: Option<String> = None;
-    let mut current_message = String::new();
-
+    let mut sections: Vec<(String, String)> = Vec::new();
     for line in content.lines() {
         if line.starts_with("==========") && line.ends_with("==========") {
-            // Save previous repo if it had a message
-            if let Some(repo) = current_repo.take() {
-                let msg = current_message.trim().to_string();
-                if !msg.is_empty() {
-                    commits.push((repo, msg));
-                }
-            }
-            // Parse new repo name
-            let repo = line
-                .trim_start_matches('=')
-                .trim_end_matches('=')
-                .trim()
-                .to_string();
-            current_repo = Some(repo);
-            current_message.clear();
-        } else if !line.starts_with('#') && current_repo.is_some() {
-            // Add non-comment lines to current message
-            current_message.push_str(line);
-            current_message.push('\n');
+            let repo = line.trim_matches('=').trim();
+            sections.push((repo.to_string(), String::new()));
+        } else if let Some((_, message)) = sections.last_mut().filter(|_| !line.starts_with('#')) {
+            // a line of the section's message; a comment is no part of it
+            message.push_str(line);
+            message.push('\n');
         }
     }
-
-    // Don't forget the last repo
-    if let Some(repo) = current_repo {
-        let msg = current_message.trim().to_string();
-        if !msg.is_empty() {
-            commits.push((repo, msg));
-        }
-    }
-
-    commits
+    sections
+        .into_iter()
+        .filter_map(|(repo, message)| {
+            let message = message.trim();
+            (!message.is_empty()).then(|| (repo, message.to_string()))
+        })
+        .collect()
 }
 
 #[cfg(test)]

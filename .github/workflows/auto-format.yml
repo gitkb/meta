@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
 
-# The job checks out and pushes with PARENT_REPO_PAT, never GITHUB_TOKEN
+# The job checks out and pushes as the org's dependency-updates App, never GITHUB_TOKEN
 permissions: {}
 
 concurrency:
@@ -22,20 +22,20 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'github-actions[bot]'
     steps:
-      # CI on a format commit pushed with GITHUB_TOKEN waits for manual approval
-      - name: Require PARENT_REPO_PAT
-        env:
-          PAT: ${{ secrets.PARENT_REPO_PAT }}
-        run: |
-          if [ -z "$PAT" ]; then
-            echo "::error::PARENT_REPO_PAT is not available to this run; run cargo fmt --all and push the result yourself"
-            exit 1
-          fi
+      # A format commit pushed with GITHUB_TOKEN starts no CI; the App's push does. This repo
+      # alone, contents write. Minting fails when the secrets aren't available to the run.
+      - name: Token to push the format commit
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.DEPENDENCY_UPDATES_APP_ID }}
+          private-key: ${{ secrets.DEPENDENCY_UPDATES_APP_KEY }}
+          permission-contents: write
 
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref }}
-          token: ${{ secrets.PARENT_REPO_PAT }}
+          token: ${{ steps.token.outputs.token }}
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:

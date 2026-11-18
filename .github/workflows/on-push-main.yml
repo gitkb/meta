@@ -5,7 +5,7 @@ on:
     branches:
       - main
 
-# release-please acts with PARENT_REPO_PAT, not GITHUB_TOKEN
+# release-please acts as the org's dependency-updates App, not GITHUB_TOKEN
 permissions:
   contents: read
 
@@ -14,7 +14,7 @@ jobs:
   quality:
     uses: ./.github/workflows/ci.yml
 
-  # Create release PR or release on merge. The tag it creates (with the PAT)
+  # Create release PR or release on merge. The tag it creates (as the App)
   # starts release.yml.
   release-please:
     name: Release Please
@@ -24,10 +24,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # This repo alone: the release PR, its labels, the tag and the release. The App's tag
+      # starts release.yml, which a GITHUB_TOKEN tag would not.
+      - name: Token for release-please
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.DEPENDENCY_UPDATES_APP_ID }}
+          private-key: ${{ secrets.DEPENDENCY_UPDATES_APP_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Release Please
         uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
         with:
-          token: ${{ secrets.PARENT_REPO_PAT }}
+          token: ${{ steps.token.outputs.token }}
           # Use manifest mode to track version in VERSION file
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json

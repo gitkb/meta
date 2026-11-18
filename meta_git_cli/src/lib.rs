@@ -328,10 +328,7 @@ pub(crate) fn printed_with_git(
     let Some(failure) = failure else {
         return Ok(Response::printed(records));
     };
-    let root = request
-        .workspace
-        .as_ref()
-        .map_or(request.cwd.as_path(), |w| w.root.as_path());
+    let root = update::named(request, &request.cwd);
     let rows = worktree::git_ops::failure_rows(&failure, root);
     if !ctx.meta().json || rows.is_empty() {
         return printed(ctx, records, Some(failure));

@@ -29,22 +29,21 @@ pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>>
         }
     }
     let components: Vec<_> = cwd.components().collect();
-    for (i, comp) in components.iter().enumerate() {
-        if let Component::Normal(name) = comp {
-            if name.to_str() == Some(meta_plugin::sets::WORKTREES_DIR) {
-                let task_name = match components.get(i + 1) {
-                    Some(Component::Normal(n)) => match n.to_str() {
-                        Some(n) => n.to_string(),
-                        None => return Ok(None),
-                    },
-                    _ => return Ok(None),
-                };
-                let task_dir: PathBuf = components.iter().take(i + 2).collect();
-                return Ok(Some((task_name, task_dir)));
-            }
-        }
-    }
-    Ok(None)
+    let Some(i) = components.iter().position(|c| {
+        matches!(c, Component::Normal(n) if n.to_str() == Some(meta_plugin::sets::WORKTREES_DIR))
+    }) else {
+        return Ok(None);
+    };
+    let Some(Component::Normal(name)) = components.get(i + 1) else {
+        return Ok(None);
+    };
+    let Some(name) = name.to_str() else {
+        return Ok(None);
+    };
+    Ok(Some((
+        name.to_string(),
+        components.iter().take(i + 2).collect(),
+    )))
 }
 
 /// The owner file beside the set at `set_dir`, when it was made for this
@@ -153,16 +152,7 @@ pub fn set_members(
         }
         return Ok(Vec::new());
     };
-    // where each project's checkout is in the set (an outside project's at
-    // its name)
-    let projects: Vec<_> = workspace
-        .projects
-        .iter()
-        .map(|project| crate::config::ProjectInfo {
-            path: project.set_place().to_string(),
-            ..project.clone()
-        })
-        .collect();
+    let projects = at_set_places(workspace);
     // without a filter, a nested config that can't be read only costs its
     // projects: the command runs in the others, as in the workspace
     let tree = match set_tree(set_dir, &projects, None, None).map(|(tree, _)| tree) {
@@ -178,19 +168,11 @@ pub fn set_members(
             .collect(),
         Err(e) => return Err(e),
     };
-    let mut places: Vec<(String, crate::config::ProjectInfo)> =
-        crate::config::build_project_map(&tree, set_dir, "")
-            .into_iter()
-            .map(|(place, (_, info))| (place, info))
-            .collect();
-    places.sort_by(|a, b| a.0.cmp(&b.0));
-    let tags = places
-        .iter()
-        .flat_map(|(_, info)| info.tags.clone())
-        .collect();
+    let places = crate::config::build_project_map(&tree, "");
+    let tags = places.values().flat_map(|info| info.tags.clone()).collect();
     let held: Vec<PathBuf> = places
-        .iter()
-        .map(|(place, _)| set_dir.join(place))
+        .keys()
+        .map(|place| set_dir.join(place))
         .filter(|dir| dir.is_dir())
         .collect();
     // the root is a member exactly when the set's folder is a checkout of
@@ -364,7 +346,7 @@ pub fn set_project_tree(
     depth: Option<usize>,
     selected_config: bool,
 ) -> Result<Vec<crate::config::MetaTreeNode>> {
-    use crate::config::{MetaTreeNode, ProjectInfo};
+    use crate::config::MetaTreeNode;
     use std::collections::BTreeMap;
     fn flatten(
         nodes: Vec<MetaTreeNode>,
@@ -397,14 +379,7 @@ pub fn set_project_tree(
         }
     }
 
-    let projects: Vec<_> = workspace
-        .projects
-        .iter()
-        .map(|project| ProjectInfo {
-            path: project.set_place().to_string(),
-            ..project.clone()
-        })
-        .collect();
+    let projects = at_set_places(workspace);
     let mut flat = BTreeMap::new();
     let (tree, read) = set_tree(
         set_dir,
@@ -489,6 +464,19 @@ impl TreeRead {
             }
         }
     }
+}
+
+/// The workspace's projects, each at the place its checkout has in a set
+/// (an outside project's at its name).
+fn at_set_places(workspace: &crate::config::Workspace) -> Vec<crate::config::ProjectInfo> {
+    workspace
+        .projects
+        .iter()
+        .map(|project| crate::config::ProjectInfo {
+            path: project.set_place().to_string(),
+            ..project.clone()
+        })
+        .collect()
 }
 
 /// The meta tree that describes the checkouts of the set at `set_dir`, whose
@@ -899,9 +887,9 @@ mod tests {
             config(&set.join("parent/group"), r#""lib": "own""#);
         }
         let tree = set_project_tree(&set, &own, None, false).unwrap();
-        let map = crate::config::build_project_map(&tree, &set, "");
+        let map = crate::config::build_project_map(&tree, "");
         assert_eq!(
-            map["parent/group/lib"].1.repo.as_ref().unwrap().to_string(),
+            map["parent/group/lib"].repo.as_ref().unwrap().to_string(),
             "own"
         );
     }

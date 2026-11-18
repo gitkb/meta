@@ -337,43 +337,34 @@ pub fn format_markdown(ctx: &WorkspaceContext) -> String {
         .any(|r| r.branch.is_some() || r.dirty.is_some());
     let has_tags = ctx.repos.iter().any(|r| !r.tags.is_empty());
 
-    if has_status && has_tags {
-        out.push_str("## Repos\n");
-        out.push_str("| Repo | Branch | Status | Tags |\n");
-        out.push_str("|------|--------|--------|------|\n");
-        for r in &ctx.repos {
-            out.push_str(&format!(
-                "| {} | {} | {} | {} |\n",
-                md(&r.name),
-                md(&format_branch(r)),
-                format_status(r),
-                md_list(&r.tags),
-            ));
+    out.push_str("## Repos\n");
+    if has_status || has_tags {
+        let mut columns = vec!["Repo"];
+        if has_status {
+            columns.extend(["Branch", "Status"]);
         }
-    } else if has_status {
-        out.push_str("## Repos\n");
-        out.push_str("| Repo | Branch | Status |\n");
-        out.push_str("|------|--------|--------|\n");
+        if has_tags {
+            columns.push("Tags");
+        }
+        out.push_str(&format!("| {} |\n", columns.join(" | ")));
+        for column in &columns {
+            out.push('|');
+            out.push_str(&"-".repeat(column.len() + 2));
+        }
+        out.push_str("|\n");
         for r in &ctx.repos {
-            out.push_str(&format!(
-                "| {} | {} | {} |\n",
-                md(&r.name),
-                md(&format_branch(r)),
-                format_status(r),
-            ));
+            let mut cells = vec![md(&r.name)];
+            if has_status {
+                cells.extend([md(&format_branch(r)), format_status(r)]);
+            }
+            if has_tags {
+                cells.push(md_list(&r.tags));
+            }
+            out.push_str(&format!("| {} |\n", cells.join(" | ")));
         }
     } else {
-        out.push_str("## Repos\n");
-        if has_tags {
-            out.push_str("| Repo | Tags |\n");
-            out.push_str("|------|------|\n");
-            for r in &ctx.repos {
-                out.push_str(&format!("| {} | {} |\n", md(&r.name), md_list(&r.tags)));
-            }
-        } else {
-            for r in &ctx.repos {
-                out.push_str(&format!("- {}\n", md(&r.name)));
-            }
+        for r in &ctx.repos {
+            out.push_str(&format!("- {}\n", md(&r.name)));
         }
     }
 

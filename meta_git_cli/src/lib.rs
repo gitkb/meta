@@ -346,7 +346,7 @@ pub(crate) fn printed_with_git(
 
 /// Check if a git command accesses remote repositories
 fn is_remote_command(argv: &[String]) -> bool {
-    let remote_commands = ["push", "pull", "fetch", "clone", "ls-remote"];
+    let remote_commands = ["push", "pull", "fetch", "ls-remote"];
     argv.get(1)
         .is_some_and(|subcommand| remote_commands.contains(&subcommand.as_str()))
 }
@@ -712,14 +712,6 @@ the only commit message
     fn test_is_remote_command_fetch() {
         assert!(super::is_remote_command(&argv("git fetch")));
         assert!(super::is_remote_command(&argv("git fetch --all")));
-    }
-
-    #[test]
-    fn test_is_remote_command_clone() {
-        assert!(super::is_remote_command(&argv("git clone")));
-        assert!(super::is_remote_command(&argv(
-            "git clone https://github.com/org/repo.git"
-        )));
     }
 
     #[test]

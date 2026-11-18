@@ -507,15 +507,11 @@ impl Scope {
         known: &[String],
         read_from: &str,
     ) -> Result<Self> {
-        let tags = tag.as_deref().map(Filters::tags).transpose()?;
-        Ok(match (project, tags) {
+        let filters = tag.as_deref().map(tag_filter).transpose()?;
+        Ok(match (project, filters) {
             (Some(_), Some(_)) => anyhow::bail!("Give 'project' or 'tag', not both"),
             (Some(project), None) => Scope::Project(project),
-            (None, Some(tags)) => {
-                let filters = Filters {
-                    tags,
-                    ..Filters::default()
-                };
+            (None, Some(filters)) => {
                 filters.check_tags(known, read_from, "")?;
                 Scope::Tags(filters)
             }
@@ -990,10 +986,12 @@ impl McpServer {
     }
 
     fn git_branch(&self, args: TagArgs) -> Result<String> {
-        let filters = match args.tag {
-            Some(tag) => tag_filter(&tag)?,
-            None => Filters::default(),
-        };
+        let filters = args
+            .tag
+            .as_deref()
+            .map(tag_filter)
+            .transpose()?
+            .unwrap_or_default();
         let recursive = self.recursive()?;
         let mut results = Vec::new();
         for (project, dir, _) in reached(&recursive, &filters)? {
@@ -1171,21 +1169,7 @@ impl McpServer {
     fn clean(&self, args: TagArgs) -> Result<Reply> {
         let workspace = self.workspace()?;
         let targets = workspace.select(&workspace.scope(None, args.tag)?)?;
-        self.run_each(&targets, |dir| {
-            let has = |file: &str| dir.join(file).is_file();
-            // npm has no clean; removing node_modules is left to the user
-            if has("Cargo.toml") {
-                Some(("cargo", vec!["clean"]))
-            } else if has("package.json") {
-                None
-            } else if has("go.mod") {
-                Some(("go", vec!["clean"]))
-            } else if has("Makefile") {
-                Some(("make", vec!["clean"]))
-            } else {
-                None
-            }
-        })
+        self.run_each(&targets, |dir| repo_command(dir, RepoAction::Clean))
     }
 
     /// Runs, in each of `targets` that exists, the command `command` picks
@@ -1254,11 +1238,7 @@ impl McpServer {
     /// The projects of the workspace in `dir` (their paths under `prefix`)
     /// that are no repository of their own, and why, as `meta project
     /// check` says; its error when it gave no answer.
-    fn not_repos(
-        &self,
-        dir: &Path,
-        prefix: &str,
-    ) -> Result<std::collections::HashMap<String, String>, String> {
+    fn not_repos(&self, dir: &Path, prefix: &str) -> Result<HashMap<String, String>, String> {
         let check = crate::run::meta().and_then(|meta| {
             let meta = meta.cwd(dir).args(["project", "check"]);
             self.calls.meta(meta)
@@ -1303,7 +1283,7 @@ impl McpServer {
         // whether a project gave an answer, matches or none
         let mut answered = false;
         // what `meta project check` says of each workspace's projects
-        let mut checks = std::collections::HashMap::new();
+        let mut checks = HashMap::new();
 
         for SearchTarget {
             path: name,
@@ -1478,7 +1458,7 @@ impl McpServer {
         let recursive = self.recursive()?;
         let mut matching = Vec::new();
         for (name, dir, tags) in reached(&recursive, &Filters::default())? {
-            let state = RepoState::collect(&name, &dir, &tags)?;
+            let state = RepoState::collect(&name, &dir, &tags);
             if state.matches(&query) {
                 matching.push(state);
             }
@@ -1494,9 +1474,7 @@ impl McpServer {
         let recursive = self.recursive()?;
         let mut repo_states = Vec::new();
         for (name, dir, tags) in reached(&recursive, &Filters::default())? {
-            if let Ok(state) = RepoState::collect(&name, &dir, &tags) {
-                repo_states.push(state);
-            }
+            repo_states.push(RepoState::collect(&name, &dir, &tags));
         }
         Ok(serde_json::to_string_pretty(&WorkspaceState::from_repos(
             &repo_states,
@@ -1659,35 +1637,48 @@ fn build_file_tree(
 /// npm is a `.cmd` script on Windows, which `Command` doesn't find by its bare name.
 const NPM: &str = if cfg!(windows) { "npm.cmd" } else { "npm" };
 
-/// What to run in a repo: build it (`release` for cargo) or test it.
+/// What to run in a repo: build it (`release` for cargo), test it or clean it.
 #[derive(Clone, Copy)]
 enum RepoAction {
     Build { release: bool },
     Test,
+    Clean,
 }
 
-/// Choose build/test commands from the same per-repo build-system precedence.
+/// Choose build/test/clean commands from the same per-repo build-system precedence.
 fn repo_command(path: &Path, action: RepoAction) -> Option<(&'static str, Vec<&'static str>)> {
-    let build = matches!(action, RepoAction::Build { .. });
-    if path.join("Cargo.toml").is_file() {
-        Some(match action {
-            RepoAction::Build { release: true } => ("cargo", vec!["build", "--release"]),
-            RepoAction::Build { release: false } => ("cargo", vec!["build"]),
-            RepoAction::Test => ("cargo", vec!["test"]),
-        })
-    } else if path.join("package.json").is_file() {
-        Some((
-            NPM,
-            if build {
-                vec!["run", "build"]
-            } else {
-                vec!["test"]
-            },
-        ))
-    } else if path.join("go.mod").is_file() {
-        Some(("go", vec![if build { "build" } else { "test" }, "./..."]))
-    } else if path.join("Makefile").is_file() {
-        Some(("make", if build { vec![] } else { vec!["test"] }))
+    use RepoAction::{Build, Clean, Test};
+    let has = |file: &str| path.join(file).is_file();
+    if has("Cargo.toml") {
+        let args = match action {
+            Build { release: true } => vec!["build", "--release"],
+            Build { release: false } => vec!["build"],
+            Test => vec!["test"],
+            Clean => vec!["clean"],
+        };
+        Some(("cargo", args))
+    } else if has("package.json") {
+        let args = match action {
+            Build { .. } => vec!["run", "build"],
+            Test => vec!["test"],
+            // npm has no clean; removing node_modules is left to the user
+            Clean => return None,
+        };
+        Some((NPM, args))
+    } else if has("go.mod") {
+        let args = match action {
+            Build { .. } => vec!["build", "./..."],
+            Test => vec!["test", "./..."],
+            Clean => vec!["clean"],
+        };
+        Some(("go", args))
+    } else if has("Makefile") {
+        let args = match action {
+            Build { .. } => vec![],
+            Test => vec!["test"],
+            Clean => vec!["clean"],
+        };
+        Some(("make", args))
     } else {
         None
     }
@@ -2577,20 +2568,34 @@ mod tests {
     fn build_and_test_share_detection_and_keep_release() {
         let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();
-        for (file, program, build, test) in [
-            ("Makefile", "make", vec![], vec!["test"]),
+        for (file, program, build, test, clean) in [
+            (
+                "Makefile",
+                "make",
+                vec![],
+                vec!["test"],
+                Some(vec!["clean"]),
+            ),
             (
                 "go.mod",
                 "go",
                 vec!["build", "./..."],
                 vec!["test", "./..."],
+                Some(vec!["clean"]),
             ),
-            ("package.json", NPM, vec!["run", "build"], vec!["test"]),
+            (
+                "package.json",
+                NPM,
+                vec!["run", "build"],
+                vec!["test"],
+                None,
+            ),
             (
                 "Cargo.toml",
                 "cargo",
                 vec!["build", "--release"],
                 vec!["test"],
+                Some(vec!["clean"]),
             ),
         ] {
             std::fs::write(tmp.join(file), "").unwrap();
@@ -2599,6 +2604,10 @@ mod tests {
                 Some((program, build))
             );
             assert_eq!(repo_command(&tmp, RepoAction::Test), Some((program, test)));
+            assert_eq!(
+                repo_command(&tmp, RepoAction::Clean),
+                clean.map(|clean| (program, clean))
+            );
         }
     }
 

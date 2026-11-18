@@ -35,10 +35,8 @@ pub enum QueryCondition {
     ModifiedIn(Duration),
     /// Filter by language/build system
     Language(String),
-    /// Filter by having unpushed commits
-    HasUnpushed(bool),
-    /// Filter by being ahead of remote
-    AheadOfRemote(bool),
+    /// Filter by having unpushed commits: being ahead of remote
+    Ahead(bool),
     /// Filter by being behind remote
     BehindRemote(bool),
 }
@@ -97,12 +95,13 @@ impl Query {
             anyhow::bail!("'{}' has no value", escape(s));
         }
 
+        let flag = |what: &str| {
+            value
+                .parse::<bool>()
+                .with_context(|| format!("Invalid boolean value{what}: '{}'", escape(value)))
+        };
         match field.as_str() {
-            "dirty" => {
-                let is_dirty = value.parse::<bool>()
-                    .with_context(|| format!("Invalid boolean value for dirty: '{}'", escape(value)))?;
-                Ok(QueryCondition::Dirty(is_dirty))
-            }
+            "dirty" => Ok(QueryCondition::Dirty(flag(" for dirty")?)),
             "branch" => Ok(QueryCondition::Branch(value.to_string())),
             "tag" => Ok(QueryCondition::Tag(value.to_string())),
             "modified_in" | "modified" => {
@@ -110,21 +109,10 @@ impl Query {
                 Ok(QueryCondition::ModifiedIn(Duration::from_secs(secs)))
             }
             "language" | "lang" => Ok(QueryCondition::Language(value.to_lowercase())),
-            "has_unpushed" | "unpushed" => {
-                let has_unpushed = value.parse::<bool>()
-                    .with_context(|| format!("Invalid boolean value: '{}'", escape(value)))?;
-                Ok(QueryCondition::HasUnpushed(has_unpushed))
+            "has_unpushed" | "unpushed" | "ahead" | "ahead_of_remote" => {
+                Ok(QueryCondition::Ahead(flag("")?))
             }
-            "ahead" | "ahead_of_remote" => {
-                let ahead = value.parse::<bool>()
-                    .with_context(|| format!("Invalid boolean value: '{}'", escape(value)))?;
-                Ok(QueryCondition::AheadOfRemote(ahead))
-            }
-            "behind" | "behind_remote" => {
-                let behind = value.parse::<bool>()
-                    .with_context(|| format!("Invalid boolean value: '{}'", escape(value)))?;
-                Ok(QueryCondition::BehindRemote(behind))
-            }
+            "behind" | "behind_remote" => Ok(QueryCondition::BehindRemote(flag("")?)),
             _ => anyhow::bail!("Unknown query field: '{}'. Valid fields: dirty, branch, tag, modified_in, language, has_unpushed, ahead, behind", escape(&field)),
         }
     }
@@ -154,8 +142,9 @@ pub struct RepoState {
 }
 
 impl RepoState {
-    /// Collect state for a repository at the given path
-    pub fn collect(name: &str, path: &Path, tags: &[String]) -> Result<Self> {
+    /// Collect state for a repository at the given path; what git can't
+    /// read is `None`.
+    pub fn collect(name: &str, path: &Path, tags: &[String]) -> Self {
         let path_str = path.to_string_lossy().to_string();
 
         // a checkout whose work tree git refuses (`core.bare=true`) still
@@ -184,7 +173,7 @@ impl RepoState {
         // Detect build systems
         let build_systems = detect_build_systems(path);
 
-        Ok(RepoState {
+        RepoState {
             name: name.to_string(),
             path: path_str,
             branch: refs
@@ -201,17 +190,12 @@ impl RepoState {
             last_commit_hash: refs.and_then(|refs| refs.oid),
             last_commit_message,
             build_systems,
-        })
+        }
     }
 
     /// Check if this repo state matches a query
     pub fn matches(&self, query: &Query) -> bool {
-        for condition in &query.conditions {
-            if !self.matches_condition(condition) {
-                return false;
-            }
-        }
-        true
+        query.conditions.iter().all(|c| self.matches_condition(c))
     }
 
     fn matches_condition(&self, condition: &QueryCondition) -> bool {
@@ -232,7 +216,7 @@ impl RepoState {
                 .build_systems
                 .iter()
                 .any(|bs| bs.to_lowercase() == *lang),
-            QueryCondition::HasUnpushed(expected) | QueryCondition::AheadOfRemote(expected) => {
+            QueryCondition::Ahead(expected) => {
                 self.ahead.is_some_and(|ahead| (ahead > 0) == *expected)
             }
             QueryCondition::BehindRemote(expected) => {
@@ -327,40 +311,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_simple_query() {
-        let query = Query::parse("dirty:true").unwrap();
-        assert_eq!(query.conditions.len(), 1);
-        assert_eq!(query.conditions[0], QueryCondition::Dirty(true));
-    }
-
-    #[test]
-    fn test_parse_compound_query() {
-        let query = Query::parse("dirty:true AND tag:backend").unwrap();
-        assert_eq!(query.conditions.len(), 2);
-        assert_eq!(query.conditions[0], QueryCondition::Dirty(true));
-        assert_eq!(
-            query.conditions[1],
-            QueryCondition::Tag("backend".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_branch_query() {
-        let query = Query::parse("branch:main").unwrap();
-        assert_eq!(query.conditions.len(), 1);
-        assert_eq!(
-            query.conditions[0],
-            QueryCondition::Branch("main".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_modified_in_query() {
-        let query = Query::parse("modified_in:24h").unwrap();
-        assert_eq!(
-            query.conditions,
-            [QueryCondition::ModifiedIn(Duration::from_secs(86400))]
-        );
+    fn test_parse_queries() {
+        use QueryCondition::{Branch, Dirty, ModifiedIn, Tag};
+        for (query, conditions) in [
+            ("dirty:true", vec![Dirty(true)]),
+            (
+                "dirty:true AND tag:backend",
+                vec![Dirty(true), Tag("backend".to_string())],
+            ),
+            ("branch:main", vec![Branch("main".to_string())]),
+            (
+                "modified_in:24h",
+                vec![ModifiedIn(Duration::from_secs(86400))],
+            ),
+        ] {
+            assert_eq!(
+                Query::parse(query).unwrap().conditions,
+                conditions,
+                "{query}"
+            );
+        }
     }
 
     #[test]
@@ -389,7 +359,7 @@ mod tests {
         let dir = sandbox.work();
         sandbox.git(&dir, &["init", "-q", "-b", "main"]);
         std::fs::write(dir.join("new"), "").unwrap();
-        let state = RepoState::collect("r", dir.as_path(), &[]).unwrap();
+        let state = RepoState::collect("r", dir.as_path(), &[]);
         assert_eq!(
             (state.is_dirty, state.has_untracked),
             (Some(true), Some(true))
@@ -413,7 +383,7 @@ mod tests {
         let commit = sandbox.git(&dir, &["commit-tree", tree, "-m", "first"]);
         let commit = commit.trim().to_string();
         sandbox.git(&dir, &["update-ref", "refs/heads/main", &commit]);
-        let state = RepoState::collect("r", dir.as_path(), &[]).unwrap();
+        let state = RepoState::collect("r", dir.as_path(), &[]);
         assert_eq!(state.branch.as_deref(), Some("main"));
         assert_eq!(state.last_commit_hash.as_deref(), Some(commit.as_str()));
         assert_eq!(state.last_commit_message.as_deref(), Some("first"));
@@ -428,7 +398,7 @@ mod tests {
         sandbox.git(&dir, &["init", "-q", "-b", "main"]);
         sandbox.git(&dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
         sandbox.git(&dir, &["config", "core.bare", "true"]);
-        let state = RepoState::collect("r", dir.as_path(), &[]).unwrap();
+        let state = RepoState::collect("r", dir.as_path(), &[]);
         assert_eq!(state.branch.as_deref(), Some("main"));
         assert_eq!(state.last_commit_message.as_deref(), Some("first"));
         // its changes are unknown, never clean

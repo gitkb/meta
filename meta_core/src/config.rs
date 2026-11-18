@@ -1254,6 +1254,20 @@ fn walk_inner(
 mod tests {
     use super::*;
 
+    fn meta_yaml(dir: &Path, projects: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join(".meta.yaml"),
+            format!(r#"{{"projects": {{{projects}}}}}"#),
+        )
+        .unwrap();
+    }
+
+    fn load(dir: &Path, yaml: &str) -> anyhow::Result<Workspace> {
+        std::fs::write(dir.join(".meta.yaml"), yaml).unwrap();
+        Workspace::load(&dir.join(".meta.yaml"))
+    }
+
     #[test]
     fn test_walk_meta_tree_no_config() {
         let dir = tempfile::tempdir().unwrap();
@@ -1264,7 +1278,7 @@ mod tests {
     #[test]
     fn test_walk_meta_tree_empty_projects() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        meta_yaml(dir.path(), "");
         let tree = walk_meta_tree(dir.path(), None).unwrap();
         assert!(tree.is_empty());
     }
@@ -1275,15 +1289,10 @@ mod tests {
         std::fs::create_dir(dir.path().join("zebra")).unwrap();
         std::fs::create_dir(dir.path().join("alpha")).unwrap();
         std::fs::create_dir(dir.path().join("middle")).unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {
-                "zebra": "git@github.com:org/zebra.git",
-                "alpha": "git@github.com:org/alpha.git",
-                "middle": "git@github.com:org/middle.git"
-            }}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""zebra": "git@github.com:org/zebra.git", "alpha": "git@github.com:org/alpha.git", "middle": "git@github.com:org/middle.git""#,
+        );
 
         let tree = walk_meta_tree(dir.path(), None).unwrap();
         assert_eq!(tree.len(), 3);
@@ -1299,15 +1308,11 @@ mod tests {
         let no_meta = dir.path().join("no_meta");
         std::fs::create_dir(&has_meta).unwrap();
         std::fs::create_dir(&no_meta).unwrap();
-        std::fs::write(has_meta.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {
-                "has_meta": "git@github.com:org/has_meta.git",
-                "no_meta": "git@github.com:org/no_meta.git"
-            }}"#,
-        )
-        .unwrap();
+        meta_yaml(&has_meta, "");
+        meta_yaml(
+            dir.path(),
+            r#""has_meta": "git@github.com:org/has_meta.git", "no_meta": "git@github.com:org/no_meta.git""#,
+        );
 
         let tree = walk_meta_tree(dir.path(), None).unwrap();
         let has = tree.iter().find(|n| n.info.name == "has_meta").unwrap();
@@ -1338,14 +1343,12 @@ mod tests {
     #[test]
     fn a_config_that_does_not_parse_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".meta.yaml");
         for text in [
             "{not json",
             "projects: [unclosed",
             "projects:\n  a: {repo: [}\n",
         ] {
-            std::fs::write(&config, text).unwrap();
-            assert!(Workspace::load(&config).is_err(), "{text}");
+            assert!(load(dir.path(), text).is_err(), "{text}");
         }
     }
 
@@ -1371,16 +1374,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&child, child.join("loop")).unwrap();
 
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"child": "git@github.com:org/child.git"}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            child.join(".meta.yaml"),
-            r#"{"projects": {"loop": "git@github.com:org/loop.git"}}"#,
-        )
-        .unwrap();
+        meta_yaml(dir.path(), r#""child": "git@github.com:org/child.git""#);
+        meta_yaml(&child, r#""loop": "git@github.com:org/loop.git""#);
 
         #[cfg(unix)]
         {
@@ -1396,11 +1391,7 @@ mod tests {
     fn test_walk_meta_tree_nonexistent_project_dir() {
         let dir = tempfile::tempdir().unwrap();
         // Project listed in .meta.yaml but directory doesn't exist
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"missing": "git@github.com:org/missing.git"}}"#,
-        )
-        .unwrap();
+        meta_yaml(dir.path(), r#""missing": "git@github.com:org/missing.git""#);
 
         let tree = walk_meta_tree(dir.path(), None).unwrap();
         assert_eq!(tree.len(), 1);
@@ -1411,14 +1402,13 @@ mod tests {
 
     #[test]
     fn branch_is_the_start_branch_and_a_bad_one_fails_only_its_project() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".meta.yaml");
-        let load = |yaml: &str| {
-            std::fs::write(&config, yaml).unwrap();
-            Workspace::load(&config)
-        };
-        let loaded =
-            load("projects:\n  a:\n    repo: x\n    branch: release/1.x\n  b: y\n").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let loaded = load(
+            dir,
+            "projects:\n  a:\n    repo: x\n    branch: release/1.x\n  b: y\n",
+        )
+        .unwrap();
         let start: Vec<_> = loaded.projects.iter().map(|p| p.start_branch()).collect();
         assert_eq!(start, [Ok(Some("release/1.x")), Ok(None)]);
         // a bad one fails only what would use it: the config still loads,
@@ -1434,9 +1424,10 @@ mod tests {
             "[main]",
             "{x: 1}",
         ] {
-            let loaded = load(&format!(
-                "projects:\n  a:\n    repo: x\n    branch: {bad}\n  b: y\n"
-            ))
+            let loaded = load(
+                dir,
+                &format!("projects:\n  a:\n    repo: x\n    branch: {bad}\n  b: y\n"),
+            )
             .unwrap();
             let why = loaded.projects[0].start_branch().unwrap_err();
             assert!(
@@ -1446,26 +1437,22 @@ mod tests {
             assert_eq!(loaded.projects[1].start_branch(), Ok(None), "{bad}");
         }
         // null is no branch: the remote's default
-        let loaded = load("projects:\n  a:\n    repo: x\n    branch: ~\n").unwrap();
+        let loaded = load(dir, "projects:\n  a:\n    repo: x\n    branch: ~\n").unwrap();
         assert_eq!(loaded.projects[0].start_branch(), Ok(None));
     }
 
     #[test]
     fn defaults_and_unknown_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".meta.yaml");
-        let load = |yaml: &str| {
-            std::fs::write(&config, yaml).unwrap();
-            Workspace::load(&config)
-        };
-        assert!(load("projects: {}\n").unwrap().defaults.parallel);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        assert!(load(dir, "projects: {}\n").unwrap().defaults.parallel);
         assert!(
-            !load("defaults:\n  parallel: false\n")
+            !load(dir, "defaults:\n  parallel: false\n")
                 .unwrap()
                 .defaults
                 .parallel
         );
-        let hooks = load("worktree:\n  hooks:\n    post-create: make\n").unwrap();
+        let hooks = load(dir, "worktree:\n  hooks:\n    post-create: make\n").unwrap();
         assert_eq!(
             hooks
                 .worktree
@@ -1485,18 +1472,22 @@ mod tests {
             "worktree:\n  hooks:\n    post-create: 123\n",
             "worktree:\n  hooks:\n    post-create:\n",
         ] {
-            assert!(load(typo).is_err(), "{typo}");
+            assert!(load(dir, typo).is_err(), "{typo}");
         }
         // a hook name meta doesn't run at is an error naming it
-        let err = load("worktree:\n  hooks:\n    post-cretae: make\n").unwrap_err();
+        let err = load(dir, "worktree:\n  hooks:\n    post-cretae: make\n").unwrap_err();
         let err = format!("{err:#}");
         assert!(
             err.contains("post-cretae") && err.contains(".meta.yaml"),
             "{err}"
         );
         // keys other tools put on a project are theirs
-        assert!(load("projects:\n  a:\n    repo: x\n    owner: team-a\n").is_ok());
-        assert!(load("projects:\n  a:\n    path: \"123\"\n    tags: [\"1\"]\n").is_ok());
+        assert!(load(dir, "projects:\n  a:\n    repo: x\n    owner: team-a\n").is_ok());
+        assert!(load(
+            dir,
+            "projects:\n  a:\n    path: \"123\"\n    tags: [\"1\"]\n"
+        )
+        .is_ok());
         // a project of the wrong shape is named, with the shape it needs
         for (yaml, says) in [
             (
@@ -1529,7 +1520,7 @@ mod tests {
                 "projects.api.tags[0]: invalid type: integer `1`, expected a string",
             ),
         ] {
-            let err = format!("{:#}", load(yaml).unwrap_err());
+            let err = format!("{:#}", load(dir, yaml).unwrap_err());
             assert!(err.contains(says) && err.contains(".meta.yaml"), "{err}");
         }
         // an empty path is refused naming its project, in an entry a merge
@@ -1538,7 +1529,7 @@ mod tests {
             "projects:\n  api:\n    path: \"\"\n",
             "projects:\n  a: &b\n    repo: x.git\n  api:\n    <<: *b\n    path: \"\"\n",
         ] {
-            let err = format!("{:#}", load(yaml).unwrap_err());
+            let err = format!("{:#}", load(dir, yaml).unwrap_err());
             assert!(
                 err.contains("Invalid project 'api' in") && err.ends_with(": path is empty"),
                 "{err}"
@@ -1549,19 +1540,18 @@ mod tests {
             "projects:\n  api:\n    path: a\n    path: b\n",
             "projects:\n  api:\n    path: ~\n    path: b\n",
         ] {
-            let err = format!("{:#}", load(yaml).unwrap_err());
+            let err = format!("{:#}", load(dir, yaml).unwrap_err());
             assert!(err.contains("duplicate field `path`"), "{err}");
         }
-        let null = load("projects:\n  api:\n    path: ~\n").unwrap();
+        let null = load(dir, "projects:\n  api:\n    path: ~\n").unwrap();
         assert_eq!(null.projects[0].path, "api");
     }
 
     #[test]
     fn every_field_and_url_form_loads_with_defaults_for_the_rest() {
         let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".meta.yaml");
-        std::fs::write(
-            &config,
+        let loaded: Vec<_> = load(
+            dir.path(),
             "projects:
   scp: git@github.com:org/scp.git
   url:
@@ -1580,24 +1570,22 @@ mod tests {
   none: {}
 ",
         )
-        .unwrap();
-        let loaded: Vec<_> = Workspace::load(&config)
-            .unwrap()
-            .projects
-            .into_iter()
-            .map(|p| {
-                let repo = p.repo.map(|r| r.raw().to_string());
-                (
-                    p.name,
-                    p.path,
-                    repo,
-                    p.tags,
-                    p.provides,
-                    p.depends_on,
-                    p.meta,
-                )
-            })
-            .collect();
+        .unwrap()
+        .projects
+        .into_iter()
+        .map(|p| {
+            let repo = p.repo.map(|r| r.raw().to_string());
+            (
+                p.name,
+                p.path,
+                repo,
+                p.tags,
+                p.provides,
+                p.depends_on,
+                p.meta,
+            )
+        })
+        .collect();
         let none = Vec::<String>::new;
         let strings = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let entry = |name: &str, path: &str, repo: Option<&str>| {
@@ -1645,18 +1633,16 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
 
         // Root .meta.yaml with nested meta project (has repo URL + meta: true)
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}"#,
+        );
 
         // Nested .meta.yaml inside vendor (simulates what exists after cloning)
-        std::fs::write(
-            vendor.join(".meta.yaml"),
-            r#"{"projects": {"tree-sitter-markdown": "git@github.com:org/tsm.git"}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            &vendor,
+            r#""tree-sitter-markdown": "git@github.com:org/tsm.git""#,
+        );
 
         let tree = walk_meta_tree(dir.path(), None).unwrap();
         assert_eq!(tree.len(), 1);
@@ -1686,13 +1672,12 @@ mod tests {
         std::fs::create_dir(&vendor).unwrap();
 
         // Parent .meta.yaml tracks vendor with repo URL and meta: true
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}"#,
+        );
         // Nested .meta.yaml (simulates what exists after cloning vendor)
-        std::fs::write(vendor.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        meta_yaml(&vendor, "");
 
         let result = check_orphan_status(&vendor);
         assert!(result.is_none(), "vendor should not be orphan when tracked");
@@ -1705,14 +1690,10 @@ mod tests {
         std::fs::create_dir(&vendor).unwrap();
 
         // Parent .meta.yaml does NOT track vendor
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"other": "git@github.com:org/other.git"}}"#,
-        )
-        .unwrap();
+        meta_yaml(dir.path(), r#""other": "git@github.com:org/other.git""#);
         std::fs::create_dir(dir.path().join("other")).unwrap();
         // Nested .meta.yaml
-        std::fs::write(vendor.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        meta_yaml(&vendor, "");
 
         let result = check_orphan_status(&vendor);
         assert!(result.is_some(), "vendor should be orphan when not tracked");
@@ -1726,7 +1707,7 @@ mod tests {
     #[test]
     fn test_check_orphan_status_no_parent_means_not_orphan() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        meta_yaml(dir.path(), "");
 
         // No parent .meta.yaml above this one
         let result = check_orphan_status(dir.path());
@@ -1743,25 +1724,22 @@ mod tests {
         std::fs::create_dir_all(&deep_lib).unwrap();
 
         // Root tracks vendor as nested meta
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}"#,
+        );
 
         // Vendor tracks sub-vendor as nested meta
-        std::fs::write(
-            vendor.join(".meta.yaml"),
-            r#"{"projects": {"sub-vendor": {"repo": "git@github.com:org/sub-vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            &vendor,
+            r#""sub-vendor": {"repo": "git@github.com:org/sub-vendor.git", "meta": true}"#,
+        );
 
         // Sub-vendor tracks deep-lib
-        std::fs::write(
-            sub_vendor.join(".meta.yaml"),
-            r#"{"projects": {"deep-lib": "git@github.com:org/deep-lib.git"}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            &sub_vendor,
+            r#""deep-lib": "git@github.com:org/deep-lib.git""#,
+        );
 
         // Check from sub-vendor's perspective (should not be orphan - tracked by vendor)
         let result = check_orphan_status(&sub_vendor);
@@ -1781,22 +1759,17 @@ mod tests {
         std::fs::create_dir(dir.path().join("backend")).unwrap();
 
         // Root tracks vendor and backend
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}, "backend": "git@github.com:org/backend.git"}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}, "backend": "git@github.com:org/backend.git""#,
+        );
 
         // Vendor does NOT track orphan-project
-        std::fs::write(
-            vendor.join(".meta.yaml"),
-            r#"{"projects": {"lib": "git@github.com:org/lib.git"}}"#,
-        )
-        .unwrap();
+        meta_yaml(&vendor, r#""lib": "git@github.com:org/lib.git""#);
         std::fs::create_dir(vendor.join("lib")).unwrap();
 
         // Orphan has its own .meta.yaml
-        std::fs::write(orphan_dir.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        meta_yaml(&orphan_dir, "");
 
         // Check from orphan's perspective
         let result = check_orphan_status(&orphan_dir);
@@ -1816,16 +1789,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vendor = dir.path().join("vendor");
         std::fs::create_dir(&vendor).unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            vendor.join(".meta.yaml"),
-            r#"{"projects": {"x": {"path": ".git/escape"}}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""vendor": {"repo": "git@github.com:org/vendor.git", "meta": true}"#,
+        );
+        meta_yaml(&vendor, r#""x": {"path": ".git/escape"}"#);
 
         let err = walk_meta_tree(dir.path(), None).unwrap_err().to_string();
         assert!(err.contains("Invalid project 'x'"), "{err}");
@@ -1833,10 +1801,7 @@ mod tests {
     }
 
     fn parse_err_in(dir: &Path, json: &str) -> String {
-        std::fs::write(dir.join(".meta.yaml"), json).unwrap();
-        Workspace::load(&dir.join(".meta.yaml"))
-            .unwrap_err()
-            .to_string()
+        load(dir, json).unwrap_err().to_string()
     }
 
     fn parse_err(json: &str) -> String {
@@ -1847,12 +1812,11 @@ mod tests {
     #[test]
     fn a_url_with_credentials_reaches_git_unchanged() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(".meta.yaml");
-        std::fs::write(&path, "projects:\n  r: https://alice:ghp_SECRET@h/r.git\n").unwrap();
-        let repo = Workspace::load(&path).unwrap().projects[0]
-            .repo
-            .clone()
-            .unwrap();
+        let loaded = load(
+            dir.path(),
+            "projects:\n  r: https://alice:ghp_SECRET@h/r.git\n",
+        );
+        let repo = loaded.unwrap().projects[0].repo.clone().unwrap();
         assert_eq!(repo.as_git_arg(), "https://alice:ghp_SECRET@h/r.git");
         assert_eq!(repo.to_string(), "https://***@h/r.git");
     }
@@ -1937,11 +1901,10 @@ mod tests {
         if !locked_dir(&locked) {
             return;
         }
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"p": {"repo": "u", "path": "locked/x"}, "q": "u"}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""p": {"repo": "u", "path": "locked/x"}, "q": "u""#,
+        );
         let loaded = Workspace::load(&dir.path().join(".meta.yaml"));
         unlock_dir(&locked);
         assert_eq!(loaded.unwrap().projects.len(), 2);
@@ -1951,11 +1914,7 @@ mod tests {
     #[test]
     fn one_project_folder_it_cannot_look_into_is_that_projects_problem() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"locked": "u", "open": "u"}}"#,
-        )
-        .unwrap();
+        meta_yaml(dir.path(), r#""locked": "u", "open": "u""#);
         std::fs::create_dir(dir.path().join("open")).unwrap();
         let locked = dir.path().join("locked");
         if !locked_dir(&locked) {
@@ -1981,11 +1940,7 @@ mod tests {
         // must fail rather than leave group's repos out
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("group/core")).unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"group": {"repo": "u", "meta": true}}}"#,
-        )
-        .unwrap();
+        meta_yaml(dir.path(), r#""group": {"repo": "u", "meta": true}"#);
         let private = dir.path().join("private");
         std::fs::create_dir(&private).unwrap();
         std::fs::write(
@@ -2019,11 +1974,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("real")).unwrap();
         std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("alias")).unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"outer": {"repo": "u", "path": "real/outer"}, "inner": {"repo": "u", "path": "alias/outer/link/x"}}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""outer": {"repo": "u", "path": "real/outer"}, "inner": {"repo": "u", "path": "alias/outer/link/x"}"#,
+        );
         let err = Workspace::load(&dir.path().join(".meta.yaml"))
             .unwrap_err()
             .to_string();
@@ -2081,8 +2035,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = dir.path().join("ws\nfake line\u{1b}[2J");
         std::fs::create_dir(&ws).unwrap();
-        std::fs::write(ws.join(".meta.yaml"), "{not json").unwrap();
-        let err = format!("{:#}", Workspace::load(&ws.join(".meta.yaml")).unwrap_err());
+        let err = format!("{:#}", load(&ws, "{not json").unwrap_err());
         assert!(!err.contains('\n') && !err.contains('\u{1b}'), "{err}");
         assert!(err.contains("ws\\nfake line\\u{1b}[2J"), "{err}");
     }
@@ -2128,11 +2081,10 @@ mod tests {
         }
         // Ordinary names that only look similar are fine
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"console": "u", "a.b": "u", "com10": "u", "x y+z@w": "u", ".github": "u"}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""console": "u", "a.b": "u", "com10": "u", "x y+z@w": "u", ".github": "u""#,
+        );
         assert!(Workspace::load(&dir.path().join(".meta.yaml")).is_ok());
     }
 
@@ -2162,11 +2114,10 @@ mod tests {
 
         // A shared name prefix is not nesting
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"a": "u", "a-b": "u", "ab": {"repo": "u", "path": "a.b/c"}}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""a": "u", "a-b": "u", "ab": {"repo": "u", "path": "a.b/c"}"#,
+        );
         assert!(Workspace::load(&dir.path().join(".meta.yaml")).is_ok());
     }
 
@@ -2174,14 +2125,12 @@ mod tests {
     fn test_parse_accepts_nested_alias_names() {
         // as gitkb's .meta.yaml lists `vendor/tree-sitter-markdown`
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
+        let projects = load(
+            dir.path(),
             "projects:\n  core: u\n  vendor/tree-sitter-markdown: u\n",
         )
-        .unwrap();
-        let projects = Workspace::load(&dir.path().join(".meta.yaml"))
-            .unwrap()
-            .projects;
+        .unwrap()
+        .projects;
         assert_eq!(projects[1].name, "vendor/tree-sitter-markdown");
         assert_eq!(projects[1].path, "vendor/tree-sitter-markdown");
     }
@@ -2190,12 +2139,8 @@ mod tests {
     fn worktrees_dir_may_be_anywhere_but_the_config_dir_or_git() {
         let dir = tempfile::tempdir().unwrap();
         let load = |worktrees: &str| {
-            std::fs::write(
-                dir.path().join(".meta.yaml"),
-                serde_json::json!({"projects": {}, "worktrees_dir": worktrees}).to_string(),
-            )
-            .unwrap();
-            Workspace::load(&dir.path().join(".meta.yaml"))
+            let json = serde_json::json!({"projects": {}, "worktrees_dir": worktrees});
+            load(dir.path(), &json.to_string())
         };
         let outside = dir.path().parent().unwrap().join("sets");
         for (worktrees, normal) in [
@@ -2262,11 +2207,10 @@ mod tests {
     #[test]
     fn test_parse_normalizes_paths() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"a": {"repo": "u", "path": "./third_party//vendor/"}, "b": {"repo": "u", "path": "x\\y"}}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""a": {"repo": "u", "path": "./third_party//vendor/"}, "b": {"repo": "u", "path": "x\\y"}"#,
+        );
         let projects = Workspace::load(&dir.path().join(".meta.yaml"))
             .unwrap()
             .projects;
@@ -2321,11 +2265,10 @@ mod tests {
         let custom_path = dir.path().join("custom/path/to/project");
         std::fs::create_dir_all(&custom_path).unwrap();
 
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"my-project": {"repo": "git@github.com:org/my-project.git", "path": "custom/path/to/project"}}}"#,
-        )
-        .unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""my-project": {"repo": "git@github.com:org/my-project.git", "path": "custom/path/to/project"}"#,
+        );
 
         let tree = walk_meta_tree(dir.path(), None).unwrap();
         let map = build_project_map(&tree, "");
@@ -2346,7 +2289,7 @@ mod tests {
     fn test_listed_root_no_parent() {
         // Single-level meta dir (no parent) → returns self
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        meta_yaml(dir.path(), "");
 
         assert_eq!(listed_root(dir.path()), dir.path());
     }
@@ -2358,19 +2301,18 @@ mod tests {
         let child = dir.path().join("child");
         std::fs::create_dir(&child).unwrap();
 
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"child": {"repo": "git@github.com:org/child.git", "meta": true}}}"#,
-        )
-        .unwrap();
-        std::fs::write(child.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""child": {"repo": "git@github.com:org/child.git", "meta": true}"#,
+        );
+        meta_yaml(&child, "");
 
         assert_eq!(listed_root(&child), dir.path());
         // a meta repo the one above doesn't list (a worktree set in its
         // .worktrees, an orphan) is its own root
         let unlisted = dir.path().join(".worktrees/set");
         std::fs::create_dir_all(&unlisted).unwrap();
-        std::fs::write(unlisted.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        meta_yaml(&unlisted, "");
         assert_eq!(listed_root(&unlisted), unlisted);
     }
 
@@ -2382,17 +2324,15 @@ mod tests {
         let grandchild = child.join("grandchild");
         std::fs::create_dir_all(&grandchild).unwrap();
 
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"child": {"repo": "git@github.com:org/child.git", "meta": true}}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            child.join(".meta.yaml"),
-            r#"{"projects": {"grandchild": {"repo": "git@github.com:org/gc.git", "meta": true}}}"#,
-        )
-        .unwrap();
-        std::fs::write(grandchild.join(".meta.yaml"), r#"{"projects": {}}"#).unwrap();
+        meta_yaml(
+            dir.path(),
+            r#""child": {"repo": "git@github.com:org/child.git", "meta": true}"#,
+        );
+        meta_yaml(
+            &child,
+            r#""grandchild": {"repo": "git@github.com:org/gc.git", "meta": true}"#,
+        );
+        meta_yaml(&grandchild, "");
 
         assert_eq!(listed_root(&grandchild), dir.path());
     }
@@ -2400,15 +2340,6 @@ mod tests {
     // ============================================================================
     // A `.meta/` directory (meta's local folder) is never config
     // ============================================================================
-
-    fn meta_yaml(dir: &Path, projects: &str) {
-        std::fs::create_dir_all(dir).unwrap();
-        std::fs::write(
-            dir.join(".meta.yaml"),
-            format!(r#"{{"projects": {{{projects}}}}}"#),
-        )
-        .unwrap();
-    }
 
     #[test]
     fn the_root_climbs_only_through_parents_that_list_the_child() {
@@ -2562,12 +2493,11 @@ mod tests {
     #[test]
     fn yaml_merge_keys_are_applied() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
+        let loaded = load(
+            dir.path(),
             "projects:\n  r1:\n    <<: {repo: \"u\", tags: [backend]}\n    path: here\n",
         )
         .unwrap();
-        let loaded = Workspace::load(&dir.path().join(".meta.yaml")).unwrap();
         let r1 = &loaded.projects[0];
         assert_eq!(
             (r1.repo.as_ref().map(|r| r.raw()), r1.tags.as_slice()),
@@ -2575,20 +2505,14 @@ mod tests {
         );
         assert_eq!(r1.path, "here");
         // under the keys that refuse unknown ones too
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
+        let loaded = load(
+            dir.path(),
             "defaults:\n  <<: {parallel: false}\nprojects: {}\n",
         )
         .unwrap();
-        let loaded = Workspace::load(&dir.path().join(".meta.yaml")).unwrap();
         assert!(!loaded.defaults.parallel);
         // a duplicate key is still one
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            "projects:\n  a: {<<: {repo: u}}\n  a: u\n",
-        )
-        .unwrap();
-        assert!(Workspace::load(&dir.path().join(".meta.yaml")).is_err());
+        assert!(load(dir.path(), "projects:\n  a: {<<: {repo: u}}\n  a: u\n").is_err());
     }
 
     #[test]
@@ -2596,11 +2520,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let child = dir.path().join("child");
         std::fs::create_dir_all(child.join(".meta")).unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"child": "x"}}"#,
-        )
-        .unwrap();
+        meta_yaml(dir.path(), r#""child": "x""#);
 
         let path = find_meta_config(&child, None).unwrap().unwrap();
         assert_eq!(path, dir.path().join(".meta.yaml"));
@@ -2608,20 +2528,15 @@ mod tests {
         let tree = walk_meta_tree(dir.path(), None).unwrap();
         assert!(!tree[0].is_meta);
     }
-}
 
-#[cfg(test)]
-mod duplicate_project_tests {
     #[test]
     fn duplicate_project_keys_name_file_and_key() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(".meta.yaml");
         for content in [
             "projects:\n  dup: first\n  dup: second\n",
             r#"{"projects":{"dup":"first","dup":"second"}}"#,
         ] {
-            std::fs::write(&path, content).unwrap();
-            let err = format!("{:#}", super::Workspace::load(&path).unwrap_err());
+            let err = format!("{:#}", load(dir.path(), content).unwrap_err());
             assert!(err.contains(".meta.yaml"), "{err}");
             assert!(err.contains("duplicate project key 'dup'"), "{err}");
         }

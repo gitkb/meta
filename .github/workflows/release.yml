@@ -4,7 +4,7 @@ name: Release
 # workflow, and every job checks out the tag. The macOS and Windows tests run
 # here, and nothing is uploaded unless they pass. A PR that changes this file,
 # or a manual run, tests, builds and checks the archives the same way and
-# releases nothing.
+# releases nothing. (temporary: run the Windows tests on this PR)
 on:
   push:
     tags:

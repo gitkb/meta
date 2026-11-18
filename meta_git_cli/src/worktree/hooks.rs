@@ -2,46 +2,28 @@
 //! [`meta_plugin::sets::fire`] with each event's payload.
 
 use anyhow::Result;
-use std::collections::HashMap;
+use meta_plugin::sets::fire;
+use meta_plugin::Worktree;
 use std::path::Path;
 
-use super::types::{CreateRepoEntry, PruneEntry};
-
-/// Where the hooks come from: the workspace's worktree settings, as meta
-/// sent them (none outside a workspace).
-pub type Hooks<'a> = Option<&'a meta_plugin::Worktree>;
-
-fn fire(hooks: Hooks<'_>, event: &str, payload: &serde_json::Value) -> Result<()> {
-    match hooks {
-        Some(worktree) => meta_plugin::sets::fire(worktree, event, payload),
-        None => Ok(()),
-    }
-}
+use super::types::{CreateOutput, PruneEntry};
 
 /// Fire post-create hook with structured payload.
-pub fn fire_post_create(
-    name: &str,
-    path: &Path,
-    repos: &[CreateRepoEntry],
-    ephemeral: bool,
-    ttl_seconds: Option<u64>,
-    custom: &HashMap<String, String>,
-    hooks: Hooks<'_>,
-) -> Result<()> {
+pub fn fire_post_create(output: &CreateOutput, hooks: &Worktree) -> Result<()> {
     let payload = serde_json::json!({
         "action": "create",
-        "name": name,
-        "path": path.display().to_string(),
-        "repos": repos,
-        "ephemeral": ephemeral,
-        "ttl_seconds": ttl_seconds,
-        "custom": custom,
+        "name": output.name,
+        "path": output.root,
+        "repos": output.repos,
+        "ephemeral": output.ephemeral,
+        "ttl_seconds": output.ttl_seconds,
+        "custom": output.custom,
     });
     fire(hooks, "post-create", &payload)
 }
 
 /// Fire post-destroy hook with structured payload.
-pub fn fire_post_destroy(name: &str, path: &Path, force: bool, hooks: Hooks<'_>) -> Result<()> {
+pub fn fire_post_destroy(name: &str, path: &Path, force: bool, hooks: &Worktree) -> Result<()> {
     let payload = serde_json::json!({
         "action": "destroy",
         "name": name,
@@ -52,7 +34,7 @@ pub fn fire_post_destroy(name: &str, path: &Path, force: bool, hooks: Hooks<'_>)
 }
 
 /// Fire post-prune hook with structured payload.
-pub fn fire_post_prune(removed: &[PruneEntry], hooks: Hooks<'_>) -> Result<()> {
+pub fn fire_post_prune(removed: &[PruneEntry], hooks: &Worktree) -> Result<()> {
     let payload = serde_json::json!({
         "action": "prune",
         "removed": removed,

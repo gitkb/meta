@@ -396,7 +396,7 @@ fn prune(ctx: &Ctx, request: &Request, records: &mut Vec<ProjectResult>) -> Resu
     records.extend(kept.iter().map(|entry| record(entry, "kept")));
     // What was done is reported first: a failing hook doesn't undo it
     let hook = match attempted {
-        true => fire_post_prune(&removed, Some(here.worktree)),
+        true => fire_post_prune(&removed, here.worktree),
         false => Ok(()),
     };
     // a removal that failed is the error; a failing hook then only warns

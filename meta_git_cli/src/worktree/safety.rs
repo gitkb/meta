@@ -562,19 +562,8 @@ fn remote_tags(repo: &Path, remote: &str) -> std::result::Result<String, String>
     };
     let out = read(child.stdout().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let err = read(child.stderr().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let limit = std::time::Instant::now() + std::time::Duration::from_secs(TAGS_SECONDS);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if std::time::Instant::now() < limit => {
-                std::thread::sleep(std::time::Duration::from_millis(20))
-            }
-            _ => {
-                child.stop(true);
-                let _ = child.wait();
-                return Err(format!("it didn't answer within {TAGS_SECONDS} seconds"));
-            }
-        }
+    let Some(status) = super::origin::wait_at_most(&mut child, TAGS_SECONDS) else {
+        return Err(format!("it didn't answer within {TAGS_SECONDS} seconds"));
     };
     let (out, err) = (
         out.join().unwrap_or_default(),
@@ -622,21 +611,17 @@ const STRANDED: &str = "not on any branch, tag or remote";
 /// Describe the work in one checkout that deleting it would lose, and return
 /// git's complete output alongside for exact comparison.
 fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String)> {
-    let output = git(repo)
-        .args(["status", "--porcelain", "-z", "--untracked-files=all"])
-        .output()
-        .context("cannot run git status")?;
-    anyhow::ensure!(
-        output.status.success(),
-        "git status failed:{}",
-        program_output(&output.stderr)
-    );
+    let status = git_bytes(
+        repo,
+        &["status", "--porcelain", "-z", "--untracked-files=all"],
+        "status",
+    )?;
     // Exact, for the re-check: raw bytes, not a lossy decoding.
-    let text = format!("{:?}", output.stdout);
+    let text = format!("{status:?}");
     // Paths stay raw bytes, so a file with any name is found again on disk.
     let mut modified: Vec<(String, PathBuf)> = Vec::new();
     let mut untracked: Vec<(String, PathBuf)> = Vec::new();
-    let mut entries = output.stdout.split(|b| *b == 0).filter(|e| !e.is_empty());
+    let mut entries = status.split(|b| *b == 0).filter(|e| !e.is_empty());
     while let Some(entry) = entries.next() {
         let (Some(code), Some(path)) = (entry.get(..2), entry.get(3..)) else {
             continue;
@@ -645,7 +630,10 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
             entries.next(); // the rename source
         }
         let shown = String::from_utf8_lossy(path).into_owned();
-        let full = repo.join(path_from_bytes(path.strip_suffix(b"/").unwrap_or(path))?);
+        let full = repo.join(path_from_bytes(
+            path.strip_suffix(b"/").unwrap_or(path),
+            NOT_UTF8,
+        )?);
         if code != b"??" {
             modified.push((shown, full));
         } else if !members.contains(&full) {
@@ -679,38 +667,30 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
         ));
     }
 
-    let output = git(repo)
-        .args([
+    let commits = git_bytes(
+        repo,
+        &[
             "rev-list",
             "HEAD",
             "--not",
             "--branches",
             "--tags",
             "--remotes",
-        ])
-        .output()
-        .context("cannot run git rev-list")?;
-    anyhow::ensure!(
-        output.status.success(),
-        "git rev-list failed:{}",
-        program_output(&output.stderr)
-    );
-    let commits = String::from_utf8_lossy(&output.stdout).into_owned();
+        ],
+        "rev-list",
+    )?;
+    let commits = String::from_utf8_lossy(&commits).into_owned();
     let stranded = commits.lines().count();
     if stranded > 0 {
         found.push(format!("{} {STRANDED}", plural(stranded, "commit")));
     }
     // Staged content, which the status codes alone don't show.
-    let staged = git(repo)
-        .args(["diff", "--cached", "--raw", "-z", "--no-renames"])
-        .output()
-        .context("cannot run git diff --cached")?;
-    anyhow::ensure!(
-        staged.status.success(),
-        "git diff --cached failed:{}",
-        program_output(&staged.stderr)
-    );
-    let staged = String::from_utf8_lossy(&staged.stdout).into_owned();
+    let staged = git_bytes(
+        repo,
+        &["diff", "--cached", "--raw", "-z", "--no-renames"],
+        "diff --cached",
+    )?;
+    let staged = String::from_utf8_lossy(&staged).into_owned();
     let files: Vec<String> = modified
         .iter()
         .chain(&untracked)
@@ -732,19 +712,11 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
 /// so meta counts them as unsaved instead of guessing. Files absent from
 /// disk (a sparse checkout) hold nothing.
 fn hidden_files(repo: &Path) -> Result<Vec<(String, PathBuf)>> {
-    let output = git(repo)
-        .args(["ls-files", "-v", "-z"])
-        .output()
-        .context("cannot run git ls-files")?;
-    anyhow::ensure!(
-        output.status.success(),
-        "git ls-files failed:{}",
-        program_output(&output.stderr)
-    );
+    let listed = git_bytes(repo, &["ls-files", "-v", "-z"], "ls-files")?;
     // Entries are "<tag> <path>"; a lowercase tag means assume-unchanged,
     // "S" skip-worktree.
     let mut hidden = Vec::new();
-    for entry in output.stdout.split(|b| *b == 0) {
+    for entry in listed.split(|b| *b == 0) {
         let Some((tag, rest)) = entry.split_first() else {
             continue;
         };
@@ -752,7 +724,7 @@ fn hidden_files(repo: &Path) -> Result<Vec<(String, PathBuf)>> {
             continue;
         };
         if tag.is_ascii_lowercase() || *tag == b'S' {
-            let full = repo.join(path_from_bytes(path)?);
+            let full = repo.join(path_from_bytes(path, NOT_UTF8)?);
             if full.symlink_metadata().is_ok() {
                 hidden.push((String::from_utf8_lossy(path).into_owned(), full));
             }
@@ -761,8 +733,32 @@ fn hidden_files(repo: &Path) -> Result<Vec<(String, PathBuf)>> {
     Ok(hidden)
 }
 
-/// A path git printed as raw bytes. Outside Unix, git writes UTF-8.
-fn path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
+/// What git printed for `args` in `repo`; an error, with git's own words,
+/// when it fails. `what` names the command in the message.
+fn git_bytes(repo: &Path, args: &[&str], what: &str) -> Result<Vec<u8>> {
+    let output = git(repo)
+        .args(args)
+        .output()
+        .with_context(|| format!("cannot run git {what}"))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "git {what} failed:{}",
+        program_output(&output.stderr)
+    );
+    Ok(output.stdout)
+}
+
+/// What [`path_from_bytes`] says, outside Unix, of a path git printed that
+/// isn't UTF-8.
+const NOT_UTF8: &str = "git printed a path that isn't UTF-8";
+
+/// A path git printed as raw bytes. Outside Unix, git writes UTF-8; a path
+/// that isn't is an error saying `not_utf8`.
+#[cfg_attr(
+    unix,
+    expect(unused_variables, reason = "on Unix every path is valid bytes")
+)]
+pub(super) fn path_from_bytes(bytes: &[u8], not_utf8: &'static str) -> Result<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
@@ -772,7 +768,7 @@ fn path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
     {
         std::str::from_utf8(bytes)
             .map(PathBuf::from)
-            .context("git printed a path that isn't UTF-8")
+            .context(not_utf8)
     }
 }
 

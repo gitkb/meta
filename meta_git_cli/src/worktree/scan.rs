@@ -9,17 +9,6 @@ use meta_plugin::display::{escape, escape_lines, escape_path};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-/// Discovered information about a repo within a worktree set.
-#[derive(Debug, Clone, Serialize)]
-pub struct WorktreeRepoInfo {
-    pub alias: String,
-    pub branch: String,
-    pub path: PathBuf,
-    pub source_path: PathBuf,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_branch: Option<bool>,
-}
-
 /// Whether a checkout meta made for a set (a linked worktree with meta's
 /// record, readable or not, or one whose git directory can't be found) may
 /// be under `dir`, as in a set moved by hand; a part of `dir` that can't be
@@ -87,32 +76,6 @@ pub fn holds_meta_checkout(dir: &Path) -> bool {
     false
 }
 
-/// [`discover_worktree_members`] with each one's branch.
-pub fn discover_worktree_repos(
-    task_dir: &Path,
-    places: &[String],
-) -> Result<Vec<WorktreeRepoInfo>> {
-    Ok(discover_worktree_members(task_dir, places)?
-        .into_iter()
-        .map(with_branch)
-        .collect())
-}
-
-fn with_branch(member: WorktreeMemberInfo) -> WorktreeRepoInfo {
-    WorktreeRepoInfo {
-        // a branch git can't read is shown as by git for a detached HEAD;
-        // status and list say when a checkout can't be read
-        branch: meta_core::git::current_branch(&member.path)
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "HEAD".to_string()),
-        alias: member.alias,
-        path: member.path,
-        source_path: member.source_path,
-        created_branch: None,
-    }
-}
-
 /// Every member of the set at `task_dir`, nested ones (`clients/desktop`
 /// inside `clients`) too, without branch probes (command scoping needs only
 /// their paths, and starts no git for each): the one member list, as a
@@ -126,12 +89,7 @@ pub fn discover_worktree_members(
     let mut repos = Vec::new();
 
     // Check if the task dir itself is a worktree (the "." alias)
-    let dot_git = task_dir.join(".git");
-    if dot_git
-        .symlink_metadata()
-        .map(|m| m.is_file())
-        .unwrap_or(false)
-    {
+    if is_checkout(task_dir) {
         let source = source_repo(task_dir)?;
         repos.push(WorktreeMemberInfo {
             alias: ".".to_string(),
@@ -180,12 +138,9 @@ fn discover_repos_recursive(
         }
     };
     for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
+        let Ok(entry) = entry else { continue };
         let sub_path = entry.path();
-        if !entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+        if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
             continue;
         }
         if !ScannedDirs::searched(&sub_path) {
@@ -311,19 +266,6 @@ fn add_member(
     Ok(())
 }
 
-/// Discover all realized worktrees, including repos nested beneath other repos.
-/// Unlike legacy discovery, traversal errors are fatal. Under a hidden
-/// directory only checkouts meta recorded in this set count (see
-/// `ScannedDirs`); directory symlinks are not followed, so traversal never
-/// leaves the set.
-/// A finite entry budget prevents unbounded scans of generated directory trees.
-pub fn discover_worktree_repos_strict(task_dir: &Path) -> Result<Vec<WorktreeRepoInfo>> {
-    Ok(discover_worktree_members_strict(task_dir)?
-        .into_iter()
-        .map(with_branch)
-        .collect())
-}
-
 /// Realized membership without branch, dirty-state or ahead/behind probes.
 /// This uses the same strict bounded traversal and Git backlink validation as
 /// recursive status, but never launches Git. Consumers can observe Git once.
@@ -375,6 +317,11 @@ impl ScannedDirs {
     }
 }
 
+/// Every member of the set at `task_dir`, nested ones too, where a
+/// traversal error is fatal. Under a hidden directory only checkouts meta
+/// recorded in this set count (see `ScannedDirs`); directory symlinks are not
+/// followed, so traversal never leaves the set. A finite entry budget
+/// prevents unbounded scans of generated directory trees.
 pub fn discover_worktree_members_strict(task_dir: &Path) -> Result<Vec<WorktreeMemberInfo>> {
     let mut repos = Vec::new();
     let scanned = ScannedDirs::of(task_dir);
@@ -485,7 +432,7 @@ mod tests {
     }
 
     /// Normalize separators for platform-independent alias assertions.
-    fn aliases(repos: Vec<WorktreeRepoInfo>) -> Vec<String> {
+    fn aliases(repos: Vec<WorktreeMemberInfo>) -> Vec<String> {
         repos
             .into_iter()
             .map(|repo| repo.alias.replace('\\', "/"))
@@ -508,8 +455,8 @@ mod tests {
         std::fs::create_dir_all(root.join("configured-but-absent")).unwrap();
         // the strict scan finds the same members
         for repos in [
-            discover_worktree_repos(root, &places),
-            discover_worktree_repos_strict(root),
+            discover_worktree_members(root, &places),
+            discover_worktree_members_strict(root),
         ] {
             assert_eq!(
                 aliases(repos.unwrap()),
@@ -557,9 +504,9 @@ mod tests {
         let child = sandbox.work().join("parent/broken");
         std::fs::create_dir_all(&child).unwrap();
         std::fs::write(child.join(".git"), "invalid").unwrap();
-        assert!(discover_worktree_repos_strict(sandbox.work().as_path()).is_err());
+        assert!(discover_worktree_members_strict(sandbox.work().as_path()).is_err());
         assert_eq!(
-            aliases(discover_worktree_repos(sandbox.work().as_path(), &[]).unwrap()),
+            aliases(discover_worktree_members(sandbox.work().as_path(), &[]).unwrap()),
             ["parent"]
         );
     }
@@ -568,7 +515,7 @@ mod tests {
     /// Missing roots cannot be represented as complete empty inventories.
     fn recursive_missing_root_is_error() {
         let sandbox = meta_plugin::testing::isolated!();
-        assert!(discover_worktree_repos_strict(&sandbox.work().join("missing")).is_err());
+        assert!(discover_worktree_members_strict(&sandbox.work().join("missing")).is_err());
     }
 
     #[cfg(unix)]
@@ -593,7 +540,7 @@ mod tests {
         member(&sandbox, &root, ".worktrees/other");
         std::os::unix::fs::symlink(&root, root.join("visible/cycle")).unwrap();
         assert_eq!(
-            aliases(discover_worktree_repos_strict(&root).unwrap()),
+            aliases(discover_worktree_members_strict(&root).unwrap()),
             [".deps/child", "visible"]
         );
     }
@@ -619,11 +566,11 @@ mod tests {
         .unwrap();
         assert_eq!(source_repo(&root).unwrap(), source);
         assert_eq!(
-            discover_worktree_repos_strict(&root).unwrap()[0].source_path,
+            discover_worktree_members_strict(&root).unwrap()[0].source_path,
             source
         );
         assert_eq!(
-            discover_worktree_repos(&root, &[]).unwrap()[0].source_path,
+            discover_worktree_members(&root, &[]).unwrap()[0].source_path,
             source
         );
     }
@@ -642,7 +589,10 @@ mod tests {
             } else {
                 std::fs::remove_file(admin.join(missing)).unwrap();
             }
-            assert!(discover_worktree_repos_strict(&root).is_err(), "{missing}");
+            assert!(
+                discover_worktree_members_strict(&root).is_err(),
+                "{missing}"
+            );
         }
     }
 }

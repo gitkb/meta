@@ -8,7 +8,7 @@ use meta_plugin::process;
 use meta_plugin::Ctx;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -125,17 +125,8 @@ fn ask(repo: &Wanted) -> Result<Answer> {
     let Ok(mut child) = process::spawn_group(&mut command) else {
         return Ok(Answer::Unreachable);
     };
-    let limit = Instant::now() + Duration::from_secs(ASK_SECONDS);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < limit => std::thread::sleep(Duration::from_millis(20)),
-            _ => {
-                child.stop(true);
-                let _ = child.wait();
-                return Ok(Answer::Unreachable);
-            }
-        }
+    let Some(status) = wait_at_most(&mut child, ASK_SECONDS) else {
+        return Ok(Answer::Unreachable);
     };
     Ok(match status.code() {
         Some(0) => {
@@ -187,6 +178,23 @@ fn fetch(repo: &Wanted) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+/// How `child` exited, if it does within `secs` seconds; otherwise (or when
+/// it can't be waited on) it is stopped and the answer is None.
+pub(super) fn wait_at_most(child: &mut process::Owned, secs: u64) -> Option<ExitStatus> {
+    let limit = Instant::now() + Duration::from_secs(secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) if Instant::now() < limit => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                child.stop(true);
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 /// `command` never waits for a person: no password prompt, and ssh gives up

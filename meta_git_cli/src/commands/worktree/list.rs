@@ -10,8 +10,7 @@ use std::collections::HashMap;
 
 use crate::worktree::git_ops::repo_status;
 use crate::worktree::scan::{
-    discover_worktree_members, discover_worktree_members_strict, discover_worktree_repos,
-    discover_worktree_repos_strict, WorktreeMemberInfo,
+    discover_worktree_members, discover_worktree_members_strict, WorktreeMemberInfo,
 };
 use crate::worktree::ttl;
 use crate::worktree::types::ListRepoEntry;
@@ -51,25 +50,19 @@ fn repo_entries(
     selected: bool,
     places: &[String],
 ) -> Result<(Vec<RepoEntry>, Option<SetRecord>)> {
+    let members = if args.strict {
+        discover_worktree_members_strict(path)?
+    } else {
+        discover_worktree_members(path, places)?
+    };
+    let record = record::find(path, members.iter().map(|m| &m.path));
     if args.metadata_only {
-        let members = if args.strict {
-            discover_worktree_members_strict(path)?
-        } else {
-            discover_worktree_members(path, places)?
-        };
-        let record = record::find(path, members.iter().map(|m| &m.path));
         return Ok((
             members.into_iter().map(RepoEntry::Metadata).collect(),
             record,
         ));
     }
-    let repos = if args.strict {
-        discover_worktree_repos_strict(path)?
-    } else {
-        discover_worktree_repos(path, places)?
-    };
-    let record = record::find(path, repos.iter().map(|r| &r.path));
-    let entries = repos
+    let entries = members
         .par_iter()
         .map(|repo| {
             let status = repo_status(&repo.path);
@@ -80,7 +73,14 @@ fn repo_entries(
             };
             Ok(RepoEntry::Observed(ListRepoEntry {
                 alias: repo.alias.clone(),
-                branch: status.as_ref().map(|_| repo.branch.clone()),
+                // a branch git can't read is shown as by git for a detached
+                // HEAD; the status says when a checkout can't be read
+                branch: status.as_ref().map(|_| {
+                    meta_core::git::current_branch(&repo.path)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "HEAD".to_string())
+                }),
                 dirty: status.map(|s| s.is_dirty()),
             }))
         })

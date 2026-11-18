@@ -22,9 +22,9 @@ pub fn resolve_existing_worktree(name: &str, request: &Request) -> Result<PathBu
 pub fn discover_and_validate_worktree(
     name: &str,
     request: &Request,
-) -> Result<(PathBuf, Vec<super::scan::WorktreeRepoInfo>)> {
+) -> Result<(PathBuf, Vec<super::scan::WorktreeMemberInfo>)> {
     let wt_dir = resolve_existing_worktree(name, request)?;
-    let repos = super::scan::discover_worktree_repos(&wt_dir, &places(request))?;
+    let repos = super::scan::discover_worktree_members(&wt_dir, &places(request))?;
     if repos.is_empty() {
         anyhow::bail!("No repos found in worktree '{}'", escape(name));
     }
@@ -122,12 +122,11 @@ pub fn parse_from_pr(from_pr: &str) -> Result<(String, u32)> {
 }
 
 /// Parse `--from-pr owner/repo#N` format and resolve the PR's head branch.
-/// Returns (owner/repo, pr_number, head_branch_name).
-pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
+/// Returns (owner/repo, head_branch_name).
+pub fn resolve_from_pr(from_pr: &str) -> Result<(String, String)> {
     use std::process::Command;
 
     let (repo_spec, pr_num) = parse_from_pr(from_pr)?;
-    let repo_spec = repo_spec.as_str();
 
     // Resolve head branch via gh CLI: its answer is read, never coloured
     #[expect(
@@ -142,7 +141,7 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
             "view",
             &pr_num.to_string(),
             "--repo",
-            repo_spec,
+            &repo_spec,
             "--json",
             "headRefName",
             "-q",
@@ -155,7 +154,7 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
         anyhow::bail!(
             "Failed to resolve PR #{} in {}:{}",
             pr_num,
-            escape(repo_spec),
+            escape(&repo_spec),
             program_output(&output.stderr)
         );
     }
@@ -164,11 +163,11 @@ pub fn resolve_from_pr(from_pr: &str) -> Result<(String, u32, String)> {
     if branch.is_empty() {
         anyhow::bail!(
             "Empty head branch for PR #{pr_num} in {}",
-            escape(repo_spec)
+            escape(&repo_spec)
         );
     }
 
-    Ok((repo_spec.to_string(), pr_num, branch))
+    Ok((repo_spec, branch))
 }
 
 /// Check if a repo's `origin` remote is exactly the given owner/repo.

@@ -142,8 +142,9 @@ pub struct RepoState {
 }
 
 impl RepoState {
-    /// Collect state for a repository at the given path
-    pub fn collect(name: &str, path: &Path, tags: &[String]) -> Result<Self> {
+    /// Collect state for a repository at the given path; what git can't
+    /// read is `None`.
+    pub fn collect(name: &str, path: &Path, tags: &[String]) -> Self {
         let path_str = path.to_string_lossy().to_string();
 
         // a checkout whose work tree git refuses (`core.bare=true`) still
@@ -172,7 +173,7 @@ impl RepoState {
         // Detect build systems
         let build_systems = detect_build_systems(path);
 
-        Ok(RepoState {
+        RepoState {
             name: name.to_string(),
             path: path_str,
             branch: refs
@@ -189,7 +190,7 @@ impl RepoState {
             last_commit_hash: refs.and_then(|refs| refs.oid),
             last_commit_message,
             build_systems,
-        })
+        }
     }
 
     /// Check if this repo state matches a query
@@ -372,7 +373,7 @@ mod tests {
         let dir = sandbox.work();
         sandbox.git(&dir, &["init", "-q", "-b", "main"]);
         std::fs::write(dir.join("new"), "").unwrap();
-        let state = RepoState::collect("r", dir.as_path(), &[]).unwrap();
+        let state = RepoState::collect("r", dir.as_path(), &[]);
         assert_eq!(
             (state.is_dirty, state.has_untracked),
             (Some(true), Some(true))
@@ -396,7 +397,7 @@ mod tests {
         let commit = sandbox.git(&dir, &["commit-tree", tree, "-m", "first"]);
         let commit = commit.trim().to_string();
         sandbox.git(&dir, &["update-ref", "refs/heads/main", &commit]);
-        let state = RepoState::collect("r", dir.as_path(), &[]).unwrap();
+        let state = RepoState::collect("r", dir.as_path(), &[]);
         assert_eq!(state.branch.as_deref(), Some("main"));
         assert_eq!(state.last_commit_hash.as_deref(), Some(commit.as_str()));
         assert_eq!(state.last_commit_message.as_deref(), Some("first"));
@@ -411,7 +412,7 @@ mod tests {
         sandbox.git(&dir, &["init", "-q", "-b", "main"]);
         sandbox.git(&dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
         sandbox.git(&dir, &["config", "core.bare", "true"]);
-        let state = RepoState::collect("r", dir.as_path(), &[]).unwrap();
+        let state = RepoState::collect("r", dir.as_path(), &[]);
         assert_eq!(state.branch.as_deref(), Some("main"));
         assert_eq!(state.last_commit_message.as_deref(), Some("first"));
         // its changes are unknown, never clean

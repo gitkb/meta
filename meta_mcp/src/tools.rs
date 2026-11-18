@@ -1458,7 +1458,7 @@ impl McpServer {
         let recursive = self.recursive()?;
         let mut matching = Vec::new();
         for (name, dir, tags) in reached(&recursive, &Filters::default())? {
-            let state = RepoState::collect(&name, &dir, &tags)?;
+            let state = RepoState::collect(&name, &dir, &tags);
             if state.matches(&query) {
                 matching.push(state);
             }
@@ -1474,9 +1474,7 @@ impl McpServer {
         let recursive = self.recursive()?;
         let mut repo_states = Vec::new();
         for (name, dir, tags) in reached(&recursive, &Filters::default())? {
-            if let Ok(state) = RepoState::collect(&name, &dir, &tags) {
-                repo_states.push(state);
-            }
+            repo_states.push(RepoState::collect(&name, &dir, &tags));
         }
         Ok(serde_json::to_string_pretty(&WorkspaceState::from_repos(
             &repo_states,

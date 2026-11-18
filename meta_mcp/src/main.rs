@@ -75,46 +75,6 @@ struct JsonRpcError {
     message: String,
 }
 
-#[derive(Debug, Serialize)]
-struct ServerInfo {
-    name: String,
-    version: String,
-}
-
-#[derive(Debug, Serialize)]
-struct InitializeResult {
-    #[serde(rename = "protocolVersion")]
-    protocol_version: String,
-    capabilities: ServerCapabilities,
-    #[serde(rename = "serverInfo")]
-    server_info: ServerInfo,
-}
-
-#[derive(Debug, Serialize)]
-struct ServerCapabilities {
-    tools: ToolsCapability,
-}
-
-#[derive(Debug, Serialize)]
-struct ToolsCapability {
-    #[serde(rename = "listChanged")]
-    list_changed: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct CallToolResult {
-    content: Vec<ToolContent>,
-    #[serde(rename = "isError", skip_serializing_if = "Option::is_none")]
-    is_error: Option<bool>,
-}
-
-#[derive(Debug, Serialize)]
-struct ToolContent {
-    #[serde(rename = "type")]
-    content_type: String,
-    text: String,
-}
-
 // ============================================================================
 // MCP Server
 // ============================================================================
@@ -423,7 +383,11 @@ impl McpServer {
         }
         let id = request.id.clone()?;
         let result = match request.method.as_str() {
-            "initialize" => self.handle_initialize(),
+            "initialize" => Ok(serde_json::json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {"tools": {"listChanged": false}},
+                "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+            })),
             "ping" => Ok(serde_json::json!({})),
             "tools/list" => self.handle_list_tools(),
             "tools/call" => {
@@ -461,22 +425,6 @@ impl McpServer {
         })
     }
 
-    fn handle_initialize(&self) -> Result<serde_json::Value> {
-        let result = InitializeResult {
-            protocol_version: PROTOCOL_VERSION.to_string(),
-            capabilities: ServerCapabilities {
-                tools: ToolsCapability {
-                    list_changed: false,
-                },
-            },
-            server_info: ServerInfo {
-                name: SERVER_NAME.to_string(),
-                version: SERVER_VERSION.to_string(),
-            },
-        };
-        Ok(serde_json::to_value(result)?)
-    }
-
     fn handle_list_tools(&self) -> Result<serde_json::Value> {
         let tools: Vec<_> = tools::TOOLS
             .iter()
@@ -511,13 +459,12 @@ impl McpServer {
             Ok(reply) => (reply.text, reply.is_error),
             Err(e) => (format!("{e:#}"), true),
         };
-        Ok(serde_json::to_value(CallToolResult {
-            content: vec![ToolContent {
-                content_type: "text".to_string(),
-                text,
-            }],
-            is_error: is_error.then_some(true),
-        })?)
+        let content = serde_json::json!([{"type": "text", "text": text}]);
+        Ok(if is_error {
+            serde_json::json!({"content": content, "isError": true})
+        } else {
+            serde_json::json!({"content": content})
+        })
     }
 }
 
@@ -827,8 +774,12 @@ mod tests {
 
     #[test]
     fn test_initialize_response() {
-        let server = McpServer::new().unwrap();
-        let result = server.handle_initialize().unwrap();
+        let server = McpServer::nowhere();
+        let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
+        let response = server
+            .handle_request(&serde_json::from_str(request).unwrap())
+            .unwrap();
+        let result = response.result.unwrap();
 
         let result_obj = result.as_object().unwrap();
         assert_eq!(result_obj.get("protocolVersion").unwrap(), PROTOCOL_VERSION);

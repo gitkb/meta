@@ -12,8 +12,7 @@ use crate::git_env;
 /// its path in the set.
 pub(crate) fn handle_exec(args: ExecArgs, request: &Request) -> Result<Response> {
     let (_, repos) = discover_and_validate_worktree(&args.name, request)?;
-    let git_env: std::collections::BTreeMap<String, String> =
-        git_env::git_env().into_iter().collect();
+    let git_env = git_env::git_env();
     let step = |project: &str, dir: &Path| {
         let mut step = Step::new(Some(project), dir, args.command.clone());
         step.env = git_env.clone();

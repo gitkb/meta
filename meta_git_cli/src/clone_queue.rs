@@ -5,7 +5,7 @@ use meta_plugin::RepoUrl;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// A meta repo on the way down to a task: its name, its folder (resolved),
 /// and the URL it comes from, if known.
@@ -115,6 +115,12 @@ pub struct CloneQueue {
     changed: Mutex<HashSet<PathBuf>>,
 }
 
+/// `mutex` locked, also when a thread panicked while holding it: what it
+/// guards stays usable.
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 impl CloneQueue {
     /// A queue that clones with `git_depth`, reads `.meta.yaml` files down
     /// to level `meta_depth` (all of them with `None`).
@@ -177,19 +183,15 @@ impl CloneQueue {
 
     /// Change the outcome.
     fn record(&self, change: impl FnOnce(&mut Outcome)) {
-        change(&mut self.outcome.lock().unwrap_or_else(|e| e.into_inner()));
+        change(&mut lock(&self.outcome));
     }
 
     /// What became of the repositories so far.
     pub fn outcome(&self) -> Outcome {
-        let mut outcome = self
-            .outcome
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let mut outcome = lock(&self.outcome).clone();
         // A repository another .meta.yaml lists, or that holds a listed
         // project, is no leftover
-        let listed = self.listed.lock().unwrap_or_else(|e| e.into_inner());
+        let listed = lock(&self.listed);
         outcome
             .unlisted
             .retain(|path| !listed.iter().any(|dir| dir.starts_with(resolved(path))));
@@ -199,10 +201,7 @@ impl CloneQueue {
     /// Claim the folder at `path`: false if it was claimed before, however
     /// spelled.
     fn claim(&self, path: &Path) -> bool {
-        self.claimed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(resolved(path))
+        lock(&self.claimed).insert(resolved(path))
     }
 
     /// The tasks for the projects of the `.meta.yaml` in `dir`, at `level`,
@@ -242,10 +241,7 @@ impl CloneQueue {
         let mut tasks = Vec::new();
         for project in &workspace.projects {
             let target_path = base_dir.join(&project.path);
-            self.listed
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(resolved(&target_path));
+            lock(&self.listed).push(resolved(&target_path));
             // a URL meta read back hides its credentials: the one configured
             // is in the request, or in the request of another run
             let mut project = project.clone();
@@ -256,11 +252,7 @@ impl CloneQueue {
                         let absent = matches!(Checkout::of(&target_path), Checkout::Missing)
                             || is_empty_dir(&target_path);
                         if absent && self.selected(&target_path) {
-                            let new = self
-                                .changed
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .contains(&resolved(base_dir));
+                            let new = lock(&self.changed).contains(&resolved(base_dir));
                             self.record(|o| {
                                 o.deferred
                                     .push((project.name.clone(), target_path.clone(), new))
@@ -405,10 +397,7 @@ impl CloneQueue {
     pub fn mark_completed(&self, task: &CloneTask) -> Vec<CloneTask> {
         self.total_completed.fetch_add(1, Ordering::SeqCst);
         self.record(|o| o.cloned.push(task.target_path.clone()));
-        self.changed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(resolved(&task.target_path));
+        lock(&self.changed).insert(resolved(&task.target_path));
         let (found, listed) = self.read_nested(task);
 
         // Warn if the config declared meta: true but no nested .meta.yaml was found

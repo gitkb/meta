@@ -1,4 +1,4 @@
-use crate::clone_queue::{CloneQueue, CloneTask, Outcome};
+use crate::clone_queue::{lock, CloneQueue, CloneTask, Outcome};
 use anyhow::Context;
 use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -107,33 +107,20 @@ pub(crate) fn failure_rows(queue: &CloneQueue, root: &Path) -> Vec<meta_plugin::
         .outcome()
         .failures
         .iter()
-        .map(|failure| {
-            let last = failure
-                .error
-                .lines()
-                .rev()
-                .find(|line| !line.trim().is_empty())
-                .unwrap_or("no stderr");
-            let project = match failure.path.strip_prefix(root) {
-                Ok(inside) if inside.as_os_str().is_empty() => ".".to_string(),
-                Ok(inside) => inside.to_string_lossy().into_owned(),
-                Err(_) => failure.path.to_string_lossy().into_owned(),
-            };
-            meta_plugin::ProjectResult {
-                stderr: Some(failure.error.clone()),
-                ..meta_plugin::ProjectResult::error(
-                    project,
-                    meta_plugin::ErrorInfo::new(
-                        meta_plugin::ErrorCode::ToolFailed,
-                        format!(
-                            "{} could not be cloned: {}",
-                            meta_plugin::display::escape(&failed(failure)),
-                            meta_plugin::display::escape(last)
-                        ),
+        .map(|failure| meta_plugin::ProjectResult {
+            stderr: Some(failure.error.clone()),
+            ..meta_plugin::ProjectResult::error(
+                crate::project_of(&failure.path, root),
+                meta_plugin::ErrorInfo::new(
+                    meta_plugin::ErrorCode::ToolFailed,
+                    format!(
+                        "{} could not be cloned: {}",
+                        meta_plugin::display::escape(&failed(failure)),
+                        meta_plugin::display::escape(crate::last_line(&failure.error))
                     ),
-                )
-                .at(&failure.path)
-            }
+                ),
+            )
+            .at(&failure.path)
         })
         .collect()
 }
@@ -209,17 +196,10 @@ pub(crate) fn report_failures(queue: &CloneQueue, command: &str) -> Option<Strin
     let clones: Vec<String> = failures
         .iter()
         .map(|f| {
-            let last = f
-                .error
-                .lines()
-                .rev()
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .unwrap_or("no stderr");
             format!(
                 "{}: {}",
                 meta_plugin::display::escape(&failed(f)),
-                meta_plugin::display::escape(last)
+                meta_plugin::display::escape(crate::last_line(&f.error).trim())
             )
         })
         .collect();
@@ -374,7 +354,7 @@ impl StderrTail {
                     let line = String::from_utf8_lossy(&buf).trim_end().to_string();
                     buf.clear();
                     on_line(&line);
-                    let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut kept = lock(&kept);
                     if kept.len() == Self::KEPT_LINES {
                         kept.pop_front();
                     }
@@ -390,7 +370,7 @@ impl StderrTail {
     /// background process (an ssh master, say) that still holds the pipe.
     fn text(&self) -> String {
         let _ = self.done.recv_timeout(Duration::from_secs(2));
-        let lines = self.lines.lock().unwrap_or_else(|e| e.into_inner());
+        let lines = lock(&self.lines);
         Vec::from(lines.clone()).join("\n")
     }
 }

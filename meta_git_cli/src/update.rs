@@ -13,7 +13,6 @@ use indicatif::MultiProgress;
 use meta_core::gitdir::Checkout;
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::outln;
-use meta_plugin::RepoUrl;
 use meta_plugin::{Ctx, ErrorCode, ErrorInfo, ProjectResult, Request, Response};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -74,7 +73,7 @@ pub(crate) fn execute(
     let cwd = request.cwd.as_path();
     // Without -r only the workspace's own .meta.yaml is read
     let meta_depth = request.depth;
-    let workspace = workspace(request, "git update", "")?;
+    let workspace = workspace(request)?;
     // the workspace's own projects as --config lists them, and those its
     // default config lists counted as listed too. Read from disk, as the
     // nested ones are: in a plain git worktree of the workspace, meta's
@@ -109,11 +108,7 @@ pub(crate) fn execute(
     };
     // records name each repo by its path from the workspace root, as meta does
     let named = named(request, root);
-    let project = |path: &Path| match path.strip_prefix(named) {
-        Ok(inside) if inside.as_os_str().is_empty() => ".".to_string(),
-        Ok(inside) => inside.to_string_lossy().into_owned(),
-        Err(_) => path.to_string_lossy().into_owned(),
-    };
+    let project = |path: &Path| crate::project_of(path, named);
     let record = |path: &Path, action: &'static str, reason: Option<String>| {
         let data = Record { action, reason };
         match action {
@@ -150,8 +145,7 @@ pub(crate) fn execute(
             records.push(record(&task.target_path, "cloned", None));
         }
     } else if !tasks.is_empty() {
-        let urls: Vec<_> = tasks.iter().map(|task| task.url.clone()).collect();
-        run(&queue, tasks, &urls)?;
+        run(&queue, tasks)?;
     }
     let outcome = queue.outcome();
     if !preview {
@@ -185,21 +179,17 @@ pub(crate) fn execute(
     if prunes {
         for path in &outcome.unlisted {
             let shown = shown(path, cwd);
-            let leftover = match Leftover::of(path, root, true) {
-                Leftover::Removable(ignored) => Ok(ignored),
-                Leftover::Holds(why) => Err(why),
-            };
             // what is deleted along with it is said, in the preview too
             let note = |ignored: &Option<String>| match ignored {
                 Some(ignored) => format!("nothing unpushed; {ignored} deleted with it"),
                 None => "nothing unpushed".to_string(),
             };
-            let (action, reason) = match leftover {
-                Ok(ignored) if preview => {
+            let (action, reason) = match Leftover::of(path, root, true) {
+                Leftover::Removable(ignored) if preview => {
                     say(format!("Would remove {shown} ({})", note(&ignored)))?;
                     ("removed", ignored.as_ref().map(|_| note(&ignored)))
                 }
-                Ok(ignored) => match std::fs::remove_dir_all(path) {
+                Leftover::Removable(ignored) => match std::fs::remove_dir_all(path) {
                     Ok(()) => {
                         say(format!(
                             "{} {shown} ({})",
@@ -215,7 +205,7 @@ pub(crate) fn execute(
                         ("failed", Some(why))
                     }
                 },
-                Err(why) => {
+                Leftover::Holds(why) => {
                     let verb = if preview { "Would keep" } else { "Kept" };
                     say(format!("{} {shown}: {why}", verb.yellow()))?;
                     ("kept", Some(why))
@@ -277,9 +267,8 @@ pub(crate) fn clone_dirs(
         .raw(members);
     let top = Arc::from([MetaRepo::at(&root_name(root), root, None)]);
     let tasks = queue.discover_in(workspace, 0, &top)?;
-    let urls: Vec<_> = tasks.iter().map(|task| task.url.clone()).collect();
     if !tasks.is_empty() {
-        run(&queue, tasks, &urls)?;
+        run(&queue, tasks)?;
     }
     if let Some(error) = crate::clone_worker::report_failures(&queue, command) {
         return Ok(Err(error));
@@ -287,14 +276,13 @@ pub(crate) fn clone_dirs(
     Ok(Ok(queue.outcome().cloned))
 }
 
-/// The workspace `request` runs in that `meta <command>` acts on (with
+/// The workspace `request` runs in that `meta git update` acts on (with
 /// `-A`, the outermost): its config's folder and the projects it lists.
 /// Refused inside a worktree set meta made: the workspace around the set is
-/// not the command's to change from in it (`in_set`: what to run there
-/// instead). A plain git worktree of a meta repo under .worktrees is a
-/// workspace of its own: one that meta didn't make, whose .meta.yaml is its
-/// own.
-pub(crate) fn workspace(request: &Request, command: &str, in_set: &str) -> anyhow::Result<Listing> {
+/// not the command's to change from in it. A plain git worktree of a meta
+/// repo under .worktrees is a workspace of its own: one that meta didn't
+/// make, whose .meta.yaml is its own.
+fn workspace(request: &Request) -> anyhow::Result<Listing> {
     let cwd = request.cwd.as_path();
     let Some(here) = Here::of(request) else {
         anyhow::bail!("No .meta.yaml found in {} or above it", escape_path(cwd));
@@ -305,8 +293,8 @@ pub(crate) fn workspace(request: &Request, command: &str, in_set: &str) -> anyho
             || crate::worktree::scan::holds_meta_checkout(&set.dir)
         {
             anyhow::bail!(
-                "`meta {command}` acts on the workspace, not worktree set '{}'; run it in the \
-                 workspace{in_set}",
+                "`meta git update` acts on the workspace, not worktree set '{}'; run it in the \
+                 workspace",
                 escape(&set.name)
             );
         }
@@ -356,22 +344,19 @@ pub(crate) fn named<'a>(request: &'a Request, root: &'a Path) -> &'a Path {
 }
 
 /// The name the workspace at `root` goes by in progress and errors.
-pub(crate) fn root_name(root: &Path) -> String {
+fn root_name(root: &Path) -> String {
     root.file_name()
         .map_or_else(|| ".".to_string(), |n| n.to_string_lossy().into_owned())
 }
 
 /// Clone `tasks`, and the tasks their `.meta.yaml` files add, four
-/// at a time, over SSH masters set up for `urls` (the remotes the run
-/// contacts first).
-pub(crate) fn run(
-    queue: &CloneQueue,
-    tasks: Vec<CloneTask>,
-    urls: &[RepoUrl],
-) -> anyhow::Result<()> {
+/// at a time, over SSH masters set up for the remotes of `tasks` (the ones
+/// the run contacts first).
+fn run(queue: &CloneQueue, tasks: Vec<CloneTask>) -> anyhow::Result<()> {
+    let urls: Vec<_> = tasks.iter().map(|task| task.url.clone()).collect();
     let mut parallel = 4_usize;
-    let ssh_cmd = match ssh::establish_ssh_masters(urls) {
-        ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
+    let ssh_cmd = match ssh::establish_ssh_masters(&urls) {
+        ssh::SshMasters::OurSockets(ssh) => Some(ssh),
         ssh::SshMasters::UserManaged => None, // parallel OK
         ssh::SshMasters::Failed => {
             log::debug!(
@@ -391,7 +376,7 @@ pub(crate) fn run(
 }
 
 /// What deleting a repository no `.meta.yaml` lists would lose.
-pub(crate) enum Leftover {
+enum Leftover {
     /// Nothing git shows that isn't on a remote, maybe with files git
     /// ignores ("ignored files: .env, target/"). Those are deleted with it,
     /// as `git worktree remove` deletes them: ignoring a file says it isn't
@@ -405,7 +390,7 @@ impl Leftover {
     /// The repository at `path`, a leftover in the workspace at `root`;
     /// `ask`: whether its remotes are asked which of its tags they have
     /// (with false, its tags count as held).
-    pub(crate) fn of(path: &Path, root: &Path, ask: bool) -> Self {
+    fn of(path: &Path, root: &Path, ask: bool) -> Self {
         let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         let inside = real(path);
         if path
@@ -483,20 +468,14 @@ fn nested_repo(dir: &Path) -> std::io::Result<Option<PathBuf>> {
 }
 
 /// `path` as shown: from `cwd` where it is inside it.
-pub(crate) fn shown(path: &Path, cwd: &Path) -> String {
+fn shown(path: &Path, cwd: &Path) -> String {
     escape_path(path.strip_prefix(cwd).unwrap_or(path))
 }
 
 /// Name each repository in a meta repo's folder that no `.meta.yaml` lists,
 /// with what deleting it would lose (`root`: the workspace's folder; `-r`:
 /// whether nested meta repos were read).
-pub(crate) fn report_unlisted(
-    ctx: &Ctx,
-    queue: &CloneQueue,
-    root: &Path,
-    cwd: &Path,
-    recursive: bool,
-) {
+fn report_unlisted(ctx: &Ctx, queue: &CloneQueue, root: &Path, cwd: &Path, recursive: bool) {
     let prune = if recursive {
         "meta -r git update --prune"
     } else {

@@ -132,12 +132,7 @@ pub fn execute_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Resp
     );
 
     // The words after `git`, as typed
-    let words: Vec<String> = command
-        .split_whitespace()
-        .skip(1)
-        .map(str::to_string)
-        .chain(args.iter().cloned())
-        .collect();
+    let words: Vec<String> = typed(request).into_iter().skip(1).collect();
     // meta's filters typed after a command that takes none: the tip says
     // it doesn't take them, not where they go
     let bare: Vec<String> = std::iter::once("git".to_string())
@@ -241,6 +236,26 @@ pub(crate) fn help(words: impl IntoIterator<Item = String>, request: &Request) -
     }
 }
 
+/// The project at `path` as records name it: by its path from `root`, `.`
+/// for `root` itself.
+pub(crate) fn project_of(path: &std::path::Path, root: &std::path::Path) -> String {
+    match path.strip_prefix(root) {
+        Ok(inside) if inside.as_os_str().is_empty() => ".".to_string(),
+        Ok(inside) => inside.to_string_lossy().into_owned(),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
+}
+
+/// The last line of git's `stderr` that isn't blank, as summaries name a
+/// failure by it.
+pub(crate) fn last_line(stderr: &str) -> &str {
+    stderr
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("no stderr")
+}
+
 /// Records a command printed itself, for one that failed with `failure`
 /// after printing them: under `--json` the records, the failure among them
 /// (as a record of its own unless one of them is a failure), so the
@@ -271,13 +286,18 @@ pub(crate) fn printed(
 /// anew. In text it shows as it runs; under `--json` its rows are this
 /// call's.
 pub(crate) fn again(ctx: &Ctx, request: &Request) -> anyhow::Result<Response> {
-    let words: Vec<String> = request
+    through_meta(ctx, request, &request.cwd, &typed(request))
+}
+
+/// The command `request` is, as typed: its command words (`git` or `git
+/// add`), then its args exactly as given.
+fn typed(request: &Request) -> Vec<String> {
+    request
         .command
         .split_whitespace()
         .map(str::to_string)
         .chain(request.args.iter().cloned())
-        .collect();
-    through_meta(ctx, request, &request.cwd, &words)
+        .collect()
 }
 
 /// Run meta with its options as typed, then `words`, from `cwd`, as [`again`]
@@ -328,10 +348,7 @@ pub(crate) fn printed_with_git(
     let Some(failure) = failure else {
         return Ok(Response::printed(records));
     };
-    let root = request
-        .workspace
-        .as_ref()
-        .map_or(request.cwd.as_path(), |w| w.root.as_path());
+    let root = update::named(request, &request.cwd);
     let rows = worktree::git_ops::failure_rows(&failure, root);
     if !ctx.meta().json || rows.is_empty() {
         return printed(ctx, records, Some(failure));
@@ -346,7 +363,7 @@ pub(crate) fn printed_with_git(
 
 /// Check if a git command accesses remote repositories
 fn is_remote_command(argv: &[String]) -> bool {
-    let remote_commands = ["push", "pull", "fetch", "clone", "ls-remote"];
+    let remote_commands = ["push", "pull", "fetch", "ls-remote"];
     argv.get(1)
         .is_some_and(|subcommand| remote_commands.contains(&subcommand.as_str()))
 }
@@ -354,17 +371,9 @@ fn is_remote_command(argv: &[String]) -> bool {
 /// Plan a raw git command in each selected repo (any git command meta-git
 /// doesn't adapt)
 fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<Response> {
-    // The git argv: the command words (e.g. "git" or "git add") and the
-    // user's args exactly as given
-    let argv: Vec<String> = request
-        .command
-        .split_whitespace()
-        .map(str::to_string)
-        .chain(request.args.iter().cloned())
-        .collect();
+    let argv = typed(request);
     // Set git-specific environment variables (pager, colors, prompts)
-    let git_env: std::collections::BTreeMap<String, String> =
-        git_env::git_env().into_iter().collect();
+    let git_env = git_env::git_env();
 
     // A listed project that isn't cloned yet is named, not counted as a
     // failure: cloning it is `meta git update`'s (with --strict, an
@@ -379,53 +388,42 @@ fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<
         step.env = git_env.clone();
         steps.push(step);
     }
-    let plan = |steps, parallel: Option<bool>, max_parallel, stagger_ms| {
-        Ok(Response::plan(Plan {
-            steps,
-            parallel,
-            max_parallel,
-            stagger_ms,
-        }))
+    let mut plan = Plan {
+        steps,
+        ..Plan::default()
     };
 
     // For remote commands running in parallel, establish SSH ControlMaster
     // connections and inject GIT_SSH_COMMAND into each step. A preview
     // connects nowhere.
     if !request.meta.parallel() || ctx.dry_run() || !is_remote_command(&argv) {
-        return plan(steps, None, None, None);
+        return Ok(Response::plan(plan));
     }
     let urls = ssh::ssh_urls(&request.projects);
     // HTTPS-only workspaces don't need SSH multiplexing
     if urls.is_empty() {
-        return plan(steps, None, None, None);
+        return Ok(Response::plan(plan));
     }
-    let (ssh_env, parallel_ok) = match ssh::establish_ssh_masters(&urls) {
-        ssh::SshMasters::OurSockets(dir) => (Some(ssh::git_ssh_command(&dir)), true),
-        ssh::SshMasters::UserManaged => (None, true),
+    match ssh::establish_ssh_masters(&urls) {
+        ssh::SshMasters::OurSockets(ssh) => {
+            for step in &mut plan.steps {
+                step.env.insert("GIT_SSH_COMMAND".to_string(), ssh.clone());
+            }
+        }
+        ssh::SshMasters::UserManaged => {}
+        // SSH setup failed — fall back to sequential
         ssh::SshMasters::Failed => {
             log::debug!("SSH multiplexing could not be set up: running one repository at a time");
-            (None, false)
-        }
-    };
-    if let Some(ssh) = &ssh_env {
-        for step in &mut steps {
-            step.env.insert("GIT_SSH_COMMAND".to_string(), ssh.clone());
+            plan.parallel = Some(false);
+            return Ok(Response::plan(plan));
         }
     }
     // SSH ControlMaster has a default MaxSessions limit of 10 (server-side).
-    const SSH_MAX_SESSIONS: usize = 10;
+    plan.max_parallel = Some(10);
     // Stagger spawns by 25ms to prevent SSH socket saturation.
-    const SSH_SPAWN_STAGGER_MS: u64 = 25;
-    match parallel_ok {
-        true => plan(
-            steps,
-            Some(true),
-            Some(SSH_MAX_SESSIONS),
-            Some(SSH_SPAWN_STAGGER_MS),
-        ),
-        // SSH setup failed — fall back to sequential
-        false => plan(steps, Some(false), None, None),
-    }
+    plan.stagger_ms = Some(25);
+    plan.parallel = Some(true);
+    Ok(Response::plan(plan))
 }
 
 #[cfg(test)]
@@ -694,47 +692,25 @@ the only commit message
         assert_eq!(commits[0].1, "the only commit message");
     }
 
-    // ============ Remote Command Detection Tests ============
-
     #[test]
-    fn test_is_remote_command_push() {
-        assert!(super::is_remote_command(&argv("git push")));
-        assert!(super::is_remote_command(&argv("git push origin main")));
-    }
-
-    #[test]
-    fn test_is_remote_command_pull() {
-        assert!(super::is_remote_command(&argv("git pull")));
-        assert!(super::is_remote_command(&argv("git pull --rebase")));
-    }
-
-    #[test]
-    fn test_is_remote_command_fetch() {
-        assert!(super::is_remote_command(&argv("git fetch")));
-        assert!(super::is_remote_command(&argv("git fetch --all")));
-    }
-
-    #[test]
-    fn test_is_remote_command_clone() {
-        assert!(super::is_remote_command(&argv("git clone")));
-        assert!(super::is_remote_command(&argv(
-            "git clone https://github.com/org/repo.git"
-        )));
-    }
-
-    #[test]
-    fn test_is_remote_command_ls_remote() {
-        assert!(super::is_remote_command(&argv("git ls-remote")));
-    }
-
-    #[test]
-    fn test_is_remote_command_local_commands() {
-        assert!(!super::is_remote_command(&argv("git status")));
-        assert!(!super::is_remote_command(&argv("git add .")));
-        assert!(!super::is_remote_command(&argv("git commit -m \"msg\"")));
-        assert!(!super::is_remote_command(&argv("git log")));
-        assert!(!super::is_remote_command(&argv("git diff")));
-        assert!(!super::is_remote_command(&argv("git branch")));
-        assert!(!super::is_remote_command(&argv("git checkout main")));
+    fn remote_commands_are_the_ones_that_reach_a_remote() {
+        for (line, remote) in [
+            ("git push", true),
+            ("git push origin main", true),
+            ("git pull", true),
+            ("git pull --rebase", true),
+            ("git fetch", true),
+            ("git fetch --all", true),
+            ("git ls-remote", true),
+            ("git status", false),
+            ("git add .", false),
+            ("git commit -m \"msg\"", false),
+            ("git log", false),
+            ("git diff", false),
+            ("git branch", false),
+            ("git checkout main", false),
+        ] {
+            assert_eq!(is_remote_command(&argv(line)), remote, "{line}");
+        }
     }
 }

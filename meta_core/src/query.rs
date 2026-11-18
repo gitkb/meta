@@ -35,10 +35,8 @@ pub enum QueryCondition {
     ModifiedIn(Duration),
     /// Filter by language/build system
     Language(String),
-    /// Filter by having unpushed commits
-    HasUnpushed(bool),
-    /// Filter by being ahead of remote
-    AheadOfRemote(bool),
+    /// Filter by having unpushed commits: being ahead of remote
+    Ahead(bool),
     /// Filter by being behind remote
     BehindRemote(bool),
 }
@@ -97,12 +95,13 @@ impl Query {
             anyhow::bail!("'{}' has no value", escape(s));
         }
 
+        let flag = |what: &str| {
+            value
+                .parse::<bool>()
+                .with_context(|| format!("Invalid boolean value{what}: '{}'", escape(value)))
+        };
         match field.as_str() {
-            "dirty" => {
-                let is_dirty = value.parse::<bool>()
-                    .with_context(|| format!("Invalid boolean value for dirty: '{}'", escape(value)))?;
-                Ok(QueryCondition::Dirty(is_dirty))
-            }
+            "dirty" => Ok(QueryCondition::Dirty(flag(" for dirty")?)),
             "branch" => Ok(QueryCondition::Branch(value.to_string())),
             "tag" => Ok(QueryCondition::Tag(value.to_string())),
             "modified_in" | "modified" => {
@@ -110,21 +109,10 @@ impl Query {
                 Ok(QueryCondition::ModifiedIn(Duration::from_secs(secs)))
             }
             "language" | "lang" => Ok(QueryCondition::Language(value.to_lowercase())),
-            "has_unpushed" | "unpushed" => {
-                let has_unpushed = value.parse::<bool>()
-                    .with_context(|| format!("Invalid boolean value: '{}'", escape(value)))?;
-                Ok(QueryCondition::HasUnpushed(has_unpushed))
+            "has_unpushed" | "unpushed" | "ahead" | "ahead_of_remote" => {
+                Ok(QueryCondition::Ahead(flag("")?))
             }
-            "ahead" | "ahead_of_remote" => {
-                let ahead = value.parse::<bool>()
-                    .with_context(|| format!("Invalid boolean value: '{}'", escape(value)))?;
-                Ok(QueryCondition::AheadOfRemote(ahead))
-            }
-            "behind" | "behind_remote" => {
-                let behind = value.parse::<bool>()
-                    .with_context(|| format!("Invalid boolean value: '{}'", escape(value)))?;
-                Ok(QueryCondition::BehindRemote(behind))
-            }
+            "behind" | "behind_remote" => Ok(QueryCondition::BehindRemote(flag("")?)),
             _ => anyhow::bail!("Unknown query field: '{}'. Valid fields: dirty, branch, tag, modified_in, language, has_unpushed, ahead, behind", escape(&field)),
         }
     }
@@ -206,12 +194,7 @@ impl RepoState {
 
     /// Check if this repo state matches a query
     pub fn matches(&self, query: &Query) -> bool {
-        for condition in &query.conditions {
-            if !self.matches_condition(condition) {
-                return false;
-            }
-        }
-        true
+        query.conditions.iter().all(|c| self.matches_condition(c))
     }
 
     fn matches_condition(&self, condition: &QueryCondition) -> bool {
@@ -232,7 +215,7 @@ impl RepoState {
                 .build_systems
                 .iter()
                 .any(|bs| bs.to_lowercase() == *lang),
-            QueryCondition::HasUnpushed(expected) | QueryCondition::AheadOfRemote(expected) => {
+            QueryCondition::Ahead(expected) => {
                 self.ahead.is_some_and(|ahead| (ahead > 0) == *expected)
             }
             QueryCondition::BehindRemote(expected) => {

@@ -120,9 +120,7 @@ pub fn handle_context(
 
     let ctx = WorkspaceContext {
         name: workspace_name,
-        description:
-            "Multi-repo workspace managed by `meta`. Use `meta` commands for cross-repo operations."
-                .to_string(),
+        description: DESCRIPTION.to_string(),
         repo_count: repos.len(),
         repos,
         commands: key_commands(),
@@ -190,14 +188,16 @@ fn flatten(nodes: &[config::MetaTreeNode], prefix: &str, first: bool, out: &mut 
 
 // ── Types ───────────────────────────────────────────────
 
-#[derive(Debug, Serialize)]
+const DESCRIPTION: &str =
+    "Multi-repo workspace managed by `meta`. Use `meta` commands for cross-repo operations.";
+
+#[derive(Debug)]
 pub struct WorkspaceContext {
     pub name: String,
     pub description: String,
     pub repo_count: usize,
     pub repos: Vec<RepoContext>,
     pub commands: Vec<CommandRef>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub dependencies: Option<HashMap<String, Vec<String>>>,
 }
 
@@ -457,7 +457,7 @@ mod tests {
     ) -> WorkspaceContext {
         WorkspaceContext {
             name: "test-workspace".to_string(),
-            description: "Multi-repo workspace managed by `meta`. Use `meta` commands for cross-repo operations.".to_string(),
+            description: DESCRIPTION.to_string(),
             repo_count: repos.len(),
             repos,
             commands: key_commands(),
@@ -800,59 +800,23 @@ mod tests {
     // ── JSON serialization ──────────────────────────────
 
     #[test]
-    fn json_serializes_full_context() {
-        let ctx = make_ctx(
-            vec![make_repo(
-                "api",
-                Some("main"),
-                Some(false),
-                Some(0),
-                vec!["backend"],
-            )],
-            None,
-        );
-        let json = serde_json::to_string(&ctx).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["name"], "test-workspace");
-        assert_eq!(v["repo_count"], 1);
-        assert_eq!(v["repos"][0]["name"], "api");
-        assert_eq!(v["repos"][0]["path"], "api");
-        assert_eq!(v["repos"][0]["repo"], "git@github.com:org/api.git");
-        assert_eq!(v["repos"][0]["branch"], "main");
-        assert_eq!(v["repos"][0]["dirty"], false);
-        assert_eq!(v["repos"][0]["tags"][0], "backend");
+    fn json_serializes_a_repo_row() {
+        let repo = make_repo("api", Some("main"), Some(false), Some(0), vec!["backend"]);
+        let v = serde_json::to_value(&repo).unwrap();
+        assert_eq!(v["name"], "api");
+        assert_eq!(v["path"], "api");
+        assert_eq!(v["repo"], "git@github.com:org/api.git");
+        assert_eq!(v["branch"], "main");
+        assert_eq!(v["dirty"], false);
+        assert_eq!(v["tags"][0], "backend");
     }
 
     #[test]
-    fn json_omits_none_fields() {
-        let ctx = make_ctx(vec![make_repo("api", None, None, None, vec![])], None);
-        let json = serde_json::to_string(&ctx).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(v["repos"][0].get("branch").is_none());
-        assert!(v["repos"][0].get("dirty").is_none());
-        assert!(v["repos"][0].get("modified_count").is_none());
-        assert!(v.get("dependencies").is_none());
-    }
-
-    #[test]
-    fn json_includes_description_and_commands() {
-        let ctx = make_ctx(vec![], None);
-        let json = serde_json::to_string(&ctx).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(v["description"].as_str().unwrap().contains("meta"));
-        let commands = v["commands"].as_array().unwrap();
-        assert!(!commands.is_empty());
-        assert!(commands[0].get("command").is_some());
-        assert!(commands[0].get("description").is_some());
-    }
-
-    #[test]
-    fn json_includes_dependencies_when_present() {
-        let mut deps = HashMap::new();
-        deps.insert("api".to_string(), vec!["core".to_string()]);
-        let ctx = make_ctx(vec![], Some(deps));
-        let json = serde_json::to_string(&ctx).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["dependencies"]["api"][0], "core");
+    fn json_repo_row_omits_none_fields() {
+        let repo = make_repo("api", None, None, None, vec![]);
+        let v = serde_json::to_value(&repo).unwrap();
+        assert!(v.get("branch").is_none());
+        assert!(v.get("dirty").is_none());
+        assert!(v.get("modified_count").is_none());
     }
 }

@@ -30,9 +30,9 @@ const MAX_LINE_BYTES: u64 = 10 * 1024 * 1024;
 // MCP Protocol Types
 // ============================================================================
 
-#[derive(Debug, Serialize, Deserialize)]
+/// A request whose `"jsonrpc": "2.0"` `handle_message` has checked.
+#[derive(Deserialize)]
 struct JsonRpcRequest {
-    jsonrpc: String,
     /// `None` only when the member is absent (a notification); `"id": null` is `Some(Null)`.
     #[serde(default, deserialize_with = "present")]
     id: Option<serde_json::Value>,

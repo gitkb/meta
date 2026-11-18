@@ -1,6 +1,6 @@
 name: Release
 
-# release-please creates the tag with PARENT_REPO_PAT, so its push starts this
+# release-please creates the tag as the org's App, so its push starts this
 # workflow, and every job checks out the tag. The macOS and Windows tests run
 # here, and nothing is uploaded unless they pass. A PR that changes this file,
 # or a manual run, tests, builds and checks the archives the same way and
@@ -286,11 +286,24 @@ jobs:
     needs: release
     if: github.repository == 'gitkb/meta'
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      contents: read  # GH_TOKEN reads this repo's release and commit
     steps:
+      # The dispatch token is for the dependents alone, contents write (what a repository_dispatch needs).
+      - name: Token to send dep-update
+        id: dispatch-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.DEPENDENCY_UPDATES_APP_ID }}
+          private-key: ${{ secrets.DEPENDENCY_UPDATES_APP_KEY }}
+          owner: gitkb
+          repositories: atc-sandbox
+          permission-contents: write
+
       - name: Send dep-update with the version
         env:
-          GH_TOKEN: ${{ secrets.PARENT_REPO_PAT }}
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
           TAG: ${{ needs.release.outputs.tag }}
           REPO: ${{ github.repository }}
         run: |
@@ -308,5 +321,5 @@ jobs:
           sha="$(gh api "repos/${REPO}/commits/${TAG}" --jq .sha)"
           payload="$(jq -n --arg repo "$REPO" --arg sha "$sha" --arg version "${TAG#v}" \
             '{event_type: "dep-update", client_payload: {repo: $repo, sha: $sha, version: $version}}')"
-          gh api --method POST repos/gitkb/atc-sandbox/dispatches --input - <<<"$payload" >/dev/null
+          GH_TOKEN="$DISPATCH_TOKEN" gh api --method POST repos/gitkb/atc-sandbox/dispatches --input - <<<"$payload" >/dev/null
           echo "Sent dep-update ${REPO} ${TAG} to gitkb/atc-sandbox"

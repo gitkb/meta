@@ -199,7 +199,7 @@ fn resolve_dependencies(
         // the resolved ones, then those that name nothing, as qualified
         let unresolved = problems.iter().filter_map(|p| match p {
             meta_core::dependency_graph::DependencyProblem::Unresolved(dep) => Some(dep.clone()),
-            _ => None,
+            meta_core::dependency_graph::DependencyProblem::Ambiguous { .. } => None,
         });
         member.depends_on = resolved
             .iter()
@@ -220,7 +220,7 @@ fn resolve_dependencies(
                 meta_core::dependency_graph::DependencyProblem::Unresolved(dep) => {
                     elsewhere.left_out(&member.abs, &written(dep), flat)
                 }
-                _ => None,
+                meta_core::dependency_graph::DependencyProblem::Ambiguous { .. } => None,
             };
             match (left_out, problem) {
                 (Some(left_out), _) => member.left_out.push(left_out),

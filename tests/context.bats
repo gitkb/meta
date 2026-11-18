@@ -182,7 +182,6 @@ assert 'backend' in data['dependencies'], 'backend not in dependencies'
     empty_dir="$(mktemp -d)"
     cd "$empty_dir"
     run "$META_BIN" context
-    rm -rf "$empty_dir"
     [ "$status" -eq 1 ]
     [[ "$output" == *"Not a meta workspace"* ]]
 }

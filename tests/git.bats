@@ -552,7 +552,6 @@ state() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"meta repos list each other: cyc → kid → top"* ]]
     [ ! -e "$CYC/kid/top" ]
-    rm -rf "$TOP_BARE" "$KID_BARE" "$CYC"
 }
 
 
@@ -937,7 +936,6 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     header=$(grep -an 'Cloning meta repository' <<<"$screen" | head -1 | cut -d: -f1)
     first=$(grep -an 'Cloned a' <<<"$screen" | head -1 | cut -d: -f1)
     [ -n "$header" ] && [ "$header" -lt "$first" ]
-    rm -rf "$remotes"
 }
 
 @test "meta git clone with custom directory name for meta repo" {
@@ -974,9 +972,6 @@ EOF
     # Verify the custom directory was used for the meta repo
     [ -d "$CLONE_DIR/$CUSTOM_NAME" ]
     [ -f "$CLONE_DIR/$CUSTOM_NAME/.meta.yaml" ]
-
-    # Clean up
-    rm -rf "$REMOTE_DIR" "$WORK_DIR" "$CLONE_DIR"
 }
 
 @test "meta git clone with --depth option" {
@@ -1012,9 +1007,6 @@ EOF
     # Verify it's a shallow clone (only 1 commit)
     COMMIT_COUNT=$(git -C "$CLONE_TARGET" rev-list --count HEAD)
     [ "$COMMIT_COUNT" -eq 1 ]
-
-    # Clean up
-    rm -rf "$REMOTE_DIR" "$WORK_DIR" "$CLONE_TARGET"
 }
 
 @test "meta git clone --dry-run shows what would be cloned" {
@@ -1240,8 +1232,6 @@ create_meta_bare_repo() {
         git commit --quiet -m "Add meta config"
         git push --quiet -u origin main
     )
-
-    rm -rf "$work_dir"
 }
 
 @test "meta git clone --recursive clones 2 levels deep" {
@@ -1268,8 +1258,6 @@ create_meta_bare_repo() {
     [ -d "$CLONE_TARGET/child/.git" ]
     # Grandchild was cloned (recursive discovered child's .meta.yaml)
     [ -d "$CLONE_TARGET/child/grandchild/.git" ]
-
-    rm -rf "$GRANDCHILD_BARE" "$CHILD_BARE" "$ROOT_BARE" "$CLONE_TARGET"
 }
 
 @test "meta git clone --recursive clones 3 levels deep" {
@@ -1296,8 +1284,6 @@ create_meta_bare_repo() {
     [ -d "$CLONE_TARGET/l1/.git" ]
     [ -d "$CLONE_TARGET/l1/l2/.git" ]
     [ -d "$CLONE_TARGET/l1/l2/l3/.git" ]
-
-    rm -rf "$L3_BARE" "$L2_BARE" "$L1_BARE" "$ROOT_BARE" "$CLONE_TARGET"
 }
 
 @test "clone routes nesting and history depth apart" {
@@ -1330,8 +1316,6 @@ create_meta_bare_repo() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"as in meta -r git clone file://$ROOT_BARE other"* ]]
     [ ! -e other ]
-
-    rm -rf "$L3_BARE" "$L2_BARE" "$L1_BARE" "$ROOT_BARE" "$CLONE_TARGET" "$work"
 }
 
 @test "meta git clone without --recursive clones only first level" {
@@ -1358,8 +1342,6 @@ create_meta_bare_repo() {
     [ -d "$CLONE_TARGET/child/.git" ]
     # Grandchild should NOT be cloned (no --recursive)
     [ ! -d "$CLONE_TARGET/child/grandchild" ]
-
-    rm -rf "$GRANDCHILD_BARE" "$CHILD_BARE" "$ROOT_BARE" "$CLONE_TARGET"
 }
 
 # ============ Arguments reach git as typed, with no shell ============
@@ -1570,7 +1552,6 @@ EOF
     [[ "$output" == *"leads into .git"* ]]
     # A failed clone is still reported alongside it
     [[ "$output" == *"Failed to clone"*"gone"* ]]
-    rm -rf "$UP"
 }
 
 @test "meta git clone escapes the URL it echoes" {

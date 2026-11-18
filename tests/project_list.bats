@@ -356,7 +356,6 @@ assert nested_lib['path'] == 'vendor/nested-lib', nested_lib
     ln -s "$OUTSIDE" linked
     echo '{"projects": {"linked": "git@github.com:org/linked.git"}}' > .meta.yaml
     run "$META_BIN" project list
-    rm -rf "$OUTSIDE"
     [ "$status" -eq 0 ]
     [[ "$output" == *"linked"* ]]
 }

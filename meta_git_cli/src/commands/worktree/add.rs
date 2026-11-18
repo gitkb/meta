@@ -12,7 +12,7 @@ use crate::worktree::git_ops::{
 use crate::worktree::helpers::*;
 use crate::worktree::origin::{branches_on_origin, Wanted};
 use crate::worktree::plan::{Index, PlannedRepo, StartBranches};
-use crate::worktree::scan::discover_worktree_repos;
+use crate::worktree::scan::discover_worktree_members;
 use crate::worktree::types::*;
 use meta_core::set_record as record;
 
@@ -52,7 +52,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
     }
 
     // Check existing repos in the worktree
-    let existing = discover_worktree_repos(&wt_dir, &here.places())?;
+    let existing = discover_worktree_members(&wt_dir, &here.places())?;
 
     // What is added joins the set's record, if meta made the set; one it
     // didn't make stays unrecorded, so `remove` keeps refusing it.

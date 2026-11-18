@@ -22,9 +22,9 @@ pub fn resolve_existing_worktree(name: &str, request: &Request) -> Result<PathBu
 pub fn discover_and_validate_worktree(
     name: &str,
     request: &Request,
-) -> Result<(PathBuf, Vec<super::scan::WorktreeRepoInfo>)> {
+) -> Result<(PathBuf, Vec<super::scan::WorktreeMemberInfo>)> {
     let wt_dir = resolve_existing_worktree(name, request)?;
-    let repos = super::scan::discover_worktree_repos(&wt_dir, &places(request))?;
+    let repos = super::scan::discover_worktree_members(&wt_dir, &places(request))?;
     if repos.is_empty() {
         anyhow::bail!("No repos found in worktree '{}'", escape(name));
     }

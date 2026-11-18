@@ -2,6 +2,7 @@ name: Auto Format
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 # The job checks out and pushes as the org's dependency-updates App, never GITHUB_TOKEN
@@ -18,9 +19,11 @@ jobs:
     # Skip if:
     # - PR from fork (can't push back)
     # - Commit by github-actions[bot] (prevent infinite loop)
+    # - Draft PR (it runs once the PR is marked ready)
     if: |
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor != 'github-actions[bot]'
+      github.actor != 'github-actions[bot]' &&
+      github.event.pull_request.draft != true
     steps:
       # A format commit pushed with GITHUB_TOKEN starts no CI; the App's push does. This repo
       # alone, contents write. Minting fails when the secrets aren't available to the run.

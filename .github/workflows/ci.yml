@@ -7,6 +7,7 @@ name: CI
 # uploaded. macOS and Windows use GitHub-hosted runners (free: meta is public).
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
   workflow_call:
     inputs:
@@ -39,6 +40,7 @@ env:
 jobs:
   test:
     name: Test
+    if: github.event.pull_request.draft != true
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -67,7 +69,7 @@ jobs:
 
   clippy:
     name: Clippy
-    if: ${{ !inputs.tests_only }}
+    if: ${{ !inputs.tests_only && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -88,7 +90,7 @@ jobs:
 
   crates:
     name: Check Each Crate
-    if: ${{ !inputs.tests_only }}
+    if: ${{ !inputs.tests_only && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -117,6 +119,7 @@ jobs:
 
   integration:
     name: Integration Tests
+    if: github.event.pull_request.draft != true
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -159,7 +162,7 @@ jobs:
 
   format:
     name: Format
-    if: ${{ !inputs.tests_only }}
+    if: ${{ !inputs.tests_only && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -178,9 +181,10 @@ jobs:
   # skipped one fails it). `if: always()` makes it report after a failure; a
   # skipped call reports only as `gate`. release.yml's tests_only run skips
   # Clippy, Check Each Crate and Format on purpose. meta is public, so it
-  # calls its own copy of the shared gate (ci-gate.yml says why).
+  # calls its own copy of the shared gate (ci-gate.yml says why). A draft PR
+  # runs nothing: everything runs once it is marked ready.
   gate:
-    if: always()
+    if: always() && github.event.pull_request.draft != true
     needs: [test, clippy, crates, integration, format]
     uses: ./.github/workflows/ci-gate.yml
     with:

@@ -10,6 +10,7 @@ on:
     tags:
       - 'v*'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - .github/workflows/ci.yml
       - .github/workflows/release.yml
@@ -27,6 +28,7 @@ jobs:
   # only here
   tests:
     name: Tests
+    if: github.event.pull_request.draft != true
     uses: ./.github/workflows/ci.yml
     with:
       test_os: '["macos-latest", "windows-latest"]'
@@ -35,6 +37,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
+    if: github.event.pull_request.draft != true
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

@@ -1051,18 +1051,16 @@ fn runs_group(found: &Value, group: &Value) -> bool {
 /// `agent guard` hook only with `guard`
 fn build_meta_hooks(guard: bool) -> Map<String, Value> {
     let mut hooks = Map::new();
+    let context = json!([{
+        "hooks": [{
+            "type": "command",
+            "command": CONTEXT_COMMAND,
+            "timeout": 10
+        }]
+    }]);
 
     // SessionStart: inject workspace context at session start and after compaction
-    hooks.insert(
-        "SessionStart".to_string(),
-        json!([{
-            "hooks": [{
-                "type": "command",
-                "command": CONTEXT_COMMAND,
-                "timeout": 10
-            }]
-        }]),
-    );
+    hooks.insert("SessionStart".to_string(), context.clone());
 
     // PreToolUse: block destructive Bash commands
     if guard {
@@ -1080,16 +1078,7 @@ fn build_meta_hooks(guard: bool) -> Map<String, Value> {
     }
 
     // PreCompact: capture workspace state before context compaction
-    hooks.insert(
-        "PreCompact".to_string(),
-        json!([{
-            "hooks": [{
-                "type": "command",
-                "command": CONTEXT_COMMAND,
-                "timeout": 10
-            }]
-        }]),
-    );
+    hooks.insert("PreCompact".to_string(), context);
 
     hooks
 }

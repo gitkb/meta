@@ -942,23 +942,8 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     # Custom directory only applies to the meta repo itself
     # Child repos clone to paths according to .meta.yaml files
 
-    # Create a "remote" bare repo with main as default branch
-    REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git init --bare --quiet "$REMOTE_DIR"
-    git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
-
-    # Create a temp working copy to push initial content
-    WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
-    cd "$WORK_DIR/meta-repo"
-    cat > .meta.yaml <<'EOF'
-{
-    "projects": {}
-}
-EOF
-    git add .meta.yaml
-    git commit --quiet -m "Add .meta.yaml"
-    git push --quiet -u origin main
+    REMOTE_DIR="$(mktemp -d)/remote.git"
+    create_meta_bare_repo "$REMOTE_DIR" '{"projects": {}}'
 
     # Clone with custom directory name
     CLONE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
@@ -975,26 +960,14 @@ EOF
 }
 
 @test "meta git clone with --depth option" {
-    # Create a "remote" bare repo with main as default branch
-    REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git init --bare --quiet "$REMOTE_DIR"
-    git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
-
-    WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
-    cd "$WORK_DIR/meta-repo"
-    # Set default branch name explicitly
-    echo '{"projects": {}}' > .meta.yaml
-    git add .meta.yaml
-    git commit --quiet -m "Commit 1"
-    # Create additional commits by adding new files (keep .meta.yaml valid)
-    echo "readme 1" > README.md
-    git add README.md
-    git commit --quiet -m "Commit 2"
-    echo "readme 2" >> README.md
-    git add README.md
-    git commit --quiet -m "Commit 3"
-    git push --quiet -u origin main
+    # A remote with three commits
+    REMOTE_DIR="$(mktemp -d)/remote.git"
+    create_meta_bare_repo "$REMOTE_DIR" '{"projects": {}}'
+    WORK_DIR="$(mktemp -d)"
+    git clone --quiet "$REMOTE_DIR" "$WORK_DIR"
+    git -C "$WORK_DIR" commit --quiet --allow-empty -m "Commit 2"
+    git -C "$WORK_DIR" commit --quiet --allow-empty -m "Commit 3"
+    git -C "$WORK_DIR" push --quiet origin main
 
     CLONE_TARGET="$(mktemp -d)/shallow-clone"
 

@@ -243,21 +243,21 @@ impl Listing {
     /// instead of the default), as meta reads them; `None` when `dir` holds
     /// none. One meta can't read is an error saying why.
     pub fn of(dir: &Path, config: Option<&Path>) -> Result<Option<Listing>> {
-        let rows = match project_list(dir, config, false)? {
-            Some(rows) => rows,
-            None => return Ok(None),
+        let Some(rows) = project_list(dir, config, false)? else {
+            return Ok(None);
         };
         let projects = rows
-            .iter()
-            .filter(|row| row.place.is_some())
-            .map(|row| Listed {
-                name: row.listed.name.clone(),
-                path: row.place.clone().unwrap_or_default(),
-                repo: row.listed.repo.clone(),
-                // declared `meta: true` (a meta repo not cloned yet too)
-                meta: row.listed.meta,
-                branch: row.listed.branch.clone(),
-                branch_problem: row.listed.branch_problem.clone(),
+            .into_iter()
+            .filter_map(|row| {
+                Some(Listed {
+                    name: row.listed.name,
+                    path: row.place?,
+                    repo: row.listed.repo,
+                    // declared `meta: true` (a meta repo not cloned yet too)
+                    meta: row.listed.meta,
+                    branch: row.listed.branch,
+                    branch_problem: row.listed.branch_problem,
+                })
             })
             .collect();
         Ok(Some(Listing {

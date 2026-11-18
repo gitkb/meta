@@ -338,21 +338,22 @@ impl Envelope {
     /// Print it on stdout, as `meta --json` does: pretty-printed, with only
     /// the row fields `fields` names when it names any.
     pub fn print(&self, fields: &[String]) -> Result<(), crate::out::StdoutError> {
-        let value = match fields.is_empty() {
-            true => serde_json::to_value(self).unwrap_or_default(),
-            false => self.select(fields),
-        };
-        let text = serde_json::to_string_pretty(&value).unwrap_or_default();
+        let text = serde_json::to_string_pretty(&self.shown(fields)).unwrap_or_default();
         crate::out::document(&text)
     }
 
     /// Print it as the last line of `--json-stream`: `{"envelope": …}`.
     pub fn print_last(&self, fields: &[String]) -> Result<(), crate::out::StdoutError> {
-        let value = match fields.is_empty() {
+        crate::out::document(&serde_json::json!({ "envelope": self.shown(fields) }).to_string())
+    }
+
+    /// What the printers show: the whole envelope, or only the row fields
+    /// `fields` names when it names any.
+    fn shown(&self, fields: &[String]) -> serde_json::Value {
+        match fields.is_empty() {
             true => serde_json::to_value(self).unwrap_or_default(),
             false => self.select(fields),
-        };
-        crate::out::document(&serde_json::json!({ "envelope": value }).to_string())
+        }
     }
 
     /// The envelope as `meta --fields a,b.c` prints it: each row keeps only

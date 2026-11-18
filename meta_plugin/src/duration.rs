@@ -3,6 +3,15 @@
 use crate::display::escape;
 use anyhow::Context;
 
+/// Each unit's suffix and its length in seconds, largest first.
+const UNITS: [(char, u64); 5] = [
+    ('w', 604800),
+    ('d', 86400),
+    ('h', 3600),
+    ('m', 60),
+    ('s', 1),
+];
+
 /// Parse a human-friendly duration string to seconds.
 /// Supported formats: "30s", "5m", "1h", "2d", "1w" (any case), or bare seconds "300".
 /// The result always fits in an `i64`, so timestamp arithmetic can't wrap.
@@ -21,17 +30,16 @@ pub fn parse_duration(s: &str) -> anyhow::Result<u64> {
         let mut chars = s.chars();
         let suffix = chars.next_back();
         let num_str = chars.as_str();
-        let multiplier = match suffix {
-            Some('s') => 1,
-            Some('m') => 60,
-            Some('h') => 3600,
-            Some('d') => 86400,
-            Some('w') => 604800,
-            _ => anyhow::bail!(
-                "Invalid duration suffix '{}'. Use s (seconds), m (minutes), h (hours), d (days), or w (weeks)",
-                escape(&suffix.map(String::from).unwrap_or_default())
-            ),
-        };
+        let multiplier = UNITS
+            .iter()
+            .find(|(unit, _)| Some(*unit) == suffix)
+            .map(|&(_, size)| size)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Invalid duration suffix '{}'. Use s (seconds), m (minutes), h (hours), d (days), or w (weeks)",
+                    escape(&suffix.map(String::from).unwrap_or_default())
+                )
+            })?;
         (num_str, multiplier)
     };
     let num: u64 = num_str.parse().with_context(|| {
@@ -52,21 +60,12 @@ pub fn format_duration(secs: i64) -> String {
     let abs_secs = secs.unsigned_abs();
     let prefix = if secs < 0 { "-" } else { "" };
 
-    if abs_secs >= 604800 && abs_secs.is_multiple_of(604800) {
-        let weeks = abs_secs / 604800;
-        format!("{prefix}{weeks}w")
-    } else if abs_secs >= 86400 && abs_secs.is_multiple_of(86400) {
-        let days = abs_secs / 86400;
-        format!("{prefix}{days}d")
-    } else if abs_secs >= 3600 && abs_secs.is_multiple_of(3600) {
-        let hours = abs_secs / 3600;
-        format!("{prefix}{hours}h")
-    } else if abs_secs >= 60 && abs_secs.is_multiple_of(60) {
-        let mins = abs_secs / 60;
-        format!("{prefix}{mins}m")
-    } else {
-        format!("{prefix}{abs_secs}s")
-    }
+    let (unit, size) = UNITS
+        .iter()
+        .find(|(_, size)| abs_secs >= *size && abs_secs.is_multiple_of(*size))
+        .copied()
+        .unwrap_or(('s', 1));
+    format!("{prefix}{}{unit}", abs_secs / size)
 }
 
 #[cfg(test)]

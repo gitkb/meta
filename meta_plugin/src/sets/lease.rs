@@ -147,7 +147,7 @@ impl Claim {
 
     /// Delete the lease, if one was left.
     pub fn delete(self) -> Result<()> {
-        remove(&self.path)
+        super::remove_file(&self.path)
     }
 }
 
@@ -173,15 +173,6 @@ fn read_lease(path: &Path) -> Option<Lease> {
     std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-}
-
-fn remove(path: &Path) -> Result<()> {
-    match std::fs::remove_file(path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(e).with_context(|| format!("Cannot delete {}", escape_path(path)))
-        }
-        _ => Ok(()),
-    }
 }
 
 /// The lock file of the lease at `path`.
@@ -294,7 +285,7 @@ pub fn take(lease: &Lease) -> Result<Held> {
                 read(path).holder()
             );
         }
-        remove(&path)?;
+        super::remove_file(&path)?;
     }
     // Written whole, then put in place: a reader sees all of it or none
     let mut tmp = path.as_os_str().to_owned();

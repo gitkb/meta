@@ -276,14 +276,8 @@ impl MetaOptions {
     /// (`--parallel 8`), and none that `check` rejects for anything else; the
     /// rule alone is.
     pub fn tip(&self, command: &[String], rejected: &str, check: Check) -> Option<String> {
-        let spelling = |word: &str| word.split('=').next().unwrap_or(word).to_string();
-        let find = |spelling: &str| {
-            self.options
-                .iter()
-                .find(|o| o.spellings.iter().any(|s| s == spelling))
-        };
-        let first = spelling(rejected);
-        if find(&first)?.refused {
+        let first = spelling(rejected).to_string();
+        if find(&self.options, &first)?.refused {
             return Some(format!(
                 "{first} is an option of meta itself, and this command doesn't take it"
             ));
@@ -293,8 +287,8 @@ impl MetaOptions {
         let mut moved: Vec<String> = Vec::new();
         let mut rejected = rejected.to_string();
         for _ in 0..command.len() {
-            let name = spelling(&rejected);
-            let Some(option) = find(&name).filter(|o| !o.refused) else {
+            let name = spelling(&rejected).to_string();
+            let Some(option) = find(&self.options, &name).filter(|o| !o.refused) else {
                 return Some(rule);
             };
             let at = rest.iter().position(|word| {
@@ -368,19 +362,14 @@ impl MetaOptions {
 /// ends it, the rest its value). `None` when it is not; otherwise whether
 /// their value is the next word.
 fn option_word(options: &[MetaOption], word: &str) -> Option<bool> {
-    let find = |spelling: &str| {
-        options
-            .iter()
-            .find(|o| o.spellings.iter().any(|s| s == spelling))
-    };
     match word.strip_prefix('-') {
         Some(long) if long.starts_with('-') => {
-            let option = find(word.split('=').next().unwrap_or(word))?;
+            let option = find(options, spelling(word))?;
             Some(option.takes_value && !word.contains('='))
         }
         Some(shorts) if !shorts.is_empty() => {
             for (at, short) in shorts.char_indices() {
-                if find(&format!("-{short}"))?.takes_value {
+                if find(options, &format!("-{short}"))?.takes_value {
                     return Some(at + short.len_utf8() == shorts.len());
                 }
             }
@@ -390,16 +379,24 @@ fn option_word(options: &[MetaOption], word: &str) -> Option<bool> {
     }
 }
 
+/// Meta's option, from `options`, that `spelling` (`--include`, `-i`) spells.
+fn find<'a>(options: &'a [MetaOption], spelling: &str) -> Option<&'a MetaOption> {
+    options
+        .iter()
+        .find(|o| o.spellings.iter().any(|s| s == spelling))
+}
+
+/// The option's spelling in `word`: the part before any `=` (`--depth=2`).
+fn spelling(word: &str) -> &str {
+    word.split('=').next().unwrap_or(word)
+}
+
 impl MetaOptions {
     /// Whether meta's option spelled `long` (`--recursive`) was typed before
     /// the command, in any spelling: `-r`, in a cluster (`-rv`), or with its
     /// value (`--depth=2`).
     pub fn typed_has(&self, long: &str) -> bool {
-        let Some(option) = self
-            .options
-            .iter()
-            .find(|o| o.spellings.iter().any(|s| s == long))
-        else {
+        let Some(option) = find(&self.options, long) else {
             return false;
         };
         let mut words = self.typed.iter();
@@ -465,8 +462,7 @@ impl MetaOptions {
     /// its spellings (`--depth=2` too), or a cluster of short options
     /// holding it (`-rv`) before one that takes a value.
     fn names(&self, option: &MetaOption, word: &str) -> bool {
-        let spelling = word.split('=').next().unwrap_or(word);
-        if option.spellings.iter().any(|s| s == spelling) {
+        if option.spellings.iter().any(|s| s == spelling(word)) {
             return true;
         }
         let Some(shorts) = word.strip_prefix('-').filter(|s| !s.starts_with('-')) else {

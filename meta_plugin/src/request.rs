@@ -6,7 +6,7 @@
 
 use crate::wire_path;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// One plugin call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -270,11 +270,6 @@ impl Request {
             #[cfg(not(feature = "parse"))]
             meta_options: serde_json::Value::Null,
         }
-    }
-
-    /// The folders of the selected projects, in order.
-    pub fn dirs(&self) -> Vec<&Path> {
-        self.projects.iter().map(|p| p.abs.as_path()).collect()
     }
 
     /// The workspace, or the error a command that needs one gives.

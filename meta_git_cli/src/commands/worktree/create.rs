@@ -256,7 +256,7 @@ pub(crate) fn handle_create(
 
     // Resolve/apply --from-pr: get PR head branch, override branch for the matching repo, and fetch
     let from_pr_info = from_pr_spec.map(resolve_from_pr).transpose()?;
-    if let Some((ref pr_repo_spec, _pr_num, ref pr_branch)) = from_pr_info {
+    if let Some((ref pr_repo_spec, ref pr_branch)) = from_pr_info {
         let repo = repos_to_create
             .iter_mut()
             .find(|repo| repo.place != "." && repo_matches_spec(&repo.source, pr_repo_spec))

@@ -409,7 +409,7 @@ fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<
         return plan(steps, None, None, None);
     }
     let (ssh_env, parallel_ok) = match ssh::establish_ssh_masters(&urls) {
-        ssh::SshMasters::OurSockets(dir) => (Some(ssh::git_ssh_command(&dir)), true),
+        ssh::SshMasters::OurSockets(ssh) => (Some(ssh), true),
         ssh::SshMasters::UserManaged => (None, true),
         ssh::SshMasters::Failed => {
             log::debug!("SSH multiplexing could not be set up: running one repository at a time");

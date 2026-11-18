@@ -356,7 +356,7 @@ fn run(queue: &CloneQueue, tasks: Vec<CloneTask>) -> anyhow::Result<()> {
     let urls: Vec<_> = tasks.iter().map(|task| task.url.clone()).collect();
     let mut parallel = 4_usize;
     let ssh_cmd = match ssh::establish_ssh_masters(&urls) {
-        ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
+        ssh::SshMasters::OurSockets(ssh) => Some(ssh),
         ssh::SshMasters::UserManaged => None, // parallel OK
         ssh::SshMasters::Failed => {
             log::debug!(

@@ -17,8 +17,9 @@ use std::process::{Command, Stdio};
 
 /// Result of SSH multiplexing setup.
 pub enum SshMasters {
-    /// We established masters; callers should inject `GIT_SSH_COMMAND`.
-    OurSockets(PathBuf),
+    /// We established masters; callers should inject this
+    /// `GIT_SSH_COMMAND`, which uses them.
+    OurSockets(String),
     /// All hosts already have active masters from user's own SSH config.
     /// Parallel execution is safe; no `GIT_SSH_COMMAND` override needed.
     UserManaged,
@@ -103,7 +104,7 @@ pub(crate) fn ssh_urls(projects: &[meta_plugin::Project]) -> Vec<RepoUrl> {
 /// Establish SSH ControlMaster connections for the SSH remotes among `urls`.
 ///
 /// Returns:
-/// - `SshMasters::OurSockets(dir)` if we established at least one master
+/// - `SshMasters::OurSockets(git_ssh_command)` if we established at least one master
 /// - `SshMasters::UserManaged` if all hosts already have active masters
 /// - `SshMasters::Failed` if sockets dir couldn't be created or all connections failed
 pub fn establish_ssh_masters(urls: &[RepoUrl]) -> SshMasters {
@@ -205,7 +206,7 @@ pub fn establish_ssh_masters(urls: &[RepoUrl]) -> SshMasters {
     }
 
     if any_succeeded {
-        SshMasters::OurSockets(sockets_dir)
+        SshMasters::OurSockets(git_ssh_command(&sockets_dir))
     } else {
         SshMasters::Failed
     }
@@ -237,7 +238,7 @@ fn contacted(url: &RepoUrl) -> RepoUrl {
 /// A `GIT_SSH_COMMAND` value that reuses established ControlMaster
 /// connections. Git runs it through a shell, so the `ControlPath` option is
 /// quoted; SSH expands `%r`, `%h` and `%p` itself.
-pub fn git_ssh_command(sockets_dir: &Path) -> String {
+fn git_ssh_command(sockets_dir: &Path) -> String {
     let control_path = format!("ControlPath={}/%r@%h-%p", sockets_dir.display());
     format!(
         "ssh -o ControlMaster=auto -o {} -o ControlPersist=600 -o ConnectTimeout=10",

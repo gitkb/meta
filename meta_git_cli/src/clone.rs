@@ -135,7 +135,7 @@ pub(crate) fn execute_git_clone(
 
     // Set up SSH ControlMaster for the meta repo's host before cloning
     let mut ssh_cmd = match ssh::establish_ssh_masters(std::slice::from_ref(&url)) {
-        ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
+        ssh::SshMasters::OurSockets(ssh) => Some(ssh),
         ssh::SshMasters::UserManaged | ssh::SshMasters::Failed => None,
     };
 
@@ -211,9 +211,7 @@ pub(crate) fn execute_git_clone(
     // Establish SSH masters for any additional hosts in the queue
     let queue_urls: Vec<_> = tasks.iter().map(|t| t.url.clone()).collect();
     match ssh::establish_ssh_masters(&queue_urls) {
-        ssh::SshMasters::OurSockets(sockets_dir) => {
-            ssh_cmd = Some(ssh::git_ssh_command(&sockets_dir));
-        }
+        ssh::SshMasters::OurSockets(ssh) => ssh_cmd = Some(ssh),
         ssh::SshMasters::UserManaged => {} // parallel OK, no override needed
         ssh::SshMasters::Failed if ssh_cmd.is_none() => {
             log::debug!("SSH multiplexing could not be set up: cloning one repository at a time");

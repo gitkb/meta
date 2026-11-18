@@ -74,7 +74,7 @@ pub(crate) fn execute(
     let cwd = request.cwd.as_path();
     // Without -r only the workspace's own .meta.yaml is read
     let meta_depth = request.depth;
-    let workspace = workspace(request, "git update", "")?;
+    let workspace = workspace(request)?;
     // the workspace's own projects as --config lists them, and those its
     // default config lists counted as listed too. Read from disk, as the
     // nested ones are: in a plain git worktree of the workspace, meta's
@@ -287,14 +287,13 @@ pub(crate) fn clone_dirs(
     Ok(Ok(queue.outcome().cloned))
 }
 
-/// The workspace `request` runs in that `meta <command>` acts on (with
+/// The workspace `request` runs in that `meta git update` acts on (with
 /// `-A`, the outermost): its config's folder and the projects it lists.
 /// Refused inside a worktree set meta made: the workspace around the set is
-/// not the command's to change from in it (`in_set`: what to run there
-/// instead). A plain git worktree of a meta repo under .worktrees is a
-/// workspace of its own: one that meta didn't make, whose .meta.yaml is its
-/// own.
-pub(crate) fn workspace(request: &Request, command: &str, in_set: &str) -> anyhow::Result<Listing> {
+/// not the command's to change from in it. A plain git worktree of a meta
+/// repo under .worktrees is a workspace of its own: one that meta didn't
+/// make, whose .meta.yaml is its own.
+fn workspace(request: &Request) -> anyhow::Result<Listing> {
     let cwd = request.cwd.as_path();
     let Some(here) = Here::of(request) else {
         anyhow::bail!("No .meta.yaml found in {} or above it", escape_path(cwd));
@@ -305,8 +304,8 @@ pub(crate) fn workspace(request: &Request, command: &str, in_set: &str) -> anyho
             || crate::worktree::scan::holds_meta_checkout(&set.dir)
         {
             anyhow::bail!(
-                "`meta {command}` acts on the workspace, not worktree set '{}'; run it in the \
-                 workspace{in_set}",
+                "`meta git update` acts on the workspace, not worktree set '{}'; run it in the \
+                 workspace",
                 escape(&set.name)
             );
         }

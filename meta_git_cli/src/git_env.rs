@@ -4,12 +4,11 @@
 //! loop_lib can remain a generic execution engine without tool-specific
 //! knowledge.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Build git-specific environment variables.
 ///
-/// This returns a HashMap suitable for use in `PlannedCommand.env` that
-/// configures git for non-interactive, programmatic use.
+/// The `Step.env` that configures git for non-interactive, programmatic use.
 ///
 /// Includes:
 /// - `GIT_PAGER=cat` - Disable pager to prevent blocking
@@ -17,8 +16,8 @@ use std::collections::HashMap;
 /// - `color.ui=always` when meta's output is coloured
 ///   ([`meta_plugin::out::color`]), added after the `GIT_CONFIG_*` entries of
 ///   meta's own environment (see [`with_color`])
-pub fn git_env() -> HashMap<String, String> {
-    let mut env = HashMap::new();
+pub fn git_env() -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
 
     // Disable pager for programmatic use
     env.insert("GIT_PAGER".to_string(), "cat".to_string());
@@ -36,7 +35,7 @@ pub fn git_env() -> HashMap<String, String> {
 /// ones the user's own `GIT_CONFIG_COUNT` holds (read with `var`), so
 /// theirs still count. Nothing is added when their entries set `color.ui`
 /// themselves, or when git can't read their count (git reports it).
-fn with_color(env: &mut HashMap<String, String>, var: impl Fn(&str) -> Option<String>) {
+fn with_color(env: &mut BTreeMap<String, String>, var: impl Fn(&str) -> Option<String>) {
     let count = var("GIT_CONFIG_COUNT").unwrap_or_default();
     // git reads an empty count as none
     let n = match count.as_str() {
@@ -68,23 +67,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn git_env_includes_pager_setting() {
+    fn git_env_disables_the_pager_and_prompts() {
         let env = git_env();
-        assert_eq!(env.get("GIT_PAGER"), Some(&"cat".to_string()));
+        assert_eq!(env["GIT_PAGER"], "cat");
+        assert_eq!(env["GIT_TERMINAL_PROMPT"], "0");
     }
 
-    #[test]
-    fn git_env_includes_terminal_prompt_setting() {
-        let env = git_env();
-        assert_eq!(env.get("GIT_TERMINAL_PROMPT"), Some(&"0".to_string()));
-    }
-
-    fn with(vars: &[(&str, &str)]) -> HashMap<String, String> {
-        let vars: HashMap<String, String> = vars
+    fn with(vars: &[(&str, &str)]) -> BTreeMap<String, String> {
+        let vars: BTreeMap<String, String> = vars
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        let mut env = HashMap::new();
+        let mut env = BTreeMap::new();
         with_color(&mut env, |name| vars.get(name).cloned());
         env
     }

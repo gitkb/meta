@@ -363,8 +363,7 @@ fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<
         .chain(request.args.iter().cloned())
         .collect();
     // Set git-specific environment variables (pager, colors, prompts)
-    let git_env: std::collections::BTreeMap<String, String> =
-        git_env::git_env().into_iter().collect();
+    let git_env = git_env::git_env();
 
     // A listed project that isn't cloned yet is named, not counted as a
     // failure: cloning it is `meta git update`'s (with --strict, an

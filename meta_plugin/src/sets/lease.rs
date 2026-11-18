@@ -147,7 +147,7 @@ impl Claim {
 
     /// Delete the lease, if one was left.
     pub fn delete(self) -> Result<()> {
-        remove(&self.path)
+        super::remove_file(&self.path)
     }
 }
 
@@ -173,15 +173,6 @@ fn read_lease(path: &Path) -> Option<Lease> {
     std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-}
-
-fn remove(path: &Path) -> Result<()> {
-    match std::fs::remove_file(path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(e).with_context(|| format!("Cannot delete {}", escape_path(path)))
-        }
-        _ => Ok(()),
-    }
 }
 
 /// The lock file of the lease at `path`.
@@ -294,20 +285,12 @@ pub fn take(lease: &Lease) -> Result<Held> {
                 read(path).holder()
             );
         }
-        remove(&path)?;
+        super::remove_file(&path)?;
     }
-    // Written whole, then put in place: a reader sees all of it or none
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".tmp.{}", std::process::id()));
-    let tmp = PathBuf::from(tmp);
-    let written = serde_json::to_vec_pretty(lease)
+    serde_json::to_vec_pretty(lease)
         .map_err(std::io::Error::other)
-        .and_then(|json| std::fs::write(&tmp, json))
-        .and_then(|()| std::fs::rename(&tmp, &path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    written.with_context(|| format!("Cannot write {}", escape_path(&path)))?;
+        .and_then(|json| super::write_whole(&path, &json))
+        .with_context(|| format!("Cannot write {}", escape_path(&path)))?;
     Ok(Held {
         path,
         _lock: lock,

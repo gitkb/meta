@@ -24,6 +24,7 @@ pub mod lease;
 use crate::display::{escape, escape_path};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 /// The provider that owns a set without an owner file.
@@ -76,17 +77,21 @@ pub fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// The file beside `set` named `.<set><suffix>`.
-pub(crate) fn beside(set: &Path, suffix: &str) -> Result<PathBuf> {
+/// The folder `set` is in, and its name there.
+fn parent_and_name(set: &Path) -> Result<(&Path, &OsStr)> {
     match (set.parent(), set.file_name()) {
-        (Some(dir), Some(name)) => {
-            let mut file = std::ffi::OsString::from(".");
-            file.push(name);
-            file.push(suffix);
-            Ok(dir.join(file))
-        }
+        (Some(dir), Some(name)) => Ok((dir, name)),
         _ => anyhow::bail!("{} has no folder to keep its files in", escape_path(set)),
     }
+}
+
+/// The file beside `set` named `.<set><suffix>`.
+pub(crate) fn beside(set: &Path, suffix: &str) -> Result<PathBuf> {
+    let (dir, name) = parent_and_name(set)?;
+    let mut file = OsString::from(".");
+    file.push(name);
+    file.push(suffix);
+    Ok(dir.join(file))
 }
 
 /// The folder of the owner files of the sets in the worktrees folder `dir`.
@@ -105,13 +110,32 @@ pub fn owners_dir(dir: &Path) -> Result<PathBuf> {
 
 /// The owner file of the set at `set`: `.meta-sets/<set>.json` beside it.
 fn owner_path(set: &Path) -> Result<PathBuf> {
-    match (set.parent(), set.file_name()) {
-        (Some(dir), Some(name)) => {
-            let mut file = name.to_owned();
-            file.push(".json");
-            Ok(owners_dir(dir)?.join(file))
+    let (dir, name) = parent_and_name(set)?;
+    let mut file = name.to_owned();
+    file.push(".json");
+    Ok(owners_dir(dir)?.join(file))
+}
+
+/// Write `bytes` to `path` whole, then put it in place: a reader sees all
+/// of it or none.
+pub(crate) fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp.{}", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// Delete the file at `path`; one already gone is fine.
+pub(crate) fn remove_file(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(e).with_context(|| format!("Cannot delete {}", escape_path(path)))
         }
-        _ => anyhow::bail!("{} has no folder to keep its files in", escape_path(set)),
+        _ => Ok(()),
     }
 }
 
@@ -126,15 +150,12 @@ pub fn create(set: &Path, provider: &str, workspace: &Path) -> Result<()> {
             .canonicalize()
             .with_context(|| format!("Cannot resolve {}", escape_path(set)))?,
     };
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".tmp.{}", std::process::id()));
-    let tmp = PathBuf::from(tmp);
     let json = serde_json::to_vec_pretty(&owner)?;
     let write = || {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(&tmp, &json).and_then(|()| std::fs::rename(&tmp, &path))
+        write_whole(&path, &json)
     };
     // the folder goes with the last owner file another command forgets:
     // made again once if it went in between
@@ -142,9 +163,6 @@ pub fn create(set: &Path, provider: &str, workspace: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => write(),
         written => written,
     };
-    if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
     written.with_context(|| format!("Cannot write {}", escape_path(&path)))
 }
 
@@ -174,18 +192,12 @@ pub fn forget(set: &Path) -> Result<()> {
         anyhow::bail!("{} is still there; its owner file stays", escape_path(set));
     }
     let path = owner_path(set)?;
-    match std::fs::remove_file(&path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(e).with_context(|| format!("Cannot delete {}", escape_path(&path)))
-        }
-        // the folder goes with the last owner file (one still in use stays)
-        _ => {
-            if let Some(dir) = path.parent() {
-                let _ = std::fs::remove_dir(dir);
-            }
-            Ok(())
-        }
+    remove_file(&path)?;
+    // the folder goes with the last owner file (one still in use stays)
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::remove_dir(dir);
     }
+    Ok(())
 }
 
 /// Delete the set `set` that `provider` made, while `claim` holds its lease:

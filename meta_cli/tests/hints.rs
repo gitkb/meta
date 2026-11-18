@@ -7,6 +7,7 @@
 )]
 #![cfg(unix)]
 
+use meta_plugin::testing::text;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -88,10 +89,6 @@ impl Workspace {
         let bin = Path::new(env!("CARGO_BIN_EXE_meta"));
         self.command(bin, &self.ws).args(args).output().unwrap()
     }
-}
-
-fn text(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr)
 }
 
 /// The command a message suggests: its line that starts with `meta `.

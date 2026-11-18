@@ -470,6 +470,15 @@ pub fn mkfifo(path: &Path) -> bool {
     }
 }
 
+/// What a program printed: its stdout, then its stderr.
+pub fn text(out: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
 /// `path` as an argument
 pub fn path(path: &Path) -> String {
     path.to_str().unwrap().to_string()

@@ -10,7 +10,7 @@
 // Unix only: the plugin log is a shell script around meta-git
 #![cfg(unix)]
 
-use meta_plugin::testing::Sandbox;
+use meta_plugin::testing::{text, Sandbox};
 use serde_json::Value;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -110,14 +110,6 @@ exec "{real}" "$@"
             let _ = fs::remove_file(self.log.join(file));
         }
     }
-}
-
-fn text(out: &Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    )
 }
 
 /// What one line should do

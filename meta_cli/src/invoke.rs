@@ -7,6 +7,7 @@ use crate::subprocess_plugins::SubprocessPlugin;
 use crate::{run_list, Cli};
 use anyhow::{Context, Result};
 use meta_core::config::{self, Workspace as Config};
+use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
 use meta_core::repo_filter::{repo_path, Candidate, Reach};
 use meta_core::worktree;
 use meta_plugin::display::{escape, escape_lines, escape_path};
@@ -14,6 +15,7 @@ use meta_plugin::{
     errln, outln, Answer, ErrorCode, ErrorInfo, Plan, Project, ProjectResult, Request, Response,
     Scope, Text,
 };
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// The repos a command runs in, chosen once
@@ -124,59 +126,27 @@ fn resolve_dependencies(
     members: &mut [Project],
     whole_tree: &[Candidate],
 ) {
-    use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
     let repos = reach.scope().repos;
     let flat = reach.tree.is_empty();
-    // each project of the reach: its folder, its key in the graph, its info
-    let keyed: Vec<(PathBuf, String, &config::ProjectInfo)> = repos
-        .iter()
-        .filter_map(|repo| {
-            let info = repo.info.as_ref()?;
-            let key = match flat {
-                true => info.name.clone(),
-                false => repo_path(&repo.dir, root),
-            };
-            Some((repo.dir.clone(), key, info))
-        })
-        .collect();
-    let keys: std::collections::HashSet<&str> = keyed.iter().map(|(_, k, _)| k.as_str()).collect();
-    // an entry of the project at `key`, as the graph names it
-    let qualify_with = |key: &str, info: &config::ProjectInfo, name: &String| {
-        // "open-source/gitkb/core" listed as "core": "open-source/gitkb/"
-        let prefix = match flat {
-            true => "",
-            false => key
-                .strip_suffix(info.path.as_str())
-                .filter(|prefix| prefix.is_empty() || prefix.ends_with('/'))
-                .unwrap_or(""),
-        };
-        match keys.contains(name.as_str()) || name == "." {
-            true => name.clone(),
-            false => format!("{prefix}{name}"),
-        }
+    // each project of the reach, keyed in the graph by name, or with -r/-A
+    // by path from the root
+    let keyed: Vec<Placed> = match flat {
+        true => repos
+            .iter()
+            .filter_map(|repo| {
+                let info = repo.info.as_ref()?;
+                Some((repo.dir.as_path(), info.name.clone(), String::new(), info))
+            })
+            .collect(),
+        false => placed(&repos, root),
     };
-    let mut nodes: Vec<ProjectDependencies> = keyed
-        .iter()
-        .map(|(_, key, info)| {
-            let qualify = |name: &String| qualify_with(key, info, name);
-            ProjectDependencies {
-                name: key.clone(),
-                path: key.clone(),
-                repo: info.repo.clone(),
-                tags: info.tags.clone(),
-                provides: info.provides.iter().map(qualify).collect(),
-                depends_on: info.depends_on.iter().map(qualify).collect(),
-            }
-        })
-        .collect();
-    // in the order of the keys, so a run picks the provider the last did
-    nodes.sort_by(|a, b| a.name.cmp(&b.name));
-    let graph = DependencyGraph::build(nodes);
+    let graph = graph(&keyed);
+    let keys = keys(&keyed);
     let path_of = |key: &str| {
         keyed
             .iter()
-            .find(|(_, k, _)| k == key)
-            .map(|(dir, _, _)| repo_path(dir, root))
+            .find(|(_, k, ..)| k == key)
+            .map(|(dir, ..)| repo_path(dir, root))
     };
     // what -r reaches from the config the command starts at
     let here = Reach::of(reach.workspace.clone(), true, false, None)
@@ -184,7 +154,7 @@ fn resolve_dependencies(
         .map(|reach| reach.scope().repos);
     let elsewhere = Elsewhere::of(whole_tree, here.as_deref(), root, &reach.workspace.dir);
     for member in members.iter_mut() {
-        let Some((_, key, info)) = keyed.iter().find(|(dir, _, _)| *dir == member.abs) else {
+        let Some((_, key, prefix, info)) = keyed.iter().find(|(dir, ..)| *dir == member.abs) else {
             // outside the reach (a nested repo without -r): only what
             // names one repo elsewhere is said
             member.left_out = member
@@ -210,7 +180,7 @@ fn resolve_dependencies(
         let written = |qualified: &str| {
             info.depends_on
                 .iter()
-                .find(|dep| qualify_with(key, info, dep) == qualified)
+                .find(|dep| qualify(&keys, prefix, dep) == qualified)
                 .cloned()
                 .unwrap_or_else(|| qualified.to_string())
         };
@@ -235,15 +205,52 @@ fn resolve_dependencies(
     }
 }
 
+/// The keys of `projects`.
+fn keys<'a>(projects: &'a [Placed<'_>]) -> HashSet<&'a str> {
+    projects.iter().map(|(_, key, ..)| key.as_str()).collect()
+}
+
+/// An entry `name` of a project listed at `prefix`, as the graph of `keys`
+/// names it: a key as written, else qualified with the place ("core" listed
+/// in "open-source/gitkb/" as "open-source/gitkb/core").
+fn qualify(keys: &HashSet<&str>, prefix: &str, name: &str) -> String {
+    match keys.contains(name) || name == "." {
+        true => name.to_string(),
+        false => format!("{prefix}{name}"),
+    }
+}
+
+/// The dependency graph of `projects`.
+fn graph(projects: &[Placed<'_>]) -> DependencyGraph {
+    let keys = keys(projects);
+    let mut nodes: Vec<ProjectDependencies> = projects
+        .iter()
+        .map(|(_, key, prefix, info)| {
+            let qualify = |name: &String| qualify(&keys, prefix, name);
+            ProjectDependencies {
+                name: key.clone(),
+                path: key.clone(),
+                repo: info.repo.clone(),
+                tags: info.tags.clone(),
+                provides: info.provides.iter().map(qualify).collect(),
+                depends_on: info.depends_on.iter().map(qualify).collect(),
+            }
+        })
+        .collect();
+    // in the order of the keys, so a run picks the provider the last did
+    nodes.sort_by(|a, b| a.name.cmp(&b.name));
+    DependencyGraph::build(nodes)
+}
+
 /// Every project of the whole workspace, for an entry the reach can't
 /// resolve: which one repo elsewhere it names, and whether `-r` follows it.
 struct Elsewhere<'a> {
     /// Each project's folder, its path from the root, the place of the meta
     /// repo that lists it (`platform/`, empty at the top), its info
-    projects: Vec<(&'a Path, String, String, &'a config::ProjectInfo)>,
+    projects: Vec<Placed<'a>>,
     /// The graph of what `-r` reaches from where the command starts, as `-r`
     /// resolves it (by path, an entry qualified with its meta repo's place)
-    recursive: meta_core::dependency_graph::DependencyGraph,
+    recursive: DependencyGraph,
     /// The folders `-r` reaches from there
     reached: Vec<PathBuf>,
     /// The folder of the config the command starts at: a `--repo` there is
@@ -251,12 +258,13 @@ struct Elsewhere<'a> {
     start: PathBuf,
 }
 
-/// Each project of `repos`: its folder, its path from `root`, the place of
-/// the meta repo that lists it, its info.
-fn placed<'a>(
-    repos: &'a [Candidate],
-    root: &Path,
-) -> Vec<(&'a Path, String, String, &'a config::ProjectInfo)> {
+/// A project: its folder, its key in a graph (its path from the root, or
+/// its name), the place of the meta repo that lists it (`platform/`, empty
+/// at the top), its info.
+type Placed<'a> = (&'a Path, String, String, &'a config::ProjectInfo);
+
+/// Each project of `repos`, keyed by its path from `root`.
+fn placed<'a>(repos: &'a [Candidate], root: &Path) -> Vec<Placed<'a>> {
     repos
         .iter()
         .filter_map(|repo| {
@@ -281,31 +289,10 @@ impl<'a> Elsewhere<'a> {
         root: &Path,
         start: &Path,
     ) -> Self {
-        use meta_core::dependency_graph::{DependencyGraph, ProjectDependencies};
         let projects = placed(whole_tree, root);
         let reach = placed(here.unwrap_or(whole_tree), root);
-        let keys: std::collections::HashSet<&str> =
-            reach.iter().map(|(_, path, ..)| path.as_str()).collect();
-        let mut nodes: Vec<ProjectDependencies> = reach
-            .iter()
-            .map(|(_, path, prefix, info)| {
-                let qualify = |name: &String| match keys.contains(name.as_str()) || name == "." {
-                    true => name.clone(),
-                    false => format!("{prefix}{name}"),
-                };
-                ProjectDependencies {
-                    name: path.clone(),
-                    path: path.clone(),
-                    repo: info.repo.clone(),
-                    tags: info.tags.clone(),
-                    provides: info.provides.iter().map(qualify).collect(),
-                    depends_on: info.depends_on.iter().map(qualify).collect(),
-                }
-            })
-            .collect();
-        nodes.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
-            recursive: DependencyGraph::build(nodes),
+            recursive: graph(&reach),
             reached: reach.iter().map(|(dir, ..)| dir.to_path_buf()).collect(),
             start: start.to_path_buf(),
             projects,
@@ -321,7 +308,7 @@ impl<'a> Elsewhere<'a> {
         use meta_plugin::display::escape;
         let (_, own_path, prefix, _) = self.projects.iter().find(|(d, ..)| *d == dir)?;
         // a name or capability, or a path from the dependent's config or the root
-        let names = |(_, path, _, info): &&(&Path, String, String, &config::ProjectInfo)| {
+        let names = |(_, path, _, info): &&Placed<'_>| {
             info.name == dep
                 || info.provides.iter().any(|p| p == dep)
                 || *path == format!("{prefix}{dep}")

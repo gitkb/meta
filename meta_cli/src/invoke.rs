@@ -439,10 +439,6 @@ fn target_with(
     let parallel = parallel(Some(&config));
     let reach = Reach::of(config, cli.recursive, cli.all, cli.depth)?;
     let repos = reach.select(filters, crate::with_all)?;
-    let depth = match cli.recursive || cli.all {
-        true => cli.depth,
-        false => Some(0),
-    };
     Ok(Target {
         workspace: Some(workspace(
             &reach.workspace,
@@ -456,7 +452,7 @@ fn target_with(
         parallel,
         root: reach.root,
         set: None,
-        depth,
+        depth: cli.reach_depth(),
     })
 }
 
@@ -553,7 +549,7 @@ fn in_set(
     if named_outside {
         return Ok(None);
     }
-    let provider = meta_plugin::sets::owner(set_dir)?.map(|owner| owner.provider);
+    let provider = meta_plugin::sets::provider(set_dir)?;
     let config = config_path.map(|path| Config::load(&path)).transpose()?;
     let repos = worktree::set_members(set_dir, config.as_ref(), filters)?;
     let all = worktree::set_members(
@@ -589,7 +585,7 @@ fn in_set(
         name: name.to_string(),
         dir: set_dir.to_path_buf(),
         members: projects(&all, set_dir),
-        provider: provider.unwrap_or_else(|| meta_plugin::sets::DEFAULT_PROVIDER.to_string()),
+        provider,
         leased: leased(set_dir),
     };
     Ok(Some(Target {
@@ -604,10 +600,7 @@ fn in_set(
         repos,
         // the set is the scope; -r, -A and --depth say how deep into the
         // meta repos checked out in it, as outside a set
-        depth: match cli.recursive || cli.all {
-            true => cli.depth,
-            false => Some(0),
-        },
+        depth: cli.reach_depth(),
     }))
 }
 
@@ -664,10 +657,9 @@ pub fn named_set(cli: &Cli, start: &Path, name: &str) -> Result<Option<Target>> 
         return Ok(Some(target));
     }
     let provider = meta_plugin::sets::provider(&set_dir)?;
-    let set_config = match worktree::set_config(&set_dir, cli.config.as_ref())? {
-        Some(path) => Some(Config::load(&path)?),
-        None => None,
-    };
+    let set_config = worktree::set_config(&set_dir, cli.config.as_ref())?
+        .map(|path| Config::load(&path))
+        .transpose()?;
     let filters = meta_core::repo_filter::Filters::default();
     let all = worktree::set_members(&set_dir, set_config.as_ref(), &filters)?;
     let repos = match all.is_empty() {

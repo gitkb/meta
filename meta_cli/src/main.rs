@@ -223,6 +223,15 @@ impl Cli {
         ExecutionMode::from_dry_run(self.dry_run)
     }
 
+    /// How far into nested meta repos the selection reaches: `--depth` with
+    /// -r or -A, else the config's own projects only
+    pub fn reach_depth(&self) -> Option<usize> {
+        match self.recursive || self.all {
+            true => self.depth,
+            false => Some(0),
+        }
+    }
+
     /// `--include`, `--exclude` and `--tag`
     pub fn filters(&self) -> Filters {
         Filters::new(

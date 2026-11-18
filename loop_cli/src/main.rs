@@ -76,7 +76,7 @@ fn run_loop() -> Result<()> {
             cli.command.is_empty(),
             "--add-aliases-to-global-looprc imports your shell's aliases and runs no command"
         );
-        return import_aliases(false);
+        return import_aliases();
     }
 
     // A file named with -c must exist; ./.looprc may not

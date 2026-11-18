@@ -411,11 +411,7 @@ fn shell_aliases() -> Result<BTreeMap<String, String>> {
 /// `--add-aliases-to-global-looprc`: your shell's aliases into the `aliases`
 /// of `~/.looprc`, after a preview and your yes. Its other keys stay as they
 /// are; a file loop can't read is reported, not replaced.
-pub fn import_aliases(dry_run: bool) -> Result<()> {
-    if dry_run {
-        outln!("[DRY RUN] Would add your shell's aliases to ~/.looprc")?;
-        return Ok(());
-    }
+pub fn import_aliases() -> Result<()> {
     let path = global_looprc().context("HOME is not set")?;
     let cancelled = || anyhow::anyhow!("Cancelled: nothing written to {}", escape_path(&path));
 

@@ -470,6 +470,16 @@ pub fn mkfifo(path: &Path) -> bool {
     }
 }
 
+/// An executable shell script at `path`, folders and all: `#!/bin/sh`,
+/// then `body`.
+#[cfg(unix)]
+pub fn script(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 /// What a program printed: its stdout, then its stderr.
 pub fn text(out: &std::process::Output) -> String {
     format!(

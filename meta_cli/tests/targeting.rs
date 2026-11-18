@@ -10,10 +10,9 @@
 // Unix only: the plugin log is a shell script around meta-git
 #![cfg(unix)]
 
-use meta_plugin::testing::{text, Sandbox};
+use meta_plugin::testing::{script, text, Sandbox};
 use serde_json::Value;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -44,19 +43,15 @@ impl Table {
             .display()
             .to_string();
         let wrapper = bin.join("meta-git");
-        fs::write(
+        script(
             &wrapper,
-            format!(
-                r#"#!/bin/sh
-echo "$1" >> "{log}/starts"
+            &format!(
+                r#"echo "$1" >> "{log}/starts"
 [ "$1" = --meta-plugin-exec ] && {{ cat "$META_REQUEST"; echo; }} >> "{log}/requests"
-exec "{real}" "$@"
-"#,
+exec "{real}" "$@""#,
                 log = log.display()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let table = Table {
             sandbox,
             ws,

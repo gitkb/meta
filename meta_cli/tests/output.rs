@@ -5,7 +5,7 @@
 // Unix only: the plugin here is a shell script
 #![cfg(unix)]
 
-use meta_plugin::testing::Sandbox;
+use meta_plugin::testing::{script, Sandbox};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -18,16 +18,10 @@ fn workspace(sandbox: &Sandbox) -> PathBuf {
     let plugins = root.join(".meta/plugins");
     std::fs::create_dir_all(&plugins).unwrap();
     let plugin = plugins.join("meta-die");
-    std::fs::write(
+    script(
         &plugin,
-        "#!/bin/sh\nif [ \"$1\" = --meta-plugin-info ]; then\n    echo '{\"name\":\"die\",\"version\":\"1\",\"commands\":[\"die\"]}'\nelse\n    echo plugin-boom >&2; exit 3\nfi\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&plugin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+        "if [ \"$1\" = --meta-plugin-info ]; then\n    echo '{\"name\":\"die\",\"version\":\"1\",\"commands\":[\"die\"]}'\nelse\n    echo plugin-boom >&2; exit 3\nfi",
+    );
     root
 }
 

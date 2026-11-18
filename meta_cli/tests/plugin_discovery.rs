@@ -7,7 +7,7 @@
 // Unix only: the plugins here are shell scripts
 #![cfg(unix)]
 
-use meta_plugin::testing::Sandbox;
+use meta_plugin::testing::{script, Sandbox};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -57,12 +57,6 @@ impl Fixture {
     fn run(&self, args: &[&str]) -> Output {
         self.command(args).output().unwrap()
     }
-}
-
-fn script(path: &Path, body: &str) {
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 fn plugin(path: &Path, name: &str, version: &str) {

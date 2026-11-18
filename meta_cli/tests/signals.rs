@@ -10,10 +10,9 @@
 // Unix only: signals and process groups
 #![cfg(unix)]
 
-use meta_plugin::testing::Sandbox;
+use meta_plugin::testing::{script, Sandbox};
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -40,14 +39,12 @@ fn workspace(sandbox: &Sandbox, root: &Path) {
     let bin = root.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let plugin = bin.join("meta-slow");
-    fs::write(
+    script(
         &plugin,
-        format!(
-            "#!/bin/sh\ncase \"$1\" in\n  --meta-plugin-info) echo '{{\"name\":\"slow\",\"version\":\"1.0.0\",\"commands\":[\"slow\"]}}' ;;\n  --meta-plugin-exec) cat >/dev/null; {SLOW} ;;\nesac\n"
+        &format!(
+            "case \"$1\" in\n  --meta-plugin-info) echo '{{\"name\":\"slow\",\"version\":\"1.0.0\",\"commands\":[\"slow\"]}}' ;;\n  --meta-plugin-exec) cat >/dev/null; {SLOW} ;;\nesac"
         ),
-    )
-    .unwrap();
-    fs::set_permissions(&plugin, fs::Permissions::from_mode(0o755)).unwrap();
+    );
 }
 
 /// meta, started as a job of its own (never a terminal's foreground job).

@@ -1,8 +1,6 @@
 RUST_BACKTRACE ?= full
 RUST_LOG ?= trace
 
-include Makefile.context.mk
-
 .DEFAULT_GOAL := build-all
 
 build-all: build
@@ -53,20 +51,16 @@ remove_old_copies = dir="$(1)"; keep="$(2)"; \
 # Uses git rev-parse to handle worktrees and submodules correctly
 install-hooks:
 	@echo "Installing git hooks..."
-	@chmod +x .githooks/commit-msg
-	@chmod +x .githooks/pre-commit
-	@chmod +x .githooks/pre-push
-	@mkdir -p "$$(git rev-parse --git-path hooks)"
-	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/commit-msg" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/commit-msg"
-	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/pre-commit" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/pre-commit"
-	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/pre-push" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/pre-push"
+	@for hook in commit-msg pre-commit pre-push; do chmod +x ".githooks/$$hook" || exit 1; done
+	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && mkdir -p "$$hooks_dir" && \
+		for hook in commit-msg pre-commit pre-push; do \
+			rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/$$hook" "$$hooks_dir")" && \
+			ln -sf "$$rel" "$$hooks_dir/$$hook" || exit 1; \
+		done
 	@echo "Commit-msg, pre-commit, and pre-push hooks installed."
 
 release: 
 	cargo build --release
-
-rm-meta:
-	rm -rf meta
 
 run: 
 	cargo run
@@ -76,15 +70,6 @@ run:
 test:
 	cargo build --workspace --bins --examples
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo nextest run --workspace
-
-test-meta-git-clone: rm-meta
-	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo run --release --bin meta -- git clone git@github.com:mateodelnorte/meta.git
-
-test-meta-git-clone-depth-1-recursive: rm-meta
-	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo run --release --bin meta -- -r git clone git@github.com:mateodelnorte/meta.git --depth 1
-
-test-meta-git-clone-parallel-recursive: rm-meta
-	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo run --release --bin meta -- -r git clone git@github.com:mateodelnorte/meta.git --parallel 4
 
 # Parallel jobs - defaults to CPU count
 # Override with JOBS=N, or disable with JOBS=1
@@ -111,10 +96,6 @@ endif
 bats:
 	bats $(BATS_FLAGS) $(if $(FILE),$(wildcard tests/*$(FILE)*.bats),tests/)
 
-integration-test:
-	cargo build -p meta
-	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) META_CLI_PATH=target/debug/meta CARGO_BIN_EXE_meta=target/debug/meta cargo nextest run --workspace
-
 # By package name, so it still matches after a version bump since the install
 uninstall:
 	@packages=$$(python3 scripts/programs.py packages) && for package in $$packages; do \
@@ -122,4 +103,4 @@ uninstall:
 	done
 	@$(call remove_old_copies,$$HOME/.meta/plugins,$(CARGO_BIN))
 
-.PHONY: build-all install install-all uninstall clean install-hooks build run test bats release integration-test
+.PHONY: build-all install install-all uninstall clean install-hooks build run test bats release

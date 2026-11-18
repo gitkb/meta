@@ -501,8 +501,7 @@ plugin_folders() {
 @test "make install and uninstall remove only the two old plugin copies, once installed; make clean only the checkout's" {
     scratch_workspace
     mkdir -p "$SCRATCH/scripts" "$SCRATCH/stub"
-    cp "$BATS_TEST_DIRNAME/../Makefile" "$BATS_TEST_DIRNAME/../Makefile.context.mk" \
-        "$BATS_TEST_DIRNAME/../install.sh" "$SCRATCH/"
+    cp "$BATS_TEST_DIRNAME/../Makefile" "$BATS_TEST_DIRNAME/../install.sh" "$SCRATCH/"
     cp "$PROGRAMS" "$SCRATCH/scripts/"
     # cargo that reads metadata for real, records the rest, and fails an
     # install when FAIL is set

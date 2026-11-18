@@ -1238,11 +1238,7 @@ impl McpServer {
     /// The projects of the workspace in `dir` (their paths under `prefix`)
     /// that are no repository of their own, and why, as `meta project
     /// check` says; its error when it gave no answer.
-    fn not_repos(
-        &self,
-        dir: &Path,
-        prefix: &str,
-    ) -> Result<std::collections::HashMap<String, String>, String> {
+    fn not_repos(&self, dir: &Path, prefix: &str) -> Result<HashMap<String, String>, String> {
         let check = crate::run::meta().and_then(|meta| {
             let meta = meta.cwd(dir).args(["project", "check"]);
             self.calls.meta(meta)
@@ -1287,7 +1283,7 @@ impl McpServer {
         // whether a project gave an answer, matches or none
         let mut answered = false;
         // what `meta project check` says of each workspace's projects
-        let mut checks = std::collections::HashMap::new();
+        let mut checks = HashMap::new();
 
         for SearchTarget {
             path: name,

@@ -220,7 +220,7 @@ impl Calls {
         max_lines: usize,
         said: bool,
     ) -> std::io::Result<(Output, bool)> {
-        if self.cancelled.load(Ordering::SeqCst) {
+        if self.cancelled() {
             return Err(std::io::Error::other("the tool call was cancelled"));
         }
         command
@@ -249,7 +249,7 @@ impl Calls {
             if status.is_none() {
                 status = child.try_wait()?;
             }
-            let cancelled = self.cancelled.load(Ordering::SeqCst);
+            let cancelled = self.cancelled();
             let running = status.is_none()
                 || if cancelled {
                     child.group_alive()

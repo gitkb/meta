@@ -41,15 +41,7 @@ pub(crate) fn handle_add(args: AddArgs, ctx: &Ctx, request: &Request) -> Result<
     let start_branches =
         StartBranches::new(&here.dir, &here.workspace.root, &here.workspace.config);
     let meta_dir = &here.dir;
-    let wt_dir = crate::here::worktree_root(request)?.join(name);
-
-    if !wt_dir.exists() {
-        anyhow::bail!(
-            "Worktree '{}' not found at {}",
-            escape(name),
-            escape_path(&wt_dir)
-        );
-    }
+    let wt_dir = resolve_existing_worktree(name, request)?;
 
     // Check existing repos in the worktree
     let existing = discover_worktree_members(&wt_dir, &here.places())?;

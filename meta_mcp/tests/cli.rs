@@ -547,7 +547,6 @@ fn a_command_too_long_to_start_says_why() {
     );
 }
 
-/// Whether the process `pid` is gone.
 /// meta-mcp in `ws`, leading a process group of its own, with `calls` sent;
 /// stdout dropped, stderr kept. Its stdin comes back too: while it is open
 /// the server isn't told to end, only signalled.

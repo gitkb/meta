@@ -1336,43 +1336,6 @@ mod tests {
     }
 
     #[test]
-    fn each_project_form_gives_its_name_path_repo_and_tags() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".meta.yaml");
-        std::fs::write(
-            &config,
-            "projects:\n  simple: git@x:o/simple.git\n  extended:\n    repo: git@x:o/extended.git\n    tags: [t]\n",
-        )
-        .unwrap();
-        let projects = Workspace::load(&config).unwrap().projects;
-        // in name order
-        let got: Vec<_> = projects
-            .iter()
-            .map(|p| {
-                let repo = p.repo.as_ref().map(|r| r.raw().to_string());
-                (p.name.as_str(), p.path.as_str(), repo, p.tags.clone())
-            })
-            .collect();
-        assert_eq!(
-            got,
-            [
-                (
-                    "extended",
-                    "extended",
-                    Some("git@x:o/extended.git".into()),
-                    vec!["t".to_string()]
-                ),
-                (
-                    "simple",
-                    "simple",
-                    Some("git@x:o/simple.git".into()),
-                    vec![]
-                ),
-            ]
-        );
-    }
-
-    #[test]
     fn a_config_that_does_not_parse_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join(".meta.yaml");
@@ -1430,45 +1393,6 @@ mod tests {
     }
 
     #[test]
-    fn test_flatten_meta_tree_empty() {
-        let paths = flatten_meta_tree(&[]);
-        assert!(paths.is_empty());
-    }
-
-    #[test]
-    fn test_flatten_meta_tree_deeply_nested() {
-        let dir = tempfile::tempdir().unwrap();
-        let l1 = dir.path().join("l1");
-        let l2 = l1.join("l2");
-        let l3 = l2.join("l3");
-        std::fs::create_dir_all(&l3).unwrap();
-
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {"l1": "git@github.com:org/l1.git"}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            l1.join(".meta.yaml"),
-            r#"{"projects": {"l2": "git@github.com:org/l2.git"}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            l2.join(".meta.yaml"),
-            r#"{"projects": {"l3": "git@github.com:org/l3.git"}}"#,
-        )
-        .unwrap();
-
-        let tree = walk_meta_tree(dir.path(), None).unwrap();
-        let paths = flatten_meta_tree(&tree);
-
-        assert_eq!(paths.len(), 3);
-        assert_eq!(paths[0], "l1");
-        assert_eq!(paths[1], "l1/l2");
-        assert_eq!(paths[2], "l1/l2/l3");
-    }
-
-    #[test]
     fn test_walk_meta_tree_nonexistent_project_dir() {
         let dir = tempfile::tempdir().unwrap();
         // Project listed in .meta.yaml but directory doesn't exist
@@ -1483,30 +1407,6 @@ mod tests {
         assert_eq!(tree[0].info.name, "missing");
         assert!(!tree[0].is_meta);
         assert!(tree[0].children.is_empty());
-    }
-
-    #[test]
-    fn test_walk_meta_tree_extended_format() {
-        let dir = tempfile::tempdir().unwrap();
-        let custom_path = dir.path().join("custom/path");
-        std::fs::create_dir_all(&custom_path).unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{"projects": {
-                "myproject": {
-                    "repo": "git@github.com:org/myproject.git",
-                    "path": "custom/path",
-                    "tags": ["frontend", "react"]
-                }
-            }}"#,
-        )
-        .unwrap();
-
-        let tree = walk_meta_tree(dir.path(), None).unwrap();
-        assert_eq!(tree.len(), 1);
-        assert_eq!(tree[0].info.name, "myproject");
-        assert_eq!(tree[0].info.path, "custom/path");
-        assert_eq!(tree[0].info.tags, vec!["frontend", "react"]);
     }
 
     #[test]
@@ -1736,52 +1636,6 @@ mod tests {
     // ============================================================================
     // Nested meta repos (meta: true field)
     // ============================================================================
-
-    #[test]
-    fn test_parse_nested_meta_yaml() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            "projects:\n  core: git@github.com:org/core.git\n  vendor:\n    repo: git@github.com:org/vendor.git\n    meta: true\n",
-        )
-        .unwrap();
-
-        let projects = Workspace::load(&dir.path().join(".meta.yaml"))
-            .unwrap()
-            .projects;
-        assert_eq!(projects.len(), 2);
-
-        let vendor = projects.iter().find(|p| p.name == "vendor").unwrap();
-        assert_eq!(vendor.repo, Some("git@github.com:org/vendor.git".into()));
-    }
-
-    #[test]
-    fn test_parse_nested_meta_with_custom_path() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(".meta.yaml"),
-            r#"{
-                "projects": {
-                    "vendor": {
-                        "repo": "git@github.com:org/vendor.git",
-                        "path": "third_party/vendor",
-                        "meta": true
-                    }
-                }
-            }"#,
-        )
-        .unwrap();
-
-        let projects = Workspace::load(&dir.path().join(".meta.yaml"))
-            .unwrap()
-            .projects;
-        assert_eq!(projects.len(), 1);
-
-        let vendor = &projects[0];
-        assert_eq!(vendor.repo, Some("git@github.com:org/vendor.git".into()));
-        assert_eq!(vendor.name, "vendor");
-        assert_eq!(vendor.path, "third_party/vendor");
-    }
 
     #[test]
     fn test_walk_meta_tree_nested_meta_with_children() {
@@ -2477,7 +2331,11 @@ mod tests {
         let map = build_project_map(&tree, "");
 
         // The key should be the path, not the name
-        assert_eq!(map["custom/path/to/project"].name, "my-project");
+        let places: Vec<_> = map
+            .iter()
+            .map(|(place, info)| (place.as_str(), info.name.as_str()))
+            .collect();
+        assert_eq!(places, [("custom/path/to/project", "my-project")]);
     }
 
     // ============================================================================

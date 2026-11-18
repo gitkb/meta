@@ -543,20 +543,6 @@ pub fn worktree_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
     branch_is_free(repo_path, branch, true)
 }
 
-fn checkout_path_bytes(bytes: &[u8]) -> Result<std::path::PathBuf> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        Ok(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
-    }
-    #[cfg(not(unix))]
-    {
-        Ok(std::path::PathBuf::from(
-            std::str::from_utf8(bytes).context("Git checkout path is not UTF-8")?,
-        ))
-    }
-}
-
 // Git's backlink is raw path bytes followed by one line ending.
 fn holder_checkout(admin: &Path) -> Result<Option<std::path::PathBuf>> {
     let file = admin.join("gitdir");
@@ -572,7 +558,7 @@ fn holder_checkout(admin: &Path) -> Result<Option<std::path::PathBuf>> {
     let bytes = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
     let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
     Ok(admin
-        .join(checkout_path_bytes(bytes)?)
+        .join(super::safety::path_from_bytes(bytes)?)
         .parent()
         .map(Path::to_path_buf))
 }
@@ -608,7 +594,7 @@ fn configured_worktree(repo_path: &Path, common: &Path) -> Result<Option<std::pa
         .stdout
         .strip_suffix(b"\0")
         .context("Invalid core.worktree output")?;
-    let path = common.join(checkout_path_bytes(bytes)?);
+    let path = common.join(super::safety::path_from_bytes(bytes)?);
     Ok(Some(path.canonicalize().unwrap_or(path)))
 }
 

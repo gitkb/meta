@@ -762,7 +762,7 @@ fn hidden_files(repo: &Path) -> Result<Vec<(String, PathBuf)>> {
 }
 
 /// A path git printed as raw bytes. Outside Unix, git writes UTF-8.
-fn path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
+pub(super) fn path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;

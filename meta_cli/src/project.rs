@@ -139,10 +139,7 @@ pub fn usage_error(error: &clap::Error) -> Option<anyhow::Error> {
     ) {
         return None;
     }
-    let typed: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
+    let typed = crate::typed_args();
     let meta = crate::meta_options();
     let args = match typed.get(meta.typed.len()..)?.split_first()? {
         (word, args) if word == "project" => args,
@@ -229,10 +226,7 @@ fn unrecognized(words: &[String], meta: &meta_plugin::args::MetaOptions) -> anyh
 /// says so.
 fn workspace_target(cli: &Cli, start: &Path, name: &str) -> Result<Target> {
     // named as typed: `ls` too
-    let typed: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
+    let typed = crate::typed_args();
     let typed = typed
         .get(crate::meta_options().typed.len() + 1)
         .map_or(name, String::as_str);
@@ -244,13 +238,15 @@ fn workspace_target(cli: &Cli, start: &Path, name: &str) -> Result<Target> {
     };
     target
         .filter(|target| target.workspace.is_some())
-        .ok_or_else(|| {
-            ErrorInfo::new(
-                ErrorCode::NotFound,
-                "Not a meta workspace (no .meta.yaml found)",
-            )
-            .into()
-        })
+        .ok_or_else(|| not_a_workspace().into())
+}
+
+/// The error of a command that needs a meta workspace and finds none.
+pub(crate) fn not_a_workspace() -> ErrorInfo {
+    ErrorInfo::new(
+        ErrorCode::NotFound,
+        "Not a meta workspace (no .meta.yaml found)",
+    )
 }
 
 /// What a command found: its text, its records for `--json`, and what its
@@ -395,12 +391,7 @@ fn check_project(repo: &Candidate, cwd: &Path) -> Option<CheckProblem> {
 
 /// The workspace `target` is in, and its config.
 fn workspace(target: &Target) -> Result<(&meta_plugin::Workspace, config::Workspace)> {
-    let workspace = target.workspace.as_ref().ok_or_else(|| {
-        ErrorInfo::new(
-            ErrorCode::NotFound,
-            "Not a meta workspace (no .meta.yaml found)",
-        )
-    })?;
+    let workspace = target.workspace.as_ref().ok_or_else(not_a_workspace)?;
     Ok((workspace, config::Workspace::load(&workspace.config)?))
 }
 

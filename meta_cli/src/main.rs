@@ -223,6 +223,15 @@ impl Cli {
         ExecutionMode::from_dry_run(self.dry_run)
     }
 
+    /// How far into nested meta repos the selection reaches: `--depth` with
+    /// -r or -A, else the config's own projects only
+    pub fn reach_depth(&self) -> Option<usize> {
+        match self.recursive || self.all {
+            true => self.depth,
+            false => Some(0),
+        }
+    }
+
     /// `--include`, `--exclude` and `--tag`
     pub fn filters(&self) -> Filters {
         Filters::new(
@@ -638,13 +647,8 @@ fn run_cli() -> Result<()> {
         None => help_message(&cli, &help_with_plugins(&subprocess_plugins), &mut report)?,
         Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins, &mut report)?,
         Some(Commands::Context(args)) => {
-            let workspace =
-                Workspace::find(&cli.start_dir()?, cli.config.as_ref())?.ok_or_else(|| {
-                    meta_plugin::ErrorInfo::new(
-                        meta_plugin::ErrorCode::NotFound,
-                        "Not a meta workspace (no .meta.yaml found)",
-                    )
-                })?;
+            let workspace = Workspace::find(&cli.start_dir()?, cli.config.as_ref())?
+                .ok_or_else(project::not_a_workspace)?;
             context::handle_context(
                 cli.json,
                 args.no_status,
@@ -1024,10 +1028,7 @@ fn outer(before: &[&str]) -> loop_lib::Outer {
 /// The line as typed with meta's `-r` in it as `-A`, which reaches the
 /// whole workspace (in a cluster too: `-rv` as `-Av`).
 fn with_all() -> String {
-    let args: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
+    let args = typed_args();
     let meta = meta_options();
     let valued = |c: char| {
         let short = format!("-{c}");
@@ -1169,20 +1170,16 @@ fn handle_plugin_command(
             let installer = create_installer(*local)?;
             let location = format_plugin_location(*local);
 
-            // Detect input type and route accordingly
-            if name.starts_with("http://") || name.starts_with("https://") {
-                // Direct URL install
-                let plugin_name = installer.install_from_url(name)?;
-                record(serde_json::json!({"installed": plugin_name, "to": location}));
-                if !json {
-                    outln!(
-                        "Successfully installed {} to {location}",
-                        escape(&plugin_name)
-                    )?;
-                }
+            // Detect input type and route accordingly: a direct URL, GitHub
+            // shorthand (user/repo[@version]), else the registry
+            let direct = if name.starts_with("http://") || name.starts_with("https://") {
+                Some(installer.install_from_url(name)?)
             } else if let Some(shorthand) = GitHubShorthand::parse(name) {
-                // GitHub shorthand install (user/repo[@version])
-                let plugin_name = installer.install_from_github(&shorthand)?;
+                Some(installer.install_from_github(&shorthand)?)
+            } else {
+                None
+            };
+            if let Some(plugin_name) = direct {
                 record(serde_json::json!({"installed": plugin_name, "to": location}));
                 if !json {
                     outln!(
@@ -1468,10 +1465,7 @@ fn unrecognized_command_error(
         .flatten()
         .filter(|word| builtins.contains(word) || matches!(plugins.find(word), Ok(Some(_))));
     // the line as typed, whose words from the command word on are command_args
-    let typed: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect();
+    let typed = typed_args();
     let at = typed.len().saturating_sub(command_args.len());
     let edited = |command: &[&str]| -> String {
         let argv: Vec<String> = typed
@@ -1518,9 +1512,8 @@ fn unrecognized_command_error(
 /// An "orphan" is a nested meta repo that isn't tracked by its parent meta config.
 /// This helps users understand why recursive operations might not find their nested repos.
 fn check_and_warn_orphan() {
-    let current_dir = match std::env::current_dir() {
-        Ok(d) => d,
-        Err(_) => return,
+    let Ok(current_dir) = std::env::current_dir() else {
+        return;
     };
 
     // inside a set, or where that can't be told (the command reports why)
@@ -1533,17 +1526,16 @@ fn check_and_warn_orphan() {
         return;
     };
 
-    let meta_dir = match config_path.parent() {
-        Some(p) => p.to_path_buf(),
-        None => return,
+    let Some(meta_dir) = config_path.parent() else {
+        return;
     };
 
     // Check if this meta repo is orphaned (not tracked by parent)
     // A set's checkout is meta's own, not a repo its parent forgot to list
-    if !matches!(config::set_source(&meta_dir), Ok(None)) {
+    if !matches!(config::set_source(meta_dir), Ok(None)) {
         return;
     }
-    if let Some(warning) = config::check_orphan_status(&meta_dir) {
+    if let Some(warning) = config::check_orphan_status(meta_dir) {
         meta_plugin::out::warn(format!(
             "This meta repo is not tracked by its parent.\n  \
              Current: {}\n  Parent:  {}\n\n  \

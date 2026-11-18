@@ -13,7 +13,6 @@ use indicatif::MultiProgress;
 use meta_core::gitdir::Checkout;
 use meta_plugin::display::{escape, escape_path};
 use meta_plugin::outln;
-use meta_plugin::RepoUrl;
 use meta_plugin::{Ctx, ErrorCode, ErrorInfo, ProjectResult, Request, Response};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -150,8 +149,7 @@ pub(crate) fn execute(
             records.push(record(&task.target_path, "cloned", None));
         }
     } else if !tasks.is_empty() {
-        let urls: Vec<_> = tasks.iter().map(|task| task.url.clone()).collect();
-        run(&queue, tasks, &urls)?;
+        run(&queue, tasks)?;
     }
     let outcome = queue.outcome();
     if !preview {
@@ -277,9 +275,8 @@ pub(crate) fn clone_dirs(
         .raw(members);
     let top = Arc::from([MetaRepo::at(&root_name(root), root, None)]);
     let tasks = queue.discover_in(workspace, 0, &top)?;
-    let urls: Vec<_> = tasks.iter().map(|task| task.url.clone()).collect();
     if !tasks.is_empty() {
-        run(&queue, tasks, &urls)?;
+        run(&queue, tasks)?;
     }
     if let Some(error) = crate::clone_worker::report_failures(&queue, command) {
         return Ok(Err(error));
@@ -361,15 +358,12 @@ pub(crate) fn root_name(root: &Path) -> String {
 }
 
 /// Clone `tasks`, and the tasks their `.meta.yaml` files add, four
-/// at a time, over SSH masters set up for `urls` (the remotes the run
-/// contacts first).
-pub(crate) fn run(
-    queue: &CloneQueue,
-    tasks: Vec<CloneTask>,
-    urls: &[RepoUrl],
-) -> anyhow::Result<()> {
+/// at a time, over SSH masters set up for the remotes of `tasks` (the ones
+/// the run contacts first).
+fn run(queue: &CloneQueue, tasks: Vec<CloneTask>) -> anyhow::Result<()> {
+    let urls: Vec<_> = tasks.iter().map(|task| task.url.clone()).collect();
     let mut parallel = 4_usize;
-    let ssh_cmd = match ssh::establish_ssh_masters(urls) {
+    let ssh_cmd = match ssh::establish_ssh_masters(&urls) {
         ssh::SshMasters::OurSockets(dir) => Some(ssh::git_ssh_command(&dir)),
         ssh::SshMasters::UserManaged => None, // parallel OK
         ssh::SshMasters::Failed => {

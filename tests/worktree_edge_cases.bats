@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+bats_require_minimum_version 1.5.0
 
 
 # Integration tests for meta git worktree edge cases (Phase 2 & 3)
@@ -2727,7 +2728,6 @@ EOF2
 }
 
 @test "damaged holder records keep create and add branch conflicts in JSON" {
-    bats_require_minimum_version 1.5.0
     "$META_BIN" git worktree create holder --repo backend --no-deps
     "$META_BIN" git worktree create destination --repo frontend --no-deps
     local admin

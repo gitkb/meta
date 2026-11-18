@@ -2,6 +2,7 @@
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 load "${BATS_TEST_DIRNAME}/helpers/terminal.bash"
+bats_require_minimum_version 1.5.0
 
 # Integration tests for `meta git` commands
 # Tests use local git repos (no network IO required)
@@ -395,7 +396,6 @@ state() {
     run "$META_BIN" -r project list
     [ "$status" -eq 0 ]
     [[ "$output" == *"inner"* && "$output" == *"warning: $said"* ]]
-    bats_require_minimum_version 1.5.0
     run --separate-stderr "$META_BIN" -r --json project list
     [ "$status" -eq 0 ]
     # its row says why; the listing is complete, so no Envelope warning
@@ -806,7 +806,6 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     rm -rf shared
     mkdir -p frontend-notes && echo mine > frontend-notes/notes.txt
     echo '{"projects": {"api": {"repo": "file://'"$TEST_DIR"'/nowhere.git", "path": "services/api"}, "notes": {"repo": "u", "path": "frontend-notes"}}}' > .meta.yaml
-    bats_require_minimum_version 1.5.0
     run --separate-stderr "$META_BIN" --json git update
     [ "$status" -eq 1 ]
     jq -e '.results[] | select(.project == "services/api") | .data.action == "failed" and (.error | type) == "object"' <<<"$output"

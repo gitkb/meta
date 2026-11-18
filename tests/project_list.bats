@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+bats_require_minimum_version 1.5.0
 
 # Integration tests for `meta project list` / `meta project ls`
 
@@ -159,7 +160,6 @@ assert 'api' in backend['tags']
 }
 
 @test "meta project list with no .meta.yaml file shows error" {
-    bats_require_minimum_version 1.5.0
     rm "$TEST_DIR/.meta.yaml"
     run "$META_BIN" project list
     [ "$status" -ne 0 ]
@@ -411,7 +411,6 @@ J
 }
 
 @test "project check checks only the projects a filter selects" {
-    bats_require_minimum_version 1.5.0
     cat > "$TEST_DIR/.meta.yaml" <<'YAML'
 projects:
   frontend:
@@ -472,7 +471,6 @@ paths() { jq -r '[.results[].project] | join(" ")'; }
 }
 
 @test "plain reaches the nearest .meta.yaml, -r the meta repos under it, -A the whole workspace" {
-    bats_require_minimum_version 1.5.0
     reach_tree
     cd platform
     run --separate-stderr "$META_BIN" --json exec -- true

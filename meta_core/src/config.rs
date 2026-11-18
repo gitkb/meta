@@ -1112,22 +1112,17 @@ fn flatten_inner(nodes: &[MetaTreeNode], prefix: &str, paths: &mut Vec<String>) 
     }
 }
 
-/// Build a map from full path to (resolved path, ProjectInfo) for nested lookups.
-///
-/// This is useful for looking up projects by their full nested path
-/// (e.g., "vendor/nested-lib" -> resolved filesystem path and project info).
+/// Build a map from full path to ProjectInfo for nested lookups, such as
+/// "vendor/nested-lib". A later node at the same path wins.
 pub fn build_project_map(
     nodes: &[MetaTreeNode],
-    base_dir: &Path,
     prefix: &str,
-) -> std::collections::HashMap<String, (PathBuf, ProjectInfo)> {
-    let mut map = std::collections::HashMap::new();
+) -> std::collections::BTreeMap<String, ProjectInfo> {
+    let mut map = std::collections::BTreeMap::new();
     for node in nodes {
         let full_path = nested_path(prefix, &node.info.path);
-        let resolved_path = base_dir.join(&full_path);
-        map.insert(full_path.clone(), (resolved_path, node.info.clone()));
-        // Recurse into children
-        map.extend(build_project_map(&node.children, base_dir, &full_path));
+        map.insert(full_path.clone(), node.info.clone());
+        map.extend(build_project_map(&node.children, &full_path));
     }
     map
 }
@@ -2466,14 +2461,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_project_map_empty_tree() {
-        let dir = tempfile::tempdir().unwrap();
-        let tree: Vec<MetaTreeNode> = vec![];
-        let map = build_project_map(&tree, dir.path(), "");
-        assert!(map.is_empty());
-    }
-
-    #[test]
     fn test_build_project_map_with_custom_path() {
         // Test that custom paths are handled correctly in the map
         let dir = tempfile::tempdir().unwrap();
@@ -2487,13 +2474,10 @@ mod tests {
         .unwrap();
 
         let tree = walk_meta_tree(dir.path(), None).unwrap();
-        let map = build_project_map(&tree, dir.path(), "");
+        let map = build_project_map(&tree, "");
 
         // The key should be the path, not the name
-        assert!(map.contains_key("custom/path/to/project"));
-        let (path, info) = map.get("custom/path/to/project").unwrap();
-        assert_eq!(info.name, "my-project");
-        assert_eq!(*path, custom_path);
+        assert_eq!(map["custom/path/to/project"].name, "my-project");
     }
 
     // ============================================================================

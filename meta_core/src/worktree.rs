@@ -168,19 +168,11 @@ pub fn set_members(
             .collect(),
         Err(e) => return Err(e),
     };
-    let mut places: Vec<(String, crate::config::ProjectInfo)> =
-        crate::config::build_project_map(&tree, set_dir, "")
-            .into_iter()
-            .map(|(place, (_, info))| (place, info))
-            .collect();
-    places.sort_by(|a, b| a.0.cmp(&b.0));
-    let tags = places
-        .iter()
-        .flat_map(|(_, info)| info.tags.clone())
-        .collect();
+    let places = crate::config::build_project_map(&tree, "");
+    let tags = places.values().flat_map(|info| info.tags.clone()).collect();
     let held: Vec<PathBuf> = places
-        .iter()
-        .map(|(place, _)| set_dir.join(place))
+        .keys()
+        .map(|place| set_dir.join(place))
         .filter(|dir| dir.is_dir())
         .collect();
     // the root is a member exactly when the set's folder is a checkout of
@@ -895,9 +887,9 @@ mod tests {
             config(&set.join("parent/group"), r#""lib": "own""#);
         }
         let tree = set_project_tree(&set, &own, None, false).unwrap();
-        let map = crate::config::build_project_map(&tree, &set, "");
+        let map = crate::config::build_project_map(&tree, "");
         assert_eq!(
-            map["parent/group/lib"].1.repo.as_ref().unwrap().to_string(),
+            map["parent/group/lib"].repo.as_ref().unwrap().to_string(),
             "own"
         );
     }

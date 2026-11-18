@@ -694,39 +694,25 @@ the only commit message
         assert_eq!(commits[0].1, "the only commit message");
     }
 
-    // ============ Remote Command Detection Tests ============
-
     #[test]
-    fn test_is_remote_command_push() {
-        assert!(super::is_remote_command(&argv("git push")));
-        assert!(super::is_remote_command(&argv("git push origin main")));
-    }
-
-    #[test]
-    fn test_is_remote_command_pull() {
-        assert!(super::is_remote_command(&argv("git pull")));
-        assert!(super::is_remote_command(&argv("git pull --rebase")));
-    }
-
-    #[test]
-    fn test_is_remote_command_fetch() {
-        assert!(super::is_remote_command(&argv("git fetch")));
-        assert!(super::is_remote_command(&argv("git fetch --all")));
-    }
-
-    #[test]
-    fn test_is_remote_command_ls_remote() {
-        assert!(super::is_remote_command(&argv("git ls-remote")));
-    }
-
-    #[test]
-    fn test_is_remote_command_local_commands() {
-        assert!(!super::is_remote_command(&argv("git status")));
-        assert!(!super::is_remote_command(&argv("git add .")));
-        assert!(!super::is_remote_command(&argv("git commit -m \"msg\"")));
-        assert!(!super::is_remote_command(&argv("git log")));
-        assert!(!super::is_remote_command(&argv("git diff")));
-        assert!(!super::is_remote_command(&argv("git branch")));
-        assert!(!super::is_remote_command(&argv("git checkout main")));
+    fn remote_commands_are_the_ones_that_reach_a_remote() {
+        for (line, remote) in [
+            ("git push", true),
+            ("git push origin main", true),
+            ("git pull", true),
+            ("git pull --rebase", true),
+            ("git fetch", true),
+            ("git fetch --all", true),
+            ("git ls-remote", true),
+            ("git status", false),
+            ("git add .", false),
+            ("git commit -m \"msg\"", false),
+            ("git log", false),
+            ("git diff", false),
+            ("git branch", false),
+            ("git checkout main", false),
+        ] {
+            assert_eq!(is_remote_command(&argv(line)), remote, "{line}");
+        }
     }
 }

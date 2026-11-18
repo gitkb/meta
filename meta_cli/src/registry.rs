@@ -511,6 +511,16 @@ fn release_not_found(
     )
 }
 
+/// The plugin an install by URL or shorthand reports: the archive's first
+fn first_installed(installed: &[String]) -> Result<String> {
+    let first = installed
+        .first()
+        .context("The plugin archive installed no plugin")?
+        .clone();
+    info!("Successfully installed: {}", installed.join(", "));
+    Ok(first)
+}
+
 /// Parsed GitHub shorthand: user/repo[@version]
 #[derive(Debug, Clone, PartialEq)]
 pub struct GitHubShorthand {
@@ -737,16 +747,12 @@ impl PluginInstaller {
         debug!("URL: {}", download_url);
 
         let bytes = self.download(&download_url)?;
-        let installed = self.extract_and_validate(&download_url, &bytes)?;
-
-        // Record installation in manifest
-        for plugin_name in &installed {
-            self.record_installation(
-                plugin_name,
-                metadata.name.clone(),
-                Some(metadata.version.clone()),
-            )?;
-        }
+        let installed = self.install_archive(
+            &download_url,
+            &bytes,
+            metadata.name.clone(),
+            Some(metadata.version.clone()),
+        )?;
 
         info!(
             "Successfully installed {} v{}",
@@ -764,20 +770,7 @@ impl PluginInstaller {
         info!("Downloading from: {}", url);
 
         let bytes = self.download(url)?;
-        let installed = self.extract_and_validate(url, &bytes)?;
-
-        // Record installation in manifest
-        for plugin_name in &installed {
-            self.record_installation(plugin_name, url.to_string(), None)?;
-        }
-
-        let primary_plugin = installed
-            .first()
-            .context("The plugin archive installed no plugin")?
-            .clone();
-        info!("Successfully installed: {}", installed.join(", "));
-
-        Ok(primary_plugin)
+        first_installed(&self.install_archive(url, &bytes, url.to_string(), None)?)
     }
 
     /// Install a plugin from GitHub using shorthand syntax (user/repo[@version])
@@ -803,24 +796,12 @@ impl PluginInstaller {
 
             match self.download(url) {
                 Ok(bytes) => {
-                    // Successfully downloaded, now extract and validate
-                    let installed = self.extract_and_validate(url, &bytes)?;
-
-                    // Record installation in manifest
-                    for plugin_name in &installed {
-                        self.record_installation(
-                            plugin_name,
-                            shorthand.to_string(),
-                            shorthand.version.clone(),
-                        )?;
-                    }
-
-                    let primary_plugin = installed
-                        .first()
-                        .context("The plugin archive installed no plugin")?
-                        .clone();
-                    info!("Successfully installed: {}", installed.join(", "));
-                    return Ok(primary_plugin);
+                    return first_installed(&self.install_archive(
+                        url,
+                        &bytes,
+                        shorthand.to_string(),
+                        shorthand.version.clone(),
+                    )?);
                 }
                 Err(e) => {
                     last_error = Some(e);
@@ -924,11 +905,21 @@ impl PluginInstaller {
         aliases
     }
 
-    /// Extract archive and validate all installed plugins
-    fn extract_and_validate(&self, url: &str, bytes: &[u8]) -> Result<Vec<String>> {
+    /// Extract a downloaded archive, validate its plugins and record each
+    /// in the manifest with `source` and `version`
+    fn install_archive(
+        &self,
+        url: &str,
+        bytes: &[u8],
+        source: String,
+        version: Option<String>,
+    ) -> Result<Vec<String>> {
         self.ensure_plugins_dir()?;
         let installed = self.extract_archive(url, bytes)?;
         self.validate_installed(&installed)?;
+        for plugin_name in &installed {
+            self.record_installation(plugin_name, source.clone(), version.clone())?;
+        }
         Ok(installed)
     }
 
@@ -1561,7 +1552,12 @@ mod tests {
             };
 
             let error = installer
-                .extract_and_validate("https://example.com/plugin.zip", &zip_data)
+                .install_archive(
+                    "https://example.com/plugin.zip",
+                    &zip_data,
+                    String::new(),
+                    None,
+                )
                 .unwrap_err();
             assert_eq!(error.to_string(), entry_error);
             if existing_plugin {

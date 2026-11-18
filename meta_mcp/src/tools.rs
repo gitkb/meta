@@ -507,15 +507,11 @@ impl Scope {
         known: &[String],
         read_from: &str,
     ) -> Result<Self> {
-        let tags = tag.as_deref().map(Filters::tags).transpose()?;
-        Ok(match (project, tags) {
+        let filters = tag.as_deref().map(tag_filter).transpose()?;
+        Ok(match (project, filters) {
             (Some(_), Some(_)) => anyhow::bail!("Give 'project' or 'tag', not both"),
             (Some(project), None) => Scope::Project(project),
-            (None, Some(tags)) => {
-                let filters = Filters {
-                    tags,
-                    ..Filters::default()
-                };
+            (None, Some(filters)) => {
                 filters.check_tags(known, read_from, "")?;
                 Scope::Tags(filters)
             }
@@ -990,10 +986,12 @@ impl McpServer {
     }
 
     fn git_branch(&self, args: TagArgs) -> Result<String> {
-        let filters = match args.tag {
-            Some(tag) => tag_filter(&tag)?,
-            None => Filters::default(),
-        };
+        let filters = args
+            .tag
+            .as_deref()
+            .map(tag_filter)
+            .transpose()?
+            .unwrap_or_default();
         let recursive = self.recursive()?;
         let mut results = Vec::new();
         for (project, dir, _) in reached(&recursive, &filters)? {

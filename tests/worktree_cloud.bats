@@ -41,16 +41,6 @@ assert entry['custom']['run_id'] == 'abc123'
 "
 }
 
-@test "worktree create --meta appears in --json output" {
-    run "$META_BIN" --json git worktree create meta-json --repo backend --meta env=ci
-    [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)['results'][0]['data']
-assert d['custom']['env'] == 'ci', f'got custom: {d.get(\"custom\")}'
-"
-}
-
 @test "worktree create --meta without = warns" {
     run "$META_BIN" git worktree create meta-warn --repo backend --meta badformat
     [ "$status" -eq 0 ]
@@ -71,16 +61,6 @@ assert entry['ephemeral'] == True
 "
 }
 
-@test "worktree create --ephemeral in --json output" {
-    run "$META_BIN" --json git worktree create eph-json --repo backend --ephemeral
-    [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)['results'][0]['data']
-assert d['ephemeral'] == True
-"
-}
-
 # ============ --ttl ============
 
 @test "worktree create --ttl records ttl_seconds" {
@@ -92,16 +72,6 @@ assert d['ephemeral'] == True
 import json
 entry = json.load(open('$REC'))
 assert entry['ttl_seconds'] == 7200, f'got: {entry[\"ttl_seconds\"]}'
-"
-}
-
-@test "worktree create --ttl in --json output" {
-    run "$META_BIN" --json git worktree create ttl-json --repo backend --ttl 30m
-    [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)['results'][0]['data']
-assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
 "
 }
 

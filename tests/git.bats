@@ -1259,6 +1259,35 @@ create_meta_bare_repo() {
     [ -d "$CLONE_TARGET/l1/l2/l3/.git" ]
 }
 
+@test "meta -r --depth limits how deep clone goes into nested meta repos" {
+    # Setup: root -> l1 (meta:true) -> l2 (meta:true) -> l3
+    L3_BARE="$(mktemp -d)/l3.git"
+    create_meta_bare_repo "$L3_BARE" '{"projects": {}}'
+
+    L2_BARE="$(mktemp -d)/l2.git"
+    create_meta_bare_repo "$L2_BARE" "{\"projects\": {\"l3\": \"file://$L3_BARE\"}}"
+
+    L1_BARE="$(mktemp -d)/l1.git"
+    create_meta_bare_repo "$L1_BARE" "{\"projects\": {\"l2\": {\"repo\": \"file://$L2_BARE\", \"meta\": true}}}"
+
+    ROOT_BARE="$(mktemp -d)/root.git"
+    create_meta_bare_repo "$ROOT_BARE" "{\"projects\": {\"l1\": {\"repo\": \"file://$L1_BARE\", \"meta\": true}}}"
+
+    CLONE_TARGET="$(mktemp -d)/clone-depth-limit"
+    rm -rf "$CLONE_TARGET"
+
+    cd "$TEST_DIR"
+    # --depth 1 means: level 0 (root's children) + level 1 (l1's children)
+    # l2's children (l3) should NOT be cloned
+    run "$META_BIN" --recursive --depth 1 git clone "file://$ROOT_BARE" "$CLONE_TARGET"
+    [ "$status" -eq 0 ]
+
+    [ -d "$CLONE_TARGET/l1/.git" ]
+    [ -d "$CLONE_TARGET/l1/l2/.git" ]
+    # l3 should NOT be cloned (depth limit)
+    [ ! -d "$CLONE_TARGET/l1/l2/l3" ]
+}
+
 @test "clone routes nesting and history depth apart" {
     # root -> l1 (meta, two commits) -> l2 (meta) -> l3
     L3_BARE="$(mktemp -d)/l3.git"

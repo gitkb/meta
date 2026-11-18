@@ -238,13 +238,15 @@ fn workspace_target(cli: &Cli, start: &Path, name: &str) -> Result<Target> {
     };
     target
         .filter(|target| target.workspace.is_some())
-        .ok_or_else(|| {
-            ErrorInfo::new(
-                ErrorCode::NotFound,
-                "Not a meta workspace (no .meta.yaml found)",
-            )
-            .into()
-        })
+        .ok_or_else(|| not_a_workspace().into())
+}
+
+/// The error of a command that needs a meta workspace and finds none.
+pub(crate) fn not_a_workspace() -> ErrorInfo {
+    ErrorInfo::new(
+        ErrorCode::NotFound,
+        "Not a meta workspace (no .meta.yaml found)",
+    )
 }
 
 /// What a command found: its text, its records for `--json`, and what its
@@ -389,12 +391,7 @@ fn check_project(repo: &Candidate, cwd: &Path) -> Option<CheckProblem> {
 
 /// The workspace `target` is in, and its config.
 fn workspace(target: &Target) -> Result<(&meta_plugin::Workspace, config::Workspace)> {
-    let workspace = target.workspace.as_ref().ok_or_else(|| {
-        ErrorInfo::new(
-            ErrorCode::NotFound,
-            "Not a meta workspace (no .meta.yaml found)",
-        )
-    })?;
+    let workspace = target.workspace.as_ref().ok_or_else(not_a_workspace)?;
     Ok((workspace, config::Workspace::load(&workspace.config)?))
 }
 

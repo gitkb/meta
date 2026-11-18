@@ -638,13 +638,8 @@ fn run_cli() -> Result<()> {
         None => help_message(&cli, &help_with_plugins(&subprocess_plugins), &mut report)?,
         Some(Commands::Help { command }) => help(&cli, command, &subprocess_plugins, &mut report)?,
         Some(Commands::Context(args)) => {
-            let workspace =
-                Workspace::find(&cli.start_dir()?, cli.config.as_ref())?.ok_or_else(|| {
-                    meta_plugin::ErrorInfo::new(
-                        meta_plugin::ErrorCode::NotFound,
-                        "Not a meta workspace (no .meta.yaml found)",
-                    )
-                })?;
+            let workspace = Workspace::find(&cli.start_dir()?, cli.config.as_ref())?
+                .ok_or_else(project::not_a_workspace)?;
             context::handle_context(
                 cli.json,
                 args.no_status,

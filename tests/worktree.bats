@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+bats_require_minimum_version 1.5.0
 
 # Integration tests for `meta git worktree` subcommand
 # Tests: create, add, list, status, diff, exec, remove, configuration, edge cases
@@ -1259,7 +1260,6 @@ EOF
 }
 
 @test "project list recovers nested projects through a missing parent in a legacy set" {
-    bats_require_minimum_version 1.5.0
     setup_nested_meta
     git -C vendor init --quiet -b main
     printf '/nested-lib/\n' > vendor/.gitignore
@@ -1321,7 +1321,6 @@ EOF
 }
 
 @test "worktree create reports the set holding a branch before making a set" {
-    bats_require_minimum_version 1.5.0
     "$META_BIN" git worktree create holder --repo backend
     run --separate-stderr "$META_BIN" --json git worktree create blocked --branch holder --repo backend
     [ "$status" -ne 0 ]
@@ -1343,7 +1342,6 @@ EOF
 }
 
 @test "worktree add reports the set holding a branch before adding any repo" {
-    bats_require_minimum_version 1.5.0
     "$META_BIN" git worktree create holder --repo frontend
     "$META_BIN" git worktree create destination --repo backend --no-deps
     # A free repo first verifies that the whole plan is checked before adding.
@@ -1364,7 +1362,6 @@ EOF
 }
 
 @test "inside a set, -r reaches the meta repos checked out in it, as outside one" {
-    bats_require_minimum_version 1.5.0
     setup_nested_meta
     git -C vendor init --quiet -b main
     printf '/nested-lib/\n' > vendor/.gitignore
@@ -1394,7 +1391,6 @@ EOF
 }
 
 @test "a set of a workspace whose root is no repo names its own folder as the root" {
-    bats_require_minimum_version 1.5.0
     rm -rf .git
     run "$META_BIN" git worktree create loose-root --repo backend
     [ "$status" -eq 0 ]
@@ -1452,7 +1448,6 @@ EOF
 }
 
 @test "a checkout in a set is a member even when the set's checked-out config doesn't list it" {
-    bats_require_minimum_version 1.5.0
     setup_nested_meta
     # vendor's commit has no .meta.yaml: only the workspace's file on disk
     # lists nested-lib, as when the workspace's configs aren't committed
@@ -1487,7 +1482,6 @@ EOF
 }
 
 @test "a set's root checkout is a member when the workspace repo doesn't commit its config" {
-    bats_require_minimum_version 1.5.0
     # the workspace repo keeps .meta.yaml out of git: its checkout in a set
     # has none
     echo ".meta.yaml" >> .gitignore
@@ -1516,7 +1510,6 @@ EOF
 }
 
 @test "loop commands in a set reach its nested members" {
-    bats_require_minimum_version 1.5.0
     setup_nested_meta
     echo "nested-lib/" > vendor/.gitignore
     git -C vendor init --quiet --initial-branch=main

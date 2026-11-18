@@ -8,14 +8,11 @@ SKILL_NAMES="meta-workspace meta-git meta-exec meta-plugins meta-worktree meta-s
 OLD_AGENT_DIRS=".cursor .opencode .pi .omp .grok"
 
 setup() {
-    clear_git_local_env
-    isolate_user_env
-    META_BIN="$META_BIN_DIR/meta"
-
-    TEST_DIR="$(cd "$(mktemp -d)" && pwd -P)"
+    sandbox
 
     # Stub claude to detect unintended global marketplace changes
-    STUB_DIR="$(cd "$(mktemp -d)" && pwd -P)"
+    STUB_DIR="$BATS_TEST_TMPDIR/stub"
+    mkdir -p "$STUB_DIR"
     printf '#!/bin/sh\necho "$*" >> "%s/claude-calls"\n' "$STUB_DIR" > "$STUB_DIR/claude"
     chmod +x "$STUB_DIR/claude"
     # `agent` is installed unless a test removes it
@@ -38,11 +35,6 @@ EOF
 # The skills in the workspace, as --local and older metas install them
 old_install() {
     "$META_BIN" init skills --local > /dev/null
-}
-
-teardown() {
-    cd /
-    rm -rf "$TEST_DIR" "$STUB_DIR"
 }
 
 # ============ Fresh install ============

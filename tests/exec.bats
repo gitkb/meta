@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+bats_require_minimum_version 1.5.0
 
 # Integration tests for `meta exec` and loop pass-through options
 # Tests: exec, --include, --exclude, --parallel, --dry-run, --tag
@@ -273,7 +274,6 @@ EOF
 }
 
 @test "a failure every repo shares prints once; different failures print per repo" {
-    bats_require_minimum_version 1.5.0
     run "$META_BIN" --parallel exec -- sh -c 'echo shared failure >&2; exit 3'
     [ "$status" -eq 1 ]
     [ "$(grep -cx 'shared failure' <<<"$output")" -eq 1 ]
@@ -939,7 +939,6 @@ YAML
 }
 
 @test "json usage errors are one JSON document" {
-    bats_require_minimum_version 1.5.0
     # meta's own parse error, with the line to run
     run --separate-stderr "$META_BIN" --json exec --include api -- pwd
     [ "$status" -eq 2 ]
@@ -962,7 +961,6 @@ YAML
 }
 
 @test "json results name each repo by path and list warnings" {
-    bats_require_minimum_version 1.5.0
     rm -rf frontend
     run --separate-stderr "$META_BIN" --json --exclude . git diff --quiet
     [ "$status" -eq 0 ]

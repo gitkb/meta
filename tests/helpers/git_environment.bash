@@ -98,3 +98,8 @@ make_workspace() {
         git -C "$TEST_DIR" commit --quiet -m "Initial meta commit"
     fi
 }
+
+# The file where meta records the set a linked worktree checkout belongs to
+record_file() {
+    echo "$(git -C "$1" rev-parse --absolute-git-dir)/meta-worktree.json"
+}

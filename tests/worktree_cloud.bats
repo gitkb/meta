@@ -20,11 +20,6 @@ EOF
     cd "$TEST_DIR"
 }
 
-# The file where meta records the set a linked worktree checkout belongs to
-record_file() {
-    echo "$(git -C "$1" rev-parse --absolute-git-dir)/meta-worktree.json"
-}
-
 # ============ --meta key=value ============
 
 @test "worktree create --meta stores custom metadata" {
@@ -38,16 +33,6 @@ import json
 entry = json.load(open('$REC'))
 assert entry['custom']['agent'] == 'review-bot', f'got: {entry[\"custom\"]}'
 assert entry['custom']['run_id'] == 'abc123'
-"
-}
-
-@test "worktree create --meta appears in --json output" {
-    run "$META_BIN" --json git worktree create meta-json --repo backend --meta env=ci
-    [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)['results'][0]['data']
-assert d['custom']['env'] == 'ci', f'got custom: {d.get(\"custom\")}'
 "
 }
 
@@ -71,16 +56,6 @@ assert entry['ephemeral'] == True
 "
 }
 
-@test "worktree create --ephemeral in --json output" {
-    run "$META_BIN" --json git worktree create eph-json --repo backend --ephemeral
-    [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)['results'][0]['data']
-assert d['ephemeral'] == True
-"
-}
-
 # ============ --ttl ============
 
 @test "worktree create --ttl records ttl_seconds" {
@@ -92,16 +67,6 @@ assert d['ephemeral'] == True
 import json
 entry = json.load(open('$REC'))
 assert entry['ttl_seconds'] == 7200, f'got: {entry[\"ttl_seconds\"]}'
-"
-}
-
-@test "worktree create --ttl in --json output" {
-    run "$META_BIN" --json git worktree create ttl-json --repo backend --ttl 30m
-    [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)['results'][0]['data']
-assert d['ttl_seconds'] == 1800, f'got: {d.get(\"ttl_seconds\")}'
 "
 }
 

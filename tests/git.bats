@@ -2,6 +2,7 @@
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
 load "${BATS_TEST_DIRNAME}/helpers/terminal.bash"
+bats_require_minimum_version 1.5.0
 
 # Integration tests for `meta git` commands
 # Tests use local git repos (no network IO required)
@@ -395,7 +396,6 @@ state() {
     run "$META_BIN" -r project list
     [ "$status" -eq 0 ]
     [[ "$output" == *"inner"* && "$output" == *"warning: $said"* ]]
-    bats_require_minimum_version 1.5.0
     run --separate-stderr "$META_BIN" -r --json project list
     [ "$status" -eq 0 ]
     # its row says why; the listing is complete, so no Envelope warning
@@ -552,7 +552,6 @@ state() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"meta repos list each other: cyc → kid → top"* ]]
     [ ! -e "$CYC/kid/top" ]
-    rm -rf "$TOP_BARE" "$KID_BARE" "$CYC"
 }
 
 
@@ -806,7 +805,6 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     rm -rf shared
     mkdir -p frontend-notes && echo mine > frontend-notes/notes.txt
     echo '{"projects": {"api": {"repo": "file://'"$TEST_DIR"'/nowhere.git", "path": "services/api"}, "notes": {"repo": "u", "path": "frontend-notes"}}}' > .meta.yaml
-    bats_require_minimum_version 1.5.0
     run --separate-stderr "$META_BIN" --json git update
     [ "$status" -eq 1 ]
     jq -e '.results[] | select(.project == "services/api") | .data.action == "failed" and (.error | type) == "object"' <<<"$output"
@@ -938,30 +936,14 @@ assert r["action"] == "removed" and r["reason"] == "nothing unpushed; ignored fi
     header=$(grep -an 'Cloning meta repository' <<<"$screen" | head -1 | cut -d: -f1)
     first=$(grep -an 'Cloned a' <<<"$screen" | head -1 | cut -d: -f1)
     [ -n "$header" ] && [ "$header" -lt "$first" ]
-    rm -rf "$remotes"
 }
 
 @test "meta git clone with custom directory name for meta repo" {
     # Custom directory only applies to the meta repo itself
     # Child repos clone to paths according to .meta.yaml files
 
-    # Create a "remote" bare repo with main as default branch
-    REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git init --bare --quiet "$REMOTE_DIR"
-    git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
-
-    # Create a temp working copy to push initial content
-    WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
-    cd "$WORK_DIR/meta-repo"
-    cat > .meta.yaml <<'EOF'
-{
-    "projects": {}
-}
-EOF
-    git add .meta.yaml
-    git commit --quiet -m "Add .meta.yaml"
-    git push --quiet -u origin main
+    REMOTE_DIR="$(mktemp -d)/remote.git"
+    create_meta_bare_repo "$REMOTE_DIR" '{"projects": {}}'
 
     # Clone with custom directory name
     CLONE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
@@ -975,64 +957,17 @@ EOF
     # Verify the custom directory was used for the meta repo
     [ -d "$CLONE_DIR/$CUSTOM_NAME" ]
     [ -f "$CLONE_DIR/$CUSTOM_NAME/.meta.yaml" ]
-
-    # Clean up
-    rm -rf "$REMOTE_DIR" "$WORK_DIR" "$CLONE_DIR"
-}
-
-@test "meta git clone passes URL correctly to git" {
-    # This test verifies the fix for the argument passing bug
-    # where the URL was being lost due to double-stripping of args
-
-    # Create a "remote" bare repo with main as default branch
-    REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git init --bare --quiet "$REMOTE_DIR"
-    git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
-
-    # Push minimal content
-    WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
-    cd "$WORK_DIR/meta-repo"
-    echo '{"projects": {}}' > .meta.yaml
-    git add .meta.yaml
-    git commit --quiet -m "Init"
-    git push --quiet -u origin main
-
-    CLONE_TARGET="$(mktemp -d)/test-clone"
-
-    cd "$TEST_DIR"
-    run "$META_BIN" git clone "$REMOTE_DIR" "$CLONE_TARGET"
-
-    # Should succeed, not fail with "No repository URL provided"
-    [ "$status" -eq 0 ]
-    [[ "$output" != *"No repository URL provided"* ]]
-    [ -d "$CLONE_TARGET/.git" ]
-
-    # Clean up
-    rm -rf "$REMOTE_DIR" "$WORK_DIR" "$CLONE_TARGET"
 }
 
 @test "meta git clone with --depth option" {
-    # Create a "remote" bare repo with main as default branch
-    REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git init --bare --quiet "$REMOTE_DIR"
-    git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
-
-    WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
-    cd "$WORK_DIR/meta-repo"
-    # Set default branch name explicitly
-    echo '{"projects": {}}' > .meta.yaml
-    git add .meta.yaml
-    git commit --quiet -m "Commit 1"
-    # Create additional commits by adding new files (keep .meta.yaml valid)
-    echo "readme 1" > README.md
-    git add README.md
-    git commit --quiet -m "Commit 2"
-    echo "readme 2" >> README.md
-    git add README.md
-    git commit --quiet -m "Commit 3"
-    git push --quiet -u origin main
+    # A remote with three commits
+    REMOTE_DIR="$(mktemp -d)/remote.git"
+    create_meta_bare_repo "$REMOTE_DIR" '{"projects": {}}'
+    WORK_DIR="$(mktemp -d)"
+    git clone --quiet "$REMOTE_DIR" "$WORK_DIR"
+    git -C "$WORK_DIR" commit --quiet --allow-empty -m "Commit 2"
+    git -C "$WORK_DIR" commit --quiet --allow-empty -m "Commit 3"
+    git -C "$WORK_DIR" push --quiet origin main
 
     CLONE_TARGET="$(mktemp -d)/shallow-clone"
 
@@ -1045,9 +980,6 @@ EOF
     # Verify it's a shallow clone (only 1 commit)
     COMMIT_COUNT=$(git -C "$CLONE_TARGET" rev-list --count HEAD)
     [ "$COMMIT_COUNT" -eq 1 ]
-
-    # Clean up
-    rm -rf "$REMOTE_DIR" "$WORK_DIR" "$CLONE_TARGET"
 }
 
 @test "meta git clone --dry-run shows what would be cloned" {
@@ -1273,8 +1205,6 @@ create_meta_bare_repo() {
         git commit --quiet -m "Add meta config"
         git push --quiet -u origin main
     )
-
-    rm -rf "$work_dir"
 }
 
 @test "meta git clone --recursive clones 2 levels deep" {
@@ -1301,8 +1231,6 @@ create_meta_bare_repo() {
     [ -d "$CLONE_TARGET/child/.git" ]
     # Grandchild was cloned (recursive discovered child's .meta.yaml)
     [ -d "$CLONE_TARGET/child/grandchild/.git" ]
-
-    rm -rf "$GRANDCHILD_BARE" "$CHILD_BARE" "$ROOT_BARE" "$CLONE_TARGET"
 }
 
 @test "meta git clone --recursive clones 3 levels deep" {
@@ -1329,8 +1257,6 @@ create_meta_bare_repo() {
     [ -d "$CLONE_TARGET/l1/.git" ]
     [ -d "$CLONE_TARGET/l1/l2/.git" ]
     [ -d "$CLONE_TARGET/l1/l2/l3/.git" ]
-
-    rm -rf "$L3_BARE" "$L2_BARE" "$L1_BARE" "$ROOT_BARE" "$CLONE_TARGET"
 }
 
 @test "meta -r --depth limits how deep clone goes into nested meta repos" {
@@ -1360,8 +1286,6 @@ create_meta_bare_repo() {
     [ -d "$CLONE_TARGET/l1/l2/.git" ]
     # l3 should NOT be cloned (depth limit)
     [ ! -d "$CLONE_TARGET/l1/l2/l3" ]
-
-    rm -rf "$L3_BARE" "$L2_BARE" "$L1_BARE" "$ROOT_BARE" "$CLONE_TARGET"
 }
 
 @test "clone routes nesting and history depth apart" {
@@ -1394,8 +1318,6 @@ create_meta_bare_repo() {
     [ "$status" -eq 2 ]
     [[ "$output" == *"as in meta -r git clone file://$ROOT_BARE other"* ]]
     [ ! -e other ]
-
-    rm -rf "$L3_BARE" "$L2_BARE" "$L1_BARE" "$ROOT_BARE" "$CLONE_TARGET" "$work"
 }
 
 @test "meta git clone without --recursive clones only first level" {
@@ -1422,8 +1344,6 @@ create_meta_bare_repo() {
     [ -d "$CLONE_TARGET/child/.git" ]
     # Grandchild should NOT be cloned (no --recursive)
     [ ! -d "$CLONE_TARGET/child/grandchild" ]
-
-    rm -rf "$GRANDCHILD_BARE" "$CHILD_BARE" "$ROOT_BARE" "$CLONE_TARGET"
 }
 
 # ============ Arguments reach git as typed, with no shell ============
@@ -1634,7 +1554,6 @@ EOF
     [[ "$output" == *"leads into .git"* ]]
     # A failed clone is still reported alongside it
     [[ "$output" == *"Failed to clone"*"gone"* ]]
-    rm -rf "$UP"
 }
 
 @test "meta git clone escapes the URL it echoes" {

@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+bats_require_minimum_version 1.5.0
 
 # Integration tests for `meta project list` / `meta project ls`
 
@@ -159,7 +160,6 @@ assert 'api' in backend['tags']
 }
 
 @test "meta project list with no .meta.yaml file shows error" {
-    bats_require_minimum_version 1.5.0
     rm "$TEST_DIR/.meta.yaml"
     run "$META_BIN" project list
     [ "$status" -ne 0 ]
@@ -356,7 +356,6 @@ assert nested_lib['path'] == 'vendor/nested-lib', nested_lib
     ln -s "$OUTSIDE" linked
     echo '{"projects": {"linked": "git@github.com:org/linked.git"}}' > .meta.yaml
     run "$META_BIN" project list
-    rm -rf "$OUTSIDE"
     [ "$status" -eq 0 ]
     [[ "$output" == *"linked"* ]]
 }
@@ -411,7 +410,6 @@ J
 }
 
 @test "project check checks only the projects a filter selects" {
-    bats_require_minimum_version 1.5.0
     cat > "$TEST_DIR/.meta.yaml" <<'YAML'
 projects:
   frontend:
@@ -472,7 +470,6 @@ paths() { jq -r '[.results[].project] | join(" ")'; }
 }
 
 @test "plain reaches the nearest .meta.yaml, -r the meta repos under it, -A the whole workspace" {
-    bats_require_minimum_version 1.5.0
     reach_tree
     cd platform
     run --separate-stderr "$META_BIN" --json exec -- true

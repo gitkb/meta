@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 load "${BATS_TEST_DIRNAME}/helpers/git_environment.bash"
+bats_require_minimum_version 1.5.0
 
 
 # Integration tests for meta git worktree edge cases (Phase 2 & 3)
@@ -19,11 +20,6 @@ setup() {
 EOF
     make_workspace --root-repo --plugins git backend frontend common
     cd "$TEST_DIR"
-}
-
-# The file where meta records the set a linked worktree checkout belongs to
-record_file() {
-    echo "$(git -C "$1" rev-parse --absolute-git-dir)/meta-worktree.json"
 }
 
 # Another workspace at $1, with its own clone of backend
@@ -2727,7 +2723,6 @@ EOF2
 }
 
 @test "damaged holder records keep create and add branch conflicts in JSON" {
-    bats_require_minimum_version 1.5.0
     "$META_BIN" git worktree create holder --repo backend --no-deps
     "$META_BIN" git worktree create destination --repo frontend --no-deps
     local admin

@@ -562,19 +562,8 @@ fn remote_tags(repo: &Path, remote: &str) -> std::result::Result<String, String>
     };
     let out = read(child.stdout().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let err = read(child.stderr().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let limit = std::time::Instant::now() + std::time::Duration::from_secs(TAGS_SECONDS);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if std::time::Instant::now() < limit => {
-                std::thread::sleep(std::time::Duration::from_millis(20))
-            }
-            _ => {
-                child.stop(true);
-                let _ = child.wait();
-                return Err(format!("it didn't answer within {TAGS_SECONDS} seconds"));
-            }
-        }
+    let Some(status) = super::origin::wait_at_most(&mut child, TAGS_SECONDS) else {
+        return Err(format!("it didn't answer within {TAGS_SECONDS} seconds"));
     };
     let (out, err) = (
         out.join().unwrap_or_default(),

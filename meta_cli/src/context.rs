@@ -120,9 +120,7 @@ pub fn handle_context(
 
     let ctx = WorkspaceContext {
         name: workspace_name,
-        description:
-            "Multi-repo workspace managed by `meta`. Use `meta` commands for cross-repo operations."
-                .to_string(),
+        description: DESCRIPTION.to_string(),
         repo_count: repos.len(),
         repos,
         commands: key_commands(),
@@ -190,14 +188,16 @@ fn flatten(nodes: &[config::MetaTreeNode], prefix: &str, first: bool, out: &mut 
 
 // ── Types ───────────────────────────────────────────────
 
-#[derive(Debug, Serialize)]
+const DESCRIPTION: &str =
+    "Multi-repo workspace managed by `meta`. Use `meta` commands for cross-repo operations.";
+
+#[derive(Debug)]
 pub struct WorkspaceContext {
     pub name: String,
     pub description: String,
     pub repo_count: usize,
     pub repos: Vec<RepoContext>,
     pub commands: Vec<CommandRef>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub dependencies: Option<HashMap<String, Vec<String>>>,
 }
 
@@ -207,7 +207,7 @@ pub struct CommandRef {
     pub description: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct RepoContext {
     pub name: String,
     pub path: String,
@@ -258,19 +258,8 @@ impl RepoContext {
             name: p.name.clone(),
             path: p.path.clone(),
             repo: p.repo.clone(),
-            branch: None,
-            detached: None,
-            head: None,
-            operation: None,
-            rebasing: None,
-            dirty: None,
-            modified_count: None,
-            untracked_count: None,
-            upstream: None,
-            upstream_gone: None,
-            ahead: None,
-            behind: None,
             tags: p.tags.clone(),
+            ..Self::default()
         }
     }
 }
@@ -299,11 +288,6 @@ fn key_commands() -> Vec<CommandRef> {
 // ── Dependency Graph ────────────────────────────────────
 
 fn build_dependency_map(projects: &[ProjectInfo]) -> Option<HashMap<String, Vec<String>>> {
-    let has_deps = projects.iter().any(|p| !p.depends_on.is_empty());
-    if !has_deps {
-        return None;
-    }
-
     let dep_projects: Vec<_> = projects.iter().map(|p| p.clone().into()).collect();
     let graph = DependencyGraph::build(dep_projects);
 
@@ -318,11 +302,7 @@ fn build_dependency_map(projects: &[ProjectInfo]) -> Option<HashMap<String, Vec<
         }
     }
 
-    if map.is_empty() {
-        None
-    } else {
-        Some(map)
-    }
+    (!map.is_empty()).then_some(map)
 }
 
 // ── Markdown Formatting ─────────────────────────────────
@@ -357,43 +337,34 @@ pub fn format_markdown(ctx: &WorkspaceContext) -> String {
         .any(|r| r.branch.is_some() || r.dirty.is_some());
     let has_tags = ctx.repos.iter().any(|r| !r.tags.is_empty());
 
-    if has_status && has_tags {
-        out.push_str("## Repos\n");
-        out.push_str("| Repo | Branch | Status | Tags |\n");
-        out.push_str("|------|--------|--------|------|\n");
-        for r in &ctx.repos {
-            out.push_str(&format!(
-                "| {} | {} | {} | {} |\n",
-                md(&r.name),
-                md(&format_branch(r)),
-                format_status(r),
-                md_list(&r.tags),
-            ));
+    out.push_str("## Repos\n");
+    if has_status || has_tags {
+        let mut columns = vec!["Repo"];
+        if has_status {
+            columns.extend(["Branch", "Status"]);
         }
-    } else if has_status {
-        out.push_str("## Repos\n");
-        out.push_str("| Repo | Branch | Status |\n");
-        out.push_str("|------|--------|--------|\n");
+        if has_tags {
+            columns.push("Tags");
+        }
+        out.push_str(&format!("| {} |\n", columns.join(" | ")));
+        for column in &columns {
+            out.push('|');
+            out.push_str(&"-".repeat(column.len() + 2));
+        }
+        out.push_str("|\n");
         for r in &ctx.repos {
-            out.push_str(&format!(
-                "| {} | {} | {} |\n",
-                md(&r.name),
-                md(&format_branch(r)),
-                format_status(r),
-            ));
+            let mut cells = vec![md(&r.name)];
+            if has_status {
+                cells.extend([md(&format_branch(r)), format_status(r)]);
+            }
+            if has_tags {
+                cells.push(md_list(&r.tags));
+            }
+            out.push_str(&format!("| {} |\n", cells.join(" | ")));
         }
     } else {
-        out.push_str("## Repos\n");
-        if has_tags {
-            out.push_str("| Repo | Tags |\n");
-            out.push_str("|------|------|\n");
-            for r in &ctx.repos {
-                out.push_str(&format!("| {} | {} |\n", md(&r.name), md_list(&r.tags)));
-            }
-        } else {
-            for r in &ctx.repos {
-                out.push_str(&format!("- {}\n", md(&r.name)));
-            }
+        for r in &ctx.repos {
+            out.push_str(&format!("- {}\n", md(&r.name)));
         }
     }
 
@@ -486,7 +457,7 @@ mod tests {
     ) -> WorkspaceContext {
         WorkspaceContext {
             name: "test-workspace".to_string(),
-            description: "Multi-repo workspace managed by `meta`. Use `meta` commands for cross-repo operations.".to_string(),
+            description: DESCRIPTION.to_string(),
             repo_count: repos.len(),
             repos,
             commands: key_commands(),
@@ -829,59 +800,33 @@ mod tests {
     // ── JSON serialization ──────────────────────────────
 
     #[test]
-    fn json_serializes_full_context() {
-        let ctx = make_ctx(
-            vec![make_repo(
-                "api",
-                Some("main"),
-                Some(false),
-                Some(0),
-                vec!["backend"],
-            )],
-            None,
-        );
-        let json = serde_json::to_string(&ctx).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["name"], "test-workspace");
-        assert_eq!(v["repo_count"], 1);
-        assert_eq!(v["repos"][0]["name"], "api");
-        assert_eq!(v["repos"][0]["path"], "api");
-        assert_eq!(v["repos"][0]["repo"], "git@github.com:org/api.git");
-        assert_eq!(v["repos"][0]["branch"], "main");
-        assert_eq!(v["repos"][0]["dirty"], false);
-        assert_eq!(v["repos"][0]["tags"][0], "backend");
+    fn json_serializes_a_repo_row() {
+        let repo = make_repo("api", Some("main"), Some(false), Some(0), vec!["backend"]);
+        let v = serde_json::to_value(&repo).unwrap();
+        assert_eq!(v["name"], "api");
+        assert_eq!(v["path"], "api");
+        assert_eq!(v["repo"], "git@github.com:org/api.git");
+        assert_eq!(v["branch"], "main");
+        assert_eq!(v["dirty"], false);
+        assert_eq!(v["tags"][0], "backend");
     }
 
     #[test]
-    fn json_omits_none_fields() {
-        let ctx = make_ctx(vec![make_repo("api", None, None, None, vec![])], None);
-        let json = serde_json::to_string(&ctx).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(v["repos"][0].get("branch").is_none());
-        assert!(v["repos"][0].get("dirty").is_none());
-        assert!(v["repos"][0].get("modified_count").is_none());
-        assert!(v.get("dependencies").is_none());
+    fn json_repo_row_omits_none_fields() {
+        let repo = make_repo("api", None, None, None, vec![]);
+        let v = serde_json::to_value(&repo).unwrap();
+        assert!(v.get("branch").is_none());
+        assert!(v.get("dirty").is_none());
+        assert!(v.get("modified_count").is_none());
     }
 
     #[test]
-    fn json_includes_description_and_commands() {
-        let ctx = make_ctx(vec![], None);
-        let json = serde_json::to_string(&ctx).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(v["description"].as_str().unwrap().contains("meta"));
-        let commands = v["commands"].as_array().unwrap();
+    fn json_workspace_row_has_description_and_commands() {
+        assert!(DESCRIPTION.contains("meta"));
+        let commands = serde_json::to_value(key_commands()).unwrap();
+        let commands = commands.as_array().unwrap();
         assert!(!commands.is_empty());
         assert!(commands[0].get("command").is_some());
         assert!(commands[0].get("description").is_some());
-    }
-
-    #[test]
-    fn json_includes_dependencies_when_present() {
-        let mut deps = HashMap::new();
-        deps.insert("api".to_string(), vec!["core".to_string()]);
-        let ctx = make_ctx(vec![], Some(deps));
-        let json = serde_json::to_string(&ctx).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["dependencies"]["api"][0], "core");
     }
 }

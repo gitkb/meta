@@ -867,7 +867,6 @@ dependencies = [
  "colored",
  "env_logger",
  "flate2",
- "indexmap",
  "log",
  "loop_lib",
  "meta_core",

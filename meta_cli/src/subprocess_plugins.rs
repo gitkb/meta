@@ -155,15 +155,12 @@ impl SubprocessPluginManager {
         let cwd = std::env::current_dir()?;
         // A config meta can't use leaves no project plugins; the command
         // itself reports it, and `--help` still prints
-        let nearest = meta_core::config::nearest_meta_dir(&cwd).unwrap_or_else(|e| {
-            meta_plugin::out::warn(format!(
-                "{} Skipping project plugins.",
-                escape(&format!("{e:#}"))
-            ));
-            None
+        let project_dirs = meta_core::config::nearest_meta_dir(&cwd).and_then(|nearest| {
+            nearest
+                .map(|nearest| meta_core::config::workspace_meta_dirs(&nearest))
+                .transpose()
         });
-        let project_dirs = nearest.map(|nearest| meta_core::config::workspace_meta_dirs(&nearest));
-        match project_dirs.transpose() {
+        match project_dirs {
             Ok(project_dirs) => {
                 for dir in project_dirs.into_iter().flatten() {
                     add(dir.join(".meta/plugins"), false);
@@ -546,12 +543,8 @@ pub fn extensions_on_path(tool: &str) -> std::collections::BTreeSet<String> {
 #[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    if let Ok(metadata) = path.metadata() {
-        let mode = metadata.permissions().mode();
-        mode & 0o111 != 0 && metadata.is_file()
-    } else {
-        false
-    }
+    path.metadata()
+        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(not(unix))]

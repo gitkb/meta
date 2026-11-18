@@ -20,8 +20,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// A write to command-output stdout failed (meta's one stdout error).
-pub use meta_plugin::out::StdoutError;
+use meta_plugin::out::StdoutError;
 
 /// What loop runs and how: the `.looprc` file (JSON), and what meta builds for
 /// the commands it runs. A key the file leaves out takes its default; a key

@@ -68,13 +68,7 @@ pub(crate) fn execute_git_commit(args: CommitArgs, request: &Request) -> anyhow:
     } else {
         // No message provided, show what would be committed
         outln!("Repositories with staged changes:")?;
-        for (name, _path, files) in &repos_with_changes {
-            outln!(
-                "  {} ({} files)",
-                escape(name).to_string().cyan(),
-                files.len()
-            )?;
-        }
+        list_staged(&repos_with_changes)?;
         outln!()?;
         outln!(
             "Use {} to create per-repo commit messages",
@@ -87,6 +81,18 @@ pub(crate) fn execute_git_commit(args: CommitArgs, request: &Request) -> anyhow:
     }
 
     Ok(Response::done())
+}
+
+/// Print each of `repos` with the number of its staged files.
+fn list_staged(repos: &[(String, String, Vec<String>)]) -> anyhow::Result<()> {
+    for (name, _path, files) in repos {
+        outln!(
+            "  {} ({} files)",
+            escape(name).to_string().cyan(),
+            files.len()
+        )?;
+    }
+    Ok(())
 }
 
 /// The staged files of the repo at `path`.
@@ -135,13 +141,7 @@ fn execute_editor_commit(
             "[DRY RUN] Would open the editor '{}' for a message for each of:",
             escape(&editor)
         )?;
-        for (name, _path, files) in repos {
-            outln!(
-                "  {} ({} files)",
-                escape(name).to_string().cyan(),
-                files.len()
-            )?;
-        }
+        list_staged(repos)?;
         return Ok(());
     }
 

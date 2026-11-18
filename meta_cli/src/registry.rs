@@ -502,14 +502,8 @@ fn release_not_found(
     last_error: Option<anyhow::Error>,
 ) -> anyhow::Error {
     anyhow::anyhow!(
-        "Could not find release for {}/{}{}\nTried {} URL(s). Last error: {}",
-        escape(&shorthand.user),
-        escape(&shorthand.repo),
-        shorthand
-            .version
-            .as_ref()
-            .map(|v| format!("@{}", escape(v)))
-            .unwrap_or_default(),
+        "Could not find release for {}\nTried {} URL(s). Last error: {}",
+        escape(&shorthand.to_string()),
         tried,
         last_error
             .map(|e| escape(&format!("{e:#}")).into_owned())
@@ -537,50 +531,39 @@ impl GitHubShorthand {
     ///
     /// Returns None if the input doesn't match the expected format.
     pub fn parse(input: &str) -> Option<Self> {
-        // Must not start with http
-        if input.starts_with("http://") || input.starts_with("https://") {
+        // Exactly one slash, so a URL (`https://...`) is refused too
+        let (user, rest) = input.split_once('/')?;
+        if rest.contains('/') {
             return None;
         }
-
-        let (user, repo_and_version) = input.split_once('/')?;
-        let user = user.to_string();
-
-        // Reject if repo contains additional slashes
-        if repo_and_version.matches('/').count() > 0 {
+        let (repo, version) = match rest.split_once('@') {
+            Some((repo, version)) => (repo, Some(version)),
+            None => (rest, None),
+        };
+        if user.is_empty() || repo.is_empty() || version.is_some_and(str::is_empty) {
             return None;
         }
-
-        // Check for @version suffix
-        if let Some((repo, version)) = repo_and_version.split_once('@') {
-            let (repo, version) = (repo.to_string(), version.to_string());
-
-            if user.is_empty() || repo.is_empty() || version.is_empty() {
-                return None;
-            }
-
-            Some(Self {
-                user,
-                repo,
-                version: Some(version),
-            })
-        } else {
-            let repo = repo_and_version.to_string();
-
-            if user.is_empty() || repo.is_empty() {
-                return None;
-            }
-
-            Some(Self {
-                user,
-                repo,
-                version: None,
-            })
-        }
+        Some(Self {
+            user: user.to_string(),
+            repo: repo.to_string(),
+            version: version.map(str::to_string),
+        })
     }
 
     /// Extract the plugin name from the repo (strips meta- prefix if present)
     pub fn plugin_name(&self) -> &str {
         self.repo.strip_prefix(PLUGIN_PREFIX).unwrap_or(&self.repo)
+    }
+}
+
+/// `user/repo[@version]`, as it was written
+impl std::fmt::Display for GitHubShorthand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.user, self.repo)?;
+        if let Some(version) = &self.version {
+            write!(f, "@{version}")?;
+        }
+        Ok(())
     }
 }
 
@@ -804,17 +787,12 @@ impl PluginInstaller {
     pub fn install_from_github(&self, shorthand: &GitHubShorthand) -> Result<String> {
         let platform = RegistryClient::current_platform();
 
-        if let Some(version) = &shorthand.version {
-            info!(
-                "Installing {}/{}@{} for {}",
-                shorthand.user, shorthand.repo, version, platform
-            );
+        let latest = if shorthand.version.is_none() {
+            " (latest)"
         } else {
-            info!(
-                "Installing {}/{} (latest) for {}",
-                shorthand.user, shorthand.repo, platform
-            );
-        }
+            ""
+        };
+        info!("Installing {shorthand}{latest} for {platform}");
 
         // Try to download with various URL patterns
         let urls = self.construct_github_urls(&github().0, shorthand, &platform);
@@ -829,20 +807,10 @@ impl PluginInstaller {
                     let installed = self.extract_and_validate(url, &bytes)?;
 
                     // Record installation in manifest
-                    let source = format!(
-                        "{}/{}{}",
-                        shorthand.user,
-                        shorthand.repo,
-                        shorthand
-                            .version
-                            .as_ref()
-                            .map(|v| format!("@{}", v))
-                            .unwrap_or_default()
-                    );
                     for plugin_name in &installed {
                         self.record_installation(
                             plugin_name,
-                            source.clone(),
+                            shorthand.to_string(),
                             shorthand.version.clone(),
                         )?;
                     }

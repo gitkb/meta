@@ -1,4 +1,4 @@
-use crate::clone_queue::{CloneQueue, CloneTask, Outcome};
+use crate::clone_queue::{lock, CloneQueue, CloneTask, Outcome};
 use anyhow::Context;
 use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -354,7 +354,7 @@ impl StderrTail {
                     let line = String::from_utf8_lossy(&buf).trim_end().to_string();
                     buf.clear();
                     on_line(&line);
-                    let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut kept = lock(&kept);
                     if kept.len() == Self::KEPT_LINES {
                         kept.pop_front();
                     }
@@ -370,7 +370,7 @@ impl StderrTail {
     /// background process (an ssh master, say) that still holds the pipe.
     fn text(&self) -> String {
         let _ = self.done.recv_timeout(Duration::from_secs(2));
-        let lines = self.lines.lock().unwrap_or_else(|e| e.into_inner());
+        let lines = lock(&self.lines);
         Vec::from(lines.clone()).join("\n")
     }
 }

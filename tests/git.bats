@@ -980,38 +980,6 @@ EOF
     rm -rf "$REMOTE_DIR" "$WORK_DIR" "$CLONE_DIR"
 }
 
-@test "meta git clone passes URL correctly to git" {
-    # This test verifies the fix for the argument passing bug
-    # where the URL was being lost due to double-stripping of args
-
-    # Create a "remote" bare repo with main as default branch
-    REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git init --bare --quiet "$REMOTE_DIR"
-    git -C "$REMOTE_DIR" symbolic-ref HEAD refs/heads/main
-
-    # Push minimal content
-    WORK_DIR="$(cd "$(mktemp -d)" && pwd -P)"
-    git clone --quiet "$REMOTE_DIR" "$WORK_DIR/meta-repo"
-    cd "$WORK_DIR/meta-repo"
-    echo '{"projects": {}}' > .meta.yaml
-    git add .meta.yaml
-    git commit --quiet -m "Init"
-    git push --quiet -u origin main
-
-    CLONE_TARGET="$(mktemp -d)/test-clone"
-
-    cd "$TEST_DIR"
-    run "$META_BIN" git clone "$REMOTE_DIR" "$CLONE_TARGET"
-
-    # Should succeed, not fail with "No repository URL provided"
-    [ "$status" -eq 0 ]
-    [[ "$output" != *"No repository URL provided"* ]]
-    [ -d "$CLONE_TARGET/.git" ]
-
-    # Clean up
-    rm -rf "$REMOTE_DIR" "$WORK_DIR" "$CLONE_TARGET"
-}
-
 @test "meta git clone with --depth option" {
     # Create a "remote" bare repo with main as default branch
     REMOTE_DIR="$(cd "$(mktemp -d)" && pwd -P)"

@@ -236,6 +236,26 @@ pub(crate) fn help(words: impl IntoIterator<Item = String>, request: &Request) -
     }
 }
 
+/// The project at `path` as records name it: by its path from `root`, `.`
+/// for `root` itself.
+pub(crate) fn project_of(path: &std::path::Path, root: &std::path::Path) -> String {
+    match path.strip_prefix(root) {
+        Ok(inside) if inside.as_os_str().is_empty() => ".".to_string(),
+        Ok(inside) => inside.to_string_lossy().into_owned(),
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
+}
+
+/// The last line of git's `stderr` that isn't blank, as summaries name a
+/// failure by it.
+pub(crate) fn last_line(stderr: &str) -> &str {
+    stderr
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("no stderr")
+}
+
 /// Records a command printed itself, for one that failed with `failure`
 /// after printing them: under `--json` the records, the failure among them
 /// (as a record of its own unless one of them is a failure), so the

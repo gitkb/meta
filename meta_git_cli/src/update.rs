@@ -108,11 +108,7 @@ pub(crate) fn execute(
     };
     // records name each repo by its path from the workspace root, as meta does
     let named = named(request, root);
-    let project = |path: &Path| match path.strip_prefix(named) {
-        Ok(inside) if inside.as_os_str().is_empty() => ".".to_string(),
-        Ok(inside) => inside.to_string_lossy().into_owned(),
-        Err(_) => path.to_string_lossy().into_owned(),
-    };
+    let project = |path: &Path| crate::project_of(path, named);
     let record = |path: &Path, action: &'static str, reason: Option<String>| {
         let data = Record { action, reason };
         match action {

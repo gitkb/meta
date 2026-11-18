@@ -478,32 +478,25 @@ pub fn path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn built_program_dir_finds_the_deps_layout() {
-        let sandbox = super::Sandbox::new();
-        let profile = sandbox.work().join("target/debug");
-        let exe = profile.join("deps/unit-test");
-        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
-        std::fs::write(
-            profile.join(format!("meta{}", std::env::consts::EXE_SUFFIX)),
-            b"built",
-        )
-        .unwrap();
-        assert_eq!(super::built_program_dir_from(&exe), Some(profile));
-    }
-
-    #[test]
-    fn built_program_dir_finds_the_build_out_layout() {
-        let sandbox = super::Sandbox::new();
-        let profile = sandbox.work().join("target/debug");
-        let exe = profile.join("build/meta/unit-hash/out/unit-test");
-        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
-        std::fs::write(
-            profile.join(format!("meta{}", std::env::consts::EXE_SUFFIX)),
-            b"built",
-        )
-        .unwrap();
-        // The package directory named meta is not a built program.
-        assert_eq!(super::built_program_dir_from(&exe), Some(profile));
+    fn built_program_dir_finds_each_cargo_layout() {
+        // `deps/` before cargo 1.100, `build/<package>/<hash>/out/` after;
+        // in the second, the package folder named meta is not a built program
+        for layout in ["deps/unit-test", "build/meta/unit-hash/out/unit-test"] {
+            let sandbox = super::Sandbox::new();
+            let profile = sandbox.work().join("target/debug");
+            let exe = profile.join(layout);
+            std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+            std::fs::write(
+                profile.join(format!("meta{}", std::env::consts::EXE_SUFFIX)),
+                b"built",
+            )
+            .unwrap();
+            assert_eq!(
+                super::built_program_dir_from(&exe),
+                Some(profile),
+                "{layout}"
+            );
+        }
     }
 
     use super::*;

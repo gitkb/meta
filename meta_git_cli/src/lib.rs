@@ -388,53 +388,42 @@ fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<
         step.env = git_env.clone();
         steps.push(step);
     }
-    let plan = |steps, parallel: Option<bool>, max_parallel, stagger_ms| {
-        Ok(Response::plan(Plan {
-            steps,
-            parallel,
-            max_parallel,
-            stagger_ms,
-        }))
+    let mut plan = Plan {
+        steps,
+        ..Plan::default()
     };
 
     // For remote commands running in parallel, establish SSH ControlMaster
     // connections and inject GIT_SSH_COMMAND into each step. A preview
     // connects nowhere.
     if !request.meta.parallel() || ctx.dry_run() || !is_remote_command(&argv) {
-        return plan(steps, None, None, None);
+        return Ok(Response::plan(plan));
     }
     let urls = ssh::ssh_urls(&request.projects);
     // HTTPS-only workspaces don't need SSH multiplexing
     if urls.is_empty() {
-        return plan(steps, None, None, None);
+        return Ok(Response::plan(plan));
     }
-    let (ssh_env, parallel_ok) = match ssh::establish_ssh_masters(&urls) {
-        ssh::SshMasters::OurSockets(ssh) => (Some(ssh), true),
-        ssh::SshMasters::UserManaged => (None, true),
+    match ssh::establish_ssh_masters(&urls) {
+        ssh::SshMasters::OurSockets(ssh) => {
+            for step in &mut plan.steps {
+                step.env.insert("GIT_SSH_COMMAND".to_string(), ssh.clone());
+            }
+        }
+        ssh::SshMasters::UserManaged => {}
+        // SSH setup failed — fall back to sequential
         ssh::SshMasters::Failed => {
             log::debug!("SSH multiplexing could not be set up: running one repository at a time");
-            (None, false)
-        }
-    };
-    if let Some(ssh) = &ssh_env {
-        for step in &mut steps {
-            step.env.insert("GIT_SSH_COMMAND".to_string(), ssh.clone());
+            plan.parallel = Some(false);
+            return Ok(Response::plan(plan));
         }
     }
     // SSH ControlMaster has a default MaxSessions limit of 10 (server-side).
-    const SSH_MAX_SESSIONS: usize = 10;
+    plan.max_parallel = Some(10);
     // Stagger spawns by 25ms to prevent SSH socket saturation.
-    const SSH_SPAWN_STAGGER_MS: u64 = 25;
-    match parallel_ok {
-        true => plan(
-            steps,
-            Some(true),
-            Some(SSH_MAX_SESSIONS),
-            Some(SSH_SPAWN_STAGGER_MS),
-        ),
-        // SSH setup failed — fall back to sequential
-        false => plan(steps, Some(false), None, None),
-    }
+    plan.stagger_ms = Some(25);
+    plan.parallel = Some(true);
+    Ok(Response::plan(plan))
 }
 
 #[cfg(test)]

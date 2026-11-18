@@ -29,22 +29,21 @@ pub fn detect_worktree_location(cwd: &Path) -> Result<Option<(String, PathBuf)>>
         }
     }
     let components: Vec<_> = cwd.components().collect();
-    for (i, comp) in components.iter().enumerate() {
-        if let Component::Normal(name) = comp {
-            if name.to_str() == Some(meta_plugin::sets::WORKTREES_DIR) {
-                let task_name = match components.get(i + 1) {
-                    Some(Component::Normal(n)) => match n.to_str() {
-                        Some(n) => n.to_string(),
-                        None => return Ok(None),
-                    },
-                    _ => return Ok(None),
-                };
-                let task_dir: PathBuf = components.iter().take(i + 2).collect();
-                return Ok(Some((task_name, task_dir)));
-            }
-        }
-    }
-    Ok(None)
+    let Some(i) = components.iter().position(|c| {
+        matches!(c, Component::Normal(n) if n.to_str() == Some(meta_plugin::sets::WORKTREES_DIR))
+    }) else {
+        return Ok(None);
+    };
+    let Some(Component::Normal(name)) = components.get(i + 1) else {
+        return Ok(None);
+    };
+    let Some(name) = name.to_str() else {
+        return Ok(None);
+    };
+    Ok(Some((
+        name.to_string(),
+        components.iter().take(i + 2).collect(),
+    )))
 }
 
 /// The owner file beside the set at `set_dir`, when it was made for this

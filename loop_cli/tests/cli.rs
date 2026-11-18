@@ -13,49 +13,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-#[test]
-fn an_exclusion_holds_for_directories_named_outright() {
-    let tmp = Sandbox::new();
-    for dir in ["a", "b"] {
-        std::fs::create_dir(tmp.work().join(dir)).unwrap();
-    }
-    let out = tmp
-        .command(env!("CARGO_BIN_EXE_loop"))
-        .args(["-i", "a", "-i", "b", "-e", "a", "--", "pwd"])
-        .current_dir(tmp.work())
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{out:?}");
-    let shown = String::from_utf8_lossy(&out.stdout);
-    // pwd's lines, among loop's own
-    let root = tmp.work().canonicalize().unwrap();
-    let ran: Vec<_> = shown
-        .lines()
-        .filter_map(|line| std::path::Path::new(line.trim()).strip_prefix(&root).ok())
-        .collect();
-    assert_eq!(ran, [std::path::Path::new("b")], "{shown}");
-
-    // nothing left is said, not run silently
-    let out = tmp
-        .command(env!("CARGO_BIN_EXE_loop"))
-        .args(["-i", "a", "-e", "a", "--", "pwd"])
-        .current_dir(tmp.work())
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("No directories left after exclusions"));
-    // nor when loop finds the directories itself
-    let empty = tmp.work().join("b");
-    let out = tmp
-        .command(env!("CARGO_BIN_EXE_loop"))
-        .args(["-e", ".", "--", "pwd"])
-        .current_dir(&empty)
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("No directories left after exclusions"));
-}
-
 fn sandbox(dirs: &[&str]) -> Sandbox {
     let sandbox = Sandbox::new();
     for dir in dirs {
@@ -88,6 +45,30 @@ fn ran_in(sandbox: &Sandbox, args: &[&str]) -> Vec<PathBuf> {
         .filter_map(|line| Path::new(line.trim()).strip_prefix(sandbox.work()).ok())
         .map(Path::to_path_buf)
         .collect()
+}
+
+#[test]
+fn an_exclusion_holds_for_directories_named_outright() {
+    let ws = sandbox(&["a", "b"]);
+    assert_eq!(
+        ran_in(&ws, &["-i", "a", "-i", "b", "-e", "a"]),
+        [PathBuf::from("b")]
+    );
+
+    // nothing left is said, not run silently
+    let out = run(&ws, &["-i", "a", "-e", "a", "--", "pwd"], "");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("No directories left after exclusions"));
+    // nor when loop finds the directories itself
+    let empty = ws.work().join("b");
+    let out = ws
+        .command(env!("CARGO_BIN_EXE_loop"))
+        .args(["-e", ".", "--", "pwd"])
+        .current_dir(&empty)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("No directories left after exclusions"));
 }
 
 #[test]

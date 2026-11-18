@@ -630,7 +630,10 @@ fn unsaved_work(repo: &Path, members: &[PathBuf]) -> Result<(Vec<String>, String
             entries.next(); // the rename source
         }
         let shown = String::from_utf8_lossy(path).into_owned();
-        let full = repo.join(path_from_bytes(path.strip_suffix(b"/").unwrap_or(path))?);
+        let full = repo.join(path_from_bytes(
+            path.strip_suffix(b"/").unwrap_or(path),
+            NOT_UTF8,
+        )?);
         if code != b"??" {
             modified.push((shown, full));
         } else if !members.contains(&full) {
@@ -721,7 +724,7 @@ fn hidden_files(repo: &Path) -> Result<Vec<(String, PathBuf)>> {
             continue;
         };
         if tag.is_ascii_lowercase() || *tag == b'S' {
-            let full = repo.join(path_from_bytes(path)?);
+            let full = repo.join(path_from_bytes(path, NOT_UTF8)?);
             if full.symlink_metadata().is_ok() {
                 hidden.push((String::from_utf8_lossy(path).into_owned(), full));
             }
@@ -745,8 +748,17 @@ fn git_bytes(repo: &Path, args: &[&str], what: &str) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
-/// A path git printed as raw bytes. Outside Unix, git writes UTF-8.
-pub(super) fn path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
+/// What [`path_from_bytes`] says, outside Unix, of a path git printed that
+/// isn't UTF-8.
+const NOT_UTF8: &str = "git printed a path that isn't UTF-8";
+
+/// A path git printed as raw bytes. Outside Unix, git writes UTF-8; a path
+/// that isn't is an error saying `not_utf8`.
+#[cfg_attr(
+    unix,
+    expect(unused_variables, reason = "on Unix every path is valid bytes")
+)]
+pub(super) fn path_from_bytes(bytes: &[u8], not_utf8: &'static str) -> Result<PathBuf> {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
@@ -756,7 +768,7 @@ pub(super) fn path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
     {
         std::str::from_utf8(bytes)
             .map(PathBuf::from)
-            .context("git printed a path that isn't UTF-8")
+            .context(not_utf8)
     }
 }
 
@@ -764,8 +776,16 @@ pub(super) fn path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
 /// autostash, say) lives in the worktree's git directory, which removal
 /// deletes.
 fn operation_in_progress(repo: &Path) -> Result<Option<&'static str>> {
-    let git_dir = git_bytes(repo, &["rev-parse", "--git-dir"], "rev-parse --git-dir")?;
-    let git_dir = repo.join(String::from_utf8_lossy(&git_dir).trim_end_matches(['\n', '\r']));
+    let output = git(repo)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+        .context("cannot run git rev-parse")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "git rev-parse --git-dir failed:{}",
+        program_output(&output.stderr)
+    );
+    let git_dir = repo.join(String::from_utf8_lossy(&output.stdout).trim_end_matches(['\n', '\r']));
     let markers = [
         ("rebase-merge", "rebase"),
         ("rebase-apply", "rebase or am"),

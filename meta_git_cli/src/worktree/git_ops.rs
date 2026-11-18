@@ -543,6 +543,9 @@ pub fn worktree_branch_is_free(repo_path: &Path, branch: &str) -> Result<()> {
     branch_is_free(repo_path, branch, true)
 }
 
+/// What a checkout path that isn't UTF-8 is called outside Unix.
+const CHECKOUT_NOT_UTF8: &str = "Git checkout path is not UTF-8";
+
 // Git's backlink is raw path bytes followed by one line ending.
 fn holder_checkout(admin: &Path) -> Result<Option<std::path::PathBuf>> {
     let file = admin.join("gitdir");
@@ -558,7 +561,7 @@ fn holder_checkout(admin: &Path) -> Result<Option<std::path::PathBuf>> {
     let bytes = bytes.strip_suffix(b"\n").unwrap_or(&bytes);
     let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
     Ok(admin
-        .join(super::safety::path_from_bytes(bytes)?)
+        .join(super::safety::path_from_bytes(bytes, CHECKOUT_NOT_UTF8)?)
         .parent()
         .map(Path::to_path_buf))
 }
@@ -594,7 +597,7 @@ fn configured_worktree(repo_path: &Path, common: &Path) -> Result<Option<std::pa
         .stdout
         .strip_suffix(b"\0")
         .context("Invalid core.worktree output")?;
-    let path = common.join(super::safety::path_from_bytes(bytes)?);
+    let path = common.join(super::safety::path_from_bytes(bytes, CHECKOUT_NOT_UTF8)?);
     Ok(Some(path.canonicalize().unwrap_or(path)))
 }
 

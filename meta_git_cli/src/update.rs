@@ -183,21 +183,17 @@ pub(crate) fn execute(
     if prunes {
         for path in &outcome.unlisted {
             let shown = shown(path, cwd);
-            let leftover = match Leftover::of(path, root, true) {
-                Leftover::Removable(ignored) => Ok(ignored),
-                Leftover::Holds(why) => Err(why),
-            };
             // what is deleted along with it is said, in the preview too
             let note = |ignored: &Option<String>| match ignored {
                 Some(ignored) => format!("nothing unpushed; {ignored} deleted with it"),
                 None => "nothing unpushed".to_string(),
             };
-            let (action, reason) = match leftover {
-                Ok(ignored) if preview => {
+            let (action, reason) = match Leftover::of(path, root, true) {
+                Leftover::Removable(ignored) if preview => {
                     say(format!("Would remove {shown} ({})", note(&ignored)))?;
                     ("removed", ignored.as_ref().map(|_| note(&ignored)))
                 }
-                Ok(ignored) => match std::fs::remove_dir_all(path) {
+                Leftover::Removable(ignored) => match std::fs::remove_dir_all(path) {
                     Ok(()) => {
                         say(format!(
                             "{} {shown} ({})",
@@ -213,7 +209,7 @@ pub(crate) fn execute(
                         ("failed", Some(why))
                     }
                 },
-                Err(why) => {
+                Leftover::Holds(why) => {
                     let verb = if preview { "Would keep" } else { "Kept" };
                     say(format!("{} {shown}: {why}", verb.yellow()))?;
                     ("kept", Some(why))

@@ -311,40 +311,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_simple_query() {
-        let query = Query::parse("dirty:true").unwrap();
-        assert_eq!(query.conditions.len(), 1);
-        assert_eq!(query.conditions[0], QueryCondition::Dirty(true));
-    }
-
-    #[test]
-    fn test_parse_compound_query() {
-        let query = Query::parse("dirty:true AND tag:backend").unwrap();
-        assert_eq!(query.conditions.len(), 2);
-        assert_eq!(query.conditions[0], QueryCondition::Dirty(true));
-        assert_eq!(
-            query.conditions[1],
-            QueryCondition::Tag("backend".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_branch_query() {
-        let query = Query::parse("branch:main").unwrap();
-        assert_eq!(query.conditions.len(), 1);
-        assert_eq!(
-            query.conditions[0],
-            QueryCondition::Branch("main".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_modified_in_query() {
-        let query = Query::parse("modified_in:24h").unwrap();
-        assert_eq!(
-            query.conditions,
-            [QueryCondition::ModifiedIn(Duration::from_secs(86400))]
-        );
+    fn test_parse_queries() {
+        use QueryCondition::{Branch, Dirty, ModifiedIn, Tag};
+        for (query, conditions) in [
+            ("dirty:true", vec![Dirty(true)]),
+            (
+                "dirty:true AND tag:backend",
+                vec![Dirty(true), Tag("backend".to_string())],
+            ),
+            ("branch:main", vec![Branch("main".to_string())]),
+            (
+                "modified_in:24h",
+                vec![ModifiedIn(Duration::from_secs(86400))],
+            ),
+        ] {
+            assert_eq!(
+                Query::parse(query).unwrap().conditions,
+                conditions,
+                "{query}"
+            );
+        }
     }
 
     #[test]

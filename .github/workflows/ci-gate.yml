@@ -1,0 +1,53 @@
+name: CI gate
+
+# A copy of gitkb/workflows' ci-gate.yml (at f6f2b602ac2ca9498bc420aa9b9871b936efa7c0):
+# meta is public, and GitHub lets only private and internal repos call that
+# private repo's workflows (a public caller's workflow fails to load). It
+# passes only when every job it is given succeeded. A failed or cancelled job
+# fails it, and so does a skipped one, unless the caller lists it in
+# `allowed-skips`. Called as job `gate`, it reports as `gate / CI gate`, the
+# check the org requires.
+
+on:
+  workflow_call:
+    inputs:
+      needs:
+        description: The caller's `toJSON(needs)`.
+        type: string
+        required: true
+      allowed-skips:
+        description: Space-separated ids of needed jobs that may be skipped. Any other skipped job fails the gate.
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  gate:
+    name: CI gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every needed job to succeed
+        env:
+          NEEDS: ${{ inputs.needs }}
+          ALLOWED_SKIPS: ${{ inputs.allowed-skips }}
+        run: |
+          set -euo pipefail
+          if ! jq -e 'type == "object" and length > 0' <<<"$NEEDS" >/dev/null; then
+            echo "::error::the gate was given no needed jobs: the caller passes its toJSON(needs) as the needs input"
+            exit 1
+          fi
+          bad=$(jq -r --arg allowed "$ALLOWED_SKIPS" '
+            ($allowed | split(" ")) as $ok
+            | to_entries[]
+            | select(.value.result != "success")
+            | select(.value.result != "skipped" or (.key as $k | $ok | index($k) | not))
+            | "\(.key): \(.value.result)"' <<<"$NEEDS")
+          if [ -n "$bad" ]; then
+            echo "::error::jobs that did not succeed:"
+            echo "$bad"
+            exit 1
+          fi
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
+          echo "every needed job succeeded"

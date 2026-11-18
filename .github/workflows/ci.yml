@@ -177,11 +177,12 @@ jobs:
   # when every job above succeeded on every runner (a failed, cancelled or
   # skipped one fails it). `if: always()` makes it report after a failure; a
   # skipped call reports only as `gate`. release.yml's tests_only run skips
-  # Clippy, Check Each Crate and Format on purpose.
+  # Clippy, Check Each Crate and Format on purpose. meta is public, so it
+  # calls its own copy of the shared gate (ci-gate.yml says why).
   gate:
     if: always()
     needs: [test, clippy, crates, integration, format]
-    uses: gitkb/workflows/.github/workflows/ci-gate.yml@f6f2b602ac2ca9498bc420aa9b9871b936efa7c0
+    uses: ./.github/workflows/ci-gate.yml
     with:
       needs: ${{ toJSON(needs) }}
       allowed-skips: ${{ inputs.tests_only && 'clippy crates format' || '' }}

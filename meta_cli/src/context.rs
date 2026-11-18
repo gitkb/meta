@@ -207,7 +207,7 @@ pub struct CommandRef {
     pub description: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct RepoContext {
     pub name: String,
     pub path: String,
@@ -258,19 +258,8 @@ impl RepoContext {
             name: p.name.clone(),
             path: p.path.clone(),
             repo: p.repo.clone(),
-            branch: None,
-            detached: None,
-            head: None,
-            operation: None,
-            rebasing: None,
-            dirty: None,
-            modified_count: None,
-            untracked_count: None,
-            upstream: None,
-            upstream_gone: None,
-            ahead: None,
-            behind: None,
             tags: p.tags.clone(),
+            ..Self::default()
         }
     }
 }

@@ -1,93 +1,58 @@
 //! What meta suggests after a mistake is a command that works as printed.
 
-#![expect(
-    clippy::disallowed_methods,
-    clippy::unwrap_used,
-    reason = "test helpers: a panic is a failed test, and tests start the programs they test"
-)]
+#![expect(clippy::unwrap_used, reason = "test helpers: a panic is a failed test")]
 #![cfg(unix)]
 
-use meta_plugin::testing::text;
+use meta_plugin::testing::{text, Sandbox};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
-/// A workspace repo with a cloned project `api` (one commit on `main`), and
-/// a home, config and data dir of its own.
+/// A workspace repo with a cloned project `api` (one commit on `main`), in
+/// a sandbox of its own.
 struct Workspace {
-    _temp: tempfile::TempDir,
+    sandbox: Sandbox,
     ws: PathBuf,
-    base: PathBuf,
 }
 
 impl Workspace {
     fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
-        let base = temp.path().canonicalize().unwrap();
-        for dir in ["home", "config", "data", "meta", "tmp"] {
-            fs::create_dir_all(base.join(dir)).unwrap();
-        }
-        fs::write(
-            base.join("gitconfig"),
-            "[user]\n\tname = T\n\temail = t@example.invalid\n[init]\n\tdefaultBranch = main\n",
-        )
-        .unwrap();
-        let workspace = Self {
-            ws: base.join("ws"),
-            base,
-            _temp: temp,
-        };
-        let api = workspace.ws.join("api");
+        let sandbox = Sandbox::new();
+        let ws = sandbox.work().join("ws");
+        let api = ws.join("api");
         fs::create_dir_all(&api).unwrap();
-        workspace.git(&workspace.ws, &["init", "-q"]);
-        workspace.git(&api, &["init", "-q"]);
+        sandbox.git(&ws, &["init", "-q"]);
+        sandbox.git(&api, &["init", "-q"]);
         fs::write(api.join("README.md"), "# api\n").unwrap();
-        workspace.git(&api, &["add", "."]);
-        workspace.git(&api, &["commit", "-qm", "init"]);
+        sandbox.git(&api, &["add", "."]);
+        sandbox.git(&api, &["commit", "-qm", "init"]);
         fs::write(
-            workspace.ws.join(".meta.yaml"),
+            ws.join(".meta.yaml"),
             "projects:\n  api: https://example.invalid/api.git\n",
         )
         .unwrap();
-        fs::write(workspace.ws.join(".gitignore"), "/api/\n.worktrees/\n").unwrap();
-        workspace.git(&workspace.ws, &["add", "."]);
-        workspace.git(&workspace.ws, &["commit", "-qm", "workspace"]);
-        workspace
+        fs::write(ws.join(".gitignore"), "/api/\n.worktrees/\n").unwrap();
+        sandbox.git(&ws, &["add", "."]);
+        sandbox.git(&ws, &["commit", "-qm", "workspace"]);
+        Self { sandbox, ws }
     }
 
-    fn command(&self, program: impl AsRef<std::ffi::OsStr>, dir: &Path) -> Command {
-        let bin = Path::new(env!("CARGO_BIN_EXE_meta")).parent().unwrap();
-        let mut command = Command::new(program);
-        command
-            .current_dir(dir)
-            .env_clear()
-            .env("HOME", self.base.join("home"))
-            .env("XDG_CONFIG_HOME", self.base.join("config"))
-            .env("XDG_DATA_HOME", self.base.join("data"))
-            .env("META_DATA_DIR", self.base.join("meta"))
-            .env("TMPDIR", self.base.join("tmp"))
-            .env("GIT_CONFIG_GLOBAL", self.base.join("gitconfig"))
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env(
-                "PATH",
-                format!("{}:/usr/local/bin:/usr/bin:/bin", bin.display()),
-            )
-            .stdin(Stdio::null());
-        command
-    }
-
-    fn git(&self, dir: &Path, args: &[&str]) {
-        assert!(self
-            .command("git", dir)
-            .args(args)
-            .status()
-            .unwrap()
-            .success());
-    }
-
+    /// `meta args` in the workspace, with the built meta first on a minimal
+    /// PATH, so a suggestion runs as printed.
     fn meta(&self, args: &[&str]) -> Output {
         let bin = Path::new(env!("CARGO_BIN_EXE_meta"));
-        self.command(bin, &self.ws).args(args).output().unwrap()
+        let dir = bin.parent().unwrap();
+        self.sandbox
+            .command(bin)
+            .current_dir(&self.ws)
+            .env(
+                "PATH",
+                format!("{}:/usr/local/bin:/usr/bin:/bin", dir.display()),
+            )
+            .stdin(Stdio::null())
+            .args(args)
+            .output()
+            .unwrap()
     }
 }
 
@@ -511,7 +476,7 @@ fn worktree_diff_shows_the_patch_unless_only_the_summary_is_asked_for() {
     assert!(workspace.meta(&create).status.success());
     let api = workspace.ws.join(".worktrees/d/api");
     fs::write(api.join("README.md"), "# api\nchanged\n").unwrap();
-    workspace.git(&api, &["commit", "-qam", "change"]);
+    workspace.sandbox.git(&api, &["commit", "-qam", "change"]);
 
     let full = text(&workspace.meta(&["git", "worktree", "diff", "d"]));
     let stat = text(&workspace.meta(&["git", "worktree", "diff", "d", "--stat"]));

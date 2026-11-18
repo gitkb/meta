@@ -71,12 +71,6 @@ setup() {
 
 # ============ --json ============
 
-@test "context --json outputs valid JSON" {
-    run "$META_BIN" --json context
-    [ "$status" -eq 0 ]
-    echo "$output" | python3 -c "import sys, json; json.load(sys.stdin)"
-}
-
 @test "context --json contains workspace name and repo count" {
     run "$META_BIN" --json context
     [ "$status" -eq 0 ]

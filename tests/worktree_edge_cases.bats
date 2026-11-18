@@ -22,11 +22,6 @@ EOF
     cd "$TEST_DIR"
 }
 
-# The file where meta records the set a linked worktree checkout belongs to
-record_file() {
-    echo "$(git -C "$1" rev-parse --absolute-git-dir)/meta-worktree.json"
-}
-
 # Another workspace at $1, with its own clone of backend
 another_workspace() {
     mkdir -p "$1/.meta/plugins"

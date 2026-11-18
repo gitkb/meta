@@ -819,4 +819,14 @@ mod tests {
         assert!(v.get("dirty").is_none());
         assert!(v.get("modified_count").is_none());
     }
+
+    #[test]
+    fn json_workspace_row_has_description_and_commands() {
+        assert!(DESCRIPTION.contains("meta"));
+        let commands = serde_json::to_value(key_commands()).unwrap();
+        let commands = commands.as_array().unwrap();
+        assert!(!commands.is_empty());
+        assert!(commands[0].get("command").is_some());
+        assert!(commands[0].get("description").is_some());
+    }
 }

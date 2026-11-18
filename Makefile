@@ -63,9 +63,6 @@ install-hooks:
 release: 
 	cargo build --release
 
-rm-meta:
-	rm -rf meta
-
 run: 
 	cargo run
 
@@ -74,15 +71,6 @@ run:
 test:
 	cargo build --workspace --bins --examples
 	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo nextest run --workspace
-
-test-meta-git-clone: rm-meta
-	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo run --release --bin meta -- git clone git@github.com:mateodelnorte/meta.git
-
-test-meta-git-clone-depth-1-recursive: rm-meta
-	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo run --release --bin meta -- -r git clone git@github.com:mateodelnorte/meta.git --depth 1
-
-test-meta-git-clone-parallel-recursive: rm-meta
-	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) cargo run --release --bin meta -- -r git clone git@github.com:mateodelnorte/meta.git --parallel 4
 
 # Parallel jobs - defaults to CPU count
 # Override with JOBS=N, or disable with JOBS=1
@@ -109,10 +97,6 @@ endif
 bats:
 	bats $(BATS_FLAGS) $(if $(FILE),$(wildcard tests/*$(FILE)*.bats),tests/)
 
-integration-test:
-	cargo build -p meta
-	RUST_BACKTRACE=$(RUST_BACKTRACE) RUST_LOG=$(RUST_LOG) META_CLI_PATH=target/debug/meta CARGO_BIN_EXE_meta=target/debug/meta cargo nextest run --workspace
-
 # By package name, so it still matches after a version bump since the install
 uninstall:
 	@packages=$$(python3 scripts/programs.py packages) && for package in $$packages; do \
@@ -120,4 +104,4 @@ uninstall:
 	done
 	@$(call remove_old_copies,$$HOME/.meta/plugins,$(CARGO_BIN))
 
-.PHONY: build-all install install-all uninstall clean install-hooks build run test bats release integration-test
+.PHONY: build-all install install-all uninstall clean install-hooks build run test bats release

@@ -1516,9 +1516,8 @@ fn unrecognized_command_error(
 /// An "orphan" is a nested meta repo that isn't tracked by its parent meta config.
 /// This helps users understand why recursive operations might not find their nested repos.
 fn check_and_warn_orphan() {
-    let current_dir = match std::env::current_dir() {
-        Ok(d) => d,
-        Err(_) => return,
+    let Ok(current_dir) = std::env::current_dir() else {
+        return;
     };
 
     // inside a set, or where that can't be told (the command reports why)
@@ -1531,17 +1530,16 @@ fn check_and_warn_orphan() {
         return;
     };
 
-    let meta_dir = match config_path.parent() {
-        Some(p) => p.to_path_buf(),
-        None => return,
+    let Some(meta_dir) = config_path.parent() else {
+        return;
     };
 
     // Check if this meta repo is orphaned (not tracked by parent)
     // A set's checkout is meta's own, not a repo its parent forgot to list
-    if !matches!(config::set_source(&meta_dir), Ok(None)) {
+    if !matches!(config::set_source(meta_dir), Ok(None)) {
         return;
     }
-    if let Some(warning) = config::check_orphan_status(&meta_dir) {
+    if let Some(warning) = config::check_orphan_status(meta_dir) {
         meta_plugin::out::warn(format!(
             "This meta repo is not tracked by its parent.\n  \
              Current: {}\n  Parent:  {}\n\n  \

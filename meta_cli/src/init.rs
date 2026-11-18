@@ -47,6 +47,15 @@ const SKILLS: &[(&str, &str)] = &[
 /// `.agents/skills`, `.claude/skills` by Claude Code.
 const AGENT_SKILL_DIRS: &[&str] = &[".agents/skills", ".claude/skills"];
 
+/// Where meta's skills are, under the home folder (or the workspace),
+/// joined by component so a link target uses the platform's separator.
+fn tool_dir() -> PathBuf {
+    Path::new(".meta").join("skills")
+}
+
+/// The file that marks a skill folder meta copied where it couldn't link.
+const MARKER: &str = ".meta-skill-copy";
+
 /// Skills folders an older meta also linked into; `--update` and `--force`
 /// remove the links (and marked copies) it made there.
 const OLD_AGENT_SKILL_DIRS: &[&str] = &[
@@ -155,12 +164,12 @@ impl Init {
         Ok(())
     }
 
-    fn remove_owned(&self, link: &Path, marker: &str) -> Result<()> {
+    fn remove_owned(&self, link: &Path) -> Result<()> {
         if self.mode.is_preview() {
             outln!("  would replace {}", escape_path(link))?;
             return Ok(());
         }
-        remove_owned(link, marker)
+        remove_owned(link)
     }
 
     /// Link `link` to `target` with `make_link`; where that fails, copy the
@@ -170,7 +179,6 @@ impl Init {
         target: &Path,
         link: &Path,
         source: &Path,
-        marker: &str,
         make_link: impl Fn(&Path, &Path) -> std::io::Result<()>,
     ) -> Result<bool> {
         if self.mode.is_preview() {
@@ -196,7 +204,7 @@ impl Init {
             // Windows needs Developer Mode or admin rights for symlinks; some
             // filesystems have none. Copy instead.
             Err(err) => {
-                copy_skill(source, link, marker)?;
+                copy_skill(source, link)?;
                 outln!(
                     "{} {} (symlink failed: {err})",
                     "Copied".yellow(),
@@ -267,14 +275,7 @@ fn install_claude_integration_to(
 
     // --force or --update: overwrite; default: skip existing
     let overwrite_content = force || update;
-    let skills = install_skills(
-        home,
-        "meta",
-        SKILLS,
-        AGENT_SKILL_DIRS,
-        overwrite_content,
-        init,
-    )?;
+    let skills = install_skills(home, overwrite_content, init)?;
     let mut installed = skills.written;
     let mut skipped = skills.skipped;
     let local = workspace.is_some_and(|workspace| same_dir(home, workspace));
@@ -284,10 +285,10 @@ fn install_claude_integration_to(
         skipped += remove_old_files(&claude_dir.join("skills"), "", overwrite_content, init)?;
         skipped += remove_old_files(&claude_dir.join("rules"), "rules/", overwrite_content, init)?;
         if overwrite_content {
-            workspace_skills(home, workspace, "meta", SKILLS, true, init)?;
+            workspace_skills(home, workspace, true, init)?;
         }
     } else if let Some(workspace) = workspace {
-        also_local = workspace_skills(home, workspace, "meta", SKILLS, false, init)?;
+        also_local = workspace_skills(home, workspace, false, init)?;
     }
 
     // --update leaves settings untouched; --force uses the same merge as default.
@@ -444,7 +445,7 @@ fn remove_local_skills(home: &Path, workspace: &Path, init: &Init) -> Result<()>
     let before = removals(workspace)?;
     remove_old_files(&claude_dir.join("skills"), "", true, init)?;
     remove_old_files(&claude_dir.join("rules"), "rules/", true, init)?;
-    workspace_skills(home, workspace, "meta", SKILLS, true, init)?;
+    workspace_skills(home, workspace, true, init)?;
     if init.mode.is_preview() {
         outln!("[DRY RUN] Nothing was removed.")?;
         return Ok(());
@@ -500,27 +501,18 @@ fn removals(workspace: &Path) -> Result<usize> {
 }
 
 /// Meta's skills in `workspace`, where `--local` or an older meta installed
-/// them: its links in every agent folder and each `.<tool>/skills/<name>/SKILL.md`
+/// them: its links in every agent folder and each `.meta/skills/<name>/SKILL.md`
 /// that is byte for byte one meta wrote. With `remove` they are removed, and a
 /// skill file changed since is kept with its links, and named; otherwise they
 /// are counted. Where the workspace's skills are the home ones (`--local`, a
 /// `.meta.yaml` in the home folder, a skills folder linked to the home one),
 /// only an older meta's links in other agents' folders are its to remove.
 /// How many it removed or counted.
-fn workspace_skills(
-    home: &Path,
-    workspace: &Path,
-    tool: &str,
-    skills: &[(&str, &str)],
-    remove: bool,
-    init: &Init,
-) -> Result<usize> {
-    let tool_dir = PathBuf::from(format!(".{tool}")).join("skills");
-    let marker = format!(".{tool}-skill-copy");
+fn workspace_skills(home: &Path, workspace: &Path, remove: bool, init: &Init) -> Result<usize> {
     let real_root = fs::canonicalize(workspace)
         .with_context(|| format!("Failed to resolve {}", escape_path(workspace)))?;
     let is_home =
-        same_dir(home, workspace) || same_dir(&home.join(&tool_dir), &workspace.join(&tool_dir));
+        same_dir(home, workspace) || same_dir(&home.join(tool_dir()), &workspace.join(tool_dir()));
     // (folder, whether agents still read it: an edited skill keeps its links there)
     let agent_dirs = OLD_AGENT_SKILL_DIRS.iter().map(|dir| (dir, false)).chain(
         AGENT_SKILL_DIRS
@@ -530,8 +522,8 @@ fn workspace_skills(
     );
     let mut found = 0;
     let mut kept = Vec::new();
-    for (name, _) in skills.iter().filter(|_| !is_home && remove) {
-        let path = workspace.join(&tool_dir).join(name).join("SKILL.md");
+    for (name, _) in SKILLS.iter().filter(|_| !is_home && remove) {
+        let path = workspace.join(tool_dir()).join(name).join("SKILL.md");
         if path.exists() && !shipped(&format!("{name}/SKILL.md"), &blob_id(workspace, &path)?) {
             outln!(
                 "{} {} (changed since meta wrote it; delete it once its changes are kept \
@@ -547,16 +539,16 @@ fn workspace_skills(
         if !skills_dir.is_dir() {
             continue;
         }
-        let target_dir = link_target(&skills_dir, agent_dir, &real_root, &tool_dir)?;
+        let target_dir = link_target(&skills_dir, agent_dir, &real_root)?;
         let mut removed = false;
-        for (name, _) in skills
+        for (name, _) in SKILLS
             .iter()
             .filter(|(name, _)| !(read && kept.contains(name)))
         {
             let link = skills_dir.join(name);
-            let owned = match skill_entry(&link, &target_dir.join(name), &marker) {
+            let owned = match skill_entry(&link, &target_dir.join(name)) {
                 SkillEntry::Linked => false,
-                SkillEntry::Owned if copy_is_meta_s(workspace, &tool_dir, name, &link)? => true,
+                SkillEntry::Owned if copy_is_meta_s(workspace, name, &link)? => true,
                 SkillEntry::Owned if remove => {
                     outln!(
                         "{} {} (a copy meta made, changed since; delete it once its changes \
@@ -573,7 +565,7 @@ fn workspace_skills(
                 continue;
             }
             match owned {
-                true => init.remove_owned(&link, &marker)?,
+                true => init.remove_owned(&link)?,
                 false => init.remove_link(&link)?,
             }
             removed = true;
@@ -587,11 +579,11 @@ fn workspace_skills(
             }
         }
     }
-    for (name, _) in skills
+    for (name, _) in SKILLS
         .iter()
         .filter(|(name, _)| !is_home && !kept.contains(name))
     {
-        let dir = workspace.join(&tool_dir).join(name);
+        let dir = workspace.join(tool_dir()).join(name);
         let path = dir.join("SKILL.md");
         if !path.exists() {
             continue;
@@ -607,8 +599,8 @@ fn workspace_skills(
     }
     // the folders meta made, once empty
     if remove && !is_home && !init.mode.is_preview() {
-        let _ = fs::remove_dir(workspace.join(&tool_dir));
-        let _ = fs::remove_dir(workspace.join(format!(".{tool}")));
+        let _ = fs::remove_dir(workspace.join(tool_dir()));
+        let _ = fs::remove_dir(workspace.join(".meta"));
     }
     Ok(found)
 }
@@ -703,9 +695,9 @@ fn remove_old_files(dir: &Path, prefix: &str, overwrite: bool, init: &Init) -> R
 /// What [`install_skills`] did.
 #[derive(Default)]
 struct SkillsReport {
-    /// `SKILL.md` files written into the tool's folder
+    /// `SKILL.md` files written into meta's folder
     written: usize,
-    /// Existing entries of the tool's own left alone, which `overwrite`
+    /// Existing entries of meta's own left alone, which `overwrite`
     /// would refresh
     skipped: usize,
     /// Skill folders linked (or copied) into agent folders
@@ -717,64 +709,45 @@ struct SkillsReport {
 /// State of a skill entry in an agent skills folder.
 enum SkillEntry {
     Missing,
-    /// The tool's own link
+    /// Meta's own link
     Linked,
-    /// Something the tool wrote that is not its link: a marked copy, or the plain
+    /// Something meta wrote that is not its link: a marked copy, or the plain
     /// file git checks the link out as with `core.symlinks=false`
     Owned,
     /// Anything else belongs to the user or another tool
     Foreign,
 }
 
-/// Install `skills` (name, `SKILL.md` content) as `.<tool>/skills/<name>/SKILL.md` under
-/// `root` and link each into the agent skills folders, as atc and git-kb do:
-/// `.claude/skills/<name> -> ../../.<tool>/skills/<name>`.
+/// Install [`SKILLS`] as `.meta/skills/<name>/SKILL.md` under `root` and link
+/// each into the [`AGENT_SKILL_DIRS`], as atc and git-kb do:
+/// `.claude/skills/<name> -> ../../.meta/skills/<name>`.
 ///
-/// Without `overwrite`, existing files and folders are kept. With it, the tool's files
+/// Without `overwrite`, existing files and folders are kept. With it, meta's files
 /// are rewritten and its own entries in agent folders are replaced by links.
 /// Foreign entries (a file, folder or link meta didn't make) are left alone.
 /// The folders on the way are followed wherever links put them.
 /// Where a symlink can't be made (e.g. Windows without Developer Mode), the skill folder is
-/// copied instead, with a `.<tool>-skill-copy` marker so later runs know it is theirs.
-fn install_skills(
-    root: &Path,
-    tool: &str,
-    skills: &[(&str, &str)],
-    agent_dirs: &[&str],
-    overwrite: bool,
-    init: &Init,
-) -> Result<SkillsReport> {
-    install_skills_with(
-        root,
-        tool,
-        skills,
-        agent_dirs,
-        overwrite,
-        init,
-        |target, link| symlink_dir(target, link),
-    )
+/// copied instead, with a [`MARKER`] file so later runs know it is theirs.
+fn install_skills(root: &Path, overwrite: bool, init: &Init) -> Result<SkillsReport> {
+    install_skills_with(root, overwrite, init, |target, link| {
+        symlink_dir(target, link)
+    })
 }
 
 /// [`install_skills`], making links with `make_link(target, link)`.
 fn install_skills_with(
     root: &Path,
-    tool: &str,
-    skills: &[(&str, &str)],
-    agent_dirs: &[&str],
     overwrite: bool,
     init: &Init,
     make_link: impl Fn(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<SkillsReport> {
     let verbose = init.verbose;
     let mut report = SkillsReport::default();
-    let tool_dir = PathBuf::from(format!(".{tool}")).join("skills");
-    let marker = format!(".{tool}-skill-copy");
     let real_root = fs::canonicalize(root)
         .with_context(|| format!("Failed to resolve {}", escape_path(root)))?;
 
-    for (name, content) in skills {
-        let rel = tool_dir.join(name).join("SKILL.md");
-        let path = root.join(&rel);
+    for (name, content) in SKILLS {
+        let path = root.join(tool_dir()).join(name).join("SKILL.md");
         if path.exists() && !overwrite {
             outln!(
                 "{} {} (already exists)",
@@ -795,19 +768,19 @@ fn install_skills_with(
             )?;
             continue;
         }
-        init.create_dir_all(&root.join(tool_dir.join(name)))?;
+        init.create_dir_all(&root.join(tool_dir()).join(name))?;
         init.write_file(&path, content)?;
         report.written += 1;
     }
 
-    for agent_dir in agent_dirs {
+    for agent_dir in AGENT_SKILL_DIRS {
         let skills_dir = root.join(agent_dir);
         init.create_dir_all(&skills_dir)?;
-        let target_dir = link_target(&skills_dir, agent_dir, &real_root, &tool_dir)?;
-        for (name, _) in skills {
+        let target_dir = link_target(&skills_dir, agent_dir, &real_root)?;
+        for (name, _) in SKILLS {
             let link = skills_dir.join(name);
             let target = target_dir.join(name);
-            match skill_entry(&link, &target, &marker) {
+            match skill_entry(&link, &target) {
                 SkillEntry::Missing => {}
                 SkillEntry::Linked => {
                     if verbose {
@@ -818,9 +791,7 @@ fn install_skills_with(
                 // a marked copy is replaced only when nothing in it is the
                 // user's: it holds the text it was copied from, or a version
                 // meta shipped
-                SkillEntry::Owned
-                    if overwrite && !copy_is_meta_s(root, &tool_dir, name, &link)? =>
-                {
+                SkillEntry::Owned if overwrite && !copy_is_meta_s(root, name, &link)? => {
                     outln!(
                         "{} {} (a copy meta made, changed since; to get a link instead, move it \
                          away and run `meta init skills --update`)",
@@ -829,7 +800,7 @@ fn install_skills_with(
                     )?;
                     continue;
                 }
-                SkillEntry::Owned if overwrite => init.remove_owned(&link, &marker)?,
+                SkillEntry::Owned if overwrite => init.remove_owned(&link)?,
                 SkillEntry::Owned => {
                     outln!("Skipped {} (already exists)", escape_path(&link))?;
                     report.skipped += 1;
@@ -837,15 +808,15 @@ fn install_skills_with(
                 }
                 SkillEntry::Foreign => {
                     outln!(
-                        "{} {} (not created by {tool}, left alone)",
+                        "{} {} (not created by meta, left alone)",
                         "Skipped".yellow(),
                         escape_path(&link)
                     )?;
                     continue;
                 }
             }
-            let source = root.join(tool_dir.join(name)).join("SKILL.md");
-            if init.link_skill(&target, &link, &source, &marker, &make_link)? {
+            let source = root.join(tool_dir()).join(name).join("SKILL.md");
+            if init.link_skill(&target, &link, &source, &make_link)? {
                 report.copied += 1;
             }
             report.placed += 1;
@@ -855,39 +826,34 @@ fn install_skills_with(
     Ok(report)
 }
 
-/// Where the links in `skills_dir` (`<root>/<agent_dir>`) lead: the tool's
+/// Where the links in `skills_dir` (`<root>/<agent_dir>`) lead: meta's
 /// skills folder, relative (portable) where the folder is where it says,
 /// and by the real root where links put it elsewhere.
-fn link_target(
-    skills_dir: &Path,
-    agent_dir: &str,
-    real_root: &Path,
-    tool_dir: &Path,
-) -> Result<PathBuf> {
+fn link_target(skills_dir: &Path, agent_dir: &str, real_root: &Path) -> Result<PathBuf> {
     let moved = skills_dir.is_dir()
         && fs::canonicalize(skills_dir)
             .with_context(|| format!("Failed to resolve {}", escape_path(skills_dir)))?
             != real_root.join(agent_dir);
     Ok(match moved {
-        true => real_root.join(tool_dir),
+        true => real_root.join(tool_dir()),
         false => Path::new(agent_dir)
             .components()
             .map(|_| Path::new(".."))
             .collect::<PathBuf>()
-            .join(tool_dir),
+            .join(tool_dir()),
     })
 }
 
 /// Whether the skill copy at `link` (a folder meta marked, or git's link
 /// placeholder file) holds nothing but meta's: the `SKILL.md` it was copied
-/// from (`<root>/<tool_dir>/<name>/SKILL.md`), or a version meta shipped.
-fn copy_is_meta_s(root: &Path, tool_dir: &Path, name: &str, link: &Path) -> Result<bool> {
+/// from (`<root>/.meta/skills/<name>/SKILL.md`), or a version meta shipped.
+fn copy_is_meta_s(root: &Path, name: &str, link: &Path) -> Result<bool> {
     let copy = link.join("SKILL.md");
     if !fs::symlink_metadata(&copy).is_ok_and(|m| m.is_file()) {
         return Ok(true); // a placeholder file holds only meta's link target
     }
     let text = fs::read(&copy).with_context(|| format!("Failed to read {}", escape_path(&copy)))?;
-    let source = fs::read(root.join(tool_dir).join(name).join("SKILL.md")).ok();
+    let source = fs::read(root.join(tool_dir()).join(name).join("SKILL.md")).ok();
     if source.as_deref() == Some(text.as_slice()) {
         return Ok(true);
     }
@@ -898,7 +864,7 @@ fn copy_is_meta_s(root: &Path, tool_dir: &Path, name: &str, link: &Path) -> Resu
 }
 
 /// Classify the entry at `link` without following it.
-fn skill_entry(link: &Path, target: &Path, marker: &str) -> SkillEntry {
+fn skill_entry(link: &Path, target: &Path) -> SkillEntry {
     let Ok(meta) = fs::symlink_metadata(link) else {
         return SkillEntry::Missing;
     };
@@ -930,20 +896,20 @@ fn skill_entry(link: &Path, target: &Path, marker: &str) -> SkillEntry {
         names.push(entry.file_name());
     }
     names.sort();
-    if names == [marker, "SKILL.md"] {
+    if names == [MARKER, "SKILL.md"] {
         SkillEntry::Owned
     } else {
         SkillEntry::Foreign
     }
 }
 
-/// Remove an [`SkillEntry::Owned`] entry: only the files the tool wrote, then the folder.
-fn remove_owned(link: &Path, marker: &str) -> Result<()> {
+/// Remove an [`SkillEntry::Owned`] entry: only the files meta wrote, then the folder.
+fn remove_owned(link: &Path) -> Result<()> {
     if fs::symlink_metadata(link).is_ok_and(|m| m.is_file()) {
         return fs::remove_file(link)
             .with_context(|| format!("Failed to remove {}", escape_path(link)));
     }
-    for file in ["SKILL.md", marker] {
+    for file in ["SKILL.md", MARKER] {
         let path = link.join(file);
         if path.exists() {
             fs::remove_file(&path)
@@ -954,13 +920,13 @@ fn remove_owned(link: &Path, marker: &str) -> Result<()> {
 }
 
 /// Copy the skill folder of `source` (a `SKILL.md`) to `dir` where it can't be linked,
-/// marking the copy as the tool's own.
-fn copy_skill(source: &Path, dir: &Path, marker: &str) -> Result<()> {
+/// marking the copy as meta's own.
+fn copy_skill(source: &Path, dir: &Path) -> Result<()> {
     fs::create_dir(dir).with_context(|| format!("Failed to create {}", escape_path(dir)))?;
     fs::copy(source, dir.join("SKILL.md"))
         .with_context(|| format!("Failed to copy {}", escape_path(source)))?;
     fs::write(
-        dir.join(marker),
+        dir.join(MARKER),
         "Copied by `meta init skills` because a symlink could not be created here.\n\
          `meta init skills --update` refreshes it.\n",
     )
@@ -1980,16 +1946,7 @@ mod tests {
         fs::write(&skill, "committed skill").unwrap();
         let fail = |_: &Path, _: &Path| Err(std::io::Error::other("no links"));
 
-        let report = install_skills_with(
-            dir.path(),
-            "meta",
-            SKILLS,
-            AGENT_SKILL_DIRS,
-            false,
-            &RUN,
-            fail,
-        )
-        .unwrap();
+        let report = install_skills_with(dir.path(), false, &RUN, fail).unwrap();
 
         assert_eq!(report.copied, 2 * SKILLS.len());
         let copy = dir.path().join(".claude/skills/meta-git");
@@ -2000,16 +1957,7 @@ mod tests {
         assert!(copy.join(".meta-skill-copy").is_file());
 
         // Later runs know the copies are meta's: kept by default, replaced with --update
-        let report = install_skills_with(
-            dir.path(),
-            "meta",
-            SKILLS,
-            AGENT_SKILL_DIRS,
-            false,
-            &RUN,
-            fail,
-        )
-        .unwrap();
+        let report = install_skills_with(dir.path(), false, &RUN, fail).unwrap();
         assert_eq!(report.copied, 0);
         install_claude_integration_to(dir.path(), Some(dir.path()), false, true, &RUN).unwrap();
         assert_linked(dir.path(), ".claude/skills", "meta-git");
@@ -2019,18 +1967,7 @@ mod tests {
     fn update_keeps_a_skill_copy_the_user_edited() {
         let dir = tempdir().unwrap();
         let fail = |_: &Path, _: &Path| Err(std::io::Error::other("no links"));
-        let install = |overwrite| {
-            install_skills_with(
-                dir.path(),
-                "meta",
-                SKILLS,
-                AGENT_SKILL_DIRS,
-                overwrite,
-                &RUN,
-                fail,
-            )
-            .unwrap()
-        };
+        let install = |overwrite| install_skills_with(dir.path(), overwrite, &RUN, fail).unwrap();
         install(false);
         let copy = dir.path().join(".claude/skills/meta-workspace/SKILL.md");
         let mine = format!("{}\nmy own note\n", fs::read_to_string(&copy).unwrap());

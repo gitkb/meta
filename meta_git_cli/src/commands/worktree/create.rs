@@ -461,16 +461,8 @@ pub(crate) fn handle_create(
     }
 
     // What was made is reported first: a failing hook doesn't undo it
-    let hook = fire_post_create(
-        name,
-        &wt_dir,
-        &output.repos,
-        ephemeral,
-        ttl_seconds,
-        &output.custom,
-        here.worktree,
-    )
-    .or_else(|e| ctx.warn_or_bail(format!("{e:#}")));
+    let hook =
+        fire_post_create(&output, here.worktree).or_else(|e| ctx.warn_or_bail(format!("{e:#}")));
     records.push(ProjectResult::about_workspace(&output).at(&wt_dir));
     if let Err(e) = hook {
         // the set is made: an ephemeral one is the next prune's

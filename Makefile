@@ -1,8 +1,6 @@
 RUST_BACKTRACE ?= full
 RUST_LOG ?= trace
 
-include Makefile.context.mk
-
 .DEFAULT_GOAL := build-all
 
 build-all: build

@@ -1170,20 +1170,16 @@ fn handle_plugin_command(
             let installer = create_installer(*local)?;
             let location = format_plugin_location(*local);
 
-            // Detect input type and route accordingly
-            if name.starts_with("http://") || name.starts_with("https://") {
-                // Direct URL install
-                let plugin_name = installer.install_from_url(name)?;
-                record(serde_json::json!({"installed": plugin_name, "to": location}));
-                if !json {
-                    outln!(
-                        "Successfully installed {} to {location}",
-                        escape(&plugin_name)
-                    )?;
-                }
+            // Detect input type and route accordingly: a direct URL, GitHub
+            // shorthand (user/repo[@version]), else the registry
+            let direct = if name.starts_with("http://") || name.starts_with("https://") {
+                Some(installer.install_from_url(name)?)
             } else if let Some(shorthand) = GitHubShorthand::parse(name) {
-                // GitHub shorthand install (user/repo[@version])
-                let plugin_name = installer.install_from_github(&shorthand)?;
+                Some(installer.install_from_github(&shorthand)?)
+            } else {
+                None
+            };
+            if let Some(plugin_name) = direct {
                 record(serde_json::json!({"installed": plugin_name, "to": location}));
                 if !json {
                     outln!(

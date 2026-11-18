@@ -51,13 +51,12 @@ remove_old_copies = dir="$(1)"; keep="$(2)"; \
 # Uses git rev-parse to handle worktrees and submodules correctly
 install-hooks:
 	@echo "Installing git hooks..."
-	@chmod +x .githooks/commit-msg
-	@chmod +x .githooks/pre-commit
-	@chmod +x .githooks/pre-push
-	@mkdir -p "$$(git rev-parse --git-path hooks)"
-	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/commit-msg" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/commit-msg"
-	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/pre-commit" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/pre-commit"
-	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/pre-push" "$$hooks_dir")" && ln -sf "$$rel" "$$hooks_dir/pre-push"
+	@for hook in commit-msg pre-commit pre-push; do chmod +x ".githooks/$$hook" || exit 1; done
+	@hooks_dir="$$(git rev-parse --git-path hooks)" && root="$$(git rev-parse --show-toplevel)" && mkdir -p "$$hooks_dir" && \
+		for hook in commit-msg pre-commit pre-push; do \
+			rel="$$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$$root/.githooks/$$hook" "$$hooks_dir")" && \
+			ln -sf "$$rel" "$$hooks_dir/$$hook" || exit 1; \
+		done
 	@echo "Commit-msg, pre-commit, and pre-push hooks installed."
 
 release: 

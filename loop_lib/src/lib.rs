@@ -20,8 +20,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// A write to command-output stdout failed (meta's one stdout error).
-pub use meta_plugin::out::StdoutError;
+use meta_plugin::out::StdoutError;
 
 /// What loop runs and how: the `.looprc` file (JSON), and what meta builds for
 /// the commands it runs. A key the file leaves out takes its default; a key
@@ -411,11 +410,7 @@ fn shell_aliases() -> Result<BTreeMap<String, String>> {
 /// `--add-aliases-to-global-looprc`: your shell's aliases into the `aliases`
 /// of `~/.looprc`, after a preview and your yes. Its other keys stay as they
 /// are; a file loop can't read is reported, not replaced.
-pub fn import_aliases(dry_run: bool) -> Result<()> {
-    if dry_run {
-        outln!("[DRY RUN] Would add your shell's aliases to ~/.looprc")?;
-        return Ok(());
-    }
+pub fn import_aliases() -> Result<()> {
     let path = global_looprc().context("HOME is not set")?;
     let cancelled = || anyhow::anyhow!("Cancelled: nothing written to {}", escape_path(&path));
 
@@ -568,15 +563,11 @@ fn build_command(
 
 fn failed_result(dir: &Path, command: String, stderr: String) -> CommandResult {
     CommandResult {
-        project: None,
         success: false,
         ran: false,
-        argv: Vec::new(),
         exit_code: Some(-1),
-        signal: None,
         directory: dir.to_path_buf(),
         command,
-        stdout: Vec::new(),
         stderr: stderr.into_bytes(),
         ..CommandResult::default()
     }
@@ -792,7 +783,6 @@ fn capture_in_directory(
         Ok(output) => {
             let (exit_code, signal) = exit_of(output.status);
             CommandResult {
-                project: None,
                 success: accepted(exit_code, signal, ok_codes),
                 ran: true,
                 exit_code,
@@ -894,8 +884,6 @@ pub struct Outcome {
     /// The tip the text output ended with (an option of meta's typed
     /// after the command, when every command rejected it)
     pub tip: Option<String>,
-    /// Whether the commands were only shown (`--dry-run`)
-    pub dry_run: bool,
     /// The summary is a line of its own when output is silenced
     silent: bool,
 }
@@ -1154,7 +1142,6 @@ pub fn run_commands(config: &LoopConfig, commands: &[DirCommand]) -> Result<Outc
     let outcome = |results, tip| Outcome {
         results,
         tip,
-        dry_run: config.dry_run,
         silent: config.silent,
     };
     if commands.is_empty() {

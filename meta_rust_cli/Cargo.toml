@@ -11,10 +11,6 @@ description = "Rust plugin for meta CLI to run any cargo command across Rust rep
 name = "meta-cargo"
 path = "src/main.rs"
 
-[lib]
-name = "meta_rust_cli"
-path = "src/lib.rs"
-
 [dependencies]
 meta_plugin.workspace = true
 indexmap.workspace = true

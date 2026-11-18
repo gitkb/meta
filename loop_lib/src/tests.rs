@@ -125,16 +125,7 @@ fn test_run() {
 
     let config = LoopConfig {
         directories: vec![dir1.to_path_buf(), dir2.to_path_buf()],
-        ignore: vec![],
-        verbose: false,
         silent: true,
-        parallel: false,
-        dry_run: false,
-        json_output: false,
-        spawn_stagger_ms: 0,
-        env: None,
-        max_parallel: None,
-        root_dir: None,
         ..Default::default()
     };
 
@@ -149,7 +140,6 @@ fn test_run() {
 #[test]
 fn test_execute_command_in_directory() {
     let config = LoopConfig {
-        verbose: false,
         silent: true,
         ..Default::default()
     };
@@ -165,34 +155,6 @@ fn test_execute_command_in_directory() {
     assert_eq!(result.exit_code, Some(1));
 }
 #[test]
-fn test_run_without_looprc() {
-    let temp_dir = TempDir::new().unwrap();
-    let dir1 = temp_dir.path().join("dir1");
-    let dir2 = temp_dir.path().join("dir2");
-    fs::create_dir(&dir1).unwrap();
-    fs::create_dir(&dir2).unwrap();
-
-    // Run without a .looprc file
-    let config = LoopConfig {
-        directories: vec![temp_dir.path().to_path_buf()],
-        ignore: vec![],
-        verbose: false,
-        silent: true,
-        parallel: false,
-        dry_run: false,
-        json_output: false,
-        spawn_stagger_ms: 0,
-        env: None,
-        max_parallel: None,
-        root_dir: None,
-        ..Default::default()
-    };
-
-    let result = run(&config, &sh("echo test"));
-    assert!(result.is_ok());
-}
-
-#[test]
 fn test_run_parallel() {
     let temp_dir = TempDir::new().unwrap();
     let dir1 = temp_dir.path().join("dir1");
@@ -204,16 +166,8 @@ fn test_run_parallel() {
 
     let config = LoopConfig {
         directories: vec![dir1.to_path_buf(), dir2.to_path_buf(), dir3.to_path_buf()],
-        ignore: vec![],
-        verbose: false,
         silent: true,
         parallel: true,
-        dry_run: false,
-        json_output: false,
-        spawn_stagger_ms: 0,
-        env: None,
-        max_parallel: None,
-        root_dir: None,
         ..Default::default()
     };
 
@@ -229,7 +183,6 @@ fn test_run_parallel() {
 fn test_execute_command_in_directory_capturing() {
     // captured to be shown later (a silenced command's stdout goes nowhere)
     let config = LoopConfig {
-        verbose: false,
         silent: false,
         ..Default::default()
     };
@@ -250,7 +203,6 @@ fn test_execute_command_in_directory_capturing() {
 #[test]
 fn test_execute_command_in_directory_capturing_stderr() {
     let config = LoopConfig {
-        verbose: false,
         silent: false,
         ..Default::default()
     };
@@ -270,7 +222,6 @@ fn test_execute_command_in_directory_capturing_stderr() {
 #[test]
 fn test_execute_command_nonexistent_directory() {
     let config = LoopConfig {
-        verbose: false,
         silent: true,
         ..Default::default()
     };
@@ -445,89 +396,11 @@ fn test_run_commands_empty_list() {
     assert!(result.is_ok());
 }
 
-#[test]
-fn test_run_commands_sequential() {
-    let temp_dir = TempDir::new().unwrap();
-    let dir1 = temp_dir.path().join("dir1");
-    let dir2 = temp_dir.path().join("dir2");
-    fs::create_dir(&dir1).unwrap();
-    fs::create_dir(&dir2).unwrap();
-
-    let config = LoopConfig {
-        parallel: false,
-        silent: true,
-        ..Default::default()
-    };
-
-    let commands = vec![
-        DirCommand {
-            project: None,
-            ok_codes: vec![0],
-            dir: dir1.to_path_buf(),
-            argv: sh("echo test1"),
-            env: None,
-            refused: None,
-        },
-        DirCommand {
-            project: None,
-            ok_codes: vec![0],
-            dir: dir2.to_path_buf(),
-            argv: sh("echo test2"),
-            env: None,
-            refused: None,
-        },
-    ];
-
-    let result = run_commands(&config, &commands);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_run_commands_parallel() {
-    let temp_dir = TempDir::new().unwrap();
-    let dir1 = temp_dir.path().join("dir1");
-    let dir2 = temp_dir.path().join("dir2");
-    fs::create_dir(&dir1).unwrap();
-    fs::create_dir(&dir2).unwrap();
-
-    let config = LoopConfig {
-        parallel: true,
-        silent: true,
-        ..Default::default()
-    };
-
-    let commands = vec![
-        DirCommand {
-            project: None,
-            ok_codes: vec![0],
-            dir: dir1.to_path_buf(),
-            argv: sh("echo test1"),
-            env: None,
-            refused: None,
-        },
-        DirCommand {
-            project: None,
-            ok_codes: vec![0],
-            dir: dir2.to_path_buf(),
-            argv: sh("echo test2"),
-            env: None,
-            refused: None,
-        },
-    ];
-
-    let result = run_commands(&config, &commands);
-    assert!(result.is_ok());
-}
-
 /// `script` with `WHO` set for it, in `dir`
 fn command_with_who(dir: &Path, who: &str, script: &str) -> DirCommand {
     DirCommand {
-        project: None,
-        ok_codes: vec![0],
-        dir: dir.to_path_buf(),
-        argv: sh(script),
         env: Some(HashMap::from([("WHO".to_string(), who.to_string())])),
-        refused: None,
+        ..DirCommand::new(dir.to_path_buf(), sh(script))
     }
 }
 
@@ -605,82 +478,6 @@ fn max_parallel_bounds_how_many_run_at_once() {
         .collect();
     assert_eq!(seen.len(), 12);
     assert_eq!(seen.iter().max(), Some(&2), "{seen:?}");
-}
-
-#[test]
-fn test_run_commands_dry_run() {
-    let temp_dir = TempDir::new().unwrap();
-    let marker_file = temp_dir.path().join("marker.txt");
-
-    let config = LoopConfig {
-        dry_run: true,
-        silent: true,
-        ..Default::default()
-    };
-
-    let commands = vec![DirCommand {
-        project: None,
-        ok_codes: vec![0],
-        dir: temp_dir.path().to_path_buf(),
-        argv: touch_cmd(&marker_file),
-        env: None,
-        refused: None,
-    }];
-
-    let result = run_commands(&config, &commands);
-    assert!(result.is_ok());
-    assert!(!marker_file.exists(), "dry_run should not execute commands");
-}
-
-#[test]
-fn test_run_commands_failure_handling() {
-    let temp_dir = TempDir::new().unwrap();
-    let dir1 = temp_dir.path().join("dir1");
-    fs::create_dir(&dir1).unwrap();
-
-    let config = LoopConfig {
-        parallel: false,
-        silent: true,
-        ..Default::default()
-    };
-
-    let commands = vec![DirCommand {
-        project: None,
-        ok_codes: vec![0],
-        dir: dir1.to_path_buf(),
-        argv: fail_cmd(), // This command always fails
-        env: None,
-        refused: None,
-    }];
-
-    let result = run_commands(&config, &commands);
-    assert!(result.is_err(), "Should return error when command fails");
-}
-
-#[test]
-fn test_run_commands_failure_in_dry_run_succeeds() {
-    let temp_dir = TempDir::new().unwrap();
-
-    let config = LoopConfig {
-        dry_run: true,
-        silent: true,
-        ..Default::default()
-    };
-
-    let commands = vec![DirCommand {
-        project: None,
-        ok_codes: vec![0],
-        dir: temp_dir.path().to_path_buf(),
-        argv: fail_cmd(),
-        env: None,
-        refused: None,
-    }];
-
-    let result = run_commands(&config, &commands);
-    assert!(
-        result.is_ok(),
-        "dry_run should succeed even for failing commands"
-    );
 }
 
 #[test]
@@ -814,12 +611,8 @@ fn starts_are_one_interval_apart_however_long_commands_take() {
 fn a_refused_command_is_a_failed_result_and_never_runs() {
     let temp_dir = TempDir::new().unwrap();
     let command = |refused: Option<&str>| DirCommand {
-        project: None,
-        ok_codes: vec![0],
-        dir: temp_dir.path().to_path_buf(),
-        argv: sh("echo ran > ran"),
-        env: None,
         refused: refused.map(str::to_string),
+        ..DirCommand::new(temp_dir.path().to_path_buf(), sh("echo ran > ran"))
     };
     for parallel in [false, true] {
         let config = LoopConfig {

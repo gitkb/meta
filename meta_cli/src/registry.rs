@@ -142,21 +142,6 @@ impl PluginManifest {
         meta_core::store::write_atomic(manifest_path, self)
             .with_context(|| format!("Failed to write manifest to {}", escape_path(manifest_path)))
     }
-
-    /// Add or update a plugin entry
-    pub fn add_plugin(&mut self, name: String, entry: PluginManifestEntry) {
-        self.plugins.insert(name, entry);
-    }
-
-    /// Remove a plugin entry
-    pub fn remove_plugin(&mut self, name: &str) -> Option<PluginManifestEntry> {
-        self.plugins.remove(name)
-    }
-
-    /// Get a plugin entry
-    pub fn get_plugin(&self, name: &str) -> Option<&PluginManifestEntry> {
-        self.plugins.get(name)
-    }
 }
 
 /// Plugin metadata from the registry
@@ -724,7 +709,7 @@ impl PluginInstaller {
             platform: RegistryClient::current_platform(),
         };
 
-        manifest.add_plugin(plugin_name.to_string(), entry);
+        manifest.plugins.insert(plugin_name.to_string(), entry);
         self.save_manifest(&manifest)?;
 
         debug!("Recorded {} in manifest", plugin_name);
@@ -1125,7 +1110,7 @@ impl PluginInstaller {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if is_plugin_binary(name) {
                         // Get manifest data if available
-                        let manifest_entry = manifest.get_plugin(name);
+                        let manifest_entry = manifest.plugins.get(name);
 
                         plugins.push(PluginInfo {
                             name: name.to_string(),
@@ -1164,7 +1149,7 @@ impl PluginInstaller {
                 .with_context(|| format!("Failed to remove {}", escape_path(&plugin_path)))?;
 
             // Remove from manifest
-            manifest.remove_plugin(&plugin_name);
+            manifest.plugins.remove(&plugin_name);
             self.save_manifest(&manifest)?;
 
             info!("Uninstalled {}", plugin_name);
@@ -1203,7 +1188,8 @@ impl PluginInstaller {
             |why: &str| anyhow::anyhow!("Cannot check {} for updates: {why}", escape(&plugin_name));
 
         let entry = manifest
-            .get_plugin(&plugin_name)
+            .plugins
+            .get(&plugin_name)
             .ok_or_else(|| cannot("it was not installed with meta plugin install"))?;
         // the source isn't shown: a URL may hold a credential
         if GitHubShorthand::parse(&entry.source).is_none() {
@@ -1229,7 +1215,8 @@ impl PluginInstaller {
         let plugin_name = ensure_plugin_prefix(plugin_name);
 
         let entry = manifest
-            .get_plugin(&plugin_name)
+            .plugins
+            .get(&plugin_name)
             .ok_or_else(|| anyhow::anyhow!("Plugin {} not installed", escape(&plugin_name)))?;
 
         // Parse source as GitHub shorthand
@@ -2123,7 +2110,7 @@ mod tests {
         let manifest_path = dir.path().join(".manifest.json");
 
         let mut manifest = PluginManifest::default();
-        manifest.add_plugin(
+        manifest.plugins.insert(
             "meta-test".to_string(),
             PluginManifestEntry {
                 source: "test-user/meta-test".to_string(),
@@ -2141,7 +2128,7 @@ mod tests {
         let loaded = PluginManifest::load(&manifest_path).unwrap();
         assert_eq!(loaded.plugins.len(), 1);
 
-        let entry = loaded.get_plugin("meta-test").unwrap();
+        let entry = loaded.plugins.get("meta-test").unwrap();
         assert_eq!(entry.source, "test-user/meta-test");
         assert_eq!(entry.version.as_deref(), Some("v1.0.0"));
     }
@@ -2151,7 +2138,7 @@ mod tests {
         let mut manifest = PluginManifest::default();
 
         // Add plugin
-        manifest.add_plugin(
+        manifest.plugins.insert(
             "meta-test".to_string(),
             PluginManifestEntry {
                 source: "test-user/meta-test".to_string(),
@@ -2163,12 +2150,12 @@ mod tests {
         assert_eq!(manifest.plugins.len(), 1);
 
         // Remove plugin
-        let removed = manifest.remove_plugin("meta-test");
+        let removed = manifest.plugins.remove("meta-test");
         assert!(removed.is_some());
         assert_eq!(manifest.plugins.len(), 0);
 
         // Remove non-existent plugin
-        let removed = manifest.remove_plugin("meta-nonexistent");
+        let removed = manifest.plugins.remove("meta-nonexistent");
         assert!(removed.is_none());
     }
 
@@ -2230,7 +2217,7 @@ mod tests {
 
         // Create manifest
         let mut manifest = PluginManifest::default();
-        manifest.add_plugin(
+        manifest.plugins.insert(
             "meta-test".to_string(),
             PluginManifestEntry {
                 source: "test-user/meta-test".to_string(),

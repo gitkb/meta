@@ -288,11 +288,6 @@ fn key_commands() -> Vec<CommandRef> {
 // ── Dependency Graph ────────────────────────────────────
 
 fn build_dependency_map(projects: &[ProjectInfo]) -> Option<HashMap<String, Vec<String>>> {
-    let has_deps = projects.iter().any(|p| !p.depends_on.is_empty());
-    if !has_deps {
-        return None;
-    }
-
     let dep_projects: Vec<_> = projects.iter().map(|p| p.clone().into()).collect();
     let graph = DependencyGraph::build(dep_projects);
 
@@ -307,11 +302,7 @@ fn build_dependency_map(projects: &[ProjectInfo]) -> Option<HashMap<String, Vec<
         }
     }
 
-    if map.is_empty() {
-        None
-    } else {
-        Some(map)
-    }
+    (!map.is_empty()).then_some(map)
 }
 
 // ── Markdown Formatting ─────────────────────────────────

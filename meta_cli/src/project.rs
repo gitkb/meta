@@ -423,7 +423,7 @@ fn list(target: &Target, start: &Path, selected_config: bool) -> Result<Found> {
 
     let worktree = target.set.as_ref().map(|set| {
         // the workspace the set was made from, as its owner file says
-        let canonical_root = config::set_source(&set.dir)
+        let canonical_root = meta_core::worktree::primary_dir(&set.dir)
             .ok()
             .flatten()
             .unwrap_or_else(|| config.dir.clone());

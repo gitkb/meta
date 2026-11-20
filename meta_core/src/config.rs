@@ -454,15 +454,15 @@ pub fn meta_config_at(
 /// whose own project list names the one before. A meta directory its parent
 /// doesn't list (or whose parent's config can't be read) is a workspace of
 /// its own. In a worktree set meta made, the set's own meta directories come
-/// first, then those of the checkout it stands for ([`set_source`]) and its
-/// workspace.
+/// first, then those of the checkout it stands for
+/// ([`crate::worktree::primary_dir`]) and its workspace.
 pub fn workspace_meta_dirs(meta_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut dirs = listed_chain(meta_dir);
     // A checkout in a set meta made goes on with the checkout it stands for
     let mut source = None;
     for dir in &dirs {
-        source =
-            set_source(dir)?.filter(|source| matches!(find_meta_config_in(source), Ok(Some(_))));
+        source = crate::worktree::primary_dir(dir)?
+            .filter(|source| matches!(find_meta_config_in(source), Ok(Some(_))));
         if source.is_some() {
             break;
         }
@@ -519,15 +519,6 @@ fn lists(config: &Path, dir: &Path) -> bool {
             .canonicalize()
             .is_ok_and(|path| path == dir)
     })
-}
-
-/// Where the folder `dir`, in a worktree set, stands in the workspace the
-/// set was made from, as the set's owner file says (see
-/// [`crate::worktree::primary_dir`]); from a set made inside another set, on
-/// to that one's workspace. A folder in no set, or in a set without an owner
-/// file (made by hand), stands for itself, as a second workspace can.
-pub fn set_source(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
-    crate::worktree::primary_dir(dir)
 }
 
 /// Nearest directory holding a config file: where `--local` plugins go.
@@ -2415,7 +2406,10 @@ mod tests {
         let member = set.join("beta");
         std::fs::create_dir_all(&member).unwrap();
         meta_plugin::sets::create(&set, "git", &top).unwrap();
-        assert_eq!(set_source(&member).unwrap(), Some(top.join("beta")));
+        assert_eq!(
+            crate::worktree::primary_dir(&member).unwrap(),
+            Some(top.join("beta"))
+        );
     }
 
     #[test]

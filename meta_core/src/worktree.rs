@@ -99,7 +99,8 @@ pub fn set_config(set_dir: &Path, config_name: Option<&PathBuf>) -> Result<Optio
 /// Where `dir`, inside a worktree set, is in the workspace the set was made
 /// from (and from a set made inside another set, on to that one's
 /// workspace), by the sets' owner files. None outside a set, and for a set
-/// without an owner file.
+/// without an owner file (made by hand): such a folder stands for itself,
+/// as a second workspace can.
 pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
     let mut place = dir.to_path_buf();
     let mut seen = Vec::new();

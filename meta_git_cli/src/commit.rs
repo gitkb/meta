@@ -222,11 +222,18 @@ fn commit_each(repos: &[Staged], commits: &[(String, String)]) -> anyhow::Result
     let mut failed = 0;
 
     for (repo_name, message) in commits {
-        // Find the path for this repo
-        let path = repos
-            .iter()
-            .find(|repo| repo.name == *repo_name)
-            .map_or(Path::new(repo_name), |repo| repo.dir.as_path());
+        // a section commits only in a repo it was written for, never in
+        // a folder its (edited) header happens to name
+        let Some(repo) = repos.iter().find(|repo| repo.name == *repo_name) else {
+            outln!(
+                "{} No repo with staged changes is named {}; the message was:\n{}",
+                "✗".red(),
+                escape(repo_name).to_string().bold(),
+                escape_lines(message)
+            )?;
+            failed += 1;
+            continue;
+        };
 
         outln!(
             "{} Committing {}...",
@@ -234,7 +241,7 @@ fn commit_each(repos: &[Staged], commits: &[(String, String)]) -> anyhow::Result
             escape(repo_name).to_string().bold()
         )?;
 
-        let status = meta_core::git::git(path)
+        let status = meta_core::git::git(&repo.dir)
             .args(["commit", "-m", message])
             .status();
 

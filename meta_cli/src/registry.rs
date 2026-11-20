@@ -1188,8 +1188,9 @@ impl PluginInstaller {
             .then_some((current_version, latest_version)))
     }
 
-    /// Update a plugin to the latest version
-    pub fn update_plugin(&self, plugin_name: &str) -> Result<String> {
+    /// Update a plugin to `latest`, the release [`Self::check_update`]
+    /// found: installed by that tag, also over a version the install named
+    pub fn update_plugin(&self, plugin_name: &str, latest: &str) -> Result<String> {
         let manifest = self.load_manifest()?;
         let plugin_name = ensure_plugin_prefix(plugin_name);
 
@@ -1202,9 +1203,13 @@ impl PluginInstaller {
         let shorthand = GitHubShorthand::parse(&entry.source).ok_or_else(|| {
             anyhow::anyhow!("Cannot update plugin: source is not a GitHub shorthand")
         })?;
+        let shorthand = GitHubShorthand {
+            version: Some(latest.to_string()),
+            ..shorthand
+        };
 
         info!(
-            "Updating {} from {} to latest",
+            "Updating {} from {} to {latest}",
             plugin_name,
             entry.version.as_deref().unwrap_or("unknown")
         );

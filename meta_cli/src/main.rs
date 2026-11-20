@@ -1327,7 +1327,7 @@ fn handle_plugin_command(
                                 )?;
                             }
                         } else {
-                            let updated = installer.update_plugin(plugin_name)?;
+                            let updated = installer.update_plugin(plugin_name, &latest)?;
                             if !json {
                                 outln!(
                                     "Successfully updated {} from {} to {} in {}",
@@ -1394,7 +1394,7 @@ fn handle_plugin_command(
                     }
                 } else {
                     for (name, current, latest) in &updates_available {
-                        match installer.update_plugin(name) {
+                        match installer.update_plugin(name, latest) {
                             Ok(_) => {
                                 record(serde_json::json!({
                                     "name": name, "version": current, "latest": latest, "updated": true,

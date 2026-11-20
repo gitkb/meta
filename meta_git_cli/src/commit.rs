@@ -423,6 +423,33 @@ mod tests {
         }
     }
 
+    // macOS and Windows file systems refuse a name that isn't UTF-8
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_project_folder_that_is_not_utf8_is_committed_in_as_named() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let sandbox = meta_plugin::testing::isolated!();
+        let project = sandbox
+            .work()
+            .join(std::ffi::OsStr::from_bytes(b"app-\xff"));
+        std::fs::create_dir(&project).unwrap();
+        sandbox.git(&project, &["init", "-q"]);
+        std::fs::write(project.join("new"), "x").unwrap();
+        sandbox.git(&project, &["add", "new"]);
+        let args = CommitArgs {
+            edit: false,
+            message: Some("save".to_string()),
+        };
+        let result = execute_git_commit(args, &request(&[project.clone()]));
+        let steps = match result.unwrap().answer {
+            Answer::Plan(plan) => plan.steps,
+            _ => Vec::new(),
+        };
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].dir, project);
+    }
+
     #[test]
     fn a_staged_file_read_git_fails_is_an_error_not_nothing_staged() {
         let sandbox = meta_plugin::testing::isolated!();

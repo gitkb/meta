@@ -713,4 +713,20 @@ the only commit message
             assert_eq!(is_remote_command(&argv(line)), remote, "{line}");
         }
     }
+
+    #[test]
+    fn remote_commands_are_found_after_gits_own_options() {
+        for (line, remote) in [
+            ("git -c x.y=z fetch", true),
+            ("git --no-pager pull", true),
+            ("git -C sub push", true),
+            ("git --git-dir .git --work-tree . fetch", true),
+            ("git --git-dir=.git ls-remote", true),
+            ("git -c remote.origin.url=fetch status", false),
+            ("git -C fetch status", false),
+            ("git --no-pager log", false),
+        ] {
+            assert_eq!(is_remote_command(&argv(line)), remote, "{line}");
+        }
+    }
 }

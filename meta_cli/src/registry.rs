@@ -925,8 +925,10 @@ impl PluginInstaller {
         aliases
     }
 
-    /// Extract a downloaded archive, validate its plugins and record each
-    /// in the manifest with `source` and `version`
+    /// Extract a downloaded archive into a folder of its own, validate its
+    /// plugins there, then move each into place and record it in the
+    /// manifest with `source` and `version`: an archive that fails leaves
+    /// the plugins already here as they were.
     fn install_archive(
         &self,
         url: &str,
@@ -935,9 +937,19 @@ impl PluginInstaller {
         version: Option<String>,
     ) -> Result<Vec<String>> {
         self.ensure_plugins_dir()?;
-        let installed = self.extract_archive(url, bytes)?;
-        self.validate_installed(&installed)?;
+        let staging = tempfile::Builder::new()
+            .prefix(".staging-")
+            .tempdir_in(&self.plugins_dir)?;
+        let staged = PluginInstaller {
+            plugins_dir: staging.path().to_path_buf(),
+            scope: self.scope.clone(),
+        };
+        let installed = staged.extract_archive(url, bytes)?;
+        staged.validate_installed(&installed)?;
         for plugin_name in &installed {
+            let path = self.plugins_dir.join(plugin_name);
+            std::fs::rename(staging.path().join(plugin_name), &path)
+                .with_context(|| format!("Cannot install plugin {}", escape_path(&path)))?;
             self.record_installation(plugin_name, source.clone(), version.clone())?;
         }
         Ok(installed)
@@ -1214,13 +1226,8 @@ impl PluginInstaller {
             entry.version.as_deref().unwrap_or("unknown")
         );
 
-        // Uninstall current version
-        self.uninstall(&plugin_name)?;
-
-        // Install latest version
-        let installed_name = self.install_from_github(&shorthand)?;
-
-        Ok(installed_name)
+        // installed over the current one, which stays if it fails
+        self.install_from_github(&shorthand)
     }
 }
 

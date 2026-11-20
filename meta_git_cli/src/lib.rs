@@ -750,8 +750,28 @@ the only commit message
             ("git -c remote.origin.url=fetch status", false),
             ("git -C fetch status", false),
             ("git --no-pager log", false),
+            // options that make git exit before running any command
+            ("git --exec-path fetch", false),
+            ("git --version fetch", false),
+            ("git --list-cmds=main fetch", false),
+            ("git --exec-path=/usr/lib/git-core fetch", true),
         ] {
             assert_eq!(is_remote_command(&argv(line)), remote, "{line}");
         }
+    }
+
+    #[test]
+    fn an_ssh_command_git_is_given_is_left_to_git() {
+        // meta's GIT_SSH_COMMAND would win over the user's own
+        for line in [
+            "git -c core.sshCommand=my-ssh fetch",
+            "git -c CORE.SSHCOMMAND=ssh pull",
+            "git --config-env core.sshCommand=SSH_CMD push",
+            "git --config-env=core.sshCommand=SSH_CMD fetch",
+        ] {
+            assert!(!is_remote_command(&argv(line)), "{line}");
+        }
+        // a setting of the command's own, not git's
+        assert!(is_remote_command(&argv("git fetch -c core.sshCommand=x")));
     }
 }

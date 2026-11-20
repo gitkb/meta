@@ -109,6 +109,27 @@ EOF
     cmp "$PLUGINS_DIR/.manifest.json" "$BATS_TEST_TMPDIR/before.json"
 }
 
+@test "update installs the latest release over a pinned one, and says so" {
+    serve
+    release gitkb/meta-x/releases/download/v1.0.0/meta-x-any.tar.gz 1.0.0 one
+    release gitkb/meta-x/releases/download/v2.0.0/meta-x-any.tar.gz 2.0.0 two
+    release gitkb/meta-x/releases/latest/download/meta-x-any.tar.gz 2.0.0 two
+    mkdir -p "$RELEASES/api/v3/repos/gitkb/meta-x/releases"
+    echo '{"tag_name": "v2.0.0"}' > "$RELEASES/api/v3/repos/gitkb/meta-x/releases/latest"
+    run "$META_BIN" plugin install gitkb/meta-x@v1.0.0
+    [ "$status" -eq 0 ]
+    run "$META_BIN" plugin update x
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"from v1.0.0 to v2.0.0"* ]]
+    run "$PLUGINS_DIR/meta-x" --meta-plugin-info
+    [[ "$output" == *'"version":"2.0.0"'* ]]
+    [ "$(jq -r '.plugins["meta-x"].version' "$PLUGINS_DIR/.manifest.json")" = v2.0.0 ]
+    # the next check finds nothing newer
+    run "$META_BIN" plugin update x --check
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"already up to date"* ]]
+}
+
 @test "an archive URL with a query string installs" {
     serve
     release direct/meta-x.tar.gz 1.0.0 direct

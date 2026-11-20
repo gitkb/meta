@@ -950,6 +950,22 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_commit_ish_is_named_escaped() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let tmp = sandbox.repo(&sandbox.work());
+        let forged = "nope\u{1b}[2J\nFORGED";
+        let err = worktree_start(&tmp, "topic", Some(forged), &|| Ok(None))
+            .map(|_| ())
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("not found"), "{message}");
+        assert!(
+            !message.contains('\u{1b}') && !message.contains('\n'),
+            "{message:?}"
+        );
+    }
+
+    #[test]
     fn diff_handles_unrelated_histories_but_rejects_a_bad_ref() {
         let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.repo(&sandbox.work());

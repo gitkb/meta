@@ -29,10 +29,11 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The profile folder containing the host `meta` built for these tests.
-/// Cargo used `deps/` for test executables before 1.100 and now uses
-/// `build/<package>/<hash>/out/`. Search only executable ancestors, never
-/// PATH, so an installed meta cannot stand in for the workspace build.
+/// The profile folder containing the host `meta` built for these tests:
+/// the test executable's own, which holds its `deps/` (cargo before 1.100)
+/// or `build/<package>/<hash>/out/` (since). Only that folder, never one
+/// above it or PATH, so a stale or installed meta cannot stand in for the
+/// workspace build.
 #[expect(
     clippy::expect_used,
     reason = "test setup needs the workspace binaries"
@@ -40,7 +41,7 @@ use std::process::Command;
 pub fn built_program_dir() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
     built_program_dir_from(&exe).expect(
-        "No built meta above the test executable: build the workspace first (cargo build --workspace --bins --examples)"
+        "No built meta in the test executable's profile folder: build the workspace first (cargo build --workspace --bins --examples)"
     )
 }
 
@@ -50,11 +51,23 @@ pub fn built_meta() -> PathBuf {
 }
 
 fn built_program_dir_from(exe: &Path) -> Option<PathBuf> {
+    let named = |n: usize, name: &str| {
+        exe.ancestors()
+            .nth(n)
+            .is_some_and(|dir| dir.file_name() == Some(OsStr::new(name)))
+    };
+    let profile = if named(1, "deps") {
+        exe.ancestors().nth(2)
+    } else if named(1, "out") && named(4, "build") {
+        exe.ancestors().nth(5)
+    } else {
+        None
+    }?;
     let program = format!("meta{}", std::env::consts::EXE_SUFFIX);
-    exe.ancestors()
-        .skip(1)
-        .find(|dir| dir.join(&program).is_file())
-        .map(Path::to_path_buf)
+    profile
+        .join(program)
+        .is_file()
+        .then(|| profile.to_path_buf())
 }
 
 /// The identity commits in a sandbox are made as.
@@ -523,6 +536,21 @@ mod tests {
                 "{layout}"
             );
         }
+    }
+
+    #[test]
+    fn built_program_dir_never_takes_a_meta_from_above_the_profile() {
+        // a stale `target/meta` (or any meta higher up) is not this build's
+        let sandbox = super::Sandbox::new();
+        let target = sandbox.work().join("target");
+        let exe = target.join("debug/deps/unit-test");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(
+            target.join(format!("meta{}", std::env::consts::EXE_SUFFIX)),
+            b"stale",
+        )
+        .unwrap();
+        assert_eq!(super::built_program_dir_from(&exe), None);
     }
 
     use super::*;

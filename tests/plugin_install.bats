@@ -38,19 +38,29 @@ serve() {
     printf 'registries:\n  - %s/registry\n' "$SERVER" > "$META_DATA_DIR/config.yaml"
 }
 
+# plugin FILE VERSION SAYS: at FILE, a plugin of VERSION (its word from
+# FILE's name) whose `meta <word> run` prints SAYS
+plugin() {
+    local word
+    word="$(basename "$1")"
+    word="${word#meta-}"
+    mkdir -p "$(dirname "$1")"
+    cat > "$1" <<EOF
+#!/bin/sh
+case "\$1" in
+    --meta-plugin-info) echo '{"name":"$word","version":"$2","commands":["$word run"]}' ;;
+    --meta-plugin-exec) echo '{"message":"$3"}' > "\$META_RESPONSE" ;;
+esac
+EOF
+    chmod +x "$1"
+}
+
 # release PATH VERSION SAYS: a tar.gz at RELEASES/PATH holding a plugin
 # meta-x of VERSION whose `meta x run` prints SAYS
 release() {
     local build="$BATS_TEST_TMPDIR/build-$RANDOM"
-    mkdir -p "$build" "$(dirname "$RELEASES/$1")"
-    cat > "$build/meta-x" <<EOF
-#!/bin/sh
-case "\$1" in
-    --meta-plugin-info) echo '{"name":"x","version":"$2","commands":["x run"]}' ;;
-    --meta-plugin-exec) echo '{"message":"$3"}' > "\$META_RESPONSE" ;;
-esac
-EOF
-    chmod +x "$build/meta-x"
+    mkdir -p "$(dirname "$RELEASES/$1")"
+    plugin "$build/meta-x" "$2" "$3"
     tar -czf "$RELEASES/$1" -C "$build" meta-x
 }
 
@@ -159,6 +169,42 @@ EOF
         [[ "$output" == *one* ]]
         cmp "$PLUGINS_DIR/.manifest.json" "$BATS_TEST_TMPDIR/before.json"
     done
+}
+
+@test "an update whose release holds another plugin changes nothing" {
+    serve
+    release gitkb/meta-x/releases/download/v1.0.0/meta-x-any.tar.gz 1.0.0 one
+    plugin "$BATS_TEST_TMPDIR/other/meta-y" 2.0.0 why
+    mkdir -p "$RELEASES/gitkb/meta-x/releases/download/v2.0.0" "$RELEASES/api/v3/repos/gitkb/meta-x/releases"
+    tar -czf "$RELEASES/gitkb/meta-x/releases/download/v2.0.0/meta-x-any.tar.gz" -C "$BATS_TEST_TMPDIR/other" meta-y
+    echo '{"tag_name": "v2.0.0"}' > "$RELEASES/api/v3/repos/gitkb/meta-x/releases/latest"
+    run "$META_BIN" plugin install gitkb/meta-x@v1.0.0
+    [ "$status" -eq 0 ]
+    cp "$PLUGINS_DIR/.manifest.json" "$BATS_TEST_TMPDIR/before.json"
+    run "$META_BIN" plugin update x
+    [ "$status" -ne 0 ]
+    [[ "$output" == *meta-x* ]]
+    [ ! -e "$PLUGINS_DIR/meta-y" ]
+    printf 'projects: {}\n' > .meta.yaml
+    run "$META_BIN" x run
+    [[ "$output" == *one* ]]
+    cmp "$PLUGINS_DIR/.manifest.json" "$BATS_TEST_TMPDIR/before.json"
+}
+
+@test "an update installs the release tag it reported, spelled as reported" {
+    serve
+    release gitkb/meta-x/releases/download/v1.0.0/meta-x-any.tar.gz 1.0.0 one
+    # another tag than the latest release's v2.0.0
+    release gitkb/meta-x/releases/download/2.0.0/meta-x-any.tar.gz 2.0.0 two
+    mkdir -p "$RELEASES/api/v3/repos/gitkb/meta-x/releases"
+    echo '{"tag_name": "v2.0.0"}' > "$RELEASES/api/v3/repos/gitkb/meta-x/releases/latest"
+    run "$META_BIN" plugin install gitkb/meta-x@v1.0.0
+    [ "$status" -eq 0 ]
+    run "$META_BIN" plugin update x
+    [ "$status" -ne 0 ]
+    printf 'projects: {}\n' > .meta.yaml
+    run "$META_BIN" x run
+    [[ "$output" == *one* ]]
 }
 
 @test "an archive URL with a query string installs" {

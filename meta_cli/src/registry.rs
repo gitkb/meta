@@ -41,17 +41,37 @@ fn normalize_version(version: &str) -> &str {
     version.strip_prefix('v').unwrap_or(version)
 }
 
-/// Compare two version strings
-///
-/// Returns true if new_version is newer than current_version.
-/// Simple lexicographic comparison after normalizing (removing 'v' prefix).
+/// Whether `new` is a later version than `current` (each with or without a
+/// `v`): their dot-separated numbers compared as numbers, and a version
+/// before its pre-release (`1.0.0-beta` is before `1.0.0`). A version that
+/// isn't numbers is compared as text.
 pub fn is_newer_version(current: &str, new: &str) -> bool {
-    let current = normalize_version(current);
-    let new = normalize_version(new);
-
-    // Simple string comparison works for most semver cases
-    // e.g., "1.0.0" < "1.1.0" < "2.0.0"
-    new > current
+    /// The numbers of a version, and its pre-release; `None` if a part
+    /// isn't a number
+    fn parts(version: &str) -> Option<(Vec<u64>, Option<&str>)> {
+        let version = normalize_version(version);
+        let version = version.split_once('+').map_or(version, |(v, _)| v);
+        let (release, pre) = match version.split_once('-') {
+            Some((release, pre)) => (release, Some(pre)),
+            None => (version, None),
+        };
+        let numbers = release
+            .split('.')
+            .map(|n| n.parse().ok())
+            .collect::<Option<_>>()?;
+        Some((numbers, pre))
+    }
+    match (parts(current), parts(new)) {
+        (Some((current, current_pre)), Some((new, new_pre))) => {
+            new.cmp(&current)
+                .then_with(|| match (current_pre, new_pre) {
+                    (Some(current), Some(new)) => new.cmp(current),
+                    (current, new) => current.is_some().cmp(&new.is_some()),
+                })
+                == std::cmp::Ordering::Greater
+        }
+        _ => normalize_version(new) > normalize_version(current),
+    }
 }
 
 /// The plugin a tar entry installs: its file name, when that is `meta-*`

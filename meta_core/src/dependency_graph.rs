@@ -105,6 +105,8 @@ pub fn in_tree(
 pub struct DependencyGraph {
     /// Map from project name to project info
     projects: HashMap<String, ProjectDependencies>,
+    /// Project names in the order they were listed
+    order: Vec<String>,
     /// Map from provided item to the projects that provide it, in order
     providers: HashMap<String, Vec<String>>,
     /// Adjacency list: project -> projects it depends on
@@ -161,6 +163,7 @@ impl DependencyGraph {
     pub fn build(projects: Vec<ProjectDependencies>) -> Self {
         let mut graph = DependencyGraph {
             projects: HashMap::new(),
+            order: Vec::new(),
             providers: HashMap::new(),
             dependencies: HashMap::new(),
             dependents: HashMap::new(),
@@ -170,7 +173,13 @@ impl DependencyGraph {
         // First pass: register all projects and who provides what (the
         // last project providing an item is the one used)
         for project in &projects {
-            graph.projects.insert(project.name.clone(), project.clone());
+            if graph
+                .projects
+                .insert(project.name.clone(), project.clone())
+                .is_none()
+            {
+                graph.order.push(project.name.clone());
+            }
             for provided in &project.provides {
                 graph
                     .providers
@@ -355,10 +364,11 @@ impl DependencyGraph {
             in_degree.insert(project.as_str(), deps.len());
         }
 
-        // Start with nodes that have no dependencies (in_degree = 0)
-        for (name, &degree) in &in_degree {
-            if degree == 0 {
-                queue.push_back(*name);
+        // Start with nodes that have no dependencies (in_degree = 0), in
+        // the order they were listed: a HashMap's order differs per run
+        for name in &self.order {
+            if in_degree.get(name.as_str()) == Some(&0) {
+                queue.push_back(name.as_str());
             }
         }
 
@@ -519,6 +529,23 @@ mod tests {
         // api-service should come before web-app
         let web_pos = order.iter().position(|&n| n == "web-app").unwrap();
         assert!(api_pos < web_pos);
+    }
+
+    #[test]
+    fn independent_projects_run_in_the_order_they_are_listed() {
+        let names = ["h", "c", "f", "a", "g", "b", "e", "d"];
+        // each build has its own hash order: the listed order must win in all
+        for _ in 0..20 {
+            let mut projects: Vec<_> = names.iter().map(|n| project(n, &[], &[])).collect();
+            // "z" waits for "a", "y" for "h": each still follows its dependency
+            projects.push(project("z", &[], &["a"]));
+            projects.push(project("y", &[], &["h"]));
+            let graph = DependencyGraph::build(projects);
+            assert_eq!(
+                graph.execution_order().unwrap(),
+                ["h", "c", "f", "a", "g", "b", "e", "d", "y", "z"]
+            );
+        }
     }
 
     #[test]

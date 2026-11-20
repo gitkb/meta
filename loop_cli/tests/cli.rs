@@ -72,6 +72,19 @@ fn an_exclusion_holds_for_directories_named_outright() {
 }
 
 #[test]
+fn silent_says_nothing_about_a_missing_directory() {
+    let ws = sandbox(&[]);
+    let said = |args: &[&str]| {
+        let out = run(&ws, &[args, &["-i", "nope", "--", "pwd"]].concat(), "");
+        assert!(!out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert!(said(&[]).contains("No directory found"));
+    let silent = said(&["-s"]);
+    assert!(!silent.contains("No directory found"), "{silent}");
+}
+
+#[test]
 fn an_empty_looprc_selects_what_no_looprc_does() {
     let ws = sandbox(&["a", ".git"]);
     let without = ran_in(&ws, &[]);

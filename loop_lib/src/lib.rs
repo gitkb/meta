@@ -612,16 +612,18 @@ fn execute_in_directory(
     ok_codes: &[i32],
 ) -> Result<CommandResult> {
     if !dir.exists() {
-        outln!("\nNo directory found for {}", escape_path(dir))?;
-        outln!(
-            "\n{}",
-            format!(
-                "✗ {}: No directory found. Command: {} (Exit code: 1)",
-                display_name(dir, config.root_dir.as_deref()),
-                escape(&display_command(argv)),
-            )
-            .red()
-        )?;
+        if !config.silent {
+            outln!("\nNo directory found for {}", escape_path(dir))?;
+            outln!(
+                "\n{}",
+                format!(
+                    "✗ {}: No directory found. Command: {} (Exit code: 1)",
+                    display_name(dir, config.root_dir.as_deref()),
+                    escape(&display_command(argv)),
+                )
+                .red()
+            )?;
+        }
         return Ok(CommandResult {
             exit_code: Some(1),
             ..failed_result(dir, display_command(argv), String::new())

@@ -378,6 +378,27 @@ mod tests {
         assert_eq!(urls, ["https://example.com/org/app.git"]);
     }
 
+    #[test]
+    fn a_rewrite_in_the_projects_own_config_counts() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let app = sandbox.repo(&sandbox.work().join("app"));
+        sandbox.git(
+            &app,
+            &[
+                "config",
+                "url.git@example.com:.insteadOf",
+                "https://example.com/",
+            ],
+        );
+        let urls = ssh_urls(&[meta_plugin::Project {
+            repo: Some("https://example.com/org/app.git".to_string()),
+            abs: app,
+            present: true,
+            ..meta_plugin::Project::default()
+        }]);
+        assert_eq!(urls.len(), 1, "the rewrite in app's .git/config was missed");
+    }
+
     #[cfg(unix)]
     #[test]
     fn sockets_dir_is_private() {

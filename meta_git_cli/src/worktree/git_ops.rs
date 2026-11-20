@@ -983,6 +983,24 @@ mod tests {
     }
 
     #[test]
+    fn a_diff_base_that_looks_like_an_option_is_a_bad_ref() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let tmp = sandbox.repo(&sandbox.work());
+        // git would take these for its own options: merge-base's `--all`
+        // and `--independent`, which then prints HEAD for a diff of nothing
+        for base in ["--all", "--independent"] {
+            let err = git_diff_stat(&tmp, base).unwrap_err();
+            let message = format!("{err:#}");
+            assert!(message.contains(base), "{message}");
+            assert!(
+                !message.contains("usage"),
+                "{base} read as an option: {message}"
+            );
+            assert!(git_diff_patch(&tmp, base).is_err(), "{base}");
+        }
+    }
+
+    #[test]
     fn a_failed_fetch_keeps_each_line_under_the_message() {
         let sandbox = meta_plugin::testing::isolated!();
         let tmp = sandbox.work();

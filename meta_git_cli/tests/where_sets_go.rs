@@ -47,9 +47,8 @@ fn every_place_has_one_folder_of_sets() {
         std::fs::create_dir_all(dir).unwrap();
     }
     // meta and meta-git as built (`cargo build --workspace --bins` first)
-    let bin = Path::new(env!("CARGO_BIN_EXE_meta-git")).parent().unwrap();
-    let meta = bin.join(format!("meta{}", std::env::consts::EXE_SUFFIX));
-    assert!(meta.is_file(), "{} is not built", meta.display());
+    let meta = meta_plugin::testing::built_meta();
+    let bin = meta.parent().unwrap();
     let path = std::env::var_os("PATH").unwrap_or_default();
     let path = std::env::join_paths(
         std::iter::once(bin.to_path_buf()).chain(std::env::split_paths(&path)),

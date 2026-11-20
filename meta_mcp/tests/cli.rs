@@ -146,7 +146,7 @@ fn call(
         dir,
         &[],
         &request.to_string(),
-        &[("META_EXE", &meta())],
+        &[("META_EXE", &meta_plugin::testing::built_meta())],
     );
     let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let text = reply["result"]["content"][0]["text"]
@@ -155,19 +155,6 @@ fn call(
     serde_json::from_str(text)
         .map_err(|e| format!("{e}: {reply}"))
         .unwrap()
-}
-
-/// The meta built beside meta-mcp (`cargo build --workspace --bins`), which
-/// its tools call.
-fn meta() -> std::path::PathBuf {
-    let meta = Path::new(env!("CARGO_BIN_EXE_meta-mcp"))
-        .with_file_name(format!("meta{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        meta.is_file(),
-        "{} is missing: build the workspace's binaries first",
-        meta.display()
-    );
-    meta
 }
 
 #[test]

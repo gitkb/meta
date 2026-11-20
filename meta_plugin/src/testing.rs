@@ -44,6 +44,11 @@ pub fn built_program_dir() -> PathBuf {
     )
 }
 
+/// The host `meta` built for these tests, in [`built_program_dir`].
+pub fn built_meta() -> PathBuf {
+    built_program_dir().join(format!("meta{}", std::env::consts::EXE_SUFFIX))
+}
+
 fn built_program_dir_from(exe: &Path) -> Option<PathBuf> {
     let program = format!("meta{}", std::env::consts::EXE_SUFFIX);
     exe.ancestors()

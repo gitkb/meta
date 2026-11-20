@@ -392,14 +392,10 @@ pub(crate) mod tests {
     /// profile folder), as meta would set `META_EXE` for it. Each
     /// test that reads a config runs in a process of its own (`isolated!`).
     pub(crate) fn use_built_meta() {
-        let meta = meta_plugin::testing::built_program_dir()
-            .join(format!("meta{}", std::env::consts::EXE_SUFFIX));
-        assert!(
-            meta.is_file(),
-            "{} is not built: cargo build --workspace --bins first",
-            meta.display()
+        std::env::set_var(
+            meta_plugin::client::EXE_VAR,
+            meta_plugin::testing::built_meta(),
         );
-        std::env::set_var(meta_plugin::client::EXE_VAR, meta);
     }
 
     fn member(root: &Path, path: &str, meta: bool) -> Project {

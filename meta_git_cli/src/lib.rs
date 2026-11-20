@@ -467,7 +467,7 @@ fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<
     if urls.is_empty() {
         return Ok(Response::plan(plan));
     }
-    match ssh::establish_ssh_masters(&urls) {
+    match ssh::establish_contacted(&urls) {
         ssh::SshMasters::OurSockets(ssh) => {
             for step in &mut plan.steps {
                 step.env.insert("GIT_SSH_COMMAND".to_string(), ssh.clone());

@@ -90,21 +90,24 @@ impl SshTarget {
     }
 }
 
-/// The distinct SSH remotes of `projects` (their `repo:` URLs): SSH as
-/// written, or once git's `url.<base>.insteadOf` rewrites apply.
+/// What git contacts for the remotes of `projects` (their `repo:` URLs)
+/// that it reaches over SSH, distinct, for [`establish_contacted`]: each
+/// URL after git's `url.<base>.insteadOf` rewrites, a cloned project's own
+/// config included.
 pub(crate) fn ssh_urls(projects: &[meta_plugin::Project]) -> Vec<RepoUrl> {
     let urls: BTreeSet<RepoUrl> = projects
         .iter()
-        .filter_map(|p| p.repo.as_deref())
-        .map(RepoUrl::from)
-        .collect();
-    urls.into_iter()
-        .filter(|repo| {
-            SshTarget::of(repo)
-                .or_else(|| SshTarget::of(&contacted(repo)))
-                .is_some()
+        .filter_map(|p| {
+            let dir = if p.present {
+                p.abs.clone()
+            } else {
+                std::env::temp_dir()
+            };
+            Some(contacted(&RepoUrl::from(p.repo.as_deref()?), &dir))
         })
-        .collect()
+        .filter(|url| SshTarget::of(url).is_some())
+        .collect();
+    urls.into_iter().collect()
 }
 
 /// Establish SSH ControlMaster connections for the SSH remotes among `urls`.
@@ -114,10 +117,16 @@ pub(crate) fn ssh_urls(projects: &[meta_plugin::Project]) -> Vec<RepoUrl> {
 /// - `SshMasters::UserManaged` if all hosts already have active masters
 /// - `SshMasters::Failed` if sockets dir couldn't be created or all connections failed
 pub fn establish_ssh_masters(urls: &[RepoUrl]) -> SshMasters {
-    let mut seen = BTreeSet::new();
     // what git will contact: a url.<base>.insteadOf rewrite (git@github.com:
     // to https://, say) leaves no SSH to share
-    let contacted: Vec<RepoUrl> = urls.iter().map(contacted).collect();
+    let dir = std::env::temp_dir();
+    let contacted: Vec<RepoUrl> = urls.iter().map(|url| contacted(url, &dir)).collect();
+    establish_contacted(&contacted)
+}
+
+/// [`establish_ssh_masters`] for the URLs git contacts, rewrites applied.
+pub(crate) fn establish_contacted(contacted: &[RepoUrl]) -> SshMasters {
+    let mut seen = BTreeSet::new();
     let targets: Vec<SshTarget> = contacted
         .iter()
         .filter_map(SshTarget::of)
@@ -218,16 +227,16 @@ pub fn establish_ssh_masters(urls: &[RepoUrl]) -> SshMasters {
     }
 }
 
-/// The URL git contacts for `url`, after its `url.<base>.insteadOf`
+/// The URL git contacts for `url` from `dir`, after its `url.<base>.insteadOf`
 /// rewrites (`git ls-remote --get-url` applies them without connecting);
 /// `url` itself where git can't say.
-fn contacted(url: &RepoUrl) -> RepoUrl {
-    let dir = std::env::temp_dir();
-    let out = meta_core::git::git(&dir)
-        .arg("ls-remote")
-        .arg("--get-url")
-        .arg(url.as_git_arg())
-        .output();
+fn contacted(url: &RepoUrl, dir: &Path) -> RepoUrl {
+    let out = meta_plugin::process::output(
+        meta_core::git::git(dir)
+            .arg("ls-remote")
+            .arg("--get-url")
+            .arg(url.as_git_arg()),
+    );
     match out {
         Ok(out) if out.status.success() => {
             let rewritten = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -375,7 +384,7 @@ mod tests {
             project("https://other.example/org/web.git"),
         ]);
         let urls: Vec<String> = urls.iter().map(ToString::to_string).collect();
-        assert_eq!(urls, ["https://example.com/org/app.git"]);
+        assert_eq!(urls, ["git@example.com:org/app.git"]);
     }
 
     #[test]

@@ -127,7 +127,7 @@ Join conditions with AND (in any case): `dirty:true AND tag:backend AND branch:m
 }
 ```
 
-`meta_execution_order` (`tag`) orders the projects so that dependencies come before their dependents, and projects that don't depend on each other in project-name order; a dependency cycle is an error:
+`meta_execution_order` (`tag`) orders the projects so that dependencies come before their dependents: the projects that depend on nothing start, in project-name order, and each other project follows once its dependencies are done; a dependency cycle is an error:
 
 ```json
 {

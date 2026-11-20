@@ -98,10 +98,13 @@ pub fn common_dir(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
             return Err(e).with_context(|| format!("Cannot inspect {}", escape_path(&dot_git)))
         }
     }
-    let output = crate::git::git(dir)
-        .args(["rev-parse", "--show-prefix", "--git-common-dir"])
-        .output()
-        .with_context(|| format!("Cannot run git in {}", escape_path(dir)))?;
+    // a child this program owns, as every other git meta runs
+    let output = meta_plugin::process::output(crate::git::git(dir).args([
+        "rev-parse",
+        "--show-prefix",
+        "--git-common-dir",
+    ]))
+    .with_context(|| format!("Cannot run git in {}", escape_path(dir)))?;
     anyhow::ensure!(
         output.status.success(),
         "git can't use its .git: {}",

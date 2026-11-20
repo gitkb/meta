@@ -772,6 +772,7 @@ impl PluginInstaller {
             &bytes,
             metadata.name.clone(),
             Some(metadata.version.clone()),
+            None,
         )?;
 
         info!(
@@ -790,14 +791,20 @@ impl PluginInstaller {
         info!("Downloading from: {}", url);
 
         let bytes = self.download(url)?;
-        first_installed(&self.install_archive(url, &bytes, url.to_string(), None)?)
+        first_installed(&self.install_archive(url, &bytes, url.to_string(), None, None)?)
     }
 
     /// Install a plugin from GitHub using shorthand syntax (user/repo[@version])
     ///
     /// Automatically discovers the correct platform binary from GitHub Releases
     /// by trying multiple naming conventions and formats.
-    pub fn install_from_github(&self, shorthand: &GitHubShorthand) -> Result<String> {
+    /// `update`, the plugin being updated: then only the release tag as
+    /// written is tried, and an archive without that plugin installs nothing.
+    pub fn install_from_github(
+        &self,
+        shorthand: &GitHubShorthand,
+        update: Option<&str>,
+    ) -> Result<String> {
         let platform = RegistryClient::current_platform();
 
         let latest = if shorthand.version.is_none() {
@@ -808,7 +815,7 @@ impl PluginInstaller {
         info!("Installing {shorthand}{latest} for {platform}");
 
         // Try to download with various URL patterns
-        let urls = self.construct_github_urls(&github().0, shorthand, &platform);
+        let urls = self.construct_github_urls(&github().0, shorthand, &platform, update.is_some());
 
         let mut last_error = None;
         for url in &urls {
@@ -821,6 +828,7 @@ impl PluginInstaller {
                         &bytes,
                         shorthand.to_string(),
                         shorthand.version.clone(),
+                        update,
                     )?);
                 }
                 Err(e) => {
@@ -834,20 +842,23 @@ impl PluginInstaller {
         Err(release_not_found(shorthand, urls.len(), last_error))
     }
 
-    /// Construct possible GitHub release URLs for a shorthand
+    /// Construct possible GitHub release URLs for a shorthand; `exact`: only
+    /// its version's tag as written, not also with or without a `v`
     fn construct_github_urls(
         &self,
         github: &str,
         shorthand: &GitHubShorthand,
         platform: &str,
+        exact: bool,
     ) -> Vec<String> {
         let mut urls = Vec::new();
         let base = format!("{github}/{}/{}/releases", shorthand.user, shorthand.repo);
 
         // Determine version component
         let version_paths = if let Some(version) = &shorthand.version {
-            // Try both with and without 'v' prefix
-            if let Some(bare) = version.strip_prefix('v') {
+            if exact {
+                vec![format!("download/{version}")]
+            } else if let Some(bare) = version.strip_prefix('v') {
                 // If version already has 'v', try with and without
                 vec![format!("download/{version}"), format!("download/{bare}")]
             } else {
@@ -935,6 +946,7 @@ impl PluginInstaller {
         bytes: &[u8],
         source: String,
         version: Option<String>,
+        required: Option<&str>,
     ) -> Result<Vec<String>> {
         self.ensure_plugins_dir()?;
         let staging = tempfile::Builder::new()
@@ -945,6 +957,14 @@ impl PluginInstaller {
             scope: self.scope.clone(),
         };
         let installed = staged.extract_archive(url, bytes)?;
+        if let Some(required) = required {
+            anyhow::ensure!(
+                installed.iter().any(|name| name == required),
+                "The archive {} holds no {}; nothing was installed",
+                escape(url),
+                escape(required)
+            );
+        }
         staged.validate_installed(&installed)?;
         for plugin_name in &installed {
             let path = self.plugins_dir.join(plugin_name);
@@ -1227,7 +1247,7 @@ impl PluginInstaller {
         );
 
         // installed over the current one, which stays if it fails
-        self.install_from_github(&shorthand)
+        self.install_from_github(&shorthand, Some(&plugin_name))
     }
 }
 
@@ -1611,6 +1631,7 @@ mod tests {
                     &zip_data,
                     String::new(),
                     None,
+                    None,
                 )
                 .unwrap_err();
             assert_eq!(error.to_string(), entry_error);
@@ -1915,8 +1936,12 @@ mod tests {
         };
 
         let shorthand = GitHubShorthand::parse("user/meta-docker@v1.0.0").unwrap();
-        let urls =
-            installer.construct_github_urls("https://github.com", &shorthand, "darwin-arm64");
+        let urls = installer.construct_github_urls(
+            "https://github.com",
+            &shorthand,
+            "darwin-arm64",
+            false,
+        );
 
         // Should contain versioned URLs
         assert!(urls.iter().any(|u| u.contains("download/v1.0.0")));
@@ -1943,7 +1968,8 @@ mod tests {
         };
 
         let shorthand = GitHubShorthand::parse("user/meta-docker").unwrap();
-        let urls = installer.construct_github_urls("https://github.com", &shorthand, "linux-x64");
+        let urls =
+            installer.construct_github_urls("https://github.com", &shorthand, "linux-x64", false);
 
         // Should use latest/download for unversioned
         assert!(urls.iter().any(|u| u.contains("latest/download")));
@@ -1960,7 +1986,8 @@ mod tests {
 
         // When repo doesn't have "meta-" prefix, both names would be the same
         let shorthand = GitHubShorthand::parse("user/docker").unwrap();
-        let urls = installer.construct_github_urls("https://github.com", &shorthand, "linux-x64");
+        let urls =
+            installer.construct_github_urls("https://github.com", &shorthand, "linux-x64", false);
 
         // Count how many URLs contain "docker-linux-x64" (exact platform match)
         let docker_count = urls
@@ -1977,7 +2004,8 @@ mod tests {
 
         // With "meta-" prefix, there should be two distinct names
         let shorthand = GitHubShorthand::parse("user/meta-docker").unwrap();
-        let urls = installer.construct_github_urls("https://github.com", &shorthand, "linux-x64");
+        let urls =
+            installer.construct_github_urls("https://github.com", &shorthand, "linux-x64", false);
 
         // Count URLs with exact platform for each plugin name variant
         let meta_docker_count = urls

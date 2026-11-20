@@ -1175,7 +1175,7 @@ fn handle_plugin_command(
             let direct = if name.starts_with("http://") || name.starts_with("https://") {
                 Some(installer.install_from_url(name)?)
             } else if let Some(shorthand) = GitHubShorthand::parse(name) {
-                Some(installer.install_from_github(&shorthand)?)
+                Some(installer.install_from_github(&shorthand, None)?)
             } else {
                 None
             };
@@ -1196,7 +1196,7 @@ fn handle_plugin_command(
                     Ok(source) => {
                         // Got GitHub shorthand from registry, use GitHub install flow
                         if let Some(shorthand) = GitHubShorthand::parse(&source) {
-                            let plugin_name = installer.install_from_github(&shorthand)?;
+                            let plugin_name = installer.install_from_github(&shorthand, None)?;
                             record(serde_json::json!({"installed": plugin_name, "to": location}));
                             if !json {
                                 outln!(

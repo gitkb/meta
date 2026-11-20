@@ -237,6 +237,39 @@ release() {
     [ ! -e "$PLUGINS_DIR/meta-x" ]
 }
 
+@test "an archive holding a plugin twice installs its last copy" {
+    serve
+    plugin "$BATS_TEST_TMPDIR/twice/one/meta-x" 1.0.0 first
+    plugin "$BATS_TEST_TMPDIR/twice/two/meta-x" 1.0.0 second
+    mkdir -p "$RELEASES/direct"
+    tar -czf "$RELEASES/direct/twice.tar.gz" -C "$BATS_TEST_TMPDIR/twice" one/meta-x two/meta-x
+    run "$META_BIN" plugin install "$SERVER/direct/twice.tar.gz"
+    [ "$status" -eq 0 ]
+    printf 'projects: {}\n' > .meta.yaml
+    run "$META_BIN" x run
+    [[ "$output" == *second* ]]
+}
+
+@test "an archive whose plugins can't all be installed installs none of them" {
+    serve
+    release gitkb/meta-x/releases/latest/download/meta-x-any.tar.gz 1.0.0 one
+    run "$META_BIN" plugin install gitkb/meta-x
+    [ "$status" -eq 0 ]
+    cp "$PLUGINS_DIR/.manifest.json" "$BATS_TEST_TMPDIR/before.json"
+    plugin "$BATS_TEST_TMPDIR/both/meta-x" 2.0.0 two
+    plugin "$BATS_TEST_TMPDIR/both/meta-y" 2.0.0 why
+    mkdir -p "$RELEASES/direct"
+    tar -czf "$RELEASES/direct/both.tar.gz" -C "$BATS_TEST_TMPDIR/both" meta-x meta-y
+    # meta-y can't be put in place: a folder is there
+    mkdir -p "$PLUGINS_DIR/meta-y/in-the-way"
+    run "$META_BIN" plugin install "$SERVER/direct/both.tar.gz"
+    [ "$status" -ne 0 ]
+    printf 'projects: {}\n' > .meta.yaml
+    run "$META_BIN" x run
+    [[ "$output" == *one* ]]
+    cmp "$PLUGINS_DIR/.manifest.json" "$BATS_TEST_TMPDIR/before.json"
+}
+
 @test "a download that isn't an archive installs nothing" {
     serve
     mkdir -p "$RELEASES/direct"

@@ -361,16 +361,39 @@ pub(crate) fn printed_with_git(
     Ok(Response::printed(records))
 }
 
-/// Check if a git command accesses remote repositories
+/// Whether meta shares SSH for a git command: one that reaches a remote,
+/// unless git's own options name the SSH command to use (meta's
+/// `GIT_SSH_COMMAND` would win over it).
 fn is_remote_command(argv: &[String]) -> bool {
     let remote_commands = ["push", "pull", "fetch", "ls-remote"];
-    subcommand(argv).is_some_and(|subcommand| remote_commands.contains(&subcommand))
+    let Some(at) = command_at(argv) else {
+        return false;
+    };
+    let options = argv.get(1..at).unwrap_or_default();
+    let names_ssh = |setting: &str| {
+        setting
+            .split('=')
+            .next()
+            .is_some_and(|key| key.eq_ignore_ascii_case("core.sshCommand"))
+    };
+    let ssh_given = options.windows(2).any(|pair| match pair {
+        [flag, setting] => matches!(flag.as_str(), "-c" | "--config-env") && names_ssh(setting),
+        _ => false,
+    }) || options
+        .iter()
+        .any(|o| o.strip_prefix("--config-env=").is_some_and(names_ssh));
+    !ssh_given
+        && argv
+            .get(at)
+            .is_some_and(|command| remote_commands.contains(&command.as_str()))
 }
 
-/// The command of `git [<options>] <command> ...`, as git finds it: the
-/// first word after git's own options, each option that takes a value as
-/// the next word (`-C <path>`, `-c <name>=<value>`) skipped with it.
-fn subcommand(argv: &[String]) -> Option<&str> {
+/// Where the command of `git [<options>] <command> ...` is, as git finds
+/// it: the first word after git's own options, each option that takes a
+/// value as the next word (`-C <path>`, `-c <name>=<value>`) skipped with
+/// it. `None` without one, or after an option that makes git exit before
+/// running any (`--version`, `--exec-path`).
+fn command_at(argv: &[String]) -> Option<usize> {
     const TAKE_A_VALUE: &[&str] = &[
         "-C",
         "-c",
@@ -381,14 +404,29 @@ fn subcommand(argv: &[String]) -> Option<&str> {
         "--super-prefix",
         "--attr-source",
     ];
-    let mut words = argv.iter().skip(1);
-    while let Some(word) = words.next() {
+    const END_GIT: &[&str] = &[
+        "--exec-path",
+        "--html-path",
+        "--man-path",
+        "--info-path",
+        "--version",
+        "-v",
+        "--help",
+        "-h",
+    ];
+    let mut at = 1;
+    while let Some(word) = argv.get(at) {
         if !word.starts_with('-') {
-            return Some(word);
+            return Some(at);
         }
-        if TAKE_A_VALUE.contains(&word.as_str()) {
-            words.next();
+        if END_GIT.contains(&word.as_str()) || word.starts_with("--list-cmds") {
+            return None;
         }
+        at += if TAKE_A_VALUE.contains(&word.as_str()) {
+            2
+        } else {
+            1
+        };
     }
     None
 }

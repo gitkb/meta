@@ -90,15 +90,21 @@ impl SshTarget {
     }
 }
 
-/// The distinct SSH remotes of `projects` (their `repo:` URLs).
+/// The distinct SSH remotes of `projects` (their `repo:` URLs): SSH as
+/// written, or once git's `url.<base>.insteadOf` rewrites apply.
 pub(crate) fn ssh_urls(projects: &[meta_plugin::Project]) -> Vec<RepoUrl> {
     let urls: BTreeSet<RepoUrl> = projects
         .iter()
         .filter_map(|p| p.repo.as_deref())
         .map(RepoUrl::from)
-        .filter(|repo| SshTarget::of(repo).is_some())
         .collect();
-    urls.into_iter().collect()
+    urls.into_iter()
+        .filter(|repo| {
+            SshTarget::of(repo)
+                .or_else(|| SshTarget::of(&contacted(repo)))
+                .is_some()
+        })
+        .collect()
 }
 
 /// Establish SSH ControlMaster connections for the SSH remotes among `urls`.

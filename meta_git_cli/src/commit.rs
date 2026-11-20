@@ -456,7 +456,7 @@ mod tests {
             edit: false,
             message: Some("save".to_string()),
         };
-        let result = execute_git_commit(args, &request(&[project.clone()]));
+        let result = execute_git_commit(args, &request(std::slice::from_ref(&project)));
         let steps = match result.unwrap().answer {
             Answer::Plan(plan) => plan.steps,
             _ => Vec::new(),

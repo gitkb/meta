@@ -522,6 +522,23 @@ mod tests {
     }
 
     #[test]
+    fn independent_projects_run_in_the_order_they_are_listed() {
+        let names = ["h", "c", "f", "a", "g", "b", "e", "d"];
+        // each build has its own hash order: the listed order must win in all
+        for _ in 0..20 {
+            let mut projects: Vec<_> = names.iter().map(|n| project(n, &[], &[])).collect();
+            // "z" waits for "a", "y" for "h": each still follows its dependency
+            projects.push(project("z", &[], &["a"]));
+            projects.push(project("y", &[], &["h"]));
+            let graph = DependencyGraph::build(projects);
+            assert_eq!(
+                graph.execution_order().unwrap(),
+                ["h", "c", "f", "a", "g", "b", "e", "d", "y", "z"]
+            );
+        }
+    }
+
+    #[test]
     fn test_provided_item_resolution() {
         let projects = create_test_projects();
         let graph = DependencyGraph::build(projects);

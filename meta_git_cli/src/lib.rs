@@ -364,8 +364,33 @@ pub(crate) fn printed_with_git(
 /// Check if a git command accesses remote repositories
 fn is_remote_command(argv: &[String]) -> bool {
     let remote_commands = ["push", "pull", "fetch", "ls-remote"];
-    argv.get(1)
-        .is_some_and(|subcommand| remote_commands.contains(&subcommand.as_str()))
+    subcommand(argv).is_some_and(|subcommand| remote_commands.contains(&subcommand))
+}
+
+/// The command of `git [<options>] <command> ...`, as git finds it: the
+/// first word after git's own options, each option that takes a value as
+/// the next word (`-C <path>`, `-c <name>=<value>`) skipped with it.
+fn subcommand(argv: &[String]) -> Option<&str> {
+    const TAKE_A_VALUE: &[&str] = &[
+        "-C",
+        "-c",
+        "--config-env",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--super-prefix",
+        "--attr-source",
+    ];
+    let mut words = argv.iter().skip(1);
+    while let Some(word) = words.next() {
+        if !word.starts_with('-') {
+            return Some(word);
+        }
+        if TAKE_A_VALUE.contains(&word.as_str()) {
+            words.next();
+        }
+    }
+    None
 }
 
 /// Plan a raw git command in each selected repo (any git command meta-git

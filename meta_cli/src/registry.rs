@@ -949,30 +949,29 @@ impl PluginInstaller {
         staged.validate_installed(&installed)?;
 
         let mut manifest = self.load_manifest()?;
-        // each plugin replaced keeps its old copy here (a hard link), to be
-        // put back if a later step fails
+        // each plugin replaced has its old entry (a file or a link) moved
+        // here, to be put back if a later step fails
         let old = staging.path().join(".old");
         std::fs::create_dir(&old)?;
         let mut placed = Vec::new();
         let swapped = (|| -> Result<()> {
             for plugin_name in &installed {
                 let path = self.plugins_dir.join(plugin_name);
-                let keep = old.join(plugin_name);
-                // a copy where the file system has no hard links
-                let kept = match std::fs::hard_link(&path, &keep)
-                    .or_else(|_| std::fs::copy(&path, &keep).map(drop))
-                {
-                    Ok(()) => true,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-                    Err(e) => {
-                        return Err(e).with_context(|| {
-                            format!("Cannot replace plugin {}", escape_path(&path))
-                        })
+                let cannot = || format!("Cannot install plugin {}", escape_path(&path));
+                let kept = match std::fs::symlink_metadata(&path) {
+                    Ok(entry) if entry.is_dir() => {
+                        anyhow::bail!("{}: a folder is in its place", cannot())
                     }
+                    Ok(_) => {
+                        let keep = old.join(plugin_name);
+                        std::fs::rename(&path, &keep).with_context(cannot)?;
+                        Some(keep)
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(e).with_context(cannot),
                 };
-                std::fs::rename(staging.path().join(plugin_name), &path)
-                    .with_context(|| format!("Cannot install plugin {}", escape_path(&path)))?;
-                placed.push((path, kept.then_some(keep)));
+                placed.push((path.clone(), kept));
+                std::fs::rename(staging.path().join(plugin_name), &path).with_context(cannot)?;
                 manifest.plugins.insert(
                     plugin_name.clone(),
                     PluginManifestEntry {

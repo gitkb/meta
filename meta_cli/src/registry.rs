@@ -2305,4 +2305,21 @@ mod tests {
         assert!(!is_newer_version("2.0.0", "1.0.0"));
         assert!(!is_newer_version("1.1.0", "1.0.0"));
     }
+
+    #[test]
+    fn versions_compare_by_number_not_by_text() {
+        assert!(is_newer_version("1.9.0", "1.10.0"));
+        assert!(is_newer_version("v0.9.9", "v0.10.0"));
+        assert!(is_newer_version("1.0.9", "1.0.10"));
+        assert!(!is_newer_version("1.10.0", "1.9.0"));
+        assert!(!is_newer_version("10.0.0", "9.0.0"));
+    }
+
+    #[test]
+    fn a_release_is_newer_than_its_pre_release() {
+        assert!(is_newer_version("1.0.0-beta.1", "1.0.0"));
+        assert!(!is_newer_version("1.0.0", "1.0.0-beta.1"));
+        assert!(is_newer_version("1.0.0-beta.1", "1.0.0-beta.2"));
+        assert!(is_newer_version("1.0.0", "1.1.0-beta.1"));
+    }
 }

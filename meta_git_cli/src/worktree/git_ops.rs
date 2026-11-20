@@ -422,7 +422,10 @@ pub fn git_diff_stat(
     base_ref: &str,
 ) -> Result<(usize, usize, usize, Vec<String>)> {
     let range = diff_range(worktree_path, base_ref)?;
-    let numstat_text = run(worktree_path, ["diff", "--numstat", &range, "--"])?;
+    let numstat_text = run(
+        worktree_path,
+        ["diff", "--numstat", "--end-of-options", &range, "--"],
+    )?;
 
     let mut files_changed = 0;
     let mut insertions = 0usize;
@@ -478,6 +481,7 @@ pub fn git_diff_patch(worktree_path: &Path, base_ref: &str) -> Result<String> {
             "--no-color",
             "--no-ext-diff",
             "--no-textconv",
+            "--end-of-options",
             &range,
             "--",
         ],
@@ -486,15 +490,15 @@ pub fn git_diff_patch(worktree_path: &Path, base_ref: &str) -> Result<String> {
 
 /// What HEAD changed since it left `base_ref`: `merge-base` exits 1 only when
 /// there is no common ancestor, and only then is it a two-dot diff; a bad
-/// ref or a failed read is still an error.
+/// ref or a failed read is still an error. A base is never read as an
+/// option (`--base=--all`), only as a revision.
 fn diff_range(worktree_path: &Path, base_ref: &str) -> Result<String> {
-    Ok(
-        if lookup(worktree_path, ["merge-base", base_ref, "HEAD"])?.is_some() {
-            format!("{base_ref}...HEAD")
-        } else {
-            format!("{base_ref}..HEAD")
-        },
-    )
+    let merge_base = ["merge-base", "--end-of-options", base_ref, "HEAD"];
+    Ok(if lookup(worktree_path, merge_base)?.is_some() {
+        format!("{base_ref}...HEAD")
+    } else {
+        format!("{base_ref}..HEAD")
+    })
 }
 
 /// Unregister and delete the checked worktrees of a set, deepest first

@@ -379,7 +379,7 @@ const UNSET: [&str; 14] = [
     "GIT_CONFIG_PARAMETERS",
     crate::sets::WORKTREES_VAR,
     // a meta around the tests: a test's meta is the outermost
-    crate::client::DEPTH_VAR,
+    "META_DEPTH",
     "META_GITHUB_URL",
     "META_PLATFORM",
     "GIT_TEMPLATE_DIR",
@@ -557,10 +557,8 @@ mod tests {
     #[test]
     fn a_meta_around_the_tests_does_not_reach_them() {
         let command = Sandbox::new().command("meta");
-        let depth = command
-            .get_envs()
-            .find(|(key, _)| *key == crate::client::DEPTH_VAR);
-        assert_eq!(depth, Some((OsStr::new(crate::client::DEPTH_VAR), None)));
+        let depth = command.get_envs().find(|(key, _)| *key == "META_DEPTH");
+        assert_eq!(depth, Some((OsStr::new("META_DEPTH"), None)));
     }
 
     #[test]

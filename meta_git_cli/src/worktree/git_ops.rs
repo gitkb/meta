@@ -223,7 +223,7 @@ pub fn worktree_start(
             git_rev_parse(repo_path, &format!("{ref_name}^{{commit}}"))?.ok_or_else(|| {
                 anyhow::anyhow!(
                     "Ref '{}' not found in repo '{}'",
-                    ref_name,
+                    escape(ref_name),
                     escape_path(repo_path)
                 )
             })?;

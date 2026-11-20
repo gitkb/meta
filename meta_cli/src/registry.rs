@@ -706,29 +706,6 @@ impl PluginInstaller {
         manifest.save(&self.manifest_path())
     }
 
-    /// Record a plugin installation in the manifest
-    fn record_installation(
-        &self,
-        plugin_name: &str,
-        source: String,
-        version: Option<String>,
-    ) -> Result<()> {
-        let mut manifest = self.load_manifest()?;
-
-        let entry = PluginManifestEntry {
-            source,
-            version,
-            installed: chrono::Utc::now().to_rfc3339(),
-            platform: RegistryClient::current_platform(),
-        };
-
-        manifest.plugins.insert(plugin_name.to_string(), entry);
-        self.save_manifest(&manifest)?;
-
-        debug!("Recorded {} in manifest", plugin_name);
-        Ok(())
-    }
-
     /// Download bytes from a URL
     fn download(&self, url: &str) -> Result<Vec<u8>> {
         let response = ureq::get(url)
@@ -937,9 +914,10 @@ impl PluginInstaller {
     }
 
     /// Extract a downloaded archive into a folder of its own, validate its
-    /// plugins there, then move each into place and record it in the
-    /// manifest with `source` and `version`: an archive that fails leaves
-    /// the plugins already here as they were.
+    /// plugins there, then move them into place and record them in the
+    /// manifest with `source` and `version`, all or none: an archive that
+    /// fails leaves the plugins already here as they were. `required`: a
+    /// plugin the archive must hold.
     fn install_archive(
         &self,
         url: &str,
@@ -956,7 +934,10 @@ impl PluginInstaller {
             plugins_dir: staging.path().to_path_buf(),
             scope: self.scope.clone(),
         };
-        let installed = staged.extract_archive(url, bytes)?;
+        let mut installed = staged.extract_archive(url, bytes)?;
+        // a name the archive holds twice was written twice: its last copy
+        let mut seen = std::collections::HashSet::new();
+        installed.retain(|name| seen.insert(name.clone()));
         if let Some(required) = required {
             anyhow::ensure!(
                 installed.iter().any(|name| name == required),
@@ -966,12 +947,53 @@ impl PluginInstaller {
             );
         }
         staged.validate_installed(&installed)?;
-        for plugin_name in &installed {
-            let path = self.plugins_dir.join(plugin_name);
-            std::fs::rename(staging.path().join(plugin_name), &path)
-                .with_context(|| format!("Cannot install plugin {}", escape_path(&path)))?;
-            self.record_installation(plugin_name, source.clone(), version.clone())?;
+
+        let mut manifest = self.load_manifest()?;
+        // each plugin replaced keeps its old copy here (a hard link), to be
+        // put back if a later step fails
+        let old = staging.path().join(".old");
+        std::fs::create_dir(&old)?;
+        let mut placed = Vec::new();
+        let swapped = (|| -> Result<()> {
+            for plugin_name in &installed {
+                let path = self.plugins_dir.join(plugin_name);
+                let keep = old.join(plugin_name);
+                // a copy where the file system has no hard links
+                let kept = match std::fs::hard_link(&path, &keep)
+                    .or_else(|_| std::fs::copy(&path, &keep).map(drop))
+                {
+                    Ok(()) => true,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(e) => {
+                        return Err(e).with_context(|| {
+                            format!("Cannot replace plugin {}", escape_path(&path))
+                        })
+                    }
+                };
+                std::fs::rename(staging.path().join(plugin_name), &path)
+                    .with_context(|| format!("Cannot install plugin {}", escape_path(&path)))?;
+                placed.push((path, kept.then_some(keep)));
+                manifest.plugins.insert(
+                    plugin_name.clone(),
+                    PluginManifestEntry {
+                        source: source.clone(),
+                        version: version.clone(),
+                        installed: chrono::Utc::now().to_rfc3339(),
+                        platform: RegistryClient::current_platform(),
+                    },
+                );
+            }
+            self.save_manifest(&manifest)
+        })();
+        if swapped.is_err() {
+            for (path, kept) in placed.iter().rev() {
+                let _ = match kept {
+                    Some(kept) => std::fs::rename(kept, path),
+                    None => std::fs::remove_file(path),
+                };
+            }
         }
+        swapped?;
         Ok(installed)
     }
 

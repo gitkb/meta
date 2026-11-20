@@ -347,6 +347,31 @@ mod tests {
         assert!(of("ext::ssh -p 2222 host %S repo").is_none());
     }
 
+    #[test]
+    fn an_https_remote_git_rewrites_to_ssh_is_an_ssh_remote() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let work = sandbox.work();
+        sandbox.git(
+            &work,
+            &[
+                "config",
+                "--global",
+                "url.git@example.com:.insteadOf",
+                "https://example.com/",
+            ],
+        );
+        let project = |url: &str| meta_plugin::Project {
+            repo: Some(url.to_string()),
+            ..meta_plugin::Project::default()
+        };
+        let urls = ssh_urls(&[
+            project("https://example.com/org/app.git"),
+            project("https://other.example/org/web.git"),
+        ]);
+        let urls: Vec<String> = urls.iter().map(ToString::to_string).collect();
+        assert_eq!(urls, ["https://example.com/org/app.git"]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn sockets_dir_is_private() {

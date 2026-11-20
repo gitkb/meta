@@ -69,10 +69,11 @@ impl Ctx {
             return Ok(());
         };
         let line = event.line();
+        // meta measures the line without its newline
+        let len = line.strip_suffix('\n').unwrap_or(&line).len();
         anyhow::ensure!(
-            line.len() <= crate::event::MAX_LINE,
-            "an event of {} bytes is longer than meta reads",
-            line.len()
+            len <= crate::event::MAX_LINE,
+            "an event of {len} bytes is longer than meta reads"
         );
         let mut file = events
             .lock()
@@ -268,4 +269,41 @@ fn execute(plugin: &PluginDefinition) -> anyhow::Result<()> {
 /// (a missing argument the host should have caught).
 pub fn usage(message: impl Into<String>) -> anyhow::Error {
     ErrorInfo::new(ErrorCode::Usage, message).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::MAX_LINE;
+
+    /// A record event whose JSON is exactly `len` bytes
+    fn record_of(len: usize) -> Event {
+        let padded = |pad: usize| {
+            Event::Record(crate::ProjectResult::record(
+                "p",
+                serde_json::json!({ "pad": "x".repeat(pad) }),
+            ))
+        };
+        let base = padded(0).line().len() - 1;
+        padded(len - base)
+    }
+
+    #[test]
+    fn emit_sends_an_event_as_long_as_meta_reads_and_refuses_one_byte_more() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let ctx = Ctx::streaming(crate::Meta::default(), file.reopen().unwrap());
+
+        ctx.emit(record_of(MAX_LINE)).unwrap();
+        let sent = std::fs::read(file.path()).unwrap();
+        let line = sent.strip_suffix(b"\n").unwrap();
+        assert_eq!(line.len(), MAX_LINE);
+        assert!(Event::parse(line).is_ok(), "meta reads what emit sent");
+
+        assert!(ctx.emit(record_of(MAX_LINE + 1)).is_err());
+        assert_eq!(
+            std::fs::read(file.path()).unwrap(),
+            sent,
+            "nothing more sent"
+        );
+    }
 }

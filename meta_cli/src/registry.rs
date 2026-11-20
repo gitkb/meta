@@ -41,17 +41,37 @@ fn normalize_version(version: &str) -> &str {
     version.strip_prefix('v').unwrap_or(version)
 }
 
-/// Compare two version strings
-///
-/// Returns true if new_version is newer than current_version.
-/// Simple lexicographic comparison after normalizing (removing 'v' prefix).
+/// Whether `new` is a later version than `current` (each with or without a
+/// `v`): their dot-separated numbers compared as numbers, and a version
+/// before its pre-release (`1.0.0-beta` is before `1.0.0`). A version that
+/// isn't numbers is compared as text.
 pub fn is_newer_version(current: &str, new: &str) -> bool {
-    let current = normalize_version(current);
-    let new = normalize_version(new);
-
-    // Simple string comparison works for most semver cases
-    // e.g., "1.0.0" < "1.1.0" < "2.0.0"
-    new > current
+    /// The numbers of a version, and its pre-release; `None` if a part
+    /// isn't a number
+    fn parts(version: &str) -> Option<(Vec<u64>, Option<&str>)> {
+        let version = normalize_version(version);
+        let version = version.split_once('+').map_or(version, |(v, _)| v);
+        let (release, pre) = match version.split_once('-') {
+            Some((release, pre)) => (release, Some(pre)),
+            None => (version, None),
+        };
+        let numbers = release
+            .split('.')
+            .map(|n| n.parse().ok())
+            .collect::<Option<_>>()?;
+        Some((numbers, pre))
+    }
+    match (parts(current), parts(new)) {
+        (Some((current, current_pre)), Some((new, new_pre))) => {
+            new.cmp(&current)
+                .then_with(|| match (current_pre, new_pre) {
+                    (Some(current), Some(new)) => new.cmp(current),
+                    (current, new) => current.is_some().cmp(&new.is_some()),
+                })
+                == std::cmp::Ordering::Greater
+        }
+        _ => normalize_version(new) > normalize_version(current),
+    }
 }
 
 /// The plugin a tar entry installs: its file name, when that is `meta-*`
@@ -686,29 +706,6 @@ impl PluginInstaller {
         manifest.save(&self.manifest_path())
     }
 
-    /// Record a plugin installation in the manifest
-    fn record_installation(
-        &self,
-        plugin_name: &str,
-        source: String,
-        version: Option<String>,
-    ) -> Result<()> {
-        let mut manifest = self.load_manifest()?;
-
-        let entry = PluginManifestEntry {
-            source,
-            version,
-            installed: chrono::Utc::now().to_rfc3339(),
-            platform: RegistryClient::current_platform(),
-        };
-
-        manifest.plugins.insert(plugin_name.to_string(), entry);
-        self.save_manifest(&manifest)?;
-
-        debug!("Recorded {} in manifest", plugin_name);
-        Ok(())
-    }
-
     /// Download bytes from a URL
     fn download(&self, url: &str) -> Result<Vec<u8>> {
         let response = ureq::get(url)
@@ -752,6 +749,7 @@ impl PluginInstaller {
             &bytes,
             metadata.name.clone(),
             Some(metadata.version.clone()),
+            None,
         )?;
 
         info!(
@@ -770,14 +768,20 @@ impl PluginInstaller {
         info!("Downloading from: {}", url);
 
         let bytes = self.download(url)?;
-        first_installed(&self.install_archive(url, &bytes, url.to_string(), None)?)
+        first_installed(&self.install_archive(url, &bytes, url.to_string(), None, None)?)
     }
 
     /// Install a plugin from GitHub using shorthand syntax (user/repo[@version])
     ///
     /// Automatically discovers the correct platform binary from GitHub Releases
     /// by trying multiple naming conventions and formats.
-    pub fn install_from_github(&self, shorthand: &GitHubShorthand) -> Result<String> {
+    /// `update`, the plugin being updated: then only the release tag as
+    /// written is tried, and an archive without that plugin installs nothing.
+    pub fn install_from_github(
+        &self,
+        shorthand: &GitHubShorthand,
+        update: Option<&str>,
+    ) -> Result<String> {
         let platform = RegistryClient::current_platform();
 
         let latest = if shorthand.version.is_none() {
@@ -788,7 +792,7 @@ impl PluginInstaller {
         info!("Installing {shorthand}{latest} for {platform}");
 
         // Try to download with various URL patterns
-        let urls = self.construct_github_urls(&github().0, shorthand, &platform);
+        let urls = self.construct_github_urls(&github().0, shorthand, &platform, update.is_some());
 
         let mut last_error = None;
         for url in &urls {
@@ -801,6 +805,7 @@ impl PluginInstaller {
                         &bytes,
                         shorthand.to_string(),
                         shorthand.version.clone(),
+                        update,
                     )?);
                 }
                 Err(e) => {
@@ -814,20 +819,23 @@ impl PluginInstaller {
         Err(release_not_found(shorthand, urls.len(), last_error))
     }
 
-    /// Construct possible GitHub release URLs for a shorthand
+    /// Construct possible GitHub release URLs for a shorthand; `exact`: only
+    /// its version's tag as written, not also with or without a `v`
     fn construct_github_urls(
         &self,
         github: &str,
         shorthand: &GitHubShorthand,
         platform: &str,
+        exact: bool,
     ) -> Vec<String> {
         let mut urls = Vec::new();
         let base = format!("{github}/{}/{}/releases", shorthand.user, shorthand.repo);
 
         // Determine version component
         let version_paths = if let Some(version) = &shorthand.version {
-            // Try both with and without 'v' prefix
-            if let Some(bare) = version.strip_prefix('v') {
+            if exact {
+                vec![format!("download/{version}")]
+            } else if let Some(bare) = version.strip_prefix('v') {
                 // If version already has 'v', try with and without
                 vec![format!("download/{version}"), format!("download/{bare}")]
             } else {
@@ -905,21 +913,86 @@ impl PluginInstaller {
         aliases
     }
 
-    /// Extract a downloaded archive, validate its plugins and record each
-    /// in the manifest with `source` and `version`
+    /// Extract a downloaded archive into a folder of its own, validate its
+    /// plugins there, then move them into place and record them in the
+    /// manifest with `source` and `version`, all or none: an archive that
+    /// fails leaves the plugins already here as they were. `required`: a
+    /// plugin the archive must hold.
     fn install_archive(
         &self,
         url: &str,
         bytes: &[u8],
         source: String,
         version: Option<String>,
+        required: Option<&str>,
     ) -> Result<Vec<String>> {
         self.ensure_plugins_dir()?;
-        let installed = self.extract_archive(url, bytes)?;
-        self.validate_installed(&installed)?;
-        for plugin_name in &installed {
-            self.record_installation(plugin_name, source.clone(), version.clone())?;
+        let staging = tempfile::Builder::new()
+            .prefix(".staging-")
+            .tempdir_in(&self.plugins_dir)?;
+        let staged = PluginInstaller {
+            plugins_dir: staging.path().to_path_buf(),
+            scope: self.scope.clone(),
+        };
+        let mut installed = staged.extract_archive(url, bytes)?;
+        // a name the archive holds twice was written twice: its last copy
+        let mut seen = std::collections::HashSet::new();
+        installed.retain(|name| seen.insert(name.clone()));
+        if let Some(required) = required {
+            anyhow::ensure!(
+                installed.iter().any(|name| name == required),
+                "The archive {} holds no {}; nothing was installed",
+                escape(url),
+                escape(required)
+            );
         }
+        staged.validate_installed(&installed)?;
+
+        let mut manifest = self.load_manifest()?;
+        // each plugin replaced has its old entry (a file or a link) moved
+        // here, to be put back if a later step fails
+        let old = staging.path().join(".old");
+        std::fs::create_dir(&old)?;
+        let mut placed = Vec::new();
+        let swapped = (|| -> Result<()> {
+            for plugin_name in &installed {
+                let path = self.plugins_dir.join(plugin_name);
+                let cannot = || format!("Cannot install plugin {}", escape_path(&path));
+                let kept = match std::fs::symlink_metadata(&path) {
+                    Ok(entry) if entry.is_dir() => {
+                        anyhow::bail!("{}: a folder is in its place", cannot())
+                    }
+                    Ok(_) => {
+                        let keep = old.join(plugin_name);
+                        std::fs::rename(&path, &keep).with_context(cannot)?;
+                        Some(keep)
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(e) => return Err(e).with_context(cannot),
+                };
+                placed.push((path.clone(), kept));
+                std::fs::rename(staging.path().join(plugin_name), &path).with_context(cannot)?;
+                manifest.plugins.insert(
+                    plugin_name.clone(),
+                    PluginManifestEntry {
+                        source: source.clone(),
+                        version: version.clone(),
+                        installed: chrono::Utc::now().to_rfc3339(),
+                        platform: RegistryClient::current_platform(),
+                    },
+                );
+            }
+            self.save_manifest(&manifest)
+        })();
+        if swapped.is_err() {
+            for (path, kept) in placed.iter().rev() {
+                let _ = match kept {
+                    Some(kept) => std::fs::rename(kept, path),
+                    None => std::fs::remove_file(path),
+                };
+            }
+        }
+        swapped?;
         Ok(installed)
     }
 
@@ -1168,8 +1241,9 @@ impl PluginInstaller {
             .then_some((current_version, latest_version)))
     }
 
-    /// Update a plugin to the latest version
-    pub fn update_plugin(&self, plugin_name: &str) -> Result<String> {
+    /// Update a plugin to `latest`, the release [`Self::check_update`]
+    /// found: installed by that tag, also over a version the install named
+    pub fn update_plugin(&self, plugin_name: &str, latest: &str) -> Result<String> {
         let manifest = self.load_manifest()?;
         let plugin_name = ensure_plugin_prefix(plugin_name);
 
@@ -1182,20 +1256,19 @@ impl PluginInstaller {
         let shorthand = GitHubShorthand::parse(&entry.source).ok_or_else(|| {
             anyhow::anyhow!("Cannot update plugin: source is not a GitHub shorthand")
         })?;
+        let shorthand = GitHubShorthand {
+            version: Some(latest.to_string()),
+            ..shorthand
+        };
 
         info!(
-            "Updating {} from {} to latest",
+            "Updating {} from {} to {latest}",
             plugin_name,
             entry.version.as_deref().unwrap_or("unknown")
         );
 
-        // Uninstall current version
-        self.uninstall(&plugin_name)?;
-
-        // Install latest version
-        let installed_name = self.install_from_github(&shorthand)?;
-
-        Ok(installed_name)
+        // installed over the current one, which stays if it fails
+        self.install_from_github(&shorthand, Some(&plugin_name))
     }
 }
 
@@ -1579,6 +1652,7 @@ mod tests {
                     &zip_data,
                     String::new(),
                     None,
+                    None,
                 )
                 .unwrap_err();
             assert_eq!(error.to_string(), entry_error);
@@ -1883,8 +1957,12 @@ mod tests {
         };
 
         let shorthand = GitHubShorthand::parse("user/meta-docker@v1.0.0").unwrap();
-        let urls =
-            installer.construct_github_urls("https://github.com", &shorthand, "darwin-arm64");
+        let urls = installer.construct_github_urls(
+            "https://github.com",
+            &shorthand,
+            "darwin-arm64",
+            false,
+        );
 
         // Should contain versioned URLs
         assert!(urls.iter().any(|u| u.contains("download/v1.0.0")));
@@ -1911,7 +1989,8 @@ mod tests {
         };
 
         let shorthand = GitHubShorthand::parse("user/meta-docker").unwrap();
-        let urls = installer.construct_github_urls("https://github.com", &shorthand, "linux-x64");
+        let urls =
+            installer.construct_github_urls("https://github.com", &shorthand, "linux-x64", false);
 
         // Should use latest/download for unversioned
         assert!(urls.iter().any(|u| u.contains("latest/download")));
@@ -1928,7 +2007,8 @@ mod tests {
 
         // When repo doesn't have "meta-" prefix, both names would be the same
         let shorthand = GitHubShorthand::parse("user/docker").unwrap();
-        let urls = installer.construct_github_urls("https://github.com", &shorthand, "linux-x64");
+        let urls =
+            installer.construct_github_urls("https://github.com", &shorthand, "linux-x64", false);
 
         // Count how many URLs contain "docker-linux-x64" (exact platform match)
         let docker_count = urls
@@ -1945,7 +2025,8 @@ mod tests {
 
         // With "meta-" prefix, there should be two distinct names
         let shorthand = GitHubShorthand::parse("user/meta-docker").unwrap();
-        let urls = installer.construct_github_urls("https://github.com", &shorthand, "linux-x64");
+        let urls =
+            installer.construct_github_urls("https://github.com", &shorthand, "linux-x64", false);
 
         // Count URLs with exact platform for each plugin name variant
         let meta_docker_count = urls
@@ -2304,5 +2385,22 @@ mod tests {
     fn test_is_newer_version_older() {
         assert!(!is_newer_version("2.0.0", "1.0.0"));
         assert!(!is_newer_version("1.1.0", "1.0.0"));
+    }
+
+    #[test]
+    fn versions_compare_by_number_not_by_text() {
+        assert!(is_newer_version("1.9.0", "1.10.0"));
+        assert!(is_newer_version("v0.9.9", "v0.10.0"));
+        assert!(is_newer_version("1.0.9", "1.0.10"));
+        assert!(!is_newer_version("1.10.0", "1.9.0"));
+        assert!(!is_newer_version("10.0.0", "9.0.0"));
+    }
+
+    #[test]
+    fn a_release_is_newer_than_its_pre_release() {
+        assert!(is_newer_version("1.0.0-beta.1", "1.0.0"));
+        assert!(!is_newer_version("1.0.0", "1.0.0-beta.1"));
+        assert!(is_newer_version("1.0.0-beta.1", "1.0.0-beta.2"));
+        assert!(is_newer_version("1.0.0", "1.1.0-beta.1"));
     }
 }

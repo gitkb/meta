@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 /// The variable naming where a plugin writes its events.
 pub const EVENTS_VAR: &str = "META_EVENTS";
 
-/// The longest event line meta reads; a longer one fails the call
-/// (`plugin-failed`).
+/// The longest event line meta reads, not counting its newline; a longer
+/// one fails the call (`plugin-failed`).
 pub const MAX_LINE: usize = 64 * 1024;
 
 /// One thing a command reports while it runs.

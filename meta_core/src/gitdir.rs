@@ -98,10 +98,13 @@ pub fn common_dir(dir: &Path) -> anyhow::Result<Option<PathBuf>> {
             return Err(e).with_context(|| format!("Cannot inspect {}", escape_path(&dot_git)))
         }
     }
-    let output = crate::git::git(dir)
-        .args(["rev-parse", "--show-prefix", "--git-common-dir"])
-        .output()
-        .with_context(|| format!("Cannot run git in {}", escape_path(dir)))?;
+    // a child this program owns, as every other git meta runs
+    let output = meta_plugin::process::output(crate::git::git(dir).args([
+        "rev-parse",
+        "--show-prefix",
+        "--git-common-dir",
+    ]))
+    .with_context(|| format!("Cannot run git in {}", escape_path(dir)))?;
     anyhow::ensure!(
         output.status.success(),
         "git can't use its .git: {}",
@@ -382,6 +385,39 @@ mod tests {
         assert!(
             err.to_string().contains("belongs to another checkout"),
             "{err}"
+        );
+    }
+
+    // git runs as every other git meta starts: a child meta owns (stopped
+    // with meta), whose captured output is bounded
+    #[cfg(unix)]
+    #[test]
+    fn common_dirs_git_is_a_child_meta_owns() {
+        use std::os::unix::fs::PermissionsExt;
+        let sandbox = meta_plugin::testing::isolated!();
+        let repo = sandbox.repo(&sandbox.work().join("repo"));
+        let bin = sandbox.work().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let script = bin.join("git");
+        // a good answer, then more than meta keeps of any git's output
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '\\n.git\\n'\nhead -c {} /dev/zero\n",
+                meta_plugin::process::CAPTURE_LIMIT + 1
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        std::env::set_var(
+            "PATH",
+            std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path))).unwrap(),
+        );
+        let err = common_dir(&repo).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("output passed 16 MiB"),
+            "{err:#}"
         );
     }
 }

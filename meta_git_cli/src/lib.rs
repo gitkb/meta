@@ -361,11 +361,74 @@ pub(crate) fn printed_with_git(
     Ok(Response::printed(records))
 }
 
-/// Check if a git command accesses remote repositories
+/// Whether meta shares SSH for a git command: one that reaches a remote,
+/// unless git's own options name the SSH command to use (meta's
+/// `GIT_SSH_COMMAND` would win over it).
 fn is_remote_command(argv: &[String]) -> bool {
     let remote_commands = ["push", "pull", "fetch", "ls-remote"];
-    argv.get(1)
-        .is_some_and(|subcommand| remote_commands.contains(&subcommand.as_str()))
+    let Some(at) = command_at(argv) else {
+        return false;
+    };
+    let options = argv.get(1..at).unwrap_or_default();
+    let names_ssh = |setting: &str| {
+        setting
+            .split('=')
+            .next()
+            .is_some_and(|key| key.eq_ignore_ascii_case("core.sshCommand"))
+    };
+    let ssh_given = options.windows(2).any(|pair| match pair {
+        [flag, setting] => matches!(flag.as_str(), "-c" | "--config-env") && names_ssh(setting),
+        _ => false,
+    }) || options
+        .iter()
+        .any(|o| o.strip_prefix("--config-env=").is_some_and(names_ssh));
+    !ssh_given
+        && argv
+            .get(at)
+            .is_some_and(|command| remote_commands.contains(&command.as_str()))
+}
+
+/// Where the command of `git [<options>] <command> ...` is, as git finds
+/// it: the first word after git's own options, each option that takes a
+/// value as the next word (`-C <path>`, `-c <name>=<value>`) skipped with
+/// it. `None` without one, or after an option that makes git exit before
+/// running any (`--version`, `--exec-path`).
+fn command_at(argv: &[String]) -> Option<usize> {
+    const TAKE_A_VALUE: &[&str] = &[
+        "-C",
+        "-c",
+        "--config-env",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--super-prefix",
+        "--attr-source",
+    ];
+    const END_GIT: &[&str] = &[
+        "--exec-path",
+        "--html-path",
+        "--man-path",
+        "--info-path",
+        "--version",
+        "-v",
+        "--help",
+        "-h",
+    ];
+    let mut at = 1;
+    while let Some(word) = argv.get(at) {
+        if !word.starts_with('-') {
+            return Some(at);
+        }
+        if END_GIT.contains(&word.as_str()) || word.starts_with("--list-cmds") {
+            return None;
+        }
+        at += if TAKE_A_VALUE.contains(&word.as_str()) {
+            2
+        } else {
+            1
+        };
+    }
+    None
 }
 
 /// Plan a raw git command in each selected repo (any git command meta-git
@@ -404,7 +467,7 @@ fn execute_raw_git_command(ctx: &Ctx, request: &Request) -> meta_plugin::Result<
     if urls.is_empty() {
         return Ok(Response::plan(plan));
     }
-    match ssh::establish_ssh_masters(&urls) {
+    match ssh::establish_contacted(&urls) {
         ssh::SshMasters::OurSockets(ssh) => {
             for step in &mut plan.steps {
                 step.env.insert("GIT_SSH_COMMAND".to_string(), ssh.clone());
@@ -712,5 +775,41 @@ the only commit message
         ] {
             assert_eq!(is_remote_command(&argv(line)), remote, "{line}");
         }
+    }
+
+    #[test]
+    fn remote_commands_are_found_after_gits_own_options() {
+        for (line, remote) in [
+            ("git -c x.y=z fetch", true),
+            ("git --no-pager pull", true),
+            ("git -C sub push", true),
+            ("git --git-dir .git --work-tree . fetch", true),
+            ("git --git-dir=.git ls-remote", true),
+            ("git -c remote.origin.url=fetch status", false),
+            ("git -C fetch status", false),
+            ("git --no-pager log", false),
+            // options that make git exit before running any command
+            ("git --exec-path fetch", false),
+            ("git --version fetch", false),
+            ("git --list-cmds=main fetch", false),
+            ("git --exec-path=/usr/lib/git-core fetch", true),
+        ] {
+            assert_eq!(is_remote_command(&argv(line)), remote, "{line}");
+        }
+    }
+
+    #[test]
+    fn an_ssh_command_git_is_given_is_left_to_git() {
+        // meta's GIT_SSH_COMMAND would win over the user's own
+        for line in [
+            "git -c core.sshCommand=my-ssh fetch",
+            "git -c CORE.SSHCOMMAND=ssh pull",
+            "git --config-env core.sshCommand=SSH_CMD push",
+            "git --config-env=core.sshCommand=SSH_CMD fetch",
+        ] {
+            assert!(!is_remote_command(&argv(line)), "{line}");
+        }
+        // a setting of the command's own, not git's
+        assert!(is_remote_command(&argv("git fetch -c core.sshCommand=x")));
     }
 }

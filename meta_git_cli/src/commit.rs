@@ -2,8 +2,16 @@ use colored::Colorize;
 use meta_plugin::display::{escape, escape_lines};
 use meta_plugin::outln;
 use meta_plugin::{Plan, Request, Response, Step};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// A repo with staged changes: its name in the workspace, its folder (as
+/// the OS names it, never re-spelled) and its staged files.
+struct Staged {
+    name: String,
+    dir: PathBuf,
+    files: Vec<String>,
+}
 
 /// Commit what is staged, in every repo that has staged changes.
 #[derive(clap::Parser)]
@@ -24,8 +32,8 @@ pub(crate) struct CommitArgs {
 pub(crate) fn execute_git_commit(args: CommitArgs, request: &Request) -> anyhow::Result<Response> {
     let (use_editor, message) = (args.edit, args.message);
 
-    // Find repos with staged changes: (name, folder, staged files)
-    let mut repos_with_changes: Vec<(String, String, Vec<String>)> = Vec::new();
+    // Find repos with staged changes
+    let mut repos_with_changes: Vec<Staged> = Vec::new();
 
     for project in &request.projects {
         let (dir, path) = (&project.path, &project.abs);
@@ -37,9 +45,13 @@ pub(crate) fn execute_git_commit(args: CommitArgs, request: &Request) -> anyhow:
             Ok(None) => continue,
             Err(e) => anyhow::bail!("{}: not a git repository ({e:#})", escape(dir)),
         }
-        let staged = staged_files(path)?;
-        if !staged.is_empty() {
-            repos_with_changes.push((dir.clone(), path.to_string_lossy().to_string(), staged));
+        let files = staged_files(path)?;
+        if !files.is_empty() {
+            repos_with_changes.push(Staged {
+                name: dir.clone(),
+                dir: path.clone(),
+                files,
+            });
         }
     }
 
@@ -56,9 +68,9 @@ pub(crate) fn execute_git_commit(args: CommitArgs, request: &Request) -> anyhow:
         // Apply same message to all repos: a plan, which meta previews
         let steps = repos_with_changes
             .iter()
-            .map(|(name, path, _files)| {
+            .map(|repo| {
                 let argv = ["git", "commit", "-m", msg.as_str()].map(str::to_string);
-                Step::new(Some(name), path, argv.to_vec())
+                Step::new(Some(&repo.name), &repo.dir, argv.to_vec())
             })
             .collect();
         return Ok(Response::plan(Plan {
@@ -84,12 +96,12 @@ pub(crate) fn execute_git_commit(args: CommitArgs, request: &Request) -> anyhow:
 }
 
 /// Print each of `repos` with the number of its staged files.
-fn list_staged(repos: &[(String, String, Vec<String>)]) -> anyhow::Result<()> {
-    for (name, _path, files) in repos {
+fn list_staged(repos: &[Staged]) -> anyhow::Result<()> {
+    for repo in repos {
         outln!(
             "  {} ({} files)",
-            escape(name).to_string().cyan(),
-            files.len()
+            escape(&repo.name).to_string().cyan(),
+            repo.files.len()
         )?;
     }
     Ok(())
@@ -107,7 +119,7 @@ fn staged_files(path: &std::path::Path) -> anyhow::Result<Vec<String>> {
 
 /// Execute commit with editor for per-repo messages
 fn execute_editor_commit(
-    repos: &[(String, String, Vec<String>)],
+    repos: &[Staged],
     mode: meta_plugin::ExecutionMode,
     data_dir: &std::path::Path,
 ) -> anyhow::Result<()> {
@@ -115,10 +127,10 @@ fn execute_editor_commit(
 
     // The editor git would use, from the first repo's config; asked first,
     // so a missing one or a missing terminal fails before anything is written
-    let Some((_, first, _)) = repos.first() else {
+    let Some(first) = repos.first() else {
         return Ok(());
     };
-    let first = Path::new(first);
+    let first = first.dir.as_path();
     let editor = meta_core::git::run(first, ["var", "GIT_EDITOR"]).map_err(|e| {
         anyhow::anyhow!(
             "git has no editor to use ({e:#}): set GIT_EDITOR, core.editor, VISUAL or EDITOR, \
@@ -153,10 +165,10 @@ fn execute_editor_commit(
     template.push_str("# Delete a section entirely or leave message empty to skip that repo.\n");
     template.push_str("#\n\n");
 
-    for (name, _path, files) in repos {
-        template.push_str(&format!("========== {name} ==========\n"));
-        let file_count = files.len();
-        let file_list = files.join(", ");
+    for repo in repos {
+        template.push_str(&format!("========== {} ==========\n", repo.name));
+        let file_count = repo.files.len();
+        let file_list = repo.files.join(", ");
         template.push_str(&format!("# {file_count} file(s) staged: {file_list}\n"));
         template.push('\n');
         template.push_str("# Enter commit message above this line\n\n");
@@ -205,20 +217,23 @@ fn execute_editor_commit(
 
 /// Commit each of `commits` (repo name, message) in its repo of `repos`;
 /// an error if any failed, after trying all.
-fn commit_each(
-    repos: &[(String, String, Vec<String>)],
-    commits: &[(String, String)],
-) -> anyhow::Result<()> {
+fn commit_each(repos: &[Staged], commits: &[(String, String)]) -> anyhow::Result<()> {
     let mut succeeded = 0;
     let mut failed = 0;
 
     for (repo_name, message) in commits {
-        // Find the path for this repo
-        let path = repos
-            .iter()
-            .find(|(name, _, _)| name == repo_name)
-            .map(|(_, path, _)| path.as_str())
-            .unwrap_or(repo_name);
+        // a section commits only in a repo it was written for, never in
+        // a folder its (edited) header happens to name
+        let Some(repo) = repos.iter().find(|repo| repo.name == *repo_name) else {
+            outln!(
+                "{} No repo with staged changes is named {}; the message was:\n{}",
+                "✗".red(),
+                escape(repo_name).to_string().bold(),
+                escape_lines(message)
+            )?;
+            failed += 1;
+            continue;
+        };
 
         outln!(
             "{} Committing {}...",
@@ -226,7 +241,7 @@ fn commit_each(
             escape(repo_name).to_string().bold()
         )?;
 
-        let status = meta_core::git::git(Path::new(path))
+        let status = meta_core::git::git(&repo.dir)
             .args(["commit", "-m", message])
             .status();
 
@@ -423,6 +438,33 @@ mod tests {
         }
     }
 
+    // macOS and Windows file systems refuse a name that isn't UTF-8
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_project_folder_that_is_not_utf8_is_committed_in_as_named() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let sandbox = meta_plugin::testing::isolated!();
+        let project = sandbox
+            .work()
+            .join(std::ffi::OsStr::from_bytes(b"app-\xff"));
+        std::fs::create_dir(&project).unwrap();
+        sandbox.git(&project, &["init", "-q"]);
+        std::fs::write(project.join("new"), "x").unwrap();
+        sandbox.git(&project, &["add", "new"]);
+        let args = CommitArgs {
+            edit: false,
+            message: Some("save".to_string()),
+        };
+        let result = execute_git_commit(args, &request(std::slice::from_ref(&project)));
+        let steps = match result.unwrap().answer {
+            Answer::Plan(plan) => plan.steps,
+            _ => Vec::new(),
+        };
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].dir, project);
+    }
+
     #[test]
     fn a_staged_file_read_git_fails_is_an_error_not_nothing_staged() {
         let sandbox = meta_plugin::testing::isolated!();
@@ -454,7 +496,11 @@ mod tests {
             std::fs::create_dir(&path).unwrap();
             sandbox.git(&path, &["init", "-q"]);
 
-            (name.to_string(), path.display().to_string(), vec![])
+            Staged {
+                name: name.to_string(),
+                dir: path,
+                files: vec![],
+            }
         };
         let repos = [repo("a"), repo("b")];
         std::fs::write(dir.join("b/file"), "x").unwrap();
@@ -467,5 +513,27 @@ mod tests {
         assert_eq!(err.to_string(), "Committed 1 repo(s), 1 failed");
         let subject = sandbox.git(&dir.join("b"), &["log", "-1", "--format=%s"]);
         assert_eq!(subject.trim(), "two");
+    }
+
+    #[test]
+    fn a_section_naming_no_staged_repo_commits_nowhere() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let dir = sandbox.work();
+        let api = sandbox.repo(&dir.join("api"));
+        // a repo with staged changes that wasn't selected
+        let web = sandbox.repo(&dir.join("web"));
+        std::fs::write(web.join("file"), "x").unwrap();
+        sandbox.git(&web, &["add", "file"]);
+        let repos = [Staged {
+            name: "api".to_string(),
+            dir: api,
+            files: vec![],
+        }];
+        // a header edited to name another folder, by path
+        let commits = [(web.display().to_string(), "taken".to_string())];
+        let err = commit_each(&repos, &commits).unwrap_err();
+        assert_eq!(err.to_string(), "Committed 0 repo(s), 1 failed");
+        let subject = sandbox.git(&web, &["log", "-1", "--format=%s"]);
+        assert_eq!(subject.trim(), "init");
     }
 }

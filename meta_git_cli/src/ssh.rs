@@ -90,13 +90,22 @@ impl SshTarget {
     }
 }
 
-/// The distinct SSH remotes of `projects` (their `repo:` URLs).
+/// What git contacts for the remotes of `projects` (their `repo:` URLs)
+/// that it reaches over SSH, distinct, for [`establish_contacted`]: each
+/// URL after git's `url.<base>.insteadOf` rewrites, a cloned project's own
+/// config included.
 pub(crate) fn ssh_urls(projects: &[meta_plugin::Project]) -> Vec<RepoUrl> {
     let urls: BTreeSet<RepoUrl> = projects
         .iter()
-        .filter_map(|p| p.repo.as_deref())
-        .map(RepoUrl::from)
-        .filter(|repo| SshTarget::of(repo).is_some())
+        .filter_map(|p| {
+            let dir = if p.present {
+                p.abs.clone()
+            } else {
+                std::env::temp_dir()
+            };
+            Some(contacted(&RepoUrl::from(p.repo.as_deref()?), &dir))
+        })
+        .filter(|url| SshTarget::of(url).is_some())
         .collect();
     urls.into_iter().collect()
 }
@@ -108,10 +117,16 @@ pub(crate) fn ssh_urls(projects: &[meta_plugin::Project]) -> Vec<RepoUrl> {
 /// - `SshMasters::UserManaged` if all hosts already have active masters
 /// - `SshMasters::Failed` if sockets dir couldn't be created or all connections failed
 pub fn establish_ssh_masters(urls: &[RepoUrl]) -> SshMasters {
-    let mut seen = BTreeSet::new();
     // what git will contact: a url.<base>.insteadOf rewrite (git@github.com:
     // to https://, say) leaves no SSH to share
-    let contacted: Vec<RepoUrl> = urls.iter().map(contacted).collect();
+    let dir = std::env::temp_dir();
+    let contacted: Vec<RepoUrl> = urls.iter().map(|url| contacted(url, &dir)).collect();
+    establish_contacted(&contacted)
+}
+
+/// [`establish_ssh_masters`] for the URLs git contacts, rewrites applied.
+pub(crate) fn establish_contacted(contacted: &[RepoUrl]) -> SshMasters {
+    let mut seen = BTreeSet::new();
     let targets: Vec<SshTarget> = contacted
         .iter()
         .filter_map(SshTarget::of)
@@ -212,16 +227,16 @@ pub fn establish_ssh_masters(urls: &[RepoUrl]) -> SshMasters {
     }
 }
 
-/// The URL git contacts for `url`, after its `url.<base>.insteadOf`
+/// The URL git contacts for `url` from `dir`, after its `url.<base>.insteadOf`
 /// rewrites (`git ls-remote --get-url` applies them without connecting);
 /// `url` itself where git can't say.
-fn contacted(url: &RepoUrl) -> RepoUrl {
-    let dir = std::env::temp_dir();
-    let out = meta_core::git::git(&dir)
-        .arg("ls-remote")
-        .arg("--get-url")
-        .arg(url.as_git_arg())
-        .output();
+fn contacted(url: &RepoUrl, dir: &Path) -> RepoUrl {
+    let out = meta_plugin::process::output(
+        meta_core::git::git(dir)
+            .arg("ls-remote")
+            .arg("--get-url")
+            .arg(url.as_git_arg()),
+    );
     match out {
         Ok(out) if out.status.success() => {
             let rewritten = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -345,6 +360,52 @@ mod tests {
         assert!(of("https://github.com/org/repo.git").is_none());
         assert!(of("/srv/repo.git").is_none());
         assert!(of("ext::ssh -p 2222 host %S repo").is_none());
+    }
+
+    #[test]
+    fn an_https_remote_git_rewrites_to_ssh_is_an_ssh_remote() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let work = sandbox.work();
+        sandbox.git(
+            &work,
+            &[
+                "config",
+                "--global",
+                "url.git@example.com:.insteadOf",
+                "https://example.com/",
+            ],
+        );
+        let project = |url: &str| meta_plugin::Project {
+            repo: Some(url.to_string()),
+            ..meta_plugin::Project::default()
+        };
+        let urls = ssh_urls(&[
+            project("https://example.com/org/app.git"),
+            project("https://other.example/org/web.git"),
+        ]);
+        let urls: Vec<String> = urls.iter().map(ToString::to_string).collect();
+        assert_eq!(urls, ["git@example.com:org/app.git"]);
+    }
+
+    #[test]
+    fn a_rewrite_in_the_projects_own_config_counts() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let app = sandbox.repo(&sandbox.work().join("app"));
+        sandbox.git(
+            &app,
+            &[
+                "config",
+                "url.git@example.com:.insteadOf",
+                "https://example.com/",
+            ],
+        );
+        let urls = ssh_urls(&[meta_plugin::Project {
+            repo: Some("https://example.com/org/app.git".to_string()),
+            abs: app,
+            present: true,
+            ..meta_plugin::Project::default()
+        }]);
+        assert_eq!(urls.len(), 1, "the rewrite in app's .git/config was missed");
     }
 
     #[cfg(unix)]

@@ -537,7 +537,7 @@ pub fn nearest_meta_dir(start_dir: &Path) -> anyhow::Result<Option<PathBuf>> {
 }
 
 /// A `.meta.yaml`, read and checked once: the workspace it describes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Workspace {
     /// The directory of the config, where project paths start.
     pub dir: PathBuf,

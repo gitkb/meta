@@ -130,6 +130,37 @@ EOF
     [[ "$output" == *"already up to date"* ]]
 }
 
+@test "a failed update leaves the installed plugin working" {
+    serve
+    release gitkb/meta-x/releases/download/v1.0.0/meta-x-any.tar.gz 1.0.0 one
+    mkdir -p "$RELEASES/api/v3/repos/gitkb/meta-x/releases"
+    echo '{"tag_name": "v2.0.0"}' > "$RELEASES/api/v3/repos/gitkb/meta-x/releases/latest"
+    run "$META_BIN" plugin install gitkb/meta-x@v1.0.0
+    [ "$status" -eq 0 ]
+    cp "$PLUGINS_DIR/.manifest.json" "$BATS_TEST_TMPDIR/before.json"
+    printf 'projects: {}\n' > .meta.yaml
+    # first no release to download, then one whose plugin doesn't answer
+    rm -r "$RELEASES/gitkb/meta-x/releases/download"
+    mkdir -p "$BATS_TEST_TMPDIR/silent"
+    printf '#!/bin/sh\nexit 1\n' > "$BATS_TEST_TMPDIR/silent/meta-x"
+    chmod +x "$BATS_TEST_TMPDIR/silent/meta-x"
+    for broken in none silent; do
+        if [ "$broken" = silent ]; then
+            for version in v1.0.0 v2.0.0; do
+                mkdir -p "$RELEASES/gitkb/meta-x/releases/download/$version"
+                tar -czf "$RELEASES/gitkb/meta-x/releases/download/$version/meta-x-any.tar.gz" \
+                    -C "$BATS_TEST_TMPDIR/silent" meta-x
+            done
+        fi
+        run "$META_BIN" plugin update x
+        [ "$status" -ne 0 ]
+        run "$META_BIN" x run
+        [ "$status" -eq 0 ]
+        [[ "$output" == *one* ]]
+        cmp "$PLUGINS_DIR/.manifest.json" "$BATS_TEST_TMPDIR/before.json"
+    done
+}
+
 @test "an archive URL with a query string installs" {
     serve
     release direct/meta-x.tar.gz 1.0.0 direct

@@ -69,10 +69,11 @@ impl Ctx {
             return Ok(());
         };
         let line = event.line();
+        // meta measures the line without its newline
+        let len = line.strip_suffix('\n').unwrap_or(&line).len();
         anyhow::ensure!(
-            line.len() <= crate::event::MAX_LINE,
-            "an event of {} bytes is longer than meta reads",
-            line.len()
+            len <= crate::event::MAX_LINE,
+            "an event of {len} bytes is longer than meta reads"
         );
         let mut file = events
             .lock()

@@ -66,9 +66,8 @@ impl Race {
         request.workspace = found.map(as_meta_sends);
         // it can call meta back: the `meta` built beside it (`cargo build
         // --workspace --bins` first)
-        let bin = Path::new(env!("CARGO_BIN_EXE_meta-git")).parent().unwrap();
-        let meta = bin.join(format!("meta{}", std::env::consts::EXE_SUFFIX));
-        assert!(meta.is_file(), "{} is not built", meta.display());
+        let meta = meta_plugin::testing::built_meta();
+        let bin = meta.parent().unwrap();
         let files = tempfile::tempdir().unwrap();
         let (request_file, response) =
             (files.path().join("request"), files.path().join("response"));

@@ -130,14 +130,9 @@ fn set_of(cwd: &Path) -> Option<meta_plugin::Set> {
 /// beside it: `cargo build --workspace --bins` first); and the
 /// `META_WORKTREES` set on it, which meta reads for the request.
 pub fn as_meta_starts(cmd: &mut std::process::Command) -> Option<std::path::PathBuf> {
-    let bin = Path::new(env!("CARGO_BIN_EXE_meta-git")).parent().unwrap();
-    let meta = bin.join(format!("meta{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        meta.is_file(),
-        "{} is not built: cargo build --workspace --bins first",
-        meta.display()
-    );
-    cmd.env(meta_plugin::client::EXE_VAR, meta);
+    let meta = meta_plugin::testing::built_meta();
+    let bin = meta.parent().unwrap();
+    cmd.env(meta_plugin::client::EXE_VAR, &meta);
     // and meta finds this meta-git, as the plugin of `meta git`
     let path = cmd
         .get_envs()

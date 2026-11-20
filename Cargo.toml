@@ -80,3 +80,5 @@ disallowed_methods = "deny"
 disallowed_macros = "deny"
 # a wildcard arm standing for one variant hides the next variant added
 match_wildcard_for_single_variants = "deny"
+# `let ... else` says the early return at the binding it guards
+manual_let_else = "deny"

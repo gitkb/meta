@@ -498,9 +498,7 @@ fn holder_of_checkouts(
 
 /// The folder of `config`'s worktrees folder that `start` is in, if any.
 fn in_worktrees_folder(config: &Config, start: &Path) -> Option<PathBuf> {
-    let owner = worktree::Configs::of(config.clone())
-        .map(|configs| configs.owner)
-        .unwrap_or_else(|_| config.clone());
+    let owner = worktree::owner(config);
     let sets = worktree::resolve_worktree_root(Some(&owner), &config.dir)
         .ok()?
         .canonicalize()

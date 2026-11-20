@@ -431,8 +431,7 @@ fn list_infers_enclosing_set_and_metadata_only_avoids_git() {
 /// `meta --json --dry-run -r git worktree create s --repo <repo>` in `cwd`:
 /// the real host and plugin; whether it succeeded, and its Envelope.
 fn previewed(sandbox: &Sandbox, cwd: &Path, repo: &str) -> (bool, Value) {
-    let bin = Path::new(env!("CARGO_BIN_EXE_meta-git")).parent().unwrap();
-    let mut meta = sandbox.command(bin.join("meta"));
+    let mut meta = sandbox.command(meta_plugin::testing::built_meta());
     as_meta_starts(&mut meta);
     let output = meta
         .args([

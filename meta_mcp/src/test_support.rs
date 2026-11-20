@@ -11,13 +11,7 @@ use std::path::PathBuf;
 /// profile folder). Each test that does runs in a process of its own
 /// (`isolated!`).
 pub(crate) fn use_built_meta() {
-    let meta = meta_plugin::testing::built_program_dir()
-        .join(format!("meta{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        meta.is_file(),
-        "{} is not built: cargo build --workspace --bins first",
-        meta.display()
-    );
+    let meta = meta_plugin::testing::built_meta();
     // its plugins too, whatever another meta on PATH brings
     let built = meta.parent().unwrap().to_path_buf();
     let path = std::env::var_os("PATH").unwrap_or_default();

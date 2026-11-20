@@ -99,7 +99,8 @@ pub fn set_config(set_dir: &Path, config_name: Option<&PathBuf>) -> Result<Optio
 /// Where `dir`, inside a worktree set, is in the workspace the set was made
 /// from (and from a set made inside another set, on to that one's
 /// workspace), by the sets' owner files. None outside a set, and for a set
-/// without an owner file.
+/// without an owner file (made by hand): such a folder stands for itself,
+/// as a second workspace can.
 pub fn primary_dir(dir: &Path) -> Result<Option<PathBuf>> {
     let mut place = dir.to_path_buf();
     let mut seen = Vec::new();
@@ -621,50 +622,23 @@ fn readable_tree(
         .collect()
 }
 
-/// The configs a worktree command reads, each loaded once: `here`, the
-/// nearest at or above where it runs, and `owner`, whose sets and settings
-/// (`worktrees_dir`, hooks) these are: inside a set, the checkout the set
-/// stands for, which outlives it; else `here`.
-#[derive(Debug, Clone)]
-pub struct Configs {
-    pub here: crate::config::Workspace,
-    pub owner: crate::config::Workspace,
-}
-
-impl Configs {
-    /// The configs of the workspace at or above `start`; an error outside one.
-    pub fn find(start: &Path) -> Result<Self> {
-        Self::find_optional(start)?
-            .ok_or_else(|| anyhow::anyhow!("Not inside a meta project (no .meta.yaml found)"))
-    }
-
-    /// Like [`Configs::find`], `None` outside a workspace.
-    pub fn find_optional(start: &Path) -> Result<Option<Self>> {
-        crate::config::Workspace::find(start, None)?
-            .map(Self::of)
-            .transpose()
-    }
-
-    /// The configs for `here`. A source checkout without a config is still
-    /// the owner, with no settings of its own.
-    pub fn of(here: crate::config::Workspace) -> Result<Self> {
-        let Some(source) = crate::config::set_source(&here.dir)?.filter(|s| s.is_dir()) else {
-            return Ok(Self {
-                owner: here.clone(),
-                here,
-            });
-        };
-        let owner = crate::config::Workspace::in_dir(&source)?.unwrap_or_else(|| {
-            crate::config::Workspace {
-                config_path: source.join(crate::config::META_CONFIG_NAME),
-                dir: source,
-                projects: Vec::new(),
-                defaults: Default::default(),
-                worktrees_dir: None,
-                worktree: Default::default(),
-            }
-        });
-        Ok(Self { here, owner })
+/// The workspace whose sets and settings (`worktrees_dir`, hooks) a
+/// worktree command run in `here` uses: inside a set, the checkout the set
+/// stands for, which outlives it (with no settings of its own when it has no
+/// config); else, or when that can't be told, `here`.
+pub fn owner(here: &crate::config::Workspace) -> crate::config::Workspace {
+    let source = match primary_dir(&here.dir) {
+        Ok(Some(source)) if source.is_dir() => source,
+        _ => return here.clone(),
+    };
+    match crate::config::Workspace::in_dir(&source) {
+        Ok(Some(owner)) => owner,
+        Ok(None) => crate::config::Workspace {
+            config_path: source.join(crate::config::META_CONFIG_NAME),
+            dir: source,
+            ..Default::default()
+        },
+        Err(_) => here.clone(),
     }
 }
 
@@ -719,13 +693,13 @@ pub fn resolve_worktree_root(
 /// made for that very folder, with `META_WORKTREES` unset, they go in
 /// the folder the set is in, where that entry is; else as
 /// [`resolve_worktree_root`] says (inside a set, for the workspace the set
-/// stands for, [`Configs::of`]).
+/// stands for, [`owner`]).
 pub fn plugin_worktree(
     config: Option<&crate::config::Workspace>,
     cwd: &Path,
     set: Option<&Path>,
 ) -> meta_plugin::Worktree {
-    let owner = config.map(|c| Configs::of(c.clone()).map_or_else(|_| c.clone(), |c| c.owner));
+    let owner = config.map(owner);
     // a folder only named like a set (a workspace in a `.worktrees`) has
     // none, or one copied there from another folder
     let owned = set.filter(|dir| matches!(own_owner(dir), Ok(Some(_))));

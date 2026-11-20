@@ -373,11 +373,13 @@ fn build(sandbox: &Sandbox, dir: &Path, up: &Path, projects: &[(String, Member)]
 const NO_CONFIG: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 /// Settings of the user's shell a test would otherwise pick up.
-const UNSET: [&str; 13] = [
+const UNSET: [&str; 14] = [
     // the `-c` settings a git around the tests was given
     "GIT_CONFIG_COUNT",
     "GIT_CONFIG_PARAMETERS",
     crate::sets::WORKTREES_VAR,
+    // a meta around the tests: a test's meta is the outermost
+    crate::client::DEPTH_VAR,
     "META_GITHUB_URL",
     "META_PLATFORM",
     "GIT_TEMPLATE_DIR",
@@ -550,6 +552,15 @@ mod tests {
         let global = std::env::var_os("GIT_CONFIG_GLOBAL").unwrap();
         assert_eq!(Path::new(&global), sandbox.root.join("gitconfig"));
         assert!(std::env::var_os("GIT_DIR").is_none());
+    }
+
+    #[test]
+    fn a_meta_around_the_tests_does_not_reach_them() {
+        let command = Sandbox::new().command("meta");
+        let depth = command
+            .get_envs()
+            .find(|(key, _)| *key == crate::client::DEPTH_VAR);
+        assert_eq!(depth, Some((OsStr::new(crate::client::DEPTH_VAR), None)));
     }
 
     #[test]

@@ -270,6 +270,21 @@ release() {
     cmp "$PLUGINS_DIR/.manifest.json" "$BATS_TEST_TMPDIR/before.json"
 }
 
+@test "a failed install puts back the link that was there, even a dangling one" {
+    serve
+    mkdir -p "$PLUGINS_DIR/meta-y/in-the-way"
+    ln -s "$BATS_TEST_TMPDIR/nowhere" "$PLUGINS_DIR/meta-x"
+    plugin "$BATS_TEST_TMPDIR/both/meta-x" 2.0.0 two
+    plugin "$BATS_TEST_TMPDIR/both/meta-y" 2.0.0 why
+    mkdir -p "$RELEASES/direct"
+    tar -czf "$RELEASES/direct/both.tar.gz" -C "$BATS_TEST_TMPDIR/both" meta-x meta-y
+    run "$META_BIN" plugin install "$SERVER/direct/both.tar.gz"
+    [ "$status" -ne 0 ]
+    [ -L "$PLUGINS_DIR/meta-x" ]
+    [ "$(readlink "$PLUGINS_DIR/meta-x")" = "$BATS_TEST_TMPDIR/nowhere" ]
+    [ -d "$PLUGINS_DIR/meta-y/in-the-way" ]
+}
+
 @test "a download that isn't an archive installs nothing" {
     serve
     mkdir -p "$RELEASES/direct"

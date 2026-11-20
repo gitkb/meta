@@ -1002,6 +1002,13 @@ mod tests {
             );
             assert!(git_diff_patch(&tmp, base).is_err(), "{base}");
         }
+        // a ref that looks like an option is still a base, in each git run
+        sandbox.git(&tmp, &["update-ref", "refs/heads/-x", "HEAD"]);
+        std::fs::write(tmp.join("README"), "changed\n").unwrap();
+        sandbox.git(&tmp, &["commit", "-qam", "change"]);
+        let (files, ..) = git_diff_stat(&tmp, "-x").unwrap();
+        assert_eq!(files, 1);
+        assert!(git_diff_patch(&tmp, "-x").unwrap().contains("+changed"));
     }
 
     #[test]

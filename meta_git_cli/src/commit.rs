@@ -507,4 +507,26 @@ mod tests {
         let subject = sandbox.git(&dir.join("b"), &["log", "-1", "--format=%s"]);
         assert_eq!(subject.trim(), "two");
     }
+
+    #[test]
+    fn a_section_naming_no_staged_repo_commits_nowhere() {
+        let sandbox = meta_plugin::testing::isolated!();
+        let dir = sandbox.work();
+        let api = sandbox.repo(&dir.join("api"));
+        // a repo with staged changes that wasn't selected
+        let web = sandbox.repo(&dir.join("web"));
+        std::fs::write(web.join("file"), "x").unwrap();
+        sandbox.git(&web, &["add", "file"]);
+        let repos = [Staged {
+            name: "api".to_string(),
+            dir: api,
+            files: vec![],
+        }];
+        // a header edited to name another folder, by path
+        let commits = [(web.display().to_string(), "taken".to_string())];
+        let err = commit_each(&repos, &commits).unwrap_err();
+        assert_eq!(err.to_string(), "Committed 0 repo(s), 1 failed");
+        let subject = sandbox.git(&web, &["log", "-1", "--format=%s"]);
+        assert_eq!(subject.trim(), "init");
+    }
 }
